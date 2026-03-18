@@ -1,0 +1,76 @@
+{
+  "app_name": "מעקב גרסאות CKAN",
+  "nav": {
+    "search": "חיפוש",
+    "tracked": "מעקב",
+    "login": "התחברות",
+    "register": "הרשמה",
+    "logout": "התנתקות",
+    "skip_to_content": "דלג לתוכן"
+  },
+  "auth": {
+    "email": "אימייל",
+    "password": "סיסמה",
+    "password_hint": "מינימום 8 תווים",
+    "display_name": "שם תצוגה",
+    "login_title": "התחברות",
+    "register_title": "הרשמה",
+    "login_btn": "התחבר",
+    "register_btn": "הירשם",
+    "no_account": "אין לך חשבון?",
+    "has_account": "כבר יש לך חשבון?"
+  },
+  "search": {
+    "title": "חיפוש מאגרי מידע ממשלתיים",
+    "placeholder": "חפש מאגר מידע...",
+    "search_btn": "חפש",
+    "track_btn": "עקוב",
+    "tracking": "במעקב",
+    "resources": "משאבים",
+    "organization": "ארגון",
+    "last_modified": "עדכון אחרון",
+    "no_results": "לא נמצאו תוצאות",
+    "results_count": "{{count}} תוצאות נמצאו"
+  },
+  "tracked": {
+    "title": "מאגרים במעקב",
+    "empty": "לא עוקבים אחרי מאגרים. חפש מאגר והוסף אותו למעקב.",
+    "poll_interval": "תדירות בדיקה",
+    "last_poll": "בדיקה אחרונה",
+    "versions": "גרסאות",
+    "poll_now": "בדוק עכשיו",
+    "untrack": "הסר מעקב",
+    "seconds": "שניות",
+    "never": "אף פעם",
+    "active": "פעיל",
+    "paused": "מושהה"
+  },
+  "versions": {
+    "title": "היסטוריית גרסאות",
+    "version": "גרסה",
+    "detected": "זוהה",
+    "changes": "שינויים",
+    "resources_modified": "משאבים שונו",
+    "resources_added": "משאבים נוספו",
+    "resources_removed": "משאבים הוסרו",
+    "compare": "השווה",
+    "download": "הורד",
+    "no_versions": "עדיין לא זוהו גרסאות",
+    "select_hint": "בחר שתי גרסאות להשוואה"
+  },
+  "diff": {
+    "title": "השוואת גרסאות",
+    "field": "שדה",
+    "old_value": "ערך ישן",
+    "new_value": "ערך חדש",
+    "changed": "שונה",
+    "added": "נוסף",
+    "removed": "הוסר",
+    "no_changes": "אין שינויים"
+  },
+  "common": {
+    "loading": "טוען...",
+    "error": "שגיאה",
+    "back": "חזרה"
+  }
+}

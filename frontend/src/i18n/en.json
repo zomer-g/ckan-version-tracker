@@ -1,0 +1,76 @@
+{
+  "app_name": "CKAN Version Tracker",
+  "nav": {
+    "search": "Search",
+    "tracked": "Tracked",
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout",
+    "skip_to_content": "Skip to content"
+  },
+  "auth": {
+    "email": "Email",
+    "password": "Password",
+    "password_hint": "Minimum 8 characters",
+    "display_name": "Display Name",
+    "login_title": "Login",
+    "register_title": "Register",
+    "login_btn": "Login",
+    "register_btn": "Register",
+    "no_account": "Don't have an account?",
+    "has_account": "Already have an account?"
+  },
+  "search": {
+    "title": "Search Government Datasets",
+    "placeholder": "Search datasets...",
+    "search_btn": "Search",
+    "track_btn": "Track",
+    "tracking": "Tracking",
+    "resources": "Resources",
+    "organization": "Organization",
+    "last_modified": "Last Modified",
+    "no_results": "No results found",
+    "results_count": "{{count}} total results"
+  },
+  "tracked": {
+    "title": "Tracked Datasets",
+    "empty": "No datasets being tracked. Search for a dataset and add it to tracking.",
+    "poll_interval": "Poll Interval",
+    "last_poll": "Last Poll",
+    "versions": "Versions",
+    "poll_now": "Poll Now",
+    "untrack": "Untrack",
+    "seconds": "seconds",
+    "never": "Never",
+    "active": "Active",
+    "paused": "Paused"
+  },
+  "versions": {
+    "title": "Version History",
+    "version": "Version",
+    "detected": "Detected",
+    "changes": "Changes",
+    "resources_modified": "resources modified",
+    "resources_added": "resources added",
+    "resources_removed": "resources removed",
+    "compare": "Compare",
+    "download": "Download",
+    "no_versions": "No versions detected yet",
+    "select_hint": "Select two versions to compare"
+  },
+  "diff": {
+    "title": "Compare Versions",
+    "field": "Field",
+    "old_value": "Old Value",
+    "new_value": "New Value",
+    "changed": "Changed",
+    "added": "Added",
+    "removed": "Removed",
+    "no_changes": "No changes"
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "back": "Back"
+  }
+}
