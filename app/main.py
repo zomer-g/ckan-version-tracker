@@ -10,6 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.auth import router as auth_router
+from app.api.oauth import router as oauth_router
 from app.api.proxy import router as proxy_router
 from app.api.datasets import router as datasets_router
 from app.api.versions import router as versions_router
@@ -55,6 +56,7 @@ app.add_middleware(
 
 # API routes
 app.include_router(auth_router)
+app.include_router(oauth_router)
 app.include_router(proxy_router)
 app.include_router(datasets_router)
 app.include_router(versions_router)

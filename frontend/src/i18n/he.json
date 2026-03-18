@@ -18,7 +18,13 @@
     "login_btn": "התחבר",
     "register_btn": "הירשם",
     "no_account": "אין לך חשבון?",
-    "has_account": "כבר יש לך חשבון?"
+    "has_account": "כבר יש לך חשבון?",
+    "or": "או",
+    "sso_google": "התחבר עם Google",
+    "sso_github": "התחבר עם GitHub",
+    "sso_denied": "ההתחברות בוטלה",
+    "sso_failed": "ההתחברות נכשלה, נסה שוב",
+    "sso_no_email": "לא ניתן לקבל כתובת אימייל מהחשבון"
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",

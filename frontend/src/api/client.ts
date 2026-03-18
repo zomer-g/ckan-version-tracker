@@ -51,6 +51,8 @@ export const auth = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => request<{ id: string; email: string; display_name: string }>("/auth/me"),
+  ssoProviders: () =>
+    request<{ google: boolean; github: boolean }>("/auth/sso/providers"),
 };
 
 // CKAN Proxy

@@ -18,7 +18,13 @@
     "login_btn": "Login",
     "register_btn": "Register",
     "no_account": "Don't have an account?",
-    "has_account": "Already have an account?"
+    "has_account": "Already have an account?",
+    "or": "or",
+    "sso_google": "Continue with Google",
+    "sso_github": "Continue with GitHub",
+    "sso_denied": "Login was cancelled",
+    "sso_failed": "Login failed, please try again",
+    "sso_no_email": "Could not get email from account"
   },
   "search": {
     "title": "Search Government Datasets",
