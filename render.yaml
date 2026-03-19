@@ -38,6 +38,6 @@ services:
 
 databases:
   - name: ckan-tracker-db
-    plan: starter
+    plan: basic-256mb
     databaseName: ckan_tracker
     postgresMajorVersion: 16
