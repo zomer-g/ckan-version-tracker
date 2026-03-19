@@ -1,4 +1,5 @@
 import asyncio
+import ssl as _ssl
 from logging.config import fileConfig
 
 from alembic import context
@@ -16,6 +17,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+# Neon SSL support
+connect_args: dict = {}
+db_url = settings.database_url
+if "neon.tech" in db_url or "neon" in db_url:
+    ssl_context = _ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = _ssl.CERT_NONE
+    connect_args = {"ssl": ssl_context, "statement_cache_size": 0}
 
 
 def run_migrations_offline() -> None:
@@ -36,6 +46,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
