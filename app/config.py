@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     odata_url: str = "https://www.odata.org.il"
     odata_api_key: str = ""
 
-    default_poll_interval: int = 3600
+    default_poll_interval: int = 900
     min_poll_interval: int = 300
     max_resource_download_size: int = 500_000_000
 

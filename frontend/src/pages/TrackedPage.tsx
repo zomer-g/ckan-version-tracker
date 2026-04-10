@@ -6,11 +6,28 @@ import {
   TrackedDataset,
 } from "../api/client";
 
+function formatInterval(seconds: number, t: (k: string) => string): string {
+  if (seconds < 60) return `${seconds} ${t("tracked.seconds")}`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} ${t("tracked.minutes")}`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} ${t("tracked.hours")}`;
+}
+
+const INTERVAL_OPTIONS = [
+  { value: 300, labelKey: "tracked.interval_5min" },
+  { value: 900, labelKey: "tracked.interval_15min" },
+  { value: 1800, labelKey: "tracked.interval_30min" },
+  { value: 3600, labelKey: "tracked.interval_1hour" },
+  { value: 86400, labelKey: "tracked.interval_1day" },
+];
+
 export default function TrackedPage() {
   const { t } = useTranslation();
   const [datasets, setDatasets] = useState<TrackedDataset[]>([]);
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState<Set<string>>(new Set());
+  const [editingInterval, setEditingInterval] = useState<string | null>(null);
 
   useEffect(() => {
     loadDatasets();
@@ -35,6 +52,16 @@ export default function TrackedPage() {
       next.delete(id);
       return next;
     });
+    // Reload after a short delay to show updated last_polled_at
+    setTimeout(loadDatasets, 2000);
+  };
+
+  const updateInterval = async (id: string, interval: number) => {
+    try {
+      const updated = await datasetsApi.update(id, { poll_interval: interval });
+      setDatasets((prev) => prev.map((d) => (d.id === id ? { ...d, poll_interval: updated.poll_interval } : d)));
+    } catch {}
+    setEditingInterval(null);
   };
 
   const untrack = async (id: string) => {
@@ -83,8 +110,39 @@ export default function TrackedPage() {
             )}
 
             <div className="text-sm mb-1">
-              <div>
-                {t("tracked.poll_interval")}: {ds.poll_interval} {t("tracked.seconds")}
+              <div className="flex" style={{ gap: "0.5rem" }}>
+                {t("tracked.poll_interval")}:{" "}
+                {editingInterval === ds.id ? (
+                  <select
+                    value={ds.poll_interval}
+                    onChange={(e) => updateInterval(ds.id, Number(e.target.value))}
+                    onBlur={() => setEditingInterval(null)}
+                    autoFocus
+                    style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                    aria-label={t("tracked.poll_interval")}
+                  >
+                    {INTERVAL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {t(opt.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <button
+                    onClick={() => setEditingInterval(ds.id)}
+                    style={{
+                      background: "none",
+                      border: "1px dashed var(--border)",
+                      padding: "0.1rem 0.4rem",
+                      fontSize: "0.8rem",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                    title={t("tracked.change_interval")}
+                  >
+                    {formatInterval(ds.poll_interval, t)} ✎
+                  </button>
+                )}
               </div>
               <div>
                 {t("tracked.last_poll")}:{" "}
