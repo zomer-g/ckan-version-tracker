@@ -22,14 +22,38 @@ export default function SearchPage() {
   const [tracked, setTracked] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
 
+  /**
+   * Extract dataset name from a data.gov.il URL, or return null if not a URL.
+   * Supports:
+   *   https://data.gov.il/he/datasets/org_name/dataset_name
+   *   https://data.gov.il/dataset/dataset_name
+   */
+  const extractDatasetName = (input: string): string | null => {
+    const trimmed = input.trim();
+    if (!trimmed.includes("data.gov.il") && !trimmed.includes("gov.il/he/dataset")) return null;
+
+    // Pattern: /datasets/org/name or /dataset/name
+    const match = trimmed.match(/\/datasets?\/(?:[^/]+\/)?([^/?#]+)/);
+    return match ? match[1] : null;
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
     setError("");
     try {
-      const data = await ckan.search(query);
-      setResults(data.results);
-      setCount(data.count);
+      const datasetName = extractDatasetName(query);
+      if (datasetName) {
+        // Direct dataset lookup by name extracted from URL
+        const pkg = await ckan.dataset(datasetName);
+        setResults([pkg]);
+        setCount(1);
+      } else {
+        // Regular keyword search
+        const data = await ckan.search(query);
+        setResults(data.results);
+        setCount(data.count);
+      }
     } catch (err: any) {
       setError(err.message);
     }

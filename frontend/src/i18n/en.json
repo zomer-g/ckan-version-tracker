@@ -28,7 +28,7 @@
   },
   "search": {
     "title": "Search Government Datasets",
-    "placeholder": "Search datasets...",
+    "placeholder": "Search by keywords or paste a data.gov.il URL...",
     "search_btn": "Search",
     "track_btn": "Track",
     "tracking": "Tracking",

@@ -28,7 +28,7 @@
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",
-    "placeholder": "חפש מאגר מידע...",
+    "placeholder": "חפש לפי מילות מפתח או הדבק קישור מ-data.gov.il...",
     "search_btn": "חפש",
     "track_btn": "עקוב",
     "tracking": "במעקב",
