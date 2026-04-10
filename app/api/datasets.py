@@ -102,28 +102,28 @@ async def track_dataset(
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
     mirror_name = f"gov-versions-{_sanitize_name(pkg['name'])}"
 
+    # Create mirror dataset on odata.org.il (optional — works without API key)
     odata_dataset_id = None
-    try:
-        mirror = await odata_client.create_dataset(
-            name=mirror_name,
-            title=f"[Versions] {pkg.get('title', pkg['name'])}",
-            extras=[
-                {"key": "source_ckan_id", "value": body.ckan_id},
-                {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{pkg['name']}"},
-                {"key": "auto_managed", "value": "true"},
-            ],
-        )
-        odata_dataset_id = mirror["id"]
-    except Exception:
+    if settings.odata_api_key:
         try:
-            mirror = await odata_client.package_show(mirror_name)
+            mirror = await odata_client.create_dataset(
+                name=mirror_name,
+                title=f"[Versions] {pkg.get('title', pkg['name'])}",
+                extras=[
+                    {"key": "source_ckan_id", "value": body.ckan_id},
+                    {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{pkg['name']}"},
+                    {"key": "auto_managed", "value": "true"},
+                ],
+            )
             odata_dataset_id = mirror["id"]
         except Exception:
-            logger.exception("Failed to create/find mirror dataset on odata.org.il")
-            raise HTTPException(
-                status_code=502,
-                detail="Failed to create mirror dataset on odata.org.il",
-            )
+            try:
+                mirror = await odata_client.package_show(mirror_name)
+                odata_dataset_id = mirror["id"]
+            except Exception:
+                logger.warning("Could not create mirror on odata.org.il — tracking without mirror")
+    else:
+        logger.info("ODATA_API_KEY not set — tracking without odata.org.il mirror")
 
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
