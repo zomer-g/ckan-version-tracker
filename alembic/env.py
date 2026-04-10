@@ -1,6 +1,7 @@
 import asyncio
 import ssl as _ssl
 from logging.config import fileConfig
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from alembic import context
 from sqlalchemy import pool
@@ -11,17 +12,26 @@ from app.database import Base
 from app.models import User, TrackedDataset, VersionIndex  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# Strip sslmode from URL — asyncpg doesn't support it as a query param
+raw_url = settings.database_url
+if "sslmode=" in raw_url:
+    parsed = urlparse(raw_url)
+    params = parse_qs(parsed.query)
+    params.pop("sslmode", None)
+    new_query = urlencode(params, doseq=True)
+    raw_url = urlunparse(parsed._replace(query=new_query))
+
+config.set_main_option("sqlalchemy.url", raw_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 
-# Neon SSL support
+# Neon SSL support via connect_args
 connect_args: dict = {}
-db_url = settings.database_url
-if "neon.tech" in db_url or "neon" in db_url:
+if "neon.tech" in raw_url or "neon" in settings.database_url:
     ssl_context = _ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = _ssl.CERT_NONE
