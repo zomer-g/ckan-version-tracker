@@ -117,12 +117,13 @@ async def track_dataset(
                 ],
             )
             odata_dataset_id = mirror["id"]
-        except Exception:
+        except Exception as e1:
+            logger.warning("Mirror create failed: %s", e1)
             try:
                 mirror = await odata_client.package_show(mirror_name)
                 odata_dataset_id = mirror["id"]
-            except Exception:
-                logger.warning("Could not create mirror on odata.org.il — tracking without mirror")
+            except Exception as e2:
+                logger.error("Mirror find also failed: %s", e2)
     else:
         logger.info("ODATA_API_KEY not set — tracking without odata.org.il mirror")
 
@@ -134,7 +135,7 @@ async def track_dataset(
         odata_dataset_id=odata_dataset_id,
         poll_interval=interval,
         created_by=user.id,
-        last_modified=pkg.get("metadata_modified"),
+        last_modified=None,  # None so first poll always creates version 1
     )
     db.add(ds)
     await db.commit()
