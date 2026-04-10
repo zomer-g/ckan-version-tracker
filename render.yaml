@@ -6,7 +6,7 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       cd frontend && npm install && npm run build && cd ..
-      alembic upgrade head
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
