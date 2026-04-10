@@ -3,11 +3,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.auth import router as auth_router
 from app.api.oauth import router as oauth_router
@@ -61,29 +63,33 @@ app.include_router(proxy_router)
 app.include_router(datasets_router)
 app.include_router(versions_router)
 
-# Serve frontend static files (built by Vite)
+# Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_dist.exists():
-    index_html = frontend_dist / "index.html"
+index_html = frontend_dist / "index.html"
 
-    # Mount static assets (JS, CSS, images) at /assets
+if frontend_dist.exists() and index_html.exists():
+    logger.info("Frontend dist found at %s", frontend_dist)
+
+    # Mount Vite's hashed static assets
     assets_dir = frontend_dist / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-    # SPA catch-all: root path
+    # SPA fallback: intercept 404s on non-API routes and serve index.html
+    @app.exception_handler(StarletteHTTPException)
+    async def spa_fallback(request: Request, exc: StarletteHTTPException):
+        # Only intercept 404s; let other HTTP errors pass through
+        if exc.status_code != 404:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        # Don't intercept API 404s — return JSON
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": exc.detail}, status_code=404)
+        # For all other 404s, serve the SPA
+        return FileResponse(index_html)
+
+    # Explicit root route (some load balancers hit / for health checks)
     @app.get("/")
     async def serve_root():
         return FileResponse(index_html)
-
-    # SPA catch-all: any other non-API path
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        if full_path.startswith("api/"):
-            return JSONResponse({"detail": "Not Found"}, status_code=404)
-        # Check if it's an actual static file
-        file_path = frontend_dist / full_path
-        if file_path.is_file() and frontend_dist in file_path.resolve().parents:
-            return FileResponse(file_path)
-        # Otherwise serve SPA index.html (React Router handles the route)
-        return FileResponse(index_html)
+else:
+    logger.warning("Frontend dist not found at %s — SPA disabled", frontend_dist)
