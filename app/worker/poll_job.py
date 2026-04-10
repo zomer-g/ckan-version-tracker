@@ -52,6 +52,15 @@ async def poll_dataset(dataset_id: str) -> None:
                 .limit(1)
             )
             latest_version = latest_result.scalar_one_or_none()
+
+            # Skip if a version already exists with this exact metadata_modified
+            if latest_version and latest_version.metadata_modified == new_modified:
+                logger.info("Version already exists for %s with modified=%s, skipping", ds.ckan_name, new_modified)
+                ds.last_polled_at = datetime.now(timezone.utc)
+                ds.last_modified = new_modified
+                await db.commit()
+                return
+
             old_mappings = latest_version.resource_mappings if latest_version else None
             next_version = (latest_version.version_number + 1) if latest_version else 1
 

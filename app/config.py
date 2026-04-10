@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     odata_api_key: str = ""
     odata_owner_org: str = "zomer"
 
-    default_poll_interval: int = 900
+    default_poll_interval: int = 604800  # 1 week
     min_poll_interval: int = 300
     max_resource_download_size: int = 500_000_000
 

@@ -11,15 +11,19 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes} ${t("tracked.minutes")}`;
   const hours = Math.round(minutes / 60);
-  return `${hours} ${t("tracked.hours")}`;
+  if (hours < 24) return `${hours} ${t("tracked.hours")}`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} ${t("tracked.days")}`;
+  const weeks = Math.round(days / 7);
+  return `${weeks} ${t("tracked.weeks")}`;
 }
 
 const INTERVAL_OPTIONS = [
-  { value: 300, labelKey: "tracked.interval_5min" },
   { value: 900, labelKey: "tracked.interval_15min" },
-  { value: 1800, labelKey: "tracked.interval_30min" },
   { value: 3600, labelKey: "tracked.interval_1hour" },
+  { value: 43200, labelKey: "tracked.interval_12hour" },
   { value: 86400, labelKey: "tracked.interval_1day" },
+  { value: 604800, labelKey: "tracked.interval_1week" },
 ];
 
 export default function TrackedPage() {
