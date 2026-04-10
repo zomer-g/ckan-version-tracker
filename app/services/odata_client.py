@@ -19,7 +19,7 @@ class ODataClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self.base_url = (base_url or settings.odata_url).rstrip("/")
         self.api_url = f"{self.base_url}/api/3/action"
-        self.api_key = api_key or settings.odata_api_key
+        self.api_key = (api_key or settings.odata_api_key).strip()
 
     def _headers(self) -> dict:
         return {"Authorization": self.api_key} if self.api_key else {}
