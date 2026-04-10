@@ -104,6 +104,7 @@ export interface Version {
   version_number: number;
   metadata_modified: string;
   detected_at: string;
+  odata_metadata_resource_id: string | null;
   change_summary: {
     resources_added?: string[];
     resources_removed?: string[];

@@ -73,7 +73,8 @@
     "compare": "השווה",
     "download": "הורד",
     "no_versions": "עדיין לא זוהו גרסאות",
-    "select_hint": "בחר שתי גרסאות להשוואה"
+    "select_hint": "בחר שתי גרסאות להשוואה",
+    "view_on_odata": "צפה ב-ODATA"
   },
   "diff": {
     "title": "השוואת גרסאות",

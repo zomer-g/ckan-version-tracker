@@ -1,21 +1,29 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { versions as versionsApi, Version } from "../api/client";
+import { versions as versionsApi, datasets as datasetsApi, Version, TrackedDataset } from "../api/client";
+
+const ODATA_BASE = "https://www.odata.org.il";
 
 export default function VersionsPage() {
   const { t } = useTranslation();
   const { datasetId } = useParams<{ datasetId: string }>();
   const navigate = useNavigate();
   const [versionsList, setVersionsList] = useState<Version[]>([]);
+  const [dataset, setDataset] = useState<TrackedDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => {
     if (!datasetId) return;
-    versionsApi
-      .list(datasetId)
-      .then(setVersionsList)
+    Promise.all([
+      versionsApi.list(datasetId),
+      datasetsApi.list().then((all) => all.find((d) => d.id === datasetId) || null),
+    ])
+      .then(([versions, ds]) => {
+        setVersionsList(versions);
+        setDataset(ds);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [datasetId]);
@@ -41,6 +49,31 @@ export default function VersionsPage() {
     }
   };
 
+  /** Get ODATA resource links from version's resource_mappings */
+  const getOdataLinks = (v: Version): { name: string; url: string }[] => {
+    const mappings = v.resource_mappings || {};
+    const links: { name: string; url: string }[] = [];
+
+    // Metadata resource
+    if (v.odata_metadata_resource_id) {
+      links.push({
+        name: `v${v.version_number} metadata`,
+        url: `${ODATA_BASE}/dataset/${dataset?.odata_dataset_id}/resource/${v.odata_metadata_resource_id}`,
+      });
+    }
+
+    // Data resources (skip internal keys starting with _)
+    for (const [key, value] of Object.entries(mappings)) {
+      if (key.startsWith("_") || typeof value !== "string") continue;
+      links.push({
+        name: key.slice(0, 12) + "...",
+        url: `${ODATA_BASE}/dataset/${dataset?.odata_dataset_id}/resource/${value}`,
+      });
+    }
+
+    return links;
+  };
+
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
   return (
@@ -48,6 +81,17 @@ export default function VersionsPage() {
       <div className="page-header flex-between">
         <h1>{t("versions.title")}</h1>
         <div className="flex">
+          {dataset?.odata_dataset_id && (
+            <a
+              href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary"
+              style={{ textDecoration: "none", fontSize: "0.8rem" }}
+            >
+              {t("tracked.view_on_odata")} ↗
+            </a>
+          )}
           <Link to="/tracked" className="btn-secondary" style={{ textDecoration: "none" }}>
             {t("common.back")}
           </Link>
@@ -70,6 +114,7 @@ export default function VersionsPage() {
           {versionsList.map((v) => {
             const summary = v.change_summary;
             const isSelected = selected.includes(v.id);
+            const odataLinks = dataset?.odata_dataset_id ? getOdataLinks(v) : [];
 
             return (
               <div
@@ -117,6 +162,31 @@ export default function VersionsPage() {
                         {summary.resources_removed!.length} {t("versions.resources_removed")}
                       </span>
                     )}
+                  </div>
+                )}
+
+                {/* ODATA direct links */}
+                {odataLinks.length > 0 && (
+                  <div className="mt-1" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {odataLinks.map((link, i) => (
+                      <a
+                        key={i}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          fontSize: "0.75rem",
+                          padding: "0.15rem 0.5rem",
+                          background: "#dbeafe",
+                          color: "#1e40af",
+                          borderRadius: "4px",
+                          textDecoration: "none",
+                        }}
+                      >
+                        {t("versions.view_on_odata")} ↗
+                      </a>
+                    ))}
                   </div>
                 )}
               </div>

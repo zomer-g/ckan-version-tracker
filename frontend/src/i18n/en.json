@@ -73,7 +73,8 @@
     "compare": "Compare",
     "download": "Download",
     "no_versions": "No versions detected yet",
-    "select_hint": "Select two versions to compare"
+    "select_hint": "Select two versions to compare",
+    "view_on_odata": "View on ODATA"
   },
   "diff": {
     "title": "Compare Versions",

@@ -26,15 +26,22 @@ export default function SearchPage() {
    * Extract dataset name from a data.gov.il URL, or return null if not a URL.
    * Supports:
    *   https://data.gov.il/he/datasets/org_name/dataset_name
+   *   https://data.gov.il/he/datasets/org_name/dataset_name/resource_id
    *   https://data.gov.il/dataset/dataset_name
    */
   const extractDatasetName = (input: string): string | null => {
     const trimmed = input.trim();
     if (!trimmed.includes("data.gov.il") && !trimmed.includes("gov.il/he/dataset")) return null;
 
-    // Pattern: /datasets/org/name or /dataset/name
-    const match = trimmed.match(/\/datasets?\/(?:[^/]+\/)?([^/?#]+)/);
-    return match ? match[1] : null;
+    // /datasets/org/name or /datasets/org/name/resource_id — always grab 2nd segment (dataset name)
+    const fullMatch = trimmed.match(/\/datasets\/([^/]+)\/([^/?#]+)/);
+    if (fullMatch) return fullMatch[2]; // org/dataset_name — return dataset_name
+
+    // /dataset/name (without org)
+    const simpleMatch = trimmed.match(/\/dataset\/([^/?#]+)/);
+    if (simpleMatch) return simpleMatch[1];
+
+    return null;
   };
 
   const search = async (e?: FormEvent) => {

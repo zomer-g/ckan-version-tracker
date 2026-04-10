@@ -25,6 +25,7 @@ class VersionResponse(BaseModel):
     version_number: int
     metadata_modified: str
     detected_at: str
+    odata_metadata_resource_id: str | None = None
     change_summary: dict | None
     resource_mappings: dict | None
 
@@ -59,6 +60,7 @@ async def list_versions(
             version_number=v.version_number,
             metadata_modified=v.metadata_modified,
             detected_at=v.detected_at.isoformat(),
+            odata_metadata_resource_id=v.odata_metadata_resource_id,
             change_summary=v.change_summary,
             resource_mappings=v.resource_mappings,
         )
@@ -94,6 +96,7 @@ async def get_version(
         version_number=version.version_number,
         metadata_modified=version.metadata_modified,
         detected_at=version.detected_at.isoformat(),
+        odata_metadata_resource_id=version.odata_metadata_resource_id,
         change_summary=version.change_summary,
         resource_mappings=version.resource_mappings,
     )
