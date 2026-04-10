@@ -64,16 +64,26 @@ app.include_router(versions_router)
 # Serve frontend static files (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    # Serve static assets (JS, CSS, images)
-    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+    index_html = frontend_dist / "index.html"
 
-    # SPA catch-all: serve index.html for any non-API route
+    # Mount static assets (JS, CSS, images) at /assets
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # SPA catch-all: root path
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(index_html)
+
+    # SPA catch-all: any other non-API path
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Don't intercept API routes
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
+        # Check if it's an actual static file
         file_path = frontend_dist / full_path
-        if file_path.is_file():
+        if file_path.is_file() and frontend_dist in file_path.resolve().parents:
             return FileResponse(file_path)
-        return FileResponse(frontend_dist / "index.html")
+        # Otherwise serve SPA index.html (React Router handles the route)
+        return FileResponse(index_html)
