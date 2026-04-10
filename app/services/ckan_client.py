@@ -1,5 +1,8 @@
+import csv
 import hashlib
+import io
 import ipaddress
+import json
 import logging
 from typing import Any
 from urllib.parse import urlparse
@@ -26,6 +29,9 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
+# data.gov.il datastore page size (max records per request)
+DATASTORE_PAGE_SIZE = 32000
+
 
 def _validate_url(url: str) -> None:
     """Validate URL to prevent SSRF attacks."""
@@ -43,7 +49,6 @@ def _validate_url(url: str) -> None:
     except ValueError as e:
         if "Blocked" in str(e) or "scheme" in str(e):
             raise
-        # hostname is not an IP — that's fine (it's a domain name)
 
 
 class CKANClient:
@@ -75,24 +80,92 @@ class CKANClient:
     async def organization_list(self, all_fields: bool = False) -> list:
         return await self._get("organization_list", {"all_fields": all_fields})
 
-    async def download_resource(self, url: str) -> tuple[bytes, str]:
-        """Download a resource file with SSRF protection and size limit."""
+    async def download_resource(self, url: str, resource_id: str = "") -> tuple[bytes, str]:
+        """
+        Download a resource. Strategy:
+        1. Try datastore_search API (works even when direct URL is blocked by IAP)
+        2. Fall back to direct URL download
+        """
+        # Strategy 1: Try datastore API (data.gov.il blocks direct downloads with Google IAP)
+        if resource_id:
+            try:
+                content = await self._download_via_datastore(resource_id)
+                if content and not content.startswith(b"<!"):  # Not an HTML error page
+                    sha256 = hashlib.sha256(content).hexdigest()
+                    logger.info("Downloaded %s via datastore API (%d bytes)", resource_id, len(content))
+                    return content, sha256
+            except Exception as e:
+                logger.debug("Datastore download failed for %s: %s, trying direct URL", resource_id, e)
+
+        # Strategy 2: Direct URL download (may fail on data.gov.il due to IAP)
+        return await self._download_direct(url)
+
+    async def _download_via_datastore(self, resource_id: str) -> bytes:
+        """Download all records from data.gov.il datastore and convert to CSV bytes."""
+        all_records: list[dict] = []
+        fields: list[str] = []
+        offset = 0
+
+        async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
+            while True:
+                url = f"{self.api_url}/datastore_search"
+                params = {
+                    "resource_id": resource_id,
+                    "limit": DATASTORE_PAGE_SIZE,
+                    "offset": offset,
+                }
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+                if not data.get("success"):
+                    raise RuntimeError(f"datastore_search error: {data.get('error')}")
+
+                result = data["result"]
+
+                if not fields and result.get("fields"):
+                    fields = [f["id"] for f in result["fields"] if f["id"] != "_id"]
+
+                records = result.get("records", [])
+                if not records:
+                    break
+
+                all_records.extend(records)
+                offset += len(records)
+
+                # Check if we got all records
+                total = result.get("total", 0)
+                if offset >= total:
+                    break
+
+        if not all_records or not fields:
+            raise RuntimeError("No data returned from datastore")
+
+        # Convert to CSV bytes
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for record in all_records:
+            # Remove _id field added by datastore
+            clean = {k: v for k, v in record.items() if k != "_id"}
+            writer.writerow(clean)
+
+        return output.getvalue().encode("utf-8")
+
+    async def _download_direct(self, url: str) -> tuple[bytes, str]:
+        """Direct file download with SSRF protection."""
         _validate_url(url)
         max_size = settings.max_resource_download_size
 
         async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-            # Check size via HEAD first
             try:
                 head = await client.head(url)
                 content_length = head.headers.get("content-length")
                 if content_length and int(content_length) > max_size:
-                    raise ValueError(
-                        f"Resource too large: {int(content_length)} bytes (max {max_size})"
-                    )
+                    raise ValueError(f"Resource too large: {int(content_length)} bytes")
             except httpx.HTTPError:
-                pass  # HEAD may fail; proceed with streaming download
+                pass
 
-            # Stream download with size enforcement
             chunks = []
             total = 0
             async with client.stream("GET", url) as resp:
@@ -100,12 +173,15 @@ class CKANClient:
                 async for chunk in resp.aiter_bytes(chunk_size=65536):
                     total += len(chunk)
                     if total > max_size:
-                        raise ValueError(
-                            f"Resource exceeded size limit during download ({max_size} bytes)"
-                        )
+                        raise ValueError(f"Resource exceeded size limit ({max_size} bytes)")
                     chunks.append(chunk)
 
             content = b"".join(chunks)
+
+            # Detect if we got an HTML page instead of actual data (IAP redirect)
+            if content[:15].lower().startswith(b"<!doctype") or content[:6].lower().startswith(b"<html"):
+                raise RuntimeError("Got HTML instead of data — likely blocked by IAP/auth")
+
             sha256 = hashlib.sha256(content).hexdigest()
             return content, sha256
 

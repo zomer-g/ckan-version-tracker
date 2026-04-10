@@ -157,6 +157,19 @@ export default function TrackedPage() {
               )}
             </div>
 
+            {ds.odata_dataset_id && (
+              <div className="text-sm mb-1">
+                <a
+                  href={`https://www.odata.org.il/dataset/${ds.odata_dataset_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: "0.8rem" }}
+                >
+                  {t("tracked.view_on_odata")} ↗
+                </a>
+              </div>
+            )}
+
             <div className="flex mt-1">
               <Link to={`/versions/${ds.id}`} className="btn-primary" style={{ textDecoration: "none" }}>
                 {t("tracked.versions")}

@@ -77,7 +77,7 @@ async def poll_dataset(dataset_id: str) -> None:
                         if not r.get("url"):
                             continue
                         try:
-                            content, sha256 = await ckan_client.download_resource(r["url"])
+                            content, sha256 = await ckan_client.download_resource(r["url"], resource_id=r["id"])
                             resources_to_upload.append({
                                 "resource": r,
                                 "content": content,
@@ -102,12 +102,13 @@ async def poll_dataset(dataset_id: str) -> None:
                         )
                         ds.odata_dataset_id = mirror["id"]
                         logger.info("Lazily created mirror dataset %s", mirror_name)
-                    except Exception:
+                    except Exception as e1:
+                        logger.warning("Mirror create failed for %s: %s", mirror_name, e1)
                         try:
                             mirror = await odata_client.package_show(mirror_name)
                             ds.odata_dataset_id = mirror["id"]
-                        except Exception:
-                            logger.warning("Could not create mirror for %s", ds.ckan_name)
+                        except Exception as e2:
+                            logger.error("Mirror find also failed for %s: %s", mirror_name, e2)
 
                 # Upload snapshot to odata.org.il
                 if ds.odata_dataset_id:

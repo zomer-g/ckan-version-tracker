@@ -45,7 +45,7 @@ async def detect_resource_changes(
             continue
 
         try:
-            content, sha256 = await ckan_client.download_resource(url)
+            content, sha256 = await ckan_client.download_resource(url, resource_id=rid)
             hash_map[rid] = sha256
 
             old_hash = old_hashes.get(rid)

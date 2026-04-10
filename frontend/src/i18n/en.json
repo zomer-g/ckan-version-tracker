@@ -46,6 +46,7 @@
     "versions": "Versions",
     "poll_now": "Poll Now",
     "untrack": "Untrack",
+    "view_on_odata": "View versions on ODATA",
     "change_interval": "Change interval",
     "minutes": "minutes",
     "hours": "hours",
