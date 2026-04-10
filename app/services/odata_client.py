@@ -10,6 +10,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=10.0)
+DATASTORE_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=10.0)
 
 
 class ODataClient:
@@ -23,8 +24,8 @@ class ODataClient:
     def _headers(self) -> dict:
         return {"Authorization": self.api_key} if self.api_key else {}
 
-    async def _post(self, action: str, data: dict | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async def _post(self, action: str, data: dict | None = None, timeout: httpx.Timeout | None = None) -> Any:
+        async with httpx.AsyncClient(timeout=timeout or TIMEOUT) as client:
             url = f"{self.api_url}/{action}"
             resp = await client.post(url, json=data or {}, headers=self._headers())
             resp.raise_for_status()
@@ -43,12 +44,14 @@ class ODataClient:
                 raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
             return result["result"]
 
+    # ── Dataset management ───────────────────────────────────────────────
+
     async def create_dataset(self, name: str, title: str, owner_org: str | None = None, extras: list | None = None) -> dict:
         """Create a mirror dataset on odata.org.il."""
         payload: dict[str, Any] = {
             "name": name,
             "title": title,
-            "notes": f"Version history mirror - auto-managed by CKAN Version Tracker",
+            "notes": "Version history mirror - auto-managed by CKAN Version Tracker",
         }
         if owner_org:
             payload["owner_org"] = owner_org
@@ -58,6 +61,18 @@ class ODataClient:
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})
+
+    # ── Resource management (file upload) ────────────────────────────────
+
+    async def create_resource(self, dataset_id: str, name: str, description: str = "", resource_format: str = "") -> dict:
+        """Create an empty CKAN resource (no file upload). Used as datastore target."""
+        return await self._post("resource_create", {
+            "package_id": dataset_id,
+            "name": name,
+            "description": description,
+            "format": resource_format,
+            "url": "",  # Empty URL — data lives in datastore
+        })
 
     async def upload_resource(
         self,
@@ -99,25 +114,103 @@ class ODataClient:
             resource_format="JSON",
         )
 
-    async def upload_resource_snapshot(
+    # ── Datastore API ────────────────────────────────────────────────────
+
+    async def datastore_create(
+        self,
+        resource_id: str,
+        fields: list[dict],
+        records: list[dict],
+        primary_key: str | list[str] | None = None,
+    ) -> dict:
+        """
+        Create a DataStore table and insert initial records.
+        After this, data is queryable via datastore_search.
+        """
+        payload: dict[str, Any] = {
+            "resource_id": resource_id,
+            "fields": fields,
+            "records": records,
+            "force": True,
+        }
+        if primary_key:
+            payload["primary_key"] = primary_key
+        return await self._post("datastore_create", payload, timeout=DATASTORE_TIMEOUT)
+
+    async def datastore_upsert(
+        self,
+        resource_id: str,
+        records: list[dict],
+        method: str = "insert",
+    ) -> dict:
+        """
+        Insert/upsert additional records into an existing DataStore table.
+        Methods: 'insert' (fast, no key check), 'upsert', 'update'.
+        """
+        return await self._post("datastore_upsert", {
+            "resource_id": resource_id,
+            "method": method,
+            "records": records,
+        }, timeout=DATASTORE_TIMEOUT)
+
+    async def push_csv_to_datastore(
         self,
         dataset_id: str,
         version_number: int,
         resource_name: str,
-        file_content: bytes,
-        resource_format: str = "",
+        fields: list[dict],
+        records: list[dict],
+        resource_format: str = "CSV",
     ) -> dict:
-        """Upload a resource data file as a version snapshot."""
+        """
+        Create a resource and push parsed CSV data into the datastore.
+        Returns the created resource dict (with resource_id for querying).
+        """
+        from app.services.csv_parser import batch_records
+
         safe_name = resource_name.replace("/", "_").replace("\\", "_")
-        filename = f"v{version_number}_{safe_name}"
-        return await self.upload_resource(
+
+        # Step 1: Create an empty CKAN resource
+        resource = await self.create_resource(
             dataset_id=dataset_id,
-            file_content=file_content,
-            filename=filename,
-            name=f"v{version_number} - {resource_name}",
-            description=f"Resource snapshot: {resource_name} (version {version_number})",
+            name=f"v{version_number} - {safe_name}",
+            description=f"Version {version_number} datastore: {resource_name} ({len(records)} rows)",
             resource_format=resource_format,
         )
+        resource_id = resource["id"]
+
+        # Step 2: Push data into datastore in batches
+        batches = batch_records(records)
+
+        if batches:
+            # First batch: use datastore_create to define schema + insert
+            logger.info(
+                "Pushing %d records to datastore %s (batch 1/%d)",
+                len(batches[0]), resource_id, len(batches),
+            )
+            await self.datastore_create(
+                resource_id=resource_id,
+                fields=fields,
+                records=batches[0],
+            )
+
+            # Remaining batches: use datastore_upsert (insert mode)
+            for i, batch in enumerate(batches[1:], start=2):
+                logger.info(
+                    "Pushing batch %d/%d (%d records) to %s",
+                    i, len(batches), len(batch), resource_id,
+                )
+                await self.datastore_upsert(
+                    resource_id=resource_id,
+                    records=batch,
+                    method="insert",
+                )
+
+        logger.info(
+            "Datastore resource %s created with %d records",
+            resource_id, len(records),
+        )
+        return resource
 
 
 odata_client = ODataClient()
