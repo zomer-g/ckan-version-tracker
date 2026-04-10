@@ -101,16 +101,17 @@ class ODataClient:
             return result["result"]
 
     async def upload_metadata_snapshot(
-        self, dataset_id: str, version_number: int, metadata: dict
+        self, dataset_id: str, version_number: int, metadata: dict, timestamp: str = ""
     ) -> dict:
         """Upload metadata snapshot as a JSON resource."""
+        ts = timestamp or "unknown"
         content = json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8")
         return await self.upload_resource(
             dataset_id=dataset_id,
             file_content=content,
-            filename=f"v{version_number}_metadata.json",
-            name=f"v{version_number} - Metadata Snapshot",
-            description=f"Metadata snapshot for version {version_number}",
+            filename=f"{ts}_v{version_number}_metadata.json",
+            name=f"{ts} v{version_number} - Metadata Snapshot",
+            description=f"Metadata snapshot for version {version_number} ({ts})",
             resource_format="JSON",
         )
 
@@ -161,6 +162,7 @@ class ODataClient:
         fields: list[dict],
         records: list[dict],
         resource_format: str = "CSV",
+        timestamp: str = "",
     ) -> dict:
         """
         Create a resource and push parsed CSV data into the datastore.
@@ -169,12 +171,13 @@ class ODataClient:
         from app.services.csv_parser import batch_records
 
         safe_name = resource_name.replace("/", "_").replace("\\", "_")
+        ts = timestamp or "unknown"
 
         # Step 1: Create an empty CKAN resource
         resource = await self.create_resource(
             dataset_id=dataset_id,
-            name=f"v{version_number} - {safe_name}",
-            description=f"Version {version_number} datastore: {resource_name} ({len(records)} rows)",
+            name=f"{ts} v{version_number} - {safe_name}",
+            description=f"Version {version_number} ({ts}): {resource_name} ({len(records)} rows)",
             resource_format=resource_format,
         )
         resource_id = resource["id"]

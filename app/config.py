@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     data_gov_il_url: str = "https://data.gov.il"
     odata_url: str = "https://www.odata.org.il"
     odata_api_key: str = ""
+    odata_owner_org: str = "zomer"
 
     default_poll_interval: int = 900
     min_poll_interval: int = 300

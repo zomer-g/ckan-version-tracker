@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
+from app.config import settings
 from app.database import async_session
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
@@ -85,6 +86,28 @@ async def poll_dataset(dataset_id: str) -> None:
                             hash_map[r["id"]] = sha256
                         except Exception as e:
                             logger.warning("Failed to download resource %s: %s", r["id"], e)
+
+                # Lazily create mirror dataset if it doesn't exist yet
+                if not ds.odata_dataset_id and settings.odata_api_key:
+                    from app.services.odata_client import odata_client
+                    import re
+                    safe = re.sub(r"[^a-z0-9_-]", "-", ds.ckan_name.lower())
+                    safe = re.sub(r"-+", "-", safe).strip("-")[:80]
+                    mirror_name = f"gov-versions-{safe}"
+                    try:
+                        mirror = await odata_client.create_dataset(
+                            name=mirror_name,
+                            title=f"[Versions] {ds.title}",
+                            owner_org=settings.odata_owner_org,
+                        )
+                        ds.odata_dataset_id = mirror["id"]
+                        logger.info("Lazily created mirror dataset %s", mirror_name)
+                    except Exception:
+                        try:
+                            mirror = await odata_client.package_show(mirror_name)
+                            ds.odata_dataset_id = mirror["id"]
+                        except Exception:
+                            logger.warning("Could not create mirror for %s", ds.ckan_name)
 
                 # Upload snapshot to odata.org.il
                 if ds.odata_dataset_id:

@@ -102,13 +102,14 @@ async def track_dataset(
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
     mirror_name = f"gov-versions-{_sanitize_name(pkg['name'])}"
 
-    # Create mirror dataset on odata.org.il (optional — works without API key)
+    # Create mirror dataset on odata.org.il under user's organization
     odata_dataset_id = None
     if settings.odata_api_key:
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
                 title=f"[Versions] {pkg.get('title', pkg['name'])}",
+                owner_org=settings.odata_owner_org,
                 extras=[
                     {"key": "source_ckan_id", "value": body.ckan_id},
                     {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{pkg['name']}"},

@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 TABULAR_FORMATS = {"csv", "tsv", "txt"}
 
 
+def _timestamp() -> str:
+    """Current timestamp for resource names: 2026-04-10_14-30"""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
+
+
 async def create_version_snapshot(
     odata_dataset_id: str,
     version_number: int,
@@ -24,15 +30,19 @@ async def create_version_snapshot(
 ) -> tuple[str, dict]:
     """
     Upload a full version snapshot to odata.org.il.
-    - Tabular data (CSV) → pushed to Datastore (queryable via API)
-    - Metadata → uploaded as JSON file
+    - Tabular data (CSV) -> pushed to Datastore (queryable via API)
+    - Metadata -> uploaded as JSON file
+    - Resource names include date for easy identification.
     Returns (metadata_resource_id, resource_mappings).
     """
+    ts = _timestamp()
+
     # Upload metadata snapshot (always as file — not tabular)
     meta_result = await odata_client.upload_metadata_snapshot(
         dataset_id=odata_dataset_id,
         version_number=version_number,
         metadata=metadata,
+        timestamp=ts,
     )
     metadata_resource_id = meta_result["id"]
 
@@ -55,18 +65,16 @@ async def create_version_snapshot(
 
         try:
             if fmt in TABULAR_FORMATS:
-                # Parse CSV and push to Datastore
                 result = await _push_to_datastore(
-                    odata_dataset_id, version_number, resource, content,
+                    odata_dataset_id, version_number, resource, content, ts,
                 )
             else:
-                # Non-tabular: upload as file (fallback)
                 result = await odata_client.upload_resource(
                     dataset_id=odata_dataset_id,
                     file_content=content,
-                    filename=f"v{version_number}_{resource.get('name', rid)}",
-                    name=f"v{version_number} - {resource.get('name', rid)}",
-                    description=f"Resource snapshot (version {version_number})",
+                    filename=f"{ts}_v{version_number}_{resource.get('name', rid)}",
+                    name=f"{ts} v{version_number} - {resource.get('name', rid)}",
+                    description=f"Resource snapshot (version {version_number}, {ts})",
                     resource_format=fmt.upper(),
                 )
 
@@ -86,6 +94,7 @@ async def _push_to_datastore(
     version_number: int,
     resource: dict,
     content: bytes,
+    timestamp: str,
 ) -> dict:
     """Parse CSV content and push rows into CKAN Datastore."""
     name = resource.get("name", resource["id"])
@@ -99,9 +108,9 @@ async def _push_to_datastore(
         return await odata_client.upload_resource(
             dataset_id=odata_dataset_id,
             file_content=content,
-            filename=f"v{version_number}_{name}",
-            name=f"v{version_number} - {name}",
-            description=f"Resource snapshot (version {version_number}) - empty/unparseable",
+            filename=f"{timestamp}_v{version_number}_{name}",
+            name=f"{timestamp} v{version_number} - {name} (unparseable)",
+            description=f"Resource snapshot (version {version_number}, {timestamp})",
             resource_format=fmt,
         )
 
@@ -114,6 +123,7 @@ async def _push_to_datastore(
         fields=fields,
         records=records,
         resource_format=fmt,
+        timestamp=timestamp,
     )
 
 
