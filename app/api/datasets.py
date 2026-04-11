@@ -88,19 +88,9 @@ async def list_tracked(
         .group_by(VersionIndex.tracked_dataset_id)
     )
     version_counts = dict(count_result.all())
-    # Resolve resource names for datasets that track a specific resource
+    # Build response — no external API calls here (performance critical)
     response_list = []
     for ds, requester in rows:
-        resource_name = None
-        if ds.resource_id:
-            try:
-                pkg = await ckan_client.package_show(ds.ckan_id)
-                for r in pkg.get("resources", []):
-                    if r["id"] == ds.resource_id:
-                        resource_name = r.get("name") or r.get("description") or r["id"]
-                        break
-            except Exception:
-                resource_name = ds.resource_id
         response_list.append(
             DatasetResponse(
                 id=str(ds.id),
@@ -117,7 +107,7 @@ async def list_tracked(
                 requester_name=requester.display_name if requester else None,
                 requester_email=requester.email if requester else None,
                 resource_id=ds.resource_id,
-                resource_name=resource_name,
+                resource_name=None,  # resource name is already in the title
                 source_url=_build_source_url(ds),
                 version_count=version_counts.get(ds.id, 0),
             )
