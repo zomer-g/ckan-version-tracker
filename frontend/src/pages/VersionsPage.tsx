@@ -138,7 +138,19 @@ export default function VersionsPage() {
                   </span>
                 </div>
 
-                {summary && (
+                {summary && summary.type === "large_dataset" ? (
+                  <div className="flex mt-1" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+                    <span className="badge badge-info">{t("versions.large_dataset")}</span>
+                    <span className="text-sm">
+                      {summary.record_count?.toLocaleString()} {t("versions.rows")}
+                      {summary.delta != null && summary.delta !== summary.record_count && (
+                        <span style={{ color: summary.delta >= 0 ? "var(--success)" : "var(--danger)", marginInlineStart: "0.3rem" }}>
+                          ({summary.delta >= 0 ? "+" : ""}{summary.delta.toLocaleString()})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ) : summary && (
                   <div className="flex mt-1">
                     {(summary.resources_modified?.length ?? 0) > 0 && (
                       <span className="badge badge-warning">

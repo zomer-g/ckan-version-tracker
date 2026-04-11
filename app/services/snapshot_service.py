@@ -121,6 +121,42 @@ async def _push_to_datastore(
     )
 
 
+async def create_lightweight_snapshot(
+    odata_dataset_id: str,
+    version_number: int,
+    resource_name: str,
+    total_rows: int,
+    fields: list[dict],
+    head_records: list[dict],
+    tail_records: list[dict],
+) -> str | None:
+    """Create a lightweight version snapshot for large datasets.
+    Pushes only sample rows (head + tail) to odata.org.il datastore.
+    Returns the odata resource_id or None.
+    """
+    ts = _timestamp()
+    all_sample = head_records + tail_records
+    if not all_sample:
+        return None
+
+    safe_name = resource_name.replace("/", "_").replace("\\", "_")
+
+    try:
+        result = await odata_client.push_csv_to_datastore(
+            dataset_id=odata_dataset_id,
+            version_number=version_number,
+            resource_name=f"{safe_name} (sample {len(all_sample)}/{total_rows:,})",
+            fields=[{"id": f["id"], "type": f.get("type", "text")} for f in fields],
+            records=all_sample,
+            resource_format="CSV",
+            timestamp=ts,
+        )
+        return result["id"]
+    except Exception as e:
+        logger.error("Failed to push lightweight snapshot: %s", e)
+        return None
+
+
 async def fetch_metadata_from_odata(odata_resource_id: str) -> dict:
     """Fetch a metadata snapshot JSON from odata.org.il."""
     if not odata_resource_id:

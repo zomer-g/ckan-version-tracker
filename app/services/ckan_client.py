@@ -198,4 +198,47 @@ class CKANClient:
             }
 
 
+    async def datastore_info(self, resource_id: str) -> dict:
+        """Get record count and fields without downloading any data. Instant."""
+        result = await self._get("datastore_search", {
+            "resource_id": resource_id,
+            "limit": 0,
+        })
+        return {
+            "total": result.get("total", 0),
+            "fields": [f for f in result.get("fields", []) if f["id"] != "_id"],
+        }
+
+    async def datastore_sample(self, resource_id: str, head: int = 100, tail: int = 100) -> tuple[list[dict], list[dict]]:
+        """Get first N and last N records for inspection without downloading everything."""
+        # Get total count first
+        info = await self.datastore_info(resource_id)
+        total = info["total"]
+        fields = info["fields"]
+
+        # Head records (first N)
+        head_result = await self._get("datastore_search", {
+            "resource_id": resource_id,
+            "limit": head,
+            "offset": 0,
+        })
+        head_records = head_result.get("records", [])
+
+        # Tail records (last N)
+        tail_records = []
+        if total > head + tail:
+            tail_result = await self._get("datastore_search", {
+                "resource_id": resource_id,
+                "limit": tail,
+                "offset": max(0, total - tail),
+            })
+            tail_records = tail_result.get("records", [])
+
+        # Clean _id from records
+        for r in head_records + tail_records:
+            r.pop("_id", None)
+
+        return head_records, tail_records
+
+
 ckan_client = CKANClient()

@@ -75,7 +75,9 @@
     "download": "הורד",
     "no_versions": "עדיין לא זוהו גרסאות",
     "select_hint": "בחר שתי גרסאות להשוואה",
-    "view_on_odata": "צפה ב-ODATA"
+    "view_on_odata": "צפה ב-ODATA",
+    "large_dataset": "מאגר גדול",
+    "rows": "שורות"
   },
   "diff": {
     "title": "השוואת גרסאות",

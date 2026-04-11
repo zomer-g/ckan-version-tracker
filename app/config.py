@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     odata_api_key: str = ""
     odata_owner_org: str = "zomer"
 
+    large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
+
     default_poll_interval: int = 604800  # 1 week
     min_poll_interval: int = 300
     max_resource_download_size: int = 500_000_000

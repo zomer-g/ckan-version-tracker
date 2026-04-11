@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -79,6 +81,20 @@ async def poll_dataset(dataset_id: str) -> None:
                         "Tracked resource %s not found in dataset %s",
                         ds.resource_id, ds.ckan_name,
                     )
+
+            # Check if this is a large dataset
+            resource_to_check = resources[0] if resources else None
+            if resource_to_check and ds.resource_id:
+                try:
+                    ds_info = await ckan_client.datastore_info(ds.resource_id)
+                    total_rows = ds_info["total"]
+                except Exception:
+                    total_rows = 0
+
+                if total_rows >= settings.large_dataset_threshold:
+                    # LARGE DATASET PATH: metadata + sample only
+                    await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
+                    return
 
             changed_resources, hash_map = await detect_resource_changes(
                 old_mappings, resources
@@ -176,3 +192,106 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.exception("Error polling dataset %s", ds.ckan_name)
             ds.last_polled_at = datetime.now(timezone.utc)
             await db.commit()
+
+
+async def _poll_large_dataset(
+    ds: TrackedDataset,
+    pkg: dict,
+    resource: dict,
+    ds_info: dict,
+    next_version: int,
+    old_mappings: dict | None,
+    db,
+):
+    """Handle large datasets with metadata-only versioning."""
+    total_rows = ds_info["total"]
+    fields = ds_info["fields"]
+
+    # Check if record count changed from previous version
+    previous_count = None
+    if old_mappings:
+        prev_summary = old_mappings.get("_large_dataset_info", {})
+        previous_count = prev_summary.get("record_count")
+
+    new_modified = pkg.get("metadata_modified", "")
+
+    # Get sample data (first 100 + last 100 rows)
+    try:
+        head_records, tail_records = await ckan_client.datastore_sample(ds.resource_id)
+    except Exception as e:
+        logger.warning("Failed to get sample for large dataset %s: %s", ds.ckan_name, e)
+        head_records, tail_records = [], []
+
+    # Compute a lightweight hash from record count + field names + sample
+    lightweight_data = json.dumps({
+        "total": total_rows,
+        "fields": [f["id"] for f in fields],
+        "head_sample": head_records[:5],  # first 5 for hash
+    }, sort_keys=True)
+    sha256 = hashlib.sha256(lightweight_data.encode()).hexdigest()
+
+    # Check against previous hash
+    old_hash = (old_mappings or {}).get("_hashes", {}).get("lightweight")
+    if old_hash == sha256 and previous_count == total_rows:
+        logger.info("Large dataset %s unchanged (count=%d, hash=%s)", ds.ckan_name, total_rows, sha256[:8])
+        ds.last_polled_at = datetime.now(timezone.utc)
+        ds.last_modified = new_modified
+        await db.commit()
+        return
+
+    logger.info("Large dataset %s changed: %s rows (prev=%s)", ds.ckan_name, total_rows, previous_count)
+
+    # Create lightweight snapshot on odata.org.il
+    odata_resource_id = None
+    if ds.odata_dataset_id:
+        try:
+            from app.services.snapshot_service import create_lightweight_snapshot
+            odata_resource_id = await create_lightweight_snapshot(
+                odata_dataset_id=ds.odata_dataset_id,
+                version_number=next_version,
+                resource_name=resource.get("name", ds.ckan_name),
+                total_rows=total_rows,
+                fields=fields,
+                head_records=head_records,
+                tail_records=tail_records,
+            )
+        except Exception as e:
+            logger.error("Failed to create lightweight snapshot: %s", e)
+
+    delta = total_rows - previous_count if previous_count is not None else total_rows
+
+    # Save version
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=new_modified,
+        odata_metadata_resource_id=None,
+        change_summary={
+            "type": "large_dataset",
+            "record_count": total_rows,
+            "previous_count": previous_count,
+            "delta": delta,
+            "fields": [f["id"] for f in fields],
+            "sample_rows": len(head_records) + len(tail_records),
+            "resources_added": [],
+            "resources_removed": [],
+            "resources_modified": [],
+        },
+        resource_mappings={
+            "_hashes": {"lightweight": sha256},
+            "_resource_ids": [resource.get("id", "")],
+            "_large_dataset_info": {
+                "record_count": total_rows,
+                "fields": [f["id"] for f in fields],
+            },
+            **({"sample": odata_resource_id} if odata_resource_id else {}),
+        },
+    )
+    db.add(version)
+
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = new_modified
+    await db.commit()
+
+    logger.info("Large dataset version %d created for %s (%d rows, delta=%d)",
+                next_version, ds.ckan_name, total_rows, delta)

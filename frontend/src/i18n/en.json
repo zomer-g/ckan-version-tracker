@@ -75,7 +75,9 @@
     "download": "Download",
     "no_versions": "No versions detected yet",
     "select_hint": "Select two versions to compare",
-    "view_on_odata": "View on ODATA"
+    "view_on_odata": "View on ODATA",
+    "large_dataset": "Large Dataset",
+    "rows": "rows"
   },
   "diff": {
     "title": "Compare Versions",
