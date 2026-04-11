@@ -123,9 +123,12 @@ export default function TrackedPage() {
               </span>
             </div>
 
-            {ds.organization && (
-              <p className="text-sm text-muted mb-1">{ds.organization}</p>
-            )}
+            <p className="text-sm text-muted mb-1">
+              {ds.organization}
+              {ds.requester_name && (
+                <span> · {t("admin.requester")}: {ds.requester_name}</span>
+              )}
+            </p>
 
             <div className="text-sm mb-1">
               <div className="flex" style={{ gap: "0.5rem" }}>

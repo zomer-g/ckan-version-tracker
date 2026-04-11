@@ -42,6 +42,8 @@ class DatasetResponse(BaseModel):
     last_polled_at: str | None
     last_modified: str | None
     version_count: int = 0
+    requester_name: str | None = None
+    requester_email: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -51,10 +53,15 @@ async def list_tracked(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Show ALL active datasets to everyone (not just creator's)
+    from app.models.user import User as UserModel
     result = await db.execute(
-        select(TrackedDataset).where(TrackedDataset.created_by == user.id).order_by(TrackedDataset.created_at.desc())
+        select(TrackedDataset, UserModel)
+        .join(UserModel, TrackedDataset.created_by == UserModel.id)
+        .where(TrackedDataset.status.in_(["active", "pending"]))
+        .order_by(TrackedDataset.created_at.desc())
     )
-    datasets = result.scalars().all()
+    rows = result.all()
     return [
         DatasetResponse(
             id=str(ds.id),
@@ -68,8 +75,10 @@ async def list_tracked(
             status=ds.status,
             last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
             last_modified=ds.last_modified,
+            requester_name=requester.display_name,
+            requester_email=requester.email,
         )
-        for ds in datasets
+        for ds, requester in rows
     ]
 
 
@@ -164,12 +173,10 @@ async def update_tracked(
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
-    result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == uid,
-            TrackedDataset.created_by == user.id,
-        )
-    )
+    query = select(TrackedDataset).where(TrackedDataset.id == uid)
+    if not user.is_admin:
+        query = query.where(TrackedDataset.created_by == user.id)
+    result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -203,12 +210,10 @@ async def untrack_dataset(
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
-    result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == uid,
-            TrackedDataset.created_by == user.id,
-        )
-    )
+    query = select(TrackedDataset).where(TrackedDataset.id == uid)
+    if not user.is_admin:
+        query = query.where(TrackedDataset.created_by == user.id)
+    result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -225,12 +230,10 @@ async def trigger_poll(
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
-    result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == uid,
-            TrackedDataset.created_by == user.id,
-        )
-    )
+    query = select(TrackedDataset).where(TrackedDataset.id == uid)
+    if not user.is_admin:
+        query = query.where(TrackedDataset.created_by == user.id)
+    result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")

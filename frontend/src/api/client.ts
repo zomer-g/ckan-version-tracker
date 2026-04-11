@@ -69,6 +69,8 @@ export interface TrackedDataset {
   last_polled_at: string | null;
   last_modified: string | null;
   version_count: number;
+  requester_name: string | null;
+  requester_email: string | null;
 }
 
 export const datasets = {
