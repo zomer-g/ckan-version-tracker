@@ -50,7 +50,7 @@ async def list_pending(
     """List all pending dataset tracking requests."""
     result = await db.execute(
         select(TrackedDataset, User)
-        .join(User, TrackedDataset.created_by == User.id)
+        .outerjoin(User, TrackedDataset.created_by == User.id)
         .where(TrackedDataset.status == "pending")
         .order_by(TrackedDataset.created_at.desc())
     )
@@ -65,8 +65,8 @@ async def list_pending(
             poll_interval=ds.poll_interval,
             status=ds.status,
             created_at=ds.created_at.isoformat(),
-            requester_email=requester.email,
-            requester_name=requester.display_name,
+            requester_email=requester.email if requester else "אנונימי",
+            requester_name=requester.display_name if requester else "אנונימי",
         )
         for ds, requester in rows
     ]
