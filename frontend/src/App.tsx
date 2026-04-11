@@ -4,17 +4,19 @@ import { useEffect, useRef } from "react";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
+import Footer from "./components/Footer";
 import LoginPage from "./pages/LoginPage";
 import SearchPage from "./pages/SearchPage";
 import TrackedPage from "./pages/TrackedPage";
 import VersionsPage from "./pages/VersionsPage";
 import DiffPage from "./pages/DiffPage";
 import AdminPage from "./pages/AdminPage";
+import AboutPage from "./pages/AboutPage";
 
 export default function App() {
   const { t, i18n } = useTranslation();
   const location = useLocation();
-  const mainRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     document.documentElement.dir = i18n.language === "he" ? "rtl" : "ltr";
@@ -32,14 +34,15 @@ export default function App() {
         {t("nav.skip_to_content", "Skip to content")}
       </a>
       <Navbar />
-      <main id="main-content" ref={mainRef} tabIndex={-1} className="container mt-3" style={{ outline: "none" }}>
+      <div id="main-content" ref={mainRef} tabIndex={-1} style={{ outline: "none", flex: 1 }}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/about" element={<AboutPage />} />
           <Route
             path="/"
             element={
               <ProtectedRoute>
-                <SearchPage />
+                <div className="container mt-3"><SearchPage /></div>
               </ProtectedRoute>
             }
           />
@@ -47,7 +50,7 @@ export default function App() {
             path="/tracked"
             element={
               <ProtectedRoute>
-                <TrackedPage />
+                <div className="container mt-3"><TrackedPage /></div>
               </ProtectedRoute>
             }
           />
@@ -55,7 +58,7 @@ export default function App() {
             path="/versions/:datasetId"
             element={
               <ProtectedRoute>
-                <VersionsPage />
+                <div className="container mt-3"><VersionsPage /></div>
               </ProtectedRoute>
             }
           />
@@ -63,7 +66,7 @@ export default function App() {
             path="/diff/:datasetId"
             element={
               <ProtectedRoute>
-                <DiffPage />
+                <div className="container mt-3"><DiffPage /></div>
               </ProtectedRoute>
             }
           />
@@ -71,12 +74,13 @@ export default function App() {
             path="/admin"
             element={
               <ProtectedRoute>
-                <AdminPage />
+                <div className="container mt-3"><AdminPage /></div>
               </ProtectedRoute>
             }
           />
         </Routes>
-      </main>
+      </div>
+      <Footer />
     </AuthProvider>
   );
 }

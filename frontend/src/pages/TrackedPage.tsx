@@ -5,6 +5,7 @@ import {
   datasets as datasetsApi,
   TrackedDataset,
 } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 
 function formatInterval(seconds: number, t: (k: string) => string): string {
   if (seconds < 60) return `${seconds} ${t("tracked.seconds")}`;
@@ -28,6 +29,8 @@ const INTERVAL_OPTIONS = [
 
 export default function TrackedPage() {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const isAdmin = !!user?.is_admin;
   const [datasets, setDatasets] = useState<TrackedDataset[]>([]);
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState<Set<string>>(new Set());
@@ -133,36 +136,40 @@ export default function TrackedPage() {
             <div className="text-sm mb-1">
               <div className="flex" style={{ gap: "0.5rem" }}>
                 {t("tracked.poll_interval")}:{" "}
-                {editingInterval === ds.id ? (
-                  <select
-                    value={ds.poll_interval}
-                    onChange={(e) => updateInterval(ds.id, Number(e.target.value))}
-                    onBlur={() => setEditingInterval(null)}
-                    autoFocus
-                    style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
-                    aria-label={t("tracked.poll_interval")}
-                  >
-                    {INTERVAL_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {t(opt.labelKey)}
-                      </option>
-                    ))}
-                  </select>
+                {isAdmin ? (
+                  editingInterval === ds.id ? (
+                    <select
+                      value={ds.poll_interval}
+                      onChange={(e) => updateInterval(ds.id, Number(e.target.value))}
+                      onBlur={() => setEditingInterval(null)}
+                      autoFocus
+                      style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                      aria-label={t("tracked.poll_interval")}
+                    >
+                      {INTERVAL_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {t(opt.labelKey)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <button
+                      onClick={() => setEditingInterval(ds.id)}
+                      style={{
+                        background: "none",
+                        border: "1px dashed var(--border)",
+                        padding: "0.1rem 0.4rem",
+                        fontSize: "0.8rem",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                      title={t("tracked.change_interval")}
+                    >
+                      {formatInterval(ds.poll_interval, t)} ✎
+                    </button>
+                  )
                 ) : (
-                  <button
-                    onClick={() => setEditingInterval(ds.id)}
-                    style={{
-                      background: "none",
-                      border: "1px dashed var(--border)",
-                      padding: "0.1rem 0.4rem",
-                      fontSize: "0.8rem",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                    }}
-                    title={t("tracked.change_interval")}
-                  >
-                    {formatInterval(ds.poll_interval, t)} ✎
-                  </button>
+                  <span style={{ fontSize: "0.8rem" }}>{formatInterval(ds.poll_interval, t)}</span>
                 )}
               </div>
               <div>
@@ -195,7 +202,7 @@ export default function TrackedPage() {
               <Link to={`/versions/${ds.id}`} className="btn-primary" style={{ textDecoration: "none" }}>
                 {t("tracked.versions")}
               </Link>
-              {ds.status === "active" && (
+              {isAdmin && ds.status === "active" && (
                 <button
                   className="btn-secondary"
                   onClick={() => pollNow(ds.id)}
@@ -206,9 +213,11 @@ export default function TrackedPage() {
                   {polling.has(ds.id) ? t("common.loading") : t("tracked.poll_now")}
                 </button>
               )}
-              <button className="btn-danger" onClick={() => untrack(ds.id)}>
-                {t("tracked.untrack")}
-              </button>
+              {isAdmin && (
+                <button className="btn-danger" onClick={() => untrack(ds.id)}>
+                  {t("tracked.untrack")}
+                </button>
+              )}
             </div>
           </article>
         ))}

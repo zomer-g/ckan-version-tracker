@@ -20,6 +20,7 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [tracking, setTracking] = useState<Set<string>>(new Set());
   const [tracked, setTracked] = useState<Set<string>>(new Set());
+  const [showIntervalFor, setShowIntervalFor] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   /**
@@ -67,10 +68,11 @@ export default function SearchPage() {
     setLoading(false);
   };
 
-  const trackDataset = async (ckanId: string) => {
+  const trackDataset = async (ckanId: string, interval: number) => {
+    setShowIntervalFor(null);
     setTracking((prev) => new Set(prev).add(ckanId));
     try {
-      await datasetsApi.track(ckanId);
+      await datasetsApi.track(ckanId, interval);
       setTracked((prev) => new Set(prev).add(ckanId));
     } catch (err: any) {
       if (err.message?.includes("already tracked")) {
@@ -85,6 +87,14 @@ export default function SearchPage() {
       return next;
     });
   };
+
+  const INTERVAL_OPTIONS = [
+    { value: 900, label: "\u05DB\u05DC 15 \u05D3\u05E7\u05D5\u05EA" },
+    { value: 3600, label: "\u05DB\u05DC \u05E9\u05E2\u05D4" },
+    { value: 43200, label: "\u05DB\u05DC 12 \u05E9\u05E2\u05D5\u05EA" },
+    { value: 86400, label: "\u05DB\u05DC \u05D9\u05D5\u05DD" },
+    { value: 604800, label: "\u05DB\u05DC \u05E9\u05D1\u05D5\u05E2" },
+  ];
 
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -138,14 +148,30 @@ export default function SearchPage() {
               {tracked.has(r.id) ? (
                 <span className="badge badge-success" role="status">{t("search.tracking")}</span>
               ) : (
-                <button
-                  className="btn-primary"
-                  onClick={() => trackDataset(r.id)}
-                  disabled={tracking.has(r.id)}
-                  aria-label={tracking.has(r.id) ? t("common.loading") : `${t("search.track_btn")} ${r.title}`}
-                >
-                  {tracking.has(r.id) ? t("common.loading") : t("search.track_btn")}
-                </button>
+                <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                  {showIntervalFor === r.id && (
+                    <select
+                      defaultValue={604800}
+                      onChange={(e) => trackDataset(r.id, Number(e.target.value))}
+                      style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                      aria-label={t("tracked.poll_interval")}
+                      autoFocus
+                    >
+                      <option value="" disabled>{t("tracked.poll_interval")}</option>
+                      {INTERVAL_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    className="btn-primary"
+                    onClick={() => showIntervalFor === r.id ? setShowIntervalFor(null) : setShowIntervalFor(r.id)}
+                    disabled={tracking.has(r.id)}
+                    aria-label={tracking.has(r.id) ? t("common.loading") : `${t("search.track_btn")} ${r.title}`}
+                  >
+                    {tracking.has(r.id) ? t("common.loading") : t("search.track_btn")}
+                  </button>
+                </div>
               )}
             </div>
             {r.notes && (

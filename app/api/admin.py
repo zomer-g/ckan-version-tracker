@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+class ApproveRequest(BaseModel):
+    poll_interval: int | None = None
+
+
 class PendingRequest(BaseModel):
     id: str
     ckan_id: str
@@ -73,6 +77,7 @@ async def list_pending(
 async def approve_request(
     request: Request,
     dataset_id: str,
+    body: ApproveRequest | None = None,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -86,6 +91,10 @@ async def approve_request(
         raise HTTPException(status_code=404, detail="Dataset not found")
     if ds.status != "pending":
         raise HTTPException(status_code=400, detail="Dataset is not pending")
+
+    # Override poll interval if admin specified one
+    if body and body.poll_interval is not None:
+        ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
 
     # Update status to active
     ds.status = "active"

@@ -6,7 +6,8 @@
     "admin": "Admin",
     "login": "Login",
     "logout": "Logout",
-    "skip_to_content": "Skip to content"
+    "skip_to_content": "Skip to content",
+    "about": "About"
   },
   "auth": {
     "login_title": "Sign In",
@@ -85,6 +86,24 @@
     "added": "Added",
     "removed": "Removed",
     "no_changes": "No changes"
+  },
+  "footer": {
+    "description": "Tracking government open data version history",
+    "source_code": "Source Code",
+    "info_for_people": "Information for the People",
+    "copyright": "\u00a9 2026 Gai Zomer"
+  },
+  "about": {
+    "title": "About Versions for the People",
+    "what_title": "What is this?",
+    "what_text": "Versions for the People tracks changes to Israeli government open datasets on data.gov.il. When a dataset is updated, the system saves the previous version so you can see what changed over time.",
+    "why_title": "Why does this matter?",
+    "why_text": "Government datasets are updated by overwriting existing data \u2014 once new data is published, the old data is gone. This project preserves the history for transparency and accountability.",
+    "how_title": "How does it work?",
+    "how_text": "The system polls data.gov.il on a configurable schedule, detects changes, and stores the data in the Datastore on odata.org.il so it can be queried via API.",
+    "projects_title": "Related Projects",
+    "project_odata": "Information for the People \u2014 Open government data platform",
+    "project_ocoi": "Conflicts of Interest for the People \u2014 Tracking public officials' conflicts of interest"
   },
   "common": {
     "loading": "Loading...",

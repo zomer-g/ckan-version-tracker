@@ -39,17 +39,21 @@ export default function LoginPage() {
   }, []);
 
   return (
-    <div style={{ maxWidth: 400, margin: "3rem auto" }}>
-      <div className="card">
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700 }} className="mb-2">
+    <div>
+      <div className="login-hero">
+        <h1>{t("app_name")}</h1>
+        <p>{t("footer.description")}</p>
+      </div>
+      <div className="login-card">
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 600, textAlign: "center" }} className="mb-2">
           {t("auth.login_title")}
-        </h1>
+        </h2>
         {error && (
           <div
             ref={errorRef}
             role="alert"
             className="badge badge-danger mb-2"
-            style={{ display: "block" }}
+            style={{ display: "block", textAlign: "center" }}
             tabIndex={-1}
           >
             {error}
@@ -59,8 +63,7 @@ export default function LoginPage() {
         {ssoProviders.google && (
           <a
             href="/api/auth/sso/google"
-            className="sso-btn"
-            style={ssoButtonStyle}
+            className="sso-btn-teal"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" style={{ marginInlineEnd: "0.5rem" }}>
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
@@ -75,20 +78,3 @@ export default function LoginPage() {
     </div>
   );
 }
-
-const ssoButtonStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "100%",
-  padding: "0.75rem 1rem",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  background: "var(--surface)",
-  color: "var(--text)",
-  fontSize: "1rem",
-  fontWeight: 500,
-  textDecoration: "none",
-  cursor: "pointer",
-  transition: "background 0.2s",
-};

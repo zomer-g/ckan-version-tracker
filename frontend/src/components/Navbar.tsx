@@ -17,30 +17,24 @@ export default function Navbar() {
 
   return (
     <header>
-      <nav
-        aria-label={t("app_name")}
-        style={{
-          background: "var(--surface)",
-          borderBottom: "1px solid var(--border)",
-          padding: "0.75rem 0",
-        }}
-      >
+      <nav className="navbar" aria-label={t("app_name")}>
         <div className="container flex-between">
           <div className="flex">
-            <Link to="/" style={{ fontWeight: 700, fontSize: "1.1rem" }}>
+            <Link to="/" className="brand">
               {t("app_name")}
             </Link>
             {user && (
               <>
-                <Link to="/">{t("nav.search")}</Link>
-                <Link to="/tracked">{t("nav.tracked")}</Link>
-                {user.is_admin && <Link to="/admin">{t("nav.admin")}</Link>}
+                <Link to="/" className="nav-link">{t("nav.search")}</Link>
+                <Link to="/tracked" className="nav-link">{t("nav.tracked")}</Link>
+                {user.is_admin && <Link to="/admin" className="nav-link">{t("nav.admin")}</Link>}
               </>
             )}
+            <Link to="/about" className="nav-link">{t("nav.about")}</Link>
           </div>
           <div className="flex">
             <button
-              className="btn-secondary"
+              className="btn-lang"
               onClick={toggleLang}
               aria-label={langLabel}
             >
@@ -48,13 +42,13 @@ export default function Navbar() {
             </button>
             {user ? (
               <>
-                <span className="text-sm text-muted">{user.display_name}</span>
-                <button className="btn-secondary" onClick={logout}>
+                <span className="user-name">{user.display_name}</span>
+                <button className="btn-logout" onClick={logout}>
                   {t("nav.logout")}
                 </button>
               </>
             ) : (
-              <Link to="/login">{t("nav.login")}</Link>
+              <Link to="/login" className="nav-link">{t("nav.login")}</Link>
             )}
           </div>
         </div>

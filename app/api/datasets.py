@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid, sanitize_ckan_name
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_admin_user, get_current_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
@@ -21,7 +21,8 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 class TrackRequest(BaseModel):
     ckan_id: str
-    poll_interval: int = 3600
+    poll_interval: int = 604800
+    preferred_interval: int = 604800
 
 
 class UpdateRequest(BaseModel):
@@ -94,7 +95,8 @@ async def track_dataset(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Dataset already tracked")
 
-    interval = max(body.poll_interval, settings.min_poll_interval)
+    raw_interval = body.preferred_interval if body.preferred_interval != 604800 else body.poll_interval
+    interval = max(raw_interval, settings.min_poll_interval)
 
     try:
         pkg = await ckan_client.package_show(body.ckan_id)
@@ -169,13 +171,11 @@ async def track_dataset(
 async def update_tracked(
     dataset_id: str,
     body: UpdateRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
     query = select(TrackedDataset).where(TrackedDataset.id == uid)
-    if not user.is_admin:
-        query = query.where(TrackedDataset.created_by == user.id)
     result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
@@ -206,13 +206,11 @@ async def update_tracked(
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def untrack_dataset(
     dataset_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
     query = select(TrackedDataset).where(TrackedDataset.id == uid)
-    if not user.is_admin:
-        query = query.where(TrackedDataset.created_by == user.id)
     result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
@@ -226,13 +224,11 @@ async def untrack_dataset(
 async def trigger_poll(
     dataset_id: str,
     background_tasks: BackgroundTasks,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
     query = select(TrackedDataset).where(TrackedDataset.id == uid)
-    if not user.is_admin:
-        query = query.where(TrackedDataset.created_by == user.id)
     result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:

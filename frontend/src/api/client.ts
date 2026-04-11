@@ -141,6 +141,10 @@ export interface PendingRequest {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string) => request<void>(`/admin/approve/${id}`, { method: "POST" }),
+  approve: (id: string, poll_interval?: number) =>
+    request<void>(`/admin/approve/${id}`, {
+      method: "POST",
+      body: JSON.stringify({ poll_interval }),
+    }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
 };
