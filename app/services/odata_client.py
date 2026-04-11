@@ -52,10 +52,11 @@ class ODataClient:
             "name": name,
             "title": title,
             "notes": (
-                "Mirror of dataset version history from data.gov.il, auto-managed by "
-                "[CKAN Version Tracker](https://github.com/zomer-g/ckan-versions).\n\n"
                 "שיקוף היסטוריית גרסאות של מאגר מידע מ-data.gov.il, מנוהל אוטומטית על ידי "
-                "[CKAN Version Tracker](https://github.com/zomer-g/ckan-versions)."
+                "[גרסאות לעם](https://over.org.il) — "
+                "[קוד מקור](https://github.com/zomer-g/ckan-version-tracker)\n\n"
+                "Dataset version history mirror from data.gov.il, auto-managed by "
+                "[Versions for the People](https://over.org.il)"
             ),
         }
         if owner_org:

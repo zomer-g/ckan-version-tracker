@@ -30,16 +30,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting CKAN Version Tracker")
+    logger.info("Starting גרסאות לעם")
     await init_scheduler()
     yield
     shutdown_scheduler()
-    logger.info("Shutting down CKAN Version Tracker")
+    logger.info("Shutting down גרסאות לעם")
 
 
 app = FastAPI(
-    title="CKAN Version Tracker",
-    description="Track and version government datasets from data.gov.il",
+    title="גרסאות לעם",
+    description="גרסאות לעם — מעקב גרסאות אחרי מאגרי מידע ממשלתיים | over.org.il",
     version="1.0.0",
     lifespan=lifespan,
 )
