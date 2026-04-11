@@ -126,6 +126,12 @@ export default function TrackedPage() {
               </span>
             </div>
 
+            {ds.resource_name && (
+              <p className="text-sm mb-1" style={{ color: "var(--primary)", fontWeight: 500 }}>
+                {t("tracked.resource", "\u05DE\u05E9\u05D0\u05D1")}: {ds.resource_name}
+              </p>
+            )}
+
             <p className="text-sm text-muted mb-1">
               {ds.organization}
               {ds.requester_name && (

@@ -22,7 +22,8 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 class TrackRequest(BaseModel):
     ckan_id: str
     poll_interval: int = 604800
-    preferred_interval: int = 604800
+    preferred_interval: int | None = None
+    resource_id: str | None = None
 
 
 class UpdateRequest(BaseModel):
@@ -45,6 +46,8 @@ class DatasetResponse(BaseModel):
     version_count: int = 0
     requester_name: str | None = None
     requester_email: str | None = None
+    resource_id: str | None = None
+    resource_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -63,39 +66,59 @@ async def list_tracked(
         .order_by(TrackedDataset.created_at.desc())
     )
     rows = result.all()
-    return [
-        DatasetResponse(
-            id=str(ds.id),
-            ckan_id=ds.ckan_id,
-            ckan_name=ds.ckan_name,
-            title=ds.title,
-            organization=ds.organization,
-            odata_dataset_id=ds.odata_dataset_id,
-            poll_interval=ds.poll_interval,
-            is_active=ds.is_active,
-            status=ds.status,
-            last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
-            last_modified=ds.last_modified,
-            requester_name=requester.display_name,
-            requester_email=requester.email,
+    # Resolve resource names for datasets that track a specific resource
+    response_list = []
+    for ds, requester in rows:
+        resource_name = None
+        if ds.resource_id:
+            try:
+                pkg = await ckan_client.package_show(ds.ckan_id)
+                for r in pkg.get("resources", []):
+                    if r["id"] == ds.resource_id:
+                        resource_name = r.get("name") or r.get("description") or r["id"]
+                        break
+            except Exception:
+                resource_name = ds.resource_id
+        response_list.append(
+            DatasetResponse(
+                id=str(ds.id),
+                ckan_id=ds.ckan_id,
+                ckan_name=ds.ckan_name,
+                title=ds.title,
+                organization=ds.organization,
+                odata_dataset_id=ds.odata_dataset_id,
+                poll_interval=ds.poll_interval,
+                is_active=ds.is_active,
+                status=ds.status,
+                last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+                last_modified=ds.last_modified,
+                requester_name=requester.display_name,
+                requester_email=requester.email,
+                resource_id=ds.resource_id,
+                resource_name=resource_name,
+            )
         )
-        for ds, requester in rows
-    ]
+    return response_list
 
 
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def track_dataset(
     body: TrackRequest,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    existing = await db.execute(
-        select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
-    )
+    # Check for duplicate (ckan_id + resource_id combination)
+    dup_query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
+    if body.resource_id:
+        dup_query = dup_query.where(TrackedDataset.resource_id == body.resource_id)
+    else:
+        dup_query = dup_query.where(TrackedDataset.resource_id.is_(None))
+    existing = await db.execute(dup_query)
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Dataset already tracked")
 
-    raw_interval = body.preferred_interval if body.preferred_interval != 604800 else body.poll_interval
+    raw_interval = body.preferred_interval if body.preferred_interval is not None else body.poll_interval
     interval = max(raw_interval, settings.min_poll_interval)
 
     try:
@@ -105,7 +128,25 @@ async def track_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found on data.gov.il")
 
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
+
+    # Resolve resource name if tracking a specific resource
+    resource_name = None
+    if body.resource_id:
+        for r in pkg.get("resources", []):
+            if r["id"] == body.resource_id:
+                resource_name = r.get("name") or r.get("description") or body.resource_id
+                break
+        if not resource_name:
+            raise HTTPException(status_code=404, detail="Resource not found in dataset")
+
+    # Build title: append resource name if tracking a specific resource
+    dataset_title = pkg.get("title", pkg["name"])
+    if resource_name:
+        dataset_title = f"{dataset_title} — {resource_name}"
+
     mirror_name = f"gov-versions-{sanitize_ckan_name(pkg['name'])}"
+    if body.resource_id:
+        mirror_name = f"{mirror_name}-{body.resource_id[:8]}"
 
     # Determine status based on admin privilege
     dataset_status = "active" if user.is_admin else "pending"
@@ -116,7 +157,7 @@ async def track_dataset(
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
-                title=f"[Versions] {pkg.get('title', pkg['name'])}",
+                title=f"[Versions] {dataset_title}",
                 owner_org=settings.odata_owner_org,
                 extras=[
                     {"key": "source_ckan_id", "value": body.ckan_id},
@@ -140,7 +181,8 @@ async def track_dataset(
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],
-        title=pkg.get("title", pkg["name"]),
+        resource_id=body.resource_id,
+        title=dataset_title,
         organization=org_name,
         odata_dataset_id=odata_dataset_id,
         poll_interval=interval,
@@ -151,6 +193,11 @@ async def track_dataset(
     db.add(ds)
     await db.commit()
     await db.refresh(ds)
+
+    # Auto-trigger first poll for admin-approved datasets
+    if dataset_status == "active":
+        from app.worker.poll_job import poll_dataset
+        background_tasks.add_task(poll_dataset, str(ds.id))
 
     return DatasetResponse(
         id=str(ds.id),
@@ -164,6 +211,8 @@ async def track_dataset(
         status=ds.status,
         last_polled_at=None,
         last_modified=ds.last_modified,
+        resource_id=ds.resource_id,
+        resource_name=resource_name,
     )
 
 
@@ -200,6 +249,7 @@ async def update_tracked(
         status=ds.status,
         last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
         last_modified=ds.last_modified,
+        resource_id=ds.resource_id,
     )
 
 

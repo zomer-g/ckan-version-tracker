@@ -71,14 +71,16 @@ export interface TrackedDataset {
   version_count: number;
   requester_name: string | null;
   requester_email: string | null;
+  resource_id: string | null;
+  resource_name: string | null;
 }
 
 export const datasets = {
   list: () => request<TrackedDataset[]>("/datasets"),
-  track: (ckan_id: string, poll_interval = 3600) =>
+  track: (ckan_id: string, poll_interval = 3600, resource_id?: string) =>
     request<TrackedDataset>("/datasets", {
       method: "POST",
-      body: JSON.stringify({ ckan_id, poll_interval }),
+      body: JSON.stringify({ ckan_id, poll_interval, resource_id }),
     }),
   update: (id: string, data: { poll_interval?: number; is_active?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {

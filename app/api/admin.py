@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,6 +77,7 @@ async def list_pending(
 async def approve_request(
     request: Request,
     dataset_id: str,
+    background_tasks: BackgroundTasks,
     body: ApproveRequest | None = None,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
@@ -102,6 +103,8 @@ async def approve_request(
     # Create odata mirror dataset if not already created
     if not ds.odata_dataset_id and settings.odata_api_key:
         mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
+        if ds.resource_id:
+            mirror_name = f"{mirror_name}-{ds.resource_id[:8]}"
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
@@ -127,6 +130,10 @@ async def approve_request(
 
     # Add poll job to scheduler
     add_poll_job(str(ds.id), ds.poll_interval)
+
+    # Auto-trigger first poll immediately after approval
+    from app.worker.poll_job import poll_dataset
+    background_tasks.add_task(poll_dataset, str(ds.id))
 
     return {"message": "Dataset approved", "dataset_id": str(ds.id)}
 

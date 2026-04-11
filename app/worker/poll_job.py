@@ -70,6 +70,16 @@ async def poll_dataset(dataset_id: str) -> None:
 
             # Detect resource-level changes
             resources = pkg.get("resources", [])
+
+            # If tracking a specific resource, filter to only that resource
+            if ds.resource_id:
+                resources = [r for r in resources if r["id"] == ds.resource_id]
+                if not resources:
+                    logger.warning(
+                        "Tracked resource %s not found in dataset %s",
+                        ds.resource_id, ds.ckan_name,
+                    )
+
             changed_resources, hash_map = await detect_resource_changes(
                 old_mappings, resources
             )

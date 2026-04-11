@@ -11,8 +11,9 @@ class TrackedDataset(Base):
     __tablename__ = "tracked_datasets"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    ckan_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    ckan_id: Mapped[str] = mapped_column(String(255), nullable=False)
     ckan_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(1000), nullable=False)
     organization: Mapped[str | None] = mapped_column(String(255))
     odata_dataset_id: Mapped[str | None] = mapped_column(String(255))

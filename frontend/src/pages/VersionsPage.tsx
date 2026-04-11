@@ -57,20 +57,37 @@ export default function VersionsPage() {
     <div>
       <div className="page-header flex-between">
         <h1>{t("versions.title")}</h1>
-        <div className="flex">
+        <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
           {dataset?.odata_dataset_id && (
             <a
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="btn-secondary"
-              style={{ textDecoration: "none", fontSize: "0.8rem" }}
+              style={{
+                textDecoration: "none",
+                fontSize: "0.85rem",
+                color: "var(--primary)",
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+              }}
             >
               {t("tracked.view_on_odata")} ↗
             </a>
           )}
-          <Link to="/tracked" className="btn-secondary" style={{ textDecoration: "none" }}>
-            {t("common.back")}
+          <Link
+            to="/tracked"
+            style={{
+              textDecoration: "none",
+              fontSize: "0.85rem",
+              color: "var(--text-muted, #64748b)",
+              background: "none",
+              border: "none",
+              padding: 0,
+            }}
+          >
+            ← {t("common.back")}
           </Link>
           {selected.length === 2 && (
             <button className="btn-primary" onClick={compare}>
