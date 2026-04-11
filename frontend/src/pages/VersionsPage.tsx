@@ -49,30 +49,7 @@ export default function VersionsPage() {
     }
   };
 
-  /** Get ODATA resource links from version's resource_mappings */
-  const getOdataLinks = (v: Version): { name: string; url: string }[] => {
-    const mappings = v.resource_mappings || {};
-    const links: { name: string; url: string }[] = [];
-
-    // Metadata resource
-    if (v.odata_metadata_resource_id) {
-      links.push({
-        name: `v${v.version_number} metadata`,
-        url: `${ODATA_BASE}/dataset/${dataset?.odata_dataset_id}/resource/${v.odata_metadata_resource_id}`,
-      });
-    }
-
-    // Data resources (skip internal keys starting with _)
-    for (const [key, value] of Object.entries(mappings)) {
-      if (key.startsWith("_") || typeof value !== "string") continue;
-      links.push({
-        name: key.slice(0, 12) + "...",
-        url: `${ODATA_BASE}/dataset/${dataset?.odata_dataset_id}/resource/${value}`,
-      });
-    }
-
-    return links;
-  };
+  // ODATA links are now a single dataset-level link, not per-resource
 
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
@@ -114,7 +91,6 @@ export default function VersionsPage() {
           {versionsList.map((v) => {
             const summary = v.change_summary;
             const isSelected = selected.includes(v.id);
-            const odataLinks = dataset?.odata_dataset_id ? getOdataLinks(v) : [];
 
             return (
               <div
@@ -165,28 +141,22 @@ export default function VersionsPage() {
                   </div>
                 )}
 
-                {/* ODATA direct links */}
-                {odataLinks.length > 0 && (
-                  <div className="mt-1" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    {odataLinks.map((link, i) => (
-                      <a
-                        key={i}
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          fontSize: "0.75rem",
-                          padding: "0.15rem 0.5rem",
-                          background: "#dbeafe",
-                          color: "#1e40af",
-                          borderRadius: "4px",
-                          textDecoration: "none",
-                        }}
-                      >
-                        {t("versions.view_on_odata")} ↗
-                      </a>
-                    ))}
+                {/* Single ODATA link per version */}
+                {dataset?.odata_dataset_id && (
+                  <div className="mt-1">
+                    <a
+                      href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-sm"
+                      style={{
+                        color: "var(--primary)",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {t("versions.view_on_odata")} ↗
+                    </a>
                   </div>
                 )}
               </div>
