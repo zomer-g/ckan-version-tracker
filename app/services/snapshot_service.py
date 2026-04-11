@@ -37,14 +37,8 @@ async def create_version_snapshot(
     """
     ts = _timestamp()
 
-    # Upload metadata snapshot (always as file — not tabular)
-    meta_result = await odata_client.upload_metadata_snapshot(
-        dataset_id=odata_dataset_id,
-        version_number=version_number,
-        metadata=metadata,
-        timestamp=ts,
-    )
-    metadata_resource_id = meta_result["id"]
+    # No separate metadata JSON upload — metadata is stored in version_index JSONB
+    metadata_resource_id = None
 
     resource_mappings: dict[str, Any] = {}
 

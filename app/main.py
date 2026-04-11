@@ -86,6 +86,10 @@ if frontend_dist.exists() and index_html.exists():
         # Don't intercept API 404s — return JSON
         if request.url.path.startswith("/api/"):
             return JSONResponse({"detail": exc.detail}, status_code=404)
+        # Check if it's an actual static file in dist/ (e.g. favicon.svg)
+        static_path = frontend_dist / request.url.path.lstrip("/")
+        if static_path.is_file() and str(static_path).startswith(str(frontend_dist)):
+            return FileResponse(static_path)
         # For all other 404s, serve the SPA
         return FileResponse(index_html)
 
