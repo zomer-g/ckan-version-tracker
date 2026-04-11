@@ -14,7 +14,7 @@ export default function Footer() {
           <div className="footer-links">
             <a href="/about">{t("nav.about")}</a>
             <a
-              href="https://github.com/zomer-g/ckan-versions"
+              href="https://github.com/zomer-g/ckan-version-tracker"
               target="_blank"
               rel="noopener noreferrer"
             >
