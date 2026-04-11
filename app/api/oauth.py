@@ -91,7 +91,7 @@ async def google_callback(
 
         # Find or create user
         jwt_token = await _find_or_create_user(db, email, name, "google")
-        return RedirectResponse(url=f"/login?sso_token={jwt_token}")
+        return RedirectResponse(url=f"/admin/login?sso_token={jwt_token}")
 
     except Exception:
         logger.exception("Google OAuth callback failed")
