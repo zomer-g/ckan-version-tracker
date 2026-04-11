@@ -162,3 +162,97 @@ async def reject_request(
     await db.commit()
 
     return {"message": "Dataset rejected", "dataset_id": str(ds.id)}
+
+
+@router.post("/backfill/{dataset_id}")
+@limiter.limit("5/minute")
+async def backfill_versions(
+    request: Request,
+    dataset_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Backfill version_index entries from existing odata.org.il resources.
+    Reads the mirror dataset on odata.org.il and creates a version entry
+    for each resource that has a date in its name.
+    """
+    import re
+    from app.models.version_index import VersionIndex
+
+    uid = parse_uuid(dataset_id, "dataset_id")
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds or not ds.odata_dataset_id:
+        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+
+    # Fetch all resources from the odata mirror dataset
+    try:
+        pkg = await odata_client.package_show(ds.odata_dataset_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch odata dataset: {e}")
+
+    resources = pkg.get("resources", [])
+    date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+    # Get existing version numbers
+    existing = await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds.id)
+        .order_by(VersionIndex.version_number)
+    )
+    existing_versions = existing.scalars().all()
+    existing_dates = {v.metadata_modified for v in existing_versions}
+    max_version = max((v.version_number for v in existing_versions), default=0)
+
+    created = 0
+    for r in sorted(resources, key=lambda x: x.get("name", "")):
+        name = r.get("name", "")
+        fmt = (r.get("format") or "").upper()
+
+        # Skip metadata JSONs
+        if fmt == "JSON" or "metadata" in name.lower():
+            continue
+
+        # Extract date from name
+        match = date_pattern.search(name)
+        if not match:
+            continue
+
+        date_str = match.group(1)
+        if date_str in existing_dates:
+            continue
+
+        max_version += 1
+        try:
+            detected_at = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+        version = VersionIndex(
+            tracked_dataset_id=ds.id,
+            version_number=max_version,
+            metadata_modified=date_str,
+            detected_at=detected_at,
+            odata_metadata_resource_id=None,
+            change_summary={
+                "resources_added": [r["id"]],
+                "resources_removed": [],
+                "resources_modified": [],
+                "total_resources": 1,
+                "note": f"Backfilled from odata.org.il resource: {name}",
+            },
+            resource_mappings={
+                "backfilled": r["id"],
+                "_hashes": {},
+                "_resource_ids": [],
+            },
+        )
+        db.add(version)
+        existing_dates.add(date_str)
+        created += 1
+
+    await db.commit()
+    return {"message": f"Backfilled {created} versions", "dataset_id": str(ds.id)}
