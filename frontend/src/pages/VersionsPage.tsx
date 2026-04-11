@@ -133,26 +133,8 @@ export default function VersionsPage() {
                   </div>
                 )}
 
-                {/* ODATA resource links per version */}
-                {dataset?.odata_dataset_id && v.resource_mappings && (
-                  <div className="mt-1 flex" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
-                    {Object.entries(v.resource_mappings).map(([resId, mapping]: [string, any]) => (
-                      <a
-                        key={resId}
-                        href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${mapping.odata_resource_id || resId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
-                      >
-                        {mapping.name || resId} (ODATA) &#8599;
-                      </a>
-                    ))}
-                  </div>
-                )}
-
-                {/* Fallback single ODATA link if no resource_mappings */}
-                {dataset?.odata_dataset_id && !v.resource_mappings && (
+                {/* Single ODATA link per version */}
+                {dataset?.odata_dataset_id && (
                   <div className="mt-1">
                     <a
                       href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}

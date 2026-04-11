@@ -71,6 +71,9 @@ async def list_tracked(
 ):
     """Public endpoint — lists all active/pending tracked datasets."""
     from app.models.user import User as UserModel
+    from app.models.version_index import VersionIndex
+    from sqlalchemy import func
+
     result = await db.execute(
         select(TrackedDataset, UserModel)
         .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
@@ -78,6 +81,13 @@ async def list_tracked(
         .order_by(TrackedDataset.created_at.desc())
     )
     rows = result.all()
+
+    # Get version counts for all datasets in one query
+    count_result = await db.execute(
+        select(VersionIndex.tracked_dataset_id, func.count(VersionIndex.id))
+        .group_by(VersionIndex.tracked_dataset_id)
+    )
+    version_counts = dict(count_result.all())
     # Resolve resource names for datasets that track a specific resource
     response_list = []
     for ds, requester in rows:
@@ -109,6 +119,7 @@ async def list_tracked(
                 resource_id=ds.resource_id,
                 resource_name=resource_name,
                 source_url=_build_source_url(ds),
+                version_count=version_counts.get(ds.id, 0),
             )
         )
     return response_list

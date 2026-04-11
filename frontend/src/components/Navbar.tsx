@@ -32,13 +32,6 @@ export default function Navbar() {
             >
               {i18n.language === "he" ? "EN" : "HE"}
             </button>
-            <Link
-              to="/admin"
-              className="nav-link"
-              style={{ fontSize: "0.8rem", opacity: 0.7 }}
-            >
-              {t("nav.admin")}
-            </Link>
           </div>
         </div>
       </nav>
