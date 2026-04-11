@@ -23,8 +23,6 @@ class Settings(BaseSettings):
     app_base_url: str = "http://localhost:8000"
     google_client_id: str = ""
     google_client_secret: str = ""
-    github_client_id: str = ""
-    github_client_secret: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

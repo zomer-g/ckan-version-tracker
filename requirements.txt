@@ -9,7 +9,6 @@ alembic==1.14.0
 
 # Auth
 PyJWT[crypto]==2.10.1
-bcrypt==4.2.1
 
 # HTTP client
 httpx==0.28.1

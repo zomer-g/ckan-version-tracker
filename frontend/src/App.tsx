@@ -5,11 +5,11 @@ import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
 import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
 import SearchPage from "./pages/SearchPage";
 import TrackedPage from "./pages/TrackedPage";
 import VersionsPage from "./pages/VersionsPage";
 import DiffPage from "./pages/DiffPage";
+import AdminPage from "./pages/AdminPage";
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -35,7 +35,6 @@ export default function App() {
       <main id="main-content" ref={mainRef} tabIndex={-1} className="container mt-3" style={{ outline: "none" }}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
           <Route
             path="/"
             element={
@@ -65,6 +64,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <DiffPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute>
+                <AdminPage />
               </ProtectedRoute>
             }
           />

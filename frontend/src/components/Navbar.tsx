@@ -34,6 +34,7 @@ export default function Navbar() {
               <>
                 <Link to="/">{t("nav.search")}</Link>
                 <Link to="/tracked">{t("nav.tracked")}</Link>
+                {user.is_admin && <Link to="/admin">{t("nav.admin")}</Link>}
               </>
             )}
           </div>
@@ -53,10 +54,7 @@ export default function Navbar() {
                 </button>
               </>
             ) : (
-              <>
-                <Link to="/login">{t("nav.login")}</Link>
-                <Link to="/register">{t("nav.register")}</Link>
-              </>
+              <Link to="/login">{t("nav.login")}</Link>
             )}
           </div>
         </div>

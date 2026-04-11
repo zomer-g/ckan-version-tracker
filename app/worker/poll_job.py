@@ -32,6 +32,10 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.info("Dataset %s not found or inactive, skipping", dataset_id)
             return
 
+        if ds.status != "active":
+            logger.info("Dataset %s status is '%s', skipping poll", dataset_id, ds.status)
+            return
+
         try:
             # Fetch current state from data.gov.il
             pkg = await ckan_client.package_show(ds.ckan_id)
@@ -99,10 +103,8 @@ async def poll_dataset(dataset_id: str) -> None:
                 # Lazily create mirror dataset if it doesn't exist yet
                 if not ds.odata_dataset_id and settings.odata_api_key:
                     from app.services.odata_client import odata_client
-                    import re
-                    safe = re.sub(r"[^a-z0-9_-]", "-", ds.ckan_name.lower())
-                    safe = re.sub(r"-+", "-", safe).strip("-")[:80]
-                    mirror_name = f"gov-versions-{safe}"
+                    from app.api.utils import sanitize_ckan_name
+                    mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
                     try:
                         mirror = await odata_client.create_dataset(
                             name=mirror_name,

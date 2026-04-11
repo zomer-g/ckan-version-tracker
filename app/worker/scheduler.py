@@ -17,7 +17,10 @@ async def init_scheduler() -> None:
     """Load all active tracked datasets and schedule their poll jobs."""
     async with async_session() as db:
         result = await db.execute(
-            select(TrackedDataset).where(TrackedDataset.is_active.is_(True))
+            select(TrackedDataset).where(
+                TrackedDataset.is_active.is_(True),
+                TrackedDataset.status == "active",
+            )
         )
         datasets = result.scalars().all()
 

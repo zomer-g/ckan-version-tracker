@@ -1,12 +1,11 @@
 import logging
-import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.utils import parse_uuid
+from app.api.utils import parse_uuid, sanitize_ckan_name
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
@@ -39,18 +38,12 @@ class DatasetResponse(BaseModel):
     odata_dataset_id: str | None
     poll_interval: int
     is_active: bool
+    status: str = "active"
     last_polled_at: str | None
     last_modified: str | None
     version_count: int = 0
 
     model_config = {"from_attributes": True}
-
-
-def _sanitize_name(name: str) -> str:
-    """Create a CKAN-safe dataset name."""
-    safe = re.sub(r"[^a-z0-9_-]", "-", name.lower())
-    safe = re.sub(r"-+", "-", safe).strip("-")
-    return safe[:80]
 
 
 @router.get("", response_model=list[DatasetResponse])
@@ -72,6 +65,7 @@ async def list_tracked(
             odata_dataset_id=ds.odata_dataset_id,
             poll_interval=ds.poll_interval,
             is_active=ds.is_active,
+            status=ds.status,
             last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
             last_modified=ds.last_modified,
         )
@@ -100,11 +94,14 @@ async def track_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found on data.gov.il")
 
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
-    mirror_name = f"gov-versions-{_sanitize_name(pkg['name'])}"
+    mirror_name = f"gov-versions-{sanitize_ckan_name(pkg['name'])}"
 
-    # Create mirror dataset on odata.org.il under user's organization
+    # Determine status based on admin privilege
+    dataset_status = "active" if user.is_admin else "pending"
+
+    # Create mirror dataset on odata.org.il only for active (admin-approved) datasets
     odata_dataset_id = None
-    if settings.odata_api_key:
+    if dataset_status == "active" and settings.odata_api_key:
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
@@ -124,6 +121,8 @@ async def track_dataset(
                 odata_dataset_id = mirror["id"]
             except Exception as e2:
                 logger.error("Mirror find also failed: %s", e2)
+    elif dataset_status == "pending":
+        logger.info("Dataset %s pending admin approval — skipping odata mirror", body.ckan_id)
     else:
         logger.info("ODATA_API_KEY not set — tracking without odata.org.il mirror")
 
@@ -134,6 +133,7 @@ async def track_dataset(
         organization=org_name,
         odata_dataset_id=odata_dataset_id,
         poll_interval=interval,
+        status=dataset_status,
         created_by=user.id,
         last_modified=None,  # None so first poll always creates version 1
     )
@@ -150,6 +150,7 @@ async def track_dataset(
         odata_dataset_id=ds.odata_dataset_id,
         poll_interval=ds.poll_interval,
         is_active=ds.is_active,
+        status=ds.status,
         last_polled_at=None,
         last_modified=ds.last_modified,
     )
@@ -189,6 +190,7 @@ async def update_tracked(
         odata_dataset_id=ds.odata_dataset_id,
         poll_interval=ds.poll_interval,
         is_active=ds.is_active,
+        status=ds.status,
         last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
         last_modified=ds.last_modified,
     )

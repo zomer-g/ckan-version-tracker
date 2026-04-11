@@ -3,25 +3,15 @@
   "nav": {
     "search": "Search",
     "tracked": "Tracked",
+    "admin": "Admin",
     "login": "Login",
-    "register": "Register",
     "logout": "Logout",
     "skip_to_content": "Skip to content"
   },
   "auth": {
-    "email": "Email",
-    "password": "Password",
-    "password_hint": "Minimum 8 characters",
-    "display_name": "Display Name",
-    "login_title": "Login",
-    "register_title": "Register",
-    "login_btn": "Login",
-    "register_btn": "Register",
-    "no_account": "Don't have an account?",
-    "has_account": "Already have an account?",
-    "or": "or",
+    "login_title": "Sign In",
+    "login_btn": "Sign in with Google",
     "sso_google": "Continue with Google",
-    "sso_github": "Continue with GitHub",
     "sso_denied": "Login was cancelled",
     "sso_failed": "Login failed, please try again",
     "sso_no_email": "Could not get email from account"
@@ -60,7 +50,17 @@
     "seconds": "seconds",
     "never": "Never",
     "active": "Active",
-    "paused": "Paused"
+    "paused": "Paused",
+    "pending": "Pending approval",
+    "rejected": "Rejected"
+  },
+  "admin": {
+    "title": "Pending Requests",
+    "empty": "No pending requests",
+    "approve": "Approve",
+    "reject": "Reject",
+    "requester": "Requested by",
+    "requested_at": "Requested at"
   },
   "versions": {
     "title": "Version History",

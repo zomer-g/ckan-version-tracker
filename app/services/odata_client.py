@@ -51,13 +51,23 @@ class ODataClient:
         payload: dict[str, Any] = {
             "name": name,
             "title": title,
-            "notes": "Version history mirror - auto-managed by CKAN Version Tracker",
+            "notes": (
+                "Mirror of dataset version history from data.gov.il, auto-managed by "
+                "[CKAN Version Tracker](https://github.com/zomer-g/ckan-versions).\n\n"
+                "שיקוף היסטוריית גרסאות של מאגר מידע מ-data.gov.il, מנוהל אוטומטית על ידי "
+                "[CKAN Version Tracker](https://github.com/zomer-g/ckan-versions)."
+            ),
         }
         if owner_org:
             payload["owner_org"] = owner_org
         if extras:
             payload["extras"] = extras
         return await self._post("package_create", payload)
+
+    async def package_patch(self, dataset_id: str, **kwargs) -> dict:
+        """Patch (partial update) an existing dataset on odata.org.il."""
+        payload = {"id": dataset_id, **kwargs}
+        return await self._post("package_patch", payload)
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})

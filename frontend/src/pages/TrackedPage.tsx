@@ -102,10 +102,24 @@ export default function TrackedPage() {
                 <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
               </h2>
               <span
-                className={`badge ${ds.is_active ? "badge-success" : "badge-warning"}`}
+                className={`badge ${
+                  ds.status === "pending"
+                    ? "badge-warning"
+                    : ds.status === "rejected"
+                    ? "badge-danger"
+                    : ds.is_active
+                    ? "badge-success"
+                    : "badge-warning"
+                }`}
                 role="status"
               >
-                {ds.is_active ? t("tracked.active") : t("tracked.paused")}
+                {ds.status === "pending"
+                  ? t("tracked.pending")
+                  : ds.status === "rejected"
+                  ? t("tracked.rejected")
+                  : ds.is_active
+                  ? t("tracked.active")
+                  : t("tracked.paused")}
               </span>
             </div>
 
@@ -161,7 +175,7 @@ export default function TrackedPage() {
               )}
             </div>
 
-            {ds.odata_dataset_id && (
+            {ds.status === "active" && ds.odata_dataset_id && (
               <div className="text-sm mb-1">
                 <a
                   href={`https://www.odata.org.il/dataset/${ds.odata_dataset_id}`}
@@ -178,15 +192,17 @@ export default function TrackedPage() {
               <Link to={`/versions/${ds.id}`} className="btn-primary" style={{ textDecoration: "none" }}>
                 {t("tracked.versions")}
               </Link>
-              <button
-                className="btn-secondary"
-                onClick={() => pollNow(ds.id)}
-                disabled={polling.has(ds.id)}
-                aria-busy={polling.has(ds.id)}
-                aria-label={polling.has(ds.id) ? t("common.loading") : t("tracked.poll_now")}
-              >
-                {polling.has(ds.id) ? t("common.loading") : t("tracked.poll_now")}
-              </button>
+              {ds.status === "active" && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => pollNow(ds.id)}
+                  disabled={polling.has(ds.id)}
+                  aria-busy={polling.has(ds.id)}
+                  aria-label={polling.has(ds.id) ? t("common.loading") : t("tracked.poll_now")}
+                >
+                  {polling.has(ds.id) ? t("common.loading") : t("tracked.poll_now")}
+                </button>
+              )}
               <button className="btn-danger" onClick={() => untrack(ds.id)}>
                 {t("tracked.untrack")}
               </button>

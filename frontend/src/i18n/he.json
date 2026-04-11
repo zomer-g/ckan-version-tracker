@@ -3,25 +3,15 @@
   "nav": {
     "search": "חיפוש",
     "tracked": "מעקב",
+    "admin": "ניהול",
     "login": "התחברות",
-    "register": "הרשמה",
     "logout": "התנתקות",
     "skip_to_content": "דלג לתוכן"
   },
   "auth": {
-    "email": "אימייל",
-    "password": "סיסמה",
-    "password_hint": "מינימום 8 תווים",
-    "display_name": "שם תצוגה",
     "login_title": "התחברות",
-    "register_title": "הרשמה",
-    "login_btn": "התחבר",
-    "register_btn": "הירשם",
-    "no_account": "אין לך חשבון?",
-    "has_account": "כבר יש לך חשבון?",
-    "or": "או",
+    "login_btn": "התחבר עם Google",
     "sso_google": "התחבר עם Google",
-    "sso_github": "התחבר עם GitHub",
     "sso_denied": "ההתחברות בוטלה",
     "sso_failed": "ההתחברות נכשלה, נסה שוב",
     "sso_no_email": "לא ניתן לקבל כתובת אימייל מהחשבון"
@@ -60,7 +50,17 @@
     "interval_1week": "כל שבוע",
     "never": "אף פעם",
     "active": "פעיל",
-    "paused": "מושהה"
+    "paused": "מושהה",
+    "pending": "ממתין לאישור",
+    "rejected": "נדחה"
+  },
+  "admin": {
+    "title": "בקשות ממתינות",
+    "empty": "אין בקשות ממתינות",
+    "approve": "אשר",
+    "reject": "דחה",
+    "requester": "מבקש",
+    "requested_at": "תאריך בקשה"
   },
   "versions": {
     "title": "היסטוריית גרסאות",

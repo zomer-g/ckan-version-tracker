@@ -18,6 +18,7 @@ class TrackedDataset(Base):
     odata_dataset_id: Mapped[str | None] = mapped_column(String(255))
     poll_interval: Mapped[int] = mapped_column(Integer, default=3600)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_modified: Mapped[str | None] = mapped_column(String(50))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)

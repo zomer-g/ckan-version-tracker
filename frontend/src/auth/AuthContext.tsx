@@ -11,13 +11,12 @@ interface User {
   id: string;
   email: string;
   display_name: string;
+  is_admin: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, displayName: string) => Promise<void>;
   loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
 }
@@ -50,20 +49,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const { access_token } = await authApi.login(email, password);
-    setToken(access_token);
-    const me = await authApi.me();
-    setUser(me);
-  };
-
-  const register = async (email: string, password: string, displayName: string) => {
-    const { access_token } = await authApi.register(email, password, displayName);
-    setToken(access_token);
-    const me = await authApi.me();
-    setUser(me);
-  };
-
   const loginWithToken = async (token: string) => {
     setToken(token);
     const me = await authApi.me();
@@ -76,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, loginWithToken, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginWithToken, logout }}>
       {children}
     </AuthContext.Provider>
   );

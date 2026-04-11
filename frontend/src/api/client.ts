@@ -40,19 +40,9 @@ async function request<T>(
 
 // Auth
 export const auth = {
-  register: (email: string, password: string, display_name: string) =>
-    request<{ access_token: string }>("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password, display_name }),
-    }),
-  login: (email: string, password: string) =>
-    request<{ access_token: string }>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
-  me: () => request<{ id: string; email: string; display_name: string }>("/auth/me"),
+  me: () => request<{ id: string; email: string; display_name: string; is_admin: boolean }>("/auth/me"),
   ssoProviders: () =>
-    request<{ google: boolean; github: boolean }>("/auth/sso/providers"),
+    request<{ google: boolean }>("/auth/sso/providers"),
 };
 
 // CKAN Proxy
@@ -75,6 +65,7 @@ export interface TrackedDataset {
   odata_dataset_id: string | null;
   poll_interval: number;
   is_active: boolean;
+  status: string;
   last_polled_at: string | null;
   last_modified: string | null;
   version_count: number;
@@ -130,4 +121,24 @@ export const versions = {
         new_value: any;
       }>;
     }>(`/diff?from=${fromId}&to=${toId}`),
+};
+
+// Admin
+export interface PendingRequest {
+  id: string;
+  ckan_id: string;
+  ckan_name: string;
+  title: string;
+  organization: string | null;
+  poll_interval: number;
+  status: string;
+  created_at: string;
+  requester_email: string;
+  requester_name: string;
+}
+
+export const admin = {
+  pending: () => request<PendingRequest[]>("/admin/pending"),
+  approve: (id: string) => request<void>(`/admin/approve/${id}`, { method: "POST" }),
+  reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
 };

@@ -16,6 +16,7 @@ from app.api.oauth import router as oauth_router
 from app.api.proxy import router as proxy_router
 from app.api.datasets import router as datasets_router
 from app.api.versions import router as versions_router
+from app.api.admin import router as admin_router
 from app.config import settings
 from app.rate_limit import limiter
 from app.worker.scheduler import init_scheduler, shutdown_scheduler
@@ -62,6 +63,7 @@ app.include_router(oauth_router)
 app.include_router(proxy_router)
 app.include_router(datasets_router)
 app.include_router(versions_router)
+app.include_router(admin_router)
 
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
