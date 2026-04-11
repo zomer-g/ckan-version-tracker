@@ -40,10 +40,7 @@ async def list_versions(
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
     ds_result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == uid,
-            TrackedDataset.created_by == user.id,
-        )
+        select(TrackedDataset).where(TrackedDataset.id == uid)
     )
     if not ds_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -83,10 +80,7 @@ async def get_version(
         raise HTTPException(status_code=404, detail="Version not found")
 
     ds_result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == version.tracked_dataset_id,
-            TrackedDataset.created_by == user.id,
-        )
+        select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
     )
     if not ds_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Version not found")
@@ -156,10 +150,7 @@ async def diff_versions(
         raise HTTPException(status_code=400, detail="Versions must belong to the same dataset")
 
     ds_result = await db.execute(
-        select(TrackedDataset).where(
-            TrackedDataset.id == v1.tracked_dataset_id,
-            TrackedDataset.created_by == user.id,
-        )
+        select(TrackedDataset).where(TrackedDataset.id == v1.tracked_dataset_id)
     )
     if not ds_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Dataset not found")
