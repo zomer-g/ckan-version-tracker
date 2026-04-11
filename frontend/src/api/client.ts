@@ -101,10 +101,16 @@ export interface Version {
   detected_at: string;
   odata_metadata_resource_id: string | null;
   change_summary: {
+    type?: string;
     resources_added?: string[];
     resources_removed?: string[];
     resources_modified?: { resource_id: string; name: string; format: string }[];
     total_resources?: number;
+    record_count?: number;
+    previous_count?: number;
+    delta?: number;
+    fields?: string[];
+    sample_rows?: number;
   } | null;
   resource_mappings: Record<string, any> | null;
 }
