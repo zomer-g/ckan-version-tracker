@@ -2,7 +2,7 @@ services:
   - type: web
     name: ckan-version-tracker
     env: python
-    plan: free
+    plan: starter
     buildCommand: |
       pip install -r requirements.txt
       cd frontend && npm install && npm run build && cd ..
