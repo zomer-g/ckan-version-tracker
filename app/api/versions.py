@@ -7,10 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid
-from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
-from app.models.user import User
 from app.models.version_index import VersionIndex
 from app.services.diff_service import compute_metadata_diff
 from app.config import settings
@@ -35,7 +33,6 @@ class VersionResponse(BaseModel):
 @router.get("/datasets/{dataset_id}/versions", response_model=list[VersionResponse])
 async def list_versions(
     dataset_id: str,
-    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
@@ -68,7 +65,6 @@ async def list_versions(
 @router.get("/versions/{version_id}", response_model=VersionResponse)
 async def get_version(
     version_id: str,
-    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     vid = parse_uuid(version_id, "version_id")
@@ -100,7 +96,6 @@ async def get_version(
 async def download_resource(
     version_id: str,
     resource_id: str,
-    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     vid = parse_uuid(version_id, "version_id")
@@ -127,7 +122,6 @@ async def download_resource(
 async def diff_versions(
     from_version: str = Query(..., alias="from"),
     to_version: str = Query(..., alias="to"),
-    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from_id = parse_uuid(from_version, "from")

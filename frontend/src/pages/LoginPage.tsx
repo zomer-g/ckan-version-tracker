@@ -17,7 +17,7 @@ export default function LoginPage() {
 
   // If already logged in (e.g. SSO callback set token), redirect
   useEffect(() => {
-    if (user) navigate("/");
+    if (user) navigate("/admin");
   }, [user, navigate]);
 
   // Check for SSO error in URL

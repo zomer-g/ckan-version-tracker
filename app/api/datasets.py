@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from app.auth.dependencies import get_admin_user, get_current_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
+from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
 from app.services.odata_client import odata_client
 from app.config import settings
@@ -48,20 +49,31 @@ class DatasetResponse(BaseModel):
     requester_email: str | None = None
     resource_id: str | None = None
     resource_name: str | None = None
+    requester_notes: str = ""
+    source_url: str = ""
 
     model_config = {"from_attributes": True}
 
 
+def _build_source_url(ds: TrackedDataset) -> str:
+    """Compute the data.gov.il source URL for a tracked dataset."""
+    org = ds.organization or ""
+    name = ds.ckan_name or ""
+    base = f"https://data.gov.il/he/datasets/{org}/{name}"
+    if ds.resource_id:
+        base = f"{base}/{ds.resource_id}"
+    return base
+
+
 @router.get("", response_model=list[DatasetResponse])
 async def list_tracked(
-    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Show ALL active datasets to everyone (not just creator's)
+    """Public endpoint — lists all active/pending tracked datasets."""
     from app.models.user import User as UserModel
     result = await db.execute(
         select(TrackedDataset, UserModel)
-        .join(UserModel, TrackedDataset.created_by == UserModel.id)
+        .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
         .where(TrackedDataset.status.in_(["active", "pending"]))
         .order_by(TrackedDataset.created_at.desc())
     )
@@ -92,10 +104,11 @@ async def list_tracked(
                 status=ds.status,
                 last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
                 last_modified=ds.last_modified,
-                requester_name=requester.display_name,
-                requester_email=requester.email,
+                requester_name=requester.display_name if requester else None,
+                requester_email=requester.email if requester else None,
                 resource_id=ds.resource_id,
                 resource_name=resource_name,
+                source_url=_build_source_url(ds),
             )
         )
     return response_list
@@ -288,3 +301,103 @@ async def trigger_poll(
 
     background_tasks.add_task(poll_dataset, str(ds.id))
     return {"message": "Poll triggered", "dataset_id": str(ds.id)}
+
+
+# ---------------------------------------------------------------------------
+# Public endpoints (no auth required)
+# ---------------------------------------------------------------------------
+
+class TrackingRequest(BaseModel):
+    ckan_id: str
+    resource_id: str | None = None
+    preferred_interval: int = 604800
+    requester_name: str = ""
+    requester_notes: str = ""
+    requester_contact: str = ""
+
+
+@router.post("/requests", status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
+async def submit_tracking_request(
+    request: Request,
+    body: TrackingRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Anonymous endpoint -- anyone can request tracking without login."""
+    # Check not already tracked
+    query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
+    if body.resource_id:
+        query = query.where(TrackedDataset.resource_id == body.resource_id)
+    existing = await db.execute(query)
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Already tracked or requested")
+
+    # Fetch dataset info from data.gov.il
+    try:
+        pkg = await ckan_client.package_show(body.ckan_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Find resource name if resource_id provided
+    resource_name = ""
+    if body.resource_id:
+        for r in pkg.get("resources", []):
+            if r["id"] == body.resource_id:
+                resource_name = r.get("name", "")
+                break
+
+    org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
+    title = pkg.get("title", pkg["name"])
+    if resource_name:
+        title = f"{title} — {resource_name}"
+
+    interval = max(body.preferred_interval, settings.min_poll_interval)
+
+    ds = TrackedDataset(
+        ckan_id=body.ckan_id,
+        ckan_name=pkg["name"],
+        resource_id=body.resource_id,
+        title=title,
+        organization=org_name,
+        poll_interval=interval,
+        status="pending",
+        created_by=None,
+        last_modified=None,
+    )
+    db.add(ds)
+    await db.commit()
+
+    return {"message": "Request submitted", "status": "pending"}
+
+
+@router.get("/public/{dataset_id}")
+async def get_tracked_public(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint -- get a single active tracked dataset."""
+    uid = parse_uuid(dataset_id, "dataset_id")
+    result = await db.execute(
+        select(TrackedDataset).where(
+            TrackedDataset.id == uid,
+            TrackedDataset.status == "active",
+        )
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return DatasetResponse(
+        id=str(ds.id),
+        ckan_id=ds.ckan_id,
+        ckan_name=ds.ckan_name,
+        title=ds.title,
+        organization=ds.organization,
+        odata_dataset_id=ds.odata_dataset_id,
+        poll_interval=ds.poll_interval,
+        is_active=ds.is_active,
+        status=ds.status,
+        last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+        last_modified=ds.last_modified,
+        resource_id=ds.resource_id,
+        source_url=_build_source_url(ds),
+    )

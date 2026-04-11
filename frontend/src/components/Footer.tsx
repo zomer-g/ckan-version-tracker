@@ -4,7 +4,7 @@ export default function Footer() {
   const { t } = useTranslation();
 
   return (
-    <footer className="footer">
+    <footer className="footer" role="contentinfo">
       <div className="container">
         <div className="footer-inner">
           <div>

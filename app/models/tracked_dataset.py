@@ -22,7 +22,7 @@ class TrackedDataset(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_modified: Mapped[str | None] = mapped_column(String(50))
-    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

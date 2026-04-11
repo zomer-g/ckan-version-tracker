@@ -133,6 +133,23 @@ export const versions = {
     }>(`/diff?from=${fromId}&to=${toId}`),
 };
 
+// Public API (no auth required)
+export const publicApi = {
+  datasets: () => request<TrackedDataset[]>("/datasets"),
+  request: (data: {
+    ckan_id: string;
+    resource_id?: string;
+    preferred_interval?: number;
+    requester_name?: string;
+    requester_notes?: string;
+    requester_contact?: string;
+  }) =>
+    request<{ message: string }>("/datasets/requests", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
 // Admin
 export interface PendingRequest {
   id: string;

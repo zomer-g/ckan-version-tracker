@@ -17,6 +17,23 @@
     "sso_failed": "Login failed, please try again",
     "sso_no_email": "Could not get email from account"
   },
+  "home": {
+    "hero_title": "Versions for the People",
+    "hero_subtitle": "Tracking government open data version history",
+    "search_placeholder": "Search by keywords or paste a data.gov.il URL...",
+    "tracked_title": "Tracked Datasets",
+    "request_btn": "Request Tracking",
+    "request_title": "Request Tracking",
+    "request_name": "Name (optional)",
+    "request_notes": "Why is this dataset important? How often should it be updated?",
+    "request_contact": "Contact info (optional)",
+    "request_interval": "Preferred interval",
+    "request_submit": "Submit Request",
+    "request_success": "Request submitted! We'll review and approve it soon.",
+    "versions_count": "versions",
+    "source_link": "Source on data.gov.il",
+    "no_tracked": "No tracked datasets yet"
+  },
   "search": {
     "title": "Search Government Datasets",
     "placeholder": "Search by keywords or paste a data.gov.il URL...",

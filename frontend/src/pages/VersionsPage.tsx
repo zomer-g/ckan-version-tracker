@@ -1,24 +1,22 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import { versions as versionsApi, datasets as datasetsApi, Version, TrackedDataset } from "../api/client";
+import { useParams, Link } from "react-router-dom";
+import { versions as versionsApi, publicApi, Version, TrackedDataset } from "../api/client";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
 export default function VersionsPage() {
   const { t } = useTranslation();
   const { datasetId } = useParams<{ datasetId: string }>();
-  const navigate = useNavigate();
   const [versionsList, setVersionsList] = useState<Version[]>([]);
   const [dataset, setDataset] = useState<TrackedDataset | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<string[]>([]);
 
   useEffect(() => {
     if (!datasetId) return;
     Promise.all([
       versionsApi.list(datasetId),
-      datasetsApi.list().then((all) => all.find((d) => d.id === datasetId) || null),
+      publicApi.datasets().then((all) => all.find((d) => d.id === datasetId) || null),
     ])
       .then(([versions, ds]) => {
         setVersionsList(versions);
@@ -27,29 +25,6 @@ export default function VersionsPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [datasetId]);
-
-  const toggleSelect = (id: string) => {
-    setSelected((prev) => {
-      if (prev.includes(id)) return prev.filter((v) => v !== id);
-      if (prev.length >= 2) return [prev[1], id];
-      return [...prev, id];
-    });
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent, id: string) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggleSelect(id);
-    }
-  };
-
-  const compare = () => {
-    if (selected.length === 2) {
-      navigate(`/diff/${datasetId}?from=${selected[0]}&to=${selected[1]}`);
-    }
-  };
-
-  // ODATA links are now a single dataset-level link, not per-resource
 
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
@@ -67,62 +42,50 @@ export default function VersionsPage() {
                 textDecoration: "none",
                 fontSize: "0.85rem",
                 color: "var(--primary)",
-                background: "none",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
               }}
             >
-              {t("tracked.view_on_odata")} ↗
+              {t("tracked.view_on_odata")} &#8599;
+            </a>
+          )}
+          {dataset && (
+            <a
+              href={`https://data.gov.il/dataset/${dataset.ckan_name}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                textDecoration: "none",
+                fontSize: "0.85rem",
+                color: "var(--text-muted)",
+              }}
+            >
+              {t("home.source_link")} &#8599;
             </a>
           )}
           <Link
-            to="/tracked"
+            to="/"
             style={{
               textDecoration: "none",
               fontSize: "0.85rem",
-              color: "var(--text-muted, #64748b)",
-              background: "none",
-              border: "none",
-              padding: 0,
+              color: "var(--text-muted)",
             }}
           >
-            ← {t("common.back")}
+            &larr; {t("common.back")}
           </Link>
-          {selected.length === 2 && (
-            <button className="btn-primary" onClick={compare}>
-              {t("versions.compare")}
-            </button>
-          )}
         </div>
       </div>
-
-      <p className="text-sm text-muted mb-2">
-        {t("versions.select_hint", "Select two versions to compare")}
-      </p>
 
       {versionsList.length === 0 ? (
         <div className="empty-state">{t("versions.no_versions")}</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }} role="listbox" aria-multiselectable="true" aria-label={t("versions.title")}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }} role="list" aria-label={t("versions.title")}>
           {versionsList.map((v) => {
             const summary = v.change_summary;
-            const isSelected = selected.includes(v.id);
 
             return (
               <div
                 key={v.id}
                 className="card"
-                role="option"
-                aria-selected={isSelected}
-                tabIndex={0}
-                onClick={() => toggleSelect(v.id)}
-                onKeyDown={(e) => handleKeyDown(e, v.id)}
-                style={{
-                  borderColor: isSelected ? "var(--primary)" : undefined,
-                  borderWidth: isSelected ? 2 : 1,
-                  cursor: "pointer",
-                }}
+                role="listitem"
               >
                 <div className="flex-between">
                   <div className="flex">
@@ -170,21 +133,35 @@ export default function VersionsPage() {
                   </div>
                 )}
 
-                {/* Single ODATA link per version */}
-                {dataset?.odata_dataset_id && (
+                {/* ODATA resource links per version */}
+                {dataset?.odata_dataset_id && v.resource_mappings && (
+                  <div className="mt-1 flex" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
+                    {Object.entries(v.resource_mappings).map(([resId, mapping]: [string, any]) => (
+                      <a
+                        key={resId}
+                        href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${mapping.odata_resource_id || resId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm"
+                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                      >
+                        {mapping.name || resId} (ODATA) &#8599;
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+                {/* Fallback single ODATA link if no resource_mappings */}
+                {dataset?.odata_dataset_id && !v.resource_mappings && (
                   <div className="mt-1">
                     <a
                       href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
                       className="text-sm"
-                      style={{
-                        color: "var(--primary)",
-                        textDecoration: "none",
-                      }}
+                      style={{ color: "var(--primary)", textDecoration: "none" }}
                     >
-                      {t("versions.view_on_odata")} ↗
+                      {t("versions.view_on_odata")} &#8599;
                     </a>
                   </div>
                 )}

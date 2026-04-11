@@ -6,10 +6,8 @@ import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import LoginPage from "./pages/LoginPage";
-import SearchPage from "./pages/SearchPage";
-import TrackedPage from "./pages/TrackedPage";
+import HomePage from "./pages/HomePage";
 import VersionsPage from "./pages/VersionsPage";
-import DiffPage from "./pages/DiffPage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
 
@@ -34,42 +32,14 @@ export default function App() {
         {t("nav.skip_to_content", "Skip to content")}
       </a>
       <Navbar />
-      <div id="main-content" ref={mainRef} tabIndex={-1} style={{ outline: "none", flex: 1 }}>
+      <div id="main-content" ref={mainRef} tabIndex={-1} role="main" style={{ outline: "none", flex: 1 }}>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <div className="container mt-3"><SearchPage /></div>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/tracked"
-            element={
-              <ProtectedRoute>
-                <div className="container mt-3"><TrackedPage /></div>
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/" element={<HomePage />} />
           <Route
             path="/versions/:datasetId"
-            element={
-              <ProtectedRoute>
-                <div className="container mt-3"><VersionsPage /></div>
-              </ProtectedRoute>
-            }
+            element={<div className="container mt-3"><VersionsPage /></div>}
           />
-          <Route
-            path="/diff/:datasetId"
-            element={
-              <ProtectedRoute>
-                <div className="container mt-3"><DiffPage /></div>
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/about" element={<AboutPage />} />
           <Route
             path="/admin"
             element={
@@ -78,6 +48,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/admin/login" element={<LoginPage />} />
         </Routes>
       </div>
       <Footer />

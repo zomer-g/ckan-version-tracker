@@ -17,6 +17,23 @@
     "sso_failed": "ההתחברות נכשלה, נסה שוב",
     "sso_no_email": "לא ניתן לקבל כתובת אימייל מהחשבון"
   },
+  "home": {
+    "hero_title": "גרסאות לעם",
+    "hero_subtitle": "מעקב גרסאות אחרי מאגרי מידע ממשלתיים פתוחים",
+    "search_placeholder": "חפש לפי מילות מפתח או הדבק קישור מ-data.gov.il...",
+    "tracked_title": "מאגרים במעקב",
+    "request_btn": "בקש מעקב",
+    "request_title": "בקשה למעקב",
+    "request_name": "שם (לא חובה)",
+    "request_notes": "למה המאגר הזה חשוב? באיזו תדירות כדאי לעדכן?",
+    "request_contact": "דרכי יצירת קשר (לא חובה)",
+    "request_interval": "תדירות מועדפת",
+    "request_submit": "שלח בקשה",
+    "request_success": "הבקשה נשלחה בהצלחה! נבדוק ונאשר בהקדם.",
+    "versions_count": "גרסאות",
+    "source_link": "מקור ב-data.gov.il",
+    "no_tracked": "עדיין אין מאגרים במעקב"
+  },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",
     "placeholder": "חפש לפי מילות מפתח או הדבק קישור מ-data.gov.il...",
