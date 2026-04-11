@@ -133,20 +133,36 @@ export default function VersionsPage() {
                   </div>
                 )}
 
-                {/* Single ODATA link per version */}
-                {dataset?.odata_dataset_id && (
-                  <div className="mt-1">
-                    <a
-                      href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm"
-                      style={{ color: "var(--primary)", textDecoration: "none" }}
-                    >
-                      {t("versions.view_on_odata")} &#8599;
-                    </a>
-                  </div>
-                )}
+                {/* ODATA link — direct to resource if available */}
+                {dataset?.odata_dataset_id && (() => {
+                  // Find the first real odata resource_id from mappings
+                  // Skip internal keys (_hashes, _resource_ids, _large_dataset_info)
+                  const mappings = v.resource_mappings || {};
+                  let odataResourceId: string | null = null;
+                  for (const [key, val] of Object.entries(mappings)) {
+                    if (key.startsWith("_")) continue;
+                    if (typeof val === "string" && val.length > 10) {
+                      odataResourceId = val;
+                      break;
+                    }
+                  }
+                  const href = odataResourceId
+                    ? `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${odataResourceId}`
+                    : `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`;
+                  return (
+                    <div className="mt-1">
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm"
+                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                      >
+                        {t("versions.view_on_odata")} &#8599;
+                      </a>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
