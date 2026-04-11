@@ -57,7 +57,7 @@ async def google_callback(
 ):
     """Handle Google OAuth2 callback."""
     if error or not code:
-        return RedirectResponse(url="/login?error=google_denied")
+        return RedirectResponse(url="/admin/login?error=google_denied")
 
     try:
         # Exchange code for tokens
@@ -87,7 +87,7 @@ async def google_callback(
         name = userinfo.get("name", "") or email.split("@")[0]
 
         if not email:
-            return RedirectResponse(url="/login?error=no_email")
+            return RedirectResponse(url="/admin/login?error=no_email")
 
         # Find or create user
         jwt_token = await _find_or_create_user(db, email, name, "google")
@@ -95,7 +95,7 @@ async def google_callback(
 
     except Exception:
         logger.exception("Google OAuth callback failed")
-        return RedirectResponse(url="/login?error=google_failed")
+        return RedirectResponse(url="/admin/login?error=google_failed")
 
 
 # -- Shared helpers ------------------------------------------------------------
