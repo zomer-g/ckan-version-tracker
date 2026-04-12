@@ -347,7 +347,7 @@ export default function HomePage() {
                     )}
 
                     <a
-                      href={`https://data.gov.il/dataset/${ds.ckan_name}`}
+                      href={ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sm"

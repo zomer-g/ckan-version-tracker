@@ -49,7 +49,7 @@ export default function VersionsPage() {
           )}
           {dataset && (
             <a
-              href={`https://data.gov.il/dataset/${dataset.ckan_name}`}
+              href={dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{
