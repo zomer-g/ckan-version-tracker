@@ -32,7 +32,13 @@ def _prepare_db_url_and_args() -> tuple[str, dict]:
 
 
 db_url, connect_args = _prepare_db_url_and_args()
-engine = create_async_engine(db_url, echo=False, connect_args=connect_args)
+engine = create_async_engine(
+    db_url,
+    echo=False,
+    connect_args=connect_args,
+    pool_recycle=300,        # Recycle connections after 5 min (Neon idle timeout)
+    pool_pre_ping=True,      # Test connections before use (detects closed connections)
+)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
