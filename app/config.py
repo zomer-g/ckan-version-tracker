@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     min_poll_interval: int = 300
     max_resource_download_size: int = 500_000_000
 
+    worker_api_key: str = ""  # API key for govil-scraper worker
+
     cors_origins: str = ""
 
     # SSO

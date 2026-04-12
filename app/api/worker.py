@@ -1,0 +1,288 @@
+"""Worker API for govil-scraper integration."""
+import hashlib
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.database import get_db
+from app.models.scrape_task import ScrapeTask
+from app.models.tracked_dataset import TrackedDataset
+from app.models.version_index import VersionIndex
+from app.rate_limit import limiter
+from app.services.odata_client import odata_client
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/worker", tags=["worker"])
+
+
+def _verify_worker_key(request: Request):
+    """Verify the worker API key from Authorization header."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing worker key")
+    key = auth[7:].strip()
+    if not settings.worker_api_key or key != settings.worker_api_key:
+        raise HTTPException(status_code=403, detail="Invalid worker key")
+
+
+# --- Models ---
+
+class ResourceData(BaseModel):
+    name: str
+    format: str = "CSV"
+    records: list[dict] = []
+    fields: list[dict] = []
+    row_count: int = 0
+
+class AttachmentData(BaseModel):
+    name: str
+    url: str
+    size: int = 0
+
+class PushVersionRequest(BaseModel):
+    tracked_dataset_id: str
+    metadata_modified: str
+    resources: list[ResourceData] = []
+    attachments: list[AttachmentData] = []
+    scrape_metadata: dict = {}
+
+class ProgressUpdate(BaseModel):
+    phase: str
+    current: int = 0
+    total: int = 0
+    percentage: int = 0
+    message: str = ""
+
+class FailureReport(BaseModel):
+    error: str
+    phase: str = ""
+
+
+# --- Endpoints ---
+
+@router.get("/poll")
+@limiter.limit("60/minute")
+async def poll_for_task(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker polls for the next available scrape task."""
+    _verify_worker_key(request)
+
+    result = await db.execute(
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(ScrapeTask.status == "pending")
+        .order_by(ScrapeTask.created_at.asc())
+        .limit(1)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=204)  # No tasks
+
+    task, ds = row
+    task.status = "running"
+    task.phase = "assigned"
+    task.message = "Assigned to worker"
+    await db.commit()
+
+    return {
+        "task_id": str(task.id),
+        "tracked_dataset_id": str(ds.id),
+        "source_url": ds.source_url,
+        "scraper_config": ds.scraper_config or {"download_files": False},
+        "callback_url": "/api/worker/push-version",
+    }
+
+
+@router.post("/push-version")
+@limiter.limit("30/minute")
+async def push_version(
+    request: Request,
+    body: PushVersionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker pushes scraped data as a new version."""
+    _verify_worker_key(request)
+
+    # Find the tracked dataset
+    try:
+        ds_id = uuid.UUID(body.tracked_dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset ID")
+
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Get next version number
+    latest_result = await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds.id)
+        .order_by(VersionIndex.version_number.desc())
+        .limit(1)
+    )
+    latest = latest_result.scalar_one_or_none()
+    next_version = (latest.version_number + 1) if latest else 1
+
+    # Skip if same metadata_modified
+    if latest and latest.metadata_modified == body.metadata_modified:
+        return {"message": "No change detected", "version_number": latest.version_number}
+
+    # Push tabular resources to odata.org.il
+    resource_mappings: dict[str, Any] = {}
+    odata_resource_ids = []
+
+    if ds.odata_dataset_id:
+        from app.services.snapshot_service import _timestamp
+        ts = _timestamp()
+
+        for res in body.resources:
+            if res.records and res.fields:
+                try:
+                    odata_result = await odata_client.push_csv_to_datastore(
+                        dataset_id=ds.odata_dataset_id,
+                        version_number=next_version,
+                        resource_name=res.name,
+                        fields=res.fields,
+                        records=res.records,
+                        resource_format=res.format,
+                        timestamp=ts,
+                    )
+                    rid = odata_result["id"]
+                    resource_mappings[res.name] = rid
+                    odata_resource_ids.append(rid)
+                    logger.info("Pushed %d records for %s to odata (resource %s)", len(res.records), res.name, rid)
+                except Exception as e:
+                    logger.error("Failed to push resource %s to odata: %s", res.name, e)
+
+    # Compute hash for change detection
+    hash_data = json.dumps({
+        "resources": [{"name": r.name, "row_count": r.row_count} for r in body.resources],
+        "attachments": [{"name": a.name, "url": a.url} for a in body.attachments],
+    }, sort_keys=True)
+    content_hash = hashlib.sha256(hash_data.encode()).hexdigest()
+
+    resource_mappings["_hashes"] = {"scraper": content_hash}
+    resource_mappings["_resource_ids"] = []
+
+    # Create version
+    total_rows = sum(r.row_count for r in body.resources)
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=body.metadata_modified,
+        odata_metadata_resource_id=None,
+        change_summary={
+            "type": "scraper",
+            "total_rows": total_rows,
+            "total_attachments": len(body.attachments),
+            "resources": [{"name": r.name, "format": r.format, "rows": r.row_count} for r in body.resources],
+            "scrape_metadata": body.scrape_metadata,
+            "resources_added": odata_resource_ids,
+            "resources_removed": [],
+            "resources_modified": [],
+        },
+        resource_mappings=resource_mappings,
+    )
+    db.add(version)
+
+    # Update dataset
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = body.metadata_modified
+    await db.commit()
+
+    # Mark any running task as completed
+    task_result = await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status == "running",
+        )
+    )
+    task = task_result.scalar_one_or_none()
+    if task:
+        task.status = "completed"
+        task.completed_at = datetime.now(timezone.utc)
+        task.progress = 100
+        task.phase = "complete"
+        await db.commit()
+
+    logger.info("Scraper version %d created for %s (%d rows)", next_version, ds.title, total_rows)
+
+    return {
+        "version_id": str(version.id),
+        "version_number": next_version,
+        "odata_resource_ids": odata_resource_ids,
+        "message": f"Version {next_version} created with {total_rows} records",
+    }
+
+
+@router.post("/progress/{task_id}")
+@limiter.limit("120/minute")
+async def update_progress(
+    request: Request,
+    task_id: str,
+    body: ProgressUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker reports progress on a running task."""
+    _verify_worker_key(request)
+
+    try:
+        tid = uuid.UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task ID")
+
+    result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.phase = body.phase
+    task.progress = body.percentage
+    task.message = body.message
+    await db.commit()
+
+    return {"status": "ok"}
+
+
+@router.post("/fail/{task_id}")
+@limiter.limit("30/minute")
+async def report_failure(
+    request: Request,
+    task_id: str,
+    body: FailureReport,
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker reports a task failure."""
+    _verify_worker_key(request)
+
+    try:
+        tid = uuid.UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task ID")
+
+    result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "failed"
+    task.phase = body.phase
+    task.error = body.error
+    task.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    logger.warning("Scrape task %s failed: %s", task_id, body.error)
+    return {"status": "failed"}

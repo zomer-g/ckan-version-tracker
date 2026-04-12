@@ -166,6 +166,7 @@ export default function AdminPage() {
             <thead>
               <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
                 <th style={thStyle}>שם מאגר</th>
+                <th style={thStyle}>מקור</th>
                 <th style={thStyle}>ארגון</th>
                 <th style={thStyle}>תדירות</th>
                 <th style={thStyle}>גרסאות</th>
@@ -180,6 +181,26 @@ export default function AdminPage() {
                     <Link to={`/versions/${ds.id}`} style={{ fontWeight: 500 }}>
                       {ds.title}
                     </Link>
+                    {ds.source_type === "scraper" && ds.source_url && (
+                      <div style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
+                        <a href={ds.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                          {ds.source_url}
+                        </a>
+                      </div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
+                      color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
+                    }}>
+                      {ds.source_type === "scraper" ? "Scraper" : "CKAN"}
+                    </span>
                   </td>
                   <td style={tdStyle} className="text-sm text-muted">{ds.organization}</td>
                   <td style={tdStyle}>

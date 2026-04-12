@@ -73,7 +73,8 @@ export interface TrackedDataset {
   requester_email: string | null;
   resource_id: string | null;
   resource_name: string | null;
-  source_url: string;
+  source_type: string;
+  source_url: string | null;
 }
 
 export const datasets = {

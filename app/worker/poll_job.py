@@ -34,6 +34,11 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.info("Dataset %s not found or inactive, skipping", dataset_id)
             return
 
+        # For scraper-type datasets, create a task instead of polling CKAN
+        if ds.source_type == "scraper":
+            await _create_scrape_task(ds, db)
+            return
+
         if ds.status != "active":
             logger.info("Dataset %s status is '%s', skipping poll", dataset_id, ds.status)
             return
@@ -192,6 +197,35 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.exception("Error polling dataset %s", ds.ckan_name)
             ds.last_polled_at = datetime.now(timezone.utc)
             await db.commit()
+
+
+async def _create_scrape_task(ds: TrackedDataset, db) -> None:
+    """Create a scrape task for the worker to pick up."""
+    from app.models.scrape_task import ScrapeTask
+
+    # Check if there's already a pending/running task
+    existing = await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status.in_(["pending", "running"]),
+        )
+    )
+    if existing.scalar_one_or_none():
+        logger.info("Scrape task already exists for %s, skipping", ds.ckan_name)
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
+    task = ScrapeTask(
+        tracked_dataset_id=ds.id,
+        status="pending",
+        phase="queued",
+        message=f"Queued for scraping: {ds.source_url}",
+    )
+    db.add(task)
+    ds.last_polled_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Created scrape task for %s (source: %s)", ds.ckan_name, ds.source_url)
 
 
 async def _poll_large_dataset(

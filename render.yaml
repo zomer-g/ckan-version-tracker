@@ -29,4 +29,6 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+      - key: WORKER_API_KEY
+        sync: false
 # No databases section — using external Neon PostgreSQL (free tier)
