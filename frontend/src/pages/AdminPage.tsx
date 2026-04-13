@@ -15,6 +15,8 @@ const INTERVAL_OPTIONS = [
   { value: 43200, label: "כל 12 שעות" },
   { value: 86400, label: "כל יום" },
   { value: 604800, label: "כל שבוע" },
+  { value: 2592000, label: "כל חודש" },
+  { value: 7776000, label: "כל רבעון" },
 ];
 
 function formatIntervalLabel(seconds: number): string {

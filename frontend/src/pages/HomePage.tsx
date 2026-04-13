@@ -33,8 +33,10 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
   if (hours < 24) return `${hours} ${t("tracked.hours")}`;
   const days = Math.round(hours / 24);
   if (days < 7) return `${days} ${t("tracked.days")}`;
-  const weeks = Math.round(days / 7);
-  return `${weeks} ${t("tracked.weeks")}`;
+  if (days < 28) { const weeks = Math.round(days / 7); return `${weeks} ${t("tracked.weeks")}`; }
+  if (days < 90) { const months = Math.round(days / 30); return `${months} ${t("tracked.months")}`; }
+  const quarters = Math.round(days / 90);
+  return `${quarters} ${t("tracked.quarters")}`;
 }
 
 export default function HomePage() {

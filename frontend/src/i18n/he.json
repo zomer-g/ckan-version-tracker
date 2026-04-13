@@ -61,6 +61,8 @@
     "hours": "שעות",
     "days": "ימים",
     "weeks": "שבועות",
+    "months": "חודשים",
+    "quarters": "רבעונים",
     "interval_15min": "כל 15 דקות",
     "interval_1hour": "כל שעה",
     "interval_12hour": "כל 12 שעות",

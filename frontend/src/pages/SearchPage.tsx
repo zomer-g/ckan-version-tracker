@@ -124,11 +124,13 @@ export default function SearchPage() {
   };
 
   const INTERVAL_OPTIONS = [
-    { value: 900, label: "\u05DB\u05DC 15 \u05D3\u05E7\u05D5\u05EA" },
-    { value: 3600, label: "\u05DB\u05DC \u05E9\u05E2\u05D4" },
-    { value: 43200, label: "\u05DB\u05DC 12 \u05E9\u05E2\u05D5\u05EA" },
-    { value: 86400, label: "\u05DB\u05DC \u05D9\u05D5\u05DD" },
-    { value: 604800, label: "\u05DB\u05DC \u05E9\u05D1\u05D5\u05E2" },
+    { value: 900, label: "כל 15 דקות" },
+    { value: 3600, label: "כל שעה" },
+    { value: 43200, label: "כל 12 שעות" },
+    { value: 86400, label: "כל יום" },
+    { value: 604800, label: "כל שבוע" },
+    { value: 2592000, label: "כל חודש" },
+    { value: 7776000, label: "כל רבעון" },
   ];
 
   const stripHtml = (html: string) => {

@@ -60,6 +60,8 @@
     "hours": "hours",
     "days": "days",
     "weeks": "weeks",
+    "months": "months",
+    "quarters": "quarters",
     "interval_15min": "Every 15 minutes",
     "interval_1hour": "Every hour",
     "interval_12hour": "Every 12 hours",

@@ -15,6 +15,8 @@ const INTERVAL_OPTIONS = [
   { value: 43200, labelHe: "12 שעות", labelEn: "12 hours" },
   { value: 86400, labelHe: "יום", labelEn: "1 day" },
   { value: 604800, labelHe: "שבוע", labelEn: "1 week" },
+  { value: 2592000, labelHe: "חודש", labelEn: "1 month" },
+  { value: 7776000, labelHe: "רבעון", labelEn: "3 months" },
 ];
 
 export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose }: RequestFormProps) {
