@@ -123,11 +123,31 @@ export default function AdminPage() {
       ) : (
         <div className="grid grid-2 mb-2">
           {requests.map((req) => (
-            <article key={req.id} className="card" style={{ borderRight: "4px solid var(--warning)" }}>
-              <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: "0 0 0.5rem 0" }}>
-                {req.title}
-              </h2>
-              {req.organization && <p className="text-sm text-muted">{req.organization}</p>}
+            <article key={req.id} className="card" style={{ borderRight: `4px solid ${req.source_type === "scraper" ? "#f59e0b" : "var(--warning)"}` }}>
+              <div className="flex-between" style={{ marginBottom: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                  {req.title}
+                </h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: req.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
+                  color: req.source_type === "scraper" ? "#92400e" : "#0f766e",
+                }}>
+                  {req.source_type === "scraper" ? "GOV.IL" : "CKAN"}
+                </span>
+              </div>
+              {req.source_type === "scraper" && req.source_url && (
+                <p className="text-sm text-muted" style={{ wordBreak: "break-all" }}>
+                  <a href={req.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {req.source_url}
+                  </a>
+                </p>
+              )}
+              {req.organization && req.source_type !== "scraper" && <p className="text-sm text-muted">{req.organization}</p>}
               <div className="text-sm mb-1">
                 <div>{t("admin.requester")}: {req.requester_name} ({req.requester_email})</div>
                 <div>{t("admin.requested_at")}: {new Date(req.created_at).toLocaleString()}</div>

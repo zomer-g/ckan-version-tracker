@@ -38,6 +38,8 @@ class PendingRequest(BaseModel):
     created_at: str
     requester_email: str
     requester_name: str
+    source_type: str = "ckan"
+    source_url: str | None = None
 
 
 @router.get("/pending", response_model=list[PendingRequest])
@@ -67,6 +69,8 @@ async def list_pending(
             created_at=ds.created_at.isoformat(),
             requester_email=requester.email if requester else "אנונימי",
             requester_name=requester.display_name if requester else "אנונימי",
+            source_type=ds.source_type or "ckan",
+            source_url=ds.source_url,
         )
         for ds, requester in rows
     ]
@@ -102,19 +106,28 @@ async def approve_request(
 
     # Create odata mirror dataset if not already created
     if not ds.odata_dataset_id and settings.odata_api_key:
-        mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
-        if ds.resource_id:
-            mirror_name = f"{mirror_name}-{ds.resource_id[:8]}"
+        if ds.source_type == "scraper":
+            mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ds.ckan_name)}"
+            extras = [
+                {"key": "source_type", "value": "scraper"},
+                {"key": "source_url", "value": ds.source_url or ""},
+                {"key": "auto_managed", "value": "true"},
+            ]
+        else:
+            mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
+            if ds.resource_id:
+                mirror_name = f"{mirror_name}-{ds.resource_id[:8]}"
+            extras = [
+                {"key": "source_ckan_id", "value": ds.ckan_id},
+                {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"},
+                {"key": "auto_managed", "value": "true"},
+            ]
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
                 title=f"[Versions] {ds.title}",
                 owner_org=settings.odata_owner_org,
-                extras=[
-                    {"key": "source_ckan_id", "value": ds.ckan_id},
-                    {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"},
-                    {"key": "auto_managed", "value": "true"},
-                ],
+                extras=extras,
             )
             ds.odata_dataset_id = mirror["id"]
         except Exception as e1:

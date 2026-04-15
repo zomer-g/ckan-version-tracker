@@ -18,6 +18,7 @@ from app.api.datasets import router as datasets_router
 from app.api.versions import router as versions_router
 from app.api.admin import router as admin_router
 from app.api.worker import router as worker_router
+from app.api.govil import router as govil_router
 from app.config import settings
 from app.rate_limit import limiter
 from app.worker.scheduler import init_scheduler, shutdown_scheduler
@@ -66,6 +67,7 @@ app.include_router(datasets_router)
 app.include_router(versions_router)
 app.include_router(admin_router)
 app.include_router(worker_router)
+app.include_router(govil_router)
 
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"

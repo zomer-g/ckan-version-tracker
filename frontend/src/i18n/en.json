@@ -20,7 +20,7 @@
   "home": {
     "hero_title": "Versions for the People",
     "hero_subtitle": "Tracking government open data version history",
-    "search_placeholder": "Search by keywords or paste a data.gov.il URL...",
+    "search_placeholder": "Search datasets or paste a data.gov.il or gov.il URL...",
     "tracked_title": "Tracked Datasets",
     "request_btn": "Request Tracking",
     "request_title": "Request Tracking",
@@ -32,11 +32,12 @@
     "request_success": "Request submitted! We'll review and approve it soon.",
     "versions_count": "versions",
     "source_link": "Source on data.gov.il",
+    "source_link_govil": "Source on gov.il",
     "no_tracked": "No tracked datasets yet"
   },
   "search": {
     "title": "Search Government Datasets",
-    "placeholder": "Search by keywords or paste a data.gov.il URL...",
+    "placeholder": "Search datasets or paste a data.gov.il or gov.il URL...",
     "search_btn": "Search",
     "track_btn": "Track",
     "tracking": "Tracking",

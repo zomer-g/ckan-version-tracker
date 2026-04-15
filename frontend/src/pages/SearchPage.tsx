@@ -1,6 +1,6 @@
 import { useState, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
 interface CkanResource {
@@ -22,6 +22,9 @@ interface SearchResult {
   resources?: CkanResource[];
 }
 
+/** Detect gov.il collector URLs */
+const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?)\/([^/?#]+)/i;
+
 export default function SearchPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -34,40 +37,32 @@ export default function SearchPage() {
   const [tracked, setTracked] = useState<Map<string, "tracked" | "pending">>(new Map());
   const [showIntervalFor, setShowIntervalFor] = useState<string | null>(null);
   const [error, setError] = useState("");
-  // Track which resource_id was extracted from URL
   const [targetResourceId, setTargetResourceId] = useState<string | null>(null);
 
-  /**
-   * Extract dataset name from a data.gov.il URL, or return null if not a URL.
-   * Supports:
-   *   https://data.gov.il/he/datasets/org_name/dataset_name
-   *   https://data.gov.il/he/datasets/org_name/dataset_name/resource_id
-   *   https://data.gov.il/dataset/dataset_name
-   */
+  // Gov.il scraper result
+  const [govIlResult, setGovIlResult] = useState<GovIlValidation | null>(null);
+  const [govIlTracked, setGovIlTracked] = useState<"tracked" | "pending" | null>(null);
+  const [govIlTracking, setGovIlTracking] = useState(false);
+  const [showGovIlInterval, setShowGovIlInterval] = useState(false);
+
   const extractDatasetName = (input: string): string | null => {
     const trimmed = input.trim();
     if (!trimmed.includes("data.gov.il") && !trimmed.includes("gov.il/he/dataset")) return null;
-
-    // /datasets/org/name or /datasets/org/name/resource_id — always grab 2nd segment (dataset name)
     const fullMatch = trimmed.match(/\/datasets\/([^/]+)\/([^/?#]+)/);
-    if (fullMatch) return fullMatch[2]; // org/dataset_name — return dataset_name
-
-    // /dataset/name (without org)
+    if (fullMatch) return fullMatch[2];
     const simpleMatch = trimmed.match(/\/dataset\/([^/?#]+)/);
     if (simpleMatch) return simpleMatch[1];
-
     return null;
   };
 
-  /**
-   * Extract resource_id (UUID) from a data.gov.il resource URL.
-   * Resource URLs look like: /datasets/org/name/c4a8e209-c4a4-4482-b094-defc5bf4588e
-   */
   const extractResourceId = (input: string): string | null => {
     const trimmed = input.trim();
-    // Match UUID at the end of a datasets URL path
     const match = trimmed.match(/\/datasets\/[^/]+\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
     return match ? match[1] : null;
+  };
+
+  const detectGovIlUrl = (input: string): boolean => {
+    return GOV_IL_PATTERN.test(input.trim());
   };
 
   const search = async (e?: FormEvent) => {
@@ -75,19 +70,34 @@ export default function SearchPage() {
     setLoading(true);
     setError("");
     setTargetResourceId(null);
+    setGovIlResult(null);
+    setGovIlTracked(null);
+    setShowGovIlInterval(false);
     try {
+      // 1. Check for gov.il collector URL
+      if (detectGovIlUrl(query)) {
+        const validation = await govil.validate(query.trim());
+        if (validation.valid) {
+          setGovIlResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2. Check for data.gov.il URL
       const datasetName = extractDatasetName(query);
       const resourceId = extractResourceId(query);
       if (datasetName) {
-        // Direct dataset lookup by name extracted from URL
         const pkg = await ckan.dataset(datasetName);
-        if (resourceId) {
-          setTargetResourceId(resourceId);
-        }
+        if (resourceId) setTargetResourceId(resourceId);
         setResults([pkg]);
         setCount(1);
       } else {
-        // Regular keyword search
+        // 3. Keyword search
         const data = await ckan.search(query);
         setResults(data.results);
         setCount(data.count);
@@ -98,7 +108,6 @@ export default function SearchPage() {
     setLoading(false);
   };
 
-  /** Unique key for tracking state: combines dataset id + optional resource id */
   const trackKey = (datasetId: string, resourceId?: string) =>
     resourceId ? `${datasetId}::${resourceId}` : datasetId;
 
@@ -123,6 +132,23 @@ export default function SearchPage() {
     });
   };
 
+  const trackGovIlDataset = async (interval: number) => {
+    if (!govIlResult?.url || !govIlResult?.title) return;
+    setShowGovIlInterval(false);
+    setGovIlTracking(true);
+    try {
+      await datasetsApi.trackScraper(govIlResult.url, govIlResult.title, interval);
+      setGovIlTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setGovIlTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setGovIlTracking(false);
+  };
+
   const INTERVAL_OPTIONS = [
     { value: 900, label: "כל 15 דקות" },
     { value: 3600, label: "כל שעה" },
@@ -138,7 +164,6 @@ export default function SearchPage() {
     return doc.body.textContent || "";
   };
 
-  /** Render the track button / status badge for a given dataset+resource combo */
   const renderTrackButton = (datasetId: string, label: string, resourceId?: string) => {
     const key = trackKey(datasetId, resourceId);
     const status = tracked.get(key);
@@ -183,6 +208,47 @@ export default function SearchPage() {
     );
   };
 
+  /** Render track button for gov.il scraper dataset */
+  const renderGovIlTrackButton = () => {
+    if (govIlTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (govIlTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "\u05D4\u05D1\u05E7\u05E9\u05D4 \u05E0\u05E9\u05DC\u05D7\u05D4 \u2014 \u05DE\u05DE\u05EA\u05D9\u05DF \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8")}
+        </span>
+      );
+    }
+
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showGovIlInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackGovIlDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowGovIlInterval(!showGovIlInterval)}
+          disabled={govIlTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {govIlTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -211,7 +277,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && query && (
+        {!loading && results.length === 0 && !govIlResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -222,9 +288,45 @@ export default function SearchPage() {
         )}
       </div>
 
+      {/* Gov.il scraper result */}
+      {govIlResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #f59e0b" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{govIlResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#fef3c7",
+                  color: "#92400e",
+                }}>
+                  GOV.IL
+                </span>
+              </div>
+              {renderGovIlTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>
+                {govIlResult.page_type === "dynamic_collector" ? "Dynamic Collector" : "Traditional Collector"}
+              </span>
+              <span>gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={govIlResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {govIlResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* CKAN results */}
       <div className="grid grid-2">
         {results.map((r) => {
-          // If a specific resource was targeted via URL, show only that resource
           const targetResource = targetResourceId
             ? r.resources?.find((res) => res.id === targetResourceId)
             : null;
@@ -233,7 +335,6 @@ export default function SearchPage() {
             <article key={r.id} className="card">
               <div className="flex-between mb-1">
                 <h2 style={{ fontSize: "1rem", fontWeight: 600 }}>{r.title}</h2>
-                {/* Dataset-level track button (only if no specific resource targeted) */}
                 {!targetResource && renderTrackButton(r.id, r.title)}
               </div>
               {r.notes && (
@@ -255,7 +356,6 @@ export default function SearchPage() {
                 </span>
               </div>
 
-              {/* Show targeted resource for tracking */}
               {targetResource && (
                 <div
                   style={{
@@ -282,7 +382,6 @@ export default function SearchPage() {
                 </div>
               )}
 
-              {/* Show all resources when dataset fetched via URL (but no specific resource targeted) */}
               {!targetResource && r.resources && r.resources.length > 0 && extractDatasetName(query) && (
                 <div style={{ marginTop: "0.75rem" }}>
                   <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem" }}>

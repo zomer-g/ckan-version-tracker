@@ -1,10 +1,13 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, TrackedDataset } from "../api/client";
+import { ckan, publicApi, govil, TrackedDataset, GovIlValidation } from "../api/client";
 import RequestForm from "../components/RequestForm";
 
 const ODATA_BASE = "https://www.odata.org.il";
+
+/** Detect gov.il collector URLs */
+const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?)\/([^/?#]+)/i;
 
 interface CkanResource {
   id: string;
@@ -55,6 +58,9 @@ export default function HomePage() {
   // Request form state — which dataset has form open
   const [requestFormFor, setRequestFormFor] = useState<string | null>(null);
 
+  // Gov.il scraper result
+  const [govIlResult, setGovIlResult] = useState<GovIlValidation | null>(null);
+
   useEffect(() => {
     publicApi.datasets()
       .then(setTrackedDatasets)
@@ -78,6 +84,10 @@ export default function HomePage() {
     return match ? match[1] : null;
   };
 
+  const detectGovIlUrl = (input: string): boolean => {
+    return GOV_IL_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -90,7 +100,23 @@ export default function HomePage() {
     setError("");
     setTargetResourceId(null);
     setRequestFormFor(null);
+    setGovIlResult(null);
     try {
+      // 1. Check for gov.il collector URL
+      if (detectGovIlUrl(query)) {
+        const validation = await govil.validate(query.trim());
+        if (validation.valid) {
+          setGovIlResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2. Check for data.gov.il URL
       const datasetName = extractDatasetName(query);
       const resourceId = extractResourceId(query);
       if (datasetName) {
@@ -99,6 +125,7 @@ export default function HomePage() {
         setResults([pkg]);
         setCount(1);
       } else {
+        // 3. Keyword search
         const data = await ckan.search(query);
         setResults(data.results);
         setCount(data.count);
@@ -171,6 +198,64 @@ export default function HomePage() {
           {loading && <div className="loading" role="status">{t("common.loading")}</div>}
         </div>
 
+        {/* Gov.il scraper result */}
+        {!loading && govIlResult && (
+          <section aria-label="gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #f59e0b" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{govIlResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#fef3c7",
+                      color: "#92400e",
+                    }}>
+                      GOV.IL
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>
+                    {govIlResult.page_type === "dynamic_collector" ? "Dynamic Collector" : "Traditional Collector"}
+                  </span>
+                  <span>gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={govIlResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {govIlResult.url}
+                  </a>
+                </p>
+
+                {/* Request form for scraper dataset */}
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "govil" ? (
+                    <RequestForm
+                      datasetTitle={govIlResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={govIlResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("govil")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* CKAN results */}
         {!loading && results.length > 0 && (
           <section aria-label={t("search.title")} style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
@@ -288,7 +373,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && query && !error && (
+        {!loading && results.length === 0 && !govIlResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 
@@ -374,7 +459,7 @@ export default function HomePage() {
                         className="text-sm"
                         style={{ color: "var(--text-muted)", textDecoration: "none" }}
                       >
-                        {t("home.source_link")} &#8599;
+                        {ds.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
                       </a>
                     )}
                   </div>

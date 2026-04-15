@@ -3,10 +3,13 @@ import { useTranslation } from "react-i18next";
 import { publicApi } from "../api/client";
 
 interface RequestFormProps {
-  ckanId: string;
+  ckanId?: string;
   resourceId?: string;
   datasetTitle: string;
   onClose: () => void;
+  // Scraper mode
+  sourceType?: "ckan" | "scraper";
+  sourceUrl?: string;
 }
 
 const INTERVAL_OPTIONS = [
@@ -19,7 +22,14 @@ const INTERVAL_OPTIONS = [
   { value: 7776000, labelHe: "רבעון", labelEn: "3 months" },
 ];
 
-export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose }: RequestFormProps) {
+export default function RequestForm({
+  ckanId,
+  resourceId,
+  datasetTitle,
+  onClose,
+  sourceType = "ckan",
+  sourceUrl,
+}: RequestFormProps) {
   const { t, i18n } = useTranslation();
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
@@ -29,19 +39,32 @@ export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose 
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
 
+  const formId = sourceType === "scraper" ? (sourceUrl || "scraper") : (ckanId || "form");
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError("");
     try {
-      await publicApi.request({
-        ckan_id: ckanId,
-        resource_id: resourceId,
-        preferred_interval: interval,
-        requester_name: name || undefined,
-        requester_notes: notes || undefined,
-        requester_contact: contact || undefined,
-      });
+      if (sourceType === "scraper" && sourceUrl) {
+        await publicApi.requestScraper({
+          source_url: sourceUrl,
+          title: datasetTitle,
+          preferred_interval: interval,
+          requester_name: name || undefined,
+          requester_notes: notes || undefined,
+          requester_contact: contact || undefined,
+        });
+      } else {
+        await publicApi.request({
+          ckan_id: ckanId!,
+          resource_id: resourceId,
+          preferred_interval: interval,
+          requester_name: name || undefined,
+          requester_notes: notes || undefined,
+          requester_contact: contact || undefined,
+        });
+      }
       setSuccess(true);
     } catch (err: any) {
       setError(err.message || t("common.error"));
@@ -122,11 +145,11 @@ export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose 
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         <div>
-          <label htmlFor={`req-name-${ckanId}`} className="text-sm" style={{ fontWeight: 500 }}>
+          <label htmlFor={`req-name-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
             {t("home.request_name")}
           </label>
           <input
-            id={`req-name-${ckanId}`}
+            id={`req-name-${formId}`}
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -135,11 +158,11 @@ export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose 
         </div>
 
         <div>
-          <label htmlFor={`req-notes-${ckanId}`} className="text-sm" style={{ fontWeight: 500 }}>
+          <label htmlFor={`req-notes-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
             {t("home.request_notes")}
           </label>
           <textarea
-            id={`req-notes-${ckanId}`}
+            id={`req-notes-${formId}`}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder={t("home.request_notes")}
@@ -157,11 +180,11 @@ export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose 
         </div>
 
         <div>
-          <label htmlFor={`req-contact-${ckanId}`} className="text-sm" style={{ fontWeight: 500 }}>
+          <label htmlFor={`req-contact-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
             {t("home.request_contact")}
           </label>
           <input
-            id={`req-contact-${ckanId}`}
+            id={`req-contact-${formId}`}
             type="text"
             value={contact}
             onChange={(e) => setContact(e.target.value)}
@@ -170,11 +193,11 @@ export default function RequestForm({ ckanId, resourceId, datasetTitle, onClose 
         </div>
 
         <div>
-          <label htmlFor={`req-interval-${ckanId}`} className="text-sm" style={{ fontWeight: 500 }}>
+          <label htmlFor={`req-interval-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
             {t("home.request_interval")}
           </label>
           <select
-            id={`req-interval-${ckanId}`}
+            id={`req-interval-${formId}`}
             value={interval}
             onChange={(e) => setInterval(Number(e.target.value))}
           >

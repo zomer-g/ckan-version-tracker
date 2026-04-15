@@ -84,6 +84,11 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ ckan_id, poll_interval, resource_id }),
     }),
+  trackScraper: (source_url: string, title: string, poll_interval = 604800) =>
+    request<TrackedDataset>("/datasets", {
+      method: "POST",
+      body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
+    }),
   update: (id: string, data: { poll_interval?: number; is_active?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
@@ -135,6 +140,24 @@ export const versions = {
     }>(`/diff?from=${fromId}&to=${toId}`),
 };
 
+// Gov.il Validation
+export interface GovIlValidation {
+  valid: boolean;
+  page_type?: string;
+  collector_name?: string;
+  title?: string;
+  url?: string;
+  error?: string;
+}
+
+export const govil = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/govil/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
@@ -150,6 +173,18 @@ export const publicApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  requestScraper: (data: {
+    source_url: string;
+    title: string;
+    preferred_interval?: number;
+    requester_name?: string;
+    requester_notes?: string;
+    requester_contact?: string;
+  }) =>
+    request<{ message: string }>("/datasets/requests", {
+      method: "POST",
+      body: JSON.stringify({ source_type: "scraper", ...data }),
+    }),
 };
 
 // Admin
@@ -164,6 +199,8 @@ export interface PendingRequest {
   created_at: string;
   requester_email: string;
   requester_name: string;
+  source_type: string;
+  source_url: string | null;
 }
 
 export const admin = {

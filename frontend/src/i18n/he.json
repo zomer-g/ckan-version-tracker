@@ -20,7 +20,7 @@
   "home": {
     "hero_title": "גרסאות לעם",
     "hero_subtitle": "מעקב גרסאות אחרי מאגרי מידע ממשלתיים פתוחים",
-    "search_placeholder": "חפש לפי מילות מפתח או הדבק קישור מ-data.gov.il...",
+    "search_placeholder": "חפש מאגרים או הדבק קישור מ-data.gov.il או gov.il...",
     "tracked_title": "מאגרים במעקב",
     "request_btn": "בקש מעקב",
     "request_title": "בקשה למעקב",
@@ -32,11 +32,12 @@
     "request_success": "הבקשה נשלחה בהצלחה! נבדוק ונאשר בהקדם.",
     "versions_count": "גרסאות",
     "source_link": "מקור ב-data.gov.il",
+    "source_link_govil": "מקור ב-gov.il",
     "no_tracked": "עדיין אין מאגרים במעקב"
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",
-    "placeholder": "חפש לפי מילות מפתח או הדבק קישור מ-data.gov.il...",
+    "placeholder": "חפש מאגרים או הדבק קישור מ-data.gov.il או gov.il...",
     "search_btn": "חפש",
     "track_btn": "עקוב",
     "tracking": "במעקב",

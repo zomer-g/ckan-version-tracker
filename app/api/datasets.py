@@ -21,7 +21,11 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 
 class TrackRequest(BaseModel):
-    ckan_id: str
+    ckan_id: str | None = None
+    source_type: str = "ckan"  # "ckan" | "scraper"
+    source_url: str | None = None
+    title: str | None = None
+    scraper_config: dict | None = None
     poll_interval: int = 604800
     preferred_interval: int | None = None
     resource_id: str | None = None
@@ -51,12 +55,15 @@ class DatasetResponse(BaseModel):
     resource_name: str | None = None
     requester_notes: str = ""
     source_url: str = ""
+    source_type: str = "ckan"
 
     model_config = {"from_attributes": True}
 
 
 def _build_source_url(ds: TrackedDataset) -> str:
-    """Compute the data.gov.il source URL for a tracked dataset."""
+    """Compute the source URL for a tracked dataset."""
+    if ds.source_type == "scraper" and ds.source_url:
+        return ds.source_url
     org = ds.organization or ""
     name = ds.ckan_name or ""
     base = f"https://data.gov.il/he/datasets/{org}/{name}"
@@ -109,6 +116,7 @@ async def list_tracked(
                 resource_id=ds.resource_id,
                 resource_name=None,  # resource name is already in the title
                 source_url=_build_source_url(ds),
+                source_type=ds.source_type or "ckan",
                 version_count=version_counts.get(ds.id, 0),
             )
         )
@@ -122,6 +130,102 @@ async def track_dataset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    raw_interval = body.preferred_interval if body.preferred_interval is not None else body.poll_interval
+    interval = max(raw_interval, settings.min_poll_interval)
+
+    # Determine status based on admin privilege
+    dataset_status = "active" if user.is_admin else "pending"
+
+    # ---- Scraper-type dataset ----
+    if body.source_type == "scraper":
+        if not body.source_url:
+            raise HTTPException(status_code=400, detail="source_url is required for scraper datasets")
+        if not body.title:
+            raise HTTPException(status_code=400, detail="title is required for scraper datasets")
+
+        # Parse collector name from URL for ckan_id/ckan_name
+        from app.api.govil import _parse_govil_url
+        page_type, collector_name = _parse_govil_url(body.source_url)
+        if not collector_name:
+            raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+
+        ckan_id = f"govil-scraper-{collector_name}"
+        ckan_name = collector_name
+
+        # Duplicate check by source_url
+        existing = await db.execute(
+            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Dataset already tracked")
+
+        mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ckan_name)}"
+
+        # Create mirror on odata.org.il for active datasets
+        odata_dataset_id = None
+        if dataset_status == "active" and settings.odata_api_key:
+            try:
+                mirror = await odata_client.create_dataset(
+                    name=mirror_name,
+                    title=f"[Versions] {body.title}",
+                    owner_org=settings.odata_owner_org,
+                    extras=[
+                        {"key": "source_type", "value": "scraper"},
+                        {"key": "source_url", "value": body.source_url},
+                        {"key": "auto_managed", "value": "true"},
+                    ],
+                )
+                odata_dataset_id = mirror["id"]
+            except Exception as e1:
+                logger.warning("Mirror create failed: %s", e1)
+                try:
+                    mirror = await odata_client.package_show(mirror_name)
+                    odata_dataset_id = mirror["id"]
+                except Exception as e2:
+                    logger.error("Mirror find also failed: %s", e2)
+
+        ds = TrackedDataset(
+            ckan_id=ckan_id,
+            ckan_name=ckan_name,
+            title=body.title,
+            organization="gov.il",
+            source_type="scraper",
+            source_url=body.source_url,
+            scraper_config=body.scraper_config or {"download_files": False},
+            odata_dataset_id=odata_dataset_id,
+            poll_interval=interval,
+            status=dataset_status,
+            created_by=user.id,
+            last_modified=None,
+        )
+        db.add(ds)
+        await db.commit()
+        await db.refresh(ds)
+
+        if dataset_status == "active":
+            from app.worker.poll_job import poll_dataset
+            background_tasks.add_task(poll_dataset, str(ds.id))
+
+        return DatasetResponse(
+            id=str(ds.id),
+            ckan_id=ds.ckan_id,
+            ckan_name=ds.ckan_name,
+            title=ds.title,
+            organization=ds.organization,
+            odata_dataset_id=ds.odata_dataset_id,
+            poll_interval=ds.poll_interval,
+            is_active=ds.is_active,
+            status=ds.status,
+            last_polled_at=None,
+            last_modified=ds.last_modified,
+            source_url=ds.source_url or "",
+            source_type=ds.source_type,
+        )
+
+    # ---- CKAN-type dataset (original flow) ----
+    if not body.ckan_id:
+        raise HTTPException(status_code=400, detail="ckan_id is required for CKAN datasets")
+
     # Check for duplicate (ckan_id + resource_id combination)
     dup_query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
     if body.resource_id:
@@ -131,9 +235,6 @@ async def track_dataset(
     existing = await db.execute(dup_query)
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Dataset already tracked")
-
-    raw_interval = body.preferred_interval if body.preferred_interval is not None else body.poll_interval
-    interval = max(raw_interval, settings.min_poll_interval)
 
     try:
         pkg = await ckan_client.package_show(body.ckan_id)
@@ -161,9 +262,6 @@ async def track_dataset(
     mirror_name = f"gov-versions-{sanitize_ckan_name(pkg['name'])}"
     if body.resource_id:
         mirror_name = f"{mirror_name}-{body.resource_id[:8]}"
-
-    # Determine status based on admin privilege
-    dataset_status = "active" if user.is_admin else "pending"
 
     # Create mirror dataset on odata.org.il only for active (admin-approved) datasets
     odata_dataset_id = None
@@ -227,6 +325,7 @@ async def track_dataset(
         last_modified=ds.last_modified,
         resource_id=ds.resource_id,
         resource_name=resource_name,
+        source_type=ds.source_type,
     )
 
 
@@ -309,7 +408,10 @@ async def trigger_poll(
 # ---------------------------------------------------------------------------
 
 class TrackingRequest(BaseModel):
-    ckan_id: str
+    ckan_id: str | None = None
+    source_type: str = "ckan"  # "ckan" | "scraper"
+    source_url: str | None = None
+    title: str | None = None
     resource_id: str | None = None
     preferred_interval: int = 604800
     requester_name: str = ""
@@ -325,6 +427,49 @@ async def submit_tracking_request(
     db: AsyncSession = Depends(get_db),
 ):
     """Anonymous endpoint -- anyone can request tracking without login."""
+
+    interval = max(body.preferred_interval, settings.min_poll_interval)
+
+    # ---- Scraper-type request ----
+    if body.source_type == "scraper":
+        if not body.source_url:
+            raise HTTPException(status_code=400, detail="source_url is required for scraper datasets")
+        if not body.title:
+            raise HTTPException(status_code=400, detail="title is required for scraper datasets")
+
+        from app.api.govil import _parse_govil_url
+        page_type, collector_name = _parse_govil_url(body.source_url)
+        if not collector_name:
+            raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+
+        # Duplicate check by source_url
+        existing = await db.execute(
+            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Already tracked or requested")
+
+        ds = TrackedDataset(
+            ckan_id=f"govil-scraper-{collector_name}",
+            ckan_name=collector_name,
+            title=body.title,
+            organization="gov.il",
+            source_type="scraper",
+            source_url=body.source_url,
+            scraper_config={"download_files": False},
+            poll_interval=interval,
+            status="pending",
+            created_by=None,
+            last_modified=None,
+        )
+        db.add(ds)
+        await db.commit()
+        return {"message": "Request submitted", "status": "pending"}
+
+    # ---- CKAN-type request (original flow) ----
+    if not body.ckan_id:
+        raise HTTPException(status_code=400, detail="ckan_id is required for CKAN datasets")
+
     # Check not already tracked
     query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
     if body.resource_id:
@@ -351,8 +496,6 @@ async def submit_tracking_request(
     title = pkg.get("title", pkg["name"])
     if resource_name:
         title = f"{title} — {resource_name}"
-
-    interval = max(body.preferred_interval, settings.min_poll_interval)
 
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
@@ -401,4 +544,5 @@ async def get_tracked_public(
         last_modified=ds.last_modified,
         resource_id=ds.resource_id,
         source_url=_build_source_url(ds),
+        source_type=ds.source_type or "ckan",
     )
