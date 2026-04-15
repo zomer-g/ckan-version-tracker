@@ -169,6 +169,7 @@ async def track_dataset(
                     name=mirror_name,
                     title=f"[Versions] {body.title}",
                     owner_org=settings.odata_owner_org,
+                    notes=odata_client.NOTES_SCRAPER,
                     extras=[
                         {"key": "source_type", "value": "scraper"},
                         {"key": "source_url", "value": body.source_url},

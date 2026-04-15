@@ -49,7 +49,9 @@ export default function VersionsPage() {
           )}
           {dataset && (
             <a
-              href={dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`}
+              href={dataset.source_type === "scraper"
+                ? (dataset.source_url || "#")
+                : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`)}
               target="_blank"
               rel="noopener noreferrer"
               style={{
@@ -58,7 +60,7 @@ export default function VersionsPage() {
                 color: "var(--text-muted)",
               }}
             >
-              {t("home.source_link")} &#8599;
+              {dataset.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
             </a>
           )}
           <Link

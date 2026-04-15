@@ -46,18 +46,29 @@ class ODataClient:
 
     # ── Dataset management ───────────────────────────────────────────────
 
-    async def create_dataset(self, name: str, title: str, owner_org: str | None = None, extras: list | None = None) -> dict:
+    NOTES_CKAN = (
+        "שיקוף היסטוריית גרסאות של מאגר מידע מ-data.gov.il, מנוהל אוטומטית על ידי "
+        "[גרסאות לעם](https://over.org.il) — "
+        "[קוד מקור](https://github.com/zomer-g/ckan-version-tracker)\n\n"
+        "Dataset version history mirror from data.gov.il, auto-managed by "
+        "[Versions for the People](https://over.org.il)"
+    )
+
+    NOTES_SCRAPER = (
+        "גירוד אוטומטי של עמוד מאתר gov.il, מנוהל על ידי "
+        "[גרסאות לעם](https://over.org.il) — "
+        "[קוד מקור](https://github.com/zomer-g/ckan-version-tracker)\n\n"
+        "Automated scraping of a gov.il page, managed by "
+        "[Versions for the People](https://over.org.il)"
+    )
+
+    async def create_dataset(self, name: str, title: str, owner_org: str | None = None,
+                             extras: list | None = None, notes: str | None = None) -> dict:
         """Create a mirror dataset on odata.org.il."""
         payload: dict[str, Any] = {
             "name": name,
             "title": title,
-            "notes": (
-                "שיקוף היסטוריית גרסאות של מאגר מידע מ-data.gov.il, מנוהל אוטומטית על ידי "
-                "[גרסאות לעם](https://over.org.il) — "
-                "[קוד מקור](https://github.com/zomer-g/ckan-version-tracker)\n\n"
-                "Dataset version history mirror from data.gov.il, auto-managed by "
-                "[Versions for the People](https://over.org.il)"
-            ),
+            "notes": notes or self.NOTES_CKAN,
         }
         if owner_org:
             payload["owner_org"] = owner_org

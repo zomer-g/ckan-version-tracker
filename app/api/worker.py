@@ -1,4 +1,5 @@
 """Worker API for govil-scraper integration."""
+import base64
 import hashlib
 import json
 import logging
@@ -47,12 +48,18 @@ class AttachmentData(BaseModel):
     url: str
     size: int = 0
 
+class ZipFileData(BaseModel):
+    filename: str
+    content_base64: str
+    size: int = 0
+
 class PushVersionRequest(BaseModel):
     tracked_dataset_id: str
     metadata_modified: str
     resources: list[ResourceData] = []
     attachments: list[AttachmentData] = []
     scrape_metadata: dict = {}
+    zip_file: ZipFileData | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -166,6 +173,29 @@ async def push_version(
                     logger.info("Pushed %d records for %s to odata (resource %s)", len(res.records), res.name, rid)
                 except Exception as e:
                     logger.error("Failed to push resource %s to odata: %s", res.name, e)
+
+    # Upload ZIP file to odata if provided
+    zip_resource_id = None
+    if body.zip_file and ds.odata_dataset_id:
+        try:
+            zip_bytes = base64.b64decode(body.zip_file.content_base64)
+            from app.services.snapshot_service import _timestamp
+            ts_zip = _timestamp()
+            zip_result = await odata_client.upload_resource(
+                dataset_id=ds.odata_dataset_id,
+                file_content=zip_bytes,
+                filename=body.zip_file.filename,
+                name=f"{ts_zip} v{next_version} - קבצים מצורפים",
+                description=f"Version {next_version}: {len(body.attachments)} attached files",
+                resource_format="ZIP",
+            )
+            zip_resource_id = zip_result["id"]
+            odata_resource_ids.append(zip_resource_id)
+            resource_mappings["_zip"] = zip_resource_id
+            logger.info("Uploaded ZIP (%d KB) to odata (resource %s)",
+                        len(zip_bytes) // 1024, zip_resource_id)
+        except Exception as e:
+            logger.error("Failed to upload ZIP to odata: %s", e)
 
     # Compute hash for change detection
     hash_data = json.dumps({

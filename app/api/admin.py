@@ -122,11 +122,13 @@ async def approve_request(
                 {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"},
                 {"key": "auto_managed", "value": "true"},
             ]
+        notes = odata_client.NOTES_SCRAPER if ds.source_type == "scraper" else None
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,
                 title=f"[Versions] {ds.title}",
                 owner_org=settings.odata_owner_org,
+                notes=notes,
                 extras=extras,
             )
             ds.odata_dataset_id = mirror["id"]
