@@ -310,9 +310,22 @@ export default function HomePage() {
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                       <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
                     </h3>
-                    <span className="badge badge-info">
-                      {ds.version_count} {t("home.versions_count")}
-                    </span>
+                    <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
+                      <span style={{
+                        display: "inline-block",
+                        padding: "0.15rem 0.45rem",
+                        borderRadius: "9999px",
+                        fontSize: "0.65rem",
+                        fontWeight: 600,
+                        background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
+                        color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
+                      }}>
+                        {ds.source_type === "scraper" ? "GOV.IL" : "CKAN"}
+                      </span>
+                      <span className="badge badge-info">
+                        {ds.version_count} {t("home.versions_count")}
+                      </span>
+                    </div>
                   </div>
 
                   {ds.resource_name && (
@@ -348,15 +361,22 @@ export default function HomePage() {
                       </a>
                     )}
 
-                    <a
-                      href={ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm"
-                      style={{ color: "var(--text-muted)", textDecoration: "none" }}
-                    >
-                      {t("home.source_link")} &#8599;
-                    </a>
+                    {(ds.source_type === "scraper"
+                      ? ds.source_url
+                      : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`)
+                    ) && (
+                      <a
+                        href={(ds.source_type === "scraper"
+                          ? ds.source_url
+                          : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`))!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm"
+                        style={{ color: "var(--text-muted)", textDecoration: "none" }}
+                      >
+                        {t("home.source_link")} &#8599;
+                      </a>
+                    )}
                   </div>
                 </article>
               ))}

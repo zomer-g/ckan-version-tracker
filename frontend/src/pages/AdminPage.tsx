@@ -34,6 +34,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [intervalOverrides, setIntervalOverrides] = useState<Record<string, number>>({});
+  const [pollToast, setPollToast] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     loadAll();
@@ -75,10 +76,15 @@ export default function AdminPage() {
 
   const handlePoll = async (id: string) => {
     setProcessing((prev) => new Set(prev).add(id));
+    setPollToast(null);
     try {
       await datasetsApi.poll(id);
-      alert("דגימה הופעלה — תוצאות יופיעו בקרוב");
-    } catch (e) { console.error(e); }
+      setPollToast({ id, ok: true, msg: "נשלח לדגום ✓" });
+      setTimeout(() => setPollToast(null), 3500);
+    } catch (e: any) {
+      setPollToast({ id, ok: false, msg: e?.message || "שגיאה בדגום" });
+      setTimeout(() => setPollToast(null), 4000);
+    }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
   };
 
@@ -222,14 +228,28 @@ export default function AdminPage() {
                   </td>
                   <td style={tdStyle}>
                     <div className="flex" style={{ gap: "0.4rem" }}>
-                      <button
-                        className="btn-secondary"
-                        style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
-                        onClick={() => handlePoll(ds.id)}
-                        disabled={processing.has(ds.id)}
-                      >
-                        {processing.has(ds.id) ? "..." : "דגום"}
-                      </button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
+                          onClick={() => handlePoll(ds.id)}
+                          disabled={processing.has(ds.id)}
+                        >
+                          {processing.has(ds.id) ? "..." : "דגום"}
+                        </button>
+                        {pollToast?.id === ds.id && (
+                          <span style={{
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            background: pollToast.ok ? "#dcfce7" : "#fee2e2",
+                            color: pollToast.ok ? "#166534" : "#991b1b",
+                            whiteSpace: "nowrap",
+                          }}>
+                            {pollToast.msg}
+                          </span>
+                        )}
+                      </div>
                       <button
                         className="btn-danger"
                         style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
