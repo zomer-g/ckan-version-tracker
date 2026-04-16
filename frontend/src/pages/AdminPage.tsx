@@ -34,7 +34,12 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [intervalOverrides, setIntervalOverrides] = useState<Record<string, number>>({});
+  const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>({});
   const [pollToast, setPollToast] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
+  // Active-dataset rename state
+  const [editingTitleFor, setEditingTitleFor] = useState<string | null>(null);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
 
   useEffect(() => {
     loadAll();
@@ -58,11 +63,45 @@ export default function AdminPage() {
   const handleApprove = async (id: string) => {
     setProcessing((prev) => new Set(prev).add(id));
     try {
-      const override = intervalOverrides[id];
-      await adminApi.approve(id, override);
+      const intervalOverride = intervalOverrides[id];
+      const titleOverride = titleOverrides[id]?.trim();
+      // Only send title if it was actually edited (different from original)
+      const req = requests.find((r) => r.id === id);
+      const titleToSend = titleOverride && titleOverride !== req?.title ? titleOverride : undefined;
+      await adminApi.approve(id, intervalOverride, titleToSend);
       await loadAll();
     } catch (e) { console.error(e); }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  };
+
+  const startEditTitle = (id: string, currentTitle: string) => {
+    setEditingTitleFor(id);
+    setEditingTitleValue(currentTitle);
+  };
+
+  const cancelEditTitle = () => {
+    setEditingTitleFor(null);
+    setEditingTitleValue("");
+  };
+
+  const saveEditTitle = async (id: string) => {
+    const newTitle = editingTitleValue.trim();
+    if (!newTitle) {
+      cancelEditTitle();
+      return;
+    }
+    setSavingTitle(true);
+    try {
+      await datasetsApi.update(id, { title: newTitle });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, title: newTitle } : d))
+      );
+      cancelEditTitle();
+    } catch (e) {
+      console.error(e);
+      alert("שמירת השם נכשלה");
+    }
+    setSavingTitle(false);
   };
 
   const handleReject = async (id: string) => {
@@ -124,10 +163,24 @@ export default function AdminPage() {
         <div className="grid grid-2 mb-2">
           {requests.map((req) => (
             <article key={req.id} className="card" style={{ borderRight: `4px solid ${req.source_type === "scraper" ? "#f59e0b" : "var(--warning)"}` }}>
-              <div className="flex-between" style={{ marginBottom: "0.5rem" }}>
-                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
-                  {req.title}
-                </h2>
+              <div className="flex-between" style={{ marginBottom: "0.5rem", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={titleOverrides[req.id] ?? req.title}
+                  onChange={(e) => setTitleOverrides((prev) => ({
+                    ...prev, [req.id]: e.target.value,
+                  }))}
+                  aria-label="שם המאגר"
+                  style={{
+                    flex: 1,
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    padding: "0.3rem 0.5rem",
+                    border: "1px solid var(--border)",
+                    borderRadius: "4px",
+                    background: "var(--surface)",
+                  }}
+                />
                 <span style={{
                   display: "inline-block",
                   padding: "0.15rem 0.5rem",
@@ -136,6 +189,7 @@ export default function AdminPage() {
                   fontWeight: 600,
                   background: req.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
                   color: req.source_type === "scraper" ? "#92400e" : "#0f766e",
+                  flexShrink: 0,
                 }}>
                   {req.source_type === "scraper" ? "GOV.IL" : "CKAN"}
                 </span>
@@ -206,9 +260,68 @@ export default function AdminPage() {
               {activeDatasets.map((ds) => (
                 <tr key={ds.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <td style={tdStyle}>
-                    <Link to={`/versions/${ds.id}`} style={{ fontWeight: 500 }}>
-                      {ds.title}
-                    </Link>
+                    {editingTitleFor === ds.id ? (
+                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                        <input
+                          type="text"
+                          value={editingTitleValue}
+                          onChange={(e) => setEditingTitleValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEditTitle(ds.id);
+                            if (e.key === "Escape") cancelEditTitle();
+                          }}
+                          autoFocus
+                          aria-label="שם המאגר"
+                          style={{
+                            flex: 1,
+                            padding: "0.25rem 0.4rem",
+                            fontSize: "0.85rem",
+                            border: "1px solid var(--primary)",
+                            borderRadius: "4px",
+                          }}
+                        />
+                        <button
+                          className="btn-primary"
+                          style={{ padding: "0.2rem 0.5rem", fontSize: "0.7rem" }}
+                          onClick={() => saveEditTitle(ds.id)}
+                          disabled={savingTitle}
+                          title="שמור"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: "0.2rem 0.5rem", fontSize: "0.7rem" }}
+                          onClick={cancelEditTitle}
+                          disabled={savingTitle}
+                          title="בטל"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                        <Link to={`/versions/${ds.id}`} style={{ fontWeight: 500 }}>
+                          {ds.title}
+                        </Link>
+                        <button
+                          onClick={() => startEditTitle(ds.id, ds.title)}
+                          aria-label="ערוך שם"
+                          title="ערוך שם"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            fontSize: "0.85rem",
+                            padding: "0.1rem 0.3rem",
+                            color: "var(--text-muted)",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ✏
+                        </button>
+                      </div>
+                    )}
                     {ds.source_type === "scraper" && ds.source_url && (
                       <div style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
                         <a href={ds.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>

@@ -89,7 +89,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -205,10 +205,10 @@ export interface PendingRequest {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string, poll_interval?: number) =>
+  approve: (id: string, poll_interval?: number, title?: string) =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
-      body: JSON.stringify({ poll_interval }),
+      body: JSON.stringify({ poll_interval, title }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
 };

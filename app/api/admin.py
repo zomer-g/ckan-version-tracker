@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 class ApproveRequest(BaseModel):
     poll_interval: int | None = None
+    title: str | None = None
 
 
 class PendingRequest(BaseModel):
@@ -100,6 +101,11 @@ async def approve_request(
     # Override poll interval if admin specified one
     if body and body.poll_interval is not None:
         ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
+
+    # Override title if admin specified one (applied BEFORE mirror creation
+    # so the mirror gets the new title from the start)
+    if body and body.title is not None and body.title.strip():
+        ds.title = body.title.strip()
 
     # Update status to active
     ds.status = "active"

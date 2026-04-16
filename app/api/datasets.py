@@ -34,6 +34,7 @@ class TrackRequest(BaseModel):
 class UpdateRequest(BaseModel):
     poll_interval: int | None = None
     is_active: bool | None = None
+    title: str | None = None
 
 
 class DatasetResponse(BaseModel):
@@ -349,8 +350,24 @@ async def update_tracked(
     if body.is_active is not None:
         ds.is_active = body.is_active
 
+    title_changed = False
+    if body.title is not None and body.title.strip() and body.title.strip() != ds.title:
+        ds.title = body.title.strip()
+        title_changed = True
+
     await db.commit()
     await db.refresh(ds)
+
+    # Propagate title change to odata mirror (best-effort, don't fail the request)
+    if title_changed and ds.odata_dataset_id:
+        try:
+            await odata_client.package_patch(
+                ds.odata_dataset_id,
+                title=f"[Versions] {ds.title}",
+            )
+            logger.info("Updated odata mirror title for %s", ds.id)
+        except Exception as e:
+            logger.warning("Failed to update odata mirror title: %s", e)
     return DatasetResponse(
         id=str(ds.id),
         ckan_id=ds.ckan_id,
