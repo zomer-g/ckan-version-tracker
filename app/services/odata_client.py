@@ -187,24 +187,40 @@ class ODataClient:
         timestamp: str = "",
     ) -> dict:
         """
-        Create a resource and push parsed CSV data into the datastore.
+        Upload a CSV file and push parsed data into the datastore.
+        The uploaded file makes the CKAN download button work; the datastore
+        entries enable the filter/search/preview UI.
         Returns the created resource dict (with resource_id for querying).
         """
+        import csv as _csv
+        import io as _io
         from app.services.csv_parser import batch_records
 
         safe_name = resource_name.replace("/", "_").replace("\\", "_")
         ts = timestamp or "unknown"
 
-        # Step 1: Create an empty CKAN resource
-        resource = await self.create_resource(
+        # Step 1: Generate CSV bytes from records
+        buf = _io.StringIO()
+        fieldnames = [f["id"] for f in fields]
+        writer = _csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in records:
+            writer.writerow({k: ("" if v is None else v) for k, v in row.items()})
+        csv_bytes = buf.getvalue().encode("utf-8-sig")  # BOM for Excel Hebrew
+
+        # Step 2: Upload as a real file resource (gives download URL)
+        filename = f"{ts}_v{version_number}_{safe_name}.csv"
+        resource = await self.upload_resource(
             dataset_id=dataset_id,
+            file_content=csv_bytes,
+            filename=filename,
             name=f"{ts} v{version_number} - {safe_name}",
             description=f"Version {version_number} ({ts}): {resource_name} ({len(records)} rows)",
             resource_format=resource_format,
         )
         resource_id = resource["id"]
 
-        # Step 2: Push data into datastore in batches
+        # Step 3: Push data into datastore in batches (for filter/search UI)
         batches = batch_records(records)
 
         if batches:
