@@ -83,8 +83,32 @@ async def poll_for_task(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Worker polls for the next available scrape task."""
+    """Worker polls for the next available scrape task.
+
+    Also auto-fails any task that has been 'running' for more than 60 minutes
+    without completing — those are almost always orphaned workers that crashed
+    or got killed mid-upload.
+    """
     _verify_worker_key(request)
+
+    # Auto-reset stuck "running" tasks (started >60 min ago, no completion)
+    from datetime import timedelta
+    stuck_cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+    stuck_result = await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.status == "running",
+            ScrapeTask.created_at < stuck_cutoff,
+        )
+    )
+    for stuck_task in stuck_result.scalars().all():
+        stuck_task.status = "failed"
+        stuck_task.phase = "timeout"
+        stuck_task.error = "Task auto-reset: running >60 min without completion (likely orphaned worker)"
+        stuck_task.completed_at = datetime.now(timezone.utc)
+        logger.warning("Auto-reset stuck task %s (running since %s)",
+                       stuck_task.id, stuck_task.created_at)
+    if stuck_result:
+        await db.commit()
 
     result = await db.execute(
         select(ScrapeTask, TrackedDataset)
