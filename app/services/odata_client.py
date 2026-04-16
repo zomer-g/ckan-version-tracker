@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=10.0)
 DATASTORE_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=10.0)
+# Large file uploads (ZIP parts up to 80MB) need much more time for slow links.
+UPLOAD_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=10.0)
 
 
 class ODataClient:
@@ -106,7 +108,7 @@ class ODataClient:
         resource_format: str = "",
     ) -> dict:
         """Upload a file as a new resource to a dataset."""
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT) as client:
             url = f"{self.api_url}/resource_create"
             files = {"upload": (filename, io.BytesIO(file_content), "application/octet-stream")}
             data = {

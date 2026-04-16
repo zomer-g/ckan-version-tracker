@@ -60,8 +60,10 @@ class PushVersionRequest(BaseModel):
     attachments: list[AttachmentData] = []
     scrape_metadata: dict = {}
     zip_file: ZipFileData | None = None
-    # Alternative to inline zip_file: reference a ZIP already uploaded via /upload-zip
+    # Alternative to inline zip_file: reference a single ZIP already uploaded via /upload-zip
     zip_resource_id: str | None = None
+    # Preferred for large attachment sets: list of pre-uploaded ZIP part resource_ids
+    zip_resource_ids: list[str] | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -200,15 +202,18 @@ async def push_version(
                 except Exception as e:
                     logger.error("Failed to push resource %s to odata: %s", res.name, e)
 
-    # ZIP attachment handling: prefer pre-uploaded zip_resource_id (multipart),
-    # fall back to inline base64 zip_file for backward compat.
-    zip_resource_id = None
-    if body.zip_resource_id:
-        # ZIP was already uploaded via /api/worker/upload-zip
-        zip_resource_id = body.zip_resource_id
-        odata_resource_ids.append(zip_resource_id)
-        resource_mappings["_zip"] = zip_resource_id
-        logger.info("Using pre-uploaded ZIP resource %s", zip_resource_id)
+    # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
+    # multipart parts), fall back to single zip_resource_id, then inline base64.
+    if body.zip_resource_ids:
+        for rid in body.zip_resource_ids:
+            odata_resource_ids.append(rid)
+        resource_mappings["_zip_parts"] = list(body.zip_resource_ids)
+        logger.info("Using %d pre-uploaded ZIP part(s)", len(body.zip_resource_ids))
+    elif body.zip_resource_id:
+        # Single ZIP was already uploaded via /api/worker/upload-zip
+        odata_resource_ids.append(body.zip_resource_id)
+        resource_mappings["_zip"] = body.zip_resource_id
+        logger.info("Using pre-uploaded ZIP resource %s", body.zip_resource_id)
     elif body.zip_file and ds.odata_dataset_id:
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)
@@ -292,17 +297,25 @@ async def push_version(
 
 
 @router.post("/upload-zip/{tracked_dataset_id}")
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 async def upload_zip(
     request: Request,
     tracked_dataset_id: str,
     file: UploadFile = File(...),
     version_number: int = Form(...),
     attachment_count: int = Form(0),
+    part: int | None = Form(None),
+    total_parts: int | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Worker uploads a ZIP file as multipart. Returns the odata resource_id
-    that can then be referenced in /push-version via zip_resource_id."""
+    that can then be referenced in /push-version via zip_resource_id(s).
+
+    For large attachment sets, the worker splits the payload into ≤80MB parts
+    (to fit under Cloudflare's 100MB edge limit) and calls this endpoint once
+    per part with `part` and `total_parts` set. Each part becomes its own
+    resource on the odata mirror.
+    """
     _verify_worker_key(request)
 
     try:
@@ -321,16 +334,25 @@ async def upload_zip(
     from app.services.snapshot_service import _timestamp
     ts_zip = _timestamp()
 
+    # Build resource name/description, including part info when split
+    if part is not None and total_parts is not None and total_parts > 1:
+        resource_name = f"{ts_zip} v{version_number} - קבצים מצורפים (חלק {part}/{total_parts})"
+        description = f"Version {version_number}: attached files part {part}/{total_parts} ({attachment_count} total)"
+    else:
+        resource_name = f"{ts_zip} v{version_number} - קבצים מצורפים"
+        description = f"Version {version_number}: {attachment_count} attached files"
+
     try:
         zip_result = await odata_client.upload_resource(
             dataset_id=ds.odata_dataset_id,
             file_content=zip_bytes,
             filename=file.filename or f"v{version_number}_attachments.zip",
-            name=f"{ts_zip} v{version_number} - קבצים מצורפים",
-            description=f"Version {version_number}: {attachment_count} attached files",
+            name=resource_name,
+            description=description,
             resource_format="ZIP",
         )
-        logger.info("Uploaded ZIP (%d KB) to odata (resource %s)",
+        logger.info("Uploaded ZIP %s (%d KB) → resource %s",
+                    f"part {part}/{total_parts}" if total_parts else "(single)",
                     len(zip_bytes) // 1024, zip_result["id"])
         return {"resource_id": zip_result["id"], "size": len(zip_bytes)}
     except Exception as e:
