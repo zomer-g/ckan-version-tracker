@@ -355,3 +355,40 @@ async def list_scrape_tasks(
     ]
 
     return {"running": running, "pending": pending, "failed": failed}
+
+
+@router.delete("/scrape-tasks/{task_id}")
+@limiter.limit("30/minute")
+async def cancel_scrape_task(
+    request: Request,
+    task_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a pending or stuck-running scrape task.
+
+    - Pending → deleted from queue
+    - Running → marked as failed (so a new task can be queued on next poll)
+    - Already completed/failed → 404
+    """
+    from app.models.scrape_task import ScrapeTask
+
+    tid = parse_uuid(task_id, "task_id")
+    result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status == "pending":
+        await db.delete(task)
+        await db.commit()
+        return {"status": "deleted", "was": "pending"}
+    elif task.status == "running":
+        task.status = "failed"
+        task.phase = "cancelled"
+        task.error = f"Cancelled by admin ({user.email})"
+        task.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        return {"status": "failed", "was": "running"}
+    else:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")

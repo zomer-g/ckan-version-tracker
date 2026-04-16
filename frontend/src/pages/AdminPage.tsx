@@ -165,6 +165,17 @@ export default function AdminPage() {
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
   };
 
+  const handleCancelTask = async (taskId: string, title: string, kind: "running" | "pending") => {
+    const verb = kind === "running" ? "לאפס" : "להסיר מהתור";
+    if (!confirm(`${verb} את המשימה של "${title}"?`)) return;
+    try {
+      await adminApi.cancelScrapeTask(taskId);
+      await loadQueue();
+    } catch (e: any) {
+      alert(`שגיאה: ${e?.message || e}`);
+    }
+  };
+
   const handleUpdateInterval = async (id: string, interval: number) => {
     try {
       await datasetsApi.update(id, { poll_interval: interval });
@@ -232,42 +243,77 @@ export default function AdminPage() {
                 <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#16a34a" }}>
                   🔄 בעבודה כרגע ({queue.running.length})
                 </div>
-                {queue.running.map((t) => (
-                  <div key={t.task_id} style={{
-                    padding: "0.6rem 0.75rem",
-                    marginBottom: "0.4rem",
-                    background: "#f0fdf4",
-                    border: "1px solid #bbf7d0",
-                    borderRadius: "6px",
-                  }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>
-                      <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
-                    </div>
-                    <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
-                      שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
-                    </div>
-                    {t.message && (
-                      <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
-                        {t.message}
-                      </div>
-                    )}
-                    {/* Progress bar */}
-                    <div style={{
-                      marginTop: "0.4rem",
-                      height: "6px",
-                      background: "#dcfce7",
-                      borderRadius: "3px",
-                      overflow: "hidden",
+                {queue.running.map((t) => {
+                  const ageMs = t.created_at ? Date.now() - new Date(t.created_at).getTime() : 0;
+                  const isStuck = ageMs > 30 * 60 * 1000;  // 30 minutes
+                  return (
+                    <div key={t.task_id} style={{
+                      padding: "0.6rem 0.75rem",
+                      marginBottom: "0.4rem",
+                      background: isStuck ? "#fef2f2" : "#f0fdf4",
+                      border: isStuck ? "1px solid #fca5a5" : "1px solid #bbf7d0",
+                      borderRadius: "6px",
                     }}>
+                      <div className="flex-between" style={{ gap: "0.5rem" }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.9rem", flex: 1 }}>
+                          <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
+                          {isStuck && (
+                            <span style={{
+                              marginInlineStart: "0.5rem",
+                              fontSize: "0.7rem",
+                              padding: "0.1rem 0.4rem",
+                              borderRadius: "9999px",
+                              background: "#fee2e2",
+                              color: "#991b1b",
+                              fontWeight: 600,
+                            }}>
+                              ⚠ ייתכן שתקוע
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleCancelTask(t.task_id, t.dataset_title, "running")}
+                          title="אפס משימה"
+                          style={{
+                            background: "none",
+                            border: "1px solid #dc2626",
+                            color: "#dc2626",
+                            cursor: "pointer",
+                            fontSize: "0.7rem",
+                            padding: "0.2rem 0.5rem",
+                            borderRadius: "4px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          ✕ אפס
+                        </button>
+                      </div>
+                      <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
+                        שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
+                      </div>
+                      {t.message && (
+                        <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
+                          {t.message}
+                        </div>
+                      )}
+                      {/* Progress bar */}
                       <div style={{
-                        width: `${Math.max(2, t.progress)}%`,
-                        height: "100%",
-                        background: "#16a34a",
-                        transition: "width 0.5s",
-                      }} />
+                        marginTop: "0.4rem",
+                        height: "6px",
+                        background: isStuck ? "#fecaca" : "#dcfce7",
+                        borderRadius: "3px",
+                        overflow: "hidden",
+                      }}>
+                        <div style={{
+                          width: `${Math.max(2, t.progress)}%`,
+                          height: "100%",
+                          background: isStuck ? "#dc2626" : "#16a34a",
+                          transition: "width 0.5s",
+                        }} />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -276,26 +322,60 @@ export default function AdminPage() {
               <div>
                 <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#92400e" }}>
                   🕐 ממתין בתור ({queue.pending.length})
+                  {queue.running.length === 0 && (
+                    <span style={{
+                      marginInlineStart: "0.5rem",
+                      fontSize: "0.7rem",
+                      padding: "0.1rem 0.4rem",
+                      borderRadius: "9999px",
+                      background: "#e0e7ff",
+                      color: "#3730a3",
+                      fontWeight: 500,
+                    }}>
+                      אין worker פעיל — המשימות יחכו עד שיעלה אחד
+                    </span>
+                  )}
                 </div>
                 <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                  {queue.pending.map((t) => (
-                    <li key={t.task_id} style={{
-                      padding: "0.4rem 0.6rem",
-                      marginBottom: "0.2rem",
-                      background: "#fffbeb",
-                      border: "1px solid #fde68a",
-                      borderRadius: "4px",
-                      fontSize: "0.85rem",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: "0.5rem",
-                    }}>
-                      <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
-                      <span className="text-muted" style={{ fontSize: "0.8rem" }}>
-                        נוסף {formatRelative(t.created_at)}
-                      </span>
-                    </li>
-                  ))}
+                  {queue.pending.map((t) => {
+                    const ageMs = t.created_at ? Date.now() - new Date(t.created_at).getTime() : 0;
+                    const isOld = ageMs > 60 * 60 * 1000;  // 1 hour
+                    return (
+                      <li key={t.task_id} style={{
+                        padding: "0.4rem 0.6rem",
+                        marginBottom: "0.2rem",
+                        background: isOld ? "#fef3c7" : "#fffbeb",
+                        border: isOld ? "1px solid #fbbf24" : "1px solid #fde68a",
+                        borderRadius: "4px",
+                        fontSize: "0.85rem",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                      }}>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                        <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                          נוסף {formatRelative(t.created_at)}
+                        </span>
+                        <button
+                          onClick={() => handleCancelTask(t.task_id, t.dataset_title, "pending")}
+                          title="הסר מהתור"
+                          style={{
+                            background: "none",
+                            border: "1px solid #92400e",
+                            color: "#92400e",
+                            cursor: "pointer",
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          ✕ הסר
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

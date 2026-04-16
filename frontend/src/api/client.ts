@@ -244,4 +244,8 @@ export const admin = {
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
+  cancelScrapeTask: (taskId: string) =>
+    request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {
+      method: "DELETE",
+    }),
 };
