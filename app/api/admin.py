@@ -277,3 +277,81 @@ async def backfill_versions(
 
     await db.commit()
     return {"message": f"Backfilled {created} versions", "dataset_id": str(ds.id)}
+
+
+@router.get("/scrape-tasks")
+@limiter.limit("60/minute")
+async def list_scrape_tasks(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current scrape queue: running tasks, pending tasks, and recent failures.
+
+    Used by the admin Queue panel to show scrape progress and history.
+    """
+    from datetime import timedelta
+    from app.models.scrape_task import ScrapeTask
+
+    # All running tasks (typically 0-1 — only one worker active)
+    running_result = await db.execute(
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(ScrapeTask.status == "running")
+        .order_by(ScrapeTask.created_at.asc())
+    )
+    running = [
+        {
+            "task_id": str(t.id),
+            "dataset_id": str(ds.id),
+            "dataset_title": ds.title,
+            "phase": t.phase,
+            "progress": t.progress,
+            "message": t.message,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t, ds in running_result.all()
+    ]
+
+    # Pending tasks (FIFO)
+    pending_result = await db.execute(
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(ScrapeTask.status == "pending")
+        .order_by(ScrapeTask.created_at.asc())
+    )
+    pending = [
+        {
+            "task_id": str(t.id),
+            "dataset_id": str(ds.id),
+            "dataset_title": ds.title,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t, ds in pending_result.all()
+    ]
+
+    # Failed tasks in the last 24 hours (max 20)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    failed_result = await db.execute(
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(
+            ScrapeTask.status == "failed",
+            ScrapeTask.completed_at >= cutoff,
+        )
+        .order_by(ScrapeTask.completed_at.desc())
+        .limit(20)
+    )
+    failed = [
+        {
+            "task_id": str(t.id),
+            "dataset_id": str(ds.id),
+            "dataset_title": ds.title,
+            "phase": t.phase,
+            "error": t.error,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        }
+        for t, ds in failed_result.all()
+    ]
+
+    return {"running": running, "pending": pending, "failed": failed}

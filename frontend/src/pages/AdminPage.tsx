@@ -7,7 +7,21 @@ import {
   publicApi,
   PendingRequest,
   TrackedDataset,
+  ScrapeQueueResponse,
 } from "../api/client";
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `לפני ${sec} שניות`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `לפני ${min} דקות`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `לפני ${hr} שעות`;
+  const days = Math.round(hr / 24);
+  return `לפני ${days} ימים`;
+}
 
 const INTERVAL_OPTIONS = [
   { value: 900, label: "כל 15 דקות" },
@@ -40,10 +54,24 @@ export default function AdminPage() {
   const [editingTitleFor, setEditingTitleFor] = useState<string | null>(null);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  // Scrape queue state
+  const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
 
   useEffect(() => {
     loadAll();
+    loadQueue();
+    const id = setInterval(loadQueue, 5000);
+    return () => clearInterval(id);
   }, []);
+
+  const loadQueue = async () => {
+    try {
+      const q = await adminApi.scrapeTasks();
+      setQueue(q);
+    } catch (e) {
+      console.error("Failed to load queue", e);
+    }
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -150,11 +178,173 @@ export default function AdminPage() {
 
   const activeDatasets = allDatasets.filter((d) => d.status === "active");
 
+  // Build per-dataset status map for inline indicators
+  const datasetStatusMap = new Map<string, { kind: "running" | "pending" | "failed"; tooltip?: string }>();
+  if (queue) {
+    queue.failed.forEach((t) =>
+      datasetStatusMap.set(t.dataset_id, { kind: "failed", tooltip: t.error || undefined })
+    );
+    queue.pending.forEach((t) =>
+      datasetStatusMap.set(t.dataset_id, { kind: "pending" })
+    );
+    // Running takes priority — set last so it overrides pending/failed for same dataset
+    queue.running.forEach((t) =>
+      datasetStatusMap.set(t.dataset_id, {
+        kind: "running",
+        tooltip: `${t.phase || ""} ${t.progress || 0}% — ${t.message || ""}`.trim(),
+      })
+    );
+  }
+
   return (
     <div>
-      {/* Section 1: Pending Requests */}
+      {/* Section 0: Scrape Queue */}
       <div className="page-header">
         <h1>{t("admin.title")}</h1>
+      </div>
+
+      <section style={{
+        marginBottom: "1.5rem",
+        padding: "1rem 1.25rem",
+        background: "var(--surface)",
+        borderRadius: "var(--radius)",
+        boxShadow: "var(--shadow-sm)",
+        border: "1px solid var(--border)",
+      }} aria-labelledby="queue-heading">
+        <div className="flex-between" style={{ marginBottom: "0.75rem" }}>
+          <h2 id="queue-heading" style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
+            תור גירוד
+          </h2>
+          <button onClick={loadQueue} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
+            רענן ↻
+          </button>
+        </div>
+
+        {!queue ? (
+          <div className="text-sm text-muted">טוען...</div>
+        ) : queue.running.length === 0 && queue.pending.length === 0 && queue.failed.length === 0 ? (
+          <div className="text-sm text-muted">התור ריק — אין משימות גירוד פעילות</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            {/* Running */}
+            {queue.running.length > 0 && (
+              <div>
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#16a34a" }}>
+                  🔄 בעבודה כרגע ({queue.running.length})
+                </div>
+                {queue.running.map((t) => (
+                  <div key={t.task_id} style={{
+                    padding: "0.6rem 0.75rem",
+                    marginBottom: "0.4rem",
+                    background: "#f0fdf4",
+                    border: "1px solid #bbf7d0",
+                    borderRadius: "6px",
+                  }}>
+                    <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                      <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
+                    </div>
+                    <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
+                      שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
+                    </div>
+                    {t.message && (
+                      <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
+                        {t.message}
+                      </div>
+                    )}
+                    {/* Progress bar */}
+                    <div style={{
+                      marginTop: "0.4rem",
+                      height: "6px",
+                      background: "#dcfce7",
+                      borderRadius: "3px",
+                      overflow: "hidden",
+                    }}>
+                      <div style={{
+                        width: `${Math.max(2, t.progress)}%`,
+                        height: "100%",
+                        background: "#16a34a",
+                        transition: "width 0.5s",
+                      }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Pending */}
+            {queue.pending.length > 0 && (
+              <div>
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#92400e" }}>
+                  🕐 ממתין בתור ({queue.pending.length})
+                </div>
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {queue.pending.map((t) => (
+                    <li key={t.task_id} style={{
+                      padding: "0.4rem 0.6rem",
+                      marginBottom: "0.2rem",
+                      background: "#fffbeb",
+                      border: "1px solid #fde68a",
+                      borderRadius: "4px",
+                      fontSize: "0.85rem",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "0.5rem",
+                    }}>
+                      <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
+                      <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+                        נוסף {formatRelative(t.created_at)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Failed */}
+            {queue.failed.length > 0 && (
+              <div>
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#991b1b" }}>
+                  ⚠ כשלים אחרונים — 24 שעות ({queue.failed.length})
+                </div>
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {queue.failed.map((t) => (
+                    <li key={t.task_id} style={{
+                      padding: "0.4rem 0.6rem",
+                      marginBottom: "0.2rem",
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: "4px",
+                      fontSize: "0.85rem",
+                    }}>
+                      <div className="flex-between" style={{ gap: "0.5rem" }}>
+                        <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
+                        <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+                          {formatRelative(t.completed_at)}
+                        </span>
+                      </div>
+                      {t.error && (
+                        <div style={{
+                          marginTop: "0.2rem",
+                          fontSize: "0.75rem",
+                          color: "#991b1b",
+                          wordBreak: "break-word",
+                          fontFamily: "monospace",
+                        }}>
+                          {t.error.length > 200 ? t.error.slice(0, 200) + "..." : t.error}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Section 1: Pending Requests */}
+      <div className="page-header">
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>{t("admin.title")}</h2>
       </div>
 
       {requests.length === 0 ? (
@@ -304,6 +494,23 @@ export default function AdminPage() {
                         <Link to={`/versions/${ds.id}`} style={{ fontWeight: 500 }}>
                           {ds.title}
                         </Link>
+                        {(() => {
+                          const s = datasetStatusMap.get(ds.id);
+                          if (!s) return null;
+                          const config = {
+                            running: { icon: "🔄", color: "#16a34a", label: "בעבודה" },
+                            pending: { icon: "🕐", color: "#92400e", label: "בתור" },
+                            failed:  { icon: "⚠️", color: "#991b1b", label: "נכשל" },
+                          }[s.kind];
+                          return (
+                            <span
+                              title={s.tooltip ? `${config.label} — ${s.tooltip}` : config.label}
+                              style={{ fontSize: "0.9rem", color: config.color }}
+                            >
+                              {config.icon}
+                            </span>
+                          );
+                        })()}
                         <button
                           onClick={() => startEditTitle(ds.id, ds.title)}
                           aria-label="ערוך שם"

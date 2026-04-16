@@ -203,6 +203,38 @@ export interface PendingRequest {
   source_url: string | null;
 }
 
+export interface ScrapeQueueRunning {
+  task_id: string;
+  dataset_id: string;
+  dataset_title: string;
+  phase: string | null;
+  progress: number;
+  message: string | null;
+  created_at: string | null;
+}
+
+export interface ScrapeQueuePending {
+  task_id: string;
+  dataset_id: string;
+  dataset_title: string;
+  created_at: string | null;
+}
+
+export interface ScrapeQueueFailed {
+  task_id: string;
+  dataset_id: string;
+  dataset_title: string;
+  phase: string | null;
+  error: string | null;
+  completed_at: string | null;
+}
+
+export interface ScrapeQueueResponse {
+  running: ScrapeQueueRunning[];
+  pending: ScrapeQueuePending[];
+  failed: ScrapeQueueFailed[];
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
   approve: (id: string, poll_interval?: number, title?: string) =>
@@ -211,4 +243,5 @@ export const admin = {
       body: JSON.stringify({ poll_interval, title }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
+  scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
 };
