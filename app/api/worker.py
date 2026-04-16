@@ -87,29 +87,45 @@ async def poll_for_task(
 ):
     """Worker polls for the next available scrape task.
 
-    Also auto-fails any task that has been 'running' for more than 60 minutes
-    without completing — those are almost always orphaned workers that crashed
-    or got killed mid-upload.
+    Before returning a new task, auto-fails any 'running' task whose worker
+    appears to have died: either no heartbeat (updated_at) for >10 minutes,
+    or running for >120 minutes total even if still reporting progress (big
+    enough slack for real long scrapes while still catching truly stuck ones).
     """
     _verify_worker_key(request)
 
-    # Auto-reset stuck "running" tasks (started >60 min ago, no completion)
+    # Auto-reset stuck "running" tasks. Two triggers:
+    # 1. no progress update in the last 10 minutes → worker crashed mid-task
+    # 2. running for more than 2 hours total → unusually long, likely zombie
     from datetime import timedelta
-    stuck_cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+    from sqlalchemy import or_
+    now = datetime.now(timezone.utc)
+    heartbeat_cutoff = now - timedelta(minutes=10)
+    hard_cutoff = now - timedelta(hours=2)
     stuck_result = await db.execute(
         select(ScrapeTask).where(
             ScrapeTask.status == "running",
-            ScrapeTask.created_at < stuck_cutoff,
+            or_(
+                ScrapeTask.updated_at < heartbeat_cutoff,
+                ScrapeTask.created_at < hard_cutoff,
+            ),
         )
     )
+    cleaned = 0
     for stuck_task in stuck_result.scalars().all():
         stuck_task.status = "failed"
         stuck_task.phase = "timeout"
-        stuck_task.error = "Task auto-reset: running >60 min without completion (likely orphaned worker)"
-        stuck_task.completed_at = datetime.now(timezone.utc)
-        logger.warning("Auto-reset stuck task %s (running since %s)",
-                       stuck_task.id, stuck_task.created_at)
-    if stuck_result:
+        age_min = int((now - stuck_task.created_at).total_seconds() / 60) if stuck_task.created_at else 0
+        hb_min = int((now - stuck_task.updated_at).total_seconds() / 60) if stuck_task.updated_at else age_min
+        stuck_task.error = (
+            f"Task auto-reset: no heartbeat for {hb_min} min "
+            f"(task age {age_min} min) — worker likely crashed"
+        )
+        stuck_task.completed_at = now
+        logger.warning("Auto-reset stuck task %s (age=%dmin, no heartbeat for %dmin)",
+                       stuck_task.id, age_min, hb_min)
+        cleaned += 1
+    if cleaned:
         await db.commit()
 
     result = await db.execute(

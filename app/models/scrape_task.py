@@ -16,4 +16,12 @@ class ScrapeTask(Base):
     message: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # updated_at is bumped on every progress report — used to detect crashed
+    # workers (no heartbeat for >10 min means the worker died).
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=True,
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
