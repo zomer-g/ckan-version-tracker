@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,8 @@ class PushVersionRequest(BaseModel):
     attachments: list[AttachmentData] = []
     scrape_metadata: dict = {}
     zip_file: ZipFileData | None = None
+    # Alternative to inline zip_file: reference a ZIP already uploaded via /upload-zip
+    zip_resource_id: str | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -174,9 +176,16 @@ async def push_version(
                 except Exception as e:
                     logger.error("Failed to push resource %s to odata: %s", res.name, e)
 
-    # Upload ZIP file to odata if provided
+    # ZIP attachment handling: prefer pre-uploaded zip_resource_id (multipart),
+    # fall back to inline base64 zip_file for backward compat.
     zip_resource_id = None
-    if body.zip_file and ds.odata_dataset_id:
+    if body.zip_resource_id:
+        # ZIP was already uploaded via /api/worker/upload-zip
+        zip_resource_id = body.zip_resource_id
+        odata_resource_ids.append(zip_resource_id)
+        resource_mappings["_zip"] = zip_resource_id
+        logger.info("Using pre-uploaded ZIP resource %s", zip_resource_id)
+    elif body.zip_file and ds.odata_dataset_id:
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)
             from app.services.snapshot_service import _timestamp
@@ -256,6 +265,53 @@ async def push_version(
         "odata_resource_ids": odata_resource_ids,
         "message": f"Version {next_version} created with {total_rows} records",
     }
+
+
+@router.post("/upload-zip/{tracked_dataset_id}")
+@limiter.limit("10/minute")
+async def upload_zip(
+    request: Request,
+    tracked_dataset_id: str,
+    file: UploadFile = File(...),
+    version_number: int = Form(...),
+    attachment_count: int = Form(0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker uploads a ZIP file as multipart. Returns the odata resource_id
+    that can then be referenced in /push-version via zip_resource_id."""
+    _verify_worker_key(request)
+
+    try:
+        ds_id = uuid.UUID(tracked_dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset ID")
+
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds or not ds.odata_dataset_id:
+        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+
+    zip_bytes = await file.read()
+    from app.services.snapshot_service import _timestamp
+    ts_zip = _timestamp()
+
+    try:
+        zip_result = await odata_client.upload_resource(
+            dataset_id=ds.odata_dataset_id,
+            file_content=zip_bytes,
+            filename=file.filename or f"v{version_number}_attachments.zip",
+            name=f"{ts_zip} v{version_number} - קבצים מצורפים",
+            description=f"Version {version_number}: {attachment_count} attached files",
+            resource_format="ZIP",
+        )
+        logger.info("Uploaded ZIP (%d KB) to odata (resource %s)",
+                    len(zip_bytes) // 1024, zip_result["id"])
+        return {"resource_id": zip_result["id"], "size": len(zip_bytes)}
+    except Exception as e:
+        logger.exception("Failed to upload ZIP")
+        raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
 
 
 @router.post("/progress/{task_id}")
