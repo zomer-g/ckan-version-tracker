@@ -405,7 +405,7 @@ export default function HomePage() {
                         background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
                         color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
                       }}>
-                        {ds.source_type === "scraper" ? "GOV.IL" : "CKAN"}
+                        {ds.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
                       </span>
                       <span className="badge badge-info">
                         {ds.version_count} {t("home.versions_count")}

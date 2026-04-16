@@ -191,7 +191,7 @@ export default function AdminPage() {
                   color: req.source_type === "scraper" ? "#92400e" : "#0f766e",
                   flexShrink: 0,
                 }}>
-                  {req.source_type === "scraper" ? "GOV.IL" : "CKAN"}
+                  {req.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
                 </span>
               </div>
               {req.source_type === "scraper" && req.source_url && (
@@ -340,7 +340,7 @@ export default function AdminPage() {
                       background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
                       color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
                     }}>
-                      {ds.source_type === "scraper" ? "Scraper" : "CKAN"}
+                      {ds.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
                     </span>
                   </td>
                   <td style={tdStyle} className="text-sm text-muted">{ds.organization}</td>
