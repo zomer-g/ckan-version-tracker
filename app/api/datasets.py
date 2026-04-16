@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.utils import parse_uuid, sanitize_ckan_name
+from app.api.utils import parse_uuid, sanitize_ckan_name, scraper_url_slug
 from app.auth.dependencies import get_admin_user, get_current_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
@@ -150,8 +150,12 @@ async def track_dataset(
         if not collector_name:
             raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
 
-        ckan_id = f"govil-scraper-{collector_name}"
-        ckan_name = collector_name
+        # Build a unique slug that includes a hash of the full source URL,
+        # so two URLs with the same collector path (e.g. /collectors/policies
+        # with different officeId query params) don't collide on the same mirror.
+        unique_slug = scraper_url_slug(collector_name, body.source_url)
+        ckan_id = f"govil-scraper-{unique_slug}"
+        ckan_name = unique_slug
 
         # Duplicate check by source_url
         existing = await db.execute(
@@ -160,7 +164,7 @@ async def track_dataset(
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Dataset already tracked")
 
-        mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ckan_name)}"
+        mirror_name = f"gov-versions-scraper-{unique_slug}"
 
         # Create mirror on odata.org.il for active datasets
         odata_dataset_id = None
@@ -467,9 +471,10 @@ async def submit_tracking_request(
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Already tracked or requested")
 
+        unique_slug = scraper_url_slug(collector_name, body.source_url)
         ds = TrackedDataset(
-            ckan_id=f"govil-scraper-{collector_name}",
-            ckan_name=collector_name,
+            ckan_id=f"govil-scraper-{unique_slug}",
+            ckan_name=unique_slug,
             title=body.title,
             organization="gov.il",
             source_type="scraper",
