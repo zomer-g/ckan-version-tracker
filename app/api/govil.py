@@ -22,6 +22,10 @@ RE_TRADITIONAL = re.compile(
     r"^https?://(www\.)?gov\.il/he/collectors?/([^/?#]+)",
     re.IGNORECASE,
 )
+RE_CONTENT_PAGE = re.compile(
+    r"^https?://(www\.)?gov\.il/he/pages/([^/?#]+)",
+    re.IGNORECASE,
+)
 
 
 class ValidateRequest(BaseModel):
@@ -45,12 +49,40 @@ def _parse_govil_url(url: str) -> tuple[str | None, str | None]:
     m = RE_TRADITIONAL.match(url.strip())
     if m:
         return "traditional_collector", m.group(2)
+    m = RE_CONTENT_PAGE.match(url.strip())
+    if m:
+        return "content_page", m.group(2)
     return None, None
 
 
 def _format_collector_name(name: str) -> str:
     """Format a collector slug into a readable title (fallback when page is unreachable)."""
     return name.replace("-", " ").replace("_", " ").title()
+
+
+async def _fetch_content_page_title(collector_name: str) -> str | None:
+    """Fetch the real title for /he/pages/{name} via ContentPageWebApi.
+
+    These pages are React SPAs whose HTML <title> is just the generic shell
+    ("גוב.איל" or similar). The API returns the actual page title in
+    ``contentHead.title``.
+    """
+    try:
+        api_url = f"https://www.gov.il/ContentPageWebApi/api/content-pages/{collector_name}?culture=he"
+        async with httpx.AsyncClient(
+            timeout=10,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; over.org.il)"},
+        ) as client:
+            resp = await client.get(api_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                title = ((data.get("contentHead") or {}).get("title") or "").strip()
+                if title:
+                    return title
+    except Exception as e:
+        logger.debug("Failed to fetch content-page title for %s: %s", collector_name, e)
+    return None
 
 
 async def _fetch_page_title(url: str) -> str | None:
@@ -88,12 +120,18 @@ async def validate_govil_url(request: Request, body: ValidateRequest):
     if not page_type or not collector_name:
         return ValidateResponse(
             valid=False,
-            error="URL is not a recognized gov.il collector page. "
-                  "Supported: /he/departments/dynamiccollectors/... or /he/collectors/...",
+            error="URL is not a recognized gov.il page. Supported: "
+                  "/he/departments/dynamiccollectors/..., /he/collectors/..., "
+                  "or /he/pages/...",
         )
 
-    # Try to fetch the page title
-    title = await _fetch_page_title(url)
+    # Try to fetch the page title. For content_page (React SPA), use the
+    # ContentPageWebApi since the raw HTML title is just the shell.
+    title = None
+    if page_type == "content_page":
+        title = await _fetch_content_page_title(collector_name)
+    if not title:
+        title = await _fetch_page_title(url)
     if not title:
         title = _format_collector_name(collector_name)
 

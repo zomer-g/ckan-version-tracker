@@ -7,7 +7,7 @@ import RequestForm from "../components/RequestForm";
 const ODATA_BASE = "https://www.odata.org.il";
 
 /** Detect gov.il collector URLs */
-const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?)\/([^/?#]+)/i;
+const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 
 interface CkanResource {
   id: string;
