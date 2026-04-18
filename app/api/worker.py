@@ -1,6 +1,7 @@
 """Worker API for govil-scraper integration."""
 import base64
 import hashlib
+import httpx
 import json
 import logging
 import uuid
@@ -512,31 +513,84 @@ async def upload_csv(
     if not fields:
         fields = [{"id": col, "type": "text"} for col in header]
 
-    # ---- Step 1: Stream-upload the plain CSV to odata as a file resource ----
+    # ---- Step 1: Create the resource on odata ----
+    # CKAN itself has a ~100MB limit on uploaded files (resource_create returns
+    # 413 Payload Too Large above that), so for huge CSVs we skip the file
+    # upload and create an empty resource — the datastore table still holds
+    # the data and users can download it via CKAN's built-in datastore dump
+    # endpoint (/datastore/dump/<resource_id>).
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
     safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
     filename = f"{ts}_v{version_number}_{safe_name}.csv"
     csv_size = os.path.getsize(csv_path)
 
-    try:
-        csv_resource = await odata_client.upload_resource(
-            dataset_id=ds.odata_dataset_id,
-            filename=filename,
-            file_path=csv_path,  # streamed from disk, not held in memory
-            name=f"{ts} v{version_number} - {safe_name}",
-            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows)",
-            resource_format="CSV",
-        )
-        resource_id = csv_resource["id"]
-        logger.info(
-            "Uploaded CSV (%d KB, ~%d rows) → resource %s — datastore stream queued",
-            csv_size // 1024, row_count, resource_id,
-        )
-    except Exception as e:
-        logger.exception("Failed to upload CSV file")
-        _cleanup_paths(gz_path, csv_path)
-        raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
+    # Threshold: stay comfortably below odata's 100MB limit. 90MB plain CSV
+    # leaves margin for multipart overhead. Above that → datastore-only.
+    FILE_UPLOAD_LIMIT = 90 * 1024 * 1024
+    upload_file = csv_size <= FILE_UPLOAD_LIMIT
+
+    if upload_file:
+        try:
+            csv_resource = await odata_client.upload_resource(
+                dataset_id=ds.odata_dataset_id,
+                filename=filename,
+                file_path=csv_path,  # streamed from disk
+                name=f"{ts} v{version_number} - {safe_name}",
+                description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows)",
+                resource_format="CSV",
+            )
+            resource_id = csv_resource["id"]
+            upload_mode = "file+datastore"
+            logger.info(
+                "Uploaded CSV file (%d KB, ~%d rows) → resource %s — datastore stream queued",
+                csv_size // 1024, row_count, resource_id,
+            )
+        except httpx.HTTPStatusError as e:
+            # 413 = CKAN's file-size limit. Fall back to datastore-only rather
+            # than failing — data is still accessible via the queryable table.
+            if e.response.status_code == 413:
+                logger.warning(
+                    "ODATA rejected CSV (413 — %d KB exceeds CKAN limit). "
+                    "Falling back to datastore-only resource.",
+                    csv_size // 1024,
+                )
+                upload_file = False
+            else:
+                logger.exception("Failed to upload CSV file (non-413)")
+                _cleanup_paths(gz_path, csv_path)
+                raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
+        except Exception as e:
+            logger.exception("Failed to upload CSV file")
+            _cleanup_paths(gz_path, csv_path)
+            raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
+
+    if not upload_file:
+        # Too big for CKAN file upload, or upload returned 413 above.
+        # Create an empty resource and rely on datastore only.
+        try:
+            csv_resource = await odata_client.create_resource(
+                dataset_id=ds.odata_dataset_id,
+                name=f"{ts} v{version_number} - {safe_name}",
+                description=(
+                    f"Version {version_number} ({ts}): {resource_name} "
+                    f"({row_count} rows). File too large for direct upload ("
+                    f"{csv_size // 1024 // 1024}MB) — data available via the "
+                    f"queryable datastore table below."
+                ),
+                resource_format="CSV",
+            )
+            resource_id = csv_resource["id"]
+            upload_mode = "datastore-only"
+            logger.info(
+                "Created empty resource (file %d MB > 90MB limit) → %s — "
+                "datastore stream queued",
+                csv_size // 1024 // 1024, resource_id,
+            )
+        except Exception as e:
+            logger.exception("Failed to create empty resource")
+            _cleanup_paths(gz_path, csv_path)
+            raise HTTPException(status_code=502, detail=f"resource_create failed: {e}")
 
     # ---- Step 2: Stream rows from disk into datastore in the background ----
     # The background task also deletes the temp CSV when done so we don't
@@ -558,6 +612,7 @@ async def upload_csv(
         "rows": row_count,
         "compression": compression or "none",
         "datastore": datastore_status,
+        "upload_mode": upload_mode,
     }
 
 
