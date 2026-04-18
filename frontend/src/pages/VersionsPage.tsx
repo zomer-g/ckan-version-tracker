@@ -2,12 +2,15 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { versions as versionsApi, publicApi, Version, TrackedDataset } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
 export default function VersionsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = !!user?.is_admin;
   const { datasetId } = useParams<{ datasetId: string }>();
   const [versionsList, setVersionsList] = useState<Version[]>([]);
   const [dataset, setDataset] = useState<TrackedDataset | null>(null);
@@ -102,23 +105,25 @@ export default function VersionsPage() {
               {dataset.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
             </a>
           )}
-          <button
-            type="button"
-            onClick={handleDeleteDataset}
-            className="btn-danger"
-            style={{
-              fontSize: "0.8rem",
-              padding: "0.3rem 0.7rem",
-              background: "none",
-              border: "1px solid var(--danger, #dc2626)",
-              color: "var(--danger, #dc2626)",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-            title={t("tracked.delete_dataset")}
-          >
-            {t("tracked.delete_dataset")}
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleDeleteDataset}
+              className="btn-danger"
+              style={{
+                fontSize: "0.8rem",
+                padding: "0.3rem 0.7rem",
+                background: "none",
+                border: "1px solid var(--danger, #dc2626)",
+                color: "var(--danger, #dc2626)",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+              title={t("tracked.delete_dataset")}
+            >
+              {t("tracked.delete_dataset")}
+            </button>
+          )}
           <Link
             to="/"
             style={{
@@ -158,26 +163,28 @@ export default function VersionsPage() {
                     <span className="text-sm text-muted">
                       {v.metadata_modified?.slice(0, 19)}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteVersion(v)}
-                      disabled={deleting === v.id}
-                      style={{
-                        fontSize: "0.75rem",
-                        padding: "0.2rem 0.55rem",
-                        background: "none",
-                        border: "1px solid var(--danger, #dc2626)",
-                        color: "var(--danger, #dc2626)",
-                        borderRadius: 4,
-                        cursor: deleting === v.id ? "not-allowed" : "pointer",
-                        opacity: deleting === v.id ? 0.6 : 1,
-                      }}
-                      title={t("versions.delete_version")}
-                    >
-                      {deleting === v.id
-                        ? t("versions.deleting")
-                        : t("versions.delete_version")}
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteVersion(v)}
+                        disabled={deleting === v.id}
+                        style={{
+                          fontSize: "0.75rem",
+                          padding: "0.2rem 0.55rem",
+                          background: "none",
+                          border: "1px solid var(--danger, #dc2626)",
+                          color: "var(--danger, #dc2626)",
+                          borderRadius: 4,
+                          cursor: deleting === v.id ? "not-allowed" : "pointer",
+                          opacity: deleting === v.id ? 0.6 : 1,
+                        }}
+                        title={t("versions.delete_version")}
+                      >
+                        {deleting === v.id
+                          ? t("versions.deleting")
+                          : t("versions.delete_version")}
+                      </button>
+                    )}
                   </div>
                 </div>
 
