@@ -567,16 +567,20 @@ async def upload_csv(
 
     if not upload_file:
         # Too big for CKAN file upload, or upload returned 413 above.
-        # Create an empty resource and rely on datastore only.
+        # Create a resource pointing at CKAN's built-in datastore dump
+        # endpoint — that way the UI Download button produces a CSV
+        # streamed from the datastore on the fly, with no file stored
+        # separately on the server.
         try:
             csv_resource = await odata_client.create_resource(
                 dataset_id=ds.odata_dataset_id,
                 name=f"{ts} v{version_number} - {safe_name}",
                 description=(
                     f"Version {version_number} ({ts}): {resource_name} "
-                    f"({row_count} rows). File too large for direct upload ("
-                    f"{csv_size // 1024 // 1024}MB) — data available via the "
-                    f"queryable datastore table below."
+                    f"({row_count} rows). File too large for direct upload "
+                    f"({csv_size // 1024 // 1024}MB) — data is served from "
+                    f"the queryable datastore table; the Download button "
+                    f"streams a CSV generated on demand."
                 ),
                 resource_format="CSV",
             )
@@ -587,6 +591,22 @@ async def upload_csv(
                 "datastore stream queued",
                 csv_size // 1024 // 1024, resource_id,
             )
+            # Now that we have the resource_id, patch the URL so Download
+            # streams from the datastore dump endpoint. We can't pass this
+            # in resource_create (needs the id), hence the follow-up call.
+            try:
+                dump_url = (
+                    f"{settings.odata_url.rstrip('/')}"
+                    f"/datastore/dump/{resource_id}"
+                )
+                await odata_client.update_resource_url(resource_id, dump_url)
+                logger.info("Set download URL for %s → %s", resource_id, dump_url)
+            except Exception as e:
+                logger.warning(
+                    "Could not patch download URL for %s: %s — "
+                    "users can still access data via the datastore API",
+                    resource_id, e,
+                )
         except Exception as e:
             logger.exception("Failed to create empty resource")
             _cleanup_paths(gz_path, csv_path)

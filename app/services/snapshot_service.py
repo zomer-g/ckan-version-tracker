@@ -16,8 +16,20 @@ TABULAR_FORMATS = {"csv", "tsv", "txt"}
 
 
 def _timestamp() -> str:
-    """Current timestamp for resource names: 2026-04-10_14-30"""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    """Current timestamp for resource names in Israel local time: 2026-04-10_14-30.
+
+    Users read these in the CKAN UI in Hebrew context and expect Israel
+    time, not UTC. Standard library `zoneinfo` (Python 3.9+) handles DST
+    automatically (IST in winter, IDT in summer).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Jerusalem")
+    except Exception:
+        # Fallback: fixed UTC+3 (Israel winter time) if tzdata unavailable
+        from datetime import timedelta
+        tz = timezone(timedelta(hours=3))
+    return datetime.now(tz).strftime("%Y-%m-%d_%H-%M")
 
 
 async def create_version_snapshot(

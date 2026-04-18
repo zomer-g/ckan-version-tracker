@@ -88,14 +88,31 @@ class ODataClient:
 
     # ── Resource management (file upload) ────────────────────────────────
 
-    async def create_resource(self, dataset_id: str, name: str, description: str = "", resource_format: str = "") -> dict:
-        """Create an empty CKAN resource (no file upload). Used as datastore target."""
+    async def create_resource(self, dataset_id: str, name: str, description: str = "",
+                              resource_format: str = "", url: str = "") -> dict:
+        """Create a CKAN resource without uploading a file. Used as a datastore
+        target when the plain CSV would exceed CKAN's upload size limit.
+
+        `url` can point to an external download (e.g. CKAN's datastore dump
+        endpoint) so the CKAN UI Download button actually produces a CSV
+        instead of a 404 / empty response.
+        """
         return await self._post("resource_create", {
             "package_id": dataset_id,
             "name": name,
             "description": description,
             "format": resource_format,
-            "url": "",  # Empty URL — data lives in datastore
+            "url": url,
+        })
+
+    async def update_resource_url(self, resource_id: str, new_url: str) -> dict:
+        """Patch just a resource's URL field (used after resource_create when
+        we want the download link to point at a dynamic endpoint that needs
+        the resource_id — a chicken/egg that can't be resolved in one call).
+        """
+        return await self._post("resource_patch", {
+            "id": resource_id,
+            "url": new_url,
         })
 
     async def upload_resource(
