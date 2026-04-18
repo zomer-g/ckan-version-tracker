@@ -136,7 +136,7 @@ async def approve_request(
             else f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"
         )
         tracker_url = f"{settings.app_base_url.rstrip('/')}/versions/{ds.id}"
-        notes = odata_client.ODataClient.build_notes(
+        notes = odata_client.build_notes(
             source_type=ds.source_type,
             source_url=source_url_for_notes,
             tracker_url=tracker_url,
