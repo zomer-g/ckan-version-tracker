@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,7 +142,15 @@ async def poll_for_task(
     )
     row = result.first()
     if not row:
-        raise HTTPException(status_code=204)  # No tasks
+        # Proper empty-body response. Do NOT raise HTTPException(204) —
+        # FastAPI's exception handler builds a JSON `{"detail":...}` body,
+        # but HTTP 204 must have Content-Length: 0 and no body. Starlette
+        # then raises RuntimeError("Response content longer than Content-Length")
+        # on every call. The worker sees the status line first so functionally
+        # it still works, but each error keeps a full traceback object in
+        # memory. With ~720 polls/hour/worker this quietly accumulated enough
+        # RAM pressure to OOM-kill the dyno mid background-datastore-push.
+        return Response(status_code=204)
 
     task, ds = row
     task.status = "running"

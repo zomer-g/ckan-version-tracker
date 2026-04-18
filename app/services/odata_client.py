@@ -503,6 +503,13 @@ class ODataClient:
                 " [final, record count refreshed]" if is_last else "",
                 resource_id,
             )
+            # Ask the GC to reclaim batch + httpx buffers before we build the
+            # next one. On a 512MB Render dyno, not doing this can leave tens
+            # of MB of unreferenced-but-uncollected objects lingering per
+            # batch, and by batch 8+ we can bump into the OOM limit while the
+            # web server is still handling requests in the same process.
+            import gc as _gc
+            _gc.collect()
             # Brief pause between batches — ODATA/CKAN occasionally needs
             # a moment between sequential datastore writes.
             if not is_last:
