@@ -297,31 +297,37 @@ class ODataClient:
         fields: list[dict],
         csv_path: str,
         delete_when_done: bool = True,
-        batch_size: int = 5000,
+        batch_size: int = 2500,
     ) -> None:
         """Stream records from a CSV on disk into the datastore in batches.
 
         Used for very large datasets where loading the whole record set into
         memory would risk OOM on small dynos. Peak memory is ~batch_size rows
-        (few MB) regardless of the CSV's total size. The file is deleted
-        after a successful push unless `delete_when_done=False`.
+        (few MB) regardless of the CSV's total size.
+
+        Resilience features:
+        - Each batch is retried up to 3 times with exponential backoff.
+        - On total failure of a batch, the CSV file is KEPT on disk so it
+          can be manually or programmatically retried from batch 1. The
+          caller can see the path in the logs and re-invoke this method.
+        - delete_when_done=True only deletes on success; failures always
+          preserve the file.
         """
+        import asyncio
         import csv as _csv
         import os
 
-        batch_index = 0
         batch: list[dict] = []
         first_batch = True
         total_pushed = 0
-        try:
-            with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
-                reader = _csv.DictReader(fh)
-                header = reader.fieldnames or [f["id"] for f in fields]
+        batch_num = 0
+        had_failure = False
 
-                async def _flush(records_batch: list[dict], create: bool):
-                    nonlocal total_pushed
-                    if not records_batch:
-                        return
+        async def _push_batch_with_retry(records_batch: list[dict], create: bool, num: int):
+            """Push one batch; retry up to 3x on transient errors."""
+            last_err: Exception | None = None
+            for attempt in range(1, 4):
+                try:
                     if create:
                         await self.datastore_create(
                             resource_id=resource_id,
@@ -334,11 +340,38 @@ class ODataClient:
                             records=records_batch,
                             method="insert",
                         )
+                    return
+                except Exception as e:
+                    last_err = e
+                    if attempt < 3:
+                        wait = 5 * attempt  # 5s, 10s
+                        logger.warning(
+                            "Datastore batch %d attempt %d/3 failed (%s) — retrying in %ds",
+                            num, attempt, e, wait,
+                        )
+                        await asyncio.sleep(wait)
+            raise RuntimeError(
+                f"Datastore batch {num} failed after 3 attempts: {last_err}"
+            )
+
+        try:
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+                reader = _csv.DictReader(fh)
+
+                async def _flush(records_batch: list[dict], create: bool):
+                    nonlocal total_pushed, batch_num
+                    if not records_batch:
+                        return
+                    batch_num += 1
+                    await _push_batch_with_retry(records_batch, create, batch_num)
                     total_pushed += len(records_batch)
                     logger.info(
-                        "Datastore stream batch (%d rows, total %d) → %s",
-                        len(records_batch), total_pushed, resource_id,
+                        "Datastore batch %d (%d rows, cumulative %d) → %s",
+                        batch_num, len(records_batch), total_pushed, resource_id,
                     )
+                    # Brief pause between batches — ODATA/CKAN occasionally needs
+                    # a moment between sequential datastore writes.
+                    await asyncio.sleep(1)
 
                 for row in reader:
                     batch.append(dict(row))
@@ -350,16 +383,20 @@ class ODataClient:
                     await _flush(batch, create=first_batch)
 
             logger.info(
-                "Background datastore stream complete: %s (%d rows from %s)",
+                "Datastore stream complete: resource=%s, total_rows=%d, csv=%s",
                 resource_id, total_pushed, csv_path,
             )
         except Exception as e:
+            had_failure = True
             logger.exception(
-                "Background datastore stream FAILED for %s: %s",
-                resource_id, e,
+                "Datastore stream FAILED after batch %d (pushed %d rows so far) "
+                "for resource %s — CSV kept at %s for manual retry: %s",
+                batch_num, total_pushed, resource_id, csv_path, e,
             )
         finally:
-            if delete_when_done:
+            # Only delete on clean success; keep the file on failure so a
+            # later retry (manual or scheduled) can recover the missing rows.
+            if delete_when_done and not had_failure:
                 try:
                     os.remove(csv_path)
                     logger.info("Deleted temp CSV %s", csv_path)
