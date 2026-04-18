@@ -101,23 +101,42 @@ class ODataClient:
     async def upload_resource(
         self,
         dataset_id: str,
-        file_content: bytes,
-        filename: str,
-        name: str,
+        file_content: bytes | None = None,
+        filename: str = "",
+        name: str = "",
         description: str = "",
         resource_format: str = "",
+        file_path: str | None = None,
     ) -> dict:
-        """Upload a file as a new resource to a dataset."""
+        """Upload a file as a new resource to a dataset.
+
+        Either pass `file_content` (in-memory bytes) or `file_path` (on-disk
+        path — preferred for large files; httpx streams from disk instead of
+        holding the full payload in memory).
+        """
+        if file_path is None and file_content is None:
+            raise ValueError("upload_resource: need file_content or file_path")
+
         async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT) as client:
             url = f"{self.api_url}/resource_create"
-            files = {"upload": (filename, io.BytesIO(file_content), "application/octet-stream")}
             data = {
                 "package_id": dataset_id,
                 "name": name,
                 "description": description,
                 "format": resource_format,
             }
-            resp = await client.post(url, data=data, files=files, headers=self._headers())
+            if file_path is not None:
+                # Stream from disk — constant memory even for 200MB+ CSVs
+                with open(file_path, "rb") as fh:
+                    files = {"upload": (filename, fh, "application/octet-stream")}
+                    resp = await client.post(
+                        url, data=data, files=files, headers=self._headers(),
+                    )
+            else:
+                files = {"upload": (filename, io.BytesIO(file_content), "application/octet-stream")}
+                resp = await client.post(
+                    url, data=data, files=files, headers=self._headers(),
+                )
             resp.raise_for_status()
             result = resp.json()
             if not result.get("success"):
@@ -254,6 +273,81 @@ class ODataClient:
             resource_id, len(records),
         )
         return resource
+
+    async def push_records_to_datastore_from_file(
+        self,
+        resource_id: str,
+        fields: list[dict],
+        csv_path: str,
+        delete_when_done: bool = True,
+        batch_size: int = 5000,
+    ) -> None:
+        """Stream records from a CSV on disk into the datastore in batches.
+
+        Used for very large datasets where loading the whole record set into
+        memory would risk OOM on small dynos. Peak memory is ~batch_size rows
+        (few MB) regardless of the CSV's total size. The file is deleted
+        after a successful push unless `delete_when_done=False`.
+        """
+        import csv as _csv
+        import os
+
+        batch_index = 0
+        batch: list[dict] = []
+        first_batch = True
+        total_pushed = 0
+        try:
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+                reader = _csv.DictReader(fh)
+                header = reader.fieldnames or [f["id"] for f in fields]
+
+                async def _flush(records_batch: list[dict], create: bool):
+                    nonlocal total_pushed
+                    if not records_batch:
+                        return
+                    if create:
+                        await self.datastore_create(
+                            resource_id=resource_id,
+                            fields=fields,
+                            records=records_batch,
+                        )
+                    else:
+                        await self.datastore_upsert(
+                            resource_id=resource_id,
+                            records=records_batch,
+                            method="insert",
+                        )
+                    total_pushed += len(records_batch)
+                    logger.info(
+                        "Datastore stream batch (%d rows, total %d) → %s",
+                        len(records_batch), total_pushed, resource_id,
+                    )
+
+                for row in reader:
+                    batch.append(dict(row))
+                    if len(batch) >= batch_size:
+                        await _flush(batch, create=first_batch)
+                        first_batch = False
+                        batch = []
+                if batch:
+                    await _flush(batch, create=first_batch)
+
+            logger.info(
+                "Background datastore stream complete: %s (%d rows from %s)",
+                resource_id, total_pushed, csv_path,
+            )
+        except Exception as e:
+            logger.exception(
+                "Background datastore stream FAILED for %s: %s",
+                resource_id, e,
+            )
+        finally:
+            if delete_when_done:
+                try:
+                    os.remove(csv_path)
+                    logger.info("Deleted temp CSV %s", csv_path)
+                except OSError as e:
+                    logger.warning("Failed to delete temp CSV %s: %s", csv_path, e)
 
     async def push_records_to_datastore(
         self,

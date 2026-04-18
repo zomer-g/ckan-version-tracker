@@ -438,36 +438,66 @@ async def upload_csv(
     if not ds or not ds.odata_dataset_id:
         raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
 
-    raw_bytes = await file.read()
     is_gzip = (compression or "").lower() == "gzip"
 
-    # ---- Decompress if needed so we can store plain CSV + push to datastore ----
+    # ---- Stream the upload to a temp file on disk (no bytes held in memory) ----
+    # Hesdermutne's 166MB plain CSV + 32k parsed dicts previously pushed the
+    # Render starter dyno to ~400MB RSS and OOM-crashed. Using temp files
+    # keeps peak memory under ~30MB regardless of dataset size.
+    import os
+    import shutil
+    import tempfile
+    import uuid as _uuid
+
+    tmp_dir = "/tmp/upload_csv"
+    os.makedirs(tmp_dir, exist_ok=True)
+    upload_id = _uuid.uuid4().hex[:8]
+    gz_path = os.path.join(tmp_dir, f"{upload_id}.in.gz") if is_gzip else None
+    csv_path = os.path.join(tmp_dir, f"{upload_id}.csv")
+
+    # Stream uploaded bytes to disk in 256KB chunks
+    try:
+        target_path = gz_path or csv_path
+        with open(target_path, "wb") as out:
+            while True:
+                chunk = await file.read(256 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+    except Exception as e:
+        logger.exception("Failed writing upload to temp file")
+        _cleanup_paths(gz_path, csv_path)
+        raise HTTPException(status_code=500, detail=f"upload write failed: {e}")
+
+    # Decompress gzip → plain CSV on disk, 64KB at a time
     if is_gzip:
         try:
             import gzip as _gzip
-            csv_bytes = _gzip.decompress(raw_bytes)
+            with _gzip.open(gz_path, "rb") as g_in, open(csv_path, "wb") as c_out:
+                shutil.copyfileobj(g_in, c_out, length=64 * 1024)
+            gz_size = os.path.getsize(gz_path)
+            csv_size = os.path.getsize(csv_path)
             logger.info(
-                "Decompressed gzip CSV: %d KB → %d KB (%.1fx)",
-                len(raw_bytes) // 1024, len(csv_bytes) // 1024,
-                len(csv_bytes) / max(len(raw_bytes), 1),
+                "Decompressed gzip CSV on disk: %d KB → %d KB (%.1fx)",
+                gz_size // 1024, csv_size // 1024,
+                csv_size / max(gz_size, 1),
             )
+            os.remove(gz_path)
+            gz_path = None
         except Exception as e:
             logger.exception("Failed to decompress gzip CSV")
+            _cleanup_paths(gz_path, csv_path)
             raise HTTPException(status_code=400, detail=f"Bad gzip data: {e}")
-    else:
-        csv_bytes = raw_bytes
 
-    # ---- Parse CSV into records for datastore push ----
+    # ---- Read only the header to build fields, not the full CSV ----
     import csv as _csv
-    import io as _io
     try:
-        # utf-8-sig strips the BOM if the worker added one for Excel
-        text = csv_bytes.decode("utf-8-sig", errors="replace")
-        reader = _csv.DictReader(_io.StringIO(text))
-        header = reader.fieldnames or []
-        records = [dict(row) for row in reader]
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = _csv.reader(fh)
+            header = next(reader, []) or []
     except Exception as e:
-        logger.exception("Failed to parse uploaded CSV")
+        logger.exception("Failed to read CSV header")
+        _cleanup_paths(gz_path, csv_path)
         raise HTTPException(status_code=400, detail=f"Bad CSV data: {e}")
 
     # Resolve fields: prefer worker-supplied, fall back to header inference
@@ -482,60 +512,65 @@ async def upload_csv(
     if not fields:
         fields = [{"id": col, "type": "text"} for col in header]
 
-    # Sanity: row_count form arg may have been "0" — use actual parsed count
-    actual_rows = len(records)
-
-    # ---- Step 1: Upload the plain CSV as a file resource on odata (sync) ----
-    # This is the part the worker blocks on — it's relatively fast (~seconds
-    # to ~30s for 100MB). We return its resource_id right after so the
-    # worker can call /push-version and the UI shows the new version quickly.
+    # ---- Step 1: Stream-upload the plain CSV to odata as a file resource ----
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
     safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
     filename = f"{ts}_v{version_number}_{safe_name}.csv"
+    csv_size = os.path.getsize(csv_path)
 
     try:
         csv_resource = await odata_client.upload_resource(
             dataset_id=ds.odata_dataset_id,
-            file_content=csv_bytes,
             filename=filename,
+            file_path=csv_path,  # streamed from disk, not held in memory
             name=f"{ts} v{version_number} - {safe_name}",
-            description=f"Version {version_number} ({ts}): {resource_name} ({actual_rows} rows)",
+            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows)",
             resource_format="CSV",
         )
         resource_id = csv_resource["id"]
         logger.info(
-            "Uploaded CSV file (%d KB plain, %d rows) → resource %s — datastore push queued",
-            len(csv_bytes) // 1024, actual_rows, resource_id,
+            "Uploaded CSV (%d KB, ~%d rows) → resource %s — datastore stream queued",
+            csv_size // 1024, row_count, resource_id,
         )
     except Exception as e:
         logger.exception("Failed to upload CSV file")
+        _cleanup_paths(gz_path, csv_path)
         raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
 
-    # ---- Step 2: Push rows to datastore in the background (non-blocking) ----
-    # Large datasets (30k+ rows) take several minutes to push in batches, and
-    # if we kept the worker blocked that long the upload HTTP call would time
-    # out on either side. By running it as a FastAPI BackgroundTask, the
-    # worker gets its response in seconds and the datastore table fills up
-    # asynchronously. The dataset's version is still created immediately
-    # because /push-version sees the resource_id via csv_resource_ids.
-    if records and fields:
+    # ---- Step 2: Stream rows from disk into datastore in the background ----
+    # The background task also deletes the temp CSV when done so we don't
+    # leak temp files across requests.
+    if fields:
         background_tasks.add_task(
-            odata_client.push_records_to_datastore,
-            resource_id, fields, records,
+            odata_client.push_records_to_datastore_from_file,
+            resource_id, fields, csv_path, True, 5000,
         )
         datastore_status = "queued"
     else:
-        datastore_status = "skipped (no records/fields)"
-        logger.warning("No records/fields to push for %s", resource_id)
+        datastore_status = "skipped (no fields detected)"
+        logger.warning("No fields available for datastore push (resource %s)", resource_id)
+        _cleanup_paths(None, csv_path)
 
     return {
         "resource_id": resource_id,
-        "size": len(csv_bytes),
-        "rows": actual_rows,
+        "size": csv_size,
+        "rows": row_count,
         "compression": compression or "none",
         "datastore": datastore_status,
     }
+
+
+def _cleanup_paths(*paths: str | None) -> None:
+    """Best-effort removal of temp files used by /upload-csv."""
+    import os
+    for p in paths:
+        if not p:
+            continue
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 @router.post("/progress/{task_id}")
