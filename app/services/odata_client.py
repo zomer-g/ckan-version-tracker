@@ -255,5 +255,54 @@ class ODataClient:
         )
         return resource
 
+    async def push_records_to_datastore(
+        self,
+        resource_id: str,
+        fields: list[dict],
+        records: list[dict],
+    ) -> None:
+        """Push records to an existing resource's datastore (no file upload).
+        Used when the file was already uploaded separately and we just need
+        to populate the queryable table. Safe to call in a background task
+        — the caller doesn't need to await the result if they already have
+        the resource_id.
+        """
+        from app.services.csv_parser import batch_records
+
+        batches = batch_records(records)
+        if not batches:
+            logger.info("Datastore push for %s: no records", resource_id)
+            return
+
+        logger.info(
+            "Background datastore push: %d records → %s in %d batch(es)",
+            len(records), resource_id, len(batches),
+        )
+        try:
+            await self.datastore_create(
+                resource_id=resource_id,
+                fields=fields,
+                records=batches[0],
+            )
+            for i, batch in enumerate(batches[1:], start=2):
+                logger.info(
+                    "Datastore batch %d/%d (%d records) → %s",
+                    i, len(batches), len(batch), resource_id,
+                )
+                await self.datastore_upsert(
+                    resource_id=resource_id,
+                    records=batch,
+                    method="insert",
+                )
+            logger.info(
+                "Background datastore push complete: %s (%d records)",
+                resource_id, len(records),
+            )
+        except Exception as e:
+            logger.exception(
+                "Background datastore push FAILED for %s: %s",
+                resource_id, e,
+            )
+
 
 odata_client = ODataClient()

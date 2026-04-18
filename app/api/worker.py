@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -398,6 +398,7 @@ async def upload_zip(
 async def upload_csv(
     request: Request,
     tracked_dataset_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     version_number: int = Form(...),
     resource_name: str = Form("נתוני הסורק"),
@@ -484,33 +485,57 @@ async def upload_csv(
     # Sanity: row_count form arg may have been "0" — use actual parsed count
     actual_rows = len(records)
 
-    # ---- Push to odata: file resource + datastore table in one call ----
+    # ---- Step 1: Upload the plain CSV as a file resource on odata (sync) ----
+    # This is the part the worker blocks on — it's relatively fast (~seconds
+    # to ~30s for 100MB). We return its resource_id right after so the
+    # worker can call /push-version and the UI shows the new version quickly.
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
+    safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
+    filename = f"{ts}_v{version_number}_{safe_name}.csv"
+
     try:
-        csv_result = await odata_client.push_csv_to_datastore(
+        csv_resource = await odata_client.upload_resource(
             dataset_id=ds.odata_dataset_id,
-            version_number=version_number,
-            resource_name=resource_name,
-            fields=fields,
-            records=records,
+            file_content=csv_bytes,
+            filename=filename,
+            name=f"{ts} v{version_number} - {safe_name}",
+            description=f"Version {version_number} ({ts}): {resource_name} ({actual_rows} rows)",
             resource_format="CSV",
-            timestamp=ts,
         )
+        resource_id = csv_resource["id"]
         logger.info(
-            "Uploaded CSV + datastore (%d KB plain, %d rows) → resource %s",
-            len(csv_bytes) // 1024, actual_rows, csv_result["id"],
+            "Uploaded CSV file (%d KB plain, %d rows) → resource %s — datastore push queued",
+            len(csv_bytes) // 1024, actual_rows, resource_id,
         )
-        return {
-            "resource_id": csv_result["id"],
-            "size": len(csv_bytes),
-            "rows": actual_rows,
-            "compression": compression or "none",
-            "datastore": True,
-        }
     except Exception as e:
-        logger.exception("Failed to upload CSV / push datastore")
+        logger.exception("Failed to upload CSV file")
         raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
+
+    # ---- Step 2: Push rows to datastore in the background (non-blocking) ----
+    # Large datasets (30k+ rows) take several minutes to push in batches, and
+    # if we kept the worker blocked that long the upload HTTP call would time
+    # out on either side. By running it as a FastAPI BackgroundTask, the
+    # worker gets its response in seconds and the datastore table fills up
+    # asynchronously. The dataset's version is still created immediately
+    # because /push-version sees the resource_id via csv_resource_ids.
+    if records and fields:
+        background_tasks.add_task(
+            odata_client.push_records_to_datastore,
+            resource_id, fields, records,
+        )
+        datastore_status = "queued"
+    else:
+        datastore_status = "skipped (no records/fields)"
+        logger.warning("No records/fields to push for %s", resource_id)
+
+    return {
+        "resource_id": resource_id,
+        "size": len(csv_bytes),
+        "rows": actual_rows,
+        "compression": compression or "none",
+        "datastore": datastore_status,
+    }
 
 
 @router.post("/progress/{task_id}")
