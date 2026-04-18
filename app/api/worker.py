@@ -64,6 +64,10 @@ class PushVersionRequest(BaseModel):
     zip_resource_id: str | None = None
     # Preferred for large attachment sets: list of pre-uploaded ZIP part resource_ids
     zip_resource_ids: list[str] | None = None
+    # For huge record sets that would exceed 100MB JSON limit: worker uploads
+    # CSV via /upload-csv first and references its resource_id here per
+    # resource name (so we can skip push_csv_to_datastore for that resource).
+    csv_resource_ids: dict[str, str] | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -199,7 +203,20 @@ async def push_version(
         from app.services.snapshot_service import _timestamp
         ts = _timestamp()
 
+        csv_resource_ids = body.csv_resource_ids or {}
+
         for res in body.resources:
+            # Prefer pre-uploaded CSV file (used when records JSON would exceed
+            # Cloudflare's 100MB limit). Worker uploaded the CSV via
+            # /api/worker/upload-csv and passes the resource_id by resource name.
+            pre_uploaded = csv_resource_ids.get(res.name)
+            if pre_uploaded:
+                resource_mappings[res.name] = pre_uploaded
+                odata_resource_ids.append(pre_uploaded)
+                logger.info("Using pre-uploaded CSV for %s → resource %s (%d rows)",
+                            res.name, pre_uploaded, res.row_count)
+                continue
+
             if res.records and res.fields:
                 try:
                     odata_result = await odata_client.push_csv_to_datastore(
@@ -374,6 +391,60 @@ async def upload_zip(
     except Exception as e:
         logger.exception("Failed to upload ZIP")
         raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
+
+
+@router.post("/upload-csv/{tracked_dataset_id}")
+@limiter.limit("30/minute")
+async def upload_csv(
+    request: Request,
+    tracked_dataset_id: str,
+    file: UploadFile = File(...),
+    version_number: int = Form(...),
+    resource_name: str = Form("נתוני הסורק"),
+    row_count: int = Form(0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker uploads a CSV file as multipart. Returns the odata resource_id
+    that can then be referenced in /push-version via csv_resource_ids.
+
+    Used by workers when the records JSON would exceed the 100MB Cloudflare
+    limit on the push-version POST. Skips the datastore push (so no
+    interactive preview on odata.org.il), but the CSV is downloadable.
+    """
+    _verify_worker_key(request)
+
+    try:
+        ds_id = uuid.UUID(tracked_dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset ID")
+
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds or not ds.odata_dataset_id:
+        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+
+    csv_bytes = await file.read()
+    from app.services.snapshot_service import _timestamp
+    ts = _timestamp()
+    safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
+
+    try:
+        csv_result = await odata_client.upload_resource(
+            dataset_id=ds.odata_dataset_id,
+            file_content=csv_bytes,
+            filename=file.filename or f"v{version_number}_{safe_name}.csv",
+            name=f"{ts} v{version_number} - {safe_name}",
+            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows)",
+            resource_format="CSV",
+        )
+        logger.info("Uploaded CSV (%d KB, %d rows) → resource %s",
+                    len(csv_bytes) // 1024, row_count, csv_result["id"])
+        return {"resource_id": csv_result["id"], "size": len(csv_bytes)}
+    except Exception as e:
+        logger.exception("Failed to upload CSV")
+        raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
 
 
 @router.post("/progress/{task_id}")
