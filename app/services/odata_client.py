@@ -183,10 +183,16 @@ class ODataClient:
         fields: list[dict],
         records: list[dict],
         primary_key: str | list[str] | None = None,
+        calculate_record_count: bool = False,
     ) -> dict:
         """
         Create a DataStore table and insert initial records.
         After this, data is queryable via datastore_search.
+
+        `calculate_record_count=True` updates the stored row count so the
+        CKAN UI footer shows the right total. Only useful when this is the
+        only call (i.e. small datasets that fit in one batch) — otherwise
+        set it on the final datastore_upsert instead.
         """
         payload: dict[str, Any] = {
             "resource_id": resource_id,
@@ -196,6 +202,8 @@ class ODataClient:
         }
         if primary_key:
             payload["primary_key"] = primary_key
+        if calculate_record_count:
+            payload["calculate_record_count"] = True
         return await self._post("datastore_create", payload, timeout=DATASTORE_TIMEOUT)
 
     async def datastore_upsert(
@@ -203,16 +211,92 @@ class ODataClient:
         resource_id: str,
         records: list[dict],
         method: str = "insert",
+        force: bool = True,
+        calculate_record_count: bool = False,
     ) -> dict:
         """
         Insert/upsert additional records into an existing DataStore table.
         Methods: 'insert' (fast, no key check), 'upsert', 'update'.
+
+        `force=True` by default — CKAN's _check_read_only raises
+        ValidationError if the resource's url_type isn't in the writable
+        list, and since our resources get their `url` patched to the
+        datastore dump endpoint (which changes url_type), every upsert
+        after the first would otherwise silently fail, leaving us with
+        only the first batch in the table.
+
+        `calculate_record_count=True` should be set on the LAST batch of
+        a multi-batch push so the CKAN UI footer reflects the final row
+        count. Doing it on every batch is wasteful (scans the table).
         """
-        return await self._post("datastore_upsert", {
+        payload: dict[str, Any] = {
             "resource_id": resource_id,
             "method": method,
             "records": records,
-        }, timeout=DATASTORE_TIMEOUT)
+            "force": force,
+        }
+        if calculate_record_count:
+            payload["calculate_record_count"] = True
+        return await self._post("datastore_upsert", payload, timeout=DATASTORE_TIMEOUT)
+
+    async def _push_batch_with_retry(
+        self,
+        resource_id: str,
+        fields: list[dict],
+        records_batch: list[dict],
+        *,
+        create: bool,
+        batch_num: int,
+        is_last: bool,
+        max_attempts: int = 3,
+    ) -> None:
+        """Push one batch to the datastore, retrying up to `max_attempts` times
+        with linear backoff on transient failures.
+
+        - `create=True` uses datastore_create (defines schema on first batch)
+        - `create=False` uses datastore_upsert with `method="insert"`, always
+          with `force=True` so CKAN's read-only check (url_type check) can't
+          silently drop the batch.
+        - `is_last=True` adds `calculate_record_count=True` so the CKAN UI
+          footer matches the real row count after the full push.
+
+        Raises RuntimeError after all attempts are exhausted. The caller
+        typically logs and stops the stream, keeping the source CSV on disk
+        for manual retry.
+        """
+        import asyncio
+
+        last_err: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if create:
+                    await self.datastore_create(
+                        resource_id=resource_id,
+                        fields=fields,
+                        records=records_batch,
+                        calculate_record_count=is_last,
+                    )
+                else:
+                    await self.datastore_upsert(
+                        resource_id=resource_id,
+                        records=records_batch,
+                        method="insert",
+                        force=True,
+                        calculate_record_count=is_last,
+                    )
+                return
+            except Exception as e:
+                last_err = e
+                if attempt < max_attempts:
+                    wait = 5 * attempt  # 5s, 10s
+                    logger.warning(
+                        "Datastore batch %d attempt %d/%d failed (%s) — retrying in %ds",
+                        batch_num, attempt, max_attempts, e, wait,
+                    )
+                    await asyncio.sleep(wait)
+        raise RuntimeError(
+            f"Datastore batch {batch_num} failed after {max_attempts} attempts: {last_err}"
+        )
 
     async def push_csv_to_datastore(
         self,
@@ -258,32 +342,29 @@ class ODataClient:
         )
         resource_id = resource["id"]
 
-        # Step 3: Push data into datastore in batches (for filter/search UI)
+        # Step 3: Push data into datastore in batches (for filter/search UI).
+        # Uses the shared _push_batch_with_retry helper so force=True is
+        # always sent on upserts and each batch retries transient failures
+        # (same semantics as push_records_to_datastore_from_file).
+        import asyncio
         batches = batch_records(records)
+        total_batches = len(batches)
 
-        if batches:
-            # First batch: use datastore_create to define schema + insert
+        for i, batch in enumerate(batches, start=1):
             logger.info(
-                "Pushing %d records to datastore %s (batch 1/%d)",
-                len(batches[0]), resource_id, len(batches),
+                "Pushing batch %d/%d (%d records) to %s",
+                i, total_batches, len(batch), resource_id,
             )
-            await self.datastore_create(
+            await self._push_batch_with_retry(
                 resource_id=resource_id,
                 fields=fields,
-                records=batches[0],
+                records_batch=batch,
+                create=(i == 1),
+                batch_num=i,
+                is_last=(i == total_batches),
             )
-
-            # Remaining batches: use datastore_upsert (insert mode)
-            for i, batch in enumerate(batches[1:], start=2):
-                logger.info(
-                    "Pushing batch %d/%d (%d records) to %s",
-                    i, len(batches), len(batch), resource_id,
-                )
-                await self.datastore_upsert(
-                    resource_id=resource_id,
-                    records=batch,
-                    method="insert",
-                )
+            if i < total_batches:
+                await asyncio.sleep(1)  # brief settle pause between batches
 
         logger.info(
             "Datastore resource %s created with %d records",
@@ -317,70 +398,65 @@ class ODataClient:
         import csv as _csv
         import os
 
-        batch: list[dict] = []
-        first_batch = True
         total_pushed = 0
         batch_num = 0
         had_failure = False
 
-        async def _push_batch_with_retry(records_batch: list[dict], create: bool, num: int):
-            """Push one batch; retry up to 3x on transient errors."""
-            last_err: Exception | None = None
-            for attempt in range(1, 4):
-                try:
-                    if create:
-                        await self.datastore_create(
-                            resource_id=resource_id,
-                            fields=fields,
-                            records=records_batch,
-                        )
-                    else:
-                        await self.datastore_upsert(
-                            resource_id=resource_id,
-                            records=records_batch,
-                            method="insert",
-                        )
-                    return
-                except Exception as e:
-                    last_err = e
-                    if attempt < 3:
-                        wait = 5 * attempt  # 5s, 10s
-                        logger.warning(
-                            "Datastore batch %d attempt %d/3 failed (%s) — retrying in %ds",
-                            num, attempt, e, wait,
-                        )
-                        await asyncio.sleep(wait)
-            raise RuntimeError(
-                f"Datastore batch {num} failed after 3 attempts: {last_err}"
+        # Two-slot buffer: we hold one "pending" batch and only flush it once
+        # we've read the next row (or hit EOF). That way we always know
+        # whether the batch we're flushing is the LAST one — which lets us
+        # set calculate_record_count=True only on that call, matching CKAN's
+        # recommended best practice.
+        pending: list[dict] | None = None
+
+        async def _flush(records_batch: list[dict], create: bool, is_last: bool):
+            nonlocal total_pushed, batch_num
+            if not records_batch:
+                return
+            batch_num += 1
+            await self._push_batch_with_retry(
+                resource_id=resource_id,
+                fields=fields,
+                records_batch=records_batch,
+                create=create,
+                batch_num=batch_num,
+                is_last=is_last,
             )
+            total_pushed += len(records_batch)
+            logger.info(
+                "Datastore batch %d (%d rows, cumulative %d)%s → %s",
+                batch_num, len(records_batch), total_pushed,
+                " [final, record count refreshed]" if is_last else "",
+                resource_id,
+            )
+            # Brief pause between batches — ODATA/CKAN occasionally needs
+            # a moment between sequential datastore writes.
+            if not is_last:
+                await asyncio.sleep(1)
 
         try:
             with open(csv_path, "r", encoding="utf-8-sig", newline="") as fh:
                 reader = _csv.DictReader(fh)
 
-                async def _flush(records_batch: list[dict], create: bool):
-                    nonlocal total_pushed, batch_num
-                    if not records_batch:
-                        return
-                    batch_num += 1
-                    await _push_batch_with_retry(records_batch, create, batch_num)
-                    total_pushed += len(records_batch)
-                    logger.info(
-                        "Datastore batch %d (%d rows, cumulative %d) → %s",
-                        batch_num, len(records_batch), total_pushed, resource_id,
-                    )
-                    # Brief pause between batches — ODATA/CKAN occasionally needs
-                    # a moment between sequential datastore writes.
-                    await asyncio.sleep(1)
-
+                current: list[dict] = []
                 for row in reader:
-                    batch.append(dict(row))
-                    if len(batch) >= batch_size:
-                        await _flush(batch, create=first_batch)
-                        first_batch = False
-                        batch = []
-                if batch:
-                    await _flush(batch, create=first_batch)
+                    current.append(dict(row))
+                    if len(current) >= batch_size:
+                        # If we have a pending batch, flush it now (not last —
+                        # we just read another batch-worth, so more follows).
+                        if pending is not None:
+                            await _flush(pending, create=(batch_num == 0), is_last=False)
+                        pending = current
+                        current = []
+
+                # Handle tail: flush pending (if any) then current.
+                # Whichever is last gets is_last=True.
+                if current:
+                    if pending is not None:
+                        await _flush(pending, create=(batch_num == 0), is_last=False)
+                    await _flush(current, create=(batch_num == 0), is_last=True)
+                elif pending is not None:
+                    await _flush(pending, create=(batch_num == 0), is_last=True)
 
             logger.info(
                 "Datastore stream complete: resource=%s, total_rows=%d, csv=%s",
@@ -414,7 +490,11 @@ class ODataClient:
         to populate the queryable table. Safe to call in a background task
         — the caller doesn't need to await the result if they already have
         the resource_id.
+
+        Shares the _push_batch_with_retry helper so force=True and retries
+        apply consistently across all three datastore-push code paths.
         """
+        import asyncio
         from app.services.csv_parser import batch_records
 
         batches = batch_records(records)
@@ -422,26 +502,27 @@ class ODataClient:
             logger.info("Datastore push for %s: no records", resource_id)
             return
 
+        total_batches = len(batches)
         logger.info(
             "Background datastore push: %d records → %s in %d batch(es)",
-            len(records), resource_id, len(batches),
+            len(records), resource_id, total_batches,
         )
         try:
-            await self.datastore_create(
-                resource_id=resource_id,
-                fields=fields,
-                records=batches[0],
-            )
-            for i, batch in enumerate(batches[1:], start=2):
+            for i, batch in enumerate(batches, start=1):
                 logger.info(
                     "Datastore batch %d/%d (%d records) → %s",
-                    i, len(batches), len(batch), resource_id,
+                    i, total_batches, len(batch), resource_id,
                 )
-                await self.datastore_upsert(
+                await self._push_batch_with_retry(
                     resource_id=resource_id,
-                    records=batch,
-                    method="insert",
+                    fields=fields,
+                    records_batch=batch,
+                    create=(i == 1),
+                    batch_num=i,
+                    is_last=(i == total_batches),
                 )
+                if i < total_batches:
+                    await asyncio.sleep(1)
             logger.info(
                 "Background datastore push complete: %s (%d records)",
                 resource_id, len(records),

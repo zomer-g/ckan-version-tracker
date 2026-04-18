@@ -614,11 +614,13 @@ async def upload_csv(
 
     # ---- Step 2: Stream rows from disk into datastore in the background ----
     # The background task also deletes the temp CSV when done so we don't
-    # leak temp files across requests.
+    # leak temp files across requests. Batch size is taken from the
+    # function's default (2500) — do NOT pass 5000 here, that override is
+    # exactly what used to cap the datastore at one batch worth of rows.
     if fields:
         background_tasks.add_task(
             odata_client.push_records_to_datastore_from_file,
-            resource_id, fields, csv_path, True, 5000,
+            resource_id, fields, csv_path, True,
         )
         datastore_status = "queued"
     else:
