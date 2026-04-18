@@ -394,6 +394,16 @@ async def untrack_dataset(
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Remove a tracked dataset AND its ODATA mirror package.
+
+    Order:
+      1. Call package_delete (+ dataset_purge) on ODATA if we have a mirror.
+         Best-effort — ODATA errors are logged but don't block the local row
+         deletion; that way a user can always clean up broken state by
+         deleting on this side even if ODATA is down.
+      2. Remove scrape jobs from the APScheduler so no stale poll runs.
+      3. Delete the TrackedDataset row (cascades to VersionIndex via FK).
+    """
     uid = parse_uuid(dataset_id, "dataset_id")
     query = select(TrackedDataset).where(TrackedDataset.id == uid)
     result = await db.execute(query)
@@ -401,8 +411,28 @@ async def untrack_dataset(
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    if ds.odata_dataset_id:
+        try:
+            await odata_client.package_delete(ds.odata_dataset_id, purge=True)
+            logger.info("Deleted ODATA package %s for tracked dataset %s",
+                        ds.odata_dataset_id, uid)
+        except Exception as e:
+            logger.warning(
+                "ODATA package_delete failed for %s (tracked %s): %s — "
+                "continuing with local delete anyway",
+                ds.odata_dataset_id, uid, e,
+            )
+
+    # Remove any running poll job so we don't keep polling a deleted dataset
+    try:
+        from app.worker.scheduler import remove_poll_job
+        remove_poll_job(str(uid))
+    except Exception as e:
+        logger.warning("remove_poll_job(%s) failed: %s", uid, e)
+
     await db.delete(ds)
     await db.commit()
+    logger.info("Tracked dataset %s deleted by %s", uid, user.email)
 
 
 @router.post("/{dataset_id}/poll")

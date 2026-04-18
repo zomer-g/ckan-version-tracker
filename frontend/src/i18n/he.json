@@ -73,7 +73,10 @@
     "active": "פעיל",
     "paused": "מושהה",
     "pending": "ממתין לאישור",
-    "rejected": "נדחה"
+    "rejected": "נדחה",
+    "delete_dataset": "מחק מאגר",
+    "delete_confirm": "למחוק את המאגר \"{{title}}\" לצמיתות? הפעולה תמחק את המאגר גם מ-ODATA ואינה ניתנת לביטול.",
+    "delete_failed": "מחיקת המאגר נכשלה"
   },
   "admin": {
     "title": "בקשות ממתינות",
@@ -97,7 +100,11 @@
     "select_hint": "בחר שתי גרסאות להשוואה",
     "view_on_odata": "צפה ב-ODATA",
     "large_dataset": "מאגר גדול",
-    "rows": "שורות"
+    "rows": "שורות",
+    "delete_version": "מחק גרסה",
+    "deleting": "מוחק...",
+    "delete_confirm": "למחוק את {{label}} לצמיתות? הפעולה תסיר את הקבצים המקושרים מ-ODATA ואינה ניתנת לביטול.",
+    "delete_failed": "מחיקת הגרסה נכשלה"
   },
   "diff": {
     "title": "השוואת גרסאות",

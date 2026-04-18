@@ -73,7 +73,10 @@
     "active": "Active",
     "paused": "Paused",
     "pending": "Pending approval",
-    "rejected": "Rejected"
+    "rejected": "Rejected",
+    "delete_dataset": "Delete",
+    "delete_confirm": "Permanently delete the dataset \"{{title}}\"? This will also remove it from ODATA and cannot be undone.",
+    "delete_failed": "Failed to delete the dataset"
   },
   "admin": {
     "title": "Pending Requests",
@@ -97,7 +100,11 @@
     "select_hint": "Select two versions to compare",
     "view_on_odata": "View on ODATA",
     "large_dataset": "Large Dataset",
-    "rows": "rows"
+    "rows": "rows",
+    "delete_version": "Delete",
+    "deleting": "Deleting…",
+    "delete_confirm": "Permanently delete {{label}}? This will remove the associated files from ODATA and cannot be undone.",
+    "delete_failed": "Failed to delete the version"
   },
   "diff": {
     "title": "Compare Versions",

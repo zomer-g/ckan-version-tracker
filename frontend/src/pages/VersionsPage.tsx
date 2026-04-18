@@ -1,16 +1,18 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, Link } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { versions as versionsApi, publicApi, Version, TrackedDataset } from "../api/client";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
 export default function VersionsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { datasetId } = useParams<{ datasetId: string }>();
   const [versionsList, setVersionsList] = useState<Version[]>([]);
   const [dataset, setDataset] = useState<TrackedDataset | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -26,12 +28,49 @@ export default function VersionsPage() {
       .finally(() => setLoading(false));
   }, [datasetId]);
 
+  async function handleDeleteVersion(v: Version) {
+    const label = `${t("versions.version")} ${v.version_number}`;
+    if (!window.confirm(t("versions.delete_confirm", { label }))) return;
+    setDeleting(v.id);
+    try {
+      await versionsApi.delete(v.id);
+      setVersionsList((prev) => prev.filter((x) => x.id !== v.id));
+    } catch (e: any) {
+      alert(t("versions.delete_failed") + ": " + (e?.message || "unknown"));
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  async function handleDeleteDataset() {
+    if (!dataset) return;
+    if (!window.confirm(t("tracked.delete_confirm", { title: dataset.title }))) return;
+    try {
+      const { datasets } = await import("../api/client");
+      await datasets.untrack(dataset.id);
+      navigate("/");
+    } catch (e: any) {
+      alert(t("tracked.delete_failed") + ": " + (e?.message || "unknown"));
+    }
+  }
+
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
   return (
     <div>
       <div className="page-header flex-between">
-        <h1>{t("versions.title")}</h1>
+        <div>
+          <h1 style={{ margin: 0 }}>
+            {dataset?.title || t("versions.title")}
+          </h1>
+          {dataset && (
+            <div className="text-sm text-muted" style={{ marginTop: "0.25rem" }}>
+              {t("versions.title")}
+              {" · "}
+              {versionsList.length} {t("home.versions_count")}
+            </div>
+          )}
+        </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
           {dataset?.odata_dataset_id && (
             <a
@@ -63,6 +102,23 @@ export default function VersionsPage() {
               {dataset.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
             </a>
           )}
+          <button
+            type="button"
+            onClick={handleDeleteDataset}
+            className="btn-danger"
+            style={{
+              fontSize: "0.8rem",
+              padding: "0.3rem 0.7rem",
+              background: "none",
+              border: "1px solid var(--danger, #dc2626)",
+              color: "var(--danger, #dc2626)",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+            title={t("tracked.delete_dataset")}
+          >
+            {t("tracked.delete_dataset")}
+          </button>
           <Link
             to="/"
             style={{
@@ -98,9 +154,31 @@ export default function VersionsPage() {
                       {t("versions.detected")}: {new Date(v.detected_at).toLocaleString()}
                     </span>
                   </div>
-                  <span className="text-sm text-muted">
-                    {v.metadata_modified?.slice(0, 19)}
-                  </span>
+                  <div className="flex" style={{ alignItems: "center", gap: "0.75rem" }}>
+                    <span className="text-sm text-muted">
+                      {v.metadata_modified?.slice(0, 19)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteVersion(v)}
+                      disabled={deleting === v.id}
+                      style={{
+                        fontSize: "0.75rem",
+                        padding: "0.2rem 0.55rem",
+                        background: "none",
+                        border: "1px solid var(--danger, #dc2626)",
+                        color: "var(--danger, #dc2626)",
+                        borderRadius: 4,
+                        cursor: deleting === v.id ? "not-allowed" : "pointer",
+                        opacity: deleting === v.id ? 0.6 : 1,
+                      }}
+                      title={t("versions.delete_version")}
+                    >
+                      {deleting === v.id
+                        ? t("versions.deleting")
+                        : t("versions.delete_version")}
+                    </button>
+                  </div>
                 </div>
 
                 {summary && summary.type === "large_dataset" ? (

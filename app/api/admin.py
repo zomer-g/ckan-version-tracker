@@ -128,7 +128,19 @@ async def approve_request(
                 {"key": "source_url", "value": f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"},
                 {"key": "auto_managed", "value": "true"},
             ]
-        notes = odata_client.NOTES_SCRAPER if ds.source_type == "scraper" else None
+        # Build notes with explicit links back to the source page on gov.il /
+        # data.gov.il AND to this dataset's version-history view on over.org.il.
+        # Users reading the ODATA page should be able to jump both ways.
+        source_url_for_notes = (
+            ds.source_url if ds.source_type == "scraper"
+            else f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"
+        )
+        tracker_url = f"{settings.app_base_url.rstrip('/')}/versions/{ds.id}"
+        notes = odata_client.ODataClient.build_notes(
+            source_type=ds.source_type,
+            source_url=source_url_for_notes,
+            tracker_url=tracker_url,
+        )
         try:
             mirror = await odata_client.create_dataset(
                 name=mirror_name,

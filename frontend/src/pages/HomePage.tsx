@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, TrackedDataset, GovIlValidation } from "../api/client";
+import { ckan, publicApi, govil, datasets as datasetsApi, TrackedDataset, GovIlValidation } from "../api/client";
 import RequestForm from "../components/RequestForm";
 
 const ODATA_BASE = "https://www.odata.org.il";
@@ -462,6 +462,32 @@ export default function HomePage() {
                         {ds.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
                       </a>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm(t("tracked.delete_confirm", { title: ds.title }))) return;
+                        try {
+                          await datasetsApi.untrack(ds.id);
+                          setTrackedDatasets((prev) => prev.filter((x) => x.id !== ds.id));
+                        } catch (e: any) {
+                          alert(t("tracked.delete_failed") + ": " + (e?.message || "unknown"));
+                        }
+                      }}
+                      style={{
+                        marginInlineStart: "auto",
+                        fontSize: "0.75rem",
+                        padding: "0.2rem 0.55rem",
+                        background: "none",
+                        border: "1px solid var(--danger, #dc2626)",
+                        color: "var(--danger, #dc2626)",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                      }}
+                      title={t("tracked.delete_dataset")}
+                    >
+                      {t("tracked.delete_dataset")}
+                    </button>
                   </div>
                 </article>
               ))}

@@ -305,6 +305,26 @@ async def push_version(
     ds.last_modified = body.metadata_modified
     await db.commit()
 
+    # Refresh the ODATA package description so it carries current links back
+    # to the source and to this dataset's over.org.il view. Best-effort — a
+    # failure here shouldn't break version creation, it only affects the
+    # description text visible on the ODATA dataset page.
+    if ds.odata_dataset_id:
+        try:
+            source_url_for_notes = (
+                ds.source_url if ds.source_type == "scraper"
+                else f"{settings.data_gov_il_url}/dataset/{ds.ckan_name}"
+            )
+            tracker_url = f"{settings.app_base_url.rstrip('/')}/versions/{ds.id}"
+            notes = odata_client.ODataClient.build_notes(
+                source_type=ds.source_type,
+                source_url=source_url_for_notes,
+                tracker_url=tracker_url,
+            )
+            await odata_client.package_patch(ds.odata_dataset_id, notes=notes)
+        except Exception as e:
+            logger.warning("Failed to refresh ODATA notes for %s: %s", ds.id, e)
+
     # Mark any running task as completed
     task_result = await db.execute(
         select(ScrapeTask).where(

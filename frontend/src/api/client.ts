@@ -120,11 +120,15 @@ export interface Version {
     sample_rows?: number;
   } | null;
   resource_mappings: Record<string, any> | null;
+  dataset_title?: string | null;
+  dataset_source_type?: string | null;
 }
 
 export const versions = {
   list: (datasetId: string) => request<Version[]>(`/datasets/${datasetId}/versions`),
   get: (versionId: string) => request<Version>(`/versions/${versionId}`),
+  delete: (versionId: string) =>
+    request<void>(`/versions/${versionId}`, { method: "DELETE" }),
   diff: (fromId: string, toId: string) =>
     request<{
       from_version: string;

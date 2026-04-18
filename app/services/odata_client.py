@@ -64,6 +64,51 @@ class ODataClient:
         "[Versions for the People](https://over.org.il)"
     )
 
+    @staticmethod
+    def build_notes(source_type: str, source_url: str | None, tracker_url: str) -> str:
+        """Build the ODATA dataset `notes` (description) field with explicit
+        links to:
+          - the source page on data.gov.il / gov.il
+          - the version-history view on over.org.il for THIS tracked dataset
+
+        Both links are Markdown so the CKAN UI renders them as clickable.
+        Falls back to a static notes template if source_url is missing.
+        """
+        if source_type == "scraper":
+            source_label_he = "עמוד המקור באתר gov.il"
+            source_label_en = "Source page on gov.il"
+            intro_he = "גירוד אוטומטי של עמוד מאתר gov.il"
+            intro_en = "Automated scraping of a gov.il page"
+        else:
+            source_label_he = "עמוד המקור ב-data.gov.il"
+            source_label_en = "Source page on data.gov.il"
+            intro_he = "שיקוף היסטוריית גרסאות של מאגר מידע מ-data.gov.il"
+            intro_en = "Dataset version history mirror from data.gov.il"
+
+        source_line_he = (
+            f"[{source_label_he}]({source_url})" if source_url
+            else source_label_he
+        )
+        source_line_en = (
+            f"[{source_label_en}]({source_url})" if source_url
+            else source_label_en
+        )
+        tracker_line_he = f"[היסטוריית גרסאות ב-over.org.il]({tracker_url})"
+        tracker_line_en = f"[Version history on over.org.il]({tracker_url})"
+
+        return (
+            f"{intro_he}, מנוהל על ידי "
+            f"[גרסאות לעם](https://over.org.il) — "
+            f"[קוד מקור](https://github.com/zomer-g/ckan-version-tracker)\n\n"
+            f"🔗 {source_line_he}\n\n"
+            f"📜 {tracker_line_he}\n\n"
+            f"---\n\n"
+            f"{intro_en}, managed by "
+            f"[Versions for the People](https://over.org.il)\n\n"
+            f"🔗 {source_line_en}\n\n"
+            f"📜 {tracker_line_en}"
+        )
+
     async def create_dataset(self, name: str, title: str, owner_org: str | None = None,
                              extras: list | None = None, notes: str | None = None) -> dict:
         """Create a mirror dataset on odata.org.il."""
@@ -85,6 +130,35 @@ class ODataClient:
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})
+
+    async def package_delete(self, dataset_id: str, purge: bool = True) -> dict:
+        """Delete a dataset on odata.org.il.
+
+        CKAN's `package_delete` performs a soft delete by default (flips
+        state='deleted' but rows stay in the DB). `purge=True` issues a
+        follow-up `dataset_purge` for a hard delete — matches user expectation
+        that "delete" actually removes the item from ODATA.
+        """
+        result = await self._post("package_delete", {"id": dataset_id})
+        if purge:
+            try:
+                await self._post("dataset_purge", {"id": dataset_id})
+            except Exception as e:
+                logger.warning(
+                    "package_delete succeeded for %s but dataset_purge failed: %s"
+                    " — the package is soft-deleted and will hide from the UI",
+                    dataset_id, e,
+                )
+        return result
+
+    async def resource_delete(self, resource_id: str) -> dict:
+        """Delete a resource from its parent dataset. Also wipes any datastore
+        table that was attached to it (CKAN handles that cascade internally
+        when force=True)."""
+        return await self._post("resource_delete", {
+            "id": resource_id,
+            "force": True,
+        })
 
     # ── Resource management (file upload) ────────────────────────────────
 

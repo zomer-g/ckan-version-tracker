@@ -1,16 +1,19 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid
+from app.auth.dependencies import get_admin_user
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
+from app.models.user import User
 from app.models.version_index import VersionIndex
 from app.services.diff_service import compute_metadata_diff
+from app.services.odata_client import odata_client
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -26,8 +29,43 @@ class VersionResponse(BaseModel):
     odata_metadata_resource_id: str | None = None
     change_summary: dict | None
     resource_mappings: dict | None
+    dataset_title: str | None = None
+    dataset_source_type: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+def _extract_resource_ids(mappings: dict | None) -> list[str]:
+    """Pull every ODATA resource_id out of a version's resource_mappings.
+
+    `resource_mappings` mixes real resource_ids (string UUIDs, keyed by
+    user-visible resource name) with internal bookkeeping keys like
+    `_hashes` (dict), `_resource_ids` (list), `_zip` (string), and
+    `_zip_parts` (list of strings). This helper returns only the actual
+    resource_ids, deduplicated, ready for resource_delete.
+    """
+    if not mappings:
+        return []
+    ids: set[str] = set()
+    for key, value in mappings.items():
+        # Skip purely internal state dicts
+        if key == "_hashes":
+            continue
+        if key == "_resource_ids" and isinstance(value, list):
+            for v in value:
+                if isinstance(v, str) and len(v) >= 30:
+                    ids.add(v)
+            continue
+        if key == "_zip_parts" and isinstance(value, list):
+            for v in value:
+                if isinstance(v, str) and len(v) >= 30:
+                    ids.add(v)
+            continue
+        # Everything else: strings that look like UUIDs get treated as
+        # resource_ids (covers named resources AND `_zip`).
+        if isinstance(value, str) and len(value) >= 30:
+            ids.add(value)
+    return list(ids)
 
 
 @router.get("/datasets/{dataset_id}/versions", response_model=list[VersionResponse])
@@ -39,7 +77,8 @@ async def list_versions(
     ds_result = await db.execute(
         select(TrackedDataset).where(TrackedDataset.id == uid)
     )
-    if not ds_result.scalar_one_or_none():
+    ds = ds_result.scalar_one_or_none()
+    if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     result = await db.execute(
@@ -57,6 +96,8 @@ async def list_versions(
             odata_metadata_resource_id=v.odata_metadata_resource_id,
             change_summary=v.change_summary,
             resource_mappings=v.resource_mappings,
+            dataset_title=ds.title,
+            dataset_source_type=ds.source_type,
         )
         for v in versions
     ]
@@ -78,7 +119,8 @@ async def get_version(
     ds_result = await db.execute(
         select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
     )
-    if not ds_result.scalar_one_or_none():
+    ds = ds_result.scalar_one_or_none()
+    if not ds:
         raise HTTPException(status_code=404, detail="Version not found")
 
     return VersionResponse(
@@ -89,6 +131,54 @@ async def get_version(
         odata_metadata_resource_id=version.odata_metadata_resource_id,
         change_summary=version.change_summary,
         resource_mappings=version.resource_mappings,
+        dataset_title=ds.title,
+        dataset_source_type=ds.source_type,
+    )
+
+
+@router.delete("/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_version(
+    version_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a version from our DB AND remove its ODATA resources.
+
+    Order:
+      1. Pull the resource_ids out of the version's resource_mappings.
+      2. Call resource_delete on each — best-effort; ODATA failures are
+         logged but don't block the DB row deletion (if the resource is
+         already gone on ODATA we still want to clean up our side).
+      3. Delete the metadata snapshot resource if present.
+      4. Delete the VersionIndex row.
+    """
+    vid = parse_uuid(version_id, "version_id")
+    result = await db.execute(select(VersionIndex).where(VersionIndex.id == vid))
+    version = result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    to_delete = _extract_resource_ids(version.resource_mappings)
+    if version.odata_metadata_resource_id:
+        to_delete.append(version.odata_metadata_resource_id)
+
+    deleted, failed = 0, 0
+    for rid in to_delete:
+        try:
+            await odata_client.resource_delete(rid)
+            deleted += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("resource_delete(%s) failed during version %s cleanup: %s",
+                           rid, version_id, e)
+
+    await db.delete(version)
+    await db.commit()
+
+    logger.info(
+        "Version %s (v%d of dataset %s) deleted by %s — %d ODATA resources removed, %d failed",
+        version_id, version.version_number, version.tracked_dataset_id,
+        user.email, deleted, failed,
     )
 
 
