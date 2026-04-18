@@ -402,6 +402,7 @@ async def upload_csv(
     version_number: int = Form(...),
     resource_name: str = Form("נתוני הסורק"),
     row_count: int = Form(0),
+    compression: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Worker uploads a CSV file as multipart. Returns the odata resource_id
@@ -410,6 +411,11 @@ async def upload_csv(
     Used by workers when the records JSON would exceed the 100MB Cloudflare
     limit on the push-version POST. Skips the datastore push (so no
     interactive preview on odata.org.il), but the CSV is downloadable.
+
+    `compression="gzip"` indicates the uploaded bytes are gzip-compressed.
+    The server uploads them to odata as `.csv.gz` (CKAN itself rejects
+    plain CSVs above ~100MB, so the compressed form is what gets stored).
+    Users download the .csv.gz and decompress with any standard tool.
     """
     _verify_worker_key(request)
 
@@ -425,23 +431,33 @@ async def upload_csv(
     if not ds or not ds.odata_dataset_id:
         raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
 
-    csv_bytes = await file.read()
+    file_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
     safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
 
+    is_gzip = (compression or "").lower() == "gzip"
+    if is_gzip:
+        ext = "csv.gz"
+        fmt = "CSV.GZ"
+        size_note = f"compressed; uncompresses to ~{len(file_bytes) * 8 // 1024} KB est."
+    else:
+        ext = "csv"
+        fmt = "CSV"
+        size_note = ""
+
     try:
         csv_result = await odata_client.upload_resource(
             dataset_id=ds.odata_dataset_id,
-            file_content=csv_bytes,
-            filename=file.filename or f"v{version_number}_{safe_name}.csv",
+            file_content=file_bytes,
+            filename=file.filename or f"v{version_number}_{safe_name}.{ext}",
             name=f"{ts} v{version_number} - {safe_name}",
-            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows)",
-            resource_format="CSV",
+            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows{', ' + size_note if size_note else ''})",
+            resource_format=fmt,
         )
-        logger.info("Uploaded CSV (%d KB, %d rows) → resource %s",
-                    len(csv_bytes) // 1024, row_count, csv_result["id"])
-        return {"resource_id": csv_result["id"], "size": len(csv_bytes)}
+        logger.info("Uploaded %s (%d KB, %d rows) → resource %s",
+                    fmt, len(file_bytes) // 1024, row_count, csv_result["id"])
+        return {"resource_id": csv_result["id"], "size": len(file_bytes), "compression": compression or "none"}
     except Exception as e:
         logger.exception("Failed to upload CSV")
         raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
