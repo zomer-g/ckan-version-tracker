@@ -403,19 +403,25 @@ async def upload_csv(
     resource_name: str = Form("נתוני הסורק"),
     row_count: int = Form(0),
     compression: str | None = Form(None),
+    fields_json: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Worker uploads a CSV file as multipart. Returns the odata resource_id
     that can then be referenced in /push-version via csv_resource_ids.
 
     Used by workers when the records JSON would exceed the 100MB Cloudflare
-    limit on the push-version POST. Skips the datastore push (so no
-    interactive preview on odata.org.il), but the CSV is downloadable.
+    limit on the push-version POST.
 
     `compression="gzip"` indicates the uploaded bytes are gzip-compressed.
-    The server uploads them to odata as `.csv.gz` (CKAN itself rejects
-    plain CSVs above ~100MB, so the compressed form is what gets stored).
-    Users download the .csv.gz and decompress with any standard tool.
+    The server decompresses on receipt so the resource is stored as a plain
+    `.csv` (downloadable + Excel-friendly) rather than `.csv.gz`. We also
+    parse the CSV and push it into the datastore so the dataset page shows
+    a queryable/filterable table — same UX as small datasets that go through
+    the inline JSON push-version path.
+
+    `fields_json` is a JSON-encoded list of {id, type} dicts describing the
+    CSV columns (used for datastore schema). If absent, columns are inferred
+    from the CSV header row with type=text.
     """
     _verify_worker_key(request)
 
@@ -431,35 +437,79 @@ async def upload_csv(
     if not ds or not ds.odata_dataset_id:
         raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
 
-    file_bytes = await file.read()
+    raw_bytes = await file.read()
+    is_gzip = (compression or "").lower() == "gzip"
+
+    # ---- Decompress if needed so we can store plain CSV + push to datastore ----
+    if is_gzip:
+        try:
+            import gzip as _gzip
+            csv_bytes = _gzip.decompress(raw_bytes)
+            logger.info(
+                "Decompressed gzip CSV: %d KB → %d KB (%.1fx)",
+                len(raw_bytes) // 1024, len(csv_bytes) // 1024,
+                len(csv_bytes) / max(len(raw_bytes), 1),
+            )
+        except Exception as e:
+            logger.exception("Failed to decompress gzip CSV")
+            raise HTTPException(status_code=400, detail=f"Bad gzip data: {e}")
+    else:
+        csv_bytes = raw_bytes
+
+    # ---- Parse CSV into records for datastore push ----
+    import csv as _csv
+    import io as _io
+    try:
+        # utf-8-sig strips the BOM if the worker added one for Excel
+        text = csv_bytes.decode("utf-8-sig", errors="replace")
+        reader = _csv.DictReader(_io.StringIO(text))
+        header = reader.fieldnames or []
+        records = [dict(row) for row in reader]
+    except Exception as e:
+        logger.exception("Failed to parse uploaded CSV")
+        raise HTTPException(status_code=400, detail=f"Bad CSV data: {e}")
+
+    # Resolve fields: prefer worker-supplied, fall back to header inference
+    fields: list[dict] = []
+    if fields_json:
+        try:
+            parsed = json.loads(fields_json)
+            if isinstance(parsed, list):
+                fields = parsed
+        except Exception:
+            logger.warning("Bad fields_json — falling back to header inference")
+    if not fields:
+        fields = [{"id": col, "type": "text"} for col in header]
+
+    # Sanity: row_count form arg may have been "0" — use actual parsed count
+    actual_rows = len(records)
+
+    # ---- Push to odata: file resource + datastore table in one call ----
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
-    safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
-
-    is_gzip = (compression or "").lower() == "gzip"
-    if is_gzip:
-        ext = "csv.gz"
-        fmt = "CSV.GZ"
-        size_note = f"compressed; uncompresses to ~{len(file_bytes) * 8 // 1024} KB est."
-    else:
-        ext = "csv"
-        fmt = "CSV"
-        size_note = ""
-
     try:
-        csv_result = await odata_client.upload_resource(
+        csv_result = await odata_client.push_csv_to_datastore(
             dataset_id=ds.odata_dataset_id,
-            file_content=file_bytes,
-            filename=file.filename or f"v{version_number}_{safe_name}.{ext}",
-            name=f"{ts} v{version_number} - {safe_name}",
-            description=f"Version {version_number} ({ts}): {resource_name} ({row_count} rows{', ' + size_note if size_note else ''})",
-            resource_format=fmt,
+            version_number=version_number,
+            resource_name=resource_name,
+            fields=fields,
+            records=records,
+            resource_format="CSV",
+            timestamp=ts,
         )
-        logger.info("Uploaded %s (%d KB, %d rows) → resource %s",
-                    fmt, len(file_bytes) // 1024, row_count, csv_result["id"])
-        return {"resource_id": csv_result["id"], "size": len(file_bytes), "compression": compression or "none"}
+        logger.info(
+            "Uploaded CSV + datastore (%d KB plain, %d rows) → resource %s",
+            len(csv_bytes) // 1024, actual_rows, csv_result["id"],
+        )
+        return {
+            "resource_id": csv_result["id"],
+            "size": len(csv_bytes),
+            "rows": actual_rows,
+            "compression": compression or "none",
+            "datastore": True,
+        }
     except Exception as e:
-        logger.exception("Failed to upload CSV")
+        logger.exception("Failed to upload CSV / push datastore")
         raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
 
 
