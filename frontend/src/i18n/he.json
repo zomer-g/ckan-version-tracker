@@ -27,7 +27,10 @@
     "admin_link_scrapers": "שייך מאגרי gov.il לארגונים",
     "admin_sync_done": "סונכרן בהצלחה",
     "admin_column": "ארגון",
-    "external_website": "אתר רשמי"
+    "external_website": "אתר רשמי",
+    "children_heading": "יחידות תחת",
+    "part_of": "תחת",
+    "sub_units_count": "תת-יחידות"
   },
   "auth": {
     "login_title": "התחברות",

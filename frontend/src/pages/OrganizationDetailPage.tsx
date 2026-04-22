@@ -33,10 +33,18 @@ export default function OrganizationDetailPage() {
 
   return (
     <div className="container mt-3">
-      <div style={{ marginBottom: "0.75rem" }}>
-        <Link to="/organizations" className="text-sm text-muted" style={{ textDecoration: "none" }}>
-          ← {t("organizations.back", "חזרה לרשימה")}
+      <div style={{ marginBottom: "0.75rem", fontSize: "0.85rem" }}>
+        <Link to="/organizations" className="text-muted" style={{ textDecoration: "none" }}>
+          {t("organizations.back", "חזרה לרשימה")}
         </Link>
+        {org.parent && (
+          <>
+            {" / "}
+            <Link to={`/organizations/${org.parent.id}`} style={{ color: "var(--primary)", textDecoration: "none" }}>
+              {org.parent.title}
+            </Link>
+          </>
+        )}
       </div>
 
       <div style={{
@@ -108,6 +116,55 @@ export default function OrganizationDetailPage() {
           </div>
         </div>
       </div>
+
+      {org.children.length > 0 && (
+        <section style={{ marginBottom: "1.5rem" }}>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: "0.75rem" }}>
+            {t("organizations.children_heading", "יחידות תחת")} {org.title} ({org.children.length})
+          </h2>
+          <div className="grid grid-2">
+            {org.children.map((c) => (
+              <Link
+                key={c.id}
+                to={`/organizations/${c.id}`}
+                className="card"
+                style={{
+                  textDecoration: "none",
+                  color: "inherit",
+                  display: "flex",
+                  gap: "0.6rem",
+                  alignItems: "center",
+                }}
+              >
+                {c.gov_il_logo_url ? (
+                  <img
+                    src={c.gov_il_logo_url}
+                    alt=""
+                    style={{
+                      width: 40, height: 40, borderRadius: 6, objectFit: "contain",
+                      background: "#fff", border: "1px solid var(--border)", flexShrink: 0,
+                    }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                  />
+                ) : (
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 6,
+                    background: "var(--primary-50, #e0e7ff)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "1.1rem", color: "var(--primary)", flexShrink: 0,
+                  }}>🏛</div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>{c.title}</div>
+                  <div className="text-sm text-muted">
+                    {c.dataset_count} {t("organizations.datasets_count", "מאגרים במעקב")}
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: "0.75rem" }}>
         {t("organizations.datasets_heading", "מאגרים")}

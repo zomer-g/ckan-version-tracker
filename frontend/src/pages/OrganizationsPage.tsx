@@ -132,8 +132,16 @@ function OrgCard({ org, muted = false }: { org: Organization; muted?: boolean })
         <div style={{ fontWeight: 600, fontSize: "1rem", marginBottom: "0.2rem" }}>
           {org.title}
         </div>
+        {org.parent_title && (
+          <div className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
+            {t("organizations.part_of", "תחת")} {org.parent_title}
+          </div>
+        )}
         <div className="text-sm text-muted">
           {org.dataset_count} {t("organizations.datasets_count", "מאגרים במעקב")}
+          {org.children_count > 0 && (
+            <> · {org.children_count} {t("organizations.sub_units_count", "תת-יחידות")}</>
+          )}
         </div>
       </div>
     </Link>

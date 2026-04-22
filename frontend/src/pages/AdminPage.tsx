@@ -137,6 +137,17 @@ export default function AdminPage() {
           if (!urlName || !title) return null;
           const logoName = (r.logo?.name || "").trim();
           const logoUrl = logoName ? `${LOGO_BASE}/${urlName}/he/${logoName}` : null;
+          // Flatten unitsList[].unitsSubList[] into a single array of sub-units
+          const units: Array<{ url_name: string; title: string }> = [];
+          const groups = Array.isArray(r.unitsList) ? r.unitsList : [];
+          for (const g of groups) {
+            const sub = Array.isArray(g?.unitsSubList) ? g.unitsSubList : [];
+            for (const u of sub) {
+              const ut = (u?.title || "").trim();
+              const un = (u?.urlName || "").trim();
+              if (ut && un) units.push({ title: ut, url_name: un });
+            }
+          }
           return {
             url_name: urlName,
             title,
@@ -144,6 +155,7 @@ export default function AdminPage() {
             external_website: r.externalWebsite || null,
             org_type: r.orgType ?? null,
             offices: Array.isArray(r.offices) ? r.offices.filter((x: any) => typeof x === "string") : [],
+            units,
           };
         })
         .filter((o): o is NonNullable<typeof o> => o !== null);
@@ -152,7 +164,10 @@ export default function AdminPage() {
         throw new Error("gov.il החזיר רשימה ריקה");
       }
       const res = await adminApi.syncOrganizationsGovIl(offices);
-      setSyncToast(`gov.il: נוספו ${res.created} ארגונים חדשים, חוברו ${res.matched} לארגונים קיימים`);
+      setSyncToast(
+        `gov.il: משרדים — נוספו ${res.created}, חוברו ${res.matched}. ` +
+        `תת-יחידות — נוספו ${res.children_created}, שויכו ${res.children_matched}.`
+      );
       await loadOrgs();
       setTimeout(() => setSyncToast(null), 6000);
     } catch (e: any) {

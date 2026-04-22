@@ -32,6 +32,9 @@ class OrganizationResponse(BaseModel):
     gov_il_url_name: str | None = None
     gov_il_logo_url: str | None = None
     external_website: str | None = None
+    parent_id: str | None = None
+    parent_title: str | None = None
+    children_count: int = 0
     dataset_count: int = 0
 
 
@@ -42,6 +45,20 @@ class DatasetMini(BaseModel):
     source_type: str
     version_count: int
     last_polled_at: str | None
+
+
+class OrganizationChild(BaseModel):
+    id: str
+    name: str
+    title: str
+    gov_il_logo_url: str | None = None
+    dataset_count: int = 0
+
+
+class OrganizationParent(BaseModel):
+    id: str
+    name: str
+    title: str
 
 
 class OrganizationDetailResponse(BaseModel):
@@ -59,6 +76,8 @@ class OrganizationDetailResponse(BaseModel):
     gov_il_logo_url: str | None = None
     external_website: str | None = None
     dataset_count: int
+    parent: OrganizationParent | None = None
+    children: list[OrganizationChild] = []
     datasets: list[DatasetMini]
 
 
@@ -77,11 +96,24 @@ async def list_organizations(
         .group_by(TrackedDataset.organization_id)
         .subquery()
     )
+    # Children count per parent
+    children_subq = (
+        select(
+            Organization.parent_id,
+            func.count(Organization.id).label("cnt"),
+        )
+        .where(Organization.parent_id.is_not(None))
+        .group_by(Organization.parent_id)
+        .subquery()
+    )
     result = await db.execute(
-        select(Organization, count_subq.c.cnt)
+        select(Organization, count_subq.c.cnt, children_subq.c.cnt)
         .outerjoin(count_subq, Organization.id == count_subq.c.organization_id)
+        .outerjoin(children_subq, Organization.id == children_subq.c.parent_id)
         .order_by(Organization.title.asc())
     )
+    rows = result.all()
+    parent_titles = {o.id: o.title for o, _, _ in rows}
     return [
         OrganizationResponse(
             id=str(org.id),
@@ -93,9 +125,12 @@ async def list_organizations(
             gov_il_url_name=org.gov_il_url_name,
             gov_il_logo_url=org.gov_il_logo_url,
             external_website=org.external_website,
-            dataset_count=cnt or 0,
+            parent_id=str(org.parent_id) if org.parent_id else None,
+            parent_title=parent_titles.get(org.parent_id) if org.parent_id else None,
+            children_count=child_cnt or 0,
+            dataset_count=ds_cnt or 0,
         )
-        for org, cnt in result.all()
+        for org, ds_cnt, child_cnt in rows
     ]
 
 
@@ -143,6 +178,42 @@ async def get_organization(
                 data_gov_il_slug = ds.organization
                 break
 
+    # Parent
+    parent_obj = None
+    if org.parent_id:
+        parent_row = (await db.execute(
+            select(Organization).where(Organization.id == org.parent_id)
+        )).scalar_one_or_none()
+        if parent_row:
+            parent_obj = OrganizationParent(
+                id=str(parent_row.id),
+                name=parent_row.name,
+                title=parent_row.title,
+            )
+
+    # Children (one level deep) with their own dataset counts
+    children_result = await db.execute(
+        select(Organization, func.count(TrackedDataset.id))
+        .outerjoin(
+            TrackedDataset,
+            (TrackedDataset.organization_id == Organization.id) &
+            (TrackedDataset.status.in_(["active", "pending"])),
+        )
+        .where(Organization.parent_id == org.id)
+        .group_by(Organization.id)
+        .order_by(Organization.title.asc())
+    )
+    children = [
+        OrganizationChild(
+            id=str(c.id),
+            name=c.name,
+            title=c.title,
+            gov_il_logo_url=c.gov_il_logo_url,
+            dataset_count=cnt or 0,
+        )
+        for c, cnt in children_result.all()
+    ]
+
     count_result = await db.execute(
         select(VersionIndex.tracked_dataset_id, func.count(VersionIndex.id))
         .group_by(VersionIndex.tracked_dataset_id)
@@ -161,6 +232,8 @@ async def get_organization(
         gov_il_logo_url=org.gov_il_logo_url,
         external_website=org.external_website,
         dataset_count=len(datasets),
+        parent=parent_obj,
+        children=children,
         datasets=[
             DatasetMini(
                 id=str(ds.id),
@@ -193,6 +266,14 @@ class SyncGovIlResponse(BaseModel):
     created: int
     matched: int
     total: int
+    children_created: int = 0
+    children_matched: int = 0
+
+
+class GovIlUnitPayload(BaseModel):
+    """A sub-unit under a parent office (from gov.il unitsList)."""
+    url_name: str  # raw urlName from gov.il — may be a full URL or a slug
+    title: str
 
 
 class GovIlOfficePayload(BaseModel):
@@ -202,6 +283,7 @@ class GovIlOfficePayload(BaseModel):
     external_website: str | None = None
     org_type: int | None = None
     offices: list[str] = []  # gov.il internal office UUIDs
+    units: list[GovIlUnitPayload] = []
 
 
 class SyncGovIlRequest(BaseModel):
@@ -372,11 +454,99 @@ async def sync_organizations_gov_il(
             by_title[_normalize_title(o.title)] = new_org
             created += 1
 
+    # Flush parents so new ones get IDs we can reference for children.
+    await db.flush()
+
+    # --- Pass 2: process sub-units (unitsList) under each parent ---
+    # Match or create each child, setting parent_id to the office above.
+    # Match logic: normalized title first, then normalized slug.
+    children_created = 0
+    children_matched = 0
+
+    def _extract_unit_slug(raw: str) -> str:
+        """Turn a unit urlName (possibly a full URL) into a gov.il path slug."""
+        import re
+        from urllib.parse import urlparse
+
+        s = (raw or "").strip()
+        if not s:
+            return ""
+        if s.startswith("http"):
+            try:
+                path = urlparse(s).path or ""
+            except Exception:
+                path = s
+            # /he/departments/<rest> or /he/Departments/<rest>
+            m = re.match(r"^/[a-z]{2}/departments?/(.+)$", path, re.IGNORECASE)
+            if m:
+                s = m.group(1)
+            else:
+                s = path.lstrip("/")
+        return s.rstrip("/").removesuffix("/govil-landing-page")
+
+    # Refresh indexes with newly-created parents
+    all_rows = (await db.execute(select(Organization))).scalars().all()
+    by_title = {_normalize_title(o.title): o for o in all_rows if o.title}
+    by_slug = {_normalize_slug(o.name): o for o in all_rows if o.name}
+    by_gov_slug = {
+        _normalize_slug(o.gov_il_url_name): o
+        for o in all_rows if o.gov_il_url_name
+    }
+
+    for parent_payload in offices:
+        parent_row = (
+            by_title.get(_normalize_title(parent_payload.title))
+            or by_slug.get(_normalize_slug(parent_payload.url_name))
+        )
+        if not parent_row:
+            continue
+        for unit in parent_payload.units:
+            if not (unit.title and unit.url_name):
+                continue
+            slug = _extract_unit_slug(unit.url_name)
+            norm_title = _normalize_title(unit.title)
+            norm_slug = _normalize_slug(slug)
+
+            existing = (
+                by_title.get(norm_title)
+                or by_gov_slug.get(norm_slug)
+                or by_slug.get(norm_slug)
+            )
+            if existing:
+                # Always update parent_id + gov.il url so we have a good
+                # link even when the child existed from data.gov.il sync.
+                existing.parent_id = parent_row.id
+                if not existing.gov_il_url_name:
+                    existing.gov_il_url_name = slug
+                children_matched += 1
+            else:
+                # New child — pick a unique `name` slug.
+                base_slug = slug or f"gov-il-unit-{len(by_slug)}"
+                name = base_slug
+                if name in by_slug:
+                    name = f"gov-il-{base_slug}"
+                if name in by_slug:
+                    name = f"gov-il-{base_slug}-{children_created + 1}"
+                new_child = Organization(
+                    name=name,
+                    title=unit.title,
+                    gov_il_url_name=slug,
+                    parent_id=parent_row.id,
+                )
+                db.add(new_child)
+                by_slug[name] = new_child
+                by_title[norm_title] = new_child
+                if slug:
+                    by_gov_slug[_normalize_slug(slug)] = new_child
+                children_created += 1
+
     await db.commit()
     return SyncGovIlResponse(
         created=created,
         matched=matched,
         total=created + matched,
+        children_created=children_created,
+        children_matched=children_matched,
     )
 
 

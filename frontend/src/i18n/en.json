@@ -27,7 +27,10 @@
     "admin_link_scrapers": "Link gov.il scrapers to orgs",
     "admin_sync_done": "Synced successfully",
     "admin_column": "Organization",
-    "external_website": "Official website"
+    "external_website": "Official website",
+    "children_heading": "Sub-units of",
+    "part_of": "Part of",
+    "sub_units_count": "sub-units"
   },
   "auth": {
     "login_title": "Sign In",

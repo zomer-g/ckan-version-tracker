@@ -268,8 +268,15 @@ export const admin = {
     external_website: string | null;
     org_type: number | null;
     offices: string[];
+    units: Array<{ url_name: string; title: string }>;
   }>) =>
-    request<{ created: number; matched: number; total: number }>(
+    request<{
+      created: number;
+      matched: number;
+      total: number;
+      children_created: number;
+      children_matched: number;
+    }>(
       "/admin/organizations/sync-gov-il",
       {
         method: "POST",
@@ -296,11 +303,22 @@ export interface Organization {
   gov_il_url_name: string | null;
   gov_il_logo_url: string | null;
   external_website: string | null;
+  parent_id: string | null;
+  parent_title: string | null;
+  children_count: number;
   dataset_count: number;
 }
 
 export interface OrganizationDetail extends Organization {
   data_gov_il_slug: string | null;
+  parent: { id: string; name: string; title: string } | null;
+  children: {
+    id: string;
+    name: string;
+    title: string;
+    gov_il_logo_url: string | null;
+    dataset_count: number;
+  }[];
   datasets: {
     id: string;
     title: string;

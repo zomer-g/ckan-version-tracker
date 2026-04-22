@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,11 @@ class Organization(Base):
     # gov.il internal office UUIDs — used to match tracked gov.il scraper
     # datasets (whose source_url has ?officeId=<uuid>) to their org.
     gov_il_office_ids: Mapped[list | None] = mapped_column(JSONB)
+    # Parent org (for sub-units under a ministry). Top-level ministries
+    # have parent_id = NULL.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
