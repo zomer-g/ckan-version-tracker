@@ -179,6 +179,7 @@ class GovIlOfficePayload(BaseModel):
     logo_url: str | None = None
     external_website: str | None = None
     org_type: int | None = None
+    offices: list[str] = []  # gov.il internal office UUIDs
 
 
 class SyncGovIlRequest(BaseModel):
@@ -326,6 +327,7 @@ async def sync_organizations_gov_il(
             existing.gov_il_logo_url = o.logo_url
             existing.external_website = o.external_website
             existing.org_type = o.org_type
+            existing.gov_il_office_ids = o.offices or None
             matched += 1
         else:
             # New row. Use gov.il urlName as the unique slug (fall back to
@@ -341,6 +343,7 @@ async def sync_organizations_gov_il(
                 gov_il_logo_url=o.logo_url,
                 external_website=o.external_website,
                 org_type=o.org_type,
+                gov_il_office_ids=o.offices or None,
             )
             db.add(new_org)
             by_slug[slug] = new_org
@@ -352,4 +355,99 @@ async def sync_organizations_gov_il(
         created=created,
         matched=matched,
         total=created + matched,
+    )
+
+
+class LinkScrapersResponse(BaseModel):
+    linked_by_office_id: int
+    linked_by_path: int
+    unlinked: int
+    total_scraper_datasets: int
+
+
+@admin_router.post("/link-scrapers", response_model=LinkScrapersResponse)
+@limiter.limit("5/minute")
+async def link_scraper_datasets_to_organizations(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Back-fill organization_id on scraper-type tracked_datasets.
+
+    Strategy (first match wins):
+      1. URL has ?officeId=<uuid> → match against gov_il_office_ids.
+      2. URL path starts with /he/departments/<slug>/ → match Organization
+         by gov_il_url_name (case-insensitive, _ and - normalized).
+
+    Requires /sync-gov-il to have been run first so gov_il_office_ids
+    and gov_il_url_name are populated.
+    """
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    orgs = (await db.execute(select(Organization))).scalars().all()
+
+    # Build lookup indexes
+    by_office_id: dict[str, Organization] = {}
+    for o in orgs:
+        for uid in (o.gov_il_office_ids or []):
+            if uid:
+                by_office_id[uid.lower()] = o
+
+    by_slug: dict[str, Organization] = {}
+    for o in orgs:
+        if o.gov_il_url_name:
+            by_slug[_normalize_slug(o.gov_il_url_name)] = o
+
+    dept_path_re = re.compile(r"^/he/departments/([^/?#]+)", re.IGNORECASE)
+
+    scrapers = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.source_type == "scraper")
+    )).scalars().all()
+
+    by_office = 0
+    by_path = 0
+    unlinked = 0
+    for ds in scrapers:
+        url = ds.source_url or ""
+        matched: Organization | None = None
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            parsed = None
+
+        # Strategy 1: ?officeId=<uuid>
+        if parsed:
+            qs = parse_qs(parsed.query)
+            office_id = (qs.get("officeId") or qs.get("officeid") or [None])[0]
+            if office_id:
+                matched = by_office_id.get(office_id.lower())
+                if matched:
+                    by_office += 1
+
+        # Strategy 2: /he/departments/<slug>/...
+        if not matched and parsed:
+            m = dept_path_re.match(parsed.path or "")
+            if m:
+                slug = m.group(1)
+                # Skip the "dynamiccollectors" path — it's not a dept slug
+                if slug.lower() not in ("dynamiccollectors", "dynamiccollector"):
+                    candidate = by_slug.get(_normalize_slug(slug))
+                    if candidate:
+                        matched = candidate
+                        by_path += 1
+
+        if matched:
+            ds.organization_id = matched.id
+            # Keep the legacy string in sync for display consistency
+            ds.organization = matched.name
+        else:
+            unlinked += 1
+
+    await db.commit()
+    return LinkScrapersResponse(
+        linked_by_office_id=by_office,
+        linked_by_path=by_path,
+        unlinked=unlinked,
+        total_scraper_datasets=len(scrapers),
     )

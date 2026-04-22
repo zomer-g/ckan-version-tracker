@@ -24,6 +24,7 @@
     "select_placeholder": "— ללא שיוך —",
     "admin_sync": "סנכרן מ-data.gov.il",
     "admin_sync_gov_il": "סנכרן מ-gov.il",
+    "admin_link_scrapers": "שייך מאגרי gov.il לארגונים",
     "admin_sync_done": "סונכרן בהצלחה",
     "admin_column": "ארגון",
     "external_website": "אתר רשמי"

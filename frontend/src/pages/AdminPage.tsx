@@ -97,6 +97,24 @@ export default function AdminPage() {
     setSyncingOrgs(false);
   };
 
+  const handleLinkScrapers = async () => {
+    setSyncingOrgs(true);
+    setSyncToast(null);
+    try {
+      const res = await adminApi.linkScraperDatasetsToOrgs();
+      setSyncToast(
+        `שויכו לפי officeId: ${res.linked_by_office_id}, לפי נתיב: ${res.linked_by_path}, ` +
+        `ללא שיוך: ${res.unlinked} (מתוך ${res.total_scraper_datasets})`
+      );
+      await loadAll();
+      setTimeout(() => setSyncToast(null), 8000);
+    } catch (e: any) {
+      setSyncToast(`שגיאה: ${e?.message || e}`);
+      setTimeout(() => setSyncToast(null), 6000);
+    }
+    setSyncingOrgs(false);
+  };
+
   const handleSyncOrgsGovIl = async () => {
     setSyncingOrgs(true);
     setSyncToast(null);
@@ -125,6 +143,7 @@ export default function AdminPage() {
             logo_url: logoUrl,
             external_website: r.externalWebsite || null,
             org_type: r.orgType ?? null,
+            offices: Array.isArray(r.offices) ? r.offices.filter((x: any) => typeof x === "string") : [],
           };
         })
         .filter((o): o is NonNullable<typeof o> => o !== null);
@@ -329,6 +348,14 @@ export default function AdminPage() {
             style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
           >
             {syncingOrgs ? "..." : t("organizations.admin_sync_gov_il")}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleLinkScrapers}
+            disabled={syncingOrgs}
+            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
+          >
+            {syncingOrgs ? "..." : t("organizations.admin_link_scrapers", "שייך מאגרי gov.il")}
           </button>
           {syncToast && (
             <span style={{

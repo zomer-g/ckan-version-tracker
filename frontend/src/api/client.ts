@@ -267,6 +267,7 @@ export const admin = {
     logo_url: string | null;
     external_website: string | null;
     org_type: number | null;
+    offices: string[];
   }>) =>
     request<{ created: number; matched: number; total: number }>(
       "/admin/organizations/sync-gov-il",
@@ -275,6 +276,13 @@ export const admin = {
         body: JSON.stringify({ offices }),
       }
     ),
+  linkScraperDatasetsToOrgs: () =>
+    request<{
+      linked_by_office_id: number;
+      linked_by_path: number;
+      unlinked: number;
+      total_scraper_datasets: number;
+    }>("/admin/organizations/link-scrapers", { method: "POST" }),
 };
 
 // Organizations

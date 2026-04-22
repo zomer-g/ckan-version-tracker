@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -23,6 +24,9 @@ class Organization(Base):
     gov_il_logo_url: Mapped[str | None] = mapped_column(String(1000))
     external_website: Mapped[str | None] = mapped_column(String(1000))
     org_type: Mapped[int | None] = mapped_column()  # gov.il orgType (1=office)
+    # gov.il internal office UUIDs — used to match tracked gov.il scraper
+    # datasets (whose source_url has ?officeId=<uuid>) to their org.
+    gov_il_office_ids: Mapped[list | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
