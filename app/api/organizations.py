@@ -28,6 +28,7 @@ class OrganizationResponse(BaseModel):
     title: str
     description: str | None = None
     image_url: str | None = None
+    data_gov_il_id: str | None = None
     gov_il_url_name: str | None = None
     gov_il_logo_url: str | None = None
     external_website: str | None = None
@@ -49,6 +50,7 @@ class OrganizationDetailResponse(BaseModel):
     title: str
     description: str | None = None
     image_url: str | None = None
+    data_gov_il_id: str | None = None
     gov_il_url_name: str | None = None
     gov_il_logo_url: str | None = None
     external_website: str | None = None
@@ -83,6 +85,7 @@ async def list_organizations(
             title=org.title,
             description=org.description,
             image_url=org.image_url,
+            data_gov_il_id=org.data_gov_il_id,
             gov_il_url_name=org.gov_il_url_name,
             gov_il_logo_url=org.gov_il_logo_url,
             external_website=org.external_website,
@@ -135,6 +138,7 @@ async def get_organization(
         title=org.title,
         description=org.description,
         image_url=org.image_url,
+        data_gov_il_id=org.data_gov_il_id,
         gov_il_url_name=org.gov_il_url_name,
         gov_il_logo_url=org.gov_il_logo_url,
         external_website=org.external_website,

@@ -292,6 +292,7 @@ export interface Organization {
   title: string;
   description: string | null;
   image_url: string | null;
+  data_gov_il_id: string | null;
   gov_il_url_name: string | null;
   gov_il_logo_url: string | null;
   external_website: string | null;
