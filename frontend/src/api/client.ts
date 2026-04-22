@@ -62,6 +62,8 @@ export interface TrackedDataset {
   ckan_name: string;
   title: string;
   organization: string | null;
+  organization_id: string | null;
+  organization_title: string | null;
   odata_dataset_id: string | null;
   poll_interval: number;
   is_active: boolean;
@@ -89,7 +91,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -198,6 +200,8 @@ export interface PendingRequest {
   ckan_name: string;
   title: string;
   organization: string | null;
+  organization_id: string | null;
+  organization_title: string | null;
   poll_interval: number;
   status: string;
   created_at: string;
@@ -241,10 +245,10 @@ export interface ScrapeQueueResponse {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string, poll_interval?: number, title?: string) =>
+  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string) =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
-      body: JSON.stringify({ poll_interval, title }),
+      body: JSON.stringify({ poll_interval, title, organization_id }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
@@ -252,4 +256,35 @@ export const admin = {
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {
       method: "DELETE",
     }),
+  syncOrganizations: () =>
+    request<{ created: number; updated: number; total: number; linked_datasets: number }>(
+      "/admin/organizations/sync",
+      { method: "POST" }
+    ),
+};
+
+// Organizations
+export interface Organization {
+  id: string;
+  name: string;
+  title: string;
+  description: string | null;
+  image_url: string | null;
+  dataset_count: number;
+}
+
+export interface OrganizationDetail extends Organization {
+  datasets: {
+    id: string;
+    title: string;
+    ckan_name: string;
+    source_type: string;
+    version_count: number;
+    last_polled_at: string | null;
+  }[];
+}
+
+export const organizations = {
+  list: () => request<Organization[]>("/organizations"),
+  get: (id: string) => request<OrganizationDetail>(`/organizations/${id}`),
 };

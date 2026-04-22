@@ -420,7 +420,16 @@ export default function HomePage() {
                   )}
 
                   <p className="text-sm text-muted mb-1">
-                    {ds.organization}
+                    {ds.organization_id ? (
+                      <Link
+                        to={`/organizations/${ds.organization_id}`}
+                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                      >
+                        {ds.organization_title || ds.organization}
+                      </Link>
+                    ) : (
+                      ds.organization
+                    )}
                     {" · "}
                     {t("tracked.poll_interval")}: {formatInterval(ds.poll_interval, t)}
                   </p>

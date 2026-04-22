@@ -3,11 +3,28 @@
   "nav": {
     "search": "חיפוש",
     "tracked": "מעקב",
+    "organizations": "ארגונים",
     "admin": "ניהול",
     "login": "התחברות",
     "logout": "התנתקות",
     "skip_to_content": "דלג לתוכן",
     "about": "אודות"
+  },
+  "organizations": {
+    "title": "ארגונים",
+    "subtitle": "רשימת הארגונים שמפרסמים מאגרי מידע ממשלתיים",
+    "search_placeholder": "חפש ארגון...",
+    "datasets_count": "מאגרים במעקב",
+    "datasets_heading": "מאגרים",
+    "no_datasets": "אין מאגרים במעקב עבור ארגון זה.",
+    "no_datasets_heading": "ארגונים ללא מאגרים במעקב",
+    "empty": "אין ארגונים. מנהל המערכת יכול לסנכרן מ-data.gov.il.",
+    "not_found": "ארגון לא נמצא",
+    "back": "חזרה לרשימה",
+    "select_placeholder": "— ללא שיוך —",
+    "admin_sync": "סנכרן ארגונים מ-data.gov.il",
+    "admin_sync_done": "סונכרן בהצלחה",
+    "admin_column": "ארגון"
   },
   "auth": {
     "login_title": "התחברות",

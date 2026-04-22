@@ -12,6 +12,7 @@ from app.api.utils import parse_uuid, sanitize_ckan_name
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
+from app.models.organization import Organization
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
@@ -26,6 +27,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 class ApproveRequest(BaseModel):
     poll_interval: int | None = None
     title: str | None = None
+    organization_id: str | None = None  # "" or null to leave as-is; UUID to assign
 
 
 class PendingRequest(BaseModel):
@@ -34,6 +36,8 @@ class PendingRequest(BaseModel):
     ckan_name: str
     title: str
     organization: str | None
+    organization_id: str | None = None
+    organization_title: str | None = None
     poll_interval: int
     status: str
     created_at: str
@@ -52,8 +56,9 @@ async def list_pending(
 ):
     """List all pending dataset tracking requests."""
     result = await db.execute(
-        select(TrackedDataset, User)
+        select(TrackedDataset, User, Organization)
         .outerjoin(User, TrackedDataset.created_by == User.id)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(TrackedDataset.status == "pending")
         .order_by(TrackedDataset.created_at.desc())
     )
@@ -65,6 +70,8 @@ async def list_pending(
             ckan_name=ds.ckan_name,
             title=ds.title,
             organization=ds.organization,
+            organization_id=str(ds.organization_id) if ds.organization_id else None,
+            organization_title=org.title if org else None,
             poll_interval=ds.poll_interval,
             status=ds.status,
             created_at=ds.created_at.isoformat(),
@@ -73,7 +80,7 @@ async def list_pending(
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
         )
-        for ds, requester in rows
+        for ds, requester, org in rows
     ]
 
 
@@ -106,6 +113,17 @@ async def approve_request(
     # so the mirror gets the new title from the start)
     if body and body.title is not None and body.title.strip():
         ds.title = body.title.strip()
+
+    # Assign organization if admin specified one
+    if body and body.organization_id:
+        org_uid = parse_uuid(body.organization_id, "organization_id")
+        org_row = (await db.execute(
+            select(Organization).where(Organization.id == org_uid)
+        )).scalar_one_or_none()
+        if not org_row:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        ds.organization_id = org_row.id
+        ds.organization = org_row.name
 
     # Update status to active
     ds.status = "active"

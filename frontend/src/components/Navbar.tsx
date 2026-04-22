@@ -22,6 +22,7 @@ export default function Navbar() {
               {t("app_name")}
             </Link>
             <Link to="/" className="nav-link">{t("nav.search")}</Link>
+            <Link to="/organizations" className="nav-link">{t("nav.organizations", "ארגונים")}</Link>
             <Link to="/about" className="nav-link">{t("nav.about")}</Link>
           </div>
           <div className="flex">

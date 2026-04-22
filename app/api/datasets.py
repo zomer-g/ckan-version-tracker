@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.utils import parse_uuid, sanitize_ckan_name, scraper_url_slug
 from app.auth.dependencies import get_admin_user, get_current_user
 from app.database import get_db
+from app.models.organization import Organization
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
@@ -35,6 +36,7 @@ class UpdateRequest(BaseModel):
     poll_interval: int | None = None
     is_active: bool | None = None
     title: str | None = None
+    organization_id: str | None = None  # "" or null to clear; UUID to assign
 
 
 class DatasetResponse(BaseModel):
@@ -43,6 +45,8 @@ class DatasetResponse(BaseModel):
     ckan_name: str
     title: str
     organization: str | None
+    organization_id: str | None = None
+    organization_title: str | None = None
     odata_dataset_id: str | None
     poll_interval: int
     is_active: bool
@@ -83,8 +87,9 @@ async def list_tracked(
     from sqlalchemy import func
 
     result = await db.execute(
-        select(TrackedDataset, UserModel)
+        select(TrackedDataset, UserModel, Organization)
         .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(TrackedDataset.status.in_(["active", "pending"]))
         .order_by(TrackedDataset.created_at.desc())
     )
@@ -98,7 +103,7 @@ async def list_tracked(
     version_counts = dict(count_result.all())
     # Build response — no external API calls here (performance critical)
     response_list = []
-    for ds, requester in rows:
+    for ds, requester, org in rows:
         response_list.append(
             DatasetResponse(
                 id=str(ds.id),
@@ -106,6 +111,8 @@ async def list_tracked(
                 ckan_name=ds.ckan_name,
                 title=ds.title,
                 organization=ds.organization,
+                organization_id=str(ds.organization_id) if ds.organization_id else None,
+                organization_title=org.title if org else None,
                 odata_dataset_id=ds.odata_dataset_id,
                 poll_interval=ds.poll_interval,
                 is_active=ds.is_active,
@@ -250,6 +257,15 @@ async def track_dataset(
 
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
 
+    # Link to local Organization row if it exists (best-effort)
+    org_id = None
+    if org_name:
+        org_row = (await db.execute(
+            select(Organization).where(Organization.name == org_name)
+        )).scalar_one_or_none()
+        if org_row:
+            org_id = org_row.id
+
     # Resolve resource name if tracking a specific resource
     resource_name = None
     if body.resource_id:
@@ -302,6 +318,7 @@ async def track_dataset(
         resource_id=body.resource_id,
         title=dataset_title,
         organization=org_name,
+        organization_id=org_id,
         odata_dataset_id=odata_dataset_id,
         poll_interval=interval,
         status=dataset_status,
@@ -354,6 +371,20 @@ async def update_tracked(
     if body.is_active is not None:
         ds.is_active = body.is_active
 
+    if body.organization_id is not None:
+        if body.organization_id == "":
+            ds.organization_id = None
+        else:
+            org_uid = parse_uuid(body.organization_id, "organization_id")
+            org_row = (await db.execute(
+                select(Organization).where(Organization.id == org_uid)
+            )).scalar_one_or_none()
+            if not org_row:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            ds.organization_id = org_row.id
+            # Also update the legacy display string so it stays in sync
+            ds.organization = org_row.name
+
     title_changed = False
     if body.title is not None and body.title.strip() and body.title.strip() != ds.title:
         ds.title = body.title.strip()
@@ -372,12 +403,23 @@ async def update_tracked(
             logger.info("Updated odata mirror title for %s", ds.id)
         except Exception as e:
             logger.warning("Failed to update odata mirror title: %s", e)
+
+    org_title = None
+    if ds.organization_id:
+        org_row = (await db.execute(
+            select(Organization).where(Organization.id == ds.organization_id)
+        )).scalar_one_or_none()
+        if org_row:
+            org_title = org_row.title
+
     return DatasetResponse(
         id=str(ds.id),
         ckan_id=ds.ckan_id,
         ckan_name=ds.ckan_name,
         title=ds.title,
         organization=ds.organization,
+        organization_id=str(ds.organization_id) if ds.organization_id else None,
+        organization_title=org_title,
         odata_dataset_id=ds.odata_dataset_id,
         poll_interval=ds.poll_interval,
         is_active=ds.is_active,
@@ -550,12 +592,22 @@ async def submit_tracking_request(
     if resource_name:
         title = f"{title} — {resource_name}"
 
+    # Link to local Organization row if it exists (best-effort)
+    org_id = None
+    if org_name:
+        org_row = (await db.execute(
+            select(Organization).where(Organization.name == org_name)
+        )).scalar_one_or_none()
+        if org_row:
+            org_id = org_row.id
+
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],
         resource_id=body.resource_id,
         title=title,
         organization=org_name,
+        organization_id=org_id,
         poll_interval=interval,
         status="pending",
         created_by=None,

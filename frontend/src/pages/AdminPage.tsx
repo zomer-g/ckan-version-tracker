@@ -5,9 +5,11 @@ import {
   admin as adminApi,
   datasets as datasetsApi,
   publicApi,
+  organizations as orgsApi,
   PendingRequest,
   TrackedDataset,
   ScrapeQueueResponse,
+  Organization,
 } from "../api/client";
 
 function formatRelative(iso: string | null): string {
@@ -56,13 +58,65 @@ export default function AdminPage() {
   const [savingTitle, setSavingTitle] = useState(false);
   // Scrape queue state
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
+  // Organizations
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
+  const [syncingOrgs, setSyncingOrgs] = useState(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
 
   useEffect(() => {
     loadAll();
+    loadOrgs();
     loadQueue();
     const id = setInterval(loadQueue, 5000);
     return () => clearInterval(id);
   }, []);
+
+  const loadOrgs = async () => {
+    try {
+      const list = await orgsApi.list();
+      setOrgs(list);
+    } catch (e) {
+      console.error("Failed to load organizations", e);
+    }
+  };
+
+  const handleSyncOrgs = async () => {
+    setSyncingOrgs(true);
+    setSyncToast(null);
+    try {
+      const res = await adminApi.syncOrganizations();
+      setSyncToast(`נוספו ${res.created}, עודכנו ${res.updated}, שויכו ${res.linked_datasets} מאגרים`);
+      await loadOrgs();
+      await loadAll();
+      setTimeout(() => setSyncToast(null), 6000);
+    } catch (e: any) {
+      setSyncToast(`שגיאה: ${e?.message || e}`);
+      setTimeout(() => setSyncToast(null), 6000);
+    }
+    setSyncingOrgs(false);
+  };
+
+  const handleChangeOrg = async (datasetId: string, newOrgId: string) => {
+    try {
+      await datasetsApi.update(datasetId, { organization_id: newOrgId || "" });
+      const matched = orgs.find((o) => o.id === newOrgId);
+      setAllDatasets((prev) =>
+        prev.map((d) =>
+          d.id === datasetId
+            ? {
+                ...d,
+                organization_id: newOrgId || null,
+                organization_title: matched?.title || null,
+                organization: matched?.name || d.organization,
+              }
+            : d
+        )
+      );
+    } catch (e: any) {
+      alert(`שיוך ארגון נכשל: ${e?.message || e}`);
+    }
+  };
 
   const loadQueue = async () => {
     try {
@@ -96,7 +150,8 @@ export default function AdminPage() {
       // Only send title if it was actually edited (different from original)
       const req = requests.find((r) => r.id === id);
       const titleToSend = titleOverride && titleOverride !== req?.title ? titleOverride : undefined;
-      await adminApi.approve(id, intervalOverride, titleToSend);
+      const orgIdOverride = orgOverrides[id] || undefined;
+      await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride);
       await loadAll();
     } catch (e) { console.error(e); }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
@@ -210,8 +265,29 @@ export default function AdminPage() {
   return (
     <div>
       {/* Section 0: Scrape Queue */}
-      <div className="page-header">
-        <h1>{t("admin.title")}</h1>
+      <div className="page-header flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
+        <h1 style={{ margin: 0 }}>{t("admin.title")}</h1>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            className="btn-secondary"
+            onClick={handleSyncOrgs}
+            disabled={syncingOrgs}
+            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
+          >
+            {syncingOrgs ? "..." : t("organizations.admin_sync")}
+          </button>
+          {syncToast && (
+            <span style={{
+              fontSize: "0.75rem",
+              padding: "0.25rem 0.5rem",
+              borderRadius: "4px",
+              background: syncToast.startsWith("שגיאה") ? "#fee2e2" : "#dcfce7",
+              color: syncToast.startsWith("שגיאה") ? "#991b1b" : "#166534",
+            }}>
+              {syncToast}
+            </span>
+          )}
+        </div>
       </div>
 
       <section style={{
@@ -492,6 +568,21 @@ export default function AdminPage() {
                   </select>
                 </label>
               </div>
+              <div className="text-sm mb-1">
+                <label style={{ fontSize: "0.85rem" }}>
+                  {t("organizations.admin_column")}:{" "}
+                  <select
+                    value={orgOverrides[req.id] ?? req.organization_id ?? ""}
+                    onChange={(e) => setOrgOverrides((prev) => ({
+                      ...prev, [req.id]: e.target.value,
+                    }))}
+                    style={{ width: "auto", maxWidth: "100%", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                  >
+                    <option value="">{t("organizations.select_placeholder")}</option>
+                    {orgs.map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+                  </select>
+                </label>
+              </div>
               <div className="flex mt-1">
                 <button className="btn-primary" onClick={() => handleApprove(req.id)} disabled={processing.has(req.id)}>
                   {processing.has(req.id) ? "..." : t("admin.approve")}
@@ -519,7 +610,7 @@ export default function AdminPage() {
               <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
                 <th style={thStyle}>שם מאגר</th>
                 <th style={thStyle}>מקור</th>
-                <th style={thStyle}>ארגון</th>
+                <th style={thStyle}>{t("organizations.admin_column")}</th>
                 <th style={thStyle}>תדירות</th>
                 <th style={thStyle}>גרסאות</th>
                 <th style={thStyle}>בדיקה אחרונה</th>
@@ -630,7 +721,28 @@ export default function AdminPage() {
                       {ds.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
                     </span>
                   </td>
-                  <td style={tdStyle} className="text-sm text-muted">{ds.organization}</td>
+                  <td style={tdStyle}>
+                    <select
+                      value={ds.organization_id ?? ""}
+                      onChange={(e) => handleChangeOrg(ds.id, e.target.value)}
+                      style={{
+                        width: "100%",
+                        maxWidth: 220,
+                        padding: "0.2rem 0.4rem",
+                        fontSize: "0.8rem",
+                        border: "1px solid var(--border)",
+                        borderRadius: "4px",
+                      }}
+                    >
+                      <option value="">{t("organizations.select_placeholder")}</option>
+                      {orgs.map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+                    </select>
+                    {ds.organization && !ds.organization_id && (
+                      <div className="text-muted" style={{ fontSize: "0.7rem", marginTop: "0.2rem" }}>
+                        {ds.organization}
+                      </div>
+                    )}
+                  </td>
                   <td style={tdStyle}>
                     <select
                       value={ds.poll_interval}

@@ -3,11 +3,28 @@
   "nav": {
     "search": "Search",
     "tracked": "Tracked",
+    "organizations": "Organizations",
     "admin": "Admin",
     "login": "Login",
     "logout": "Logout",
     "skip_to_content": "Skip to content",
     "about": "About"
+  },
+  "organizations": {
+    "title": "Organizations",
+    "subtitle": "Government bodies that publish open datasets",
+    "search_placeholder": "Search organizations...",
+    "datasets_count": "tracked datasets",
+    "datasets_heading": "Datasets",
+    "no_datasets": "No tracked datasets for this organization.",
+    "no_datasets_heading": "Organizations with no tracked datasets",
+    "empty": "No organizations. Admins can sync from data.gov.il.",
+    "not_found": "Organization not found",
+    "back": "Back to list",
+    "select_placeholder": "— Unassigned —",
+    "admin_sync": "Sync organizations from data.gov.il",
+    "admin_sync_done": "Synced successfully",
+    "admin_column": "Organization"
   },
   "auth": {
     "login_title": "Sign In",

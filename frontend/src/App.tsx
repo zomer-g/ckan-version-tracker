@@ -10,6 +10,8 @@ import HomePage from "./pages/HomePage";
 import VersionsPage from "./pages/VersionsPage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
+import OrganizationsPage from "./pages/OrganizationsPage";
+import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -39,6 +41,8 @@ export default function App() {
             path="/versions/:datasetId"
             element={<div className="container mt-3"><VersionsPage /></div>}
           />
+          <Route path="/organizations" element={<OrganizationsPage />} />
+          <Route path="/organizations/:orgId" element={<OrganizationDetailPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route
             path="/admin"
