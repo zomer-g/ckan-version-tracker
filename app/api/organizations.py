@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
+from app.services.govil_landing import fetch_offices as fetch_govil_offices
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class OrganizationResponse(BaseModel):
     title: str
     description: str | None = None
     image_url: str | None = None
+    gov_il_url_name: str | None = None
+    gov_il_logo_url: str | None = None
+    external_website: str | None = None
     dataset_count: int = 0
 
 
@@ -46,6 +50,9 @@ class OrganizationDetailResponse(BaseModel):
     title: str
     description: str | None = None
     image_url: str | None = None
+    gov_il_url_name: str | None = None
+    gov_il_logo_url: str | None = None
+    external_website: str | None = None
     dataset_count: int
     datasets: list[DatasetMini]
 
@@ -77,6 +84,9 @@ async def list_organizations(
             title=org.title,
             description=org.description,
             image_url=org.image_url,
+            gov_il_url_name=org.gov_il_url_name,
+            gov_il_logo_url=org.gov_il_logo_url,
+            external_website=org.external_website,
             dataset_count=cnt or 0,
         )
         for org, cnt in result.all()
@@ -126,6 +136,9 @@ async def get_organization(
         title=org.title,
         description=org.description,
         image_url=org.image_url,
+        gov_il_url_name=org.gov_il_url_name,
+        gov_il_logo_url=org.gov_il_logo_url,
+        external_website=org.external_website,
         dataset_count=len(datasets),
         datasets=[
             DatasetMini(
@@ -153,6 +166,12 @@ class SyncResponse(BaseModel):
     updated: int
     total: int
     linked_datasets: int
+
+
+class SyncGovIlResponse(BaseModel):
+    created: int
+    matched: int
+    total: int
 
 
 @admin_router.post("/sync", response_model=SyncResponse)
@@ -228,4 +247,93 @@ async def sync_organizations(
         updated=updated,
         total=created + updated,
         linked_datasets=linked,
+    )
+
+
+def _normalize_title(s: str) -> str:
+    """Normalize for fuzzy matching — collapse whitespace, strip quotes/punct."""
+    if not s:
+        return ""
+    return (
+        s.strip()
+        .replace("״", "")
+        .replace('"', "")
+        .replace("׳", "")
+        .replace("'", "")
+        .replace("-", " ")
+        .replace("  ", " ")
+        .lower()
+    )
+
+
+def _normalize_slug(s: str) -> str:
+    if not s:
+        return ""
+    return s.strip().lower().replace("_", "-")
+
+
+@admin_router.post("/sync-gov-il", response_model=SyncGovIlResponse)
+@limiter.limit("5/minute")
+async def sync_organizations_gov_il(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pull ministry/office list from gov.il landing page.
+
+    Matches each gov.il entry to an existing Organization row (populated
+    via /sync from data.gov.il) by:
+      1. exact normalized title match, then
+      2. normalized slug match (_ <-> -, case-insensitive).
+    If no match: creates a new Organization. If match found: updates
+    gov.il-specific fields on the existing row.
+    """
+    try:
+        offices = await fetch_govil_offices()
+    except Exception as e:
+        logger.exception("Failed to fetch offices from gov.il")
+        raise HTTPException(status_code=502, detail=f"gov.il fetch failed: {e}")
+
+    all_rows = (await db.execute(select(Organization))).scalars().all()
+    by_title = {_normalize_title(o.title): o for o in all_rows if o.title}
+    by_slug = {_normalize_slug(o.name): o for o in all_rows if o.name}
+
+    created = 0
+    matched = 0
+    for o in offices:
+        existing = (
+            by_title.get(_normalize_title(o.title))
+            or by_slug.get(_normalize_slug(o.url_name))
+        )
+        if existing:
+            existing.gov_il_url_name = o.url_name
+            existing.gov_il_logo_url = o.logo_url
+            existing.external_website = o.external_website
+            existing.org_type = o.org_type
+            matched += 1
+        else:
+            # New row. Use gov.il urlName as the unique slug (fall back to
+            # a disambiguated form if a collision exists, though we already
+            # checked above).
+            slug = o.url_name
+            if slug in by_slug:
+                slug = f"gov-il-{slug}"
+            new_org = Organization(
+                name=slug,
+                title=o.title,
+                gov_il_url_name=o.url_name,
+                gov_il_logo_url=o.logo_url,
+                external_website=o.external_website,
+                org_type=o.org_type,
+            )
+            db.add(new_org)
+            by_slug[slug] = new_org
+            by_title[_normalize_title(o.title)] = new_org
+            created += 1
+
+    await db.commit()
+    return SyncGovIlResponse(
+        created=created,
+        matched=matched,
+        total=created + matched,
     )

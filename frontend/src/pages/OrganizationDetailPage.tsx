@@ -50,9 +50,9 @@ export default function OrganizationDetailPage() {
         boxShadow: "var(--shadow-sm)",
         border: "1px solid var(--border)",
       }}>
-        {org.image_url && (
+        {(org.image_url || org.gov_il_logo_url) && (
           <img
-            src={org.image_url}
+            src={(org.image_url || org.gov_il_logo_url) as string}
             alt=""
             style={{
               width: 80,
@@ -72,8 +72,40 @@ export default function OrganizationDetailPage() {
             {org.dataset_count} {t("organizations.datasets_count", "מאגרים במעקב")}
           </div>
           {org.description && (
-            <p className="text-sm" style={{ margin: 0, whiteSpace: "pre-wrap" }}>{org.description}</p>
+            <p className="text-sm" style={{ margin: 0, whiteSpace: "pre-wrap", marginBottom: "0.5rem" }}>{org.description}</p>
           )}
+          <div className="flex" style={{ gap: "0.75rem", fontSize: "0.85rem", flexWrap: "wrap" }}>
+            {org.gov_il_url_name && (
+              <a
+                href={`https://www.gov.il/he/departments/${org.gov_il_url_name}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--primary)", textDecoration: "none" }}
+              >
+                gov.il &#8599;
+              </a>
+            )}
+            {org.name && !org.gov_il_url_name?.startsWith("gov-il-") && (
+              <a
+                href={`https://data.gov.il/organization/${org.name}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--primary)", textDecoration: "none" }}
+              >
+                data.gov.il &#8599;
+              </a>
+            )}
+            {org.external_website && (
+              <a
+                href={org.external_website}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--text-muted)", textDecoration: "none" }}
+              >
+                {t("organizations.external_website", "אתר רשמי")} &#8599;
+              </a>
+            )}
+          </div>
         </div>
       </div>
 

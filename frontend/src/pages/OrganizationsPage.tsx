@@ -97,9 +97,9 @@ function OrgCard({ org, muted = false }: { org: Organization; muted?: boolean })
         opacity: muted ? 0.65 : 1,
       }}
     >
-      {org.image_url ? (
+      {(org.image_url || org.gov_il_logo_url) ? (
         <img
-          src={org.image_url}
+          src={(org.image_url || org.gov_il_logo_url) as string}
           alt=""
           style={{
             width: 56,

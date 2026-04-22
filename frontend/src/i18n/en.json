@@ -22,9 +22,11 @@
     "not_found": "Organization not found",
     "back": "Back to list",
     "select_placeholder": "— Unassigned —",
-    "admin_sync": "Sync organizations from data.gov.il",
+    "admin_sync": "Sync from data.gov.il",
+    "admin_sync_gov_il": "Sync from gov.il",
     "admin_sync_done": "Synced successfully",
-    "admin_column": "Organization"
+    "admin_column": "Organization",
+    "external_website": "Official website"
   },
   "auth": {
     "login_title": "Sign In",

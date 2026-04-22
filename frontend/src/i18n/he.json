@@ -22,9 +22,11 @@
     "not_found": "ארגון לא נמצא",
     "back": "חזרה לרשימה",
     "select_placeholder": "— ללא שיוך —",
-    "admin_sync": "סנכרן ארגונים מ-data.gov.il",
+    "admin_sync": "סנכרן מ-data.gov.il",
+    "admin_sync_gov_il": "סנכרן מ-gov.il",
     "admin_sync_done": "סונכרן בהצלחה",
-    "admin_column": "ארגון"
+    "admin_column": "ארגון",
+    "external_website": "אתר רשמי"
   },
   "auth": {
     "login_title": "התחברות",

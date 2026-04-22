@@ -261,6 +261,11 @@ export const admin = {
       "/admin/organizations/sync",
       { method: "POST" }
     ),
+  syncOrganizationsGovIl: () =>
+    request<{ created: number; matched: number; total: number }>(
+      "/admin/organizations/sync-gov-il",
+      { method: "POST" }
+    ),
 };
 
 // Organizations
@@ -270,6 +275,9 @@ export interface Organization {
   title: string;
   description: string | null;
   image_url: string | null;
+  gov_il_url_name: string | null;
+  gov_il_logo_url: string | null;
+  external_website: string | null;
   dataset_count: number;
 }
 

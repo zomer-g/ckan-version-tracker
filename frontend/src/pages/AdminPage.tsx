@@ -86,9 +86,24 @@ export default function AdminPage() {
     setSyncToast(null);
     try {
       const res = await adminApi.syncOrganizations();
-      setSyncToast(`נוספו ${res.created}, עודכנו ${res.updated}, שויכו ${res.linked_datasets} מאגרים`);
+      setSyncToast(`data.gov.il: נוספו ${res.created}, עודכנו ${res.updated}, שויכו ${res.linked_datasets} מאגרים`);
       await loadOrgs();
       await loadAll();
+      setTimeout(() => setSyncToast(null), 6000);
+    } catch (e: any) {
+      setSyncToast(`שגיאה: ${e?.message || e}`);
+      setTimeout(() => setSyncToast(null), 6000);
+    }
+    setSyncingOrgs(false);
+  };
+
+  const handleSyncOrgsGovIl = async () => {
+    setSyncingOrgs(true);
+    setSyncToast(null);
+    try {
+      const res = await adminApi.syncOrganizationsGovIl();
+      setSyncToast(`gov.il: נוספו ${res.created} ארגונים חדשים, חוברו ${res.matched} לארגונים קיימים`);
+      await loadOrgs();
       setTimeout(() => setSyncToast(null), 6000);
     } catch (e: any) {
       setSyncToast(`שגיאה: ${e?.message || e}`);
@@ -275,6 +290,14 @@ export default function AdminPage() {
             style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
           >
             {syncingOrgs ? "..." : t("organizations.admin_sync")}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleSyncOrgsGovIl}
+            disabled={syncingOrgs}
+            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
+          >
+            {syncingOrgs ? "..." : t("organizations.admin_sync_gov_il")}
           </button>
           {syncToast && (
             <span style={{
