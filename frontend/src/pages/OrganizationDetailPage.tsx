@@ -85,9 +85,9 @@ export default function OrganizationDetailPage() {
                 gov.il &#8599;
               </a>
             )}
-            {org.data_gov_il_id && (
+            {org.data_gov_il_slug && (
               <a
-                href={`https://data.gov.il/he/organization/${org.name}`}
+                href={`https://data.gov.il/he/organization/${org.data_gov_il_slug}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: "var(--primary)", textDecoration: "none" }}

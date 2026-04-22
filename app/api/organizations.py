@@ -51,6 +51,10 @@ class OrganizationDetailResponse(BaseModel):
     description: str | None = None
     image_url: str | None = None
     data_gov_il_id: str | None = None
+    # Slug to use for a data.gov.il URL; falls back to the legacy
+    # `organization` string on CKAN-type datasets when the org row
+    # wasn't synced from data.gov.il directly.
+    data_gov_il_slug: str | None = None
     gov_il_url_name: str | None = None
     gov_il_logo_url: str | None = None
     external_website: str | None = None
@@ -126,6 +130,19 @@ async def get_organization(
     )
     datasets = ds_result.scalars().all()
 
+    # Derive a usable data.gov.il slug even if the row wasn't matched
+    # during /sync (common when sync order was gov.il first):
+    #   1) explicit id from data.gov.il sync → use org.name
+    #   2) inferred from any tracked CKAN dataset's `organization` field
+    data_gov_il_slug: str | None = None
+    if org.data_gov_il_id:
+        data_gov_il_slug = org.name
+    else:
+        for ds in datasets:
+            if (ds.source_type or "ckan") == "ckan" and ds.organization:
+                data_gov_il_slug = ds.organization
+                break
+
     count_result = await db.execute(
         select(VersionIndex.tracked_dataset_id, func.count(VersionIndex.id))
         .group_by(VersionIndex.tracked_dataset_id)
@@ -139,6 +156,7 @@ async def get_organization(
         description=org.description,
         image_url=org.image_url,
         data_gov_il_id=org.data_gov_il_id,
+        data_gov_il_slug=data_gov_il_slug,
         gov_il_url_name=org.gov_il_url_name,
         gov_il_logo_url=org.gov_il_logo_url,
         external_website=org.external_website,

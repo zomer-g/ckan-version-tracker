@@ -300,6 +300,7 @@ export interface Organization {
 }
 
 export interface OrganizationDetail extends Organization {
+  data_gov_il_slug: string | null;
   datasets: {
     id: string;
     title: string;
