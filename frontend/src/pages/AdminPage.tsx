@@ -177,6 +177,15 @@ export default function AdminPage() {
     setSyncingOrgs(false);
   };
 
+  const handleChangeParentOrg = async (orgId: string, newParentId: string) => {
+    try {
+      const updated = await adminApi.updateOrgParent(orgId, newParentId || null);
+      setOrgs((prev) => prev.map((o) => (o.id === orgId ? updated : o)));
+    } catch (e: any) {
+      alert(`שיוך הורה נכשל: ${e?.message || e}`);
+    }
+  };
+
   const handleChangeOrg = async (datasetId: string, newOrgId: string) => {
     try {
       await datasetsApi.update(datasetId, { organization_id: newOrgId || "" });
@@ -888,6 +897,93 @@ export default function AdminPage() {
                       </button>
                     </div>
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Section 3: Organizations hierarchy */}
+      <div className="page-header mt-3">
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+          ניהול היררכיית ארגונים ({orgs.length})
+        </h2>
+      </div>
+      {orgs.length === 0 ? (
+        <div className="empty-state">אין ארגונים. סנכרן קודם מ-data.gov.il או gov.il.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
+            <thead>
+              <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
+                <th style={thStyle}>ארגון</th>
+                <th style={thStyle}>מקור</th>
+                <th style={thStyle}>הורה</th>
+                <th style={thStyle}>מאגרים</th>
+                <th style={thStyle}>תת-יחידות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...orgs]
+                .sort((a, b) => (a.parent_title || "").localeCompare(b.parent_title || "") || a.title.localeCompare(b.title))
+                .map((o) => (
+                <tr key={o.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={tdStyle}>
+                    <Link to={`/organizations/${o.id}`} style={{ fontWeight: 500 }}>
+                      {o.title}
+                    </Link>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                      {o.data_gov_il_id && (
+                        <span style={{
+                          display: "inline-block",
+                          padding: "0.1rem 0.4rem",
+                          borderRadius: "9999px",
+                          fontSize: "0.65rem",
+                          fontWeight: 600,
+                          background: "#ccfbf1",
+                          color: "#0f766e",
+                        }}>DATA.GOV.IL</span>
+                      )}
+                      {o.gov_il_url_name && (
+                        <span style={{
+                          display: "inline-block",
+                          padding: "0.1rem 0.4rem",
+                          borderRadius: "9999px",
+                          fontSize: "0.65rem",
+                          fontWeight: 600,
+                          background: "#fef3c7",
+                          color: "#92400e",
+                        }}>GOV.IL</span>
+                      )}
+                    </div>
+                  </td>
+                  <td style={tdStyle}>
+                    <select
+                      value={o.parent_id ?? ""}
+                      onChange={(e) => handleChangeParentOrg(o.id, e.target.value)}
+                      style={{
+                        width: "100%",
+                        maxWidth: 220,
+                        padding: "0.2rem 0.4rem",
+                        fontSize: "0.8rem",
+                        border: "1px solid var(--border)",
+                        borderRadius: "4px",
+                      }}
+                    >
+                      <option value="">— ללא הורה —</option>
+                      {orgs
+                        .filter((p) => p.id !== o.id)
+                        .sort((a, b) => a.title.localeCompare(b.title))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>{p.title}</option>
+                        ))}
+                    </select>
+                  </td>
+                  <td style={tdStyle} className="text-sm">{o.dataset_count}</td>
+                  <td style={tdStyle} className="text-sm">{o.children_count || 0}</td>
                 </tr>
               ))}
             </tbody>

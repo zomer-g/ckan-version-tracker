@@ -255,6 +255,95 @@ async def get_organization(
 admin_router = APIRouter(prefix="/api/admin/organizations", tags=["admin-organizations"])
 
 
+class UpdateOrgRequest(BaseModel):
+    parent_id: str | None = None  # "" or null to clear; UUID to assign
+
+
+@admin_router.patch("/{org_id}", response_model=OrganizationResponse)
+@limiter.limit("60/minute")
+async def update_organization(
+    request: Request,
+    org_id: str,
+    body: UpdateOrgRequest,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin edit — currently only parent_id, used to manually build the
+    org hierarchy for cases gov.il's unitsList doesn't cover.
+    """
+    uid = parse_uuid(org_id, "org_id")
+    org = (await db.execute(
+        select(Organization).where(Organization.id == uid)
+    )).scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    if body.parent_id is not None:
+        if body.parent_id == "":
+            org.parent_id = None
+        else:
+            pid = parse_uuid(body.parent_id, "parent_id")
+            if pid == org.id:
+                raise HTTPException(status_code=400, detail="Organization cannot be its own parent")
+            parent_row = (await db.execute(
+                select(Organization).where(Organization.id == pid)
+            )).scalar_one_or_none()
+            if not parent_row:
+                raise HTTPException(status_code=404, detail="Parent organization not found")
+            # Guard against simple cycles: don't allow setting parent to
+            # a descendant of this org.
+            descendants: set = set()
+            stack = [org.id]
+            while stack:
+                cur = stack.pop()
+                for c in (await db.execute(
+                    select(Organization.id).where(Organization.parent_id == cur)
+                )).scalars().all():
+                    if c in descendants:
+                        continue
+                    descendants.add(c)
+                    stack.append(c)
+            if pid in descendants:
+                raise HTTPException(status_code=400, detail="Parent cannot be a descendant of this organization")
+            org.parent_id = pid
+
+    await db.commit()
+    await db.refresh(org)
+
+    parent_title = None
+    if org.parent_id:
+        p = (await db.execute(
+            select(Organization).where(Organization.id == org.parent_id)
+        )).scalar_one_or_none()
+        if p:
+            parent_title = p.title
+
+    child_cnt = (await db.execute(
+        select(func.count(Organization.id)).where(Organization.parent_id == org.id)
+    )).scalar() or 0
+    ds_cnt = (await db.execute(
+        select(func.count(TrackedDataset.id))
+        .where(TrackedDataset.organization_id == org.id)
+        .where(TrackedDataset.status.in_(["active", "pending"]))
+    )).scalar() or 0
+
+    return OrganizationResponse(
+        id=str(org.id),
+        name=org.name,
+        title=org.title,
+        description=org.description,
+        image_url=org.image_url,
+        data_gov_il_id=org.data_gov_il_id,
+        gov_il_url_name=org.gov_il_url_name,
+        gov_il_logo_url=org.gov_il_logo_url,
+        external_website=org.external_website,
+        parent_id=str(org.parent_id) if org.parent_id else None,
+        parent_title=parent_title,
+        children_count=child_cnt,
+        dataset_count=ds_cnt,
+    )
+
+
 class SyncResponse(BaseModel):
     created: int
     updated: int

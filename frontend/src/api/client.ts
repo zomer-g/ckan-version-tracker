@@ -290,6 +290,11 @@ export const admin = {
       unlinked: number;
       total_scraper_datasets: number;
     }>("/admin/organizations/link-scrapers", { method: "POST" }),
+  updateOrgParent: (orgId: string, parentId: string | null) =>
+    request<Organization>(`/admin/organizations/${orgId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ parent_id: parentId ?? "" }),
+    }),
 };
 
 // Organizations
