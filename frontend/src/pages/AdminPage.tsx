@@ -101,7 +101,38 @@ export default function AdminPage() {
     setSyncingOrgs(true);
     setSyncToast(null);
     try {
-      const res = await adminApi.syncOrganizationsGovIl();
+      // gov.il's Cloudflare blocks cloud IPs but allows residential browsers,
+      // so we fetch the JSON here in the admin's browser and POST it up.
+      const resp = await fetch("https://www.gov.il/govil-landing-page-api/he", {
+        headers: { Accept: "application/json" },
+      });
+      if (!resp.ok) {
+        throw new Error(`gov.il returned ${resp.status}`);
+      }
+      const data = await resp.json();
+      const results: any[] = data?.results || [];
+      const LOGO_BASE = "https://www.gov.il/BlobFolder/office";
+      const offices = results
+        .map((r) => {
+          const urlName = (r.urlName || "").trim();
+          const title = (r.title || "").trim();
+          if (!urlName || !title) return null;
+          const logoName = (r.logo?.name || "").trim();
+          const logoUrl = logoName ? `${LOGO_BASE}/${urlName}/he/${logoName}` : null;
+          return {
+            url_name: urlName,
+            title,
+            logo_url: logoUrl,
+            external_website: r.externalWebsite || null,
+            org_type: r.orgType ?? null,
+          };
+        })
+        .filter((o): o is NonNullable<typeof o> => o !== null);
+
+      if (offices.length === 0) {
+        throw new Error("gov.il החזיר רשימה ריקה");
+      }
+      const res = await adminApi.syncOrganizationsGovIl(offices);
       setSyncToast(`gov.il: נוספו ${res.created} ארגונים חדשים, חוברו ${res.matched} לארגונים קיימים`);
       await loadOrgs();
       setTimeout(() => setSyncToast(null), 6000);

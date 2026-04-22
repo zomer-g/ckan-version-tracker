@@ -16,7 +16,6 @@ from app.models.user import User
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
-from app.services.govil_landing import fetch_offices as fetch_govil_offices
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +173,24 @@ class SyncGovIlResponse(BaseModel):
     total: int
 
 
+class GovIlOfficePayload(BaseModel):
+    url_name: str
+    title: str
+    logo_url: str | None = None
+    external_website: str | None = None
+    org_type: int | None = None
+
+
+class SyncGovIlRequest(BaseModel):
+    """Browser-side fetched payload.
+
+    gov.il sits behind a Cloudflare challenge that blocks Render's cloud
+    IPs but accepts residential browsers. The admin's browser fetches
+    the list and POSTs it here for server-side merging.
+    """
+    offices: list[GovIlOfficePayload]
+
+
 @admin_router.post("/sync", response_model=SyncResponse)
 @limiter.limit("5/minute")
 async def sync_organizations(
@@ -276,23 +293,22 @@ def _normalize_slug(s: str) -> str:
 @limiter.limit("5/minute")
 async def sync_organizations_gov_il(
     request: Request,
+    body: SyncGovIlRequest,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Pull ministry/office list from gov.il landing page.
+    """Merge gov.il ministry/office list into Organization table.
 
-    Matches each gov.il entry to an existing Organization row (populated
-    via /sync from data.gov.il) by:
+    Accepts the list from the admin's browser (gov.il blocks cloud IPs).
+    Matches each entry to an existing Organization row by:
       1. exact normalized title match, then
       2. normalized slug match (_ <-> -, case-insensitive).
     If no match: creates a new Organization. If match found: updates
     gov.il-specific fields on the existing row.
     """
-    try:
-        offices = await fetch_govil_offices()
-    except Exception as e:
-        logger.exception("Failed to fetch offices from gov.il")
-        raise HTTPException(status_code=502, detail=f"gov.il fetch failed: {e}")
+    offices = body.offices
+    if not offices:
+        raise HTTPException(status_code=400, detail="No offices provided")
 
     all_rows = (await db.execute(select(Organization))).scalars().all()
     by_title = {_normalize_title(o.title): o for o in all_rows if o.title}

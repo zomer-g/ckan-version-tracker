@@ -261,10 +261,19 @@ export const admin = {
       "/admin/organizations/sync",
       { method: "POST" }
     ),
-  syncOrganizationsGovIl: () =>
+  syncOrganizationsGovIl: (offices: Array<{
+    url_name: string;
+    title: string;
+    logo_url: string | null;
+    external_website: string | null;
+    org_type: number | null;
+  }>) =>
     request<{ created: number; matched: number; total: number }>(
       "/admin/organizations/sync-gov-il",
-      { method: "POST" }
+      {
+        method: "POST",
+        body: JSON.stringify({ offices }),
+      }
     ),
 };
 
