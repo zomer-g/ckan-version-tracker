@@ -12,6 +12,8 @@ import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
+import TagsPage from "./pages/TagsPage";
+import TagDetailPage from "./pages/TagDetailPage";
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -43,6 +45,8 @@ export default function App() {
           />
           <Route path="/organizations" element={<OrganizationsPage />} />
           <Route path="/organizations/:orgId" element={<OrganizationDetailPage />} />
+          <Route path="/tags" element={<TagsPage />} />
+          <Route path="/tags/:tagId" element={<TagDetailPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route
             path="/admin"

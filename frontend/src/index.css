@@ -574,3 +574,156 @@ textarea:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* Tags — chips shown next to datasets, plus the admin-side picker. */
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  background: var(--primary-50);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+a.tag-chip:hover {
+  background: var(--primary-100);
+  border-color: var(--primary-100);
+  opacity: 1;
+}
+
+.tag-chip-removable {
+  background: var(--primary-100);
+}
+
+.tag-chip-remove {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 0.15rem;
+  margin-inline-start: 0.1rem;
+  color: var(--primary-dark);
+  font-size: 0.95rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.tag-chip-remove:hover {
+  color: var(--danger);
+}
+
+.tag-picker {
+  position: relative;
+  min-width: 180px;
+}
+
+.tag-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.tag-picker-add {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.tag-picker-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.tag-picker-popover {
+  position: absolute;
+  z-index: 20;
+  inset-inline-start: 0;
+  top: calc(100% + 0.25rem);
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 0.4rem;
+}
+
+.tag-picker-input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.35rem;
+}
+
+.tag-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.tag-picker-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: start;
+  background: transparent;
+  border: none;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.tag-picker-option.is-highlight,
+.tag-picker-option:hover {
+  background: var(--primary-50);
+}
+
+.tag-picker-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tag-picker-create {
+  color: var(--primary);
+  font-weight: 500;
+  border-top: 1px solid var(--border);
+  margin-top: 0.2rem;
+  padding-top: 0.45rem;
+}
+
+.tag-picker-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.4rem;
+}
+
+.tag-picker-empty {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

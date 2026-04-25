@@ -23,6 +23,7 @@ export default function Navbar() {
             </Link>
             <Link to="/" className="nav-link">{t("nav.search")}</Link>
             <Link to="/organizations" className="nav-link">{t("nav.organizations", "ארגונים")}</Link>
+            <Link to="/tags" className="nav-link">{t("nav.tags", "תגיות")}</Link>
             <Link to="/about" className="nav-link">{t("nav.about")}</Link>
           </div>
           <div className="flex">

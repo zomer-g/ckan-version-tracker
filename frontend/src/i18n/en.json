@@ -4,11 +4,28 @@
     "search": "Search",
     "tracked": "Tracked",
     "organizations": "Organizations",
+    "tags": "Tags",
     "admin": "Admin",
     "login": "Login",
     "logout": "Logout",
     "skip_to_content": "Skip to content",
     "about": "About"
+  },
+  "tags": {
+    "page_title": "Tags",
+    "page_subtitle": "Datasets grouped by topic",
+    "search_placeholder": "Search tags...",
+    "datasets_count": "datasets",
+    "no_tags": "No tags have been created yet.",
+    "tag_not_found": "Tag not found",
+    "back_to_tags": "Back to all tags",
+    "picker_add": "Add tag",
+    "picker_search_or_create": "Search or type a new name...",
+    "picker_create_new": "Create new tag: \"{{name}}\"",
+    "picker_no_match": "No matching tags",
+    "delete_confirm": "Delete the tag \"{{name}}\"? Datasets remain, only the link is removed.",
+    "delete_failed": "Failed to delete tag",
+    "save_failed": "Failed to save tags"
   },
   "organizations": {
     "title": "Organizations",
