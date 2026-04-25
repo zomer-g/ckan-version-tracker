@@ -78,14 +78,20 @@ Deployed on [Render](https://render.com) with `render.yaml` blueprint. Database 
 
 ## API
 
+A stable, read-only public API lives under `/api/v1/` — see
+**[docs/API.md](docs/API.md)** for the full reference. Highlights:
+
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/auth/sso/google` | Google SSO login |
-| `GET` | `/api/datasets` | List tracked datasets |
-| `POST` | `/api/datasets` | Track a new dataset |
-| `POST` | `/api/datasets/{id}/poll` | Trigger manual poll |
-| `GET` | `/api/datasets/{id}/versions` | List version history |
-| `GET` | `/api/ckan/search?q=...` | Search data.gov.il |
+| `GET` | `/api/v1/datasets` | List datasets, filter by `organization_id`, `tag_id` / `tag` (AND-combined), `status` |
+| `GET` | `/api/v1/datasets/{id}` | One dataset by UUID |
+| `GET` | `/api/v1/datasets/{id}/versions` | Version history with source + ODATA download URLs |
+| `GET` | `/api/v1/tags` | All tags with dataset counts |
+| `GET` | `/api/v1/tags/{id}` | One tag + every dataset under it |
+| `GET` | `/api/v1/organizations` | All organizations |
+
+Internal SPA endpoints (`/api/auth`, `/api/datasets` POST/PATCH/DELETE,
+`/api/admin/...`) are not part of the public contract and may change.
 
 ## Tech Stack
 

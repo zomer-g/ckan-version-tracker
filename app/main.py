@@ -23,6 +23,7 @@ from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
 from app.api.tags import admin_router as admin_tags_router
+from app.api.v1 import router as v1_router
 from app.config import settings
 from app.rate_limit import limiter
 from app.worker.scheduler import init_scheduler, shutdown_scheduler
@@ -76,6 +77,7 @@ app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)
 app.include_router(admin_tags_router)
+app.include_router(v1_router)
 
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
