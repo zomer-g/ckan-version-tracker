@@ -40,3 +40,10 @@ class TrackedDataset(Base):
     )
 
     versions = relationship("VersionIndex", back_populates="tracked_dataset", cascade="all, delete-orphan")
+    tags = relationship(
+        "Tag",
+        secondary="dataset_tags",
+        back_populates="datasets",
+        lazy="selectin",
+        order_by="Tag.name",
+    )

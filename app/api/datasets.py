@@ -39,6 +39,13 @@ class UpdateRequest(BaseModel):
     organization_id: str | None = None  # "" or null to clear; UUID to assign
 
 
+class TagBrief(BaseModel):
+    id: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 class DatasetResponse(BaseModel):
     id: str
     ckan_id: str
@@ -61,6 +68,7 @@ class DatasetResponse(BaseModel):
     requester_notes: str = ""
     source_url: str = ""
     source_type: str = "ckan"
+    tags: list[TagBrief] = []
 
     model_config = {"from_attributes": True}
 
@@ -85,15 +93,17 @@ async def list_tracked(
     from app.models.user import User as UserModel
     from app.models.version_index import VersionIndex
     from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
 
     result = await db.execute(
         select(TrackedDataset, UserModel, Organization)
+        .options(selectinload(TrackedDataset.tags))
         .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
         .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(TrackedDataset.status.in_(["active", "pending"]))
         .order_by(TrackedDataset.created_at.desc())
     )
-    rows = result.all()
+    rows = result.unique().all()
 
     # Get version counts for all datasets in one query
     count_result = await db.execute(
@@ -126,6 +136,7 @@ async def list_tracked(
                 source_url=_build_source_url(ds),
                 source_type=ds.source_type or "ckan",
                 version_count=version_counts.get(ds.id, 0),
+                tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
         )
     return response_list
@@ -359,8 +370,14 @@ async def update_tracked(
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from sqlalchemy.orm import selectinload
+
     uid = parse_uuid(dataset_id, "dataset_id")
-    query = select(TrackedDataset).where(TrackedDataset.id == uid)
+    query = (
+        select(TrackedDataset)
+        .options(selectinload(TrackedDataset.tags))
+        .where(TrackedDataset.id == uid)
+    )
     result = await db.execute(query)
     ds = result.scalar_one_or_none()
     if not ds:
@@ -427,6 +444,9 @@ async def update_tracked(
         last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
         last_modified=ds.last_modified,
         resource_id=ds.resource_id,
+        source_url=_build_source_url(ds),
+        source_type=ds.source_type or "ckan",
+        tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )
 
 
@@ -625,9 +645,13 @@ async def get_tracked_public(
     db: AsyncSession = Depends(get_db),
 ):
     """Public endpoint -- get a single active tracked dataset."""
+    from sqlalchemy.orm import selectinload
+
     uid = parse_uuid(dataset_id, "dataset_id")
     result = await db.execute(
-        select(TrackedDataset).where(
+        select(TrackedDataset)
+        .options(selectinload(TrackedDataset.tags))
+        .where(
             TrackedDataset.id == uid,
             TrackedDataset.status == "active",
         )
@@ -650,4 +674,5 @@ async def get_tracked_public(
         resource_id=ds.resource_id,
         source_url=_build_source_url(ds),
         source_type=ds.source_type or "ckan",
+        tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )

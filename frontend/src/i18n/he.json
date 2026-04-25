@@ -4,11 +4,28 @@
     "search": "חיפוש",
     "tracked": "מעקב",
     "organizations": "ארגונים",
+    "tags": "תגיות",
     "admin": "ניהול",
     "login": "התחברות",
     "logout": "התנתקות",
     "skip_to_content": "דלג לתוכן",
     "about": "אודות"
+  },
+  "tags": {
+    "page_title": "תגיות",
+    "page_subtitle": "מאגרים מקובצים לפי תחום",
+    "search_placeholder": "חפש תגית...",
+    "datasets_count": "מאגרים",
+    "no_tags": "עדיין לא נוצרו תגיות.",
+    "tag_not_found": "תגית לא נמצאה",
+    "back_to_tags": "חזרה לכל התגיות",
+    "picker_add": "הוסף תגית",
+    "picker_search_or_create": "חפש או הקלד שם חדש...",
+    "picker_create_new": "צור תגית חדשה: \"{{name}}\"",
+    "picker_no_match": "אין תגיות תואמות",
+    "delete_confirm": "למחוק את התגית \"{{name}}\"? המאגרים יישארו, רק השיוך יוסר.",
+    "delete_failed": "מחיקת התגית נכשלה",
+    "save_failed": "שמירת תגיות נכשלה"
   },
   "organizations": {
     "title": "ארגונים",

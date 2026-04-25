@@ -2,6 +2,7 @@ import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { ckan, publicApi, govil, TrackedDataset, GovIlValidation } from "../api/client";
+import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 
 const ODATA_BASE = "https://www.odata.org.il";
@@ -433,6 +434,8 @@ export default function HomePage() {
                     {" · "}
                     {t("tracked.poll_interval")}: {formatInterval(ds.poll_interval, t)}
                   </p>
+
+                  <TagChips tags={ds.tags} />
 
                   <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
                     <Link

@@ -38,6 +38,13 @@ class OrganizationResponse(BaseModel):
     dataset_count: int = 0
 
 
+class TagBrief(BaseModel):
+    id: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 class DatasetMini(BaseModel):
     id: str
     title: str
@@ -45,6 +52,7 @@ class DatasetMini(BaseModel):
     source_type: str
     version_count: int
     last_polled_at: str | None
+    tags: list[TagBrief] = []
 
 
 class OrganizationChild(BaseModel):
@@ -157,13 +165,16 @@ async def get_organization(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
+    from sqlalchemy.orm import selectinload
+
     ds_result = await db.execute(
         select(TrackedDataset)
+        .options(selectinload(TrackedDataset.tags))
         .where(TrackedDataset.organization_id == org.id)
         .where(TrackedDataset.status.in_(["active", "pending"]))
         .order_by(TrackedDataset.created_at.desc())
     )
-    datasets = ds_result.scalars().all()
+    datasets = ds_result.unique().scalars().all()
 
     # Derive a usable data.gov.il slug even if the row wasn't matched
     # during /sync (common when sync order was gov.il first):
@@ -242,6 +253,7 @@ async def get_organization(
                 source_type=ds.source_type or "ckan",
                 version_count=version_counts.get(ds.id, 0),
                 last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+                tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
             for ds in datasets
         ],

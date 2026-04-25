@@ -6,11 +6,15 @@ import {
   datasets as datasetsApi,
   publicApi,
   organizations as orgsApi,
+  tagsApi,
   PendingRequest,
   TrackedDataset,
   ScrapeQueueResponse,
   Organization,
+  Tag,
+  TagWithCount,
 } from "../api/client";
+import TagPicker from "../components/TagPicker";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "";
@@ -63,14 +67,72 @@ export default function AdminPage() {
   const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
   const [syncingOrgs, setSyncingOrgs] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+  // Tags
+  const [availableTags, setAvailableTags] = useState<TagWithCount[]>([]);
 
   useEffect(() => {
     loadAll();
     loadOrgs();
+    loadTags();
     loadQueue();
     const id = setInterval(loadQueue, 5000);
     return () => clearInterval(id);
   }, []);
+
+  const loadTags = async () => {
+    try {
+      const list = await tagsApi.list();
+      setAvailableTags(list);
+    } catch (e) {
+      console.error("Failed to load tags", e);
+    }
+  };
+
+  const handleSetDatasetTags = async (datasetId: string, tags: Tag[]) => {
+    try {
+      const updated = await adminApi.setDatasetTags(
+        datasetId,
+        tags.map((t) => t.id)
+      );
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === datasetId ? updated : d))
+      );
+      // Re-pull tag counts so the picker stays accurate.
+      loadTags();
+    } catch (e: any) {
+      alert(`שמירת תגיות נכשלה: ${e?.message || e}`);
+    }
+  };
+
+  const handleCreateTag = async (name: string): Promise<Tag> => {
+    const tag = await tagsApi.create(name);
+    setAvailableTags((prev) => {
+      if (prev.some((t) => t.id === tag.id)) return prev;
+      return [...prev, { ...tag, description: null, dataset_count: 0 }];
+    });
+    return tag;
+  };
+
+  const handleDeleteTag = async (tag: TagWithCount) => {
+    const ok = window.confirm(
+      `למחוק את התגית "${tag.name}"? המאגרים יישארו, רק השיוך יוסר.`
+    );
+    if (!ok) return;
+    try {
+      await adminApi.deleteTag(tag.id);
+      setAvailableTags((prev) => prev.filter((t) => t.id !== tag.id));
+      // Also strip the tag from any cached dataset rows.
+      setAllDatasets((prev) =>
+        prev.map((d) =>
+          d.tags
+            ? { ...d, tags: d.tags.filter((t) => t.id !== tag.id) }
+            : d
+        )
+      );
+    } catch (e: any) {
+      alert(`מחיקת התגית נכשלה: ${e?.message || e}`);
+    }
+  };
 
   const loadOrgs = async () => {
     try {
@@ -716,6 +778,7 @@ export default function AdminPage() {
                 <th style={thStyle}>שם מאגר</th>
                 <th style={thStyle}>מקור</th>
                 <th style={thStyle}>{t("organizations.admin_column")}</th>
+                <th style={thStyle}>תגיות</th>
                 <th style={thStyle}>תדירות</th>
                 <th style={thStyle}>גרסאות</th>
                 <th style={thStyle}>בדיקה אחרונה</th>
@@ -847,6 +910,14 @@ export default function AdminPage() {
                         {ds.organization}
                       </div>
                     )}
+                  </td>
+                  <td style={tdStyle}>
+                    <TagPicker
+                      value={ds.tags || []}
+                      available={availableTags}
+                      onChange={(next) => handleSetDatasetTags(ds.id, next)}
+                      onCreate={handleCreateTag}
+                    />
                   </td>
                   <td style={tdStyle}>
                     <select
@@ -986,6 +1057,53 @@ export default function AdminPage() {
                   <td style={tdStyle} className="text-sm">{o.children_count || 0}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Section 4: Tags management */}
+      <div className="page-header mt-3">
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+          ניהול תגיות ({availableTags.length})
+        </h2>
+      </div>
+      {availableTags.length === 0 ? (
+        <div className="empty-state">
+          עדיין אין תגיות. ניתן להוסיף תגיות לכל מאגר ברשימה למעלה.
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
+            <thead>
+              <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
+                <th style={thStyle}>תגית</th>
+                <th style={thStyle}>מאגרים</th>
+                <th style={thStyle}>פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...availableTags]
+                .sort((a, b) => a.name.localeCompare(b.name, "he"))
+                .map((tag) => (
+                  <tr key={tag.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={tdStyle}>
+                      <Link to={`/tags/${tag.id}`} style={{ fontWeight: 500 }}>
+                        {tag.name}
+                      </Link>
+                    </td>
+                    <td style={tdStyle} className="text-sm">{tag.dataset_count}</td>
+                    <td style={tdStyle}>
+                      <button
+                        className="btn-danger"
+                        style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
+                        onClick={() => handleDeleteTag(tag)}
+                      >
+                        מחק
+                      </button>
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, OrganizationDetail } from "../api/client";
+import TagChips from "../components/TagChips";
 
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
@@ -198,6 +199,7 @@ export default function OrganizationDetailPage() {
                   <> · {t("tracked.last_poll")}: {new Date(d.last_polled_at).toLocaleDateString()}</>
                 )}
               </div>
+              <TagChips tags={d.tags} />
               <div style={{ marginTop: "0.5rem" }}>
                 <Link
                   to={`/versions/${d.id}`}

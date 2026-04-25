@@ -55,6 +55,34 @@ export const ckan = {
   organizations: () => request<any[]>("/ckan/organizations"),
 };
 
+// Tags
+export interface Tag {
+  id: string;
+  name: string;
+}
+
+export interface TagWithCount extends Tag {
+  description: string | null;
+  dataset_count: number;
+}
+
+export interface TagDataset {
+  id: string;
+  title: string;
+  ckan_name: string;
+  organization: string | null;
+  organization_id: string | null;
+  organization_title: string | null;
+  source_type: string;
+  version_count: number;
+  last_polled_at: string | null;
+  tags: Tag[];
+}
+
+export interface TagDetail extends TagWithCount {
+  datasets: TagDataset[];
+}
+
 // Tracked Datasets
 export interface TrackedDataset {
   id: string;
@@ -77,6 +105,7 @@ export interface TrackedDataset {
   resource_name: string | null;
   source_type: string;
   source_url: string | null;
+  tags?: Tag[];
 }
 
 export const datasets = {
@@ -295,6 +324,45 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify({ parent_id: parentId ?? "" }),
     }),
+  deleteTag: (tagId: string) =>
+    request<void>(`/admin/tags/${tagId}`, { method: "DELETE" }),
+  setDatasetTags: (datasetId: string, tagIds: string[]) =>
+    request<TrackedDataset>(`/admin/datasets/${datasetId}/tags`, {
+      method: "PUT",
+      body: JSON.stringify({ tag_ids: tagIds }),
+    }),
+};
+
+// Tags API
+export const tagsApi = {
+  list: () => request<TagWithCount[]>("/tags"),
+  get: (id: string) => request<TagDetail>(`/tags/${id}`),
+  // On 409 (already exists) the backend returns the existing tag in
+  // detail.tag — we adopt it silently so the picker can use the same flow
+  // for "create" and "reuse".
+  create: async (name: string, description?: string): Promise<Tag> => {
+    const token = getToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(`${BASE}/tags`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name, description }),
+    });
+    if (resp.status === 409) {
+      const body = await resp.json().catch(() => null);
+      const existing = body?.detail?.tag;
+      if (existing && existing.id && existing.name) {
+        return existing as Tag;
+      }
+      throw new Error(body?.detail?.message || "Tag already exists");
+    }
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || resp.statusText);
+    }
+    return resp.json();
+  },
 };
 
 // Organizations
@@ -331,6 +399,7 @@ export interface OrganizationDetail extends Organization {
     source_type: string;
     version_count: number;
     last_polled_at: string | null;
+    tags?: Tag[];
   }[];
 }
 
