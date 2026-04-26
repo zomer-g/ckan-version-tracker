@@ -69,6 +69,12 @@ class PushVersionRequest(BaseModel):
     # CSV via /upload-csv first and references its resource_id here per
     # resource name (so we can skip push_csv_to_datastore for that resource).
     csv_resource_ids: dict[str, str] | None = None
+    # For archive mode: patch fields to merge into ds.scraper_config (used to
+    # persist incremental checkpoint back to the server after each run).
+    scraper_config_patch: dict | None = None
+    # Archive mode with 0 new items: mark the task completed without creating a
+    # new version (avoids uploading the full CSV when nothing changed).
+    skip_version: bool = False
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -189,6 +195,30 @@ async def push_version(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Archive mode: no new items — update checkpoint and mark task done without
+    # creating a version (avoids re-uploading the full CSV when nothing changed).
+    if body.skip_version:
+        if body.scraper_config_patch:
+            current = dict(ds.scraper_config or {})
+            current.update(body.scraper_config_patch)
+            ds.scraper_config = current
+        ds.last_polled_at = datetime.now(timezone.utc)
+        task_result = await db.execute(
+            select(ScrapeTask).where(
+                ScrapeTask.tracked_dataset_id == ds.id,
+                ScrapeTask.status == "running",
+            )
+        )
+        task = task_result.scalar_one_or_none()
+        if task:
+            task.status = "completed"
+            task.completed_at = datetime.now(timezone.utc)
+            task.progress = 100
+            task.phase = "complete"
+            task.message = "No new items — archive up to date"
+        await db.commit()
+        return {"message": "No new items — task marked done, checkpoint updated"}
 
     # Get next version number
     latest_result = await db.execute(
@@ -347,6 +377,17 @@ async def push_version(
         task.progress = 100
         task.phase = "complete"
         await db.commit()
+
+    # Persist checkpoint patch back to scraper_config (archive mode).
+    # Done after task commit so a failure here doesn't block version creation.
+    if body.scraper_config_patch:
+        try:
+            current = dict(ds.scraper_config or {})
+            current.update(body.scraper_config_patch)
+            ds.scraper_config = current
+            await db.commit()
+        except Exception as e:
+            logger.warning("Failed to save scraper_config_patch for %s: %s", ds.id, e)
 
     logger.info("Scraper version %d created for %s (%d rows)", next_version, ds.title, total_rows)
 
