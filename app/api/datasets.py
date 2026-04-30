@@ -80,6 +80,7 @@ class DatasetResponse(BaseModel):
     source_type: str = "ckan"
     storage_mode: str = "full_snapshot"
     append_key: str | None = None
+    last_error: str | None = None
     tags: list[TagBrief] = []
 
     model_config = {"from_attributes": True}
@@ -149,6 +150,7 @@ async def list_tracked(
                 source_type=ds.source_type or "ckan",
                 storage_mode=ds.storage_mode or "full_snapshot",
                 append_key=(ds.scraper_config or {}).get("append_key"),
+                last_error=ds.last_error,
                 version_count=version_counts.get(ds.id, 0),
                 tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
@@ -267,6 +269,7 @@ async def track_dataset(
             source_type=ds.source_type,
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=(ds.scraper_config or {}).get("append_key"),
+            last_error=ds.last_error,
         )
 
     # ---- CKAN-type dataset (original flow) ----
@@ -391,6 +394,7 @@ async def track_dataset(
         source_type=ds.source_type,
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        last_error=ds.last_error,
     )
 
 
@@ -488,6 +492,7 @@ async def update_tracked(
         source_type=ds.source_type or "ckan",
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        last_error=ds.last_error,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )
 
@@ -718,5 +723,6 @@ async def get_tracked_public(
         source_type=ds.source_type or "ckan",
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        last_error=ds.last_error,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )

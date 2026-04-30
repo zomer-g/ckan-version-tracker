@@ -107,6 +107,7 @@ export interface TrackedDataset {
   source_url: string | null;
   storage_mode: "full_snapshot" | "append_only";
   append_key: string | null;
+  last_error: string | null;
   tags?: Tag[];
 }
 

@@ -238,6 +238,7 @@ async def push_version(
     # Push tabular resources to odata.org.il
     resource_mappings: dict[str, Any] = {}
     odata_resource_ids = []
+    push_errors: list[str] = []
 
     is_append = (ds.storage_mode == "append_only")
     append_key = (ds.scraper_config or {}).get("append_key") if is_append else None
@@ -324,6 +325,7 @@ async def push_version(
                     odata_resource_ids.append(rid)
                 except Exception as e:
                     logger.error("Failed to append resource %s to odata: %s", res.name, e)
+                    push_errors.append(f"append {res.name}: {e}")
                 continue
 
             # full_snapshot path (unchanged)
@@ -343,6 +345,7 @@ async def push_version(
                 logger.info("Pushed %d records for %s to odata (resource %s)", len(res.records), res.name, rid)
             except Exception as e:
                 logger.error("Failed to push resource %s to odata: %s", res.name, e)
+                push_errors.append(f"push {res.name}: {e}")
 
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
@@ -376,6 +379,7 @@ async def push_version(
                         len(zip_bytes) // 1024, zip_resource_id)
         except Exception as e:
             logger.error("Failed to upload ZIP to odata: %s", e)
+            push_errors.append(f"zip upload: {e}")
 
     # Compute hash for change detection
     hash_data = json.dumps({
@@ -388,6 +392,36 @@ async def push_version(
     resource_mappings["_resource_ids"] = []
     if is_append:
         resource_mappings["_appendonly_seen"] = seen_keys
+
+    # Empty-version guard: if the worker sent payload (records or ZIP) but
+    # nothing actually landed on odata, don't pretend a version exists.
+    # Surface the reason on the dataset and mark the task as failed so the
+    # admin can see what happened.
+    expected = (
+        len([r for r in body.resources if r.records or (body.csv_resource_ids or {}).get(r.name)])
+        + (1 if (body.zip_file or body.zip_resource_id or body.zip_resource_ids) else 0)
+    )
+    successes = sum(1 for k in resource_mappings if not k.startswith("_"))
+    if expected > 0 and successes == 0:
+        msg = "; ".join(push_errors)[:2000] or "all scraper pushes failed (no detail)"
+        ds.last_error = msg
+        ds.last_polled_at = datetime.now(timezone.utc)
+        task_result = await db.execute(
+            select(ScrapeTask).where(
+                ScrapeTask.tracked_dataset_id == ds.id,
+                ScrapeTask.status == "running",
+            )
+        )
+        task = task_result.scalar_one_or_none()
+        if task:
+            task.status = "failed"
+            task.completed_at = datetime.now(timezone.utc)
+            task.phase = "push_failed"
+            task.error = msg
+        await db.commit()
+        logger.error("Aborting scraper version for %s — 0/%d resources succeeded: %s",
+                     ds.title, expected, msg)
+        raise HTTPException(status_code=502, detail={"error": "all_pushes_failed", "message": msg})
 
     # Create version
     total_rows = sum(r.row_count for r in body.resources)
@@ -424,10 +458,13 @@ async def push_version(
         resource_mappings=resource_mappings,
     )
     db.add(version)
+    if push_errors:
+        change_summary["errors"] = push_errors
 
     # Update dataset
     ds.last_polled_at = datetime.now(timezone.utc)
     ds.last_modified = body.metadata_modified
+    ds.last_error = "; ".join(push_errors)[:2000] if push_errors else None
     await db.commit()
 
     # Refresh the ODATA package description so it carries current links back

@@ -58,6 +58,7 @@ class DatasetSummary(BaseModel):
     last_modified: str | None
     status: str
     storage_mode: str  # "full_snapshot" | "append_only"
+    last_error: str | None  # last poll error if any
     version_count: int
     versions_url: str  # /api/v1/datasets/{id}/versions
 
@@ -186,6 +187,7 @@ def _dataset_summary(
         last_modified=ds.last_modified,
         status=ds.status,
         storage_mode=ds.storage_mode or "full_snapshot",
+        last_error=ds.last_error,
         version_count=version_count,
         versions_url=_build_request_url(
             request, f"/api/v1/datasets/{ds.id}/versions"

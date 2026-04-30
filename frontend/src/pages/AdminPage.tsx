@@ -897,6 +897,26 @@ export default function AdminPage() {
                         </a>
                       </div>
                     )}
+                    {ds.last_error && (
+                      <div
+                        title={ds.last_error}
+                        style={{
+                          fontSize: "0.7rem",
+                          marginTop: "0.25rem",
+                          padding: "0.2rem 0.4rem",
+                          background: "#fee2e2",
+                          color: "#991b1b",
+                          borderRadius: "4px",
+                          maxWidth: "28rem",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          cursor: "help",
+                        }}
+                      >
+                        ⚠ {ds.last_error}
+                      </div>
+                    )}
                   </td>
                   <td style={tdStyle}>
                     <span style={{

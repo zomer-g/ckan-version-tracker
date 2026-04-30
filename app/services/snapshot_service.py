@@ -39,13 +39,16 @@ async def create_version_snapshot(
     changed_resources: list[dict],
     hash_map: dict,
     old_mappings: dict | None,
-) -> tuple[str, dict]:
+) -> tuple[str, dict, list[str]]:
     """
     Upload a full version snapshot to odata.org.il.
     - Tabular data (CSV) -> pushed to Datastore (queryable via API)
     - Metadata -> uploaded as JSON file
     - Resource names include date for easy identification.
-    Returns (metadata_resource_id, resource_mappings).
+    Returns (metadata_resource_id, resource_mappings, errors). `errors` is
+    a list of per-resource upload failure messages — empty when every
+    resource was uploaded cleanly. The caller decides whether to persist
+    a version when only some/none of the uploads succeeded.
     """
     ts = _timestamp()
 
@@ -53,6 +56,7 @@ async def create_version_snapshot(
     metadata_resource_id = None
 
     resource_mappings: dict[str, Any] = {}
+    errors: list[str] = []
 
     # Carry forward unchanged resources from old mappings
     if old_mappings:
@@ -87,12 +91,13 @@ async def create_version_snapshot(
             resource_mappings[rid] = result["id"]
         except Exception as e:
             logger.error("Failed to upload resource %s to odata: %s", rid, e)
+            errors.append(f"upload {resource.get('name', rid[:8])} ({fmt or '?'}): {e}")
 
     # Store hashes and resource IDs in mappings for next comparison
     resource_mappings["_hashes"] = hash_map
     resource_mappings["_resource_ids"] = [r["id"] for r in metadata.get("resources", [])]
 
-    return metadata_resource_id, resource_mappings
+    return metadata_resource_id, resource_mappings, errors
 
 
 async def _push_to_datastore(

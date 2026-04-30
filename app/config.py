@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     default_poll_interval: int = 604800  # 1 week
     min_poll_interval: int = 300
-    max_resource_download_size: int = 500_000_000
+    max_resource_download_size: int = 1_000_000_000  # 1GB — covers most data.gov.il ZIPs
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 

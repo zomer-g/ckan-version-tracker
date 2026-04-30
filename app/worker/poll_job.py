@@ -129,6 +129,8 @@ async def poll_dataset(dataset_id: str) -> None:
                     next_version, ds.ckan_name, len(changed_resources),
                 )
 
+                errors: list[str] = []
+
                 # For first version, download all resources
                 resources_to_upload = changed_resources
                 if is_first_version:
@@ -146,6 +148,7 @@ async def poll_dataset(dataset_id: str) -> None:
                             hash_map[r["id"]] = sha256
                         except Exception as e:
                             logger.warning("Failed to download resource %s: %s", r["id"], e)
+                            errors.append(f"download {r.get('name', r['id'][:8])}: {e}")
 
                 # Lazily create mirror dataset if it doesn't exist yet
                 if not ds.odata_dataset_id and settings.odata_api_key:
@@ -167,10 +170,11 @@ async def poll_dataset(dataset_id: str) -> None:
                             ds.odata_dataset_id = mirror["id"]
                         except Exception as e2:
                             logger.error("Mirror find also failed for %s: %s", mirror_name, e2)
+                            errors.append(f"mirror create/find: {e2}")
 
                 # Upload snapshot to odata.org.il
                 if ds.odata_dataset_id:
-                    meta_resource_id, resource_mappings = await create_version_snapshot(
+                    meta_resource_id, resource_mappings, upload_errors = await create_version_snapshot(
                         odata_dataset_id=ds.odata_dataset_id,
                         version_number=next_version,
                         metadata=pkg,
@@ -178,26 +182,51 @@ async def poll_dataset(dataset_id: str) -> None:
                         hash_map=hash_map,
                         old_mappings=old_mappings,
                     )
+                    errors.extend(upload_errors)
                 else:
                     meta_resource_id = None
                     resource_mappings = {"_hashes": hash_map, "_resource_ids": [r["id"] for r in resources]}
 
-                # Compute change summary
-                change_summary = compute_change_summary(
-                    old_mappings, resources, changed_resources, hash_map
-                )
+                # Count actual successful resource mappings (anything that's
+                # not a bookkeeping key like _hashes / _resource_ids).
+                successes = sum(1 for k in resource_mappings if not k.startswith("_"))
+                expected = sum(1 for r in resources if r.get("url"))
 
-                # Save version index
-                version = VersionIndex(
-                    tracked_dataset_id=ds.id,
-                    version_number=next_version,
-                    metadata_modified=new_modified,
-                    odata_metadata_resource_id=meta_resource_id,
-                    change_summary=change_summary,
-                    resource_mappings=resource_mappings,
-                )
-                db.add(version)
-                logger.info("Version %d created for %s", next_version, ds.ckan_name)
+                # If we expected to upload something and ended up with zero
+                # working resources, do NOT create a misleading empty version.
+                # Persist the failure so the user can see it in the UI.
+                if expected > 0 and successes == 0:
+                    msg = "; ".join(errors)[:2000] or "all resource downloads/uploads failed (no detail)"
+                    ds.last_error = msg
+                    logger.error(
+                        "Aborting version %d for %s — 0/%d resources succeeded: %s",
+                        next_version, ds.ckan_name, expected, msg,
+                    )
+                else:
+                    # Compute change summary
+                    change_summary = compute_change_summary(
+                        old_mappings, resources, changed_resources, hash_map
+                    )
+                    if errors:
+                        change_summary["errors"] = errors
+
+                    # Save version index
+                    version = VersionIndex(
+                        tracked_dataset_id=ds.id,
+                        version_number=next_version,
+                        metadata_modified=new_modified,
+                        odata_metadata_resource_id=meta_resource_id,
+                        change_summary=change_summary,
+                        resource_mappings=resource_mappings,
+                    )
+                    db.add(version)
+                    # Partial success → keep last_error so the user knows
+                    # something didn't make it; full success → clear it.
+                    ds.last_error = "; ".join(errors)[:2000] if errors else None
+                    logger.info(
+                        "Version %d created for %s (%d/%d resources)",
+                        next_version, ds.ckan_name, successes, expected,
+                    )
             else:
                 logger.info(
                     "Metadata changed but no resource content changed for %s",
