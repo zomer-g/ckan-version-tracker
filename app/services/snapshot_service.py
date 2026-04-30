@@ -133,6 +133,61 @@ async def _push_to_datastore(
     )
 
 
+async def append_new_rows_to_shared_resource(
+    *,
+    odata_dataset_id: str,
+    appendonly_resource_id: str | None,
+    version_number: int,
+    resource_name: str,
+    fields: list[dict],
+    new_rows: list[dict],
+    resource_format: str = "CSV",
+) -> tuple[str | None, int]:
+    """Append-only push: insert `new_rows` into a shared odata resource.
+
+    - If `appendonly_resource_id` is None, the shared resource is created
+      via the standard push_csv_to_datastore path (defines schema +
+      uploads the CSV file). Caller must persist the returned id back to
+      the dataset row.
+    - Otherwise inserts new rows in batches into the existing resource via
+      datastore_upsert(method="insert", force=True).
+
+    Returns (resource_id, rows_inserted). resource_id may be None only when
+    new_rows is empty AND there is no shared resource yet (caller skips).
+    """
+    from app.services.csv_parser import batch_records
+
+    if not new_rows and not appendonly_resource_id:
+        return None, 0
+
+    if not appendonly_resource_id:
+        result = await odata_client.push_csv_to_datastore(
+            dataset_id=odata_dataset_id,
+            version_number=version_number,
+            resource_name=resource_name,
+            fields=fields,
+            records=new_rows,
+            resource_format=resource_format,
+            timestamp=_timestamp(),
+        )
+        return result["id"], len(new_rows)
+
+    if not new_rows:
+        return appendonly_resource_id, 0
+
+    batches = batch_records(new_rows)
+    for i, batch in enumerate(batches, start=1):
+        await odata_client._push_batch_with_retry(
+            resource_id=appendonly_resource_id,
+            fields=fields,
+            records_batch=batch,
+            create=False,
+            batch_num=i,
+            is_last=(i == len(batches)),
+        )
+    return appendonly_resource_id, len(new_rows)
+
+
 async def create_lightweight_snapshot(
     odata_dataset_id: str,
     version_number: int,

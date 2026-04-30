@@ -20,6 +20,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
+from app.services.version_detector import compute_new_rows
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/worker", tags=["worker"])
@@ -238,16 +239,28 @@ async def push_version(
     resource_mappings: dict[str, Any] = {}
     odata_resource_ids = []
 
+    is_append = (ds.storage_mode == "append_only")
+    append_key = (ds.scraper_config or {}).get("append_key") if is_append else None
+    seen_keys: list[str] = []
+    rows_added_total = 0
+
+    if is_append and latest is not None:
+        seen_keys = list((latest.resource_mappings or {}).get("_appendonly_seen", []) or [])
+
     if ds.odata_dataset_id:
         from app.services.snapshot_service import _timestamp
+        from app.services.csv_parser import batch_records
         ts = _timestamp()
 
         csv_resource_ids = body.csv_resource_ids or {}
 
         for res in body.resources:
-            # Prefer pre-uploaded CSV file (used when records JSON would exceed
-            # Cloudflare's 100MB limit). Worker uploaded the CSV via
-            # /api/worker/upload-csv and passes the resource_id by resource name.
+            # Pre-uploaded CSV files bypass record-level handling. Append mode
+            # can't dedupe a file we never parsed, so we treat pre-uploaded
+            # CSVs as a full snapshot for this resource even if the dataset
+            # is in append mode (rare edge case: scraper would only do this
+            # for >100MB JSON payloads, where append-only with diffing isn't
+            # the intended path anyway).
             pre_uploaded = csv_resource_ids.get(res.name)
             if pre_uploaded:
                 resource_mappings[res.name] = pre_uploaded
@@ -256,23 +269,80 @@ async def push_version(
                             res.name, pre_uploaded, res.row_count)
                 continue
 
-            if res.records and res.fields:
+            if not (res.records and res.fields):
+                continue
+
+            if is_append:
+                new_rows, seen_keys = compute_new_rows(seen_keys, res.records, append_key)
+                rows_added_total += len(new_rows)
+                if not new_rows and ds.appendonly_resource_id:
+                    # Nothing new this round — point the version at the existing
+                    # shared resource and move on.
+                    resource_mappings[res.name] = ds.appendonly_resource_id
+                    odata_resource_ids.append(ds.appendonly_resource_id)
+                    logger.info("Append: 0 new rows for %s (resource %s)",
+                                res.name, ds.appendonly_resource_id)
+                    continue
+
                 try:
-                    odata_result = await odata_client.push_csv_to_datastore(
-                        dataset_id=ds.odata_dataset_id,
-                        version_number=next_version,
-                        resource_name=res.name,
-                        fields=res.fields,
-                        records=res.records,
-                        resource_format=res.format,
-                        timestamp=ts,
-                    )
-                    rid = odata_result["id"]
+                    if not ds.appendonly_resource_id:
+                        # First version in append mode — create the shared
+                        # resource the same way snapshot mode would.
+                        odata_result = await odata_client.push_csv_to_datastore(
+                            dataset_id=ds.odata_dataset_id,
+                            version_number=next_version,
+                            resource_name=res.name,
+                            fields=res.fields,
+                            records=new_rows,
+                            resource_format=res.format,
+                            timestamp=ts,
+                        )
+                        ds.appendonly_resource_id = odata_result["id"]
+                        rid = odata_result["id"]
+                        logger.info("Append: created shared resource %s with %d rows for %s",
+                                    rid, len(new_rows), res.name)
+                    else:
+                        # Subsequent version — insert new rows into the same
+                        # resource. Reuse the batched-with-retry helper so we
+                        # always send force=True and get the same retry/backoff
+                        # behavior as the snapshot path.
+                        rid = ds.appendonly_resource_id
+                        batches = batch_records(new_rows)
+                        for i, batch in enumerate(batches, start=1):
+                            await odata_client._push_batch_with_retry(
+                                resource_id=rid,
+                                fields=res.fields,
+                                records_batch=batch,
+                                create=False,
+                                batch_num=i,
+                                is_last=(i == len(batches)),
+                            )
+                        logger.info("Append: inserted %d new rows into %s for %s",
+                                    len(new_rows), rid, res.name)
+
                     resource_mappings[res.name] = rid
                     odata_resource_ids.append(rid)
-                    logger.info("Pushed %d records for %s to odata (resource %s)", len(res.records), res.name, rid)
                 except Exception as e:
-                    logger.error("Failed to push resource %s to odata: %s", res.name, e)
+                    logger.error("Failed to append resource %s to odata: %s", res.name, e)
+                continue
+
+            # full_snapshot path (unchanged)
+            try:
+                odata_result = await odata_client.push_csv_to_datastore(
+                    dataset_id=ds.odata_dataset_id,
+                    version_number=next_version,
+                    resource_name=res.name,
+                    fields=res.fields,
+                    records=res.records,
+                    resource_format=res.format,
+                    timestamp=ts,
+                )
+                rid = odata_result["id"]
+                resource_mappings[res.name] = rid
+                odata_resource_ids.append(rid)
+                logger.info("Pushed %d records for %s to odata (resource %s)", len(res.records), res.name, rid)
+            except Exception as e:
+                logger.error("Failed to push resource %s to odata: %s", res.name, e)
 
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
@@ -316,15 +386,26 @@ async def push_version(
 
     resource_mappings["_hashes"] = {"scraper": content_hash}
     resource_mappings["_resource_ids"] = []
+    if is_append:
+        resource_mappings["_appendonly_seen"] = seen_keys
 
     # Create version
     total_rows = sum(r.row_count for r in body.resources)
-    version = VersionIndex(
-        tracked_dataset_id=ds.id,
-        version_number=next_version,
-        metadata_modified=body.metadata_modified,
-        odata_metadata_resource_id=None,
-        change_summary={
+    if is_append:
+        change_summary = {
+            "type": "append",
+            "rows_added": rows_added_total,
+            "rows_total": len(seen_keys),
+            "key": append_key or "_hash",
+            "total_attachments": len(body.attachments),
+            "resources": [{"name": r.name, "format": r.format, "rows": r.row_count} for r in body.resources],
+            "scrape_metadata": body.scrape_metadata,
+            "resources_added": [],
+            "resources_removed": [],
+            "resources_modified": [],
+        }
+    else:
+        change_summary = {
             "type": "scraper",
             "total_rows": total_rows,
             "total_attachments": len(body.attachments),
@@ -333,7 +414,13 @@ async def push_version(
             "resources_added": odata_resource_ids,
             "resources_removed": [],
             "resources_modified": [],
-        },
+        }
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=body.metadata_modified,
+        odata_metadata_resource_id=None,
+        change_summary=change_summary,
         resource_mappings=resource_mappings,
     )
     db.add(version)

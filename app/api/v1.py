@@ -57,6 +57,7 @@ class DatasetSummary(BaseModel):
     last_polled_at: str | None
     last_modified: str | None
     status: str
+    storage_mode: str  # "full_snapshot" | "append_only"
     version_count: int
     versions_url: str  # /api/v1/datasets/{id}/versions
 
@@ -184,6 +185,7 @@ def _dataset_summary(
         last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
         last_modified=ds.last_modified,
         status=ds.status,
+        storage_mode=ds.storage_mode or "full_snapshot",
         version_count=version_count,
         versions_url=_build_request_url(
             request, f"/api/v1/datasets/{ds.id}/versions"

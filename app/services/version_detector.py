@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -94,3 +96,45 @@ def compute_change_summary(
         "resources_modified": modified,
         "total_resources": len(new_resources),
     }
+
+
+def _row_identity(row: dict, key_field: str | None) -> str:
+    """Identity used to recognize a row across versions in append mode.
+
+    With key_field: stringified value of that column (None/missing → '').
+    Without key_field: SHA-256 of the row's JSON (sorted keys, str-coerced
+    values) so semantically-equal rows hash equal regardless of dict order.
+    """
+    if key_field:
+        v = row.get(key_field)
+        return "" if v is None else str(v)
+    canonical = json.dumps(
+        {str(k): ("" if v is None else str(v)) for k, v in row.items()},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_new_rows(
+    seen_keys: list[str] | None,
+    new_records: list[dict],
+    key_field: str | None,
+) -> tuple[list[dict], list[str]]:
+    """Filter new_records down to ones not in seen_keys.
+
+    Returns (rows_to_insert, updated_seen_keys). Order is preserved.
+    Duplicates within new_records are deduplicated against each other too,
+    so a single push that contains the same row twice only inserts it once.
+    """
+    seen: set[str] = set(seen_keys or [])
+    out_rows: list[dict] = []
+    out_keys: list[str] = list(seen_keys or [])
+    for row in new_records:
+        ident = _row_identity(row, key_field)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        out_rows.append(row)
+        out_keys.append(ident)
+    return out_rows, out_keys

@@ -308,6 +308,8 @@ async def set_dataset_tags(
         resource_id=ds.resource_id,
         source_url=_build_source_url(ds),
         source_type=ds.source_type or "ckan",
+        storage_mode=ds.storage_mode or "full_snapshot",
+        append_key=(ds.scraper_config or {}).get("append_key"),
         version_count=version_count,
         tags=[_tag_brief(t) for t in ds.tags],
     )

@@ -105,6 +105,8 @@ export interface TrackedDataset {
   resource_name: string | null;
   source_type: string;
   source_url: string | null;
+  storage_mode: "full_snapshot" | "append_only";
+  append_key: string | null;
   tags?: Tag[];
 }
 
@@ -120,7 +122,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),

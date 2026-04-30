@@ -391,6 +391,27 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   };
 
+  const handleUpdateStorageMode = async (
+    id: string,
+    storage_mode: "full_snapshot" | "append_only",
+  ) => {
+    try {
+      const updated = await datasetsApi.update(id, { storage_mode });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, storage_mode: updated.storage_mode } : d))
+      );
+    } catch (e) { console.error(e); }
+  };
+
+  const handleUpdateAppendKey = async (id: string, append_key: string) => {
+    try {
+      const updated = await datasetsApi.update(id, { append_key });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, append_key: updated.append_key } : d))
+      );
+    } catch (e) { console.error(e); }
+  };
+
   if (loading) return <div className="loading" role="status">{t("common.loading")}</div>;
 
   const activeDatasets = allDatasets.filter((d) => d.status === "active");
@@ -780,6 +801,7 @@ export default function AdminPage() {
                 <th style={thStyle}>{t("organizations.admin_column")}</th>
                 <th style={thStyle}>תגיות</th>
                 <th style={thStyle}>תדירות</th>
+                <th style={thStyle}>{t("admin.storage_mode") || "אופן שמירה"}</th>
                 <th style={thStyle}>גרסאות</th>
                 <th style={thStyle}>בדיקה אחרונה</th>
                 <th style={thStyle}>פעולות</th>
@@ -927,6 +949,36 @@ export default function AdminPage() {
                     >
                       {INTERVAL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                      <select
+                        value={ds.storage_mode || "full_snapshot"}
+                        onChange={(e) =>
+                          handleUpdateStorageMode(
+                            ds.id,
+                            e.target.value as "full_snapshot" | "append_only",
+                          )
+                        }
+                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px" }}
+                      >
+                        <option value="full_snapshot">{t("admin.storage_full") || "שמירה מלאה"}</option>
+                        <option value="append_only">{t("admin.storage_append") || "תוספת בלבד"}</option>
+                      </select>
+                      {ds.storage_mode === "append_only" && (
+                        <input
+                          type="text"
+                          defaultValue={ds.append_key || ""}
+                          placeholder={t("admin.append_key_placeholder") || "מפתח (אופציונלי)"}
+                          onBlur={(e) => {
+                            if ((e.target.value || "") !== (ds.append_key || "")) {
+                              handleUpdateAppendKey(ds.id, e.target.value);
+                            }
+                          }}
+                          style={{ width: "10rem", padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: "4px" }}
+                        />
+                      )}
+                    </div>
                   </td>
                   <td style={tdStyle} className="text-sm">
                     <Link to={`/versions/${ds.id}`}>{ds.version_count}</Link>

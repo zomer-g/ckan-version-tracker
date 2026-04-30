@@ -13,10 +13,14 @@ from app.models.version_index import VersionIndex
 from app.services.ckan_client import ckan_client
 from app.services.version_detector import (
     compute_change_summary,
+    compute_new_rows,
     detect_resource_changes,
     has_metadata_changed,
 )
-from app.services.snapshot_service import create_version_snapshot
+from app.services.snapshot_service import (
+    append_new_rows_to_shared_resource,
+    create_version_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +109,20 @@ async def poll_dataset(dataset_id: str) -> None:
                 old_mappings, resources
             )
 
-            # If this is version 1 or resources changed, create a new version
             is_first_version = latest_version is None
+
+            # Append-only path: only handles a single tabular resource. For
+            # multi-resource or non-tabular datasets the shape doesn't match
+            # row-level append semantics, so we silently fall through to the
+            # snapshot path below.
+            if ds.storage_mode == "append_only" and (is_first_version or changed_resources):
+                appended = await _poll_append_only(
+                    ds, pkg, resources, changed_resources, hash_map,
+                    old_mappings, next_version, new_modified, latest_version, db,
+                )
+                if appended:
+                    return
+
             if is_first_version or changed_resources:
                 logger.info(
                     "Creating version %d for %s (%d resources changed)",
@@ -226,6 +242,140 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
     ds.last_polled_at = datetime.now(timezone.utc)
     await db.commit()
     logger.info("Created scrape task for %s (source: %s)", ds.ckan_name, ds.source_url)
+
+
+async def _poll_append_only(
+    ds: TrackedDataset,
+    pkg: dict,
+    resources: list[dict],
+    changed_resources: list[dict],
+    hash_map: dict,
+    old_mappings: dict | None,
+    next_version: int,
+    new_modified: str,
+    latest_version: VersionIndex | None,
+    db,
+) -> bool:
+    """Append-only CKAN poll: parse the (one) tabular resource and insert
+    only rows whose identity wasn't seen in any previous version.
+
+    Returns True if the append path handled this poll (caller should stop),
+    False if the dataset doesn't fit the append shape and the caller should
+    continue with the regular snapshot path.
+    """
+    from app.services.snapshot_service import TABULAR_FORMATS
+    from app.services.csv_parser import parse_csv
+
+    # Append needs exactly one tabular resource. Most odata.gov.il datasets
+    # tracked at the resource level (ds.resource_id set) match this; package-
+    # level tracking with multiple files does not.
+    if len(resources) != 1:
+        logger.info("Append: %s has %d resources, falling back to snapshot",
+                    ds.ckan_name, len(resources))
+        return False
+
+    resource = resources[0]
+    fmt = (resource.get("format", "") or "").lower().strip()
+    if fmt not in TABULAR_FORMATS:
+        logger.info("Append: %s format %r is not tabular, falling back to snapshot",
+                    ds.ckan_name, fmt)
+        return False
+
+    # On version 1 we always need to download. On subsequent versions, only
+    # if the file hash actually changed (changed_resources is the diff).
+    if changed_resources:
+        content = changed_resources[0]["content"]
+    else:
+        try:
+            content, sha = await ckan_client.download_resource(
+                resource["url"], resource_id=resource["id"],
+            )
+            hash_map[resource["id"]] = sha
+        except Exception as e:
+            logger.warning("Append: failed to download %s: %s", resource["id"], e)
+            return False
+
+    try:
+        fields, records = parse_csv(content)
+    except Exception as e:
+        logger.warning("Append: failed to parse CSV for %s: %s", ds.ckan_name, e)
+        return False
+
+    append_key = (ds.scraper_config or {}).get("append_key")
+    seen_keys = list((latest_version.resource_mappings or {}).get("_appendonly_seen", []) or []) if latest_version else []
+    new_rows, seen_keys = compute_new_rows(seen_keys, records, append_key)
+
+    # Lazily create mirror dataset (mirrors the snapshot path's behavior)
+    if not ds.odata_dataset_id and settings.odata_api_key:
+        from app.services.odata_client import odata_client
+        from app.api.utils import sanitize_ckan_name
+        mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
+        try:
+            mirror = await odata_client.create_dataset(
+                name=mirror_name,
+                title=f"[Versions] {ds.title}",
+                owner_org=settings.odata_owner_org,
+            )
+            ds.odata_dataset_id = mirror["id"]
+        except Exception:
+            try:
+                from app.services.odata_client import odata_client as _oc
+                mirror = await _oc.package_show(mirror_name)
+                ds.odata_dataset_id = mirror["id"]
+            except Exception as e:
+                logger.error("Append: mirror create/find failed for %s: %s", mirror_name, e)
+                return False
+
+    rid: str | None = ds.appendonly_resource_id
+    rows_inserted = 0
+    if ds.odata_dataset_id:
+        try:
+            rid, rows_inserted = await append_new_rows_to_shared_resource(
+                odata_dataset_id=ds.odata_dataset_id,
+                appendonly_resource_id=ds.appendonly_resource_id,
+                version_number=next_version,
+                resource_name=resource.get("name", ds.ckan_name),
+                fields=fields,
+                new_rows=new_rows,
+                resource_format=fmt.upper(),
+            )
+            if rid and not ds.appendonly_resource_id:
+                ds.appendonly_resource_id = rid
+        except Exception as e:
+            logger.error("Append: failed to push rows for %s: %s", ds.ckan_name, e)
+            return False
+
+    resource_mappings = {
+        "_hashes": hash_map,
+        "_resource_ids": [resource["id"]],
+        "_appendonly_seen": seen_keys,
+    }
+    if rid:
+        resource_mappings[resource["id"]] = rid
+
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=new_modified,
+        odata_metadata_resource_id=None,
+        change_summary={
+            "type": "append",
+            "rows_added": rows_inserted,
+            "rows_total": len(seen_keys),
+            "key": append_key or "_hash",
+            "resources_added": [],
+            "resources_removed": [],
+            "resources_modified": [],
+        },
+        resource_mappings=resource_mappings,
+    )
+    db.add(version)
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = new_modified
+    await db.commit()
+    logger.info("Append version %d created for %s (%d new rows, %d total)",
+                next_version, ds.ckan_name, rows_inserted, len(seen_keys))
+    return True
 
 
 async def _poll_large_dataset(

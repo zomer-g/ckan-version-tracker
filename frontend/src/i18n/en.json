@@ -124,7 +124,11 @@
     "approve": "Approve",
     "reject": "Reject",
     "requester": "Requested by",
-    "requested_at": "Requested at"
+    "requested_at": "Requested at",
+    "storage_mode": "Storage mode",
+    "storage_full": "Full snapshot",
+    "storage_append": "Append only",
+    "append_key_placeholder": "Key column (optional)"
   },
   "versions": {
     "title": "Version History",

@@ -45,6 +45,7 @@ class PendingRequest(BaseModel):
     requester_name: str
     source_type: str = "ckan"
     source_url: str | None = None
+    storage_mode: str = "full_snapshot"
 
 
 @router.get("/pending", response_model=list[PendingRequest])
@@ -79,6 +80,7 @@ async def list_pending(
             requester_name=requester.display_name if requester else "אנונימי",
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
+            storage_mode=ds.storage_mode or "full_snapshot",
         )
         for ds, requester, org in rows
     ]

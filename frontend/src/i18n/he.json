@@ -124,7 +124,11 @@
     "approve": "אשר",
     "reject": "דחה",
     "requester": "מבקש",
-    "requested_at": "תאריך בקשה"
+    "requested_at": "תאריך בקשה",
+    "storage_mode": "אופן שמירה",
+    "storage_full": "שמירה מלאה",
+    "storage_append": "תוספת בלבד",
+    "append_key_placeholder": "עמודת מפתח (אופציונלי)"
   },
   "versions": {
     "title": "היסטוריית גרסאות",

@@ -30,6 +30,8 @@ class TrackRequest(BaseModel):
     poll_interval: int = 604800
     preferred_interval: int | None = None
     resource_id: str | None = None
+    storage_mode: str = "full_snapshot"  # "full_snapshot" | "append_only"
+    append_key: str | None = None  # column name when storage_mode="append_only"
 
 
 class UpdateRequest(BaseModel):
@@ -37,6 +39,14 @@ class UpdateRequest(BaseModel):
     is_active: bool | None = None
     title: str | None = None
     organization_id: str | None = None  # "" or null to clear; UUID to assign
+    storage_mode: str | None = None  # "full_snapshot" | "append_only"
+    append_key: str | None = None  # only meaningful when storage_mode="append_only"
+
+
+def _validate_storage_mode(mode: str) -> str:
+    if mode not in ("full_snapshot", "append_only"):
+        raise HTTPException(status_code=400, detail="storage_mode must be 'full_snapshot' or 'append_only'")
+    return mode
 
 
 class TagBrief(BaseModel):
@@ -68,6 +78,8 @@ class DatasetResponse(BaseModel):
     requester_notes: str = ""
     source_url: str = ""
     source_type: str = "ckan"
+    storage_mode: str = "full_snapshot"
+    append_key: str | None = None
     tags: list[TagBrief] = []
 
     model_config = {"from_attributes": True}
@@ -135,6 +147,8 @@ async def list_tracked(
                 resource_name=None,  # resource name is already in the title
                 source_url=_build_source_url(ds),
                 source_type=ds.source_type or "ckan",
+                storage_mode=ds.storage_mode or "full_snapshot",
+                append_key=(ds.scraper_config or {}).get("append_key"),
                 version_count=version_counts.get(ds.id, 0),
                 tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
@@ -151,6 +165,8 @@ async def track_dataset(
 ):
     raw_interval = body.preferred_interval if body.preferred_interval is not None else body.poll_interval
     interval = max(raw_interval, settings.min_poll_interval)
+
+    storage_mode = _validate_storage_mode(body.storage_mode)
 
     # Determine status based on admin privilege
     dataset_status = "active" if user.is_admin else "pending"
@@ -208,6 +224,10 @@ async def track_dataset(
                 except Exception as e2:
                     logger.error("Mirror find also failed: %s", e2)
 
+        sc = dict(body.scraper_config or {"download_files": False})
+        if body.append_key:
+            sc["append_key"] = body.append_key
+
         ds = TrackedDataset(
             ckan_id=ckan_id,
             ckan_name=ckan_name,
@@ -215,7 +235,8 @@ async def track_dataset(
             organization="gov.il",
             source_type="scraper",
             source_url=body.source_url,
-            scraper_config=body.scraper_config or {"download_files": False},
+            scraper_config=sc,
+            storage_mode=storage_mode,
             odata_dataset_id=odata_dataset_id,
             poll_interval=interval,
             status=dataset_status,
@@ -244,6 +265,8 @@ async def track_dataset(
             last_modified=ds.last_modified,
             source_url=ds.source_url or "",
             source_type=ds.source_type,
+            storage_mode=ds.storage_mode or "full_snapshot",
+            append_key=(ds.scraper_config or {}).get("append_key"),
         )
 
     # ---- CKAN-type dataset (original flow) ----
@@ -323,6 +346,10 @@ async def track_dataset(
     else:
         logger.info("ODATA_API_KEY not set — tracking without odata.org.il mirror")
 
+    ckan_scraper_config = None
+    if body.append_key:
+        ckan_scraper_config = {"append_key": body.append_key}
+
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],
@@ -333,6 +360,8 @@ async def track_dataset(
         odata_dataset_id=odata_dataset_id,
         poll_interval=interval,
         status=dataset_status,
+        storage_mode=storage_mode,
+        scraper_config=ckan_scraper_config,
         created_by=user.id,
         last_modified=None,  # None so first poll always creates version 1
     )
@@ -360,6 +389,8 @@ async def track_dataset(
         resource_id=ds.resource_id,
         resource_name=resource_name,
         source_type=ds.source_type,
+        storage_mode=ds.storage_mode or "full_snapshot",
+        append_key=(ds.scraper_config or {}).get("append_key"),
     )
 
 
@@ -387,6 +418,15 @@ async def update_tracked(
         ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
     if body.is_active is not None:
         ds.is_active = body.is_active
+    if body.storage_mode is not None:
+        ds.storage_mode = _validate_storage_mode(body.storage_mode)
+    if body.append_key is not None:
+        sc = dict(ds.scraper_config or {})
+        if body.append_key.strip():
+            sc["append_key"] = body.append_key.strip()
+        else:
+            sc.pop("append_key", None)
+        ds.scraper_config = sc or None
 
     if body.organization_id is not None:
         if body.organization_id == "":
@@ -446,6 +486,8 @@ async def update_tracked(
         resource_id=ds.resource_id,
         source_url=_build_source_url(ds),
         source_type=ds.source_type or "ckan",
+        storage_mode=ds.storage_mode or "full_snapshot",
+        append_key=(ds.scraper_config or {}).get("append_key"),
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )
 
@@ -674,5 +716,7 @@ async def get_tracked_public(
         resource_id=ds.resource_id,
         source_url=_build_source_url(ds),
         source_type=ds.source_type or "ckan",
+        storage_mode=ds.storage_mode or "full_snapshot",
+        append_key=(ds.scraper_config or {}).get("append_key"),
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )
