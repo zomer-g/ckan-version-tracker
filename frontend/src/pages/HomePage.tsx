@@ -1,14 +1,17 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, TrackedDataset, GovIlValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
+import GovmapRequestForm from "../components/GovmapRequestForm";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
 /** Detect gov.il collector URLs */
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
+/** Detect govmap.gov.il layer URLs (requires lay=<id>) */
+const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&]lay(?:er|ers)?=\d+/i;
 
 interface CkanResource {
   id: string;
@@ -61,6 +64,8 @@ export default function HomePage() {
 
   // Gov.il scraper result
   const [govIlResult, setGovIlResult] = useState<GovIlValidation | null>(null);
+  // GovMap layer result (single seed URL — the form lets the user add more)
+  const [govMapResult, setGovMapResult] = useState<GovMapValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -89,6 +94,10 @@ export default function HomePage() {
     return GOV_IL_PATTERN.test(input.trim());
   };
 
+  const detectGovMapUrl = (input: string): boolean => {
+    return GOVMAP_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -102,8 +111,23 @@ export default function HomePage() {
     setTargetResourceId(null);
     setRequestFormFor(null);
     setGovIlResult(null);
+    setGovMapResult(null);
     try {
-      // 1. Check for gov.il collector URL
+      // 1. Check for govmap.gov.il layer URL
+      if (detectGovMapUrl(query)) {
+        const validation = await govmap.validate(query.trim());
+        if (validation.valid) {
+          setGovMapResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid govmap URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
         const validation = await govil.validate(query.trim());
         if (validation.valid) {
@@ -117,7 +141,7 @@ export default function HomePage() {
         return;
       }
 
-      // 2. Check for data.gov.il URL
+      // 3. Check for data.gov.il URL
       const datasetName = extractDatasetName(query);
       const resourceId = extractResourceId(query);
       if (datasetName) {
@@ -198,6 +222,60 @@ export default function HomePage() {
         <div aria-live="polite" aria-atomic="true">
           {loading && <div className="loading" role="status">{t("common.loading")}</div>}
         </div>
+
+        {/* GovMap layer result */}
+        {!loading && govMapResult && (
+          <section aria-label="govmap result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #0ea5e9" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                      {govMapResult.title}
+                    </h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#e0f2fe",
+                      color: "#075985",
+                    }}>
+                      GOVMAP
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>lay={govMapResult.layer_id}</span>
+                  <span>govmap.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all", direction: "ltr" }}>
+                  <a href={govMapResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {govMapResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "govmap" ? (
+                    <GovmapRequestForm
+                      initialUrl={govMapResult.url || ""}
+                      onClose={() => setRequestFormFor(null)}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("govmap")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.govmap_request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
 
         {/* Gov.il scraper result */}
         {!loading && govIlResult && (
@@ -390,7 +468,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && !govIlResult && query && !error && (
+        {!loading && results.length === 0 && !govIlResult && !govMapResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 
@@ -413,17 +491,26 @@ export default function HomePage() {
                       <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
                     </h3>
                     <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
-                      <span style={{
-                        display: "inline-block",
-                        padding: "0.15rem 0.45rem",
-                        borderRadius: "9999px",
-                        fontSize: "0.65rem",
-                        fontWeight: 600,
-                        background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
-                        color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
-                      }}>
-                        {ds.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
-                      </span>
+                      {(() => {
+                        const palette = ds.source_type === "scraper"
+                          ? { bg: "#fef3c7", fg: "#92400e", label: "GOV.IL" }
+                          : ds.source_type === "govmap"
+                          ? { bg: "#e0f2fe", fg: "#075985", label: "GOVMAP" }
+                          : { bg: "#ccfbf1", fg: "#0f766e", label: "DATA.GOV.IL" };
+                        return (
+                          <span style={{
+                            display: "inline-block",
+                            padding: "0.15rem 0.45rem",
+                            borderRadius: "9999px",
+                            fontSize: "0.65rem",
+                            fontWeight: 600,
+                            background: palette.bg,
+                            color: palette.fg,
+                          }}>
+                            {palette.label}
+                          </span>
+                        );
+                      })()}
                       <span className="badge badge-info">
                         {ds.version_count} {t("home.versions_count")}
                       </span>
@@ -474,22 +561,30 @@ export default function HomePage() {
                       </a>
                     )}
 
-                    {(ds.source_type === "scraper"
-                      ? ds.source_url
-                      : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`)
-                    ) && (
-                      <a
-                        href={(ds.source_type === "scraper"
+                    {(() => {
+                      const sourceHref =
+                        ds.source_type === "scraper" || ds.source_type === "govmap"
                           ? ds.source_url
-                          : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`))!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--text-muted)", textDecoration: "none" }}
-                      >
-                        {ds.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
-                      </a>
-                    )}
+                          : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
+                      if (!sourceHref) return null;
+                      const linkLabel =
+                        ds.source_type === "scraper"
+                          ? t("home.source_link_govil")
+                          : ds.source_type === "govmap"
+                          ? t("home.source_link_govmap")
+                          : t("home.source_link");
+                      return (
+                        <a
+                          href={sourceHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm"
+                          style={{ color: "var(--text-muted)", textDecoration: "none" }}
+                        >
+                          {linkLabel} &#8599;
+                        </a>
+                      );
+                    })()}
 
                   </div>
                 </article>

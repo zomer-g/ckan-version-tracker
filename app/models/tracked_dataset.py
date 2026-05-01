@@ -24,7 +24,7 @@ class TrackedDataset(Base):
     poll_interval: Mapped[int] = mapped_column(Integer, default=3600)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
-    source_type: Mapped[str] = mapped_column(String(20), default="ckan")  # "ckan" | "scraper"
+    source_type: Mapped[str] = mapped_column(String(20), default="ckan")  # "ckan" | "scraper" | "govmap"
     source_url: Mapped[str | None] = mapped_column(String(1000))
     scraper_config: Mapped[dict | None] = mapped_column(JSONB)
     storage_mode: Mapped[str] = mapped_column(String(20), default="full_snapshot")  # "full_snapshot" | "append_only"

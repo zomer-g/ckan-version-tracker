@@ -125,6 +125,11 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
     }),
+  trackGovmap: (source_url: string, title?: string, poll_interval = 604800) =>
+    request<TrackedDataset>("/datasets", {
+      method: "POST",
+      body: JSON.stringify({ source_type: "govmap", source_url, title, poll_interval }),
+    }),
   update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
@@ -198,6 +203,24 @@ export const govil = {
     }),
 };
 
+// GovMap Validation
+export interface GovMapValidation {
+  valid: boolean;
+  layer_id?: string;
+  center_itm?: { x: number; y: number } | null;
+  url?: string;
+  title?: string;
+  error?: string;
+}
+
+export const govmap = {
+  validate: (url: string) =>
+    request<GovMapValidation>("/govmap/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
@@ -225,6 +248,27 @@ export const publicApi = {
     request<{ message: string }>("/datasets/requests", {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", ...data }),
+    }),
+  requestGovmap: (data: {
+    source_urls: string[];
+    title?: string;
+    preferred_interval?: number;
+    requester_name?: string;
+    requester_notes?: string;
+    requester_contact?: string;
+  }) =>
+    request<{
+      message: string;
+      status: string;
+      results: Array<{
+        url: string;
+        status: "pending" | "duplicate" | "invalid";
+        layer_id?: string;
+        error?: string;
+      }>;
+    }>("/datasets/requests", {
+      method: "POST",
+      body: JSON.stringify({ source_type: "govmap", ...data }),
     }),
 };
 

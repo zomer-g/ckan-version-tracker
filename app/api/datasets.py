@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 class TrackRequest(BaseModel):
     ckan_id: str | None = None
-    source_type: str = "ckan"  # "ckan" | "scraper"
+    source_type: str = "ckan"  # "ckan" | "scraper" | "govmap"
     source_url: str | None = None
     title: str | None = None
     scraper_config: dict | None = None
@@ -116,7 +116,7 @@ class DatasetResponse(BaseModel):
 
 def _build_source_url(ds: TrackedDataset) -> str:
     """Compute the source URL for a tracked dataset."""
-    if ds.source_type == "scraper" and ds.source_url:
+    if ds.source_type in ("scraper", "govmap") and ds.source_url:
         return ds.source_url
     org = ds.organization or ""
     name = ds.ckan_name or ""
@@ -299,6 +299,106 @@ async def track_dataset(
             source_type=ds.source_type,
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=(ds.scraper_config or {}).get("append_key"),
+            last_error=ds.last_error,
+            resource_ids=ds.resource_ids,
+            new_resources_at_source=ds.new_resources_at_source,
+        )
+
+    # ---- GovMap layer (single URL — bulk is exposed only on the
+    # public /requests endpoint to keep the admin path simple) ----
+    if body.source_type == "govmap":
+        if not body.source_url:
+            raise HTTPException(status_code=400, detail="source_url is required for govmap datasets")
+
+        from app.api.govmap import parse_govmap_url, build_govmap_title
+        parsed = parse_govmap_url(body.source_url)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="Invalid govmap.gov.il layer URL (missing lay=<id>)")
+
+        existing = await db.execute(
+            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Dataset already tracked")
+
+        layer_id = parsed.layer_id
+        unique_slug = scraper_url_slug(f"govmap-{layer_id}", body.source_url)
+        ckan_id = f"govmap-{unique_slug}"
+        ckan_name = unique_slug
+        title = body.title or build_govmap_title(layer_id)
+
+        mirror_name = f"gov-versions-govmap-{unique_slug}"
+        odata_dataset_id = None
+        if dataset_status == "active" and settings.odata_api_key:
+            try:
+                mirror = await odata_client.create_dataset(
+                    name=mirror_name,
+                    title=f"[Versions] {title}",
+                    owner_org=settings.odata_owner_org,
+                    extras=[
+                        {"key": "source_type", "value": "govmap"},
+                        {"key": "source_url", "value": body.source_url},
+                        {"key": "govmap_layer_id", "value": layer_id},
+                        {"key": "auto_managed", "value": "true"},
+                    ],
+                )
+                odata_dataset_id = mirror["id"]
+            except Exception as e1:
+                logger.warning("Mirror create failed: %s", e1)
+                try:
+                    mirror = await odata_client.package_show(mirror_name)
+                    odata_dataset_id = mirror["id"]
+                except Exception as e2:
+                    logger.error("Mirror find also failed: %s", e2)
+
+        sc: dict = dict(body.scraper_config or {})
+        sc.update({
+            "kind": "govmap",
+            "layer_id": layer_id,
+            "download_files": False,
+        })
+        if parsed.center_itm:
+            sc["center_itm"] = parsed.center_itm
+
+        ds = TrackedDataset(
+            ckan_id=ckan_id,
+            ckan_name=ckan_name,
+            title=title,
+            organization="govmap.gov.il",
+            source_type="govmap",
+            source_url=body.source_url,
+            scraper_config=sc,
+            storage_mode=storage_mode,
+            odata_dataset_id=odata_dataset_id,
+            poll_interval=interval,
+            status=dataset_status,
+            created_by=user.id,
+            last_modified=None,
+        )
+        db.add(ds)
+        await db.commit()
+        await db.refresh(ds)
+
+        if dataset_status == "active":
+            from app.worker.poll_job import poll_dataset
+            background_tasks.add_task(poll_dataset, str(ds.id))
+
+        return DatasetResponse(
+            id=str(ds.id),
+            ckan_id=ds.ckan_id,
+            ckan_name=ds.ckan_name,
+            title=ds.title,
+            organization=ds.organization,
+            odata_dataset_id=ds.odata_dataset_id,
+            poll_interval=ds.poll_interval,
+            is_active=ds.is_active,
+            status=ds.status,
+            last_polled_at=None,
+            last_modified=ds.last_modified,
+            source_url=ds.source_url or "",
+            source_type=ds.source_type,
+            storage_mode=ds.storage_mode or "full_snapshot",
+            append_key=None,
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -658,8 +758,11 @@ async def trigger_poll(
 
 class TrackingRequest(BaseModel):
     ckan_id: str | None = None
-    source_type: str = "ckan"  # "ckan" | "scraper"
+    source_type: str = "ckan"  # "ckan" | "scraper" | "govmap"
     source_url: str | None = None
+    # GovMap supports bulk submission: one request creates one TrackedDataset
+    # per URL. Other source_types ignore this field and use source_url.
+    source_urls: list[str] | None = None
     title: str | None = None
     resource_id: str | None = None
     resource_ids: list[str] | None = None
@@ -716,6 +819,79 @@ async def submit_tracking_request(
         db.add(ds)
         await db.commit()
         return {"message": "Request submitted", "status": "pending"}
+
+    # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
+    if body.source_type == "govmap":
+        from app.api.govmap import parse_govmap_url, build_govmap_title
+
+        urls = list(body.source_urls or [])
+        if body.source_url and body.source_url not in urls:
+            urls.insert(0, body.source_url)
+        urls = [u.strip() for u in urls if u and u.strip()]
+        if not urls:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one source_url is required for govmap datasets",
+            )
+
+        results: list[dict] = []
+        any_created = False
+        for url in urls:
+            parsed = parse_govmap_url(url)
+            if not parsed:
+                results.append({
+                    "url": url,
+                    "status": "invalid",
+                    "error": "Invalid govmap.gov.il URL (missing lay=<id>)",
+                })
+                continue
+
+            dup = await db.execute(
+                select(TrackedDataset).where(TrackedDataset.source_url == url)
+            )
+            if dup.scalar_one_or_none():
+                results.append({"url": url, "status": "duplicate"})
+                continue
+
+            layer_id = parsed.layer_id
+            unique_slug = scraper_url_slug(f"govmap-{layer_id}", url)
+            sc: dict = {
+                "kind": "govmap",
+                "layer_id": layer_id,
+                "download_files": False,
+            }
+            if parsed.center_itm:
+                sc["center_itm"] = parsed.center_itm
+
+            ds = TrackedDataset(
+                ckan_id=f"govmap-{unique_slug}",
+                ckan_name=unique_slug,
+                title=body.title.strip() if body.title and body.title.strip() else build_govmap_title(layer_id),
+                organization="govmap.gov.il",
+                source_type="govmap",
+                source_url=url,
+                scraper_config=sc,
+                poll_interval=interval,
+                status="pending",
+                created_by=None,
+                last_modified=None,
+            )
+            db.add(ds)
+            any_created = True
+            results.append({
+                "url": url,
+                "status": "pending",
+                "layer_id": layer_id,
+            })
+
+        if any_created:
+            await db.commit()
+
+        return {
+            "message": "Request submitted" if any_created else "No new layers added",
+            "status": "pending" if any_created else "noop",
+            "results": results,
+        }
 
     # ---- CKAN-type request (original flow) ----
     if not body.ckan_id:
