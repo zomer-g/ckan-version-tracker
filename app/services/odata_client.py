@@ -453,67 +453,123 @@ class ODataClient:
         resource_id = resource["id"]
 
         # Step 3: Push data into datastore in batches (for filter/search UI).
-        # Uses the shared _push_batch_with_retry helper so force=True is
-        # always sent on upserts and each batch retries transient failures
-        # (same semantics as push_records_to_datastore_from_file).
         #
-        # IMPORTANT: odata.org.il's CKAN normalises column names on
-        # datastore_create — Hebrew is transliterated to ASCII (e.g.
-        # `חשבון` → `khshbvn`, `הצעת תקציב 2014` → `hts`t tqtsyb 2014`).
-        # If we keep sending records keyed by the original names, the
-        # second batch's datastore_upsert(method="insert") returns 409
-        # "row 1 has extra keys ..." because every original key looks
-        # extra against the normalised schema. After the create call we
-        # therefore fetch the actual schema CKAN built and, if it differs
-        # from what we sent, build a position-based mapping and rekey the
-        # remaining batches before upserting.
+        # odata.org.il runs CKAN's xloader/datapusher automatically on
+        # every uploaded CSV — by the time we get here the datastore
+        # table almost always already exists, with column names that
+        # CKAN has normalised (Hebrew → ASCII transliteration:
+        # `חשבון` → `khshbvn`, etc.). If we blindly call
+        # datastore_create with our original Hebrew field list it
+        # races/conflicts with the autopusher and returns 409
+        # "Supplied field 'חשבון' not present or in wrong order".
+        #
+        # So we probe first: ask CKAN what schema (if any) already
+        # exists. If it's there, build a position-based remap from our
+        # original column names to the names CKAN settled on, skip the
+        # create entirely, and upsert every batch with remapped keys.
+        # Only when no datastore exists yet do we run datastore_create
+        # ourselves (and even then we re-probe afterwards in case
+        # datastore_create itself normalised our names — we've seen
+        # that on ckanext-datastore_normalize too).
         import asyncio
         batches = batch_records(records)
         total_batches = len(batches)
 
-        key_map: dict[str, str] | None = None  # original → ckan-normalised
-        for i, batch in enumerate(batches, start=1):
+        # Wait briefly for the autopusher to commit a schema + rows, then
+        # decide what we still need to push ourselves. Returns (fields,
+        # total_rows) or (None, 0) if nothing landed in time.
+        async def _probe_schema() -> tuple[list[str] | None, int]:
+            for attempt in range(6):  # ~12s total
+                try:
+                    info = await self.datastore_info(resource_id)
+                except Exception:
+                    info = None
+                if info:
+                    fs = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
+                    total = info.get("total", 0) or 0
+                    if fs:
+                        return fs, int(total)
+                await asyncio.sleep(2)
+            return None, 0
+
+        expected_fields = [f["id"] for f in fields]
+        actual_fields, autoloaded_rows = await _probe_schema()
+
+        # If the autopusher already loaded EVERYTHING (or close to it),
+        # an extra upsert would only duplicate rows — datastore_upsert
+        # method=insert just appends, it doesn't dedupe by content. So
+        # bail out: the file is uploaded, the datastore has the right
+        # rows, the version-history record can point at this resource_id
+        # and we're done.
+        if actual_fields and autoloaded_rows >= len(records):
+            logger.info(
+                "Autopusher fully populated %s (%d rows ≥ %d uploaded); "
+                "skipping our datastore push to avoid duplicates",
+                resource_id, autoloaded_rows, len(records),
+            )
+            return resource
+
+        if actual_fields is None:
+            # No datastore yet — create it ourselves.
+            logger.info("No autopusher schema for %s; running datastore_create", resource_id)
+            await self._push_batch_with_retry(
+                resource_id=resource_id,
+                fields=fields,
+                records_batch=batches[0],
+                create=True,
+                batch_num=1,
+                is_last=(total_batches == 1),
+            )
+            start_batch = 2
+            # Re-probe in case datastore_create renamed columns.
+            try:
+                info = await self.datastore_info(resource_id)
+                actual_fields = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
+            except Exception:
+                actual_fields = expected_fields
+        else:
+            logger.info(
+                "Autopusher provided partial schema for %s "
+                "(%d rows already in, %d to push); upserting all batches",
+                resource_id, autoloaded_rows, len(records),
+            )
+            start_batch = 1
+
+        # Build a position-based remap if column names differ.
+        key_map: dict[str, str] | None = None
+        if (
+            actual_fields
+            and len(actual_fields) == len(expected_fields)
+            and actual_fields != expected_fields
+        ):
+            key_map = dict(zip(expected_fields, actual_fields))
+            logger.info("Datastore renamed columns; remap = %s", key_map)
+        elif actual_fields and len(actual_fields) != len(expected_fields):
+            logger.warning(
+                "Schema field count mismatch (we have %d, datastore has %d) "
+                "for %s — upsert may drop columns",
+                len(expected_fields), len(actual_fields), resource_id,
+            )
+
+        # Upsert remaining batches (or all of them if autopusher loaded
+        # only the schema but no rows).
+        for i in range(start_batch, total_batches + 1):
+            batch = batches[i - 1]
             logger.info(
                 "Pushing batch %d/%d (%d records) to %s",
                 i, total_batches, len(batch), resource_id,
             )
-            batch_to_push = batch
-            if key_map is not None:
-                batch_to_push = [_remap_keys(r, key_map) for r in batch]
+            batch_to_push = (
+                [_remap_keys(r, key_map) for r in batch] if key_map else batch
+            )
             await self._push_batch_with_retry(
                 resource_id=resource_id,
                 fields=fields,
                 records_batch=batch_to_push,
-                create=(i == 1),
+                create=False,  # always upsert when the schema already exists
                 batch_num=i,
                 is_last=(i == total_batches),
             )
-
-            # Right after the create succeeded, see what schema CKAN
-            # actually committed. If the column names changed, build a
-            # mapping for the remaining batches.
-            if i == 1 and total_batches > 1:
-                try:
-                    info = await self.datastore_info(resource_id)
-                    actual_fields = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
-                    expected_fields = [f["id"] for f in fields]
-                    if (
-                        actual_fields
-                        and len(actual_fields) == len(expected_fields)
-                        and actual_fields != expected_fields
-                    ):
-                        key_map = dict(zip(expected_fields, actual_fields))
-                        logger.info(
-                            "Datastore renamed columns; remapping remaining batches: %s",
-                            key_map,
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "Could not fetch actual schema after datastore_create on %s: %s — "
-                        "subsequent upserts may fail if CKAN renamed columns",
-                        resource_id, e,
-                    )
-
             if i < total_batches:
                 await asyncio.sleep(1)  # brief settle pause between batches
 
