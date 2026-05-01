@@ -15,6 +15,17 @@ DATASTORE_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=10
 UPLOAD_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=10.0)
 
 
+def _remap_keys(record: dict, key_map: dict[str, str]) -> dict:
+    """Rename keys in a record dict according to ``key_map``.
+
+    Used when CKAN's datastore_create normalised our column names
+    (typically Hebrew → ASCII transliteration on odata.org.il) so we
+    can keep upserting subsequent batches against the schema CKAN
+    actually built, rather than the schema we asked for.
+    """
+    return {key_map.get(k, k): v for k, v in record.items()}
+
+
 class ODataClient:
     """Async client for reading/writing to odata.org.il CKAN API."""
 
@@ -267,6 +278,15 @@ class ODataClient:
 
     # ── Datastore API ────────────────────────────────────────────────────
 
+    async def datastore_info(self, resource_id: str) -> dict:
+        """Fetch the actual datastore schema CKAN built for a resource.
+
+        Returns the full ``datastore_search`` result-shape (``fields``,
+        ``total``, etc.). Used right after ``datastore_create`` so we can
+        compare what we asked for against what CKAN actually committed.
+        """
+        return await self._get("datastore_search", {"resource_id": resource_id, "limit": 0})
+
     async def datastore_create(
         self,
         resource_id: str,
@@ -436,23 +456,64 @@ class ODataClient:
         # Uses the shared _push_batch_with_retry helper so force=True is
         # always sent on upserts and each batch retries transient failures
         # (same semantics as push_records_to_datastore_from_file).
+        #
+        # IMPORTANT: odata.org.il's CKAN normalises column names on
+        # datastore_create — Hebrew is transliterated to ASCII (e.g.
+        # `חשבון` → `khshbvn`, `הצעת תקציב 2014` → `hts`t tqtsyb 2014`).
+        # If we keep sending records keyed by the original names, the
+        # second batch's datastore_upsert(method="insert") returns 409
+        # "row 1 has extra keys ..." because every original key looks
+        # extra against the normalised schema. After the create call we
+        # therefore fetch the actual schema CKAN built and, if it differs
+        # from what we sent, build a position-based mapping and rekey the
+        # remaining batches before upserting.
         import asyncio
         batches = batch_records(records)
         total_batches = len(batches)
 
+        key_map: dict[str, str] | None = None  # original → ckan-normalised
         for i, batch in enumerate(batches, start=1):
             logger.info(
                 "Pushing batch %d/%d (%d records) to %s",
                 i, total_batches, len(batch), resource_id,
             )
+            batch_to_push = batch
+            if key_map is not None:
+                batch_to_push = [_remap_keys(r, key_map) for r in batch]
             await self._push_batch_with_retry(
                 resource_id=resource_id,
                 fields=fields,
-                records_batch=batch,
+                records_batch=batch_to_push,
                 create=(i == 1),
                 batch_num=i,
                 is_last=(i == total_batches),
             )
+
+            # Right after the create succeeded, see what schema CKAN
+            # actually committed. If the column names changed, build a
+            # mapping for the remaining batches.
+            if i == 1 and total_batches > 1:
+                try:
+                    info = await self.datastore_info(resource_id)
+                    actual_fields = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
+                    expected_fields = [f["id"] for f in fields]
+                    if (
+                        actual_fields
+                        and len(actual_fields) == len(expected_fields)
+                        and actual_fields != expected_fields
+                    ):
+                        key_map = dict(zip(expected_fields, actual_fields))
+                        logger.info(
+                            "Datastore renamed columns; remapping remaining batches: %s",
+                            key_map,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Could not fetch actual schema after datastore_create on %s: %s — "
+                        "subsequent upserts may fail if CKAN renamed columns",
+                        resource_id, e,
+                    )
+
             if i < total_batches:
                 await asyncio.sleep(1)  # brief settle pause between batches
 
