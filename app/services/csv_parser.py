@@ -9,8 +9,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Max rows to sample for type detection
-TYPE_SAMPLE_SIZE = 100
 # Max records per datastore_create/upsert batch
 BATCH_SIZE = 5000
 
@@ -72,12 +70,19 @@ def _clean_value(value: str | None) -> str | None:
 
 
 def _detect_field_types(field_names: list[str], records: list[dict]) -> list[dict]:
-    """Detect CKAN Datastore field types by sampling records."""
-    sample = records[:TYPE_SAMPLE_SIZE]
+    """Detect CKAN Datastore field types by scanning EVERY record.
+
+    Sampling a prefix is unsafe: a single text value in row 9,000 of an
+    otherwise-integer column demotes the column to text. If we mis-detect
+    "integer" from a 100-row sample and that text value lands in a later
+    batch, CKAN's typed INSERT returns 409 Conflict on the entire batch
+    (no per-row error → all 2,500 rows fail). Records are already in
+    memory at this point, so the full scan is essentially free.
+    """
     fields = []
 
     for name in field_names:
-        values = [r.get(name) for r in sample if r.get(name) is not None]
+        values = [r.get(name) for r in records if r.get(name) is not None]
         field_type = _infer_type(values)
         fields.append({"id": name, "type": field_type})
 
@@ -132,7 +137,15 @@ def _is_date(v: str) -> bool:
 
 
 def _cast_records(records: list[dict], fields: list[dict]) -> list[dict]:
-    """Cast string values to their detected types."""
+    """Cast string values to their detected types.
+
+    On cast failure (a value the detector said was castable but isn't —
+    should be impossible after the full-scan detector but kept as a
+    belt-and-suspenders), fall back to NULL rather than the original
+    string. CKAN datastore rejects a typed INSERT outright if any row
+    has the wrong type, returning 409 for the whole batch — losing one
+    cell to NULL is better than dropping 2,500 rows.
+    """
     type_map = {f["id"]: f["type"] for f in fields}
     casted = []
 
@@ -145,12 +158,12 @@ def _cast_records(records: list[dict], fields: list[dict]) -> list[dict]:
                 try:
                     new_row[key] = int(val.replace(",", ""))
                 except (ValueError, AttributeError):
-                    new_row[key] = val
+                    new_row[key] = None
             elif type_map.get(key) == "numeric":
                 try:
                     new_row[key] = float(val.replace(",", ""))
                 except (ValueError, AttributeError):
-                    new_row[key] = val
+                    new_row[key] = None
             else:
                 new_row[key] = val
         casted.append(new_row)

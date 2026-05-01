@@ -30,7 +30,23 @@ class ODataClient:
         async with httpx.AsyncClient(timeout=timeout or TIMEOUT) as client:
             url = f"{self.api_url}/{action}"
             resp = await client.post(url, json=data or {}, headers=self._headers())
-            resp.raise_for_status()
+            if resp.is_error:
+                # Surface CKAN's structured error body — the JSON shape is
+                # {"error": {"...": "..."}} and tells us things like the
+                # actual field-type mismatch behind a 409 Conflict. Without
+                # this the caller only ever sees "Client error '409 …'" and
+                # can't tell which column or value tripped the validator.
+                detail = ""
+                try:
+                    body = resp.json()
+                    err = body.get("error") if isinstance(body, dict) else None
+                    if err:
+                        detail = json.dumps(err, ensure_ascii=False)[:600]
+                except Exception:
+                    detail = (resp.text or "")[:300]
+                raise RuntimeError(
+                    f"odata {action} {resp.status_code}: {detail or resp.reason_phrase}"
+                )
             result = resp.json()
             if not result.get("success"):
                 raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
