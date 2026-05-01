@@ -149,7 +149,7 @@ async def poll_dataset(dataset_id: str) -> None:
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
 
-            changed_resources, hash_map = await detect_resource_changes(
+            changed_resources, hash_map, detect_errors = await detect_resource_changes(
                 old_mappings, resources
             )
 
@@ -167,13 +167,30 @@ async def poll_dataset(dataset_id: str) -> None:
                 if appended:
                     return
 
+            # If detect_resource_changes saw failures but nothing changed
+            # (e.g. every resource is blocked at the source), surface the
+            # reason on last_error and stop here. Without this, a forced
+            # re-poll would silently no-op and the admin would have no
+            # idea why no new version appeared.
+            if not is_first_version and not changed_resources and detect_errors:
+                msg = "; ".join(detect_errors)[:2000]
+                ds.last_error = msg
+                logger.error(
+                    "Poll for %s: 0 resources usable, errors: %s",
+                    ds.ckan_name, msg,
+                )
+                ds.last_polled_at = datetime.now(timezone.utc)
+                ds.last_modified = new_modified
+                await db.commit()
+                return
+
             if is_first_version or changed_resources:
                 logger.info(
                     "Creating version %d for %s (%d resources changed)",
                     next_version, ds.ckan_name, len(changed_resources),
                 )
 
-                errors: list[str] = []
+                errors: list[str] = list(detect_errors)
 
                 # For first version, download all resources. Each download
                 # streams to a temp file on disk (returned as ``file_path``)

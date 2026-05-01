@@ -25,12 +25,17 @@ def has_metadata_changed(old_modified: str | None, new_modified: str) -> bool:
 
 async def detect_resource_changes(
     old_mappings: dict | None, resources: list[dict]
-) -> tuple[list[dict], dict[str, str]]:
+) -> tuple[list[dict], dict[str, str], list[str]]:
     """
     Download resources to disk and detect which ones changed.
-    Returns (changed_resources, hash_map) where:
+    Returns (changed_resources, hash_map, errors) where:
       - changed_resources: list of {resource, file_path, byte_count, sha256}
       - hash_map: {ckan_resource_id: sha256}
+      - errors: per-resource failure messages (empty if every download
+        succeeded). Returned so the caller can persist them on
+        tracked_dataset.last_error rather than only logging — without
+        this, a poll where every download fails (e.g. all 4 ZIPs of a
+        IAP-blocked dataset) silently no-ops with no UI signal.
 
     Caller owns the temp files at ``file_path`` — they MUST be deleted
     after upload (see snapshot_service which removes them in a finally
@@ -41,6 +46,7 @@ async def detect_resource_changes(
 
     changed = []
     hash_map = {}
+    errors: list[str] = []
     old_hashes = {}
 
     # Extract old hashes from mappings if available
@@ -82,8 +88,9 @@ async def detect_resource_changes(
         except Exception as e:
             logger.warning("Failed to download resource %s: %s", rid, e)
             hash_map[rid] = "download_failed"
+            errors.append(f"download {resource.get('name', rid[:8])}: {e}")
 
-    return changed, hash_map
+    return changed, hash_map, errors
 
 
 def compute_change_summary(
