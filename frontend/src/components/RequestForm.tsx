@@ -199,21 +199,72 @@ export default function RequestForm({
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {showResourcePicker && (
-          <div>
-            <div className="text-sm" style={{ fontWeight: 500, marginBottom: "0.4rem" }}>
-              {t("home.request_pick_files_label") || "בחרו אילו קבצים לעקוב אחריהם"}
-              <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
+          <div
+            style={{
+              padding: "0.7rem 0.8rem",
+              border: "1px solid var(--primary-100)",
+              borderRadius: "var(--radius)",
+              background: "white",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "0.5rem",
+              }}
+            >
+              <div className="text-sm" style={{ fontWeight: 600 }}>
+                {t("home.request_pick_files_label") || "בחרו אילו קבצים לעקוב אחריהם"}
+                <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
+              </div>
+              <div style={{ display: "flex", gap: "0.25rem" }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedResources(new Set(availableResources!.map((r) => r.id)))
+                  }
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: "4px",
+                    padding: "0.15rem 0.5rem",
+                    fontSize: "0.7rem",
+                    cursor: "pointer",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  סמן הכל
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedResources(new Set())}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: "4px",
+                    padding: "0.15rem 0.5rem",
+                    fontSize: "0.7rem",
+                    cursor: "pointer",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  נקה
+                </button>
+              </div>
             </div>
             <div
               style={{
-                maxHeight: "12rem",
+                maxHeight: "20rem",
                 overflowY: "auto",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--radius)",
-                background: "white",
+                background: "var(--bg-secondary, #f8f9fa)",
               }}
             >
-              {availableResources!.map((res) => {
+              {availableResources!.map((res, idx) => {
                 const checked = selectedResources.has(res.id);
                 return (
                   <label
@@ -221,23 +272,26 @@ export default function RequestForm({
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: "0.5rem",
-                      padding: "0.4rem 0.6rem",
-                      borderBottom: "1px solid var(--border)",
+                      gap: "0.6rem",
+                      padding: "0.55rem 0.7rem",
+                      borderBottom:
+                        idx < availableResources!.length - 1 ? "1px solid var(--border)" : "none",
                       cursor: "pointer",
-                      fontSize: "0.85rem",
+                      fontSize: "0.9rem",
+                      background: checked ? "var(--primary-50)" : "transparent",
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggleResource(res.id)}
+                      style={{ width: "1rem", height: "1rem", flexShrink: 0 }}
                     />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {res.name || res.id}
                     </span>
                     {res.format && (
-                      <span className="badge" style={{ fontSize: "0.7rem" }}>
+                      <span className="badge" style={{ fontSize: "0.7rem", flexShrink: 0 }}>
                         {res.format}
                       </span>
                     )}
@@ -245,8 +299,10 @@ export default function RequestForm({
                 );
               })}
             </div>
-            <div className="text-sm text-muted" style={{ marginTop: "0.25rem" }}>
-              {selectedResources.size}/{availableResources!.length}
+            <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>
+              {selectedResources.size === 0
+                ? "בחרו לפחות קובץ אחד"
+                : `${selectedResources.size} מתוך ${availableResources!.length} קבצים נבחרו`}
             </div>
           </div>
         )}

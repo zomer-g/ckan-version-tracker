@@ -4,6 +4,8 @@ import io
 import ipaddress
 import json
 import logging
+import os
+import tempfile
 from typing import Any
 from urllib.parse import urlparse
 
@@ -80,110 +82,162 @@ class CKANClient:
     async def organization_list(self, all_fields: bool = False) -> list:
         return await self._get("organization_list", {"all_fields": all_fields})
 
-    async def download_resource(self, url: str, resource_id: str = "") -> tuple[bytes, str]:
+    async def download_resource(self, url: str, resource_id: str = "") -> tuple[str, str, int]:
         """
-        Download a resource. Strategy:
-        1. Try datastore_search API (works even when direct URL is blocked by IAP)
-        2. Fall back to direct URL download
+        Download a resource into a temporary file on disk.
+
+        Returns ``(file_path, sha256, byte_count)``. The caller owns the
+        file and is responsible for deleting it when done — typically
+        via ``os.unlink(path)`` in a try/finally. Streaming straight to
+        disk keeps peak memory at one HTTP chunk (~64KB) regardless of
+        the resource size, so a 200MB ZIP no longer OOM-kills the 512MB
+        Render dyno.
+
+        Strategy:
+        1. Try datastore_search API (works even when direct URL is
+           blocked by IAP).
+        2. Fall back to streaming direct URL download.
         """
         # Strategy 1: Try datastore API (data.gov.il blocks direct downloads with Google IAP)
         if resource_id:
             try:
-                content = await self._download_via_datastore(resource_id)
-                if content and not content.startswith(b"<!"):  # Not an HTML error page
-                    sha256 = hashlib.sha256(content).hexdigest()
-                    logger.info("Downloaded %s via datastore API (%d bytes)", resource_id, len(content))
-                    return content, sha256
+                path, sha256, n = await self._download_via_datastore_to_file(resource_id)
+                if n > 0:
+                    logger.info(
+                        "Downloaded %s via datastore API (%d bytes → %s)",
+                        resource_id, n, path,
+                    )
+                    return path, sha256, n
             except Exception as e:
                 logger.debug("Datastore download failed for %s: %s, trying direct URL", resource_id, e)
 
         # Strategy 2: Direct URL download (may fail on data.gov.il due to IAP)
         return await self._download_direct(url)
 
-    async def _download_via_datastore(self, resource_id: str) -> bytes:
-        """Download all records from data.gov.il datastore and convert to CSV bytes."""
-        all_records: list[dict] = []
-        fields: list[str] = []
+    async def _download_via_datastore_to_file(self, resource_id: str) -> tuple[str, str, int]:
+        """Stream the datastore export to a temp CSV file, hashing as we go."""
+        max_size = settings.max_resource_download_size
+
+        fd, path = tempfile.mkstemp(prefix="ckan-ds-", suffix=".csv")
+        os.close(fd)
+        h = hashlib.sha256()
+        total = 0
         offset = 0
+        fields: list[str] = []
+        any_records = False
 
-        async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
-            while True:
-                url = f"{self.api_url}/datastore_search"
-                params = {
-                    "resource_id": resource_id,
-                    "limit": DATASTORE_PAGE_SIZE,
-                    "offset": offset,
-                }
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
+                    writer: csv.DictWriter | None = None
+                    while True:
+                        url = f"{self.api_url}/datastore_search"
+                        params = {
+                            "resource_id": resource_id,
+                            "limit": DATASTORE_PAGE_SIZE,
+                            "offset": offset,
+                        }
+                        resp = await client.get(url, params=params)
+                        resp.raise_for_status()
+                        data = resp.json()
 
-                if not data.get("success"):
-                    raise RuntimeError(f"datastore_search error: {data.get('error')}")
+                        if not data.get("success"):
+                            raise RuntimeError(f"datastore_search error: {data.get('error')}")
 
-                result = data["result"]
+                        result = data["result"]
 
-                if not fields and result.get("fields"):
-                    fields = [f["id"] for f in result["fields"] if f["id"] != "_id"]
+                        if not fields and result.get("fields"):
+                            fields = [f["id"] for f in result["fields"] if f["id"] != "_id"]
+                            if not fields:
+                                break
+                            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+                            writer.writeheader()
 
-                records = result.get("records", [])
-                if not records:
-                    break
+                        records = result.get("records", [])
+                        if not records:
+                            break
 
-                all_records.extend(records)
-                offset += len(records)
+                        for record in records:
+                            assert writer is not None
+                            clean = {k: v for k, v in record.items() if k != "_id"}
+                            buf = io.StringIO()
+                            csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore").writerow(clean)
+                            line = buf.getvalue()
+                            fh.write(line)
+                            line_bytes = line.encode("utf-8")
+                            h.update(line_bytes)
+                            total += len(line_bytes)
+                            any_records = True
+                            if total > max_size:
+                                raise ValueError(f"Resource exceeded size limit ({max_size} bytes)")
+                        offset += len(records)
+                        if offset >= result.get("total", 0):
+                            break
+        except Exception:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
 
-                # Check if we got all records
-                total = result.get("total", 0)
-                if offset >= total:
-                    break
+        if not any_records or not fields:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return "", "", 0
 
-        if not all_records or not fields:
-            raise RuntimeError("No data returned from datastore")
+        return path, h.hexdigest(), total
 
-        # Convert to CSV bytes
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        for record in all_records:
-            # Remove _id field added by datastore
-            clean = {k: v for k, v in record.items() if k != "_id"}
-            writer.writerow(clean)
-
-        return output.getvalue().encode("utf-8")
-
-    async def _download_direct(self, url: str) -> tuple[bytes, str]:
-        """Direct file download with SSRF protection."""
+    async def _download_direct(self, url: str) -> tuple[str, str, int]:
+        """Stream a direct file download to a temp file, with SSRF protection."""
         _validate_url(url)
         max_size = settings.max_resource_download_size
 
-        async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+        fd, path = tempfile.mkstemp(prefix="ckan-dl-")
+        os.close(fd)
+        h = hashlib.sha256()
+        total = 0
+        first_bytes = b""
+
+        try:
+            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+                try:
+                    head = await client.head(url)
+                    content_length = head.headers.get("content-length")
+                    if content_length and int(content_length) > max_size:
+                        raise ValueError(f"Resource too large: {int(content_length)} bytes")
+                except httpx.HTTPError:
+                    pass
+
+                with open(path, "wb") as fh:
+                    async with client.stream("GET", url) as resp:
+                        resp.raise_for_status()
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            total += len(chunk)
+                            if total > max_size:
+                                raise ValueError(f"Resource exceeded size limit ({max_size} bytes)")
+                            if len(first_bytes) < 16:
+                                first_bytes += chunk[: 16 - len(first_bytes)]
+                            fh.write(chunk)
+                            h.update(chunk)
+        except Exception:
             try:
-                head = await client.head(url)
-                content_length = head.headers.get("content-length")
-                if content_length and int(content_length) > max_size:
-                    raise ValueError(f"Resource too large: {int(content_length)} bytes")
-            except httpx.HTTPError:
+                os.unlink(path)
+            except OSError:
                 pass
+            raise
 
-            chunks = []
-            total = 0
-            async with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                async for chunk in resp.aiter_bytes(chunk_size=65536):
-                    total += len(chunk)
-                    if total > max_size:
-                        raise ValueError(f"Resource exceeded size limit ({max_size} bytes)")
-                    chunks.append(chunk)
+        # Detect if we got an HTML page instead of actual data (IAP redirect)
+        head_lc = first_bytes.lower()
+        if head_lc.startswith(b"<!doctype") or head_lc.startswith(b"<html"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise RuntimeError("Got HTML instead of data — likely blocked by IAP/auth")
 
-            content = b"".join(chunks)
-
-            # Detect if we got an HTML page instead of actual data (IAP redirect)
-            if content[:15].lower().startswith(b"<!doctype") or content[:6].lower().startswith(b"<html"):
-                raise RuntimeError("Got HTML instead of data — likely blocked by IAP/auth")
-
-            sha256 = hashlib.sha256(content).hexdigest()
-            return content, sha256
+        return path, h.hexdigest(), total
 
     async def head_resource(self, url: str) -> dict:
         """HEAD request to check resource metadata without downloading."""

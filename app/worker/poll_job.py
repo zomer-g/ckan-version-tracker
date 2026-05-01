@@ -38,8 +38,11 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.info("Dataset %s not found or inactive, skipping", dataset_id)
             return
 
-        # For scraper-type datasets, create a task instead of polling CKAN
-        if ds.source_type == "scraper":
+        # For scraper-type datasets (gov.il collectors, govmap layers, etc.),
+        # create a task instead of polling CKAN. The external GOV SCRAPER
+        # worker dispatches to the right per-domain scraper based on the
+        # source_url + scraper_config.kind it receives in the poll response.
+        if ds.source_type in ("scraper", "govmap"):
             await _create_scrape_task(ds, db)
             return
 
@@ -172,7 +175,11 @@ async def poll_dataset(dataset_id: str) -> None:
 
                 errors: list[str] = []
 
-                # For first version, download all resources
+                # For first version, download all resources. Each download
+                # streams to a temp file on disk (returned as ``file_path``)
+                # instead of accumulating bytes in memory — required for the
+                # 512MB Render dyno once a resource grows past ~50MB. The
+                # file paths get cleaned up after the snapshot is uploaded.
                 resources_to_upload = changed_resources
                 if is_first_version:
                     resources_to_upload = []
@@ -180,10 +187,13 @@ async def poll_dataset(dataset_id: str) -> None:
                         if not r.get("url"):
                             continue
                         try:
-                            content, sha256 = await ckan_client.download_resource(r["url"], resource_id=r["id"])
+                            file_path, sha256, byte_count = await ckan_client.download_resource(
+                                r["url"], resource_id=r["id"],
+                            )
                             resources_to_upload.append({
                                 "resource": r,
-                                "content": content,
+                                "file_path": file_path,
+                                "byte_count": byte_count,
                                 "sha256": sha256,
                             })
                             hash_map[r["id"]] = sha256
@@ -351,25 +361,44 @@ async def _poll_append_only(
                     ds.ckan_name, fmt)
         return False
 
-    # On version 1 we always need to download. On subsequent versions, only
-    # if the file hash actually changed (changed_resources is the diff).
+    # On version 1 we always need to download. On subsequent versions,
+    # only if the file hash actually changed (changed_resources is the
+    # diff). Either way the bytes live in a temp file we have to clean
+    # up after parsing.
+    import os as _os
+    file_path: str | None = None
+    own_file = False
     if changed_resources:
-        content = changed_resources[0]["content"]
+        file_path = changed_resources[0].get("file_path")
     else:
         try:
-            content, sha = await ckan_client.download_resource(
+            file_path, sha, _n = await ckan_client.download_resource(
                 resource["url"], resource_id=resource["id"],
             )
             hash_map[resource["id"]] = sha
+            own_file = True
         except Exception as e:
             logger.warning("Append: failed to download %s: %s", resource["id"], e)
             return False
 
     try:
+        if not file_path:
+            return False
+        with open(file_path, "rb") as fh:
+            content = fh.read()
         fields, records = parse_csv(content)
     except Exception as e:
         logger.warning("Append: failed to parse CSV for %s: %s", ds.ckan_name, e)
         return False
+    finally:
+        # We re-downloaded just for this poll; the snapshot path also
+        # cleans up its own temp files, so only delete here when we
+        # owned this download.
+        if own_file and file_path:
+            try:
+                _os.unlink(file_path)
+            except OSError:
+                pass
 
     append_key = (ds.scraper_config or {}).get("append_key")
     seen_keys = list((latest_version.resource_mappings or {}).get("_appendonly_seen", []) or []) if latest_version else []

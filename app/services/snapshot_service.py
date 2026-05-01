@@ -66,32 +66,70 @@ async def create_version_snapshot(
             if rid not in {cr["resource"]["id"] for cr in changed_resources}:
                 resource_mappings[rid] = odata_rid
 
-    # Upload new/changed resources
+    # Upload new/changed resources. Each cr now carries ``file_path``
+    # (a temp file written by ckan_client.download_resource); we stream
+    # straight from disk so peak memory stays ~chunk-size regardless
+    # of resource size. The temp files are unlinked in a finally block
+    # at the end so a partial failure can't leak files onto the dyno's
+    # ephemeral disk.
+    import os as _os
+
     for cr in changed_resources:
         resource = cr["resource"]
         rid = resource["id"]
-        content: bytes = cr["content"]
+        file_path: str | None = cr.get("file_path")
+        # Back-compat: a few callers still hand us a small in-memory
+        # blob (e.g. lightweight CSV exports built locally). If neither
+        # is present, skip with an error rather than crashing.
+        content: bytes | None = cr.get("content")
         fmt = (resource.get("format", "") or "").lower().strip()
 
         try:
             if fmt in TABULAR_FORMATS:
+                # parse_csv reads the whole CSV into memory regardless,
+                # so we either feed it the bytes we already have or load
+                # the temp file once. The size cap upstream keeps this
+                # from OOMing.
+                if content is None and file_path:
+                    with open(file_path, "rb") as fh:
+                        content = fh.read()
+                if content is None:
+                    raise RuntimeError("no content or file_path provided for tabular resource")
                 result = await _push_to_datastore(
                     odata_dataset_id, version_number, resource, content, ts,
                 )
             else:
-                result = await odata_client.upload_resource(
-                    dataset_id=odata_dataset_id,
-                    file_content=content,
-                    filename=f"{ts}_v{version_number}_{resource.get('name', rid)}",
-                    name=f"{ts} v{version_number} - {resource.get('name', rid)}",
-                    description=f"Resource snapshot (version {version_number}, {ts})",
-                    resource_format=fmt.upper(),
-                )
+                if file_path:
+                    result = await odata_client.upload_resource(
+                        dataset_id=odata_dataset_id,
+                        file_path=file_path,
+                        filename=f"{ts}_v{version_number}_{resource.get('name', rid)}",
+                        name=f"{ts} v{version_number} - {resource.get('name', rid)}",
+                        description=f"Resource snapshot (version {version_number}, {ts})",
+                        resource_format=fmt.upper(),
+                    )
+                elif content is not None:
+                    result = await odata_client.upload_resource(
+                        dataset_id=odata_dataset_id,
+                        file_content=content,
+                        filename=f"{ts}_v{version_number}_{resource.get('name', rid)}",
+                        name=f"{ts} v{version_number} - {resource.get('name', rid)}",
+                        description=f"Resource snapshot (version {version_number}, {ts})",
+                        resource_format=fmt.upper(),
+                    )
+                else:
+                    raise RuntimeError("no content or file_path provided")
 
             resource_mappings[rid] = result["id"]
         except Exception as e:
             logger.error("Failed to upload resource %s to odata: %s", rid, e)
             errors.append(f"upload {resource.get('name', rid[:8])} ({fmt or '?'}): {e}")
+        finally:
+            if file_path:
+                try:
+                    _os.unlink(file_path)
+                except OSError:
+                    pass
 
     # Store hashes and resource IDs in mappings for next comparison
     resource_mappings["_hashes"] = hash_map

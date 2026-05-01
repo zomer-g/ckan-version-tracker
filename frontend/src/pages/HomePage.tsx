@@ -309,8 +309,17 @@ export default function HomePage() {
                       </div>
                     )}
 
-                    {/* Resources list when URL-based search */}
-                    {!targetResource && r.resources && r.resources.length > 0 && extractDatasetName(query) && (
+                    {/* Resources list when URL-based search.
+                        When the request form is open for THIS dataset we
+                        hide the read-only list — the form has its own
+                        interactive picker for the same resources, and
+                        showing both is just visual noise that confused
+                        the admin into thinking nothing was clickable. */}
+                    {!targetResource &&
+                      r.resources &&
+                      r.resources.length > 0 &&
+                      extractDatasetName(query) &&
+                      requestFormFor !== formKey && (
                       <div style={{ marginTop: "0.75rem" }}>
                         <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem" }}>
                           {t("search.resources")}:

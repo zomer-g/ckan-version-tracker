@@ -27,11 +27,18 @@ async def detect_resource_changes(
     old_mappings: dict | None, resources: list[dict]
 ) -> tuple[list[dict], dict[str, str]]:
     """
-    Download resources and detect which ones changed.
+    Download resources to disk and detect which ones changed.
     Returns (changed_resources, hash_map) where:
-      - changed_resources: list of {resource, content, sha256}
+      - changed_resources: list of {resource, file_path, byte_count, sha256}
       - hash_map: {ckan_resource_id: sha256}
+
+    Caller owns the temp files at ``file_path`` — they MUST be deleted
+    after upload (see snapshot_service which removes them in a finally
+    block). Unchanged resources have their temp file deleted here so we
+    don't accumulate disk pressure on a small dyno.
     """
+    import os as _os
+
     changed = []
     hash_map = {}
     old_hashes = {}
@@ -47,14 +54,15 @@ async def detect_resource_changes(
             continue
 
         try:
-            content, sha256 = await ckan_client.download_resource(url, resource_id=rid)
+            file_path, sha256, byte_count = await ckan_client.download_resource(url, resource_id=rid)
             hash_map[rid] = sha256
 
             old_hash = old_hashes.get(rid)
             if old_hash != sha256:
                 changed.append({
                     "resource": resource,
-                    "content": content,
+                    "file_path": file_path,
+                    "byte_count": byte_count,
                     "sha256": sha256,
                 })
                 logger.info(
@@ -63,6 +71,14 @@ async def detect_resource_changes(
                     old_hash,
                     sha256,
                 )
+            else:
+                # Same hash → caller won't upload it, so drop the temp
+                # file now to keep ephemeral disk usage bounded.
+                if file_path:
+                    try:
+                        _os.unlink(file_path)
+                    except OSError:
+                        pass
         except Exception as e:
             logger.warning("Failed to download resource %s: %s", rid, e)
             hash_map[rid] = "download_failed"
