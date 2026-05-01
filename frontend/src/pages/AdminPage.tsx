@@ -48,6 +48,27 @@ function formatIntervalLabel(seconds: number): string {
   return `כל ${Math.round(seconds / 86400)} ימים`;
 }
 
+interface SourceBadge {
+  bg: string;
+  fg: string;
+  label: string;
+  accent: string;
+}
+
+function sourceBadge(source_type: string | null | undefined): SourceBadge {
+  if (source_type === "scraper") {
+    return { bg: "#fef3c7", fg: "#92400e", label: "GOV.IL", accent: "#f59e0b" };
+  }
+  if (source_type === "govmap") {
+    return { bg: "#e0f2fe", fg: "#075985", label: "GOVMAP", accent: "#0ea5e9" };
+  }
+  return { bg: "#ccfbf1", fg: "#0f766e", label: "DATA.GOV.IL", accent: "var(--warning)" };
+}
+
+function isCkanLike(source_type: string | null | undefined): boolean {
+  return source_type !== "scraper" && source_type !== "govmap";
+}
+
 export default function AdminPage() {
   const { t } = useTranslation();
   const [requests, setRequests] = useState<PendingRequest[]>([]);
@@ -304,9 +325,10 @@ export default function AdminPage() {
     const reqRow = requests.find((r) => r.id === id);
     // For CKAN requests, force the admin to pick resources before approve
     // (the dataset row may have been created before this feature shipped).
+    // Scraper and govmap have no resource concept — approve directly.
     if (
       reqRow &&
-      reqRow.source_type !== "scraper" &&
+      isCkanLike(reqRow.source_type) &&
       !(reqRow.resource_ids && reqRow.resource_ids.length > 0) &&
       !reqRow.resource_id
     ) {
@@ -378,7 +400,11 @@ export default function AdminPage() {
     try {
       await datasetsApi.poll(id);
       setPollToast({ id, ok: true, msg: "נשלח לדגום ✓" });
-      setTimeout(() => setPollToast(null), 3500);
+      // Poll runs in the background. Refresh the list a few seconds later
+      // so the row reflects last_polled_at / last_error / new version count
+      // without the admin having to reload the page manually.
+      setTimeout(() => { loadAll().catch(() => {}); }, 4000);
+      setTimeout(() => setPollToast(null), 6000);
     } catch (e: any) {
       setPollToast({ id, ok: false, msg: e?.message || "שגיאה בדגום" });
       setTimeout(() => setPollToast(null), 4000);
@@ -762,8 +788,10 @@ export default function AdminPage() {
         <div className="empty-state" style={{ padding: "1.5rem" }}>{t("admin.empty")}</div>
       ) : (
         <div className="grid grid-2 mb-2">
-          {requests.map((req) => (
-            <article key={req.id} className="card" style={{ borderRight: `4px solid ${req.source_type === "scraper" ? "#f59e0b" : "var(--warning)"}` }}>
+          {requests.map((req) => {
+            const badge = sourceBadge(req.source_type);
+            return (
+            <article key={req.id} className="card" style={{ borderRight: `4px solid ${badge.accent}` }}>
               <div className="flex-between" style={{ marginBottom: "0.5rem", gap: "0.5rem" }}>
                 <input
                   type="text"
@@ -788,21 +816,21 @@ export default function AdminPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: req.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
-                  color: req.source_type === "scraper" ? "#92400e" : "#0f766e",
+                  background: badge.bg,
+                  color: badge.fg,
                   flexShrink: 0,
                 }}>
-                  {req.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
+                  {badge.label}
                 </span>
               </div>
-              {req.source_type === "scraper" && req.source_url && (
-                <p className="text-sm text-muted" style={{ wordBreak: "break-all" }}>
+              {!isCkanLike(req.source_type) && req.source_url && (
+                <p className="text-sm text-muted" style={{ wordBreak: "break-all", direction: "ltr" }}>
                   <a href={req.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {req.source_url}
                   </a>
                 </p>
               )}
-              {req.organization && req.source_type !== "scraper" && <p className="text-sm text-muted">{req.organization}</p>}
+              {req.organization && isCkanLike(req.source_type) && <p className="text-sm text-muted">{req.organization}</p>}
               <div className="text-sm mb-1">
                 <div>{t("admin.requester")}: {req.requester_name} ({req.requester_email})</div>
                 <div>{t("admin.requested_at")}: {new Date(req.created_at).toLocaleString()}</div>
@@ -838,7 +866,7 @@ export default function AdminPage() {
                   </select>
                 </label>
               </div>
-              {req.source_type !== "scraper" && (
+              {isCkanLike(req.source_type) && (
                 <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 500 }}>קבצים נבחרים:</span>
                   <span className="badge" style={{ fontSize: "0.7rem" }}>
@@ -866,7 +894,8 @@ export default function AdminPage() {
                 </button>
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -976,8 +1005,8 @@ export default function AdminPage() {
                         </button>
                       </div>
                     )}
-                    {ds.source_type === "scraper" && ds.source_url && (
-                      <div style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
+                    {!isCkanLike(ds.source_type) && ds.source_url && (
+                      <div style={{ fontSize: "0.75rem", marginTop: "0.2rem", direction: "ltr" }}>
                         <a href={ds.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                           {ds.source_url}
                         </a>
@@ -1003,7 +1032,7 @@ export default function AdminPage() {
                         ⚠ {ds.last_error}
                       </div>
                     )}
-                    {ds.source_type !== "scraper" && (
+                    {isCkanLike(ds.source_type) && (
                       <div style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.7rem" }}>
                         <span className="badge" style={{ fontSize: "0.65rem" }}>
                           {ds.resource_ids && ds.resource_ids.length > 0
@@ -1063,17 +1092,22 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td style={tdStyle}>
-                    <span style={{
-                      display: "inline-block",
-                      padding: "0.15rem 0.5rem",
-                      borderRadius: "9999px",
-                      fontSize: "0.7rem",
-                      fontWeight: 600,
-                      background: ds.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
-                      color: ds.source_type === "scraper" ? "#92400e" : "#0f766e",
-                    }}>
-                      {ds.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
-                    </span>
+                    {(() => {
+                      const b = sourceBadge(ds.source_type);
+                      return (
+                        <span style={{
+                          display: "inline-block",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "9999px",
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          background: b.bg,
+                          color: b.fg,
+                        }}>
+                          {b.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td style={tdStyle}>
                     <select
