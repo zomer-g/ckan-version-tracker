@@ -492,6 +492,16 @@ async def update_tracked(
                 status_code=400,
                 detail="resource_ids must contain at least one resource id",
             )
+        old_ids = list(ds.resource_ids or [])
+        if sorted(new_ids) != sorted(old_ids):
+            # Force the next poll to redo the snapshot rather than skip on
+            # the unchanged metadata_modified check. Without this, resizing
+            # a resource set never produces a new version (a stale empty
+            # or wrong-set version 1 persists forever) — and the admin's
+            # mental model is "I changed what's tracked, the mirror should
+            # reflect that on the next run."
+            ds.last_modified = None
+            ds.last_error = None
         ds.resource_ids = new_ids
         # Setting an explicit subset clears the new-resources alert: the
         # admin has just made an active choice about what to track, and

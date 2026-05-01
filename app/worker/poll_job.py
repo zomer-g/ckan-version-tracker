@@ -68,8 +68,19 @@ async def poll_dataset(dataset_id: str) -> None:
             )
             latest_version = latest_result.scalar_one_or_none()
 
-            # Skip if a version already exists with this exact metadata_modified
-            if latest_version and latest_version.metadata_modified == new_modified:
+            # Skip if a version already exists with this exact metadata_modified.
+            # Exception: when ds.last_modified was reset to NULL by the admin
+            # (e.g. they changed resource_ids), treat this as a forced re-poll
+            # — the existing version was created against a different tracked
+            # set and the admin's mental model is "I changed what's tracked,
+            # the mirror should reflect that now". Without this exception the
+            # forced poll silently no-ops on every run.
+            forced_repoll = ds.last_modified is None
+            if (
+                not forced_repoll
+                and latest_version
+                and latest_version.metadata_modified == new_modified
+            ):
                 logger.info("Version already exists for %s with modified=%s, skipping", ds.ckan_name, new_modified)
                 ds.last_polled_at = datetime.now(timezone.utc)
                 ds.last_modified = new_modified
