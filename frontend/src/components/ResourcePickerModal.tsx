@@ -169,8 +169,17 @@ export default function ResourcePickerModal({
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggle(res.id)}
+                      style={{ width: "1.1rem", height: "1.1rem", flexShrink: 0 }}
                     />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {res.name || res.id}
                     </span>
                     {isNew && (

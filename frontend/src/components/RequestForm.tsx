@@ -105,7 +105,7 @@ export default function RequestForm({
       } else {
         const ids = Array.from(selectedResources);
         if (showResourcePicker && ids.length === 0) {
-          setError(t("home.request_pick_files") || "בחרו לפחות קובץ אחד למעקב");
+          setError(t("home.request_pick_files"));
           setSubmitting(false);
           return;
         }
@@ -217,7 +217,7 @@ export default function RequestForm({
               }}
             >
               <div className="text-sm" style={{ fontWeight: 600 }}>
-                {t("home.request_pick_files_label") || "בחרו אילו קבצים לעקוב אחריהם"}
+                {t("home.request_pick_files_label")}
                 <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
               </div>
               <div style={{ display: "flex", gap: "0.25rem" }}>
@@ -236,7 +236,7 @@ export default function RequestForm({
                     color: "var(--text-muted)",
                   }}
                 >
-                  סמן הכל
+                  {t("home.request_select_all")}
                 </button>
                 <button
                   type="button"
@@ -251,7 +251,7 @@ export default function RequestForm({
                     color: "var(--text-muted)",
                   }}
                 >
-                  נקה
+                  {t("home.request_clear")}
                 </button>
               </div>
             </div>
@@ -301,8 +301,11 @@ export default function RequestForm({
             </div>
             <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>
               {selectedResources.size === 0
-                ? "בחרו לפחות קובץ אחד"
-                : `${selectedResources.size} מתוך ${availableResources!.length} קבצים נבחרו`}
+                ? t("home.request_pick_at_least_one")
+                : t("home.request_files_selected", {
+                    n: selectedResources.size,
+                    total: availableResources!.length,
+                  })}
             </div>
           </div>
         )}
