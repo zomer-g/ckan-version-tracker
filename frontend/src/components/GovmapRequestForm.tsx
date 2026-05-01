@@ -51,8 +51,11 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
   const [error, setError] = useState("");
 
   const parsed = useMemo<ParsedLine[]>(() => {
+    // Split ONLY on newlines, never on commas — govmap URLs contain
+    // `c=x,y` ITM coordinates, so a comma split tears each URL into
+    // two invalid chunks.
     return text
-      .split(/[\n,]+/)
+      .split(/\r?\n+/)
       .map((s) => s.trim())
       .filter(Boolean)
       .map(parseLine);
