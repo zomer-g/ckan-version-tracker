@@ -108,6 +108,8 @@ export interface TrackedDataset {
   storage_mode: "full_snapshot" | "append_only";
   append_key: string | null;
   last_error: string | null;
+  resource_ids: string[] | null;
+  new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
   tags?: Tag[];
 }
 
@@ -123,7 +125,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -202,6 +204,7 @@ export const publicApi = {
   request: (data: {
     ckan_id: string;
     resource_id?: string;
+    resource_ids?: string[];
     preferred_interval?: number;
     requester_name?: string;
     requester_notes?: string;
@@ -241,6 +244,8 @@ export interface PendingRequest {
   requester_name: string;
   source_type: string;
   source_url: string | null;
+  resource_ids?: string[] | null;
+  resource_id?: string | null;
 }
 
 export interface ScrapeQueueRunning {
@@ -277,10 +282,10 @@ export interface ScrapeQueueResponse {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string) =>
+  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[]) =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
-      body: JSON.stringify({ poll_interval, title, organization_id }),
+      body: JSON.stringify({ poll_interval, title, organization_id, resource_ids }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),

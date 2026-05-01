@@ -1,10 +1,21 @@
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { publicApi } from "../api/client";
 
+export interface ResourceOption {
+  id: string;
+  name?: string;
+  format?: string;
+}
+
 interface RequestFormProps {
   ckanId?: string;
-  resourceId?: string;
+  resourceId?: string;  // legacy: pre-pin a single resource
+  // For CKAN datasets, the parent passes the full resource list so the
+  // user can pick which files to track. If `resourceId` is also set we
+  // start with that one pre-checked; otherwise nothing is checked and
+  // the user must select at least one before submit is enabled.
+  availableResources?: ResourceOption[];
   datasetTitle: string;
   onClose: () => void;
   // Scraper mode
@@ -25,6 +36,7 @@ const INTERVAL_OPTIONS = [
 export default function RequestForm({
   ckanId,
   resourceId,
+  availableResources,
   datasetTitle,
   onClose,
   sourceType = "ckan",
@@ -39,7 +51,42 @@ export default function RequestForm({
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
 
+  // Resource picker state — only relevant for CKAN datasets that have
+  // an `availableResources` list. We initialise with whatever the
+  // parent pre-selected (single resource via URL) and let the user
+  // adjust before submitting.
+  const initialSelected = useMemo(() => {
+    if (resourceId) return new Set([resourceId]);
+    // If the dataset has exactly one resource, default-select it so the
+    // user doesn't have to tick a box just to submit.
+    if (availableResources && availableResources.length === 1) {
+      return new Set([availableResources[0].id]);
+    }
+    return new Set<string>();
+  }, [resourceId, availableResources]);
+
+  const [selectedResources, setSelectedResources] = useState<Set<string>>(initialSelected);
+
+  // Keep the selection in sync if the parent swaps in a different
+  // dataset while the form is mounted (rare but happens when the user
+  // changes their mind without closing the form).
+  useEffect(() => {
+    setSelectedResources(initialSelected);
+  }, [initialSelected]);
+
+  const showResourcePicker =
+    sourceType === "ckan" && Array.isArray(availableResources) && availableResources.length > 0;
+
   const formId = sourceType === "scraper" ? (sourceUrl || "scraper") : (ckanId || "form");
+
+  const toggleResource = (rid: string) => {
+    setSelectedResources((prev) => {
+      const next = new Set(prev);
+      if (next.has(rid)) next.delete(rid);
+      else next.add(rid);
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -56,9 +103,16 @@ export default function RequestForm({
           requester_contact: contact || undefined,
         });
       } else {
+        const ids = Array.from(selectedResources);
+        if (showResourcePicker && ids.length === 0) {
+          setError(t("home.request_pick_files") || "בחרו לפחות קובץ אחד למעקב");
+          setSubmitting(false);
+          return;
+        }
         await publicApi.request({
           ckan_id: ckanId!,
           resource_id: resourceId,
+          resource_ids: ids.length > 0 ? ids : undefined,
           preferred_interval: interval,
           requester_name: name || undefined,
           requester_notes: notes || undefined,
@@ -144,6 +198,59 @@ export default function RequestForm({
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {showResourcePicker && (
+          <div>
+            <div className="text-sm" style={{ fontWeight: 500, marginBottom: "0.4rem" }}>
+              {t("home.request_pick_files_label") || "בחרו אילו קבצים לעקוב אחריהם"}
+              <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
+            </div>
+            <div
+              style={{
+                maxHeight: "12rem",
+                overflowY: "auto",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                background: "white",
+              }}
+            >
+              {availableResources!.map((res) => {
+                const checked = selectedResources.has(res.id);
+                return (
+                  <label
+                    key={res.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      padding: "0.4rem 0.6rem",
+                      borderBottom: "1px solid var(--border)",
+                      cursor: "pointer",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleResource(res.id)}
+                    />
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {res.name || res.id}
+                    </span>
+                    {res.format && (
+                      <span className="badge" style={{ fontSize: "0.7rem" }}>
+                        {res.format}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="text-sm text-muted" style={{ marginTop: "0.25rem" }}>
+              {selectedResources.size}/{availableResources!.length}
+            </div>
+          </div>
+        )}
+
         <div>
           <label htmlFor={`req-name-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
             {t("home.request_name")}
@@ -212,7 +319,7 @@ export default function RequestForm({
         <button
           type="submit"
           className="btn-primary"
-          disabled={submitting}
+          disabled={submitting || (showResourcePicker && selectedResources.size === 0)}
           style={{ alignSelf: "flex-start" }}
         >
           {submitting ? t("common.loading") : t("home.request_submit")}

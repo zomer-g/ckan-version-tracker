@@ -15,6 +15,7 @@ import {
   TagWithCount,
 } from "../api/client";
 import TagPicker from "../components/TagPicker";
+import ResourcePickerModal from "../components/ResourcePickerModal";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "";
@@ -60,6 +61,12 @@ export default function AdminPage() {
   const [editingTitleFor, setEditingTitleFor] = useState<string | null>(null);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  // Resource picker modal for both pending requests and active datasets
+  const [resourcePickerFor, setResourcePickerFor] = useState<
+    | { kind: "active"; ds: TrackedDataset }
+    | { kind: "pending"; req: PendingRequest }
+    | null
+  >(null);
   // Scrape queue state
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
   // Organizations
@@ -294,6 +301,18 @@ export default function AdminPage() {
   };
 
   const handleApprove = async (id: string) => {
+    const reqRow = requests.find((r) => r.id === id);
+    // For CKAN requests, force the admin to pick resources before approve
+    // (the dataset row may have been created before this feature shipped).
+    if (
+      reqRow &&
+      reqRow.source_type !== "scraper" &&
+      !(reqRow.resource_ids && reqRow.resource_ids.length > 0) &&
+      !reqRow.resource_id
+    ) {
+      setResourcePickerFor({ kind: "pending", req: reqRow });
+      return;
+    }
     setProcessing((prev) => new Set(prev).add(id));
     try {
       const intervalOverride = intervalOverrides[id];
@@ -302,7 +321,13 @@ export default function AdminPage() {
       const req = requests.find((r) => r.id === id);
       const titleToSend = titleOverride && titleOverride !== req?.title ? titleOverride : undefined;
       const orgIdOverride = orgOverrides[id] || undefined;
-      await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride);
+      // Send the pre-picked resource_ids stored on the row by the
+      // resource picker, if any.
+      const pickedIds =
+        reqRow?.resource_ids && reqRow.resource_ids.length > 0
+          ? reqRow.resource_ids
+          : undefined;
+      await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride, pickedIds);
       await loadAll();
     } catch (e) { console.error(e); }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
@@ -401,6 +426,48 @@ export default function AdminPage() {
         prev.map((d) => (d.id === id ? { ...d, storage_mode: updated.storage_mode } : d))
       );
     } catch (e) { console.error(e); }
+  };
+
+  const handleSaveResourceIds = async (
+    id: string,
+    resource_ids: string[],
+    kind: "active" | "pending",
+  ) => {
+    if (kind === "active") {
+      const updated = await datasetsApi.update(id, { resource_ids });
+      setAllDatasets((prev) =>
+        prev.map((d) =>
+          d.id === id
+            ? {
+                ...d,
+                resource_ids: updated.resource_ids,
+                new_resources_at_source: updated.new_resources_at_source,
+              }
+            : d
+        )
+      );
+    } else {
+      // Pending: store the chosen ids on the row so the next approve
+      // call can ship them, then refresh from the server to confirm.
+      setRequests((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, resource_ids } : r))
+      );
+    }
+  };
+
+  const handleDismissNewResources = async (id: string) => {
+    try {
+      const updated = await datasetsApi.update(id, { dismiss_new_resources: true });
+      setAllDatasets((prev) =>
+        prev.map((d) =>
+          d.id === id
+            ? { ...d, new_resources_at_source: updated.new_resources_at_source }
+            : d
+        )
+      );
+    } catch (e: any) {
+      alert(`שגיאה: ${e?.message || e}`);
+    }
   };
 
   const handleUpdateAppendKey = async (id: string, append_key: string) => {
@@ -771,6 +838,25 @@ export default function AdminPage() {
                   </select>
                 </label>
               </div>
+              {req.source_type !== "scraper" && (
+                <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 500 }}>קבצים נבחרים:</span>
+                  <span className="badge" style={{ fontSize: "0.7rem" }}>
+                    {req.resource_ids && req.resource_ids.length > 0
+                      ? `${req.resource_ids.length} נבחרו`
+                      : req.resource_id
+                        ? "1 נבחר (legacy)"
+                        : "טרם נבחרו"}
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setResourcePickerFor({ kind: "pending", req })}
+                    style={{ fontSize: "0.75rem", padding: "0.15rem 0.5rem" }}
+                  >
+                    בחר קבצים
+                  </button>
+                </div>
+              )}
               <div className="flex mt-1">
                 <button className="btn-primary" onClick={() => handleApprove(req.id)} disabled={processing.has(req.id)}>
                   {processing.has(req.id) ? "..." : t("admin.approve")}
@@ -915,6 +1001,64 @@ export default function AdminPage() {
                         }}
                       >
                         ⚠ {ds.last_error}
+                      </div>
+                    )}
+                    {ds.source_type !== "scraper" && (
+                      <div style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.7rem" }}>
+                        <span className="badge" style={{ fontSize: "0.65rem" }}>
+                          {ds.resource_ids && ds.resource_ids.length > 0
+                            ? `${ds.resource_ids.length} קבצים`
+                            : ds.resource_id
+                              ? "קובץ אחד (legacy)"
+                              : "כל הקבצים"}
+                        </span>
+                        <button
+                          onClick={() => setResourcePickerFor({ kind: "active", ds })}
+                          style={{
+                            background: "none",
+                            border: "1px solid var(--border)",
+                            borderRadius: "4px",
+                            padding: "0.05rem 0.4rem",
+                            fontSize: "0.7rem",
+                            cursor: "pointer",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          ערוך קבצים
+                        </button>
+                        {ds.new_resources_at_source && ds.new_resources_at_source.length > 0 && (
+                          <>
+                            <button
+                              onClick={() => setResourcePickerFor({ kind: "active", ds })}
+                              title={ds.new_resources_at_source.map((r) => r.name || r.id).join(", ")}
+                              style={{
+                                background: "#fef3c7",
+                                color: "#92400e",
+                                border: "1px solid #f59e0b",
+                                borderRadius: "9999px",
+                                padding: "0.05rem 0.5rem",
+                                fontSize: "0.7rem",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}
+                            >
+                              ✨ {ds.new_resources_at_source.length} קבצים חדשים זוהו
+                            </button>
+                            <button
+                              onClick={() => handleDismissNewResources(ds.id)}
+                              title="התעלם מהקבצים החדשים"
+                              style={{
+                                background: "none",
+                                border: "none",
+                                fontSize: "0.7rem",
+                                color: "var(--text-muted)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              ✕ התעלם
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </td>
@@ -1179,6 +1323,43 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {resourcePickerFor && resourcePickerFor.kind === "active" && (
+        <ResourcePickerModal
+          ckanId={resourcePickerFor.ds.ckan_name || resourcePickerFor.ds.ckan_id}
+          datasetTitle={resourcePickerFor.ds.title}
+          initialSelected={
+            resourcePickerFor.ds.resource_ids && resourcePickerFor.ds.resource_ids.length > 0
+              ? resourcePickerFor.ds.resource_ids
+              : resourcePickerFor.ds.resource_id
+                ? [resourcePickerFor.ds.resource_id]
+                : []
+          }
+          newResourceIds={(resourcePickerFor.ds.new_resources_at_source || []).map((r) => r.id)}
+          onClose={() => setResourcePickerFor(null)}
+          onSave={async (ids) => {
+            await handleSaveResourceIds(resourcePickerFor.ds.id, ids, "active");
+          }}
+        />
+      )}
+
+      {resourcePickerFor && resourcePickerFor.kind === "pending" && (
+        <ResourcePickerModal
+          ckanId={resourcePickerFor.req.ckan_name || resourcePickerFor.req.ckan_id}
+          datasetTitle={resourcePickerFor.req.title}
+          initialSelected={
+            resourcePickerFor.req.resource_ids && resourcePickerFor.req.resource_ids.length > 0
+              ? resourcePickerFor.req.resource_ids
+              : resourcePickerFor.req.resource_id
+                ? [resourcePickerFor.req.resource_id]
+                : []
+          }
+          onClose={() => setResourcePickerFor(null)}
+          onSave={async (ids) => {
+            await handleSaveResourceIds(resourcePickerFor.req.id, ids, "pending");
+          }}
+        />
       )}
     </div>
   );

@@ -348,6 +348,13 @@ export default function HomePage() {
                         <RequestForm
                           ckanId={r.id}
                           resourceId={targetResource?.id}
+                          availableResources={
+                            r.resources?.map((res) => ({
+                              id: res.id,
+                              name: res.name,
+                              format: res.format,
+                            }))
+                          }
                           datasetTitle={r.title}
                           onClose={() => setRequestFormFor(null)}
                         />

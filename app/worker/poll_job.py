@@ -80,16 +80,46 @@ async def poll_dataset(dataset_id: str) -> None:
             next_version = (latest_version.version_number + 1) if latest_version else 1
 
             # Detect resource-level changes
-            resources = pkg.get("resources", [])
+            all_source_resources = pkg.get("resources", [])
+            resources = list(all_source_resources)
 
-            # If tracking a specific resource, filter to only that resource
-            if ds.resource_id:
+            # Resource selection precedence:
+            #   1. resource_ids (new): explicit subset chosen by admin
+            #   2. resource_id (legacy): single-resource tracking
+            #   3. None: track every resource at the source (legacy default)
+            tracked_ids: set[str] | None = None
+            if ds.resource_ids:
+                tracked_ids = set(ds.resource_ids)
+                resources = [r for r in resources if r["id"] in tracked_ids]
+                if not resources:
+                    logger.warning(
+                        "None of the tracked resources %s were found in dataset %s",
+                        ds.resource_ids, ds.ckan_name,
+                    )
+            elif ds.resource_id:
+                tracked_ids = {ds.resource_id}
                 resources = [r for r in resources if r["id"] == ds.resource_id]
                 if not resources:
                     logger.warning(
                         "Tracked resource %s not found in dataset %s",
                         ds.resource_id, ds.ckan_name,
                     )
+
+            # New-resources-at-source detection. If the admin opted into a
+            # specific subset (tracked_ids set), surface anything at the
+            # source not in that subset so they can choose to add it. For
+            # legacy "track all" datasets there's nothing to alert on.
+            if tracked_ids is not None:
+                new_at_source = [
+                    {
+                        "id": r["id"],
+                        "name": r.get("name") or r["id"],
+                        "format": (r.get("format") or "").upper() or None,
+                    }
+                    for r in all_source_resources
+                    if r["id"] not in tracked_ids
+                ]
+                ds.new_resources_at_source = new_at_source or None
 
             # Check if this is a large dataset
             resource_to_check = resources[0] if resources else None

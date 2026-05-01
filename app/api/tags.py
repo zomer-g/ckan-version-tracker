@@ -311,6 +311,8 @@ async def set_dataset_tags(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,
         tags=[_tag_brief(t) for t in ds.tags],
     )

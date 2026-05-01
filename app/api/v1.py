@@ -59,6 +59,8 @@ class DatasetSummary(BaseModel):
     status: str
     storage_mode: str  # "full_snapshot" | "append_only"
     last_error: str | None  # last poll error if any
+    resource_ids: list[str] | None  # subset of source resources, null=all
+    new_resources_at_source: list[dict] | None  # source resources not yet picked
     version_count: int
     versions_url: str  # /api/v1/datasets/{id}/versions
 
@@ -188,6 +190,8 @@ def _dataset_summary(
         status=ds.status,
         storage_mode=ds.storage_mode or "full_snapshot",
         last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,
         versions_url=_build_request_url(
             request, f"/api/v1/datasets/{ds.id}/versions"

@@ -28,6 +28,9 @@ class ApproveRequest(BaseModel):
     poll_interval: int | None = None
     title: str | None = None
     organization_id: str | None = None  # "" or null to leave as-is; UUID to assign
+    # Optional override for the user's submitted resource selection.
+    # null = keep what's already on the dataset row.
+    resource_ids: list[str] | None = None
 
 
 class PendingRequest(BaseModel):
@@ -46,6 +49,8 @@ class PendingRequest(BaseModel):
     source_type: str = "ckan"
     source_url: str | None = None
     storage_mode: str = "full_snapshot"
+    resource_ids: list[str] | None = None  # what the requester chose
+    resource_id: str | None = None  # legacy single-resource selection
 
 
 @router.get("/pending", response_model=list[PendingRequest])
@@ -81,6 +86,8 @@ async def list_pending(
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
             storage_mode=ds.storage_mode or "full_snapshot",
+            resource_ids=ds.resource_ids,
+            resource_id=ds.resource_id,
         )
         for ds, requester, org in rows
     ]
@@ -110,6 +117,19 @@ async def approve_request(
     # Override poll interval if admin specified one
     if body and body.poll_interval is not None:
         ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
+
+    # Override resource selection if admin specified one
+    if body and body.resource_ids is not None:
+        cleaned = [rid.strip() for rid in body.resource_ids if isinstance(rid, str) and rid.strip()]
+        # Remove dupes preserving order.
+        seen: set[str] = set()
+        deduped = [rid for rid in cleaned if not (rid in seen or seen.add(rid))]
+        if not deduped:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_ids must contain at least one resource id",
+            )
+        ds.resource_ids = deduped
 
     # Override title if admin specified one (applied BEFORE mirror creation
     # so the mirror gets the new title from the start)

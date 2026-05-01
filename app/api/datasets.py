@@ -30,6 +30,9 @@ class TrackRequest(BaseModel):
     poll_interval: int = 604800
     preferred_interval: int | None = None
     resource_id: str | None = None
+    # Subset of source resources to mirror. Required (>=1) for new CKAN
+    # datasets — see _validate_resource_ids. Ignored for scrapers.
+    resource_ids: list[str] | None = None
     storage_mode: str = "full_snapshot"  # "full_snapshot" | "append_only"
     append_key: str | None = None  # column name when storage_mode="append_only"
 
@@ -41,12 +44,35 @@ class UpdateRequest(BaseModel):
     organization_id: str | None = None  # "" or null to clear; UUID to assign
     storage_mode: str | None = None  # "full_snapshot" | "append_only"
     append_key: str | None = None  # only meaningful when storage_mode="append_only"
+    # New: replace the tracked-resources set. Empty list ([]) is rejected
+    # so an admin can't accidentally orphan a CKAN dataset; pass null to
+    # leave unchanged.
+    resource_ids: list[str] | None = None
+    # Acknowledge the new_resources_at_source alert without adding any.
+    dismiss_new_resources: bool | None = None
 
 
 def _validate_storage_mode(mode: str) -> str:
     if mode not in ("full_snapshot", "append_only"):
         raise HTTPException(status_code=400, detail="storage_mode must be 'full_snapshot' or 'append_only'")
     return mode
+
+
+def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
+    """De-dupe + strip, reject obviously-bad inputs. None passes through
+    so callers can distinguish "no change" from "track all"."""
+    if ids is None:
+        return None
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for rid in ids:
+        if not isinstance(rid, str):
+            raise HTTPException(status_code=400, detail="resource_ids must be a list of strings")
+        s = rid.strip()
+        if s and s not in seen:
+            cleaned.append(s)
+            seen.add(s)
+    return cleaned
 
 
 class TagBrief(BaseModel):
@@ -81,6 +107,8 @@ class DatasetResponse(BaseModel):
     storage_mode: str = "full_snapshot"
     append_key: str | None = None
     last_error: str | None = None
+    resource_ids: list[str] | None = None
+    new_resources_at_source: list[dict] | None = None
     tags: list[TagBrief] = []
 
     model_config = {"from_attributes": True}
@@ -151,6 +179,8 @@ async def list_tracked(
                 storage_mode=ds.storage_mode or "full_snapshot",
                 append_key=(ds.scraper_config or {}).get("append_key"),
                 last_error=ds.last_error,
+                resource_ids=ds.resource_ids,
+                new_resources_at_source=ds.new_resources_at_source,
                 version_count=version_counts.get(ds.id, 0),
                 tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
@@ -270,11 +300,25 @@ async def track_dataset(
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=(ds.scraper_config or {}).get("append_key"),
             last_error=ds.last_error,
+            resource_ids=ds.resource_ids,
+            new_resources_at_source=ds.new_resources_at_source,
         )
 
     # ---- CKAN-type dataset (original flow) ----
     if not body.ckan_id:
         raise HTTPException(status_code=400, detail="ckan_id is required for CKAN datasets")
+
+    resource_ids = _normalize_resource_ids(body.resource_ids)
+    # Require explicit resource selection for every NEW CKAN dataset.
+    # Existing rows with resource_ids=None are grandfathered as "track all";
+    # this only applies at creation time. Single-resource tracking via the
+    # legacy `resource_id` field continues to work and is implicitly
+    # promoted to a 1-element resource_ids below.
+    if not resource_ids and not body.resource_id:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_ids must contain at least one resource id",
+        )
 
     # Check for duplicate (ckan_id + resource_id combination)
     dup_query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
@@ -291,6 +335,20 @@ async def track_dataset(
     except Exception:
         logger.exception("Failed to fetch dataset %s from data.gov.il", body.ckan_id)
         raise HTTPException(status_code=404, detail="Dataset not found on data.gov.il")
+
+    # Validate every requested resource_id actually lives on the source.
+    if resource_ids:
+        source_ids = {r["id"] for r in pkg.get("resources", [])}
+        bad = [rid for rid in resource_ids if rid not in source_ids]
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resource_ids not found on source: {bad}",
+            )
+    elif body.resource_id:
+        # Promote legacy single-resource into resource_ids so polls go
+        # through the multi-resource path uniformly.
+        resource_ids = [body.resource_id]
 
     org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
 
@@ -357,6 +415,7 @@ async def track_dataset(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],
         resource_id=body.resource_id,
+        resource_ids=resource_ids,
         title=dataset_title,
         organization=org_name,
         organization_id=org_id,
@@ -395,6 +454,8 @@ async def track_dataset(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
     )
 
 
@@ -424,6 +485,21 @@ async def update_tracked(
         ds.is_active = body.is_active
     if body.storage_mode is not None:
         ds.storage_mode = _validate_storage_mode(body.storage_mode)
+    if body.resource_ids is not None:
+        new_ids = _normalize_resource_ids(body.resource_ids)
+        if not new_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="resource_ids must contain at least one resource id",
+            )
+        ds.resource_ids = new_ids
+        # Setting an explicit subset clears the new-resources alert: the
+        # admin has just made an active choice about what to track, and
+        # any leftover entries here either got included (no longer "new")
+        # or were intentionally skipped.
+        ds.new_resources_at_source = None
+    if body.dismiss_new_resources:
+        ds.new_resources_at_source = None
     if body.append_key is not None:
         sc = dict(ds.scraper_config or {})
         if body.append_key.strip():
@@ -493,6 +569,8 @@ async def update_tracked(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )
 
@@ -574,6 +652,7 @@ class TrackingRequest(BaseModel):
     source_url: str | None = None
     title: str | None = None
     resource_id: str | None = None
+    resource_ids: list[str] | None = None
     preferred_interval: int = 604800
     requester_name: str = ""
     requester_notes: str = ""
@@ -632,6 +711,16 @@ async def submit_tracking_request(
     if not body.ckan_id:
         raise HTTPException(status_code=400, detail="ckan_id is required for CKAN datasets")
 
+    # Resource selection: every new CKAN request must pin at least one
+    # resource. Single-resource (resource_id) is auto-promoted to a
+    # 1-element resource_ids so downstream code only handles one shape.
+    resource_ids = _normalize_resource_ids(body.resource_ids)
+    if not resource_ids and not body.resource_id:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_ids must contain at least one resource id",
+        )
+
     # Check not already tracked
     query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
     if body.resource_id:
@@ -645,6 +734,17 @@ async def submit_tracking_request(
         pkg = await ckan_client.package_show(body.ckan_id)
     except Exception:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if resource_ids:
+        source_ids = {r["id"] for r in pkg.get("resources", [])}
+        bad = [rid for rid in resource_ids if rid not in source_ids]
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resource_ids not found on source: {bad}",
+            )
+    elif body.resource_id:
+        resource_ids = [body.resource_id]
 
     # Find resource name if resource_id provided
     resource_name = ""
@@ -672,6 +772,7 @@ async def submit_tracking_request(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],
         resource_id=body.resource_id,
+        resource_ids=resource_ids,
         title=title,
         organization=org_name,
         organization_id=org_id,
@@ -724,5 +825,7 @@ async def get_tracked_public(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
     )

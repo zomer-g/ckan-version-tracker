@@ -32,6 +32,11 @@ class TrackedDataset(Base):
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_modified: Mapped[str | None] = mapped_column(String(50))
     last_error: Mapped[str | None] = mapped_column(Text)
+    # Subset of source resource IDs to mirror. NULL = legacy "track all".
+    resource_ids: Mapped[list[str] | None] = mapped_column(JSONB)
+    # [{id,name,format}, …] resources that exist at the source but aren't
+    # in resource_ids. Populated by the poll job, dismissed by the admin.
+    new_resources_at_source: Mapped[list[dict] | None] = mapped_column(JSONB)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
