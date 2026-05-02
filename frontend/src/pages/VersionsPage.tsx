@@ -89,22 +89,32 @@ export default function VersionsPage() {
               {t("tracked.view_on_odata")} &#8599;
             </a>
           )}
-          {dataset && (
-            <a
-              href={dataset.source_type === "scraper"
+          {dataset && (() => {
+            const sourceHref =
+              dataset.source_type === "scraper" || dataset.source_type === "govmap"
                 ? (dataset.source_url || "#")
-                : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`)}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                textDecoration: "none",
-                fontSize: "0.85rem",
-                color: "var(--text-muted)",
-              }}
-            >
-              {dataset.source_type === "scraper" ? t("home.source_link_govil") : t("home.source_link")} &#8599;
-            </a>
-          )}
+                : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`);
+            const linkLabel =
+              dataset.source_type === "scraper"
+                ? t("home.source_link_govil")
+                : dataset.source_type === "govmap"
+                ? t("home.source_link_govmap")
+                : t("home.source_link");
+            return (
+              <a
+                href={sourceHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  textDecoration: "none",
+                  fontSize: "0.85rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {linkLabel} &#8599;
+              </a>
+            );
+          })()}
           {isAdmin && (
             <button
               type="button"

@@ -66,6 +66,9 @@ class PushVersionRequest(BaseModel):
     zip_resource_id: str | None = None
     # Preferred for large attachment sets: list of pre-uploaded ZIP part resource_ids
     zip_resource_ids: list[str] | None = None
+    # GeoJSON resources already uploaded via /upload-geojson — referenced here
+    # so push-version can link them into the version index without re-uploading.
+    geojson_resource_ids: list[str] | None = None
     # For huge record sets that would exceed 100MB JSON limit: worker uploads
     # CSV via /upload-csv first and references its resource_id here per
     # resource name (so we can skip push_csv_to_datastore for that resource).
@@ -196,6 +199,25 @@ async def push_version(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # GovMap layers carry a placeholder title ("GovMap layer 200541") at
+    # creation time because we don't fetch the catalog from the request path.
+    # The scraper resolves the real Hebrew caption from govmap's catalog and
+    # sends it as scrape_metadata.dataset_title_he. Promote it once, but only
+    # while the title is still the default — preserves any manual override.
+    if ds.source_type == "govmap" and body.scrape_metadata:
+        from app.api.govmap import build_govmap_title
+        new_title = (body.scrape_metadata.get("dataset_title_he") or "").strip()
+        layer_id = (ds.scraper_config or {}).get("layer_id")
+        if new_title and layer_id and ds.title == build_govmap_title(layer_id):
+            ds.title = new_title
+            if ds.odata_dataset_id:
+                try:
+                    await odata_client.package_patch(
+                        ds.odata_dataset_id, title=f"[Versions] {new_title}"
+                    )
+                except Exception as e:
+                    logger.warning("Failed to patch odata title for %s: %s", ds.id, e)
 
     # Archive mode: no new items — update checkpoint and mark task done without
     # creating a version (avoids re-uploading the full CSV when nothing changed).
@@ -347,6 +369,14 @@ async def push_version(
                 logger.error("Failed to push resource %s to odata: %s", res.name, e)
                 push_errors.append(f"push {res.name}: {e}")
 
+    # GeoJSON resources (already uploaded as separate CKAN resources by the
+    # scraper via /upload-geojson) — link them into this version.
+    if body.geojson_resource_ids:
+        for rid in body.geojson_resource_ids:
+            odata_resource_ids.append(rid)
+        resource_mappings["_geojson"] = list(body.geojson_resource_ids)
+        logger.info("Linked %d pre-uploaded GeoJSON resource(s)", len(body.geojson_resource_ids))
+
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
     if body.zip_resource_ids:
@@ -400,6 +430,7 @@ async def push_version(
     expected = (
         len([r for r in body.resources if r.records or (body.csv_resource_ids or {}).get(r.name)])
         + (1 if (body.zip_file or body.zip_resource_id or body.zip_resource_ids) else 0)
+        + (1 if body.geojson_resource_ids else 0)
     )
     successes = sum(1 for k in resource_mappings if not k.startswith("_"))
     if expected > 0 and successes == 0:
@@ -585,6 +616,61 @@ async def upload_zip(
     except Exception as e:
         logger.exception("Failed to upload ZIP")
         raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
+
+
+@router.post("/upload-geojson/{tracked_dataset_id}")
+@limiter.limit("30/minute")
+async def upload_geojson(
+    request: Request,
+    tracked_dataset_id: str,
+    file: UploadFile = File(...),
+    version_number: int = Form(...),
+    resource_name: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker uploads a single .geojson file (a FeatureCollection in WGS84) as
+    a standalone CKAN resource with format=GeoJSON. Returns the odata
+    resource_id, which the worker references in /push-version via
+    `geojson_resource_ids`. Used for GovMap layers so the geometry shows up
+    on the dataset page as a separate, downloadable GeoJSON resource rather
+    than being buried inside an attachments ZIP.
+    """
+    _verify_worker_key(request)
+
+    try:
+        ds_id = uuid.UUID(tracked_dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset ID")
+
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds or not ds.odata_dataset_id:
+        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+
+    geojson_bytes = await file.read()
+    from app.services.snapshot_service import _timestamp
+    ts = _timestamp()
+
+    filename = file.filename or f"v{version_number}.geojson"
+    label = (resource_name or "").strip() or filename.rsplit(".", 1)[0] or "GeoJSON"
+
+    try:
+        result_resource = await odata_client.upload_resource(
+            dataset_id=ds.odata_dataset_id,
+            file_content=geojson_bytes,
+            filename=filename,
+            name=f"{ts} v{version_number} - {label}",
+            description=f"Version {version_number}: {label} (GeoJSON)",
+            resource_format="GeoJSON",
+        )
+        logger.info("Uploaded GeoJSON %s (%d KB) → resource %s",
+                    filename, len(geojson_bytes) // 1024, result_resource["id"])
+        return {"resource_id": result_resource["id"], "size": len(geojson_bytes)}
+    except Exception as e:
+        logger.exception("Failed to upload GeoJSON")
+        raise HTTPException(status_code=502, detail=f"GeoJSON upload failed: {e}")
 
 
 @router.post("/upload-csv/{tracked_dataset_id}")
