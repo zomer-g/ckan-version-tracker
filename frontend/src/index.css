@@ -441,6 +441,39 @@ label {
   line-height: 1.8;
 }
 
+.about-card p + p {
+  margin-top: 0.75rem;
+}
+
+.about-card a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.about-card a:hover {
+  opacity: 0.8;
+}
+
+.about-card ul {
+  list-style: disc;
+  padding-inline-start: 1.5rem;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.8;
+}
+
+.about-card li {
+  margin-bottom: 0.5rem;
+}
+
+.about-card li:last-child {
+  margin-bottom: 0;
+}
+
+.about-card .family-list {
+  margin-top: 0.75rem;
+}
+
 .project-link {
   display: block;
   padding: 1rem 1.25rem;
