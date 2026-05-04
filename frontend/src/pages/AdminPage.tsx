@@ -907,18 +907,25 @@ export default function AdminPage() {
       {activeDatasets.length === 0 ? (
         <div className="empty-state">אין מאגרים פעילים</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
+        <div>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
+            <colgroup>
+              <col style={{ width: "22%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "13%" }} />
+            </colgroup>
             <thead>
               <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
                 <th style={thStyle}>שם מאגר</th>
-                <th style={thStyle}>מקור</th>
                 <th style={thStyle}>{t("organizations.admin_column")}</th>
                 <th style={thStyle}>תגיות</th>
                 <th style={thStyle}>תדירות</th>
                 <th style={thStyle}>{t("admin.storage_mode") || "אופן שמירה"}</th>
-                <th style={thStyle}>גרסאות</th>
-                <th style={thStyle}>בדיקה אחרונה</th>
+                <th style={thStyle}>גרסאות / בדיקה</th>
                 <th style={thStyle}>פעולות</th>
               </tr>
             </thead>
@@ -966,7 +973,7 @@ export default function AdminPage() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", flexWrap: "wrap" }}>
                         <Link to={`/versions/${ds.id}`} style={{ fontWeight: 500 }}>
                           {ds.title}
                         </Link>
@@ -1003,6 +1010,22 @@ export default function AdminPage() {
                         >
                           ✏
                         </button>
+                        {(() => {
+                          const b = sourceBadge(ds.source_type);
+                          return (
+                            <span style={{
+                              display: "inline-block",
+                              padding: "0.1rem 0.45rem",
+                              borderRadius: "9999px",
+                              fontSize: "0.65rem",
+                              fontWeight: 600,
+                              background: b.bg,
+                              color: b.fg,
+                            }}>
+                              {b.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     )}
                     {!isCkanLike(ds.source_type) && ds.source_url && (
@@ -1092,30 +1115,11 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td style={tdStyle}>
-                    {(() => {
-                      const b = sourceBadge(ds.source_type);
-                      return (
-                        <span style={{
-                          display: "inline-block",
-                          padding: "0.15rem 0.5rem",
-                          borderRadius: "9999px",
-                          fontSize: "0.7rem",
-                          fontWeight: 600,
-                          background: b.bg,
-                          color: b.fg,
-                        }}>
-                          {b.label}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td style={tdStyle}>
                     <select
                       value={ds.organization_id ?? ""}
                       onChange={(e) => handleChangeOrg(ds.id, e.target.value)}
                       style={{
                         width: "100%",
-                        maxWidth: 220,
                         padding: "0.2rem 0.4rem",
                         fontSize: "0.8rem",
                         border: "1px solid var(--border)",
@@ -1179,10 +1183,13 @@ export default function AdminPage() {
                     </div>
                   </td>
                   <td style={tdStyle} className="text-sm">
-                    <Link to={`/versions/${ds.id}`}>{ds.version_count}</Link>
-                  </td>
-                  <td style={tdStyle} className="text-sm text-muted">
-                    {ds.last_polled_at ? new Date(ds.last_polled_at).toLocaleString() : "—"}
+                    <div>
+                      <Link to={`/versions/${ds.id}`}>{ds.version_count}</Link>
+                      <span className="text-muted"> גרסאות</span>
+                    </div>
+                    <div className="text-muted" style={{ fontSize: "0.7rem", marginTop: "0.2rem" }}>
+                      {ds.last_polled_at ? new Date(ds.last_polled_at).toLocaleString() : "—"}
+                    </div>
                   </td>
                   <td style={tdStyle}>
                     <div className="flex" style={{ gap: "0.4rem" }}>
@@ -1401,14 +1408,18 @@ export default function AdminPage() {
 
 const thStyle: React.CSSProperties = {
   textAlign: "start",
-  padding: "0.75rem",
+  padding: "0.5rem 0.5rem",
   fontSize: "0.8rem",
   fontWeight: 600,
   color: "var(--text)",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "0.6rem 0.75rem",
-  verticalAlign: "middle",
+  padding: "0.5rem 0.5rem",
+  verticalAlign: "top",
   fontSize: "0.85rem",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
 };
