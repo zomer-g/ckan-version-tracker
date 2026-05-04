@@ -23,5 +23,6 @@ class VersionIndex(Base):
     odata_metadata_resource_id: Mapped[str | None] = mapped_column(String(255))
     change_summary: Mapped[dict | None] = mapped_column(JSONB)
     resource_mappings: Mapped[dict | None] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="legacy", server_default="legacy")
 
     tracked_dataset = relationship("TrackedDataset", back_populates="versions")

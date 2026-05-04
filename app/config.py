@@ -27,6 +27,15 @@ class Settings(BaseSettings):
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 
+    # Conditional archiver: cheap HEAD / datastore_info probe before
+    # the full download+hash pipeline. When all resources are confirmed
+    # unchanged via HTTP headers, a metadata-only version is created
+    # that reuses the previous version's ODATA resource_ids (zero new
+    # uploads, zero new downloads). On any unverifiable signal the
+    # legacy snapshot path runs unchanged. Kill switch for the rare
+    # case it misbehaves on a particular dataset shape.
+    conditional_archive_enabled: bool = True
+
     cors_origins: str = ""
 
     # SSO

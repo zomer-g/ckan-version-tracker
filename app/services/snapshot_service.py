@@ -122,8 +122,20 @@ async def create_version_snapshot(
 
             resource_mappings[rid] = result["id"]
         except Exception as e:
-            logger.error("Failed to upload resource %s to odata: %s", rid, e)
-            errors.append(f"upload {resource.get('name', rid[:8])} ({fmt or '?'}): {e}")
+            # str(e) is empty for many httpx low-level errors (WriteError,
+            # RemoteProtocolError, broken-pipe scenarios). Surface type
+            # and repr so the user actually sees what failed.
+            detail = str(e) or repr(e)
+            etype = type(e).__name__
+            resp_info = ""
+            if hasattr(e, "response") and getattr(e, "response", None) is not None:
+                try:
+                    body = e.response.text[:500]
+                    resp_info = f" [HTTP {e.response.status_code}: {body}]"
+                except Exception:
+                    pass
+            logger.error("Failed to upload resource %s to odata: %s: %s%s", rid, etype, detail, resp_info)
+            errors.append(f"upload {resource.get('name', rid[:8])} ({fmt or '?'}): {etype}: {detail}{resp_info}")
         finally:
             if file_path:
                 try:

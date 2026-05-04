@@ -21,6 +21,7 @@ from app.services.snapshot_service import (
     append_new_rows_to_shared_resource,
     create_version_snapshot,
 )
+from app.services import conditional_archiver
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,17 @@ async def poll_dataset(dataset_id: str) -> None:
 
         if ds.status != "active":
             logger.info("Dataset %s status is '%s', skipping poll", dataset_id, ds.status)
+            return
+
+        # Conditional archiver. Cheap HEAD / datastore_info probes
+        # short-circuit the legacy download-and-hash pipeline when no
+        # tracked resource actually changed (the common "metadata
+        # bumped but bytes identical" case). CREATED / NO_CHANGE are
+        # terminal — the archiver already committed. FALLBACK means
+        # the probes were unverifiable or detected a real change, in
+        # which case we silently drop into the legacy path below.
+        _result = await conditional_archiver.try_conditional_archive(ds, db)
+        if _result in (conditional_archiver.Result.CREATED, conditional_archiver.Result.NO_CHANGE):
             return
 
         try:
@@ -135,11 +147,22 @@ async def poll_dataset(dataset_id: str) -> None:
                 ]
                 ds.new_resources_at_source = new_at_source or None
 
-            # Check if this is a large dataset
-            resource_to_check = resources[0] if resources else None
-            if resource_to_check and ds.resource_id:
+            # Check if this is a large dataset.
+            # Lightweight path handles a single tracked resource at a
+            # time. The legacy condition only checked ds.resource_id
+            # (the old single-resource field), so datasets that opted
+            # into the new ds.resource_ids array were silently routed
+            # to the heavy snapshot path even when they tracked exactly
+            # one resource — with no chance of falling back to the
+            # metadata+sample treatment when ODATA's upload limit
+            # rejected the file. We trigger lightweight whenever the
+            # tracked subset is exactly one resource, regardless of
+            # which field expressed it.
+            resource_to_check = resources[0] if len(resources) == 1 else None
+            if resource_to_check:
+                target_rid = resource_to_check["id"]
                 try:
-                    ds_info = await ckan_client.datastore_info(ds.resource_id)
+                    ds_info = await ckan_client.datastore_info(target_rid)
                     total_rows = ds_info["total"]
                 except Exception:
                     total_rows = 0
@@ -515,9 +538,13 @@ async def _poll_large_dataset(
 
     new_modified = pkg.get("metadata_modified", "")
 
-    # Get sample data (first 100 + last 100 rows)
+    # Get sample data (first 100 + last 100 rows). Use the resource
+    # passed in rather than ds.resource_id so this works for datasets
+    # tracked via the new resource_ids array (where ds.resource_id is
+    # NULL).
+    target_rid = resource.get("id") or ds.resource_id
     try:
-        head_records, tail_records = await ckan_client.datastore_sample(ds.resource_id)
+        head_records, tail_records = await ckan_client.datastore_sample(target_rid)
     except Exception as e:
         logger.warning("Failed to get sample for large dataset %s: %s", ds.ckan_name, e)
         head_records, tail_records = [], []

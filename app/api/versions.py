@@ -29,6 +29,7 @@ class VersionResponse(BaseModel):
     odata_metadata_resource_id: str | None = None
     change_summary: dict | None
     resource_mappings: dict | None
+    source: str = "legacy"
     dataset_title: str | None = None
     dataset_source_type: str | None = None
 
@@ -96,6 +97,7 @@ async def list_versions(
             odata_metadata_resource_id=v.odata_metadata_resource_id,
             change_summary=v.change_summary,
             resource_mappings=v.resource_mappings,
+            source=v.source,
             dataset_title=ds.title,
             dataset_source_type=ds.source_type,
         )
@@ -131,6 +133,7 @@ async def get_version(
         odata_metadata_resource_id=version.odata_metadata_resource_id,
         change_summary=version.change_summary,
         resource_mappings=version.resource_mappings,
+        source=version.source,
         dataset_title=ds.title,
         dataset_source_type=ds.source_type,
     )
@@ -157,6 +160,21 @@ async def delete_version(
     version = result.scalar_one_or_none()
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
+
+    # Conditional-source versions are metadata-only — they reuse the
+    # previous version's ODATA resource_ids verbatim. Calling
+    # resource_delete on them would delete the bytes that earlier
+    # versions still depend on. Only the local DB row should go.
+    if version.source == "conditional":
+        await db.delete(version)
+        await db.commit()
+        logger.info(
+            "Conditional version %s (v%d of dataset %s) deleted by %s — "
+            "no ODATA resources removed (shared with earlier version)",
+            version_id, version.version_number, version.tracked_dataset_id,
+            user.email,
+        )
+        return
 
     to_delete = _extract_resource_ids(version.resource_mappings)
     if version.odata_metadata_resource_id:
@@ -197,6 +215,8 @@ async def download_resource(
         raise HTTPException(status_code=404, detail="Version not found")
 
     mappings = version.resource_mappings or {}
+    # Conditional-source versions reuse the previous version's
+    # odata_resource_ids verbatim, so the same lookup works for them.
     odata_resource_id = mappings.get(resource_id)
     if not odata_resource_id:
         if resource_id == "metadata":
