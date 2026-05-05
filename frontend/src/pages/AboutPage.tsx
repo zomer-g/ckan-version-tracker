@@ -120,7 +120,7 @@ export default function AboutPage() {
             <Trans
               i18nKey="about.contact_text"
               components={{
-                1: <a href="mailto:zomer@octopus.org.il" />,
+                1: <a href="mailto:guy@z-g.co.il" />,
               }}
             />
           </p>
