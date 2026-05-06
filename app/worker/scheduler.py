@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from app.database import async_session
 from app.models.scrape_task import ScrapeTask
@@ -18,18 +18,19 @@ scheduler = AsyncIOScheduler()
 async def cleanup_stuck_scrape_tasks() -> None:
     """Periodically mark 'running' scrape tasks as failed when the worker
     has stopped sending progress updates. Runs independently of worker polls,
-    so stuck tasks get cleaned even when no worker is online."""
+    so stuck tasks get cleaned even when no worker is online.
+
+    Liveness is determined solely by heartbeat (updated_at): if the worker
+    is still posting progress, the task is alive — long-but-healthy scrapes
+    (e.g. tens of thousands of attachments behind a slow upstream) are fine.
+    """
     now = datetime.now(timezone.utc)
     heartbeat_cutoff = now - timedelta(minutes=10)
-    hard_cutoff = now - timedelta(hours=2)
     async with async_session() as db:
         result = await db.execute(
             select(ScrapeTask).where(
                 ScrapeTask.status == "running",
-                or_(
-                    ScrapeTask.updated_at < heartbeat_cutoff,
-                    ScrapeTask.created_at < hard_cutoff,
-                ),
+                ScrapeTask.updated_at < heartbeat_cutoff,
             )
         )
         stuck = result.scalars().all()

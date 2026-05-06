@@ -103,27 +103,20 @@ async def poll_for_task(
     """Worker polls for the next available scrape task.
 
     Before returning a new task, auto-fails any 'running' task whose worker
-    appears to have died: either no heartbeat (updated_at) for >10 minutes,
-    or running for >120 minutes total even if still reporting progress (big
-    enough slack for real long scrapes while still catching truly stuck ones).
+    has stopped heartbeating (no progress update in the last 10 minutes).
+    A worker that's still posting progress is alive by definition, so long
+    healthy scrapes (e.g. tens of thousands of attachments behind a slow
+    upstream) are not killed by an arbitrary task-age cap.
     """
     _verify_worker_key(request)
 
-    # Auto-reset stuck "running" tasks. Two triggers:
-    # 1. no progress update in the last 10 minutes → worker crashed mid-task
-    # 2. running for more than 2 hours total → unusually long, likely zombie
     from datetime import timedelta
-    from sqlalchemy import or_
     now = datetime.now(timezone.utc)
     heartbeat_cutoff = now - timedelta(minutes=10)
-    hard_cutoff = now - timedelta(hours=2)
     stuck_result = await db.execute(
         select(ScrapeTask).where(
             ScrapeTask.status == "running",
-            or_(
-                ScrapeTask.updated_at < heartbeat_cutoff,
-                ScrapeTask.created_at < hard_cutoff,
-            ),
+            ScrapeTask.updated_at < heartbeat_cutoff,
         )
     )
     cleaned = 0
