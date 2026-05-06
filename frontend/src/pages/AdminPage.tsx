@@ -433,6 +433,34 @@ export default function AdminPage() {
     }
   };
 
+  const handleDismissFailed = async (taskId: string, title: string) => {
+    if (!confirm(`למחוק את שגיאת הגירוד של "${title}" מהיומן?`)) return;
+    try {
+      await adminApi.cancelScrapeTask(taskId);
+      await loadQueue();
+    } catch (e: any) {
+      alert(`שגיאה: ${e?.message || e}`);
+    }
+  };
+
+  const handleRetryFailed = async (taskId: string, datasetId: string, title: string) => {
+    if (!confirm(`לנסות שוב לגרד את "${title}"?`)) return;
+    try {
+      // Drop the old failure entry first so the panel doesn't show stale red
+      // alongside the new pending task. If the dismiss fails (e.g. another admin
+      // already cleared it), continue anyway — the retry is what matters.
+      try {
+        await adminApi.cancelScrapeTask(taskId);
+      } catch {
+        // ignore — task may already be gone
+      }
+      await datasetsApi.poll(datasetId);
+      await loadQueue();
+    } catch (e: any) {
+      alert(`שגיאה: ${e?.message || e}`);
+    }
+  };
+
   const handleUpdateInterval = async (id: string, interval: number) => {
     try {
       await datasetsApi.update(id, { poll_interval: interval });
@@ -753,11 +781,43 @@ export default function AdminPage() {
                       borderRadius: "4px",
                       fontSize: "0.85rem",
                     }}>
-                      <div className="flex-between" style={{ gap: "0.5rem" }}>
-                        <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
-                        <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center" }}>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                        <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                           {formatRelative(t.completed_at)}
                         </span>
+                        <button
+                          onClick={() => handleRetryFailed(t.task_id, t.dataset_id, t.dataset_title)}
+                          title="ניסיון חוזר"
+                          style={{
+                            background: "none",
+                            border: "1px solid #166534",
+                            color: "#166534",
+                            cursor: "pointer",
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          ↻ נסה שוב
+                        </button>
+                        <button
+                          onClick={() => handleDismissFailed(t.task_id, t.dataset_title)}
+                          title="מחק מהיומן"
+                          style={{
+                            background: "none",
+                            border: "1px solid #991b1b",
+                            color: "#991b1b",
+                            cursor: "pointer",
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          ✕ מחק
+                        </button>
                       </div>
                       {t.error && (
                         <div style={{

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, OrganizationDetail } from "../api/client";
 import TagChips from "../components/TagChips";
+import AdminDatasetActions from "../components/AdminDatasetActions";
 
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
@@ -200,7 +201,7 @@ export default function OrganizationDetailPage() {
                 )}
               </div>
               <TagChips tags={d.tags} />
-              <div style={{ marginTop: "0.5rem" }}>
+              <div className="flex" style={{ marginTop: "0.5rem", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
                 <Link
                   to={`/versions/${d.id}`}
                   className="btn-primary"
@@ -208,6 +209,21 @@ export default function OrganizationDetailPage() {
                 >
                   {t("tracked.versions")}
                 </Link>
+                <AdminDatasetActions
+                  datasetId={d.id}
+                  title={d.title}
+                  onDeleted={(id) =>
+                    setOrg((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            datasets: prev.datasets.filter((x) => x.id !== id),
+                            dataset_count: Math.max(0, prev.dataset_count - 1),
+                          }
+                        : prev
+                    )
+                  }
+                />
               </div>
             </article>
           ))}

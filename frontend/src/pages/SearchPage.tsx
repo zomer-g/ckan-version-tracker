@@ -1,7 +1,8 @@
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { ckan, datasets as datasetsApi, govil, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import AdminDatasetActions from "../components/AdminDatasetActions";
 
 interface CkanResource {
   id: string;
@@ -44,6 +45,26 @@ export default function SearchPage() {
   const [govIlTracked, setGovIlTracked] = useState<"tracked" | "pending" | null>(null);
   const [govIlTracking, setGovIlTracking] = useState(false);
   const [showGovIlInterval, setShowGovIlInterval] = useState(false);
+
+  // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
+  // (poll/delete) can be rendered inline on results that are already tracked.
+  const [trackedByCkanId, setTrackedByCkanId] = useState<Map<string, { id: string; title: string }>>(new Map());
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    datasetsApi
+      .list()
+      .then((rows) => {
+        const m = new Map<string, { id: string; title: string }>();
+        for (const d of rows) {
+          if (d.ckan_id) m.set(d.ckan_id, { id: d.id, title: d.title });
+        }
+        setTrackedByCkanId(m);
+      })
+      .catch(() => {
+        // Non-fatal — admin actions just won't render on this session.
+      });
+  }, [isAdmin]);
 
   const extractDatasetName = (input: string): string | null => {
     const trimmed = input.trim();
@@ -331,12 +352,42 @@ export default function SearchPage() {
             ? r.resources?.find((res) => res.id === targetResourceId)
             : null;
 
+          const trackedLocal = trackedByCkanId.get(r.id);
           return (
             <article key={r.id} className="card">
               <div className="flex-between mb-1">
                 <h2 style={{ fontSize: "1rem", fontWeight: 600 }}>{r.title}</h2>
                 {!targetResource && renderTrackButton(r.id, r.title)}
               </div>
+              {trackedLocal && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <AdminDatasetActions
+                    datasetId={trackedLocal.id}
+                    title={trackedLocal.title}
+                    onDeleted={(id) => {
+                      setTrackedByCkanId((prev) => {
+                        const next = new Map(prev);
+                        for (const [ckanId, v] of prev.entries()) {
+                          if (v.id === id) next.delete(ckanId);
+                        }
+                        return next;
+                      });
+                      // Also let the existing track-state machine forget this
+                      // dataset, so the user sees the "track" button again
+                      // instead of a stale "tracking" badge.
+                      setTracked((prev) => {
+                        const next = new Map(prev);
+                        for (const key of Array.from(next.keys())) {
+                          if (key === r.id || key.startsWith(`${r.id}::`)) {
+                            next.delete(key);
+                          }
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                </div>
+              )}
               {r.notes && (
                 <p className="text-sm text-muted mb-1" style={{ maxHeight: "3em", overflow: "hidden" }}>
                   {stripHtml(r.notes).slice(0, 200)}

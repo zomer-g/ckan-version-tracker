@@ -417,11 +417,12 @@ async def cancel_scrape_task(
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a pending or stuck-running scrape task.
+    """Cancel or dismiss a scrape task.
 
     - Pending → deleted from queue
     - Running → marked as failed (so a new task can be queued on next poll)
-    - Already completed/failed → 404
+    - Failed → deleted (admin clears it from the recent-failures panel)
+    - Completed → 400 (nothing to do)
     """
     from app.models.scrape_task import ScrapeTask
 
@@ -442,5 +443,9 @@ async def cancel_scrape_task(
         task.completed_at = datetime.now(timezone.utc)
         await db.commit()
         return {"status": "failed", "was": "running"}
+    elif task.status == "failed":
+        await db.delete(task)
+        await db.commit()
+        return {"status": "deleted", "was": "failed"}
     else:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
