@@ -26,6 +26,29 @@ def _remap_keys(record: dict, key_map: dict[str, str]) -> dict:
     return {key_map.get(k, k): v for k, v in record.items()}
 
 
+def _sanitize_field_id(name: str) -> str:
+    """Replace ASCII " (invalid in CKAN/PostgreSQL identifiers — causes
+    datastore_create 409) with Hebrew gershayim (U+05F4), the canonical
+    typographic mark for abbreviations like יו"ר → יו״ר. Idempotent."""
+    return name.replace('"', '״')
+
+
+def _sanitize_fields_and_records(
+    fields: list[dict], records: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Apply _sanitize_field_id to every field id and every record dict key
+    in lockstep, so record keys stay matched to field ids. No-op when no
+    field id contains a double-quote (worth checking — most callers pass
+    clean names and we don't want to rebuild every record dict for nothing)."""
+    if not any('"' in f.get("id", "") for f in fields):
+        return fields, records
+    new_fields = [{**f, "id": _sanitize_field_id(f["id"])} for f in fields]
+    new_records = [
+        {_sanitize_field_id(k): v for k, v in r.items()} for r in records
+    ]
+    return new_fields, new_records
+
+
 class ODataClient:
     """Async client for reading/writing to odata.org.il CKAN API."""
 
@@ -376,6 +399,11 @@ class ODataClient:
         """
         import asyncio
 
+        # Defense-in-depth: covers append-mode callers (app/api/worker.py) that
+        # invoke this directly, bypassing push_csv_to_datastore. Idempotent
+        # no-op when fields are already clean.
+        fields, records_batch = _sanitize_fields_and_records(fields, records_batch)
+
         last_err: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
@@ -427,6 +455,13 @@ class ODataClient:
         import csv as _csv
         import io as _io
         from app.services.csv_parser import batch_records
+
+        # Sanitize field ids that contain ASCII " — CKAN's datastore_create
+        # rejects them with 409 (PostgreSQL identifier quote). Done at this
+        # entry point so the uploaded CSV file, the create-schema call, and
+        # every subsequent batch all use the same sanitized names. Idempotent
+        # and skipped entirely when no field needs it.
+        fields, records = _sanitize_fields_and_records(fields, records)
 
         safe_name = resource_name.replace("/", "_").replace("\\", "_")
         ts = timestamp or "unknown"
