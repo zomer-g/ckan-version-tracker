@@ -50,6 +50,7 @@ class TagDatasetMini(BaseModel):
     source_type: str = "ckan"
     version_count: int = 0
     last_polled_at: str | None = None
+    last_modified: str | None = None
     tags: list[TagBrief] = []
 
 
@@ -139,6 +140,7 @@ async def get_tag(tag_id: str, db: AsyncSession = Depends(get_db)):
             source_type=ds.source_type or "ckan",
             version_count=version_counts.get(ds.id, 0),
             last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+            last_modified=ds.last_modified,
             tags=[_tag_brief(t) for t in ds.tags if t.id != tag.id],
         )
         for ds, org in rows

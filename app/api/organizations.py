@@ -52,6 +52,7 @@ class DatasetMini(BaseModel):
     source_type: str
     version_count: int
     last_polled_at: str | None
+    last_modified: str | None = None
     tags: list[TagBrief] = []
 
 
@@ -253,6 +254,7 @@ async def get_organization(
                 source_type=ds.source_type or "ckan",
                 version_count=version_counts.get(ds.id, 0),
                 last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+                last_modified=ds.last_modified,
                 tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
             )
             for ds in datasets

@@ -71,22 +71,25 @@ export default function VersionsPage() {
               {t("versions.title")}
               {" · "}
               {versionsList.length} {t("home.versions_count")}
+              {dataset.last_modified && (
+                <>
+                  {" · "}
+                  {t("tracked.latest_version_at", "גרסה אחרונה")}:{" "}
+                  {new Date(dataset.last_modified).toLocaleString()}
+                </>
+              )}
             </div>
           )}
         </div>
-        <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
+        <div className="flex" style={{ alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           {dataset?.odata_dataset_id && (
             <a
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{
-                textDecoration: "none",
-                fontSize: "0.85rem",
-                color: "var(--primary)",
-              }}
+              className="btn-secondary btn-sm"
             >
-              {t("tracked.view_on_odata")} &#8599;
+              {t("tracked.view_on_odata")}
             </a>
           )}
           {dataset && (() => {
@@ -105,13 +108,9 @@ export default function VersionsPage() {
                 href={sourceHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{
-                  textDecoration: "none",
-                  fontSize: "0.85rem",
-                  color: "var(--text-muted)",
-                }}
+                className="btn-secondary btn-sm"
               >
-                {linkLabel} &#8599;
+                {linkLabel}
               </a>
             );
           })()}
@@ -252,10 +251,9 @@ export default function VersionsPage() {
                         href={href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                        className="btn-secondary btn-sm"
                       >
-                        {t("versions.view_on_odata")} &#8599;
+                        {t("versions.view_on_odata")}
                       </a>
                     </div>
                   );

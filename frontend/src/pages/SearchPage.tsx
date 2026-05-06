@@ -403,7 +403,10 @@ export default function SearchPage() {
                   {t("search.resources")}: {r.num_resources}
                 </span>
                 <span>
-                  {t("search.last_modified")}: {r.metadata_modified?.slice(0, 10)}
+                  {t("search.last_modified")}:{" "}
+                  {r.metadata_modified
+                    ? new Date(r.metadata_modified).toLocaleString()
+                    : "—"}
                 </span>
               </div>
 

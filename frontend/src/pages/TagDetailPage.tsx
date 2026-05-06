@@ -138,24 +138,17 @@ export default function TagDetailPage() {
               )}
               <div className="text-sm text-muted">
                 {d.version_count} {t("home.versions_count")}
-                {d.last_polled_at && (
+                {d.last_modified && (
                   <>
-                    {" "}· {t("tracked.last_poll")}:{" "}
-                    {new Date(d.last_polled_at).toLocaleDateString()}
+                    {" · "}
+                    {t("tracked.latest_version_at", "גרסה אחרונה")}:{" "}
+                    {new Date(d.last_modified).toLocaleString()}
                   </>
                 )}
               </div>
               <TagChips tags={d.tags} excludeId={tag.id} />
               <div className="flex" style={{ marginTop: "0.5rem", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
-                <Link
-                  to={`/versions/${d.id}`}
-                  className="btn-primary"
-                  style={{
-                    textDecoration: "none",
-                    fontSize: "0.85rem",
-                    padding: "0.3rem 0.75rem",
-                  }}
-                >
+                <Link to={`/versions/${d.id}`} className="btn-primary btn-sm">
                   {t("tracked.versions")}
                 </Link>
                 <AdminDatasetActions

@@ -76,6 +76,7 @@ export interface TagDataset {
   source_type: string;
   version_count: number;
   last_polled_at: string | null;
+  last_modified: string | null;
   tags: Tag[];
 }
 
@@ -451,6 +452,7 @@ export interface OrganizationDetail extends Organization {
     source_type: string;
     version_count: number;
     last_polled_at: string | null;
+    last_modified: string | null;
     tags?: Tag[];
   }[];
 }

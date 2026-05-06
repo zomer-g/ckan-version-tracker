@@ -71,7 +71,62 @@ class CKANClient:
             return data["result"]
 
     async def package_search(self, query: str, rows: int = 20, start: int = 0) -> dict:
-        return await self._get("package_search", {"q": query, "rows": rows, "start": start})
+        # Default Solr behavior is AND across tokens, which often strands
+        # multi-word Hebrew queries: e.g. "הנחיות משטרה" returns nothing
+        # even though datasets contain both terms (the Hebrew analyzer
+        # doesn't stem clitics, so "משטרה" doesn't match "המשטרה").
+        # We run the user's query as-is first, then if it under-fills the
+        # page we re-run with OR semantics and a prefix-wildcard variant
+        # and append the unique extras. This keeps exact-match relevance
+        # at the top while still surfacing reasonable partial matches.
+        q = (query or "").strip()
+        primary = await self._get(
+            "package_search", {"q": q, "rows": rows, "start": start}
+        )
+
+        if not q or start > 0:
+            return primary
+
+        tokens = [t for t in q.split() if t]
+        if len(tokens) < 2 or len(primary.get("results", [])) >= rows:
+            return primary
+
+        seen: set[str] = {
+            r["id"] for r in primary.get("results", []) if r.get("id")
+        }
+        merged: list[dict] = list(primary.get("results", []))
+        fallback_total = primary.get("count", 0)
+
+        # Fallback 1: OR across tokens (with prefix wildcards) — catches
+        # cases where Solr's AND default + Hebrew tokenization hide a hit.
+        or_parts: list[str] = []
+        for tok in tokens:
+            safe = tok.replace('"', "").replace("\\", "").replace(":", "")
+            if not safe:
+                continue
+            or_parts.append(safe)
+            or_parts.append(f"{safe}*")
+        if or_parts:
+            or_query = " OR ".join(or_parts)
+            try:
+                extra = await self._get(
+                    "package_search",
+                    {"q": or_query, "rows": rows, "start": 0},
+                )
+                for r in extra.get("results", []):
+                    rid = r.get("id")
+                    if rid and rid not in seen and len(merged) < rows:
+                        merged.append(r)
+                        seen.add(rid)
+                fallback_total = max(fallback_total, extra.get("count", 0))
+            except Exception as e:
+                logger.debug("package_search OR fallback failed: %s", e)
+
+        return {
+            **primary,
+            "results": merged,
+            "count": fallback_total,
+        }
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})

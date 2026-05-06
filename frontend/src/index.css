@@ -108,6 +108,39 @@ button:focus-visible {
   background: #dc2626;
 }
 
+/* Anchor styled as a button (for "open source" / "open on ODATA" links) */
+a.btn-primary,
+a.btn-secondary,
+a.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0.5rem 1.25rem;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+  transition: background 0.2s, opacity 0.2s, box-shadow 0.2s;
+}
+
+.btn-primary.btn-sm,
+.btn-secondary.btn-sm,
+.btn-danger.btn-sm,
+a.btn-primary.btn-sm,
+a.btn-secondary.btn-sm,
+a.btn-danger.btn-sm {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.75rem;
+}
+
+a.btn-primary:hover,
+a.btn-secondary:hover,
+a.btn-danger:hover {
+  opacity: 1; /* override generic anchor hover so the bg-change is visible */
+}
+
 /* Form elements */
 input,
 select {

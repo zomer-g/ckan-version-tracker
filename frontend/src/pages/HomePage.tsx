@@ -360,7 +360,12 @@ export default function HomePage() {
                         <span>{t("search.organization")}: {r.organization.title}</span>
                       )}
                       <span>{t("search.resources")}: {r.num_resources}</span>
-                      <span>{t("search.last_modified")}: {r.metadata_modified?.slice(0, 10)}</span>
+                      <span>
+                        {t("search.last_modified")}:{" "}
+                        {r.metadata_modified
+                          ? new Date(r.metadata_modified).toLocaleString()
+                          : "—"}
+                      </span>
                     </div>
 
                     {/* Targeted resource */}
@@ -538,13 +543,18 @@ export default function HomePage() {
                     {t("tracked.poll_interval")}: {formatInterval(ds.poll_interval, t)}
                   </p>
 
+                  {ds.last_modified && (
+                    <p className="text-sm text-muted mb-1">
+                      {t("tracked.latest_version_at", "גרסה אחרונה")}: {new Date(ds.last_modified).toLocaleString()}
+                    </p>
+                  )}
+
                   <TagChips tags={ds.tags} />
 
-                  <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
+                  <div className="flex mt-1" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
                     <Link
                       to={`/versions/${ds.id}`}
-                      className="btn-primary"
-                      style={{ textDecoration: "none", fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}
+                      className="btn-primary btn-sm"
                     >
                       {t("tracked.versions")}
                     </Link>
@@ -554,10 +564,9 @@ export default function HomePage() {
                         href={`${ODATA_BASE}/dataset/${ds.odata_dataset_id}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                        className="btn-secondary btn-sm"
                       >
-                        ODATA &#8599;
+                        {t("tracked.view_on_odata")}
                       </a>
                     )}
 
@@ -578,10 +587,9 @@ export default function HomePage() {
                           href={sourceHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm"
-                          style={{ color: "var(--text-muted)", textDecoration: "none" }}
+                          className="btn-secondary btn-sm"
                         >
-                          {linkLabel} &#8599;
+                          {linkLabel}
                         </a>
                       );
                     })()}
