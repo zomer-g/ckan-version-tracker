@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 5000
 
 
+def _sanitize_field_name(name: str) -> str:
+    """Replace ASCII " (invalid in CKAN/PostgreSQL identifiers, causes
+    datastore_create 409) with Hebrew gershayim (U+05F4), the canonical
+    typographic mark for abbreviations like יו"ר → יו״ר. No-op when the
+    name contains no double-quote."""
+    return name.replace('"', '״')
+
+
 def parse_csv(content: bytes) -> tuple[list[dict], list[dict]]:
     """
     Parse CSV bytes into (fields, records) for CKAN Datastore.
@@ -30,10 +38,10 @@ def parse_csv(content: bytes) -> tuple[list[dict], list[dict]]:
 
     records: list[dict] = []
     for row in reader:
-        cleaned = {k.strip(): _clean_value(v) for k, v in row.items() if k}
+        cleaned = {_sanitize_field_name(k.strip()): _clean_value(v) for k, v in row.items() if k}
         records.append(cleaned)
 
-    field_names = [f.strip() for f in reader.fieldnames if f]
+    field_names = [_sanitize_field_name(f.strip()) for f in reader.fieldnames if f]
     fields = _detect_field_types(field_names, records)
 
     # Cast values to detected types
