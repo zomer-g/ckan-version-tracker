@@ -246,6 +246,56 @@ Single organization. Same shape as one entry from the list.
 
 ---
 
+## CSV column conventions for scraped datasets
+
+Datasets sourced from a scraper (`source_type == "scraper"`, e.g. the
+gov.il DynamicCollector tracker) follow a small set of reserved column
+names in their CSV resources. These are added by the scraper after
+attachments are downloaded so that consumers can join a row to its
+PDF inside the dataset ZIP without falling back to positional
+ordering.
+
+| Column | Type | Description |
+|---|---|---|
+| `attachment_filename` | string | Exact basename of the PDF file inside the ZIP that belongs to this row. Empty string when the row has no attachment. Multiple attachments are joined with `"; "` (e.g. `"a.pdf; b.pdf"`). |
+| `attachment_url` | string | Direct download URL on gov.il for the same file(s). Same `"; "` join convention. |
+
+**Filename guarantees.**
+
+- The value is the **post-dedup basename** as it appears inside the
+  ZIP, not the original filename on gov.il. Name collisions are
+  resolved with `_1`, `_2`, … suffixes (`foo.pdf`, `foo_1.pdf`).
+- For every non-empty `attachment_filename`, a file with exactly that
+  basename exists inside the uploaded ZIP under
+  `<base_name>/attachments/<basename>`.
+- Rows without an attachment have `attachment_filename = ""`.
+
+**How to use.** Resolve a row's PDF by reading the column directly —
+no positional fallback needed:
+
+```python
+import zipfile
+
+def open_pdf_for_row(zip_path: str, row: dict) -> bytes | None:
+    name = row.get("attachment_filename", "")
+    if not name:
+        return None
+    first = name.split("; ", 1)[0]
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.filename.endswith("/attachments/" + first):
+                return zf.read(info)
+    return None
+```
+
+**Legacy columns to ignore.** Older snapshots of some scraped
+datasets carried columns like `Data.file`, `Data.Document`, or
+`Data.attachments` whose value was a literal placeholder string
+(`"[1 קבצים]"`). Those columns are no longer produced. New consumers
+should rely solely on `attachment_filename` / `attachment_url`.
+
+---
+
 ## Recipes
 
 ### "Give me datasets tagged X **and** Y"

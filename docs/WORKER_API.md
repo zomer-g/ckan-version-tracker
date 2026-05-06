@@ -117,20 +117,26 @@ Content-Type: application/json
           "title": "הנחיה מס' 1.0001",
           "date": "2026-01-15",
           "category": "משפט פלילי",
-          "description": "הנחיה בנושא..."
+          "description": "הנחיה בנושא...",
+          "attachment_filename": "הנחיה_1.0001.pdf",
+          "attachment_url": "https://www.gov.il/BlobFolder/generalpage/guidelines/he/1.0001.pdf"
         },
         {
           "title": "הנחיה מס' 1.0002",
           "date": "2026-02-20",
           "category": "משפט אזרחי",
-          "description": "הנחיה בנושא..."
+          "description": "הנחיה בנושא...",
+          "attachment_filename": "הנחיה_1.0002.pdf",
+          "attachment_url": "https://www.gov.il/BlobFolder/generalpage/guidelines/he/1.0002.pdf"
         }
       ],
       "fields": [
         {"id": "title", "type": "text"},
         {"id": "date", "type": "text"},
         {"id": "category", "type": "text"},
-        {"id": "description", "type": "text"}
+        {"id": "description", "type": "text"},
+        {"id": "attachment_filename", "type": "text"},
+        {"id": "attachment_url", "type": "text"}
       ],
       "row_count": 450
     }
@@ -181,9 +187,70 @@ Content-Type: application/json
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Filename |
+| `name` | string | **Yes** | Filename. **Must match exactly the basename used inside the ZIP and the value of `attachment_filename` in the corresponding CSV record** (after dedup, e.g. `foo_1.pdf` if a name collision was resolved). |
 | `url` | string | **Yes** | Direct download URL on gov.il |
 | `size` | integer | No | File size in bytes |
+
+#### Linking CSV rows to PDF attachments
+
+Every record in `records[]` may carry two reserved string fields that
+describe its attachment(s):
+
+| Column | Type | Description |
+|---|---|---|
+| `attachment_filename` | string | Exact basename of the PDF inside the ZIP. Empty string when the row has no attachment. Multiple attachments are joined with `"; "` (e.g. `"a.pdf; b.pdf"`). |
+| `attachment_url` | string | Direct download URL on gov.il for the same file(s). Same `"; "` join convention. |
+
+**Why these exist.** Consumers of a tracked dataset routinely need to
+join a CSV row to its specific PDF inside the ZIP — for example to
+diff PDF text across versions, to render a row's source document, or
+to validate the data. Without a deterministic key, consumers fall
+back to positional ordering (i-th row ↔ i-th file in
+`zf.infolist()`), which silently drifts whenever the producer's
+internal ordering differs from CSV `_id` ordering. `attachment_filename`
+is that deterministic key.
+
+**Producer guarantees.**
+
+- The value of `attachment_filename` is the **post-dedup basename**
+  inside the ZIP, not the original filename on gov.il. If two
+  attachments would have produced the same filename, the second one
+  is suffixed (`foo.pdf`, `foo_1.pdf`) and that suffixed name is what
+  appears in the CSV.
+- For every non-empty `attachment_filename`, a corresponding entry
+  exists in the top-level `attachments[]` array with `name` equal to
+  the basename, and a file with that exact basename exists inside the
+  uploaded ZIP under `<base_name>/attachments/<basename>`.
+- Rows with no PDF have `attachment_filename = ""`. Don't treat this
+  as an error.
+
+**Consumer recipe** (Python):
+
+```python
+import zipfile, csv, io
+
+def open_pdf_for_row(zip_path: str, row: dict) -> bytes | None:
+    name = row.get("attachment_filename", "")
+    if not name:
+        return None
+    # Multiple files per row are "; "-joined.
+    first = name.split("; ", 1)[0]
+    with zipfile.ZipFile(zip_path) as zf:
+        # Files live under <base>/attachments/ — find by suffix.
+        for info in zf.infolist():
+            if info.filename.endswith("/attachments/" + first):
+                return zf.read(info)
+    return None
+```
+
+**What you should NOT do.** The producer used to emit columns
+called `Data.file`, `Data.Document`, `Data.attachments` whose value
+was the literal string `"[1 קבצים]"` — a count, not a filename. Those
+columns are no longer produced. If your consumer code reads them,
+migrate to `attachment_filename` instead. If you fall back to
+positional matching when `attachment_filename` is missing, log a
+warning — for any new scrape produced by the current worker, the
+column must be populated whenever attachments exist.
 
 **Response 200:**
 ```json
@@ -381,10 +448,19 @@ def run_worker():
             # from scraper_engine import GovILScraper
             # scraper = GovILScraper()
             # result = scraper.scrape(source_url, download_files=config.get("download_files", False))
-            # 
-            # records = result.items  # list of dicts
+            #
+            # # Each item already carries `attachment_filename` and
+            # # `attachment_url` — the canonical post-dedup keys for
+            # # joining a row to its PDF inside the ZIP. They are
+            # # populated by govscraper.io.attachments.inject_attachment_columns
+            # # AFTER files are downloaded (so the dedup-suffix logic
+            # # has run), so make sure your worker downloads the
+            # # attachments BEFORE building the records payload.
+            # records = result.items  # list of dicts (incl. attachment_filename / attachment_url)
             # fields = [{"id": col, "type": "text"} for col in result.columns]
             # attachments = [{"name": f.filename, "url": f.url, "size": f.size} for f in result.files]
+            # # Invariant: for every record where attachment_filename != "",
+            # # the same basename appears as `name` in `attachments`.
 
             records = [...]  # your scraped data
             fields = [...]   # column definitions
