@@ -21,6 +21,7 @@ from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
 from app.services.version_detector import compute_new_rows
+from app.services.worker_version import get_required_worker_sha
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/worker", tags=["worker"])
@@ -107,8 +108,36 @@ async def poll_for_task(
     A worker that's still posting progress is alive by definition, so long
     healthy scrapes (e.g. tens of thousands of attachments behind a slow
     upstream) are not killed by an arbitrary task-age cap.
+
+    Also gates dispatch on a worker-version check: the worker reports its
+    git commit SHA via X-Worker-Version, and we refuse to hand out a task
+    if it doesn't match the upstream repo's tracked branch (avoids stale
+    workers producing opaque errors that newer code surfaces clearly).
+    A worker reporting no version, or a server that can't determine the
+    required SHA (e.g. GitHub unreachable), fails open.
     """
     _verify_worker_key(request)
+
+    # Worker-version gate. We do this before the auto-reset/dispatch logic
+    # so an outdated worker doesn't even trigger the bookkeeping side
+    # effects of a poll.
+    if settings.worker_version_check_enabled:
+        worker_version = (request.headers.get("x-worker-version") or "").strip()
+        required_version = await get_required_worker_sha()
+        if required_version and worker_version and worker_version != required_version:
+            logger.warning(
+                "Refusing to dispatch task: worker on %s, required %s",
+                worker_version[:12], required_version[:12],
+            )
+            return {
+                "outdated": True,
+                "worker_version": worker_version,
+                "expected_version": required_version,
+                "message": (
+                    f"Worker is running an outdated commit ({worker_version[:12]}). "
+                    f"Update to {required_version[:12]} (git pull + restart) to receive tasks."
+                ),
+            }
 
     from datetime import timedelta
     now = datetime.now(timezone.utc)

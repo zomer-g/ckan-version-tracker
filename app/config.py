@@ -27,6 +27,18 @@ class Settings(BaseSettings):
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 
+    # Worker version gate: refuse to dispatch tasks to a worker whose git
+    # commit doesn't match what's on the upstream repo's master branch.
+    # Prevents stale workers from picking up tasks and producing opaque
+    # errors that newer code would have surfaced clearly. Set
+    # WORKER_VERSION_CHECK_ENABLED=false to disable (e.g. local dev).
+    # WORKER_REQUIRED_VERSION pins to a specific SHA, skipping the GitHub
+    # fetch entirely.
+    worker_version_check_enabled: bool = True
+    worker_repo: str = "zomer-g/govil-scraper"
+    worker_branch: str = "master"
+    worker_required_version: str = ""  # explicit SHA override; empty = fetch latest
+
     # Conditional archiver: cheap HEAD / datastore_info probe before
     # the full download+hash pipeline. When all resources are confirmed
     # unchanged via HTTP headers, a metadata-only version is created
