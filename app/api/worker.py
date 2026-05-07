@@ -374,6 +374,19 @@ async def push_version(
                 odata_resource_ids.append(pre_uploaded)
                 logger.info("Using pre-uploaded CSV for %s → resource %s (%d rows)",
                             res.name, pre_uploaded, res.row_count)
+                # Worker called /upload-csv with version_number=1 (it can't
+                # know next_version yet — same constraint as the ZIP path).
+                # Now that we do, rewrite the resource's 'vN' marker so the
+                # dataset page doesn't show every CSV version stuck at v1.
+                try:
+                    await odata_client.update_resource_version_number(
+                        pre_uploaded, next_version,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to rename pre-uploaded CSV %s to v%d: %s",
+                        pre_uploaded, next_version, e,
+                    )
                 continue
 
             if not (res.records and res.fields):
