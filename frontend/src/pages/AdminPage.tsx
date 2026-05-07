@@ -70,6 +70,22 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
+type AdminTab = "queue" | "schedule" | "requests" | "datasets" | "orgs" | "tags";
+
+const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
+  { id: "queue",    label: "תור גירוד",       emoji: "⏳" },
+  { id: "schedule", label: "תזמון משימות",     emoji: "📅" },
+  { id: "requests", label: "בקשות ממתינות",    emoji: "📥" },
+  { id: "datasets", label: "מאגרים פעילים",   emoji: "📂" },
+  { id: "orgs",     label: "ארגונים",          emoji: "🏛" },
+  { id: "tags",     label: "תגיות",            emoji: "🏷" },
+];
+
+function readTabFromHash(): AdminTab {
+  const h = (typeof window !== "undefined" ? window.location.hash : "").replace("#", "");
+  return (ADMIN_TABS.find((t) => t.id === h)?.id) ?? "queue";
+}
+
 export default function AdminPage() {
   const { t } = useTranslation();
   const [requests, setRequests] = useState<PendingRequest[]>([]);
@@ -100,6 +116,17 @@ export default function AdminPage() {
   const [syncToast, setSyncToast] = useState<string | null>(null);
   // Tags
   const [availableTags, setAvailableTags] = useState<TagWithCount[]>([]);
+  // Sidebar nav tab — synced to URL hash so reload/share preserves state
+  const [tab, setTabState] = useState<AdminTab>(readTabFromHash);
+  const setTab = (next: AdminTab) => {
+    setTabState(next);
+    window.location.hash = next;
+  };
+  useEffect(() => {
+    const onHashChange = () => setTabState(readTabFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   useEffect(() => {
     loadAll();
@@ -585,49 +612,94 @@ export default function AdminPage() {
     );
   }
 
+  const activeTabLabel = ADMIN_TABS.find((tt) => tt.id === tab)?.label ?? "";
+  const orgSyncControls = (
+    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+      <button className="btn-secondary" onClick={handleSyncOrgs} disabled={syncingOrgs} style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+        {syncingOrgs ? "..." : t("organizations.admin_sync")}
+      </button>
+      <button className="btn-secondary" onClick={handleSyncOrgsGovIl} disabled={syncingOrgs} style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+        {syncingOrgs ? "..." : t("organizations.admin_sync_gov_il")}
+      </button>
+      <button className="btn-secondary" onClick={handleLinkScrapers} disabled={syncingOrgs} style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+        {syncingOrgs ? "..." : t("organizations.admin_link_scrapers", "שייך מאגרי gov.il")}
+      </button>
+      {syncToast && (
+        <span style={{
+          fontSize: "0.75rem",
+          padding: "0.25rem 0.5rem",
+          borderRadius: "4px",
+          background: syncToast.startsWith("שגיאה") ? "#fee2e2" : "#dcfce7",
+          color: syncToast.startsWith("שגיאה") ? "#991b1b" : "#166534",
+        }}>{syncToast}</span>
+      )}
+    </div>
+  );
   return (
-    <div>
-      {/* Section 0: Scrape Queue */}
-      <div className="page-header flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
-        <h1 style={{ margin: 0 }}>{t("admin.title")}</h1>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            className="btn-secondary"
-            onClick={handleSyncOrgs}
-            disabled={syncingOrgs}
-            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
-          >
-            {syncingOrgs ? "..." : t("organizations.admin_sync")}
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={handleSyncOrgsGovIl}
-            disabled={syncingOrgs}
-            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
-          >
-            {syncingOrgs ? "..." : t("organizations.admin_sync_gov_il")}
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={handleLinkScrapers}
-            disabled={syncingOrgs}
-            style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
-          >
-            {syncingOrgs ? "..." : t("organizations.admin_link_scrapers", "שייך מאגרי gov.il")}
-          </button>
-          {syncToast && (
-            <span style={{
-              fontSize: "0.75rem",
-              padding: "0.25rem 0.5rem",
-              borderRadius: "4px",
-              background: syncToast.startsWith("שגיאה") ? "#fee2e2" : "#dcfce7",
-              color: syncToast.startsWith("שגיאה") ? "#991b1b" : "#166534",
-            }}>
-              {syncToast}
-            </span>
-          )}
+    <div className="admin-layout" style={{
+      display: "flex",
+      gap: "1.25rem",
+      alignItems: "flex-start",
+      flexDirection: "row-reverse",
+    }}>
+      {/* Sidebar nav (right side under RTL) */}
+      <aside style={{
+        width: "210px",
+        flexShrink: 0,
+        position: "sticky",
+        top: "1rem",
+        background: "var(--surface)",
+        borderRadius: "var(--radius)",
+        border: "1px solid var(--border)",
+        padding: "0.75rem",
+        boxShadow: "var(--shadow-sm)",
+      }}>
+        <h1 style={{ margin: "0 0 0.75rem 0", fontSize: "1.2rem" }}>{t("admin.title")}</h1>
+        <nav style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+          {ADMIN_TABS.map((tt) => {
+            const isActive = tt.id === tab;
+            return (
+              <button
+                key={tt.id}
+                onClick={() => setTab(tt.id)}
+                style={{
+                  textAlign: "right",
+                  fontSize: "0.9rem",
+                  padding: "0.5rem 0.75rem",
+                  borderRadius: "6px",
+                  border: "1px solid",
+                  borderColor: isActive ? "var(--primary)" : "transparent",
+                  background: isActive ? "var(--primary-50, #e0e7ff)" : "transparent",
+                  color: isActive ? "var(--primary)" : "var(--text)",
+                  fontWeight: isActive ? 600 : 400,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <span style={{ fontSize: "1rem" }}>{tt.emoji}</span>
+                <span>{tt.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+
+      {/* Main content — only the selected tab renders */}
+      <main style={{ flex: 1, minWidth: 0 }}>
+        <div className="page-header flex-between" style={{
+          borderBottom: "1px solid var(--border)",
+          paddingBottom: "0.5rem",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
+          gap: "0.75rem",
+        }}>
+          <h2 style={{ margin: 0, fontSize: "1.4rem" }}>{activeTabLabel}</h2>
+          {tab === "orgs" && orgSyncControls}
         </div>
-      </div>
+
+      {tab === "queue" && (<>
 
       <section style={{
         marginBottom: "1.5rem",
@@ -875,7 +947,9 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+      </>)}
 
+      {tab === "schedule" && (<>
       {/* Schedule preview — when does each active dataset's next poll fire */}
       <section className="card mb-2">
         <div className="page-header flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
@@ -963,11 +1037,10 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+      </>)}
 
+      {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}
-      <div className="page-header">
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>{t("admin.title")}</h2>
-      </div>
 
       {requests.length === 0 ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>{t("admin.empty")}</div>
@@ -1084,9 +1157,12 @@ export default function AdminPage() {
         </div>
       )}
 
+      </>)}
+
+      {tab === "datasets" && (<>
       {/* Section 2: Active Datasets Management */}
-      <div className="page-header mt-3">
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>ניהול מאגרים פעילים ({activeDatasets.length})</h2>
+      <div className="page-header">
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)" }}>{activeDatasets.length} מאגרים</h2>
       </div>
 
       {activeDatasets.length === 0 ? (
@@ -1417,10 +1493,13 @@ export default function AdminPage() {
         </div>
       )}
 
+      </>)}
+
+      {tab === "orgs" && (<>
       {/* Section 3: Organizations hierarchy */}
-      <div className="page-header mt-3">
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-          ניהול היררכיית ארגונים ({orgs.length})
+      <div className="page-header">
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)" }}>
+          {orgs.length} ארגונים
         </h2>
       </div>
       {orgs.length === 0 ? (
@@ -1504,10 +1583,13 @@ export default function AdminPage() {
         </div>
       )}
 
+      </>)}
+
+      {tab === "tags" && (<>
       {/* Section 4: Tags management */}
-      <div className="page-header mt-3">
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
-          ניהול תגיות ({availableTags.length})
+      <div className="page-header">
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)" }}>
+          {availableTags.length} תגיות
         </h2>
       </div>
       {availableTags.length === 0 ? (
@@ -1550,6 +1632,10 @@ export default function AdminPage() {
           </table>
         </div>
       )}
+
+      </>)}
+
+      </main>
 
       {resourcePickerFor && resourcePickerFor.kind === "active" && (
         <ResourcePickerModal
