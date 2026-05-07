@@ -12,6 +12,12 @@ Resolution order:
 Cache is process-local. With one Render dyno this is fine; if we ever run
 multiple workers polling the same dyno, ~60 polls/min/worker would still
 hit GitHub at most every TTL_SECONDS.
+
+Cache-staleness handling: the poll endpoint can call this with
+refresh=True when the worker's reported SHA differs from the cached
+expected SHA. We re-fetch GitHub up to once per MIN_REFRESH_INTERVAL
+seconds — that turns a stale cache into a self-healing failure mode
+instead of forcing the operator to wait out the TTL after every push.
 """
 import logging
 import time
@@ -22,34 +28,19 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-TTL_SECONDS = 300  # 5 minutes — bound on the lag between push and enforcement
+TTL_SECONDS = 60                # serve from cache for this long
+MIN_REFRESH_INTERVAL = 20       # rate-limit forced refreshes (DOS protection)
 
 _cache: dict[str, tuple[float, str | None]] = {}
+_last_fetch: dict[str, float] = {}
 
 
 def _key() -> str:
     return f"{settings.worker_repo}@{settings.worker_branch}"
 
 
-async def get_required_worker_sha() -> str | None:
-    """Return the SHA the worker must report, or None if undetermined.
-
-    None means the caller should fail open — we don't want a transient
-    GitHub outage to block all scraping. Pinning via
-    WORKER_REQUIRED_VERSION sidesteps the network entirely.
-    """
-    if settings.worker_required_version:
-        return settings.worker_required_version.strip()
-
-    if not settings.worker_repo or not settings.worker_branch:
-        return None
-
-    key = _key()
-    now = time.time()
-    cached = _cache.get(key)
-    if cached and (now - cached[0]) < TTL_SECONDS:
-        return cached[1]
-
+async def _fetch_from_github(key: str) -> str | None:
+    """Single GitHub call; updates the cache. Returns the new SHA or None."""
     url = f"https://api.github.com/repos/{settings.worker_repo}/commits/{settings.worker_branch}"
     sha: str | None = None
     try:
@@ -69,7 +60,41 @@ async def get_required_worker_sha() -> str | None:
     except Exception as e:
         logger.warning("Failed to fetch required worker SHA from %s: %s", url, e)
 
+    now = time.time()
     # Cache even None so a flaky GitHub doesn't blast us with retries every poll.
-    # On the next TTL boundary we try again.
     _cache[key] = (now, sha)
+    _last_fetch[key] = now
     return sha
+
+
+async def get_required_worker_sha(*, refresh: bool = False) -> str | None:
+    """Return the SHA the worker must report, or None if undetermined.
+
+    None means the caller should fail open — we don't want a transient
+    GitHub outage to block all scraping. Pinning via
+    WORKER_REQUIRED_VERSION sidesteps the network entirely.
+
+    refresh=True forces a GitHub re-fetch even within the TTL, but is
+    still rate-limited globally to once per MIN_REFRESH_INTERVAL seconds
+    so a malicious or buggy worker can't flood our outbound calls.
+    """
+    if settings.worker_required_version:
+        return settings.worker_required_version.strip()
+
+    if not settings.worker_repo or not settings.worker_branch:
+        return None
+
+    key = _key()
+    now = time.time()
+    cached = _cache.get(key)
+
+    if refresh:
+        last = _last_fetch.get(key, 0.0)
+        if (now - last) >= MIN_REFRESH_INTERVAL:
+            return await _fetch_from_github(key)
+        # Hit the rate limit — fall through to whatever we have cached.
+
+    if cached and (now - cached[0]) < TTL_SECONDS:
+        return cached[1]
+
+    return await _fetch_from_github(key)

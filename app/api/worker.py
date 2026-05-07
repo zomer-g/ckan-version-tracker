@@ -121,9 +121,16 @@ async def poll_for_task(
     # Worker-version gate. We do this before the auto-reset/dispatch logic
     # so an outdated worker doesn't even trigger the bookkeeping side
     # effects of a poll.
+    #
+    # On a mismatch we re-fetch GitHub once (rate-limited) before refusing,
+    # to handle the common case where our 60s cache was warmed seconds
+    # before a `git push` reached upstream master. Without this the operator
+    # has to wait out the TTL after every push.
     if settings.worker_version_check_enabled:
         worker_version = (request.headers.get("x-worker-version") or "").strip()
         required_version = await get_required_worker_sha()
+        if required_version and worker_version and worker_version != required_version:
+            required_version = await get_required_worker_sha(refresh=True) or required_version
         if required_version and worker_version and worker_version != required_version:
             logger.warning(
                 "Refusing to dispatch task: worker on %s, required %s",
