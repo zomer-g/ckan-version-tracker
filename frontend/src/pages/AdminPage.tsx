@@ -825,9 +825,16 @@ export default function AdminPage() {
                           fontSize: "0.75rem",
                           color: "#991b1b",
                           wordBreak: "break-word",
+                          whiteSpace: "pre-wrap",
                           fontFamily: "monospace",
+                          maxHeight: "10rem",
+                          overflowY: "auto",
+                          padding: "0.25rem 0.4rem",
+                          background: "#fff",
+                          border: "1px solid #fecaca",
+                          borderRadius: "3px",
                         }}>
-                          {t.error.length > 200 ? t.error.slice(0, 200) + "..." : t.error}
+                          {t.error}
                         </div>
                       )}
                     </li>
