@@ -17,7 +17,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
-from app.worker.scheduler import add_poll_job
+from app.worker.scheduler import add_poll_job, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -449,3 +449,80 @@ async def cancel_scrape_task(
         return {"status": "deleted", "was": "failed"}
     else:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
+
+
+@router.get("/scheduled-jobs")
+@limiter.limit("60/minute")
+async def list_scheduled_jobs(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the live in-memory APScheduler job state joined with dataset
+    metadata. Used by the admin UI's "תזמון משימות" section to confirm
+    which datasets are actually scheduled, when their next poll fires,
+    and how long ago they were last polled.
+
+    APScheduler is the source of truth for `next_run_at` (its trigger
+    state is what actually decides when poll_dataset fires). The DB is
+    the source of truth for `last_polled_at` and the dataset's
+    configured interval. We join the two so the admin sees, at a
+    glance, every active dataset and any drift between its configured
+    cadence and its actual schedule.
+    """
+    # Pull DB rows for active datasets
+    db_result = await db.execute(
+        select(TrackedDataset)
+        .where(
+            TrackedDataset.is_active.is_(True),
+            TrackedDataset.status == "active",
+        )
+        .order_by(TrackedDataset.title.asc())
+    )
+    datasets = db_result.scalars().all()
+    by_id: dict[str, TrackedDataset] = {str(d.id): d for d in datasets}
+
+    # Pull APScheduler's view of pending fires
+    job_next: dict[str, datetime] = {}
+    if scheduler.running:
+        for job in scheduler.get_jobs():
+            jid = (job.id or "")
+            if jid.startswith("poll_"):
+                ds_id = jid[len("poll_"):]
+                if job.next_run_time:
+                    job_next[ds_id] = job.next_run_time
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for ds_id, ds in by_id.items():
+        next_run = job_next.get(ds_id)
+        seconds_until = (
+            int((next_run - now).total_seconds()) if next_run else None
+        )
+        rows.append({
+            "dataset_id": ds_id,
+            "title": ds.title,
+            "source_type": ds.source_type,
+            "poll_interval": ds.poll_interval,
+            "last_polled_at": ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+            "next_run_at": next_run.isoformat() if next_run else None,
+            "seconds_until_next_run": seconds_until,
+            "scheduled": ds_id in job_next,
+        })
+
+    # Datasets with a job but no DB row would be orphans — surface them
+    # so the operator can clean them up.
+    orphans = [
+        {"job_id": f"poll_{ds_id}", "next_run_at": dt.isoformat()}
+        for ds_id, dt in job_next.items() if ds_id not in by_id
+    ]
+
+    rows.sort(key=lambda r: (
+        r["seconds_until_next_run"] if r["seconds_until_next_run"] is not None else 10**12
+    ))
+    return {
+        "scheduler_running": scheduler.running,
+        "now": now.isoformat(),
+        "jobs": rows,
+        "orphan_jobs": orphans,
+    }

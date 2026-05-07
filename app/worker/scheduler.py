@@ -65,8 +65,14 @@ async def init_scheduler() -> None:
         datasets = result.scalars().all()
 
         for ds in datasets:
-            add_poll_job(str(ds.id), ds.poll_interval)
-            logger.info("Scheduled poll for %s every %ds", ds.ckan_name, ds.poll_interval)
+            add_poll_job(
+                str(ds.id), ds.poll_interval,
+                last_polled_at=ds.last_polled_at,
+            )
+            logger.info(
+                "Scheduled poll for %s every %ds (last=%s)",
+                ds.ckan_name, ds.poll_interval, ds.last_polled_at,
+            )
 
     # Periodic cleanup of stuck scrape tasks (every 5 min)
     scheduler.add_job(
@@ -82,11 +88,41 @@ async def init_scheduler() -> None:
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 
 
-def add_poll_job(dataset_id: str, interval_seconds: int) -> None:
-    """Add or replace a poll job for a dataset."""
+def add_poll_job(
+    dataset_id: str,
+    interval_seconds: int,
+    last_polled_at: datetime | None = None,
+) -> None:
+    """Add or replace a poll job for a dataset.
+
+    Anchors the schedule to `last_polled_at + interval_seconds` (or
+    `now` when never polled), not "now + interval". This matters on
+    Render: every deploy/restart re-runs init_scheduler, and the bare
+    IntervalTrigger(seconds=N) starts counting from registration time.
+    For datasets configured with weekly/monthly intervals — and a
+    deploy cadence faster than that — the timer never accumulates
+    enough wall-clock to fire. Anchoring to last_polled_at means
+    restarts preserve the "next fire" decision: if the dataset is
+    already overdue we fire immediately on startup; otherwise we wait
+    just the remaining time.
+    """
+    now = datetime.now(timezone.utc)
+    if last_polled_at is None:
+        # Brand-new dataset (never polled). Fire on next scheduler tick.
+        start_date = now
+    else:
+        candidate = last_polled_at + timedelta(seconds=interval_seconds)
+        # If overdue, fire on next tick; otherwise fire at the computed
+        # time. APScheduler refuses start_date in the past for
+        # IntervalTrigger, so we clamp to now.
+        start_date = candidate if candidate > now else now
+
     scheduler.add_job(
         poll_dataset,
-        trigger=IntervalTrigger(seconds=interval_seconds),
+        trigger=IntervalTrigger(
+            seconds=interval_seconds,
+            start_date=start_date,
+        ),
         id=f"poll_{dataset_id}",
         args=[dataset_id],
         replace_existing=True,

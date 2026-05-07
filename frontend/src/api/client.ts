@@ -324,6 +324,24 @@ export interface ScrapeQueueResponse {
   failed: ScrapeQueueFailed[];
 }
 
+export interface ScheduledJobRow {
+  dataset_id: string;
+  title: string;
+  source_type: string;
+  poll_interval: number;
+  last_polled_at: string | null;
+  next_run_at: string | null;
+  seconds_until_next_run: number | null;
+  scheduled: boolean;
+}
+
+export interface ScheduledJobsResponse {
+  scheduler_running: boolean;
+  now: string;
+  jobs: ScheduledJobRow[];
+  orphan_jobs: { job_id: string; next_run_at: string }[];
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
   approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[]) =>
@@ -337,6 +355,7 @@ export const admin = {
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {
       method: "DELETE",
     }),
+  scheduledJobs: () => request<ScheduledJobsResponse>("/admin/scheduled-jobs"),
   syncOrganizations: () =>
     request<{ created: number; updated: number; total: number; linked_datasets: number }>(
       "/admin/organizations/sync",

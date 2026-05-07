@@ -10,6 +10,7 @@ import {
   PendingRequest,
   TrackedDataset,
   ScrapeQueueResponse,
+  ScheduledJobsResponse,
   Organization,
   Tag,
   TagWithCount,
@@ -90,6 +91,8 @@ export default function AdminPage() {
   >(null);
   // Scrape queue state
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
+  // Scheduled jobs state (next-run preview)
+  const [schedule, setSchedule] = useState<ScheduledJobsResponse | null>(null);
   // Organizations
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
@@ -103,7 +106,11 @@ export default function AdminPage() {
     loadOrgs();
     loadTags();
     loadQueue();
-    const id = setInterval(loadQueue, 5000);
+    loadSchedule();
+    const id = setInterval(() => {
+      loadQueue();
+      loadSchedule();
+    }, 5000);
     return () => clearInterval(id);
   }, []);
 
@@ -304,6 +311,29 @@ export default function AdminPage() {
     } catch (e) {
       console.error("Failed to load queue", e);
     }
+  };
+
+  const loadSchedule = async () => {
+    try {
+      const s = await adminApi.scheduledJobs();
+      setSchedule(s);
+    } catch (e) {
+      console.error("Failed to load schedule", e);
+    }
+  };
+
+  const formatDuration = (totalSeconds: number): string => {
+    const sign = totalSeconds < 0 ? "-" : "";
+    const s = Math.abs(totalSeconds);
+    if (s < 60) return `${sign}${s} שניות`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${sign}${m} דקות`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${sign}${h} שעות`;
+    const d = Math.round(h / 24);
+    if (d < 30) return `${sign}${d} ימים`;
+    const months = Math.round(d / 30);
+    return `${sign}${months} חודשים`;
   };
 
   const loadAll = async () => {
@@ -840,6 +870,94 @@ export default function AdminPage() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Schedule preview — when does each active dataset's next poll fire */}
+      <section className="card mb-2">
+        <div className="page-header flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
+          <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+            תזמון משימות עתידיות
+            {schedule && (
+              <span className="text-muted" style={{ fontSize: "0.75rem", fontWeight: 400, marginInlineStart: "0.5rem" }}>
+                ({schedule.jobs.length} מאגרים פעילים
+                {!schedule.scheduler_running && " — ⚠ scheduler לא רץ"}
+                )
+              </span>
+            )}
+          </h2>
+          <button onClick={loadSchedule} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
+            רענן ↻
+          </button>
+        </div>
+
+        {!schedule ? (
+          <div className="text-muted" style={{ fontSize: "0.85rem", padding: "0.75rem" }}>טוען...</div>
+        ) : schedule.jobs.length === 0 ? (
+          <div className="empty-state" style={{ padding: "1rem" }}>אין מאגרים פעילים מתוזמנים.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead>
+                <tr style={{ background: "#f9fafb", textAlign: "right" }}>
+                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
+                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>תדירות</th>
+                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נדגם לאחרונה</th>
+                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>הפעלה הבאה</th>
+                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>בעוד</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedule.jobs.map((j) => {
+                  const overdue = j.seconds_until_next_run !== null && j.seconds_until_next_run < 0;
+                  return (
+                    <tr key={j.dataset_id} style={{
+                      borderBottom: "1px solid #f0f0f0",
+                      background: !j.scheduled ? "#fef2f2" : overdue ? "#fef3c7" : undefined,
+                    }}>
+                      <td style={{ padding: "0.4rem 0.6rem" }}>
+                        <Link to={`/versions/${j.dataset_id}`}>{j.title}</Link>
+                        {!j.scheduled && (
+                          <span className="text-muted" style={{ fontSize: "0.7rem", marginInlineStart: "0.4rem", color: "#991b1b" }}>
+                            (לא מתוזמן)
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.6rem" }} className="text-muted">
+                        {formatIntervalLabel(j.poll_interval)}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.6rem" }} className="text-muted">
+                        {j.last_polled_at
+                          ? new Date(j.last_polled_at).toLocaleString()
+                          : "אף פעם"}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.6rem" }} className="text-muted">
+                        {j.next_run_at
+                          ? new Date(j.next_run_at).toLocaleString()
+                          : "—"}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.6rem", whiteSpace: "nowrap" }}>
+                        {j.seconds_until_next_run === null ? (
+                          <span className="text-muted">—</span>
+                        ) : overdue ? (
+                          <span style={{ color: "#92400e", fontWeight: 600 }}>
+                            פיגור: {formatDuration(-j.seconds_until_next_run)}
+                          </span>
+                        ) : (
+                          <span>{formatDuration(j.seconds_until_next_run)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {schedule.orphan_jobs.length > 0 && (
+              <div style={{ marginTop: "0.6rem", fontSize: "0.8rem", color: "#92400e" }}>
+                ⚠ {schedule.orphan_jobs.length} jobs יתומים בלי dataset תואם — Restart Render כדי לנקות.
               </div>
             )}
           </div>
