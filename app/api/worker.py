@@ -21,7 +21,10 @@ from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
 from app.services.version_detector import compute_new_rows
-from app.services.worker_version import get_required_worker_sha
+from app.services.worker_version import (
+    get_required_worker_sha,
+    get_required_engine_hash,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/worker", tags=["worker"])
@@ -139,33 +142,64 @@ async def poll_for_task(
     #                     tasks and failing them.
     if settings.worker_version_check_enabled:
         worker_version = (request.headers.get("x-worker-version") or "").strip()
+        worker_engine_hash = (request.headers.get("x-worker-engine-hash") or "").strip().lower()
         required_version = await get_required_worker_sha()
-        if required_version:
-            is_match = bool(worker_version) and worker_version == required_version
-            # Refresh-on-mismatch only when the worker actually reported
-            # something different — a missing header is a "stale worker"
-            # diagnosis, not a "stale cache" one.
-            if worker_version and not is_match:
-                required_version = (
-                    await get_required_worker_sha(refresh=True) or required_version
+        required_engine_hash = await get_required_engine_hash()
+
+        # Two-axis identity check. Either failed axis refuses dispatch.
+        # The git-SHA axis is the cheap "did the operator pull?" check;
+        # the engine-hash axis is the "did the operator restart after
+        # pulling?" check (and also defends against WORKER_VERSION env
+        # spoofing). Both must match.
+        sha_match = (
+            required_version is None  # nothing to compare against → fail open
+            or (bool(worker_version) and worker_version == required_version)
+        )
+        engine_match = (
+            required_engine_hash is None
+            or (bool(worker_engine_hash) and worker_engine_hash == required_engine_hash)
+        )
+
+        # Refresh-on-mismatch covers the "cache warmed seconds before
+        # push reached upstream" case — only one re-fetch per axis,
+        # rate-limited globally inside worker_version.py.
+        if required_version is not None and bool(worker_version) and not sha_match:
+            required_version = (
+                await get_required_worker_sha(refresh=True) or required_version
+            )
+            sha_match = worker_version == required_version
+        if required_engine_hash is not None and bool(worker_engine_hash) and not engine_match:
+            required_engine_hash = (
+                await get_required_engine_hash(refresh=True) or required_engine_hash
+            )
+            engine_match = worker_engine_hash == required_engine_hash
+
+        if not (sha_match and engine_match):
+            reasons = []
+            if not sha_match:
+                reasons.append(
+                    f"git SHA mismatch (worker={worker_version or '<missing>'}, "
+                    f"expected={(required_version or '?')[:12]})"
                 )
-                is_match = worker_version == required_version
-            if not is_match:
-                logger.warning(
-                    "Refusing to dispatch task: worker version=%r, required=%s",
-                    worker_version or "<no header>", required_version[:12],
+            if not engine_match:
+                reasons.append(
+                    f"engine hash mismatch (worker={(worker_engine_hash or '<missing>')[:12]}, "
+                    f"expected={(required_engine_hash or '?')[:12]} — "
+                    f"either workers running old code in memory or "
+                    f"restart not done after pull)"
                 )
-                return {
-                    "outdated": True,
-                    "worker_version": worker_version or "(none)",
-                    "expected_version": required_version,
-                    "message": (
-                        f"Worker version mismatch: got "
-                        f"{worker_version or '(no X-Worker-Version header)'}, "
-                        f"expected {required_version[:12]}. Pre-version-reporting "
-                        f"workers must be updated. git pull + restart to receive tasks."
-                    ),
-                }
+            logger.warning("Refusing to dispatch task: %s", "; ".join(reasons))
+            return {
+                "outdated": True,
+                "worker_version": worker_version or "(none)",
+                "worker_engine_hash": worker_engine_hash or "(none)",
+                "expected_version": required_version or "(unknown)",
+                "expected_engine_hash": required_engine_hash or "(unknown)",
+                "message": (
+                    "Worker doesn't match upstream. " + "; ".join(reasons) +
+                    ". git pull && restart this worker to receive tasks."
+                ),
+            }
 
     from datetime import timedelta
     now = datetime.now(timezone.utc)

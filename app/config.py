@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
     worker_required_version: str = ""  # explicit SHA override; empty = fetch latest
+    # SHA-256 of legacy_engine.py the worker's loaded module must match.
+    # Defends against WORKER_VERSION env spoofing and the "pulled but
+    # didn't restart" failure mode where git HEAD moved but the running
+    # process still has the old module in memory. Empty = fetch latest
+    # bytes from GitHub raw and hash them.
+    worker_required_engine_hash: str = ""
 
     # Conditional archiver: cheap HEAD / datastore_info probe before
     # the full download+hash pipeline. When all resources are confirmed

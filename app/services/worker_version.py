@@ -1,24 +1,35 @@
-"""Resolve the git SHA a worker must be running, with a TTL cache.
+"""Resolve what a worker must be running, with TTL caches.
 
-The /api/worker/poll endpoint refuses to dispatch tasks to a worker whose
-reported git SHA doesn't match what's on the upstream repo's tracked
-branch. This module owns the "what SHA does the worker need?" question.
+The /api/worker/poll endpoint refuses to dispatch tasks unless the worker
+matches upstream on TWO axes:
 
-Resolution order:
-  1. settings.worker_required_version — explicit pin (no network call).
-  2. GitHub API for the configured repo+branch — cached for TTL_SECONDS.
-  3. Unknown — caller decides whether to fail open (allow) or closed (deny).
+  1. Git SHA — what the worker reports via X-Worker-Version. Cheap to
+     check (string compare), but spoofable: the worker computes it via
+     `git rev-parse HEAD` at startup, and a WORKER_VERSION env override
+     bypasses the file system entirely.
 
-Cache is process-local. With one Render dyno this is fine; if we ever run
-multiple workers polling the same dyno, ~60 polls/min/worker would still
-hit GitHub at most every TTL_SECONDS.
+  2. Engine file content — SHA-256 of the worker's loaded
+     legacy_engine.py, sent via X-Worker-Engine-Hash. This is what
+     actually decides scrape behaviour, so checking the bytes themselves
+     defeats SHA spoofing AND catches the real-world failure mode of
+     "operator pulled but didn't restart" (HEAD moved, in-memory module
+     didn't).
 
-Cache-staleness handling: the poll endpoint can call this with
-refresh=True when the worker's reported SHA differs from the cached
-expected SHA. We re-fetch GitHub up to once per MIN_REFRESH_INTERVAL
-seconds — that turns a stale cache into a self-healing failure mode
-instead of forcing the operator to wait out the TTL after every push.
+Resolution order for both:
+  1. explicit pin in settings (worker_required_version /
+     worker_required_engine_hash) — no network call.
+  2. GitHub API/raw URL for the configured repo+branch — cached TTL_SECONDS.
+  3. Unknown — caller decides fail-open vs fail-closed.
+
+Cache is process-local. With one Render dyno this is fine; if we ever
+scale, ~60 polls/min/worker still hits GitHub at most every TTL_SECONDS.
+
+Cache-staleness handling: the poll endpoint can pass refresh=True on a
+mismatch to force one re-fetch (rate-limited to MIN_REFRESH_INTERVAL).
+That turns a 60-second post-push false-positive window into a single
+self-healing poll rather than waiting out the TTL.
 """
+import hashlib
 import logging
 import time
 
@@ -31,12 +42,22 @@ logger = logging.getLogger(__name__)
 TTL_SECONDS = 60                # serve from cache for this long
 MIN_REFRESH_INTERVAL = 20       # rate-limit forced refreshes (DOS protection)
 
+# The single file whose hash we use as the worker's "actual code" identity.
+# Picked because every scrape path runs through this module — if its bytes
+# differ from upstream, the worker's behaviour will differ too. over_worker.py
+# matters too but is small and rarely the source of bugs we'd reject for.
+ENGINE_FILE_PATH = "govscraper/scrapers/govil/legacy_engine.py"
+
 _cache: dict[str, tuple[float, str | None]] = {}
 _last_fetch: dict[str, float] = {}
 
 
 def _key() -> str:
     return f"{settings.worker_repo}@{settings.worker_branch}"
+
+
+def _engine_key() -> str:
+    return f"{settings.worker_repo}@{settings.worker_branch}::engine"
 
 
 async def _fetch_from_github(key: str) -> str | None:
@@ -98,3 +119,58 @@ async def get_required_worker_sha(*, refresh: bool = False) -> str | None:
         return cached[1]
 
     return await _fetch_from_github(key)
+
+
+async def _fetch_engine_hash_from_github(key: str) -> str | None:
+    """Download the upstream legacy_engine.py and SHA-256 it. Returns the
+    hex digest or None on any error."""
+    url = (
+        f"https://raw.githubusercontent.com/{settings.worker_repo}/"
+        f"{settings.worker_branch}/{ENGINE_FILE_PATH}"
+    )
+    digest: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+        if resp.status_code == 200 and resp.content:
+            digest = hashlib.sha256(resp.content).hexdigest()
+        else:
+            logger.warning(
+                "GitHub raw for %s returned %s (len=%d); failing open on engine-hash check",
+                url, resp.status_code, len(resp.content or b""),
+            )
+    except Exception as e:
+        logger.warning("Failed to fetch engine file from %s: %s", url, e)
+
+    now = time.time()
+    _cache[key] = (now, digest)
+    _last_fetch[key] = now
+    return digest
+
+
+async def get_required_engine_hash(*, refresh: bool = False) -> str | None:
+    """Return the SHA-256 the worker's loaded legacy_engine.py must match.
+
+    Same null-on-failure semantics as get_required_worker_sha — None
+    means "we couldn't determine, fail open". An explicit pin via
+    settings.worker_required_engine_hash sidesteps the network entirely.
+    """
+    if settings.worker_required_engine_hash:
+        return settings.worker_required_engine_hash.strip()
+
+    if not settings.worker_repo or not settings.worker_branch:
+        return None
+
+    key = _engine_key()
+    now = time.time()
+    cached = _cache.get(key)
+
+    if refresh:
+        last = _last_fetch.get(key, 0.0)
+        if (now - last) >= MIN_REFRESH_INTERVAL:
+            return await _fetch_engine_hash_from_github(key)
+
+    if cached and (now - cached[0]) < TTL_SECONDS:
+        return cached[1]
+
+    return await _fetch_engine_hash_from_github(key)
