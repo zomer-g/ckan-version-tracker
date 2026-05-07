@@ -96,26 +96,42 @@ def add_poll_job(
     """Add or replace a poll job for a dataset.
 
     Anchors the schedule to `last_polled_at + interval_seconds` (or
-    `now` when never polled), not "now + interval". This matters on
-    Render: every deploy/restart re-runs init_scheduler, and the bare
-    IntervalTrigger(seconds=N) starts counting from registration time.
-    For datasets configured with weekly/monthly intervals — and a
-    deploy cadence faster than that — the timer never accumulates
-    enough wall-clock to fire. Anchoring to last_polled_at means
-    restarts preserve the "next fire" decision: if the dataset is
-    already overdue we fire immediately on startup; otherwise we wait
-    just the remaining time.
+    fires immediately when overdue / never polled), not "now + interval".
+    This matters on Render: every deploy/restart re-runs init_scheduler,
+    and a bare IntervalTrigger(seconds=N) starts counting from
+    registration time. For datasets configured with weekly/monthly
+    intervals — and a deploy cadence faster than that — the timer never
+    accumulates enough wall-clock to fire.
+
+    Computing start_date for the "fire immediately" case is subtle:
+    APScheduler's IntervalTrigger.get_next_fire_time uses
+    `ceil(diff/interval) * interval` when start_date is in the past.
+    Passing start_date=now (or now - small_epsilon) yields
+    `ceil(0/interval)=0` or `ceil(eps/interval)=1` depending on float
+    rounding — the latter pushes next_fire a full interval into the
+    future. That's exactly the bug we hit before this fix: weekly
+    datasets that should have fired immediately got rescheduled for
+    "now + 7 days".
+
+    Fix: when we want immediate fire, set start_date = now - interval.
+    Then diff == interval exactly, ceil(1) = 1, next_fire = now. The
+    second fire is computed off previous_fire_time + interval, so the
+    cadence stays correct.
     """
     now = datetime.now(timezone.utc)
+    interval = timedelta(seconds=interval_seconds)
     if last_polled_at is None:
-        # Brand-new dataset (never polled). Fire on next scheduler tick.
-        start_date = now
+        # Brand-new dataset — fire on next tick.
+        start_date = now - interval
     else:
-        candidate = last_polled_at + timedelta(seconds=interval_seconds)
-        # If overdue, fire on next tick; otherwise fire at the computed
-        # time. APScheduler refuses start_date in the past for
-        # IntervalTrigger, so we clamp to now.
-        start_date = candidate if candidate > now else now
+        candidate = last_polled_at + interval
+        if candidate > now:
+            # Not overdue — fire at the natural time.
+            start_date = candidate
+        else:
+            # Overdue — fire on next tick. See docstring for the
+            # `now - interval` math.
+            start_date = now - interval
 
     scheduler.add_job(
         poll_dataset,
