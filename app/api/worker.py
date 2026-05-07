@@ -120,31 +120,52 @@ async def poll_for_task(
 
     # Worker-version gate. We do this before the auto-reset/dispatch logic
     # so an outdated worker doesn't even trigger the bookkeeping side
-    # effects of a poll.
+    # effects of a poll. The pending task stays in the queue until a
+    # matching worker shows up — never burned on a worker we know is
+    # stale.
     #
-    # On a mismatch we re-fetch GitHub once (rate-limited) before refusing,
-    # to handle the common case where our 60s cache was warmed seconds
-    # before a `git push` reached upstream master. Without this the operator
-    # has to wait out the TTL after every push.
+    # Three branches:
+    #   match           → fall through, dispatch normally
+    #   different SHA   → re-fetch GitHub once (rate-limited; covers the
+    #                     "cache warmed seconds before push" case), then
+    #                     refuse if still mismatched
+    #   no SHA at all   → refuse. A worker that doesn't send
+    #                     X-Worker-Version is pre-`a3e300c` and missing
+    #                     the version-reporting feature itself, so it's
+    #                     stale by definition. The previous logic
+    #                     fail-opened on missing header, which let zombie
+    #                     workers (older deploys still polling, processes
+    #                     that survived a botched restart) keep grabbing
+    #                     tasks and failing them.
     if settings.worker_version_check_enabled:
         worker_version = (request.headers.get("x-worker-version") or "").strip()
         required_version = await get_required_worker_sha()
-        if required_version and worker_version and worker_version != required_version:
-            required_version = await get_required_worker_sha(refresh=True) or required_version
-        if required_version and worker_version and worker_version != required_version:
-            logger.warning(
-                "Refusing to dispatch task: worker on %s, required %s",
-                worker_version[:12], required_version[:12],
-            )
-            return {
-                "outdated": True,
-                "worker_version": worker_version,
-                "expected_version": required_version,
-                "message": (
-                    f"Worker is running an outdated commit ({worker_version[:12]}). "
-                    f"Update to {required_version[:12]} (git pull + restart) to receive tasks."
-                ),
-            }
+        if required_version:
+            is_match = bool(worker_version) and worker_version == required_version
+            # Refresh-on-mismatch only when the worker actually reported
+            # something different — a missing header is a "stale worker"
+            # diagnosis, not a "stale cache" one.
+            if worker_version and not is_match:
+                required_version = (
+                    await get_required_worker_sha(refresh=True) or required_version
+                )
+                is_match = worker_version == required_version
+            if not is_match:
+                logger.warning(
+                    "Refusing to dispatch task: worker version=%r, required=%s",
+                    worker_version or "<no header>", required_version[:12],
+                )
+                return {
+                    "outdated": True,
+                    "worker_version": worker_version or "(none)",
+                    "expected_version": required_version,
+                    "message": (
+                        f"Worker version mismatch: got "
+                        f"{worker_version or '(no X-Worker-Version header)'}, "
+                        f"expected {required_version[:12]}. Pre-version-reporting "
+                        f"workers must be updated. git pull + restart to receive tasks."
+                    ),
+                }
 
     from datetime import timedelta
     now = datetime.now(timezone.utc)
