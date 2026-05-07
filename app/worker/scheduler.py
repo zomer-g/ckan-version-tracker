@@ -103,35 +103,38 @@ def add_poll_job(
     intervals — and a deploy cadence faster than that — the timer never
     accumulates enough wall-clock to fire.
 
-    Computing start_date for the "fire immediately" case is subtle:
-    APScheduler's IntervalTrigger.get_next_fire_time uses
-    `ceil(diff/interval) * interval` when start_date is in the past.
-    Passing start_date=now (or now - small_epsilon) yields
-    `ceil(0/interval)=0` or `ceil(eps/interval)=1` depending on float
-    rounding — the latter pushes next_fire a full interval into the
-    future. That's exactly the bug we hit before this fix: weekly
-    datasets that should have fired immediately got rescheduled for
-    "now + 7 days".
+    Computing start_date for the "fire immediately" case is fiddly.
+    APScheduler's IntervalTrigger.get_next_fire_time has two branches:
+      - start_date > now → next_fire = start_date (exact)
+      - else → next_fire = start_date + ceil(diff/interval) * interval
 
-    Fix: when we want immediate fire, set start_date = now - interval.
-    Then diff == interval exactly, ceil(1) = 1, next_fire = now. The
-    second fire is computed off previous_fire_time + interval, so the
-    cadence stays correct.
+    The "else" branch is unusable for "fire on next tick" — float drift
+    between add_job and the trigger evaluation means diff is tiny but
+    positive, so ceil rounds up to 1, and next_fire ends up start_date
+    + one full interval. Confirmed empirically: weekly datasets we
+    intended to fire immediately got "next_run = deploy_time + 7 days"
+    and never ran.
+
+    Use the deterministic "future" branch instead: start_date =
+    now + 1s. Then start_date > now strictly, next_fire = start_date,
+    and the trigger fires on the next scheduler tick (~1s later).
+    Subsequent fires anchor off previous_fire_time, so the chosen
+    1-second offset doesn't propagate into the cadence.
     """
     now = datetime.now(timezone.utc)
     interval = timedelta(seconds=interval_seconds)
+    immediate = now + timedelta(seconds=1)
     if last_polled_at is None:
         # Brand-new dataset — fire on next tick.
-        start_date = now - interval
+        start_date = immediate
     else:
         candidate = last_polled_at + interval
         if candidate > now:
             # Not overdue — fire at the natural time.
             start_date = candidate
         else:
-            # Overdue — fire on next tick. See docstring for the
-            # `now - interval` math.
-            start_date = now - interval
+            # Overdue — fire on next tick.
+            start_date = immediate
 
     scheduler.add_job(
         poll_dataset,
