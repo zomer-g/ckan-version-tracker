@@ -121,6 +121,17 @@ async def get_required_worker_sha(*, refresh: bool = False) -> str | None:
     return await _fetch_from_github(key)
 
 
+def _normalize_line_endings(data: bytes) -> bytes:
+    """Collapse CRLF and lone CR to LF so hashes match across OSes.
+
+    GitHub raw serves the repo bytes (LF since the file was committed
+    on a unix-friendly autocrlf=input checkout); a Windows worker reads
+    the file from disk with CRLF after autocrlf=true converted on
+    checkout. The bytes differ but the logical content is identical —
+    normalize to LF on both sides so the hash agrees."""
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 async def _fetch_engine_hash_from_github(key: str) -> str | None:
     """Download the upstream legacy_engine.py and SHA-256 it. Returns the
     hex digest or None on any error."""
@@ -133,7 +144,7 @@ async def _fetch_engine_hash_from_github(key: str) -> str | None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url)
         if resp.status_code == 200 and resp.content:
-            digest = hashlib.sha256(resp.content).hexdigest()
+            digest = hashlib.sha256(_normalize_line_endings(resp.content)).hexdigest()
         else:
             logger.warning(
                 "GitHub raw for %s returned %s (len=%d); failing open on engine-hash check",
