@@ -11,6 +11,8 @@ import {
   TrackedDataset,
   ScrapeQueueResponse,
   ScheduledJobsResponse,
+  DatasetSizesResponse,
+  formatBytes,
   Organization,
   Tag,
   TagWithCount,
@@ -109,6 +111,10 @@ export default function AdminPage() {
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
   // Scheduled jobs state (next-run preview)
   const [schedule, setSchedule] = useState<ScheduledJobsResponse | null>(null);
+  // Dataset sizes (admin-only). Loaded once per panel open; cached on
+  // server for 60s. Slow on cold-cache (one CKAN call per dataset).
+  const [sizes, setSizes] = useState<DatasetSizesResponse | null>(null);
+  const [sizesLoading, setSizesLoading] = useState(false);
   // Organizations
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
@@ -134,6 +140,7 @@ export default function AdminPage() {
     loadTags();
     loadQueue();
     loadSchedule();
+    loadSizes();
     const id = setInterval(() => {
       loadQueue();
       loadSchedule();
@@ -346,6 +353,18 @@ export default function AdminPage() {
       setSchedule(s);
     } catch (e) {
       console.error("Failed to load schedule", e);
+    }
+  };
+
+  const loadSizes = async () => {
+    setSizesLoading(true);
+    try {
+      const s = await adminApi.datasetSizes();
+      setSizes(s);
+    } catch (e) {
+      console.error("Failed to load dataset sizes", e);
+    } finally {
+      setSizesLoading(false);
     }
   };
 
@@ -613,6 +632,10 @@ export default function AdminPage() {
   }
 
   const activeTabLabel = ADMIN_TABS.find((tt) => tt.id === tab)?.label ?? "";
+  const sizeByDsId = new Map<string, number>();
+  if (sizes) {
+    for (const r of sizes.datasets) sizeByDsId.set(r.dataset_id, r.total_bytes);
+  }
   const orgSyncControls = (
     <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
       <button className="btn-secondary" onClick={handleSyncOrgs} disabled={syncingOrgs} style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
@@ -1450,6 +1473,13 @@ export default function AdminPage() {
                     </div>
                     <div className="text-muted" style={{ fontSize: "0.7rem", marginTop: "0.2rem" }}>
                       {ds.last_polled_at ? new Date(ds.last_polled_at).toLocaleString() : "—"}
+                    </div>
+                    <div className="text-muted" style={{ fontSize: "0.7rem", marginTop: "0.2rem" }}>
+                      {sizes
+                        ? `סך גודל: ${formatBytes(sizeByDsId.get(ds.id))}`
+                        : sizesLoading
+                          ? "סך גודל: ..."
+                          : ""}
                     </div>
                   </td>
                   <td style={tdStyle}>

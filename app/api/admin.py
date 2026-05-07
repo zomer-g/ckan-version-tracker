@@ -451,6 +451,120 @@ async def cancel_scrape_task(
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
 
 
+_dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
+_DATASET_SIZES_TTL = 60.0  # seconds
+
+
+@router.get("/dataset-sizes")
+@limiter.limit("30/minute")
+async def dataset_sizes(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resource sizes per active dataset, plus per-version breakdown.
+
+    Used by the admin UI's Datasets tab to surface "this dataset's mirror
+    is now 4.2 GB across 7 versions" at a glance, and by the VersionsPage
+    (admin only) to show "this version: 312 MB".
+
+    Implementation: one CKAN package_show per dataset on the odata mirror
+    (the resource list it returns includes a 'size' field in bytes), then
+    sum sizes both globally and per-version via VersionIndex
+    .resource_mappings. Concurrency capped at 10 to avoid hammering the
+    odata API; whole result cached process-locally for 60s so repeated
+    admin renders don't re-fan-out.
+
+    Failure mode: if package_show fails for a dataset (network blip,
+    mirror gone), we report total_bytes=0 for it rather than 500-ing
+    the whole endpoint — partial data is more useful than none.
+    """
+    import asyncio
+    import time
+
+    from app.models.version_index import VersionIndex
+
+    now = time.time()
+    cached = _dataset_sizes_cache
+    if cached["payload"] is not None and (now - cached["at"]) < _DATASET_SIZES_TTL:
+        return cached["payload"]
+
+    # All active datasets we'll size up
+    ds_result = await db.execute(
+        select(TrackedDataset).where(
+            TrackedDataset.is_active.is_(True),
+            TrackedDataset.status == "active",
+        )
+    )
+    datasets = ds_result.scalars().all()
+
+    # Per-dataset version rows (single query, group in Python)
+    v_result = await db.execute(
+        select(VersionIndex).order_by(VersionIndex.version_number.asc())
+    )
+    versions_by_ds: dict[str, list[VersionIndex]] = {}
+    for v in v_result.scalars().all():
+        versions_by_ds.setdefault(str(v.tracked_dataset_id), []).append(v)
+
+    sem = asyncio.Semaphore(10)
+
+    async def _fetch_resource_sizes(ds: TrackedDataset) -> dict[str, int]:
+        if not ds.odata_dataset_id:
+            return {}
+        async with sem:
+            try:
+                pkg = await odata_client.package_show(ds.odata_dataset_id)
+            except Exception as e:
+                logger.warning("package_show failed for %s: %s", ds.ckan_name, e)
+                return {}
+        return {
+            r["id"]: int(r.get("size") or 0)
+            for r in (pkg.get("resources") or [])
+            if r.get("id")
+        }
+
+    rid_size_lists = await asyncio.gather(
+        *[_fetch_resource_sizes(ds) for ds in datasets],
+        return_exceptions=False,
+    )
+
+    out_datasets = []
+    for ds, rid_to_size in zip(datasets, rid_size_lists):
+        ds_total = sum(rid_to_size.values())
+        ds_versions: list[dict] = []
+        for v in versions_by_ds.get(str(ds.id), []):
+            mappings = v.resource_mappings or {}
+            seen: set[str] = set()
+            v_total = 0
+            for val in mappings.values():
+                if isinstance(val, str):
+                    if val and val not in seen:
+                        seen.add(val)
+                        v_total += rid_to_size.get(val, 0)
+                elif isinstance(val, list):
+                    for rid in val:
+                        if isinstance(rid, str) and rid and rid not in seen:
+                            seen.add(rid)
+                            v_total += rid_to_size.get(rid, 0)
+            ds_versions.append({
+                "version_id": str(v.id),
+                "version_number": v.version_number,
+                "total_bytes": v_total,
+            })
+        out_datasets.append({
+            "dataset_id": str(ds.id),
+            "title": ds.title,
+            "total_bytes": ds_total,
+            "version_count": len(ds_versions),
+            "versions": ds_versions,
+        })
+
+    payload = {"datasets": out_datasets}
+    _dataset_sizes_cache["at"] = now
+    _dataset_sizes_cache["payload"] = payload
+    return payload
+
+
 @router.get("/scheduled-jobs")
 @limiter.limit("60/minute")
 async def list_scheduled_jobs(

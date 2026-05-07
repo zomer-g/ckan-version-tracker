@@ -1,7 +1,14 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { versions as versionsApi, publicApi, Version, TrackedDataset } from "../api/client";
+import {
+  versions as versionsApi,
+  publicApi,
+  admin as adminApi,
+  formatBytes,
+  Version,
+  TrackedDataset,
+} from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
 const ODATA_BASE = "https://www.odata.org.il";
@@ -16,6 +23,10 @@ export default function VersionsPage() {
   const [dataset, setDataset] = useState<TrackedDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  // Admin-only: version_id -> total_bytes for the size annotation. Null
+  // means "not loaded" (still fetching or non-admin).
+  const [versionSizes, setVersionSizes] = useState<Map<string, number> | null>(null);
+  const [datasetTotalBytes, setDatasetTotalBytes] = useState<number | null>(null);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -30,6 +41,25 @@ export default function VersionsPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [datasetId]);
+
+  // Admin-only side-load for size annotations. Single endpoint returns
+  // every active dataset; we pick the one matching this page. Fails open
+  // (no annotation) on any error so the page still renders for admins
+  // when the odata mirror is briefly unreachable.
+  useEffect(() => {
+    if (!isAdmin || !datasetId) return;
+    adminApi
+      .datasetSizes()
+      .then((resp) => {
+        const me = resp.datasets.find((d) => d.dataset_id === datasetId);
+        if (!me) return;
+        const m = new Map<string, number>();
+        for (const v of me.versions) m.set(v.version_id, v.total_bytes);
+        setVersionSizes(m);
+        setDatasetTotalBytes(me.total_bytes);
+      })
+      .catch(() => {});
+  }, [isAdmin, datasetId]);
 
   async function handleDeleteVersion(v: Version) {
     const label = `${t("versions.version")} ${v.version_number}`;
@@ -71,6 +101,9 @@ export default function VersionsPage() {
               {t("versions.title")}
               {" · "}
               {versionsList.length} {t("home.versions_count")}
+              {isAdmin && datasetTotalBytes !== null && (
+                <> · סך גודל הקבצים: {formatBytes(datasetTotalBytes)}</>
+              )}
             </div>
           )}
         </div>
@@ -168,6 +201,11 @@ export default function VersionsPage() {
                     <span className="text-sm text-muted">
                       {t("versions.detected")}: {new Date(v.detected_at).toLocaleString()}
                     </span>
+                    {isAdmin && versionSizes && (
+                      <span className="text-sm text-muted" title="גודל קבצי הגרסה (אדמין בלבד)">
+                        · גודל: {formatBytes(versionSizes.get(v.id))}
+                      </span>
+                    )}
                   </div>
                   <div className="flex" style={{ alignItems: "center", gap: "0.75rem" }}>
                     <span className="text-sm text-muted">

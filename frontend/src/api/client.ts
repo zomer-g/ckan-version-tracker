@@ -342,6 +342,33 @@ export interface ScheduledJobsResponse {
   orphan_jobs: { job_id: string; next_run_at: string }[];
 }
 
+export interface DatasetSizeVersion {
+  version_id: string;
+  version_number: number;
+  total_bytes: number;
+}
+
+export interface DatasetSizeRow {
+  dataset_id: string;
+  title: string;
+  total_bytes: number;
+  version_count: number;
+  versions: DatasetSizeVersion[];
+}
+
+export interface DatasetSizesResponse {
+  datasets: DatasetSizeRow[];
+}
+
+export function formatBytes(n: number | null | undefined): string {
+  const v = Number(n) || 0;
+  if (v <= 0) return "—";
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  if (v < 1024 * 1024 * 1024) return `${(v / 1024 / 1024).toFixed(1)} MB`;
+  return `${(v / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
   approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[]) =>
@@ -356,6 +383,7 @@ export const admin = {
       method: "DELETE",
     }),
   scheduledJobs: () => request<ScheduledJobsResponse>("/admin/scheduled-jobs"),
+  datasetSizes: () => request<DatasetSizesResponse>("/admin/dataset-sizes"),
   syncOrganizations: () =>
     request<{ created: number; updated: number; total: number; linked_datasets: number }>(
       "/admin/organizations/sync",
