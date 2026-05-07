@@ -468,11 +468,27 @@ async def push_version(
             odata_resource_ids.append(rid)
         resource_mappings["_zip_parts"] = list(body.zip_resource_ids)
         logger.info("Using %d pre-uploaded ZIP part(s)", len(body.zip_resource_ids))
+        # Worker uploads with version_number=1 hardcoded (it can't know
+        # next_version yet). Now that we do, rewrite each resource's
+        # 'v1' marker to match the version we're about to commit.
+        for rid in body.zip_resource_ids:
+            try:
+                await odata_client.update_resource_version_number(rid, next_version)
+            except Exception as e:
+                logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
+                               rid, next_version, e)
     elif body.zip_resource_id:
         # Single ZIP was already uploaded via /api/worker/upload-zip
         odata_resource_ids.append(body.zip_resource_id)
         resource_mappings["_zip"] = body.zip_resource_id
         logger.info("Using pre-uploaded ZIP resource %s", body.zip_resource_id)
+        try:
+            await odata_client.update_resource_version_number(
+                body.zip_resource_id, next_version,
+            )
+        except Exception as e:
+            logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
+                           body.zip_resource_id, next_version, e)
     elif body.zip_file and ds.odata_dataset_id:
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)

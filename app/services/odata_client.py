@@ -239,6 +239,40 @@ class ODataClient:
             "url": new_url,
         })
 
+    async def get_resource(self, resource_id: str) -> dict:
+        """Fetch a resource record (name, description, format, ...)."""
+        return await self._post("resource_show", {"id": resource_id})
+
+    async def update_resource_version_number(
+        self, resource_id: str, new_version: int,
+    ) -> None:
+        """Rewrite the 'vN' marker in a resource's name + description so it
+        reflects the version this resource ended up belonging to.
+
+        The worker pre-uploads ZIP attachments via /api/worker/upload-zip
+        BEFORE push-version assigns next_version, so it can only stamp the
+        resource with a placeholder ('v1' — the worker passes
+        version_number=1 hardcoded). Once push-version determines the
+        actual next_version, we patch the pre-uploaded ZIP resources so
+        their displayed name matches the version_index row that points at
+        them. Best-effort: any odata error is swallowed by the caller.
+        """
+        import re
+        info = await self.get_resource(resource_id)
+        old_name = info.get("name") or ""
+        old_desc = info.get("description") or ""
+        # Pattern: ' v<digits> ' (in names like '14-45_2026-05-07 v1 - ...')
+        # and 'Version <digits>' (in descriptions). Both rewritten in lockstep.
+        new_name = re.sub(r"(?<= )v\d+(?= )", f"v{new_version}", old_name)
+        new_desc = re.sub(r"Version \d+", f"Version {new_version}", old_desc)
+        if new_name == old_name and new_desc == old_desc:
+            return
+        await self._post("resource_patch", {
+            "id": resource_id,
+            "name": new_name,
+            "description": new_desc,
+        })
+
     async def upload_resource(
         self,
         dataset_id: str,
