@@ -633,8 +633,12 @@ export default function AdminPage() {
 
   const activeTabLabel = ADMIN_TABS.find((tt) => tt.id === tab)?.label ?? "";
   const sizeByDsId = new Map<string, number>();
+  const suggestDeltaByDsId = new Set<string>();
   if (sizes) {
-    for (const r of sizes.datasets) sizeByDsId.set(r.dataset_id, r.total_bytes);
+    for (const r of sizes.datasets) {
+      sizeByDsId.set(r.dataset_id, r.total_bytes);
+      if (r.suggest_delta_archive) suggestDeltaByDsId.add(r.dataset_id);
+    }
   }
   const orgSyncControls = (
     <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -1481,6 +1485,24 @@ export default function AdminPage() {
                           ? "סך גודל: ..."
                           : ""}
                     </div>
+                    {suggestDeltaByDsId.has(ds.id) && (
+                      <div
+                        title="המאגר נשמר כעת רק כ-stub של metadata + 200 שורות sample כי הוא מעל 50k שורות. שנה את 'אופן שמירה' ל'תוספת בלבד' והגדר את שם עמודת המפתח (למשל מספר רישוי) — אז כל גרסה תכלול רק שורות חדשות, באמצעות הזרמה דרך datastore_search ב-32k שורות לעמוד."
+                        style={{
+                          marginTop: "0.25rem",
+                          fontSize: "0.7rem",
+                          color: "#92400e",
+                          background: "#fef3c7",
+                          border: "1px solid #fcd34d",
+                          borderRadius: "4px",
+                          padding: "0.2rem 0.4rem",
+                          cursor: "help",
+                          display: "inline-block",
+                        }}
+                      >
+                        💡 שקול ארכוב delta (append_only + מפתח)
+                      </div>
+                    )}
                   </td>
                   <td style={tdStyle}>
                     <div className="flex" style={{ gap: "0.4rem" }}>

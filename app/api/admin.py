@@ -532,6 +532,8 @@ async def dataset_sizes(
     for ds, rid_to_size in zip(datasets, rid_size_lists):
         ds_total = sum(rid_to_size.values())
         ds_versions: list[dict] = []
+        latest_type: str | None = None
+        latest_v_num = -1
         for v in versions_by_ds.get(str(ds.id), []):
             mappings = v.resource_mappings or {}
             seen: set[str] = set()
@@ -546,17 +548,33 @@ async def dataset_sizes(
                         if isinstance(rid, str) and rid and rid not in seen:
                             seen.add(rid)
                             v_total += rid_to_size.get(rid, 0)
+            v_type = (v.change_summary or {}).get("type") if isinstance(v.change_summary, dict) else None
             ds_versions.append({
                 "version_id": str(v.id),
                 "version_number": v.version_number,
                 "total_bytes": v_total,
+                "type": v_type,
             })
+            if v.version_number > latest_v_num:
+                latest_v_num = v.version_number
+                latest_type = v_type
+        # Suggest the delta-archive flow when a dataset is being stored
+        # only as metadata-stubs (the >50k-row path) AND the operator
+        # hasn't already opted in via storage_mode/append_key. This is
+        # the visible signal that "this dataset deserves real archiving".
+        suggest_delta = (
+            latest_type == "large_dataset"
+            and (ds.storage_mode != "append_only"
+                 or not ((ds.scraper_config or {}).get("append_key")))
+        )
         out_datasets.append({
             "dataset_id": str(ds.id),
             "title": ds.title,
             "total_bytes": ds_total,
             "version_count": len(ds_versions),
             "versions": ds_versions,
+            "latest_version_type": latest_type,
+            "suggest_delta_archive": suggest_delta,
         })
 
     payload = {"datasets": out_datasets}

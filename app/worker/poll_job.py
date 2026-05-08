@@ -526,9 +526,54 @@ async def _poll_large_dataset(
     old_mappings: dict | None,
     db,
 ):
-    """Handle large datasets with metadata-only versioning."""
+    """Handle large datasets.
+
+    Default path: metadata-only versioning (record count + sample rows).
+    Cheap and safe but doesn't actually preserve data — every version is
+    a few KB instead of the source's 100s of MB.
+
+    Opt-in path: when the operator sets storage_mode='append_only' AND
+    populates scraper_config.append_key, we stream the dataset out of
+    CKAN's datastore and append only the new-by-key rows to a shared
+    odata resource. This is the "delta archive" mode for vehicle-style
+    datasets where new identities are added but existing ones rarely
+    change shape.
+    """
     total_rows = ds_info["total"]
     fields = ds_info["fields"]
+
+    # Delta-archive opt-in. Skips the metadata-stub path below.
+    if ds.storage_mode == "append_only" and (ds.scraper_config or {}).get("append_key"):
+        from app.services.delta_archiver import archive_via_datastore_streaming
+        latest_result = await db.execute(
+            select(VersionIndex)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
+            .order_by(VersionIndex.version_number.desc())
+            .limit(1)
+        )
+        latest_version = latest_result.scalar_one_or_none()
+        try:
+            handled = await archive_via_datastore_streaming(
+                ds=ds,
+                resource=resource,
+                ds_info=ds_info,
+                next_version=next_version,
+                latest_version=latest_version,
+                new_modified=pkg.get("metadata_modified", ""),
+                db=db,
+            )
+        except Exception as e:
+            logger.exception(
+                "Delta archive crashed for %s; falling back to metadata stub: %s",
+                ds.ckan_name, e,
+            )
+            handled = False
+        if handled:
+            return
+        logger.info(
+            "Delta archive declined for %s; using metadata-only stub",
+            ds.ckan_name,
+        )
 
     # Check if record count changed from previous version
     previous_count = None

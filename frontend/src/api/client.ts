@@ -346,6 +346,7 @@ export interface DatasetSizeVersion {
   version_id: string;
   version_number: number;
   total_bytes: number;
+  type?: string | null;
 }
 
 export interface DatasetSizeRow {
@@ -354,6 +355,8 @@ export interface DatasetSizeRow {
   total_bytes: number;
   version_count: number;
   versions: DatasetSizeVersion[];
+  latest_version_type?: string | null;
+  suggest_delta_archive?: boolean;
 }
 
 export interface DatasetSizesResponse {
