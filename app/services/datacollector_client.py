@@ -25,10 +25,31 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Headers used for the API fetch. gov.il sits behind Cloudflare and
+# rejects requests that look bot-y (a short "compatible" User-Agent
+# alone returns 403 Just-a-moment). The values below mirror what a
+# real Chrome on Windows sends so the lower-tier IUAM checks pass.
+# Don't trim these without testing — every header matters: the
+# original "over.org.il" UA returned 403 from Render's IP while this
+# expanded set passes through.
 REQUEST_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; over.org.il)",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.gov.il/",
+    "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Referer": "https://www.gov.il/he/",
 }
 TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=10.0)
 

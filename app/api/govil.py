@@ -148,15 +148,16 @@ async def _probe_collector_api(url: str) -> tuple[bool, str | None]:
     User-Agent headers gov.il serves the SPA shell as HTML; with them
     the same URL returns JSON.
     """
+    # Share the same header set as the actual collector fetch so the
+    # probe doesn't false-negative on URLs the collector could handle
+    # (gov.il's Cloudflare returns 403 to short bot UAs but lets through
+    # full-Chrome headers).
+    from app.services.datacollector_client import REQUEST_HEADERS as _DC_HEADERS
     try:
         async with httpx.AsyncClient(
             timeout=15,
             follow_redirects=True,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; over.org.il)",
-                "Accept": "application/json, text/plain, */*",
-                "Referer": "https://www.gov.il/",
-            },
+            headers=_DC_HEADERS,
         ) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
