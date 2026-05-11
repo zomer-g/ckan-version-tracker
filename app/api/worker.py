@@ -227,14 +227,41 @@ async def poll_for_task(
     if cleaned:
         await db.commit()
 
-    result = await db.execute(
-        select(ScrapeTask, TrackedDataset)
-        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
-        .where(ScrapeTask.status == "pending")
-        .order_by(ScrapeTask.created_at.asc())
-        .limit(1)
-    )
-    row = result.first()
+    # Walk pending tasks oldest-first and skip any whose dataset is now
+    # collected locally (raw CollectorsWebApi URLs — see
+    # poll_job._is_datacollector_api). Those tasks were enqueued by
+    # _create_scrape_task before the local-collection code shipped; the
+    # external scraper would just return "HTML instead of JSON" and clog
+    # the recent-failures panel. Cancelling them on the assign path is
+    # safer than a one-shot migration and self-heals if any new ones
+    # sneak in (e.g. a stale code path or manual SQL insert).
+    from app.worker.poll_job import _is_datacollector_api
+    row = None
+    cancelled_locals = 0
+    while True:
+        result = await db.execute(
+            select(ScrapeTask, TrackedDataset)
+            .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+            .where(ScrapeTask.status == "pending")
+            .order_by(ScrapeTask.created_at.asc())
+            .limit(1)
+        )
+        candidate = result.first()
+        if not candidate:
+            break
+        cand_task, cand_ds = candidate
+        if cand_ds.source_type == "scraper" and _is_datacollector_api(cand_ds):
+            await db.delete(cand_task)
+            await db.commit()
+            cancelled_locals += 1
+            continue
+        row = candidate
+        break
+    if cancelled_locals:
+        logger.info(
+            "Skipped %d pending scrape task(s) for datacollector_api datasets",
+            cancelled_locals,
+        )
     if not row:
         # Proper empty-body response. Do NOT raise HTTPException(204) —
         # FastAPI's exception handler builds a JSON `{"detail":...}` body,
