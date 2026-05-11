@@ -43,6 +43,17 @@ async def poll_dataset(dataset_id: str) -> None:
         # create a task instead of polling CKAN. The external GOV SCRAPER
         # worker dispatches to the right per-domain scraper based on the
         # source_url + scraper_config.kind it receives in the poll response.
+        #
+        # Exception: raw CollectorsWebApi URLs are handled locally because
+        # the external scraper only knows about the SPA URLs and was
+        # returning HTML for these. We pick the local path when either
+        # (a) scraper_config.kind explicitly says so (new datasets created
+        # after this change) or (b) the source URL matches the raw API
+        # pattern (older datasets created before the validator update,
+        # currently stuck on "returned HTML instead of JSON").
+        if ds.source_type == "scraper" and _is_datacollector_api(ds):
+            await _collect_datacollector_api(ds, db)
+            return
         if ds.source_type in ("scraper", "govmap"):
             await _create_scrape_task(ds, db)
             return
@@ -333,6 +344,184 @@ async def poll_dataset(dataset_id: str) -> None:
             logger.exception("Error polling dataset %s", ds.ckan_name)
             ds.last_polled_at = datetime.now(timezone.utc)
             await db.commit()
+
+
+def _is_datacollector_api(ds: TrackedDataset) -> bool:
+    """True if this scraper dataset should be collected by the local path.
+
+    Either the operator opted in (scraper_config.kind set at creation
+    time) or the source_url matches the raw collector-API regex from
+    govil — covers legacy datasets that were already in the queue when
+    this code shipped.
+    """
+    if (ds.scraper_config or {}).get("kind") == "datacollector_api":
+        return True
+    if not ds.source_url:
+        return False
+    from app.api.govil import RE_COLLECTOR_API
+    return bool(RE_COLLECTOR_API.match(ds.source_url.strip()))
+
+
+async def _collect_datacollector_api(ds: TrackedDataset, db) -> None:
+    """In-process collector for raw gov.il CollectorsWebApi URLs.
+
+    Pulls every page of the configured API URL, hashes the result to
+    detect no-op runs, and on change pushes a fresh CSV to the dataset's
+    odata mirror through the same path the external worker would use.
+
+    Errors are recorded on ``ds.last_error`` so the admin sees them in
+    the recent-failures panel; the function never raises out of poll.
+    """
+    from app.services.datacollector_client import fetch_all_records
+    from app.services.odata_client import odata_client
+    from app.services.snapshot_service import _timestamp
+    from app.api.utils import sanitize_ckan_name
+
+    if not ds.source_url:
+        ds.last_error = "datacollector_api: source_url is empty"
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
+    # 1) Fetch + normalise. Any HTML response, transport error, or
+    # unrecognised JSON envelope surfaces as a clean error string.
+    try:
+        records, fields, meta = await fetch_all_records(ds.source_url)
+    except Exception as e:
+        msg = f"datacollector_api fetch failed: {e}"[:2000]
+        logger.error("Local collect failed for %s: %s", ds.ckan_name, e)
+        ds.last_error = msg
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
+    if not records:
+        ds.last_error = "datacollector_api: 0 rows returned (endpoint reachable but empty)"
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.info("Local collect for %s: 0 rows, skipping version", ds.ckan_name)
+        return
+
+    # 2) Hash for change detection. We hash the normalised JSON of the
+    # rows so equivalent re-orderings count as "no change". (The first
+    # record's field order is what we surface as the schema, but we
+    # sort keys here so a server-side key reordering doesn't churn.)
+    content_hash = hashlib.sha256(
+        json.dumps(records, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+    latest_result = await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds.id)
+        .order_by(VersionIndex.version_number.desc())
+        .limit(1)
+    )
+    latest_version = latest_result.scalar_one_or_none()
+    old_hash = None
+    if latest_version and latest_version.resource_mappings:
+        old_hash = (latest_version.resource_mappings.get("_hashes") or {}).get("scraper")
+
+    if old_hash == content_hash:
+        logger.info(
+            "Local collect for %s: %d rows unchanged (hash %s)",
+            ds.ckan_name, len(records), content_hash[:8],
+        )
+        ds.last_error = None
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
+    next_version = (latest_version.version_number + 1) if latest_version else 1
+
+    # 3) Lazily create the odata mirror dataset on first version, same
+    # pattern as the CKAN poll path.
+    if not ds.odata_dataset_id and settings.odata_api_key:
+        mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ds.ckan_name)}"
+        try:
+            mirror = await odata_client.create_dataset(
+                name=mirror_name,
+                title=f"[Versions] {ds.title}",
+                owner_org=settings.odata_owner_org,
+            )
+            ds.odata_dataset_id = mirror["id"]
+            logger.info("Lazily created mirror %s for %s", mirror_name, ds.ckan_name)
+        except Exception as e1:
+            logger.warning("Mirror create failed for %s: %s", mirror_name, e1)
+            try:
+                mirror = await odata_client.package_show(mirror_name)
+                ds.odata_dataset_id = mirror["id"]
+            except Exception as e2:
+                ds.last_error = f"mirror create/find: {e2}"[:2000]
+                ds.last_polled_at = datetime.now(timezone.utc)
+                await db.commit()
+                return
+
+    # 4) Push the CSV to odata. Wraps the same call the external
+    # scraper's push-version endpoint would make.
+    resource_mappings: dict = {"_hashes": {"scraper": content_hash}, "_resource_ids": []}
+    push_error: str | None = None
+    odata_resource_id: str | None = None
+    if ds.odata_dataset_id:
+        try:
+            ts = _timestamp()
+            res_name = ds.title or ds.ckan_name
+            odata_result = await odata_client.push_csv_to_datastore(
+                dataset_id=ds.odata_dataset_id,
+                version_number=next_version,
+                resource_name=res_name,
+                fields=fields,
+                records=records,
+                resource_format="CSV",
+                timestamp=ts,
+            )
+            odata_resource_id = odata_result["id"]
+            resource_mappings[res_name] = odata_resource_id
+            logger.info(
+                "Local collect: pushed %d rows to odata for %s (resource %s)",
+                len(records), ds.ckan_name, odata_resource_id,
+            )
+        except Exception as e:
+            push_error = f"odata push: {e}"[:2000]
+            logger.error("Local collect odata push failed for %s: %s", ds.ckan_name, e)
+
+    if push_error and not odata_resource_id:
+        ds.last_error = push_error
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
+    # 5) Persist the version. metadata_modified isn't supplied by the
+    # API, so we synthesise one from the content hash — keeps the
+    # dedup-by-metadata_modified logic in worker/push-version happy if
+    # this dataset is ever migrated back to the scraper path.
+    new_modified = f"local:{content_hash[:16]}"
+    change_summary = {
+        "type": "datacollector_api",
+        "total_rows": len(records),
+        "fields": [f["id"] for f in fields],
+        "pages_walked": meta.get("pages_walked"),
+        "server_total": meta.get("total_from_server"),
+        "resources_added": [odata_resource_id] if odata_resource_id else [],
+        "resources_removed": [],
+        "resources_modified": [],
+    }
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=new_modified,
+        odata_metadata_resource_id=None,
+        change_summary=change_summary,
+        resource_mappings=resource_mappings,
+    )
+    db.add(version)
+    ds.last_error = None
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = new_modified
+    await db.commit()
+    logger.info(
+        "Local collect: version %d created for %s (%d rows)",
+        next_version, ds.ckan_name, len(records),
+    )
 
 
 async def _create_scrape_task(ds: TrackedDataset, db) -> None:

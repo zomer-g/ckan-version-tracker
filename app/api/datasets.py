@@ -259,6 +259,12 @@ async def track_dataset(
         sc = dict(body.scraper_config or {"download_files": False})
         if body.append_key:
             sc["append_key"] = body.append_key
+        # Raw collector API URLs are collected locally (see poll_job /
+        # services.datacollector_client) — the external scraper only
+        # understands SPA URLs and was returning HTML for these. The
+        # ``kind`` marker tells the poller to take the local path.
+        if page_type == "data_collector_api":
+            sc["kind"] = "datacollector_api"
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -803,6 +809,9 @@ async def submit_tracking_request(
             raise HTTPException(status_code=400, detail="Already tracked or requested")
 
         unique_slug = scraper_url_slug(collector_name, body.source_url)
+        sc: dict = {"download_files": False}
+        if page_type == "data_collector_api":
+            sc["kind"] = "datacollector_api"
         ds = TrackedDataset(
             ckan_id=f"govil-scraper-{unique_slug}",
             ckan_name=unique_slug,
@@ -810,7 +819,7 @@ async def submit_tracking_request(
             organization="gov.il",
             source_type="scraper",
             source_url=body.source_url,
-            scraper_config={"download_files": False},
+            scraper_config=sc,
             poll_interval=interval,
             status="pending",
             created_by=None,
