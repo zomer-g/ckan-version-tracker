@@ -349,17 +349,34 @@ async def poll_dataset(dataset_id: str) -> None:
 def _is_datacollector_api(ds: TrackedDataset) -> bool:
     """True if this scraper dataset should be collected by the local path.
 
-    Either the operator opted in (scraper_config.kind set at creation
-    time) or the source_url matches the raw collector-API regex from
-    govil — covers legacy datasets that were already in the queue when
-    this code shipped.
+    Three opt-ins, in order:
+      1. ``scraper_config.kind == "datacollector_api"`` — explicit marker
+         set at dataset-create time for raw API URLs.
+      2. Source URL matches the raw collector-API regex
+         (``/CollectorsWebApi/...`` or ``/ContentPageWebApi/...``) —
+         covers datasets created before (1) was wired up.
+      3. Source URL is a traditional/dynamic collector SPA URL **with a
+         ``Type=`` query parameter**. The external GOV SCRAPER does
+         handle plain ``/he/collectors/publications?officeId=X`` URLs,
+         but its SPA→API translation drops/mishandles ``Type=`` and the
+         resulting API URL returns gov.il's SPA shell as HTML (see the
+         "סדר היום לישיבת הממשלה" failures). We translate the URL
+         ourselves in the local path instead.
     """
     if (ds.scraper_config or {}).get("kind") == "datacollector_api":
         return True
     if not ds.source_url:
         return False
-    from app.api.govil import RE_COLLECTOR_API
-    return bool(RE_COLLECTOR_API.match(ds.source_url.strip()))
+    from app.api.govil import RE_COLLECTOR_API, RE_TRADITIONAL, RE_DYNAMIC
+    url = ds.source_url.strip()
+    if RE_COLLECTOR_API.match(url):
+        return True
+    if RE_TRADITIONAL.match(url) or RE_DYNAMIC.match(url):
+        from urllib.parse import urlparse, parse_qs
+        qs = {k.lower() for k in parse_qs(urlparse(url).query)}
+        if "type" in qs:
+            return True
+    return False
 
 
 async def _collect_datacollector_api(ds: TrackedDataset, db) -> None:

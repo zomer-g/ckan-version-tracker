@@ -17,8 +17,9 @@ the regular snapshot pipeline so the dataset versions like any other.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -119,6 +120,76 @@ def _with_paging(url: str, skip: int, limit: int) -> str:
     return urlunparse(parsed._replace(query=urlencode(new_pairs, doseq=True)))
 
 
+# Matches /he/collectors/<slug> and
+# /he/departments/dynamiccollectors/<slug>. Same shape as the regexes
+# in app.api.govil but kept private here to avoid a cross-module import
+# dependency in the hot path. Capture group 2 is the slug.
+_RE_SPA_TRADITIONAL = re.compile(
+    r"^https?://(www\.)?gov\.il/he/collectors?/([^/?#]+)",
+    re.IGNORECASE,
+)
+_RE_SPA_DYNAMIC = re.compile(
+    r"^https?://(www\.)?gov\.il/he/departments?/dynamiccollectors?/([^/?#]+)",
+    re.IGNORECASE,
+)
+
+
+def translate_to_api_url(url: str) -> str:
+    """Map a gov.il collector SPA URL to its JSON API URL.
+
+    Examples:
+      /he/collectors/publications?OfficeId=X&Type=Y
+        → /CollectorsWebApi/api/DataCollector/GetResults
+          ?CollectorType=publications&culture=he&officeId=X&Type=Y
+      /he/departments/dynamiccollectors/menifa?foo=bar
+        → /CollectorsWebApi/api/DataCollector/GetResults
+          ?CollectorType=menifa&culture=he&foo=bar
+
+    Raw API URLs (``/CollectorsWebApi/api/...`` and friends) are
+    returned unchanged.
+
+    The translation matches what the gov.il SPA does in the browser:
+    the slug becomes ``CollectorType``, ``culture=he`` is forced, and
+    every other query parameter from the SPA URL is preserved (so
+    ``officeId``, ``Type``, ``blockCollector``, etc. are carried
+    through). ``skip``/``limit`` from the SPA URL are dropped because
+    the caller (``fetch_all_records``) injects its own paging values.
+    """
+    s = url.strip()
+    # Already an API URL — caller's pager will handle skip/limit.
+    parsed = urlparse(s)
+    if "/CollectorsWebApi/api/" in parsed.path or "/ContentPageWebApi/api/" in parsed.path:
+        return s
+
+    m = _RE_SPA_TRADITIONAL.match(s) or _RE_SPA_DYNAMIC.match(s)
+    if not m:
+        # Not a recognised SPA URL — leave it alone and let the caller
+        # surface whatever the response looks like.
+        return s
+
+    slug = m.group(2)
+    src_qs = parse_qsl(parsed.query, keep_blank_values=True)
+    out_pairs: list[tuple[str, str]] = [
+        ("CollectorType", slug),
+        ("culture", "he"),
+    ]
+    seen = {"collectortype", "culture", "skip", "limit"}
+    for k, v in src_qs:
+        if k.lower() in seen:
+            continue
+        out_pairs.append((k, v))
+        seen.add(k.lower())
+
+    return urlunparse((
+        "https",
+        "www.gov.il",
+        "/CollectorsWebApi/api/DataCollector/GetResults",
+        "",
+        urlencode(out_pairs, doseq=True),
+        "",
+    ))
+
+
 async def fetch_all_records(url: str) -> tuple[list[dict], list[dict], dict]:
     """Page through a gov.il collector API URL.
 
@@ -134,6 +205,11 @@ async def fetch_all_records(url: str) -> tuple[list[dict], list[dict], dict]:
     records: list[dict] = []
     total_from_server: int | None = None
     pages = 0
+    # SPA URLs (/he/collectors/..., /he/departments/dynamiccollectors/...)
+    # get translated to /CollectorsWebApi/... here. Raw API URLs are
+    # returned unchanged. Centralising the translation in the pager so
+    # callers don't have to know whether they got a SPA or API URL.
+    api_url = translate_to_api_url(url)
 
     async with httpx.AsyncClient(
         timeout=TIMEOUT,
@@ -141,7 +217,7 @@ async def fetch_all_records(url: str) -> tuple[list[dict], list[dict], dict]:
         headers=REQUEST_HEADERS,
     ) as client:
         for page_idx in range(MAX_PAGES):
-            page_url = _with_paging(url, skip=page_idx * PAGE_SIZE, limit=PAGE_SIZE)
+            page_url = _with_paging(api_url, skip=page_idx * PAGE_SIZE, limit=PAGE_SIZE)
             resp = await client.get(page_url)
             if resp.status_code != 200:
                 raise ValueError(
