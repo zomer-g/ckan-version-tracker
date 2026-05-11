@@ -427,6 +427,15 @@ class ODataClient:
         - `is_last=True` adds `calculate_record_count=True` so the CKAN UI
           footer matches the real row count after the full push.
 
+        Special case: when the source CSV's column types don't match what
+        CKAN inferred (so we get a 409 "Validation Error" — typically
+        "ערך מספרי מחוץ לטווח" / "value out of range" because a column
+        declared numeric has a non-numeric value, or a date-like cell
+        looks invalid), we transparently retry the same batch with every
+        field coerced to ``text``. Archival is the goal — types can be
+        rebuilt downstream — and "data was archived but stringly-typed"
+        beats "data was lost because one cell didn't parse".
+
         Raises RuntimeError after all attempts are exhausted. The caller
         typically logs and stops the stream, keeping the source CSV on disk
         for manual retry.
@@ -438,27 +447,75 @@ class ODataClient:
         # no-op when fields are already clean.
         fields, records_batch = _sanitize_fields_and_records(fields, records_batch)
 
+        async def _do_push(use_fields: list[dict]) -> None:
+            if create:
+                await self.datastore_create(
+                    resource_id=resource_id,
+                    fields=use_fields,
+                    records=records_batch,
+                    calculate_record_count=is_last,
+                )
+            else:
+                await self.datastore_upsert(
+                    resource_id=resource_id,
+                    records=records_batch,
+                    method="insert",
+                    force=True,
+                    calculate_record_count=is_last,
+                )
+
+        def _is_type_validation_error(err: Exception) -> bool:
+            """True when a 409 looks like a column-type mismatch.
+
+            CKAN returns Hebrew messages on data.gov.il / odata.org.il
+            in this case; English appears on some endpoints. Matching
+            both keeps the heuristic stable.
+            """
+            s = str(err)
+            if "409" not in s:
+                return False
+            if "Validation Error" in s or "validation_error" in s:
+                return True
+            # Hebrew CKAN: "לנתונים אין משמעות (לדוגמה: ערך מספרי
+            # מחוץ לטווח או שהוכנס אל תוך שדה טקסט)"
+            if "ערך מספרי" in s or "מחוץ לטווח" in s or "אין משמעות" in s:
+                return True
+            return False
+
+        all_text_fields: list[dict] | None = None
+        text_fallback_used = False
+
         last_err: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
-                if create:
-                    await self.datastore_create(
-                        resource_id=resource_id,
-                        fields=fields,
-                        records=records_batch,
-                        calculate_record_count=is_last,
-                    )
-                else:
-                    await self.datastore_upsert(
-                        resource_id=resource_id,
-                        records=records_batch,
-                        method="insert",
-                        force=True,
-                        calculate_record_count=is_last,
+                await _do_push(all_text_fields if text_fallback_used else fields)
+                if text_fallback_used:
+                    logger.info(
+                        "Datastore batch %d succeeded after coercing all "
+                        "fields to text (resource %s)",
+                        batch_num, resource_id,
                     )
                 return
             except Exception as e:
                 last_err = e
+                # On the first type-validation 409 we re-issue with every
+                # column declared text. Only useful on create batches —
+                # on upsert the schema is already fixed, so the same row
+                # will still violate it.
+                if create and not text_fallback_used and _is_type_validation_error(e):
+                    text_fallback_used = True
+                    all_text_fields = [
+                        {**f, "type": "text"} for f in fields
+                    ]
+                    logger.warning(
+                        "Datastore batch %d hit type-validation 409 on "
+                        "create — retrying with all fields as text "
+                        "(resource %s)",
+                        batch_num, resource_id,
+                    )
+                    # Do not consume an attempt: the fallback is a
+                    # different kind of try.
+                    continue
                 if attempt < max_attempts:
                     wait = 5 * attempt  # 5s, 10s
                     logger.warning(
