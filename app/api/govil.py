@@ -29,12 +29,17 @@ RE_CONTENT_PAGE = re.compile(
     re.IGNORECASE,
 )
 # Raw API URL for the DataCollector / Content Page collector backends.
-# These are the JSON endpoints the SPA calls (CollectorsWebApi /
-# ContentPageWebApi). When the admin pastes one of these directly we
-# accept it and collect it locally — the external scraper, which only
-# understands the SPA URLs, was returning HTML for these.
+# Two patterns are accepted:
+#   * The current API host: openapi-gc.digital.gov.il (Google Cloud,
+#     not behind Cloudflare) — what the gov.il SPA actually calls.
+#   * The legacy www.gov.il/CollectorsWebApi/... path, which now serves
+#     the SPA HTML shell. We still accept it because admins frequently
+#     paste these in (and translate_to_api_url rewrites them).
 RE_COLLECTOR_API = re.compile(
-    r"^https?://(www\.)?gov\.il/(?:CollectorsWebApi|ContentPageWebApi)/api/",
+    r"^https?://(?:"
+    r"openapi-gc\.digital\.gov\.il/"
+    r"|(?:www\.)?gov\.il/(?:CollectorsWebApi|ContentPageWebApi)/api/"
+    r")",
     re.IGNORECASE,
 )
 

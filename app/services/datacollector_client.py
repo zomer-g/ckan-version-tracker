@@ -25,31 +25,50 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Headers used for the API fetch. gov.il sits behind Cloudflare and
-# rejects requests that look bot-y (a short "compatible" User-Agent
-# alone returns 403 Just-a-moment). The values below mirror what a
-# real Chrome on Windows sends so the lower-tier IUAM checks pass.
-# Don't trim these without testing — every header matters: the
-# original "over.org.il" UA returned 403 from Render's IP while this
-# expanded set passes through.
+# The real gov.il collector API lives on openapi-gc.digital.gov.il
+# (hosted on GCP, not Cloudflare). The old /CollectorsWebApi/... path
+# on www.gov.il returns the SPA HTML shell instead of JSON — that's
+# what the external worker was getting and reporting as "returned HTML
+# instead of JSON". This module talks to the real one.
+NEW_API_HOST = "openapi-gc.digital.gov.il"
+NEW_API_PATH = "/pub/cio/govil/rest/collectors/v1/api/DataCollector/GetResults"
+
+# CORS-protected API. Sends Access-Control-Allow-Origin: https://www.gov.il,
+# so we have to send a matching Origin and Referer. The x-client-id is
+# what the SPA carries on every call — it looks static (same value
+# observed across reloads); when gov.il rotates it we'll see 401/403s
+# here and need to refresh it.
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/126.0.0.0 Safari/537.36"
+        "Chrome/148.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "*/*",
     "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    "Origin": "https://www.gov.il",
+    "Referer": "https://www.gov.il/",
+    "Sec-Ch-Ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "Referer": "https://www.gov.il/he/",
+    "Sec-Fetch-Site": "cross-site",
+    "X-Client-Id": "9KFgciHHGDyNiqz5MdQS0eK2ApeJYMc6YnElUICpN1atirZc",
+    "DNT": "1",
+}
+
+# Slug-to-CollectorType mapping. The SPA fetches a collector's layout
+# config (Layout/GetLayoutCollectorModel?collectorId=<slug>) which
+# returns the CollectorType array the page should query. We bake in
+# the well-known mappings so the common cases just work; unknown slugs
+# fall back to using the slug itself as CollectorType (which is what
+# many simpler collectors actually do).
+COLLECTOR_TYPE_MAP: dict[str, list[str]] = {
+    "publications": ["reports", "rfp", "drushim", "publicsharing"],
+    # other slugs (e.g. dynamiccollectors/menifa) fall through to the
+    # single-CollectorType=<slug> case in translate_to_api_url
 }
 TIMEOUT = httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=10.0)
 
@@ -160,51 +179,80 @@ def translate_to_api_url(url: str) -> str:
 
     Examples:
       /he/collectors/publications?OfficeId=X&Type=Y
-        → /CollectorsWebApi/api/DataCollector/GetResults
-          ?CollectorType=publications&culture=he&officeId=X&Type=Y
+        → openapi-gc.digital.gov.il/.../DataCollector/GetResults
+          ?CollectorType=reports&CollectorType=rfp&CollectorType=drushim
+          &CollectorType=publicsharing&OfficeId=X&Type=Y&culture=he
       /he/departments/dynamiccollectors/menifa?foo=bar
-        → /CollectorsWebApi/api/DataCollector/GetResults
-          ?CollectorType=menifa&culture=he&foo=bar
+        → .../DataCollector/GetResults?CollectorType=menifa&foo=bar
+          &culture=he
 
-    Raw API URLs (``/CollectorsWebApi/api/...`` and friends) are
-    returned unchanged.
+    Already-translated API URLs (openapi-gc.digital.gov.il or the
+    legacy /CollectorsWebApi/... pattern) are returned with the query
+    string normalised (culture defaulted to he, skip/limit dropped so
+    the pager can inject its own).
 
-    The translation matches what the gov.il SPA does in the browser:
-    the slug becomes ``CollectorType``, ``culture=he`` is forced, and
-    every other query parameter from the SPA URL is preserved (so
-    ``officeId``, ``Type``, ``blockCollector``, etc. are carried
-    through). ``skip``/``limit`` from the SPA URL are dropped because
-    the caller (``fetch_all_records``) injects its own paging values.
+    Two non-obvious bits worth flagging:
+      - The SPA slug is *not* the CollectorType. /he/collectors/
+        publications is backed by CollectorType=[reports, rfp, drushim,
+        publicsharing] (per the layout config). The map in
+        COLLECTOR_TYPE_MAP records the well-known cases; unmapped
+        slugs fall back to "CollectorType=<slug>".
+      - The real API lives on openapi-gc.digital.gov.il. The old
+        www.gov.il/CollectorsWebApi/... path returns the SPA HTML
+        shell instead of JSON, which was the whole "returned HTML
+        instead of JSON" failure mode.
     """
     s = url.strip()
-    # Already an API URL — caller's pager will handle skip/limit.
     parsed = urlparse(s)
-    if "/CollectorsWebApi/api/" in parsed.path or "/ContentPageWebApi/api/" in parsed.path:
-        return s
 
+    # Case 1: already pointing at the real API host. Just normalise the
+    # query string — drop skip/limit so the pager can override.
+    if parsed.netloc.lower() == NEW_API_HOST:
+        src_qs = parse_qsl(parsed.query, keep_blank_values=True)
+        out_pairs = [(k, v) for k, v in src_qs if k.lower() not in {"skip", "limit"}]
+        if not any(k.lower() == "culture" for k, _ in out_pairs):
+            out_pairs.append(("culture", "he"))
+        return urlunparse(parsed._replace(query=urlencode(out_pairs, doseq=True)))
+
+    # Case 2: legacy /CollectorsWebApi/api/... or /ContentPageWebApi/api/...
+    # on www.gov.il — those endpoints serve the SPA shell, so rewrite
+    # to the real host. Preserve everything else.
+    if "/CollectorsWebApi/api/" in parsed.path or "/ContentPageWebApi/api/" in parsed.path:
+        src_qs = parse_qsl(parsed.query, keep_blank_values=True)
+        out_pairs = [(k, v) for k, v in src_qs if k.lower() not in {"skip", "limit"}]
+        if not any(k.lower() == "culture" for k, _ in out_pairs):
+            out_pairs.append(("culture", "he"))
+        return urlunparse((
+            "https",
+            NEW_API_HOST,
+            NEW_API_PATH,
+            "",
+            urlencode(out_pairs, doseq=True),
+            "",
+        ))
+
+    # Case 3: SPA URL — extract slug, map to CollectorType(s), keep all
+    # other query params (OfficeId, Type, blockCollector, …).
     m = _RE_SPA_TRADITIONAL.match(s) or _RE_SPA_DYNAMIC.match(s)
     if not m:
-        # Not a recognised SPA URL — leave it alone and let the caller
-        # surface whatever the response looks like.
         return s
 
     slug = m.group(2)
+    collector_types = COLLECTOR_TYPE_MAP.get(slug.lower(), [slug])
     src_qs = parse_qsl(parsed.query, keep_blank_values=True)
-    out_pairs: list[tuple[str, str]] = [
-        ("CollectorType", slug),
-        ("culture", "he"),
-    ]
+    out_pairs: list[tuple[str, str]] = [("CollectorType", ct) for ct in collector_types]
     seen = {"collectortype", "culture", "skip", "limit"}
     for k, v in src_qs:
         if k.lower() in seen:
             continue
         out_pairs.append((k, v))
         seen.add(k.lower())
+    out_pairs.append(("culture", "he"))
 
     return urlunparse((
         "https",
-        "www.gov.il",
-        "/CollectorsWebApi/api/DataCollector/GetResults",
+        NEW_API_HOST,
+        NEW_API_PATH,
         "",
         urlencode(out_pairs, doseq=True),
         "",
