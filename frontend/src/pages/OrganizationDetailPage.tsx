@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, OrganizationDetail } from "../api/client";
 import TagChips from "../components/TagChips";
 import AdminDatasetActions from "../components/AdminDatasetActions";
+import { sourceBadgeFor } from "../utils/sourceBadge";
 
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
@@ -182,17 +183,27 @@ export default function OrganizationDetailPage() {
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
                 </h3>
-                <span style={{
-                  display: "inline-block",
-                  padding: "0.15rem 0.45rem",
-                  borderRadius: "9999px",
-                  fontSize: "0.65rem",
-                  fontWeight: 600,
-                  background: d.source_type === "scraper" ? "#fef3c7" : "#ccfbf1",
-                  color: d.source_type === "scraper" ? "#92400e" : "#0f766e",
-                }}>
-                  {d.source_type === "scraper" ? "GOV.IL" : "DATA.GOV.IL"}
-                </span>
+                {(() => {
+                  // Every dataset on this page belongs to `org`, so the
+                  // org slug (org.name) is the right "organization" hint
+                  // for the IDF-vs-gov.il split. The inner dataset shape
+                  // doesn't carry it, so we read it off the page-level
+                  // org instead.
+                  const palette = sourceBadgeFor(d.source_type, org.name);
+                  return (
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.45rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: palette.bg,
+                      color: palette.fg,
+                    }}>
+                      {palette.label}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="text-sm text-muted">
                 {d.version_count} {t("home.versions_count")}

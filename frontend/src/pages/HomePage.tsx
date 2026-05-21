@@ -5,6 +5,7 @@ import { ckan, publicApi, govil, govmap, idf, TrackedDataset, GovIlValidation, G
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
+import { sourceBadgeFor } from "../utils/sourceBadge";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -573,11 +574,7 @@ export default function HomePage() {
                     </h3>
                     <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
                       {(() => {
-                        const palette = ds.source_type === "scraper"
-                          ? { bg: "#fef3c7", fg: "#92400e", label: "GOV.IL" }
-                          : ds.source_type === "govmap"
-                          ? { bg: "#e0f2fe", fg: "#075985", label: "GOVMAP" }
-                          : { bg: "#ccfbf1", fg: "#0f766e", label: "DATA.GOV.IL" };
+                        const palette = sourceBadgeFor(ds.source_type, ds.organization);
                         return (
                           <span style={{
                             display: "inline-block",
@@ -648,12 +645,7 @@ export default function HomePage() {
                           ? ds.source_url
                           : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
                       if (!sourceHref) return null;
-                      const linkLabel =
-                        ds.source_type === "scraper"
-                          ? t("home.source_link_govil")
-                          : ds.source_type === "govmap"
-                          ? t("home.source_link_govmap")
-                          : t("home.source_link");
+                      const linkLabel = t(sourceBadgeFor(ds.source_type, ds.organization).sourceLinkKey);
                       return (
                         <a
                           href={sourceHref}

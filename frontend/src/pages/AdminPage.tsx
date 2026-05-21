@@ -19,6 +19,7 @@ import {
 } from "../api/client";
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
+import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "";
@@ -58,14 +59,16 @@ interface SourceBadge {
   accent: string;
 }
 
-function sourceBadge(source_type: string | null | undefined): SourceBadge {
-  if (source_type === "scraper") {
-    return { bg: "#fef3c7", fg: "#92400e", label: "GOV.IL", accent: "#f59e0b" };
-  }
-  if (source_type === "govmap") {
-    return { bg: "#e0f2fe", fg: "#075985", label: "GOVMAP", accent: "#0ea5e9" };
-  }
-  return { bg: "#ccfbf1", fg: "#0f766e", label: "DATA.GOV.IL", accent: "var(--warning)" };
+function sourceBadge(
+  source_type: string | null | undefined,
+  organization: string | null | undefined = null,
+): SourceBadge {
+  // Delegate to the shared helper for the (source_type, organization)
+  // → palette+label mapping. We strip the i18n key here because the
+  // admin badges use hardcoded labels for compactness; only the colour
+  // and label/accent matter to existing callers.
+  const p = sourceBadgeForShared(source_type, organization);
+  return { bg: p.bg, fg: p.fg, label: p.label, accent: p.accent };
 }
 
 function isCkanLike(source_type: string | null | undefined): boolean {
@@ -1074,7 +1077,7 @@ export default function AdminPage() {
       ) : (
         <div className="grid grid-2 mb-2">
           {requests.map((req) => {
-            const badge = sourceBadge(req.source_type);
+            const badge = sourceBadge(req.source_type, req.organization);
             return (
             <article key={req.id} className="card" style={{ borderRight: `4px solid ${badge.accent}` }}>
               <div className="flex-between" style={{ marginBottom: "0.5rem", gap: "0.5rem" }}>
@@ -1299,7 +1302,7 @@ export default function AdminPage() {
                           ✏
                         </button>
                         {(() => {
-                          const b = sourceBadge(ds.source_type);
+                          const b = sourceBadge(ds.source_type, ds.organization);
                           return (
                             <span style={{
                               display: "inline-block",
