@@ -10,6 +10,7 @@ import {
   TrackedDataset,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { sourceBadgeFor } from "../utils/sourceBadge";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -127,12 +128,11 @@ export default function VersionsPage() {
               dataset.source_type === "scraper" || dataset.source_type === "govmap"
                 ? (dataset.source_url || "#")
                 : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`);
-            const linkLabel =
-              dataset.source_type === "scraper"
-                ? t("home.source_link_govil")
-                : dataset.source_type === "govmap"
-                ? t("home.source_link_govmap")
-                : t("home.source_link");
+            const linkLabel = t(sourceBadgeFor(
+              dataset.source_type,
+              dataset.organization,
+              dataset.ckan_id,
+            ).sourceLinkKey);
             return (
               <a
                 href={sourceHref}
