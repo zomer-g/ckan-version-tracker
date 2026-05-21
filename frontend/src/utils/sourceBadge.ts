@@ -68,8 +68,13 @@ export function sourceBadgeFor(
   if (source_type === "scraper") {
     if (looksLikeIdf(organization, ckan_id)) {
       return {
-        bg: "#ccfbf1",
-        fg: "#115e59",
+        // Saturated green per user request (#5d936c). The dark fg
+        // colour we used on the prior light-mint background fails WCAG
+        // AA contrast on this darker bg, so switch the chip text to
+        // white — the chip is now distinctly readable as a filled
+        // green pill instead of a tinted outline.
+        bg: "#5d936c",
+        fg: "#ffffff",
         label: "IDF.IL",
         accent: "#0f766e",
         sourceLinkKey: "home.source_link_idf",
