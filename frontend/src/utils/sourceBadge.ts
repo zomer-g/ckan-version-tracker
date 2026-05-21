@@ -5,9 +5,15 @@
  * Without this helper, every page that renders a dataset card duplicated
  * the same `source_type === "scraper" ? "GOV.IL" : ...` branch, which is
  * why IDF datasets initially showed up wearing a "GOV.IL" badge — the
- * scraper branch couldn't tell the two origins apart. Branching on
- * `organization` here (which the backend sets to "gov.il" or "idf.il" at
- * dataset-create time) is the cheapest reliable signal.
+ * scraper branch couldn't tell the two origins apart.
+ *
+ * For the IDF-vs-gov.il split we look at multiple signals because the
+ * obvious one — TrackedDataset.organization — can drift: admins
+ * routinely reassign datasets to a real Organization entity (e.g.
+ * "israel_defense_forces") after the request is approved, overwriting
+ * the "idf.il" / "gov.il" string the backend stamped at create time.
+ * The ckan_id prefix (set at create time and never changed) is the
+ * most reliable marker.
  */
 
 export interface SourceBadge {
@@ -23,16 +29,32 @@ export interface SourceBadge {
   sourceLinkKey: "home.source_link" | "home.source_link_govil" | "home.source_link_govmap" | "home.source_link_idf";
 }
 
+const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
+
+function looksLikeIdf(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("idf-scraper-")) return true;
+  if (organization && IDF_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
 /**
  * @param source_type — TrackedDataset.source_type ("ckan" | "scraper" | "govmap")
- * @param organization — TrackedDataset.organization slug; only used to
- *   split the "scraper" bucket into gov.il vs idf.il. Falsy values fall
- *   back to the legacy gov.il palette so existing scraper datasets
- *   (created before the IDF code path) keep their old appearance.
+ * @param organization — TrackedDataset.organization slug. May be the
+ *   raw "idf.il"/"gov.il" the backend stamped at create time, OR a
+ *   real Organization entity slug an admin reassigned to (e.g.
+ *   "israel_defense_forces"). Both are recognised; falsy values fall
+ *   back to ckan_id detection.
+ * @param ckan_id — TrackedDataset.ckan_id (stable since create). The
+ *   most reliable signal for the IDF-vs-gov.il split because it
+ *   doesn't drift when admins reassign organizations.
  */
 export function sourceBadgeFor(
   source_type: string | null | undefined,
   organization: string | null | undefined = null,
+  ckan_id: string | null | undefined = null,
 ): SourceBadge {
   if (source_type === "govmap") {
     return {
@@ -44,7 +66,7 @@ export function sourceBadgeFor(
     };
   }
   if (source_type === "scraper") {
-    if (organization === "idf.il") {
+    if (looksLikeIdf(organization, ckan_id)) {
       return {
         bg: "#ccfbf1",
         fg: "#115e59",

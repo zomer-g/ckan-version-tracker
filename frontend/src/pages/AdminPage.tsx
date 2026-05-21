@@ -62,12 +62,13 @@ interface SourceBadge {
 function sourceBadge(
   source_type: string | null | undefined,
   organization: string | null | undefined = null,
+  ckan_id: string | null | undefined = null,
 ): SourceBadge {
-  // Delegate to the shared helper for the (source_type, organization)
-  // → palette+label mapping. We strip the i18n key here because the
-  // admin badges use hardcoded labels for compactness; only the colour
-  // and label/accent matter to existing callers.
-  const p = sourceBadgeForShared(source_type, organization);
+  // Delegate to the shared helper for the (source_type, organization,
+  // ckan_id) → palette+label mapping. ckan_id is the most reliable
+  // signal for IDF detection because the organization field drifts
+  // when admins reassign datasets to real Organization entities.
+  const p = sourceBadgeForShared(source_type, organization, ckan_id);
   return { bg: p.bg, fg: p.fg, label: p.label, accent: p.accent };
 }
 
@@ -1077,7 +1078,7 @@ export default function AdminPage() {
       ) : (
         <div className="grid grid-2 mb-2">
           {requests.map((req) => {
-            const badge = sourceBadge(req.source_type, req.organization);
+            const badge = sourceBadge(req.source_type, req.organization, req.ckan_id);
             return (
             <article key={req.id} className="card" style={{ borderRight: `4px solid ${badge.accent}` }}>
               <div className="flex-between" style={{ marginBottom: "0.5rem", gap: "0.5rem" }}>
@@ -1302,7 +1303,7 @@ export default function AdminPage() {
                           ✏
                         </button>
                         {(() => {
-                          const b = sourceBadge(ds.source_type, ds.organization);
+                          const b = sourceBadge(ds.source_type, ds.organization, ds.ckan_id);
                           return (
                             <span style={{
                               display: "inline-block",

@@ -574,7 +574,7 @@ export default function HomePage() {
                     </h3>
                     <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
                       {(() => {
-                        const palette = sourceBadgeFor(ds.source_type, ds.organization);
+                        const palette = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
                         return (
                           <span style={{
                             display: "inline-block",
@@ -645,7 +645,7 @@ export default function HomePage() {
                           ? ds.source_url
                           : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
                       if (!sourceHref) return null;
-                      const linkLabel = t(sourceBadgeFor(ds.source_type, ds.organization).sourceLinkKey);
+                      const linkLabel = t(sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id).sourceLinkKey);
                       return (
                         <a
                           href={sourceHref}
