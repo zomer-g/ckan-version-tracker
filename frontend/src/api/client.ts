@@ -221,6 +221,18 @@ export const govmap = {
     }),
 };
 
+// IDF Validation — shares the same response shape as gov.il
+// (page_type, collector_name, title, url, error). The server side lives
+// at app/api/idf.py; only Military-Prosecution unit pages are accepted
+// in v1.
+export const idf = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/idf/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

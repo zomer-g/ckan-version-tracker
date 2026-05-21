@@ -210,17 +210,32 @@ async def track_dataset(
         if not body.title:
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
-        # Parse collector name from URL for ckan_id/ckan_name
+        # Parse the URL — try gov.il first, then idf.il. The two
+        # validators don't overlap (different hosts) so order is
+        # cosmetic, but gov.il is by far the common case.
         from app.api.govil import _parse_govil_url
+        from app.api.idf import _parse_idf_url
         page_type, collector_name = _parse_govil_url(body.source_url)
+        origin = "gov.il"
+        slug_prefix = "govil-scraper"
+        mirror_prefix = "gov-versions-scraper"
         if not collector_name:
-            raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+            page_type, collector_name = _parse_idf_url(body.source_url)
+            if collector_name:
+                origin = "idf.il"
+                slug_prefix = "idf-scraper"
+                mirror_prefix = "gov-versions-idf"
+        if not collector_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid scraper URL — must be a gov.il collector or idf.il page",
+            )
 
         # Build a unique slug that includes a hash of the full source URL,
         # so two URLs with the same collector path (e.g. /collectors/policies
         # with different officeId query params) don't collide on the same mirror.
         unique_slug = scraper_url_slug(collector_name, body.source_url)
-        ckan_id = f"govil-scraper-{unique_slug}"
+        ckan_id = f"{slug_prefix}-{unique_slug}"
         ckan_name = unique_slug
 
         # Duplicate check by source_url
@@ -230,7 +245,7 @@ async def track_dataset(
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Dataset already tracked")
 
-        mirror_name = f"gov-versions-scraper-{unique_slug}"
+        mirror_name = f"{mirror_prefix}-{unique_slug}"
 
         # Create mirror on odata.org.il for active datasets
         odata_dataset_id = None
@@ -265,12 +280,21 @@ async def track_dataset(
         # ``kind`` marker tells the poller to take the local path.
         if page_type == "data_collector_api":
             sc["kind"] = "datacollector_api"
+        elif page_type == "idf_prosecution":
+            # IDF pages are scraped by the external worker via a
+            # Playwright-backed module (govscraper.scrapers.idf). The
+            # worker dispatches on scraper_config.kind, so this marker
+            # is what makes it pick the right scraper.
+            sc["kind"] = "idf"
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", 3)
+            sc.setdefault("max_docs", 500)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
             ckan_name=ckan_name,
             title=body.title,
-            organization="gov.il",
+            organization=origin,
             source_type="scraper",
             source_url=body.source_url,
             scraper_config=sc,
@@ -796,10 +820,23 @@ async def submit_tracking_request(
         if not body.title:
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
+        # Try gov.il first, then idf.il. Mirrors the admin POST /datasets
+        # branch — keep the two in sync.
         from app.api.govil import _parse_govil_url
+        from app.api.idf import _parse_idf_url
         page_type, collector_name = _parse_govil_url(body.source_url)
+        origin = "gov.il"
+        slug_prefix = "govil-scraper"
         if not collector_name:
-            raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+            page_type, collector_name = _parse_idf_url(body.source_url)
+            if collector_name:
+                origin = "idf.il"
+                slug_prefix = "idf-scraper"
+        if not collector_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid scraper URL — must be a gov.il collector or idf.il page",
+            )
 
         # Duplicate check by source_url
         existing = await db.execute(
@@ -812,11 +849,16 @@ async def submit_tracking_request(
         sc: dict = {"download_files": False}
         if page_type == "data_collector_api":
             sc["kind"] = "datacollector_api"
+        elif page_type == "idf_prosecution":
+            sc["kind"] = "idf"
+            sc["download_files"] = True
+            sc["max_depth"] = 3
+            sc["max_docs"] = 500
         ds = TrackedDataset(
-            ckan_id=f"govil-scraper-{unique_slug}",
+            ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
             title=body.title,
-            organization="gov.il",
+            organization=origin,
             source_type="scraper",
             source_url=body.source_url,
             scraper_config=sc,

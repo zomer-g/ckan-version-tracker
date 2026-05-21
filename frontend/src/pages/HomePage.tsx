@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -12,6 +12,10 @@ const ODATA_BASE = "https://www.odata.org.il";
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 /** Detect govmap.gov.il layer URLs (requires lay=<id>) */
 const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&]lay(?:er|ers)?=\d+/i;
+/** Detect idf.il Military-Prosecution pages (raw Hebrew OR %-encoded). The
+ *  raw "אתרי-יחידות/הפרקליטות-הצבאית" pair lets users paste from the
+ *  address bar in either form; the regex matches both. */
+const IDF_PATTERN = /^https?:\/\/(www\.)?idf\.il\/(?:אתרי-יחידות|%D7%90%D7%AA%D7%A8%D7%99-%D7%99%D7%97%D7%99%D7%93%D7%95%D7%AA)\/(?:הפרקליטות-הצבאית|%D7%94%D7%A4%D7%A8%D7%A7%D7%9C%D7%99%D7%98%D7%95%D7%AA-%D7%94%D7%A6%D7%91%D7%90%D7%99%D7%AA)\//i;
 
 interface CkanResource {
   id: string;
@@ -66,6 +70,9 @@ export default function HomePage() {
   const [govIlResult, setGovIlResult] = useState<GovIlValidation | null>(null);
   // GovMap layer result (single seed URL — the form lets the user add more)
   const [govMapResult, setGovMapResult] = useState<GovMapValidation | null>(null);
+  // IDF (idf.il) Military-Prosecution scraper result — same shape as
+  // GovIlValidation (validator returns page_type/collector_name/title/url).
+  const [idfResult, setIdfResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -98,6 +105,10 @@ export default function HomePage() {
     return GOVMAP_PATTERN.test(input.trim());
   };
 
+  const detectIdfUrl = (input: string): boolean => {
+    return IDF_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -112,6 +123,7 @@ export default function HomePage() {
     setRequestFormFor(null);
     setGovIlResult(null);
     setGovMapResult(null);
+    setIdfResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -136,6 +148,20 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2b. Check for idf.il Military-Prosecution URL
+      if (detectIdfUrl(query)) {
+        const validation = await idf.validate(query.trim());
+        if (validation.valid) {
+          setIdfResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid idf.il URL");
         }
         setLoading(false);
         return;
@@ -334,6 +360,61 @@ export default function HomePage() {
           </section>
         )}
 
+        {/* IDF scraper result — same card layout as gov.il, different
+            badge colour so it's obviously a separate source. */}
+        {!loading && idfResult && (
+          <section aria-label="idf.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #0f766e" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{idfResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ccfbf1",
+                      color: "#115e59",
+                    }}>
+                      IDF.IL
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>הפרקליטות הצבאית</span>
+                  <span>idf.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={idfResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {idfResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "idf" ? (
+                    <RequestForm
+                      datasetTitle={idfResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={idfResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("idf")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
         {/* CKAN results */}
         {!loading && results.length > 0 && (
           <section aria-label={t("search.title")} style={{ marginBottom: "2rem" }}>
@@ -468,7 +549,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && !govIlResult && !govMapResult && query && !error && (
+        {!loading && results.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 

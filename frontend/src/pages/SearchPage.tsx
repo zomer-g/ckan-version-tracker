@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 
@@ -25,6 +25,8 @@ interface SearchResult {
 
 /** Detect gov.il collector URLs */
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
+/** Detect idf.il Military-Prosecution pages (raw Hebrew OR %-encoded). */
+const IDF_PATTERN = /^https?:\/\/(www\.)?idf\.il\/(?:אתרי-יחידות|%D7%90%D7%AA%D7%A8%D7%99-%D7%99%D7%97%D7%99%D7%93%D7%95%D7%AA)\/(?:הפרקליטות-הצבאית|%D7%94%D7%A4%D7%A8%D7%A7%D7%9C%D7%99%D7%98%D7%95%D7%AA-%D7%94%D7%A6%D7%91%D7%90%D7%99%D7%AA)\//i;
 
 export default function SearchPage() {
   const { t } = useTranslation();
@@ -45,6 +47,14 @@ export default function SearchPage() {
   const [govIlTracked, setGovIlTracked] = useState<"tracked" | "pending" | null>(null);
   const [govIlTracking, setGovIlTracking] = useState(false);
   const [showGovIlInterval, setShowGovIlInterval] = useState(false);
+
+  // IDF scraper result — shares the gov.il flow because the backend
+  // accepts both URL families on the same /datasets endpoint (which
+  // parser wins is decided server-side).
+  const [idfResult, setIdfResult] = useState<GovIlValidation | null>(null);
+  const [idfTracked, setIdfTracked] = useState<"tracked" | "pending" | null>(null);
+  const [idfTracking, setIdfTracking] = useState(false);
+  const [showIdfInterval, setShowIdfInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -86,6 +96,10 @@ export default function SearchPage() {
     return GOV_IL_PATTERN.test(input.trim());
   };
 
+  const detectIdfUrl = (input: string): boolean => {
+    return IDF_PATTERN.test(input.trim());
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
@@ -94,6 +108,9 @@ export default function SearchPage() {
     setGovIlResult(null);
     setGovIlTracked(null);
     setShowGovIlInterval(false);
+    setIdfResult(null);
+    setIdfTracked(null);
+    setShowIdfInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -104,6 +121,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1b. Check for idf.il Military-Prosecution URL
+      if (detectIdfUrl(query)) {
+        const validation = await idf.validate(query.trim());
+        if (validation.valid) {
+          setIdfResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid idf.il URL");
         }
         setLoading(false);
         return;
@@ -168,6 +199,26 @@ export default function SearchPage() {
       }
     }
     setGovIlTracking(false);
+  };
+
+  // trackScraper on the backend accepts both gov.il and idf.il URLs —
+  // which parser wins is decided server-side. No frontend split needed
+  // beyond pointing the call at the IDF result.
+  const trackIdfDataset = async (interval: number) => {
+    if (!idfResult?.url || !idfResult?.title) return;
+    setShowIdfInterval(false);
+    setIdfTracking(true);
+    try {
+      await datasetsApi.trackScraper(idfResult.url, idfResult.title, interval);
+      setIdfTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setIdfTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setIdfTracking(false);
   };
 
   const INTERVAL_OPTIONS = [
@@ -270,6 +321,48 @@ export default function SearchPage() {
     );
   };
 
+  // Same shape as renderGovIlTrackButton, just bound to the IDF state.
+  // Could be DRY'd up with a factory, but keeping the two parallel is
+  // easier to read while we have only two scraper origins.
+  const renderIdfTrackButton = () => {
+    if (idfTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (idfTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "\u05D4\u05D1\u05E7\u05E9\u05D4 \u05E0\u05E9\u05DC\u05D7\u05D4 \u2014 \u05DE\u05DE\u05EA\u05D9\u05DF \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showIdfInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackIdfDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowIdfInterval(!showIdfInterval)}
+          disabled={idfTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {idfTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -298,7 +391,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -339,6 +432,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={govIlResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {govIlResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* IDF scraper result */}
+      {idfResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #0f766e" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{idfResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#ccfbf1",
+                  color: "#115e59",
+                }}>
+                  IDF.IL
+                </span>
+              </div>
+              {renderIdfTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>הפרקליטות הצבאית</span>
+              <span>idf.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={idfResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {idfResult.url}
               </a>
             </p>
           </article>
