@@ -228,6 +228,15 @@
     "show_more": "הצג עוד ({{n}})",
     "show_less": "הצג פחות",
     "downloading": "מוריד נתוני שכבה... {{pct}}%",
-    "parsing": "מעבד את הנתונים..."
+    "parsing": "מעבד את הנתונים...",
+    "sort_label": "מיון:",
+    "sort_count": "שכיחות",
+    "sort_alpha": "א-ב",
+    "style_title": "תצוגה",
+    "style_fill_color": "צבע מילוי",
+    "style_fill_opacity": "שקיפות מילוי",
+    "style_stroke_color": "צבע קו",
+    "style_stroke_weight": "עובי קו",
+    "style_reset": "ברירת מחדל"
   }
 }

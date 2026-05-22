@@ -116,13 +116,23 @@ const FILTER_BLOCKLIST: string[] = [];
 // Light green fill (same palette family as the IDF badge so the
 // design language stays coherent across non-CKAN sources). The fill
 // is intentionally faint so polygons in close proximity still read
-// as distinct.
-const LAYER_STYLE = {
+// as distinct. Defaults; the user can override them at runtime via
+// the "תצוגה" panel in the sidebar.
+const DEFAULT_LAYER_STYLE = {
   color: "#0f766e",
   weight: 1,
   fillColor: "#5d936c",
   fillOpacity: 0.25,
 };
+
+type SortMode = "count" | "alpha";
+
+interface LayerStyle {
+  color: string;
+  weight: number;
+  fillColor: string;
+  fillOpacity: number;
+}
 
 export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   const { t } = useTranslation();
@@ -147,6 +157,35 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     return window.matchMedia("(max-width: 768px)").matches;
   }, []);
   const layerSmoothFactor = isSmallScreen ? 4 : 1.5;
+
+  // Filter-list sort mode. "count" is the default (descending by
+  // feature count, so the most-represented values surface first);
+  // "alpha" sorts by Hebrew/locale alphabetical. Stored at the
+  // component level so the toggle applies across all fieldsets.
+  const [sortMode, setSortMode] = useState<SortMode>("count");
+
+  // Layer style — overridable from the sidebar's "תצוגה" panel so
+  // the user can tune colours and opacity to make their layer
+  // legible against whatever basemap area they're inspecting.
+  // Kept in component state (not URL) because it's a personal
+  // viewing preference, not part of the shareable filter view.
+  const [layerStyle, setLayerStyle] = useState<LayerStyle>(DEFAULT_LAYER_STYLE);
+  const [stylePanelOpen, setStylePanelOpen] = useState(false);
+
+  // Ref to the Leaflet GeoJSON layer so we can call setStyle() when
+  // the user moves a slider, without remounting the 200k-feature
+  // collection (remount would burn 3-5 s every tick). setStyle on
+  // the existing layer is essentially free — it just rewrites the
+  // path options and triggers a redraw. smoothFactor isn't a Path
+  // visual option (it's a topology setting), so we don't pass it
+  // through setStyle — it stays whatever value the layer was
+  // constructed with.
+  const geojsonRef = useRef<L.GeoJSON | null>(null);
+  useEffect(() => {
+    const layer = geojsonRef.current;
+    if (!layer) return;
+    layer.setStyle(layerStyle);
+  }, [layerStyle]);
 
   // Filter state lives in the URL — so a URL with ?yeshuvname=תקוע
   // restores the same filtered view, and any toggle the user makes
@@ -535,7 +574,10 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               // canvas work, especially on mobile. Visually
               // indistinguishable on phones until the user zooms
               // way in.
-              style={() => ({ ...LAYER_STYLE, smoothFactor: layerSmoothFactor })}
+              style={() => ({ ...layerStyle, smoothFactor: layerSmoothFactor })}
+              ref={(layer) => {
+                geojsonRef.current = layer;
+              }}
               onEachFeature={(feature, layer) => {
                 layer.bindPopup(() => renderPopup(feature, t));
               }}
@@ -583,6 +625,42 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
           {t("map.visible_count", { visible: visibleCount, total: totalCount })}
         </div>
+
+        {/* Display controls — collapsed by default so the filter list
+            stays the focus. Opens on click; lets the user override
+            fill / stroke colour and opacity to make the layer pop
+            against whatever basemap area they're inspecting. */}
+        <StylePanel
+          open={stylePanelOpen}
+          onToggle={() => setStylePanelOpen((v) => !v)}
+          style={layerStyle}
+          onChange={setLayerStyle}
+          onReset={() => setLayerStyle(DEFAULT_LAYER_STYLE)}
+        />
+
+        {/* Sort-mode toggle — applies to every field below. Default
+            is by feature frequency; alpha is useful when the user
+            knows the name they're looking for and can't be bothered
+            to scan a long count-sorted list. */}
+        {Object.keys(fieldCounts).length > 0 && (
+          <div
+            role="group"
+            aria-label={t("map.sort_label")}
+            style={{
+              display: "flex",
+              gap: "0.3rem",
+              alignItems: "center",
+              fontSize: "0.75rem",
+              color: "var(--text-muted)",
+              marginBottom: "0.5rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <span>{t("map.sort_label")}</span>
+            <SortToggle mode={sortMode} onChange={setSortMode} t={t} />
+          </div>
+        )}
+
         {fc && Object.keys(fieldCounts).length === 0 ? (
           <div className="text-sm text-muted">
             {t("map.no_filterable_fields")}
@@ -595,6 +673,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               values={vals}
               selected={filters[field] ?? new Set()}
               onToggle={(v) => toggleValue(field, v)}
+              sortMode={sortMode}
             />
           ))
         )}
@@ -615,17 +694,26 @@ function FieldFilter(props: {
   values: Record<string, number>;
   selected: ReadonlySet<string>;
   onToggle: (v: string) => void;
+  sortMode: SortMode;
 }) {
   const { t } = useTranslation();
-  const { field, values, selected, onToggle } = props;
+  const { field, values, selected, onToggle, sortMode } = props;
   const [expanded, setExpanded] = useState(false);
-  const entries = useMemo(
-    () =>
-      Object.entries(values).sort((a, b) =>
-        b[1] - a[1] || a[0].localeCompare(b[0], "he"),
-      ),
-    [values],
-  );
+  const entries = useMemo(() => {
+    const pairs = Object.entries(values);
+    if (sortMode === "alpha") {
+      // Hebrew-locale collation for the natural alphabetical order;
+      // count is the tiebreaker so duplicates stay deterministic.
+      return pairs.sort(
+        (a, b) => a[0].localeCompare(b[0], "he") || b[1] - a[1],
+      );
+    }
+    // count (default): highest first, tiebreak by alpha so the order
+    // is deterministic across renders.
+    return pairs.sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "he"),
+    );
+  }, [values, sortMode]);
   // Pin currently-selected values into the visible head so the user
   // can always see / untick them. Show top-N by count plus any
   // selected values that fall outside that head. Order: selected
@@ -726,6 +814,181 @@ function FieldFilter(props: {
         )}
       </div>
     </fieldset>
+  );
+}
+
+/** Two-button segmented control for the global filter sort mode. */
+function SortToggle(props: {
+  mode: SortMode;
+  onChange: (m: SortMode) => void;
+  t: (k: string) => string;
+}) {
+  const { mode, onChange, t } = props;
+  const baseStyle: React.CSSProperties = {
+    background: "none",
+    border: "1px solid var(--border, #cbd5e1)",
+    padding: "0.15rem 0.55rem",
+    fontSize: "0.7rem",
+    cursor: "pointer",
+    color: "var(--text-muted)",
+    borderRadius: 4,
+  };
+  const activeStyle: React.CSSProperties = {
+    background: "var(--primary, #0f766e)",
+    borderColor: "var(--primary, #0f766e)",
+    color: "white",
+  };
+  return (
+    <div style={{ display: "inline-flex", gap: "0.2rem" }}>
+      <button
+        type="button"
+        onClick={() => onChange("count")}
+        style={mode === "count" ? { ...baseStyle, ...activeStyle } : baseStyle}
+        aria-pressed={mode === "count"}
+      >
+        {t("map.sort_count")}
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("alpha")}
+        style={mode === "alpha" ? { ...baseStyle, ...activeStyle } : baseStyle}
+        aria-pressed={mode === "alpha"}
+      >
+        {t("map.sort_alpha")}
+      </button>
+    </div>
+  );
+}
+
+/** Collapsible "תצוגה" panel — lets the user override fill / stroke
+ *  colour and opacity on the live layer. The actual GeoJSON layer
+ *  picks the changes up via setStyle() in a useEffect on the parent,
+ *  so dragging the opacity slider doesn't remount 200k features. */
+function StylePanel(props: {
+  open: boolean;
+  onToggle: () => void;
+  style: LayerStyle;
+  onChange: (s: LayerStyle) => void;
+  onReset: () => void;
+}) {
+  const { t } = useTranslation();
+  const { open, onToggle, style, onChange, onReset } = props;
+  return (
+    <fieldset
+      style={{
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: 6,
+        padding: open ? "0.5rem 0.6rem" : "0.25rem 0.6rem",
+        margin: "0 0 0.6rem 0",
+      }}
+    >
+      <legend
+        onClick={onToggle}
+        style={{
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          padding: "0 0.3rem",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+        }}
+      >
+        {open ? "▾ " : "▸ "}
+        {t("map.style_title")}
+      </legend>
+      {open && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.5rem",
+            fontSize: "0.75rem",
+            color: "var(--text-muted)",
+          }}
+        >
+          <StyleRow label={t("map.style_fill_color")}>
+            <input
+              type="color"
+              value={style.fillColor}
+              onChange={(e) => onChange({ ...style, fillColor: e.target.value })}
+              style={{ width: 36, height: 24, border: "none", padding: 0 }}
+            />
+          </StyleRow>
+          <StyleRow label={t("map.style_fill_opacity")}>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(style.fillOpacity * 100)}
+              onChange={(e) =>
+                onChange({ ...style, fillOpacity: Number(e.target.value) / 100 })
+              }
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <span style={{ minWidth: 30, textAlign: "end" }}>
+              {Math.round(style.fillOpacity * 100)}%
+            </span>
+          </StyleRow>
+          <StyleRow label={t("map.style_stroke_color")}>
+            <input
+              type="color"
+              value={style.color}
+              onChange={(e) => onChange({ ...style, color: e.target.value })}
+              style={{ width: 36, height: 24, border: "none", padding: 0 }}
+            />
+          </StyleRow>
+          <StyleRow label={t("map.style_stroke_weight")}>
+            <input
+              type="range"
+              min={0}
+              max={5}
+              step={0.5}
+              value={style.weight}
+              onChange={(e) =>
+                onChange({ ...style, weight: Number(e.target.value) })
+              }
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <span style={{ minWidth: 30, textAlign: "end" }}>{style.weight}</span>
+          </StyleRow>
+          <button
+            type="button"
+            onClick={onReset}
+            style={{
+              alignSelf: "flex-start",
+              background: "none",
+              border: "1px solid var(--border, #cbd5e1)",
+              color: "var(--text-muted)",
+              fontSize: "0.7rem",
+              padding: "0.15rem 0.5rem",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            {t("map.style_reset")}
+          </button>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+/** Small label-and-control row inside the StylePanel. Keeps the
+ *  spacing / typography consistent without repeating the same flex
+ *  CSS at every input. */
+function StyleRow(props: { label: string; children: React.ReactNode }) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        cursor: "default",
+      }}
+    >
+      <span style={{ minWidth: 70 }}>{props.label}</span>
+      {props.children}
+    </label>
   );
 }
 

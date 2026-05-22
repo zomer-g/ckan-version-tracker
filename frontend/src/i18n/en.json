@@ -228,6 +228,15 @@
     "show_more": "Show {{n}} more",
     "show_less": "Show less",
     "downloading": "Downloading layer... {{pct}}%",
-    "parsing": "Parsing data..."
+    "parsing": "Parsing data...",
+    "sort_label": "Sort:",
+    "sort_count": "Frequency",
+    "sort_alpha": "A-Z",
+    "style_title": "Display",
+    "style_fill_color": "Fill color",
+    "style_fill_opacity": "Fill opacity",
+    "style_stroke_color": "Stroke color",
+    "style_stroke_weight": "Stroke weight",
+    "style_reset": "Reset"
   }
 }
