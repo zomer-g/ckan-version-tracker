@@ -226,6 +226,8 @@
     "fullscreen_enter": "Fullscreen",
     "fullscreen_exit": "Exit fullscreen",
     "show_more": "Show {{n}} more",
-    "show_less": "Show less"
+    "show_less": "Show less",
+    "downloading": "Downloading layer... {{pct}}%",
+    "parsing": "Parsing data..."
   }
 }

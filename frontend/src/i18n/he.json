@@ -226,6 +226,8 @@
     "fullscreen_enter": "מסך מלא",
     "fullscreen_exit": "יציאה ממסך מלא",
     "show_more": "הצג עוד ({{n}})",
-    "show_less": "הצג פחות"
+    "show_less": "הצג פחות",
+    "downloading": "מוריד נתוני שכבה... {{pct}}%",
+    "parsing": "מעבד את הנתונים..."
   }
 }

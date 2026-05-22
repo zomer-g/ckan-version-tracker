@@ -128,6 +128,25 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   const { t } = useTranslation();
   const [fc, setFc] = useState<FeatureCollection | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Three-stage progress reporter so the loading placeholder shows
+  // something useful instead of a static spinner — phone users
+  // otherwise see ~10-20 s of "טוען..." with no feedback and assume
+  // the page is broken. Each stage's progress is 0..1, null while
+  // not active.
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [parsing, setParsing] = useState(false);
+
+  // Detect small viewports once and tune the GeoJSON layer's
+  // smoothFactor accordingly. Canvas rendering work scales with
+  // vertex count; on a 360px-wide phone, the default smoothFactor=1
+  // is drawing sub-pixel detail that nobody can see. 4 ≈ "keep only
+  // ~1/4 of the vertices at this zoom" — dramatic perf improvement
+  // on mobile, indistinguishable visually until you zoom way in.
+  const isSmallScreen = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 768px)").matches;
+  }, []);
+  const layerSmoothFactor = isSmallScreen ? 4 : 1.5;
 
   // Filter state lives in the URL — so a URL with ?yeshuvname=תקוע
   // restores the same filtered view, and any toggle the user makes
@@ -159,6 +178,40 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
       try {
         const resp = await fetch(geojsonDownloadUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        // Stream the body manually so we can show a progress bar.
+        // resp.body is a ReadableStream of Uint8Array chunks; we
+        // accumulate them and report bytes-received vs the
+        // Content-Length header. Phones on cellular need this — a
+        // single arrayBuffer() await means the user sees nothing
+        // for 10-20s and assumes the page is hung.
+        if (!resp.body) throw new Error("Response has no body");
+        const totalRaw = resp.headers.get("content-length");
+        const total = totalRaw ? Number(totalRaw) : 0;
+        const reader = resp.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (cancelled) return;
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            received += value.byteLength;
+            if (total > 0) {
+              setDownloadProgress(received / total);
+            }
+          }
+        }
+        // Concatenate chunks into one buffer.
+        const buf = new Uint8Array(received);
+        let off = 0;
+        for (const c of chunks) {
+          buf.set(c, off);
+          off += c.byteLength;
+        }
+        setDownloadProgress(1);
+
         // Large GeoJSON layers (~200MB+) are stored gzipped on odata
         // because CKAN resource_create rejects plain bodies above
         // ~100MB. odata's /download route serves them WITHOUT the
@@ -166,10 +219,8 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         // detecting by URL or headers isn't reliable. Instead we
         // sniff the body's first two bytes: gzip is unambiguously
         // 0x1F 0x8B and a JSON document can never begin with those.
-        const buf = await resp.arrayBuffer();
-        const bytes = new Uint8Array(buf);
         const isGz =
-          bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+          buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
         let text: string;
         if (isGz) {
           if (typeof DecompressionStream === "undefined") {
@@ -182,8 +233,20 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         } else {
           text = new TextDecoder("utf-8").decode(buf);
         }
+        if (cancelled) return;
+
+        // JSON.parse of ~200MB takes 3-15s on a mobile CPU and
+        // blocks the main thread — there's nothing we can show
+        // during it, but we DO want the previous "downloading"
+        // bar to flip into a "parsing" message so the user knows
+        // the bytes arrived. setParsing(true), yield one frame to
+        // let React paint, THEN call JSON.parse.
+        setParsing(true);
+        await new Promise((r) => setTimeout(r, 0));
+        if (cancelled) return;
         const data = JSON.parse(text) as FeatureCollection;
-        if (!cancelled) setFc(data);
+        if (cancelled) return;
+        setFc(data);
       } catch (e) {
         if (!cancelled) setLoadError(String((e as Error)?.message ?? e));
       }
@@ -390,12 +453,46 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             style={{
               height: "100%",
               display: "flex",
+              flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
+              gap: "0.75rem",
               color: "var(--text-muted)",
+              padding: "1rem",
+              textAlign: "center",
             }}
           >
-            {t("common.loading")}
+            <div style={{ fontWeight: 500 }}>
+              {parsing
+                ? t("map.parsing")
+                : downloadProgress !== null
+                ? t("map.downloading", {
+                    pct: Math.round(downloadProgress * 100),
+                  })
+                : t("common.loading")}
+            </div>
+            {downloadProgress !== null && !parsing && (
+              <div
+                aria-hidden
+                style={{
+                  width: "70%",
+                  maxWidth: 320,
+                  height: 4,
+                  background: "var(--border, #e2e8f0)",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${downloadProgress * 100}%`,
+                    background: "var(--primary, #0f766e)",
+                    transition: "width 120ms linear",
+                  }}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <MapContainer
@@ -431,7 +528,14 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             <GeoJSON
               key={filterKey}
               data={filteredCollection}
-              style={() => LAYER_STYLE}
+              // smoothFactor goes inside the per-feature style
+              // function — it's a Leaflet Path option, not a
+              // top-level react-leaflet prop. Higher = fewer
+              // vertices drawn at the current zoom = much less
+              // canvas work, especially on mobile. Visually
+              // indistinguishable on phones until the user zooms
+              // way in.
+              style={() => ({ ...LAYER_STYLE, smoothFactor: layerSmoothFactor })}
               onEachFeature={(feature, layer) => {
                 layer.bindPopup(() => renderPopup(feature, t));
               }}
