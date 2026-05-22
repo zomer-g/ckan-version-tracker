@@ -237,6 +237,9 @@
     "style_fill_opacity": "Fill opacity",
     "style_stroke_color": "Stroke color",
     "style_stroke_weight": "Stroke weight",
-    "style_reset": "Reset"
+    "style_reset": "Reset",
+    "mobile_gate_title": "Large map",
+    "mobile_gate_body": "This layer contains hundreds of thousands of polygons. Loading on a mobile device may be slow and can crash the browser.",
+    "mobile_gate_button": "Load map anyway"
   }
 }

@@ -237,6 +237,9 @@
     "style_fill_opacity": "שקיפות מילוי",
     "style_stroke_color": "צבע קו",
     "style_stroke_weight": "עובי קו",
-    "style_reset": "ברירת מחדל"
+    "style_reset": "ברירת מחדל",
+    "mobile_gate_title": "מפה גדולה",
+    "mobile_gate_body": "השכבה הזו מכילה מאות אלפי פוליגונים. טעינה במכשיר נייד עלולה לקחת זמן ולעיתים גם לקרוס בדפדפן.",
+    "mobile_gate_button": "טען מפה בכל זאת"
   }
 }

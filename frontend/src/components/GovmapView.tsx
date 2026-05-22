@@ -158,6 +158,18 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   }, []);
   const layerSmoothFactor = isSmallScreen ? 4 : 1.5;
 
+  // On phones we DON'T auto-fetch the GeoJSON. Large layers (the
+  // agricultural-parcels one is ~50MB gzipped → ~250MB parsed) push
+  // mobile browsers past their per-tab memory ceiling and Safari /
+  // Chrome respond by killing the tab — the user sees iOS's
+  // "אירעה בעיה חוזרת" / "a problem repeatedly occurred" prompt
+  // and the page is unusable. Gating behind an explicit tap turns
+  // an "instant crash" into an "informed choice": small datasets
+  // are still one tap away, big ones now warn the user before they
+  // sink their phone.
+  // Desktop browsers auto-load as before.
+  const [userOptedIn, setUserOptedIn] = useState(!isSmallScreen);
+
   // Filter-list sort mode. "count" is the default (descending by
   // feature count, so the most-represented values surface first);
   // "alpha" sorts by Hebrew/locale alphabetical. Stored at the
@@ -212,6 +224,10 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   };
 
   useEffect(() => {
+    // Wait for explicit opt-in on small screens — the fetch is heavy
+    // enough to OOM-kill the tab on phones, so we don't start it
+    // until the user clicks "טען מפה".
+    if (!userOptedIn) return;
     let cancelled = false;
     (async () => {
       try {
@@ -293,7 +309,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [geojsonDownloadUrl]);
+  }, [geojsonDownloadUrl, userOptedIn]);
 
   // The full set of feature properties → distinct value counts. Doesn't
   // change when the user toggles filters — the chip list itself stays
@@ -485,6 +501,40 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             >
               {geojsonDownloadUrl}
             </a>
+          </div>
+        ) : !userOptedIn ? (
+          <div
+            role="status"
+            style={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.75rem",
+              color: "var(--text-muted)",
+              padding: "1rem",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontWeight: 500, color: "var(--text)" }}>
+              {t("map.mobile_gate_title")}
+            </div>
+            <div style={{ fontSize: "0.85rem", maxWidth: 280 }}>
+              {t("map.mobile_gate_body")}
+            </div>
+            <button
+              type="button"
+              onClick={() => setUserOptedIn(true)}
+              className="btn-primary"
+              style={{
+                padding: "0.4rem 1rem",
+                fontSize: "0.9rem",
+                marginTop: "0.25rem",
+              }}
+            >
+              {t("map.mobile_gate_button")}
+            </button>
           </div>
         ) : !fc ? (
           <div
