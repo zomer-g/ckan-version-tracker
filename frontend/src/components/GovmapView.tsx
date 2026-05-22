@@ -105,6 +105,13 @@ interface FeatureCollection {
 type FilterState = Record<string, Set<string>>;
 
 const MAP_HEIGHT = 500;
+
+// Fields we deliberately keep OUT of the filter sidebar even when
+// they're otherwise categorical-eligible. The popup still shows them,
+// so the user can read the value per-feature; they're just too noisy
+// (long descriptive strings, growing taxonomies) to drive a useful
+// faceted checklist. Add field names here case-sensitively.
+const FILTER_BLOCKLIST = ["growthname"];
 // Light green fill (same palette family as the IDF badge so the
 // design language stays coherent across non-CKAN sources). The fill
 // is intentionally faint so polygons in close proximity still read
@@ -189,7 +196,12 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // change when the user toggles filters — the chip list itself stays
   // stable; only the visible-feature counter and checkbox states move.
   const fieldCounts = useMemo(
-    () => (fc ? discoverCategoricalFields(fc.features) : {}),
+    () =>
+      fc
+        ? discoverCategoricalFields(fc.features, {
+            blocklist: FILTER_BLOCKLIST,
+          })
+        : {},
     [fc],
   );
 

@@ -69,30 +69,33 @@ export const MAX_VALUE_LENGTH = 30;
  */
 export function discoverCategoricalFields(
   features: MinimalFeature[],
+  options: { blocklist?: Iterable<string> } = {},
 ): Record<string, Record<string, number>> {
+  const blocklist = new Set(options.blocklist ?? []);
   const raw: Record<string, Record<string, number>> = {};
-  // Track which fields had ANY value exceeding MAX_VALUE_LENGTH so we
-  // can drop them wholesale below. Even one timestamp in an otherwise-
-  // short column means the field is probably free-form and not a good
-  // facet (per-row populations vary).
-  const tooLong = new Set<string>();
+  // Earlier we dropped any field that contained even ONE value
+  // longer than MAX_VALUE_LENGTH — the intent was to filter out
+  // timestamp / GUID columns. The side-effect was killing perfectly
+  // good fields (e.g. growthname) just because one row had an
+  // unusually long descriptive string. Now we skip the bad value
+  // individually and keep the field if the rest of the column looks
+  // categorical. Pure-timestamp columns still get dropped naturally:
+  // every value is >30 chars, so the bucket ends up empty and the
+  // cardinality check below tosses the field.
   for (const f of features) {
     const props = f.properties || {};
     for (const [k, v] of Object.entries(props)) {
       if (typeof v !== "string") continue;
+      if (blocklist.has(k)) continue;
       const trimmed = v.trim();
       if (!trimmed) continue;
-      if (trimmed.length > MAX_VALUE_LENGTH) {
-        tooLong.add(k);
-        continue;
-      }
+      if (trimmed.length > MAX_VALUE_LENGTH) continue;
       const bucket = raw[k] || (raw[k] = {});
       bucket[trimmed] = (bucket[trimmed] || 0) + 1;
     }
   }
   const out: Record<string, Record<string, number>> = {};
   for (const [k, vals] of Object.entries(raw)) {
-    if (tooLong.has(k)) continue;
     const card = Object.keys(vals).length;
     if (card < MIN_DISTINCT || card > MAX_DISTINCT) continue;
     // Drop ID-like fields: every feature has a different value (e.g.
