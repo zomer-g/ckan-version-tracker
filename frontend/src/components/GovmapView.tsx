@@ -13,7 +13,7 @@
  * that don't show a map (CKAN, scraper, idf) don't pay the bundle
  * cost. See plan file for the placement contract.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
@@ -165,6 +165,40 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   const totalCount = fc?.features.length ?? 0;
   const visibleCount = filteredFeatures.length;
 
+  // Fullscreen toggle. When true the whole section is positioned
+  // fixed over the viewport so the map + sidebar use all available
+  // pixels. Escape exits. Leaflet caches its viewport size — we have
+  // to call invalidateSize() after the container changes size,
+  // otherwise the tiles render in a 500px box inside the larger
+  // fullscreen area.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const mapRef = useRef<L.Map | null>(null);
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    // Lock background scroll so the user can't accidentally scroll the
+    // dataset page underneath while the overlay is up.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [isFullscreen]);
+  useEffect(() => {
+    // Defer one frame so the CSS layout settles to the new size before
+    // Leaflet reads the container's dimensions. Without this, the
+    // first invalidateSize() runs before the browser applied the
+    // fullscreen styles and the map remains misaligned.
+    if (!mapRef.current) return;
+    const m = mapRef.current;
+    const id = requestAnimationFrame(() => m.invalidateSize());
+    return () => cancelAnimationFrame(id);
+  }, [isFullscreen]);
+
   const toggleValue = (field: string, value: string) => {
     setFilters((prev) => {
       const next: FilterState = { ...prev };
@@ -178,16 +212,32 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
 
   const reset = () => setFilters({});
 
-  return (
-    <section
-      aria-label={t("map.title")}
-      style={{
+  // Fullscreen styles: cover the viewport, sit above headers, give the
+  // map / sidebar 100% of the available height instead of the fixed
+  // MAP_HEIGHT. Keeping the same JSX layout under both modes — only
+  // the wrapping section's positioning and the children's height change.
+  const sectionStyle: React.CSSProperties = isFullscreen
+    ? {
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        background: "var(--bg, #fff)",
+        margin: 0,
+        padding: "0.5rem",
+        display: "flex",
+        gap: "0.5rem",
+        flexWrap: "wrap",
+      }
+    : {
         marginBottom: "1.5rem",
         display: "flex",
         gap: "0.75rem",
         flexWrap: "wrap",
-      }}
-    >
+      };
+  const childHeight = isFullscreen ? "calc(100vh - 1rem)" : MAP_HEIGHT;
+
+  return (
+    <section aria-label={t("map.title")} style={sectionStyle}>
       {/* Map column. flex:1 with a sane minWidth so the sidebar wraps
           below the map on narrow viewports rather than fighting for
           width and clipping both. */}
@@ -198,9 +248,33 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           minWidth: 320,
           padding: 0,
           overflow: "hidden",
-          height: MAP_HEIGHT,
+          height: childHeight,
+          position: "relative",
         }}
       >
+        {/* Fullscreen toggle floats inside the map card, top-left so it
+            doesn't fight Leaflet's own zoom controls (top-right). */}
+        <button
+          type="button"
+          onClick={() => setIsFullscreen((v) => !v)}
+          style={{
+            position: "absolute",
+            top: "0.5rem",
+            left: "0.5rem",
+            zIndex: 500,
+            background: "white",
+            border: "1px solid var(--border, #cbd5e1)",
+            borderRadius: 4,
+            padding: "0.25rem 0.6rem",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
+          }}
+          aria-label={isFullscreen ? t("map.fullscreen_exit") : t("map.fullscreen_enter")}
+          title={isFullscreen ? t("map.fullscreen_exit") : t("map.fullscreen_enter")}
+        >
+          {isFullscreen ? t("map.fullscreen_exit") : t("map.fullscreen_enter")}
+        </button>
         {loadError ? (
           <div
             role="alert"
@@ -249,6 +323,9 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             zoom={layerBounds ? undefined : 8}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
+            ref={(m) => {
+              mapRef.current = m;
+            }}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -274,7 +351,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         className="card"
         style={{
           flex: "0 0 280px",
-          height: MAP_HEIGHT,
+          height: childHeight,
           overflowY: "auto",
           padding: "0.75rem",
           fontSize: "0.85rem",
@@ -367,15 +444,21 @@ function FieldFilter(props: {
         {entries.map(([v, n]) => {
           const checked = selected.has(v);
           return (
+            // Block layout intentionally — no flex on the row. Earlier
+            // experiments with `display:flex + flex:1 + wordBreak:
+            // break-word` in this RTL parent were wrapping Hebrew text
+            // character-by-character (one letter per line) because the
+            // sidebar's effective width interacted badly with min-
+            // content sizing. Plain block layout lets the value text
+            // wrap at WORD boundaries like any normal paragraph.
             <label
               key={v}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.4rem",
+                display: "block",
                 cursor: "pointer",
                 fontWeight: checked ? 600 : 400,
-                lineHeight: 1.3,
+                lineHeight: 1.4,
+                marginBottom: "0.2rem",
               }}
               title={v}
             >
@@ -383,22 +466,12 @@ function FieldFilter(props: {
                 type="checkbox"
                 checked={checked}
                 onChange={() => onToggle(v)}
-                style={{ flexShrink: 0 }}
-              />
-              {/* Single span with value + count. Earlier I split them
-                  into two flex children with the value in a flex:1
-                  ellipsis-truncated span; in an RTL parent the value
-                  visually collapsed to invisible while the count
-                  remained, hiding all labels. Combining them removes
-                  the failure mode and reads naturally either way:
-                  "זיתים (16)". */}
-              <span
                 style={{
-                  flex: 1,
-                  minWidth: 0,
-                  wordBreak: "break-word",
+                  verticalAlign: "middle",
+                  marginInlineEnd: "0.35rem",
                 }}
-              >
+              />
+              <span style={{ verticalAlign: "middle" }}>
                 {v}{" "}
                 <span className="text-muted" style={{ fontSize: "0.75rem" }}>
                   ({n})
