@@ -351,26 +351,34 @@ function FieldFilter(props: {
                 gap: "0.4rem",
                 cursor: "pointer",
                 fontWeight: checked ? 600 : 400,
+                lineHeight: 1.3,
               }}
+              title={v}
             >
               <input
                 type="checkbox"
                 checked={checked}
                 onChange={() => onToggle(v)}
+                style={{ flexShrink: 0 }}
               />
+              {/* Single span with value + count. Earlier I split them
+                  into two flex children with the value in a flex:1
+                  ellipsis-truncated span; in an RTL parent the value
+                  visually collapsed to invisible while the count
+                  remained, hiding all labels. Combining them removes
+                  the failure mode and reads naturally either way:
+                  "זיתים (16)". */}
               <span
                 style={{
                   flex: 1,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
+                  minWidth: 0,
+                  wordBreak: "break-word",
                 }}
-                title={v}
               >
-                {v}
-              </span>
-              <span className="text-muted" style={{ fontSize: "0.75rem" }}>
-                {n}
+                {v}{" "}
+                <span className="text-muted" style={{ fontSize: "0.75rem" }}>
+                  ({n})
+                </span>
               </span>
             </label>
           );
