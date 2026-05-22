@@ -28,16 +28,16 @@ export interface MinimalFeature {
  *  noise — every feature passes regardless of the user's selection,
  *  so we drop it from the sidebar to save space. */
 export const MIN_DISTINCT = 2;
-/** Max distinct-value count. Above this a checklist is genuinely
- *  unmanageable — even with "show more" pagination, browsing a
- *  thousand-option list is a worse UX than text search. 500 is a
- *  pragmatic ceiling: it covers e.g. ~250 yishuv-name values that
- *  appear on real country-scale GovMap layers, but still rejects
- *  pure ID columns (those get dropped earlier by the
- *  distinct === feature.length test anyway). Fields between
- *  ``COLLAPSED_VISIBLE_VALUES`` and this cap show the top-N most-
- *  frequent values by default with a "show all" toggle. */
-export const MAX_DISTINCT = 500;
+/** Max distinct-value count. Pure ID columns are caught earlier by
+ *  the ``distinct === feature.length`` test, so this cap only needs
+ *  to keep out genuinely pathological cases (free-text descriptions
+ *  with hundreds of thousands of unique strings, etc.). With "show
+ *  more" pagination already in place, even a 5,000-value field stays
+ *  usable: the user sees the top 10 by frequency and expands on
+ *  demand. The agricultural-parcels layer's ``growthname`` field has
+ *  ~1.5k distinct crop varieties — well above the previous 500 — and
+ *  the user explicitly asked for it. */
+export const MAX_DISTINCT = 5000;
 /** When a field has more than this many distinct values, the sidebar
  *  initially shows only the top-N most-frequent ones with a "הצג
  *  עוד (M)" button to expand. Keeps the panel scannable on the
