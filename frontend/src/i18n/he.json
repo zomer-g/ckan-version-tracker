@@ -214,5 +214,14 @@
     "loading": "טוען...",
     "error": "שגיאה",
     "back": "חזרה"
+  },
+  "map": {
+    "title": "מפת השכבה",
+    "filters_title": "סינון לפי שדה",
+    "reset": "איפוס",
+    "visible_count": "מציג {{visible}} מתוך {{total}}",
+    "popup_no_data": "אין נתונים נוספים",
+    "load_error": "טעינת המפה נכשלה",
+    "no_filterable_fields": "לא נמצאו שדות לסינון בשכבה הזו"
   }
 }

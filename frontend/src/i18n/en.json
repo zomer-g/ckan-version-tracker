@@ -214,5 +214,14 @@
     "loading": "Loading...",
     "error": "Error",
     "back": "Back"
+  },
+  "map": {
+    "title": "Layer map",
+    "filters_title": "Filter by field",
+    "reset": "Reset",
+    "visible_count": "Showing {{visible}} of {{total}}",
+    "popup_no_data": "No more properties",
+    "load_error": "Failed to load map",
+    "no_filterable_fields": "No filterable fields in this layer"
   }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense, lazy, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
@@ -11,6 +11,11 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+
+// Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
+// idf code paths. Only govmap pages that actually have a GeoJSON
+// resource load it.
+const GovmapView = lazy(() => import("../components/GovmapView"));
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -87,6 +92,28 @@ export default function VersionsPage() {
       alert(t("tracked.delete_failed") + ": " + (e?.message || "unknown"));
     }
   }
+
+  // For govmap datasets the worker uploads a GeoJSON resource and the
+  // version index stores its odata id under resource_mappings._geojson
+  // (a list — see app/api/worker.py push-version handler). Picking up
+  // the FIRST id from the LATEST version covers the common case
+  // (single-layer scrapes); multi-layer is rare and would need a
+  // layer-selector dropdown we haven't built yet.
+  const govmapGeojsonUrl = useMemo<string | null>(() => {
+    if (!dataset || dataset.source_type !== "govmap") return null;
+    if (!dataset.odata_dataset_id || versionsList.length === 0) return null;
+    const latest = versionsList[0];
+    const m = latest.resource_mappings as Record<string, unknown> | null;
+    const ids = m?._geojson;
+    let rid: string | null = null;
+    if (Array.isArray(ids)) {
+      rid = ids.find((x) => typeof x === "string" && x.length >= 30) ?? null;
+    } else if (typeof ids === "string" && ids.length >= 30) {
+      rid = ids;
+    }
+    if (!rid) return null;
+    return `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${rid}/download`;
+  }, [dataset, versionsList]);
 
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
@@ -179,6 +206,29 @@ export default function VersionsPage() {
           </Link>
         </div>
       </div>
+
+      {govmapGeojsonUrl && (
+        <Suspense
+          fallback={
+            <div
+              className="card"
+              role="status"
+              style={{
+                height: 500,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--text-muted)",
+                marginBottom: "1.5rem",
+              }}
+            >
+              {t("common.loading")}
+            </div>
+          }
+        >
+          <GovmapView geojsonDownloadUrl={govmapGeojsonUrl} />
+        </Suspense>
+      )}
 
       {versionsList.length === 0 ? (
         <div className="empty-state">{t("versions.no_versions")}</div>

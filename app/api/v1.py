@@ -70,6 +70,10 @@ class VersionResource(BaseModel):
     odata_resource_id: str
     odata_resource_url: str  # ODATA resource page
     download_url: str  # direct download via ODATA
+    # Inferred resource format ("GeoJSON" for entries built from the
+    # _geojson list mapping; None otherwise). Lets the frontend route
+    # govmap layers to the in-page map without HEADing the URL.
+    format: str | None = None
 
 
 class VersionDetail(BaseModel):
@@ -204,8 +208,17 @@ def _extract_version_resources(
 ) -> list[VersionResource]:
     """Turn a VersionIndex.resource_mappings dict into a clean list.
 
-    `resource_mappings` mixes named resources with internal bookkeeping
-    keys; we surface only the named resources plus `_zip` if present.
+    `resource_mappings` mixes three kinds of entry:
+      - named resources (key is the source resource name, value is the
+        odata resource_id string),
+      - bookkeeping keys (``_hashes``, ``_resource_ids``,
+        ``_zip_parts``) — skipped,
+      - the ``_geojson`` key which stores a *list* of odata resource
+        ids for GeoJSON layers uploaded by the govmap pipeline (see
+        ``app/api/worker.py``'s push-version handler). We expose each
+        of those as its own VersionResource so the frontend can fetch
+        them; ``format`` is stamped "GeoJSON" so the map component can
+        find them without probing every download URL.
     """
     if not mappings:
         return []
@@ -217,6 +230,29 @@ def _extract_version_resources(
         if key == "_resource_ids":
             continue  # already covered by named keys
         if key == "_zip_parts":
+            continue
+        # Govmap GeoJSON layers are list-valued; emit one entry per id.
+        if key == "_geojson" and isinstance(value, list):
+            for idx, rid in enumerate(value):
+                if not (isinstance(rid, str) and len(rid) >= 30):
+                    continue
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                # When the list has one entry the canonical "_geojson"
+                # name is friendlier; on the rare multi-layer scrape
+                # we suffix with the index so each entry has a unique
+                # key the frontend can react-key on.
+                name = "_geojson" if len(value) == 1 else f"_geojson_{idx}"
+                out.append(
+                    VersionResource(
+                        name=name,
+                        odata_resource_id=rid,
+                        odata_resource_url=_odata_resource_url(ds, rid),
+                        download_url=_odata_resource_download_url(ds, rid),
+                        format="GeoJSON",
+                    )
+                )
             continue
         if isinstance(value, str) and len(value) >= 30:
             if value in seen:
