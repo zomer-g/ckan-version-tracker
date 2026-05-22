@@ -495,11 +495,22 @@ async def push_version(
 
     # GeoJSON resources (already uploaded as separate CKAN resources by the
     # scraper via /upload-geojson) — link them into this version.
+    # Worker uploads with version_number=1 hardcoded because it can't
+    # know next_version yet — patch each resource's "vN" marker to the
+    # version we're about to commit, mirroring the ZIP/CSV paths.
     if body.geojson_resource_ids:
         for rid in body.geojson_resource_ids:
             odata_resource_ids.append(rid)
         resource_mappings["_geojson"] = list(body.geojson_resource_ids)
         logger.info("Linked %d pre-uploaded GeoJSON resource(s)", len(body.geojson_resource_ids))
+        for rid in body.geojson_resource_ids:
+            try:
+                await odata_client.update_resource_version_number(rid, next_version)
+            except Exception as e:
+                logger.warning(
+                    "Failed to rename pre-uploaded GeoJSON %s to v%d: %s",
+                    rid, next_version, e,
+                )
 
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
