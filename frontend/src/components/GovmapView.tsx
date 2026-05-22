@@ -77,21 +77,28 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         // Large GeoJSON layers (~200MB+) are stored gzipped on odata
         // because CKAN resource_create rejects plain bodies above
-        // ~100MB. odata serves them with the original Content-Type
-        // (octet-stream / application/json) but doesn't set
-        // Content-Encoding, so the browser doesn't auto-decompress —
-        // we do it ourselves via the native DecompressionStream API
-        // when the URL ends in .gz. Small / legacy GeoJSON resources
-        // are still served plain.
-        const isGz = /\.gz(\?|$)/i.test(geojsonDownloadUrl);
-        let data: FeatureCollection;
-        if (isGz && resp.body && typeof DecompressionStream !== "undefined") {
-          const stream = resp.body.pipeThrough(new DecompressionStream("gzip"));
-          const text = await new Response(stream).text();
-          data = JSON.parse(text) as FeatureCollection;
+        // ~100MB. odata's /download route serves them WITHOUT the
+        // filename suffix and WITHOUT a Content-Encoding header, so
+        // detecting by URL or headers isn't reliable. Instead we
+        // sniff the body's first two bytes: gzip is unambiguously
+        // 0x1F 0x8B and a JSON document can never begin with those.
+        const buf = await resp.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const isGz =
+          bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+        let text: string;
+        if (isGz) {
+          if (typeof DecompressionStream === "undefined") {
+            throw new Error("Browser lacks DecompressionStream support");
+          }
+          const stream = new Blob([buf])
+            .stream()
+            .pipeThrough(new DecompressionStream("gzip"));
+          text = await new Response(stream).text();
         } else {
-          data = (await resp.json()) as FeatureCollection;
+          text = new TextDecoder("utf-8").decode(buf);
         }
+        const data = JSON.parse(text) as FeatureCollection;
         if (!cancelled) setFc(data);
       } catch (e) {
         if (!cancelled) setLoadError(String((e as Error)?.message ?? e));
