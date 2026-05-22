@@ -28,11 +28,22 @@ export interface MinimalFeature {
  *  noise — every feature passes regardless of the user's selection,
  *  so we drop it from the sidebar to save space. */
 export const MIN_DISTINCT = 2;
-/** Max distinct-value count. Above this a checklist is unusable
- *  (think: id fields, free-text descriptions); the user should query
- *  by other means. 50 is a soft cap roughly matching what fits in a
- *  scrollable 400px sidebar. */
-export const MAX_DISTINCT = 50;
+/** Max distinct-value count. Above this a checklist is genuinely
+ *  unmanageable — even with "show more" pagination, browsing a
+ *  thousand-option list is a worse UX than text search. 500 is a
+ *  pragmatic ceiling: it covers e.g. ~250 yishuv-name values that
+ *  appear on real country-scale GovMap layers, but still rejects
+ *  pure ID columns (those get dropped earlier by the
+ *  distinct === feature.length test anyway). Fields between
+ *  ``COLLAPSED_VISIBLE_VALUES`` and this cap show the top-N most-
+ *  frequent values by default with a "show all" toggle. */
+export const MAX_DISTINCT = 500;
+/** When a field has more than this many distinct values, the sidebar
+ *  initially shows only the top-N most-frequent ones with a "הצג
+ *  עוד (M)" button to expand. Keeps the panel scannable on the
+ *  agricultural-parcels layer (~14 yeshuvname values is fine; 250 is
+ *  not). */
+export const COLLAPSED_VISIBLE_VALUES = 10;
 /** Max length of an individual value to be considered "categorical".
  *  Above this a value looks like a timestamp / GUID / free-text rather
  *  than a domain code — checkboxes truncated to "2024-…" provide no

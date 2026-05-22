@@ -15,12 +15,65 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+/** Reserved query-string keys this component may NOT use as filter
+ *  fields. Today the dataset page itself doesn't read any URL params,
+ *  but pages it may live inside (login redirect, etc.) sometimes do.
+ *  Adding to this list is cheap and keeps us forward-compatible. */
+const RESERVED_URL_PARAMS = new Set<string>([]);
+
+/** Query-string ↔ filter dict.
+ *  ?yeshuvname=תקוע,אלון%20שבות&moatza=גוש%20עציון
+ *    ↔ { yeshuvname: {"תקוע","אלון שבות"}, moatza: {"גוש עציון"} }
+ *  Comma is the separator. Commas inside a value (rare on GovMap
+ *  layers; never in our reference dataset) would lose round-trip,
+ *  which we accept — URLSearchParams encodes everything else
+ *  (Hebrew, spaces) cleanly. */
+function searchParamsToFilters(sp: URLSearchParams): Record<string, Set<string>> {
+  const out: Record<string, Set<string>> = {};
+  for (const [k, v] of sp.entries()) {
+    if (RESERVED_URL_PARAMS.has(k)) continue;
+    if (!v) continue;
+    const vals = v.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!vals.length) continue;
+    out[k] = new Set(vals);
+  }
+  return out;
+}
+
+function filtersToSearchParams(
+  filters: Record<string, ReadonlySet<string>>,
+  existing: URLSearchParams,
+): URLSearchParams {
+  // Start from a clone so we don't blow away unrelated params the
+  // host page is using.
+  const next = new URLSearchParams(existing);
+  // Drop any existing filter params from the previous render. We can
+  // tell a filter param apart from a non-filter one by looking at the
+  // previous filter state — anything that was a filter key and isn't
+  // any more should be removed.
+  for (const key of Array.from(next.keys())) {
+    if (RESERVED_URL_PARAMS.has(key)) continue;
+    // Heuristic: any key that *could* be a filter — we delete it,
+    // then re-add the ones that should still be there. This is safe
+    // because the dataset page doesn't read other params today, and
+    // RESERVED_URL_PARAMS protects future ones.
+    next.delete(key);
+  }
+  for (const [field, set] of Object.entries(filters)) {
+    if (!set.size) continue;
+    next.set(field, Array.from(set).join(","));
+  }
+  return next;
+}
+
 import {
   applyFilters,
+  COLLAPSED_VISIBLE_VALUES,
   discoverCategoricalFields,
   type MinimalFeature,
 } from "../utils/geoFilters";
@@ -67,7 +120,30 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   const { t } = useTranslation();
   const [fc, setFc] = useState<FeatureCollection | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<FilterState>({});
+
+  // Filter state lives in the URL — so a URL with ?yeshuvname=תקוע
+  // restores the same filtered view, and any toggle the user makes
+  // updates the URL in place (no scroll, no history spam).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [filters, setFiltersState] = useState<FilterState>(() =>
+    searchParamsToFilters(searchParams),
+  );
+  // Wrap setFilters so every update also writes to the query string.
+  const setFilters = (
+    update: FilterState | ((prev: FilterState) => FilterState),
+  ) => {
+    setFiltersState((prev) => {
+      const next = typeof update === "function"
+        ? (update as (p: FilterState) => FilterState)(prev)
+        : update;
+      // `replace: true` keeps the back button useful — filter toggles
+      // shouldn't add 50 history entries during exploration.
+      setSearchParams(filtersToSearchParams(next, searchParams), {
+        replace: true,
+      });
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -323,6 +399,13 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             zoom={layerBounds ? undefined : 8}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
+            // Canvas renderer instead of the default SVG. For
+            // datasets above a few hundred polygons this is a
+            // massive win — SVG creates one DOM node per shape
+            // (200,751 nodes for the agricultural-parcels layer kills
+            // the browser), while canvas does the same work as N
+            // drawcalls on a single bitmap and stays smooth.
+            preferCanvas
             ref={(m) => {
               mapRef.current = m;
             }}
@@ -404,14 +487,21 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
 }
 
 /** One field's checkbox group — sorted by descending count so the
- *  most common values are visible without scrolling. */
+ *  most common values are visible without scrolling. When the field
+ *  has more than ``COLLAPSED_VISIBLE_VALUES`` distinct values, only
+ *  the top-N show by default and a "הצג עוד (M)" toggle reveals the
+ *  rest. Currently-selected values are ALWAYS shown so the user
+ *  doesn't lose sight of their own filter state when a value is in
+ *  the long tail of the distribution. */
 function FieldFilter(props: {
   field: string;
   values: Record<string, number>;
   selected: ReadonlySet<string>;
   onToggle: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   const { field, values, selected, onToggle } = props;
+  const [expanded, setExpanded] = useState(false);
   const entries = useMemo(
     () =>
       Object.entries(values).sort((a, b) =>
@@ -419,6 +509,20 @@ function FieldFilter(props: {
       ),
     [values],
   );
+  // Pin currently-selected values into the visible head so the user
+  // can always see / untick them. Show top-N by count plus any
+  // selected values that fall outside that head. Order: selected
+  // ones surface at the very top, then unselected by count.
+  const visibleEntries = useMemo(() => {
+    if (expanded || entries.length <= COLLAPSED_VISIBLE_VALUES) return entries;
+    const head = entries.slice(0, COLLAPSED_VISIBLE_VALUES);
+    const headSet = new Set(head.map(([k]) => k));
+    const extraSelected = entries.filter(
+      ([k]) => selected.has(k) && !headSet.has(k),
+    );
+    return [...extraSelected, ...head];
+  }, [entries, expanded, selected]);
+  const hiddenCount = entries.length - visibleEntries.length;
   return (
     <fieldset
       style={{
@@ -441,7 +545,7 @@ function FieldFilter(props: {
       <div
         style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}
       >
-        {entries.map(([v, n]) => {
+        {visibleEntries.map(([v, n]) => {
           const checked = selected.has(v);
           return (
             // Block layout intentionally — no flex on the row. Earlier
@@ -480,6 +584,29 @@ function FieldFilter(props: {
             </label>
           );
         })}
+        {/* Show-more / show-less toggle. Only renders when there are
+            actually hidden values; we don't want a noisy "show all"
+            button on a 3-value field. */}
+        {entries.length > COLLAPSED_VISIBLE_VALUES && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            style={{
+              alignSelf: "flex-start",
+              background: "none",
+              border: "none",
+              color: "var(--primary)",
+              fontSize: "0.75rem",
+              cursor: "pointer",
+              padding: "0.15rem 0",
+              marginTop: "0.15rem",
+            }}
+          >
+            {expanded
+              ? t("map.show_less")
+              : t("map.show_more", { n: hiddenCount })}
+          </button>
+        )}
       </div>
     </fieldset>
   );

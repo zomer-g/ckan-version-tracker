@@ -224,6 +224,8 @@
     "load_error": "Failed to load map",
     "no_filterable_fields": "No filterable fields in this layer",
     "fullscreen_enter": "Fullscreen",
-    "fullscreen_exit": "Exit fullscreen"
+    "fullscreen_exit": "Exit fullscreen",
+    "show_more": "Show {{n}} more",
+    "show_less": "Show less"
   }
 }
