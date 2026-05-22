@@ -33,6 +33,11 @@ export const MIN_DISTINCT = 2;
  *  by other means. 50 is a soft cap roughly matching what fits in a
  *  scrollable 400px sidebar. */
 export const MAX_DISTINCT = 50;
+/** Max length of an individual value to be considered "categorical".
+ *  Above this a value looks like a timestamp / GUID / free-text rather
+ *  than a domain code — checkboxes truncated to "2024-…" provide no
+ *  selection signal to the user, so we drop the whole field. */
+export const MAX_VALUE_LENGTH = 30;
 
 /**
  * Walks every feature's properties and returns, per qualifying field,
@@ -55,20 +60,34 @@ export function discoverCategoricalFields(
   features: MinimalFeature[],
 ): Record<string, Record<string, number>> {
   const raw: Record<string, Record<string, number>> = {};
+  // Track which fields had ANY value exceeding MAX_VALUE_LENGTH so we
+  // can drop them wholesale below. Even one timestamp in an otherwise-
+  // short column means the field is probably free-form and not a good
+  // facet (per-row populations vary).
+  const tooLong = new Set<string>();
   for (const f of features) {
     const props = f.properties || {};
     for (const [k, v] of Object.entries(props)) {
       if (typeof v !== "string") continue;
       const trimmed = v.trim();
       if (!trimmed) continue;
+      if (trimmed.length > MAX_VALUE_LENGTH) {
+        tooLong.add(k);
+        continue;
+      }
       const bucket = raw[k] || (raw[k] = {});
       bucket[trimmed] = (bucket[trimmed] || 0) + 1;
     }
   }
   const out: Record<string, Record<string, number>> = {};
   for (const [k, vals] of Object.entries(raw)) {
+    if (tooLong.has(k)) continue;
     const card = Object.keys(vals).length;
     if (card < MIN_DISTINCT || card > MAX_DISTINCT) continue;
+    // Drop ID-like fields: every feature has a different value (e.g.
+    // globalid, objectid). These pass the cardinality check on small
+    // datasets but produce a useless one-checkbox-per-row sidebar.
+    if (card === features.length) continue;
     out[k] = vals;
   }
   return out;

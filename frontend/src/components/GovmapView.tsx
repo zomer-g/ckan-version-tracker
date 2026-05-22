@@ -13,7 +13,7 @@
  * that don't show a map (CKAN, scraper, idf) don't pay the bundle
  * cost. See plan file for the placement contract.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
@@ -68,11 +68,6 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   const [fc, setFc] = useState<FeatureCollection | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>({});
-  // We fit bounds ONCE per dataset load. Subsequent filter changes
-  // must not jump the viewport — the user has presumably panned/zoomed
-  // already and would be furious to lose it.
-  const [hasFitBounds, setHasFitBounds] = useState(false);
-  const mapRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +116,28 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     [filteredFeatures],
   );
 
+  // Compute the layer bbox once, from the unfiltered FeatureCollection.
+  // We use Leaflet's own geoJSON parser as a one-shot bbox engine so
+  // the math handles every geometry type (Point, LineString, Polygon,
+  // MultiPolygon, …) without us re-implementing recursive coordinate
+  // walking. Passing the result via MapContainer's `bounds` prop is
+  // the timing-safe way to fit the view: Leaflet does fitBounds at
+  // mount, and *doesn't* re-fit on filter toggles (the user's pan/zoom
+  // is preserved across filtering). That's why we read from `fc`, not
+  // `filteredCollection`.
+  const layerBounds = useMemo<L.LatLngBoundsExpression | null>(() => {
+    if (!fc || fc.features.length === 0) return null;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tmpLayer = L.geoJSON(fc as any);
+      const b = tmpLayer.getBounds();
+      if (!b.isValid()) return null;
+      return b;
+    } catch {
+      return null;
+    }
+  }, [fc]);
+
   const totalCount = fc?.features.length ?? 0;
   const visibleCount = filteredFeatures.length;
 
@@ -136,26 +153,6 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   };
 
   const reset = () => setFilters({});
-
-  // GeoJSON layer mount callback — wires popup binding and (only on
-  // first load) the auto-fit. We do the fit here, not in a ref-based
-  // useEffect, because the layer's bounds aren't available until the
-  // shapes are added to the map.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const onLayerCreated = (layer: any) => {
-    if (!hasFitBounds && mapRef.current && layer && layer.getBounds) {
-      try {
-        const bounds = layer.getBounds();
-        if (bounds.isValid()) {
-          mapRef.current.fitBounds(bounds, { padding: [20, 20] });
-          setHasFitBounds(true);
-        }
-      } catch {
-        // getBounds throws on empty FeatureCollections — fine to
-        // silently skip; the user can pan/zoom manually.
-      }
-    }
-  };
 
   return (
     <section
@@ -215,16 +212,18 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           </div>
         ) : (
           <MapContainer
-            // Tel Aviv-ish initial view; immediately overridden by
-            // fitBounds after the layer mounts. The default tile
-            // placeholders during the brief gap are less jarring than
-            // a blank canvas at zoom=2.
-            center={[31.78, 35.21]}
-            zoom={8}
+            // Bounds — not center/zoom — so the map is correctly
+            // framed on the data at mount. Falls back to a country-
+            // wide view only when the layer's bbox can't be
+            // computed (genuinely empty collection or invalid geometry).
+            // Passing bounds rather than calling fitBounds() in an
+            // effect avoids the timing trap where the ref isn't yet
+            // bound when fitBounds tries to run.
+            bounds={layerBounds ?? undefined}
+            boundsOptions={{ padding: [20, 20] }}
+            center={layerBounds ? undefined : [31.78, 35.21]}
+            zoom={layerBounds ? undefined : 8}
             style={{ height: "100%", width: "100%" }}
-            ref={(m) => {
-              mapRef.current = m;
-            }}
             scrollWheelZoom
           >
             <TileLayer
@@ -238,7 +237,6 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               style={() => LAYER_STYLE}
               onEachFeature={(feature, layer) => {
                 layer.bindPopup(() => renderPopup(feature, t));
-                onLayerCreated(layer);
               }}
             />
           </MapContainer>
