@@ -766,6 +766,7 @@ async def upload_geojson(
     file: UploadFile = File(...),
     version_number: int = Form(...),
     resource_name: str | None = Form(None),
+    compression: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Worker uploads a single .geojson file (a FeatureCollection in WGS84) as
@@ -774,6 +775,14 @@ async def upload_geojson(
     `geojson_resource_ids`. Used for GovMap layers so the geometry shows up
     on the dataset page as a separate, downloadable GeoJSON resource rather
     than being buried inside an attachments ZIP.
+
+    When the worker sends ``compression=gzip`` (the default since 2026-05;
+    see govil-scraper over_worker.upload_geojson), the request body is
+    already gzip-compressed and we forward the bytes to odata as-is.
+    GeoJSON compresses ~5×, which is what lets a 200 MB layer fit under
+    odata's ~100 MB CKAN resource_create limit — without this we'd get
+    HTTP 413 and the version would land with a CSV but no map data.
+    The frontend (GovmapView) decompresses on fetch via DecompressionStream.
     """
     _verify_worker_key(request)
 
@@ -789,25 +798,44 @@ async def upload_geojson(
     if not ds or not ds.odata_dataset_id:
         raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
 
-    geojson_bytes = await file.read()
+    body_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
     ts = _timestamp()
 
-    filename = file.filename or f"v{version_number}.geojson"
-    label = (resource_name or "").strip() or filename.rsplit(".", 1)[0] or "GeoJSON"
+    is_gzip = (compression or "").lower() == "gzip" or (
+        file.filename or "").lower().endswith(".gz")
+    # Preserve the .gz suffix on the filename when uploading gzipped so
+    # browsers / tooling pick up the right content semantics. Strip it
+    # for the human-readable resource label.
+    raw_filename = file.filename or (
+        f"v{version_number}.geojson.gz" if is_gzip else f"v{version_number}.geojson"
+    )
+    label_base = raw_filename
+    if label_base.lower().endswith(".gz"):
+        label_base = label_base[:-3]
+    if label_base.lower().endswith(".geojson"):
+        label_base = label_base[:-8]
+    label = (resource_name or "").strip() or label_base or "GeoJSON"
 
     try:
         result_resource = await odata_client.upload_resource(
             dataset_id=ds.odata_dataset_id,
-            file_content=geojson_bytes,
-            filename=filename,
+            file_content=body_bytes,
+            filename=raw_filename,
             name=f"{ts} v{version_number} - {label}",
-            description=f"Version {version_number}: {label} (GeoJSON)",
+            description=(
+                f"Version {version_number}: {label} (GeoJSON"
+                + (" — gzipped)" if is_gzip else ")")
+            ),
             resource_format="GeoJSON",
         )
-        logger.info("Uploaded GeoJSON %s (%d KB) → resource %s",
-                    filename, len(geojson_bytes) // 1024, result_resource["id"])
-        return {"resource_id": result_resource["id"], "size": len(geojson_bytes)}
+        logger.info(
+            "Uploaded GeoJSON %s (%d KB%s) → resource %s",
+            raw_filename, len(body_bytes) // 1024,
+            ", gzipped" if is_gzip else "",
+            result_resource["id"],
+        )
+        return {"resource_id": result_resource["id"], "size": len(body_bytes)}
     except Exception as e:
         logger.exception("Failed to upload GeoJSON")
         raise HTTPException(status_code=502, detail=f"GeoJSON upload failed: {e}")

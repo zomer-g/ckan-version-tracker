@@ -71,15 +71,32 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(geojsonDownloadUrl)
-      .then(async (resp) => {
+    (async () => {
+      try {
+        const resp = await fetch(geojsonDownloadUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = (await resp.json()) as FeatureCollection;
+        // Large GeoJSON layers (~200MB+) are stored gzipped on odata
+        // because CKAN resource_create rejects plain bodies above
+        // ~100MB. odata serves them with the original Content-Type
+        // (octet-stream / application/json) but doesn't set
+        // Content-Encoding, so the browser doesn't auto-decompress —
+        // we do it ourselves via the native DecompressionStream API
+        // when the URL ends in .gz. Small / legacy GeoJSON resources
+        // are still served plain.
+        const isGz = /\.gz(\?|$)/i.test(geojsonDownloadUrl);
+        let data: FeatureCollection;
+        if (isGz && resp.body && typeof DecompressionStream !== "undefined") {
+          const stream = resp.body.pipeThrough(new DecompressionStream("gzip"));
+          const text = await new Response(stream).text();
+          data = JSON.parse(text) as FeatureCollection;
+        } else {
+          data = (await resp.json()) as FeatureCollection;
+        }
         if (!cancelled) setFc(data);
-      })
-      .catch((e) => {
-        if (!cancelled) setLoadError(String(e?.message ?? e));
-      });
+      } catch (e) {
+        if (!cancelled) setLoadError(String((e as Error)?.message ?? e));
+      }
+    })();
     return () => {
       cancelled = true;
     };
