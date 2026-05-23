@@ -240,6 +240,7 @@
     "style_reset": "Reset",
     "mobile_gate_title": "Large map",
     "mobile_gate_body": "This layer contains hundreds of thousands of polygons. Loading on a mobile device may be slow and can crash the browser.",
-    "mobile_gate_button": "Load map anyway"
+    "mobile_gate_button": "Load map anyway",
+    "truncated_note": "Truncated view — {{n}} polygons only. Use a desktop browser to see the full layer."
   }
 }

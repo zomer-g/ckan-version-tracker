@@ -19,6 +19,149 @@ import { useSearchParams } from "react-router-dom";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { JSONParser } from "@streamparser/json";
+
+/** Mobile feature-count cap. On a weak phone we can't fit the
+ *  agricultural-parcels layer's 200k features in memory (just the
+ *  parsed JS objects are ~300MB; Leaflet doubles that). Beyond this
+ *  point the streaming parser stops collecting and aborts the
+ *  remaining download, so weak networks save bandwidth too. The user
+ *  sees "תצוגה מקוצרת (5,000 / N)" so the truncation is explicit. */
+const MOBILE_FEATURE_LIMIT = 5000;
+
+/**
+ * Stream-fetch + decompress + JSON-parse a GeoJSON FeatureCollection,
+ * collecting at most ``limit`` features and aborting the download
+ * once the cap is reached. Used on mobile to keep peak memory at
+ * tens of MB rather than ~1 GB.
+ *
+ * The chain is:
+ *   fetch response.body → (optional DecompressionStream gzip) →
+ *   @streamparser/json with paths:["$.features.*"] → onValue callback
+ *
+ * We detect gzip by peeking the first chunk's magic bytes (0x1F
+ * 0x8B), then either pipe through DecompressionStream or pass the
+ * bytes through unchanged. Cancellation: when the feature cap is
+ * hit, we cancel the underlying reader; that propagates through
+ * the stream chain and tears down the open HTTP connection.
+ */
+async function streamParseGeoJSON(args: {
+  resp: Response;
+  limit: number;
+  isCancelled: () => boolean;
+  onProgress: (frac: number) => void;
+  onParseStart: () => void;
+  onComplete: (
+    features: MinimalFeature[],
+    truncated: boolean,
+  ) => void;
+}): Promise<void> {
+  const { resp, limit, isCancelled, onProgress, onParseStart, onComplete } = args;
+  if (!resp.body) throw new Error("Response has no body");
+
+  // Peek the first chunk to detect gzip. We rebuild a ReadableStream
+  // that yields this chunk first and the rest after.
+  const reader0 = resp.body.getReader();
+  const first = await reader0.read();
+  if (isCancelled()) {
+    await reader0.cancel().catch(() => {});
+    return;
+  }
+
+  const totalRaw = resp.headers.get("content-length");
+  const total = totalRaw ? Number(totalRaw) : 0;
+  let received = first.value ? first.value.byteLength : 0;
+  if (total > 0 && received > 0) onProgress(received / total);
+
+  const firstValue = first.value;
+  const recombined = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      if (firstValue) controller.enqueue(firstValue);
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader0.read();
+          if (done) break;
+          if (value) {
+            received += value.byteLength;
+            if (total > 0) onProgress(received / total);
+            controller.enqueue(value);
+          }
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+    async cancel() {
+      try {
+        await reader0.cancel();
+      } catch {
+        // ignore
+      }
+    },
+  });
+
+  const isGz =
+    firstValue !== undefined &&
+    firstValue.length >= 2 &&
+    firstValue[0] === 0x1f &&
+    firstValue[1] === 0x8b;
+  const decompressed =
+    isGz && typeof DecompressionStream !== "undefined"
+      ? recombined.pipeThrough(new DecompressionStream("gzip"))
+      : recombined;
+
+  // Build the streaming JSON parser, asking only for elements at
+  // $.features.* — every yielded value is a single Feature object.
+  const features: MinimalFeature[] = [];
+  let truncated = false;
+  let parserError: Error | null = null;
+  const parser = new JSONParser({
+    paths: ["$.features.*"],
+    keepStack: false,
+  });
+  parser.onValue = (info: { value?: unknown }) => {
+    if (!info.value || features.length >= limit) return;
+    features.push(info.value as MinimalFeature);
+    if (features.length >= limit && !truncated) {
+      truncated = true;
+    }
+  };
+  parser.onError = (err: Error) => {
+    parserError = err;
+  };
+
+  onParseStart();
+  const dReader = decompressed.getReader();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isCancelled()) {
+      await dReader.cancel().catch(() => {});
+      return;
+    }
+    if (truncated) {
+      // We have enough — abort the rest of the download.
+      await dReader.cancel().catch(() => {});
+      break;
+    }
+    const { done, value } = await dReader.read();
+    if (done) break;
+    if (value) {
+      // @streamparser/json accepts Uint8Array (Iterable<number>) or
+      // a string. Bytes are zero-copy.
+      parser.write(value);
+      if (parserError) throw parserError;
+    }
+  }
+  try {
+    parser.end();
+  } catch {
+    // ignore — we may end mid-stream on purpose.
+  }
+
+  onComplete(features, truncated);
+}
 
 /** Reserved query-string keys this component may NOT use as filter
  *  fields. Today the dataset page itself doesn't read any URL params,
@@ -170,6 +313,14 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // Desktop browsers auto-load as before.
   const [userOptedIn, setUserOptedIn] = useState(!isSmallScreen);
 
+  // When the streaming parser stopped at MOBILE_FEATURE_LIMIT, we
+  // surface a "תצוגה מקוצרת" badge so the user knows they're not
+  // seeing the whole layer. ``totalReported`` is the server's
+  // numberMatched / scrape_metadata count when known (we read it
+  // from scrape_metadata via VersionsPage props in future; for now
+  // we just compute "X of unknown" when set).
+  const [truncatedTo, setTruncatedTo] = useState<number | null>(null);
+
   // Filter-list sort mode. "count" is the default (descending by
   // feature count, so the most-represented values surface first);
   // "alpha" sorts by Hebrew/locale alphabetical. Stored at the
@@ -233,13 +384,37 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
       try {
         const resp = await fetch(geojsonDownloadUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        // Stream the body manually so we can show a progress bar.
-        // resp.body is a ReadableStream of Uint8Array chunks; we
-        // accumulate them and report bytes-received vs the
-        // Content-Length header. Phones on cellular need this — a
-        // single arrayBuffer() await means the user sees nothing
-        // for 10-20s and assumes the page is hung.
         if (!resp.body) throw new Error("Response has no body");
+
+        // Two paths diverge here.
+        //
+        // MOBILE: stream-decompress and stream-parse, capping the
+        // feature count at MOBILE_FEATURE_LIMIT. Peak memory stays
+        // ~tens of MB regardless of the layer's total size. We also
+        // cancel the reader once the cap is reached, so the rest of
+        // the body never crosses the network — important on weak
+        // cellular connections.
+        //
+        // DESKTOP: keep the current native arrayBuffer + JSON.parse
+        // path; it's much faster, and desktop browsers handle the
+        // memory fine.
+        if (isSmallScreen) {
+          await streamParseGeoJSON({
+            resp,
+            limit: MOBILE_FEATURE_LIMIT,
+            isCancelled: () => cancelled,
+            onProgress: setDownloadProgress,
+            onParseStart: () => setParsing(true),
+            onComplete: (features, truncated) => {
+              if (cancelled) return;
+              setFc({ type: "FeatureCollection", features });
+              if (truncated) setTruncatedTo(features.length);
+            },
+          });
+          return;
+        }
+
+        // === Desktop path (unchanged from previous commit) ===
         const totalRaw = resp.headers.get("content-length");
         const total = totalRaw ? Number(totalRaw) : 0;
         const reader = resp.body.getReader();
@@ -253,12 +428,9 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           if (value) {
             chunks.push(value);
             received += value.byteLength;
-            if (total > 0) {
-              setDownloadProgress(received / total);
-            }
+            if (total > 0) setDownloadProgress(received / total);
           }
         }
-        // Concatenate chunks into one buffer.
         const buf = new Uint8Array(received);
         let off = 0;
         for (const c of chunks) {
@@ -267,13 +439,6 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         }
         setDownloadProgress(1);
 
-        // Large GeoJSON layers (~200MB+) are stored gzipped on odata
-        // because CKAN resource_create rejects plain bodies above
-        // ~100MB. odata's /download route serves them WITHOUT the
-        // filename suffix and WITHOUT a Content-Encoding header, so
-        // detecting by URL or headers isn't reliable. Instead we
-        // sniff the body's first two bytes: gzip is unambiguously
-        // 0x1F 0x8B and a JSON document can never begin with those.
         const isGz =
           buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
         let text: string;
@@ -289,13 +454,6 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           text = new TextDecoder("utf-8").decode(buf);
         }
         if (cancelled) return;
-
-        // JSON.parse of ~200MB takes 3-15s on a mobile CPU and
-        // blocks the main thread — there's nothing we can show
-        // during it, but we DO want the previous "downloading"
-        // bar to flip into a "parsing" message so the user knows
-        // the bytes arrived. setParsing(true), yield one frame to
-        // let React paint, THEN call JSON.parse.
         setParsing(true);
         await new Promise((r) => setTimeout(r, 0));
         if (cancelled) return;
@@ -309,7 +467,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [geojsonDownloadUrl, userOptedIn]);
+  }, [geojsonDownloadUrl, userOptedIn, isSmallScreen]);
 
   // The full set of feature properties → distinct value counts. Doesn't
   // change when the user toggles filters — the chip list itself stays
@@ -675,6 +833,23 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
           {t("map.visible_count", { visible: visibleCount, total: totalCount })}
         </div>
+        {truncatedTo !== null && (
+          <div
+            role="note"
+            style={{
+              fontSize: "0.75rem",
+              color: "#92400e",
+              background: "#fef3c7",
+              border: "1px solid #fcd34d",
+              borderRadius: 4,
+              padding: "0.35rem 0.5rem",
+              marginBottom: "0.5rem",
+              lineHeight: 1.35,
+            }}
+          >
+            {t("map.truncated_note", { n: truncatedTo.toLocaleString() })}
+          </div>
+        )}
 
         {/* Display controls — collapsed by default so the filter list
             stays the focus. Opens on click; lets the user override
