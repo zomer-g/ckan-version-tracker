@@ -451,6 +451,53 @@ async def cancel_scrape_task(
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
 
 
+@router.get("/datasets/{dataset_id}/scrape-tasks")
+@limiter.limit("30/minute")
+async def all_scrape_tasks_for_dataset(
+    request: Request,
+    dataset_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """All ScrapeTask rows for one dataset, every status, no time filter.
+
+    Diagnostic for the symptom "I clicked 'דגום' and the response is OK but
+    nothing shows in the queue panel" — the queue panel filters by
+    status='pending'/'running'/failed-in-last-24h with an INNER JOIN to
+    TrackedDataset; a row with a weird status, a NULL tracked_dataset_id,
+    or just one created hours ago and short-circuiting _create_scrape_task
+    will be invisible there but blocks new task creation. This endpoint
+    cuts past all of that and shows the raw truth.
+    """
+    from app.models.scrape_task import ScrapeTask
+
+    ds_uid = parse_uuid(dataset_id, "dataset_id")
+    result = await db.execute(
+        select(ScrapeTask)
+        .where(ScrapeTask.tracked_dataset_id == ds_uid)
+        .order_by(ScrapeTask.created_at.desc())
+    )
+    tasks = result.scalars().all()
+    return {
+        "dataset_id": dataset_id,
+        "total": len(tasks),
+        "tasks": [
+            {
+                "task_id": str(t.id),
+                "status": t.status,
+                "phase": t.phase,
+                "message": t.message,
+                "error": t.error,
+                "progress": t.progress,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            }
+            for t in tasks
+        ],
+    }
+
+
 _dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
 _DATASET_SIZES_TTL = 60.0  # seconds
 
