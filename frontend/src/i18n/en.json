@@ -239,8 +239,15 @@
     "style_stroke_weight": "Stroke weight",
     "style_reset": "Reset",
     "mobile_gate_title": "Large map",
-    "mobile_gate_body": "This layer contains hundreds of thousands of polygons. Loading on a mobile device may be slow and can crash the browser.",
-    "mobile_gate_button": "Load map anyway",
-    "truncated_note": "Truncated view — {{n}} polygons only. Use a desktop browser to see the full layer."
+    "mobile_gate_body": "This layer may contain hundreds of thousands of polygons. Loading all of them on a mobile device may be slow and can crash the browser. You can filter first and load only a subset.",
+    "mobile_gate_button_all": "Load everything (may crash)",
+    "mobile_gate_button_filter": "Filter first, then load",
+    "discovering_filters": "Analysing filter options... {{pct}}%",
+    "filter_first_hint": "Pick which values to display on the map, then tap \"Load filtered\". You can pick as many as you like — if you pick none, every polygon is loaded.",
+    "apply_filter_and_load": "Load filtered ({{n}} polygons)",
+    "apply_filter_and_load_all": "Load all {{total}} polygons",
+    "filter_loading_progress": "Loading matching polygons...",
+    "back_to_filter_choice": "Change choice",
+    "estimating_filter_match": "Showing {{visible}} of {{total}} polygons matching the current filter"
   }
 }

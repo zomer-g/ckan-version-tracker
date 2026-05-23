@@ -21,135 +21,98 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { JSONParser } from "@streamparser/json";
 
-/** Mobile feature-count cap. On a weak phone we can't fit the
- *  agricultural-parcels layer's 200k features in memory (just the
- *  parsed JS objects are ~300MB; Leaflet doubles that). Beyond this
- *  point the streaming parser stops collecting and aborts the
- *  remaining download, so weak networks save bandwidth too. The user
- *  sees "תצוגה מקוצרת (5,000 / N)" so the truncation is explicit. */
-const MOBILE_FEATURE_LIMIT = 5000;
-
 /**
- * Stream-fetch + decompress + JSON-parse a GeoJSON FeatureCollection,
- * collecting at most ``limit`` features and aborting the download
- * once the cap is reached. Used on mobile to keep peak memory at
- * tens of MB rather than ~1 GB.
+ * Download the GeoJSON response body into an in-memory Blob and
+ * detect whether the bytes are gzip-compressed (magic 0x1F 0x8B).
  *
- * The chain is:
- *   fetch response.body → (optional DecompressionStream gzip) →
- *   @streamparser/json with paths:["$.features.*"] → onValue callback
- *
- * We detect gzip by peeking the first chunk's magic bytes (0x1F
- * 0x8B), then either pipe through DecompressionStream or pass the
- * bytes through unchanged. Cancellation: when the feature cap is
- * hit, we cancel the underlying reader; that propagates through
- * the stream chain and tears down the open HTTP connection.
+ * Why a Blob: in "filter-first" mode we parse the body twice — once
+ * for properties only (to populate the filter sidebar) and once for
+ * geometry of the user-selected subset. Caching the raw bytes means
+ * the second pass costs zero network. Memory cost is the gzipped
+ * size (e.g. the agricultural-parcels layer at ~50 MB), which is
+ * far below the parsed-JS-object cost we used to incur (~1 GB).
  */
-async function streamParseGeoJSON(args: {
-  resp: Response;
-  limit: number;
+async function downloadToBlob(args: {
+  url: string;
   isCancelled: () => boolean;
   onProgress: (frac: number) => void;
-  onParseStart: () => void;
-  onComplete: (
-    features: MinimalFeature[],
-    truncated: boolean,
-  ) => void;
-}): Promise<void> {
-  const { resp, limit, isCancelled, onProgress, onParseStart, onComplete } = args;
+}): Promise<{ blob: Blob; isGz: boolean }> {
+  const { url, isCancelled, onProgress } = args;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   if (!resp.body) throw new Error("Response has no body");
-
-  // Peek the first chunk to detect gzip. We rebuild a ReadableStream
-  // that yields this chunk first and the rest after.
-  const reader0 = resp.body.getReader();
-  const first = await reader0.read();
-  if (isCancelled()) {
-    await reader0.cancel().catch(() => {});
-    return;
-  }
-
   const totalRaw = resp.headers.get("content-length");
   const total = totalRaw ? Number(totalRaw) : 0;
-  let received = first.value ? first.value.byteLength : 0;
-  if (total > 0 && received > 0) onProgress(received / total);
-
-  const firstValue = first.value;
-  const recombined = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      if (firstValue) controller.enqueue(firstValue);
-      try {
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader0.read();
-          if (done) break;
-          if (value) {
-            received += value.byteLength;
-            if (total > 0) onProgress(received / total);
-            controller.enqueue(value);
-          }
-        }
-        controller.close();
-      } catch (e) {
-        controller.error(e);
-      }
-    },
-    async cancel() {
-      try {
-        await reader0.cancel();
-      } catch {
-        // ignore
-      }
-    },
-  });
-
-  const isGz =
-    firstValue !== undefined &&
-    firstValue.length >= 2 &&
-    firstValue[0] === 0x1f &&
-    firstValue[1] === 0x8b;
-  const decompressed =
-    isGz && typeof DecompressionStream !== "undefined"
-      ? recombined.pipeThrough(new DecompressionStream("gzip"))
-      : recombined;
-
-  // Build the streaming JSON parser, asking only for elements at
-  // $.features.* — every yielded value is a single Feature object.
-  const features: MinimalFeature[] = [];
-  let truncated = false;
-  let parserError: Error | null = null;
-  const parser = new JSONParser({
-    paths: ["$.features.*"],
-    keepStack: false,
-  });
-  parser.onValue = (info: { value?: unknown }) => {
-    if (!info.value || features.length >= limit) return;
-    features.push(info.value as MinimalFeature);
-    if (features.length >= limit && !truncated) {
-      truncated = true;
-    }
-  };
-  parser.onError = (err: Error) => {
-    parserError = err;
-  };
-
-  onParseStart();
-  const dReader = decompressed.getReader();
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (isCancelled()) {
-      await dReader.cancel().catch(() => {});
-      return;
+      await reader.cancel().catch(() => {});
+      throw new Error("cancelled");
     }
-    if (truncated) {
-      // We have enough — abort the rest of the download.
-      await dReader.cancel().catch(() => {});
-      break;
-    }
-    const { done, value } = await dReader.read();
+    const { done, value } = await reader.read();
     if (done) break;
     if (value) {
-      // @streamparser/json accepts Uint8Array (Iterable<number>) or
-      // a string. Bytes are zero-copy.
+      chunks.push(value);
+      received += value.byteLength;
+      if (total > 0) onProgress(received / total);
+    }
+  }
+  const isGz =
+    chunks.length > 0 &&
+    chunks[0].length >= 2 &&
+    chunks[0][0] === 0x1f &&
+    chunks[0][1] === 0x8b;
+  return { blob: new Blob(chunks), isGz };
+}
+
+/**
+ * Generic streaming JSON parser. Re-reads bytes from a cached Blob
+ * (so we can parse the same body twice), pipes through gzip
+ * decompression when needed, and emits values matching `path` via
+ * the `onValue` callback.
+ *
+ * Typical paths:
+ *   - "$.features.*"            → every Feature object (full, with geometry)
+ *   - "$.features.*.properties" → only the properties subdoc (small, ~10x lighter)
+ *
+ * Memory: `onValue` is called once per match; we never hold the
+ * whole parsed array internally. The caller chooses what to collect
+ * (everything, properties only, filter-matching subset, etc.).
+ */
+async function parseStream<T>(args: {
+  blob: Blob;
+  isGz: boolean;
+  path: string;
+  onValue: (v: T) => void;
+  isCancelled: () => boolean;
+}): Promise<void> {
+  const { blob, isGz, path, onValue, isCancelled } = args;
+  const baseStream = blob.stream();
+  const stream =
+    isGz && typeof DecompressionStream !== "undefined"
+      ? baseStream.pipeThrough(new DecompressionStream("gzip"))
+      : baseStream;
+  const parser = new JSONParser({ paths: [path], keepStack: false });
+  let parserError: Error | null = null;
+  parser.onValue = (info: { value?: unknown }) => {
+    if (info.value !== undefined) onValue(info.value as T);
+  };
+  parser.onError = (e: Error) => {
+    parserError = e;
+  };
+  const reader = stream.getReader();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isCancelled()) {
+      await reader.cancel().catch(() => {});
+      throw new Error("cancelled");
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
       parser.write(value);
       if (parserError) throw parserError;
     }
@@ -157,10 +120,8 @@ async function streamParseGeoJSON(args: {
   try {
     parser.end();
   } catch {
-    // ignore — we may end mid-stream on purpose.
+    // ignore
   }
-
-  onComplete(features, truncated);
 }
 
 /** Reserved query-string keys this component may NOT use as filter
@@ -306,20 +267,45 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // mobile browsers past their per-tab memory ceiling and Safari /
   // Chrome respond by killing the tab — the user sees iOS's
   // "אירעה בעיה חוזרת" / "a problem repeatedly occurred" prompt
-  // and the page is unusable. Gating behind an explicit tap turns
-  // an "instant crash" into an "informed choice": small datasets
-  // are still one tap away, big ones now warn the user before they
-  // sink their phone.
-  // Desktop browsers auto-load as before.
-  const [userOptedIn, setUserOptedIn] = useState(!isSmallScreen);
+  // and the page is unusable. We solve this with an explicit
+  // two-button choice:
+  //
+  //   "all"          — stream every feature, render them all on the map.
+  //                    Risky on weak phones, but the only way to see
+  //                    the full layer; warn loudly so the user knows.
+  //
+  //   "filter-first" — stream once, discard geometry, keep only the
+  //                    properties subdoc per feature. Use that to
+  //                    populate the filter sidebar. The user picks
+  //                    which values to keep, then we re-stream from
+  //                    the cached Blob and only retain matching
+  //                    features. Memory peak stays manageable: even
+  //                    20 K matching polygons fit fine where 200 K
+  //                    crash the tab.
+  //
+  // Desktop skips the gate entirely and behaves as if the user
+  // chose "all".
+  type LoadMode = "all" | "filter-first";
+  const [mobileChoice, setMobileChoice] = useState<LoadMode | null>(
+    isSmallScreen ? null : "all",
+  );
 
-  // When the streaming parser stopped at MOBILE_FEATURE_LIMIT, we
-  // surface a "תצוגה מקוצרת" badge so the user knows they're not
-  // seeing the whole layer. ``totalReported`` is the server's
-  // numberMatched / scrape_metadata count when known (we read it
-  // from scrape_metadata via VersionsPage props in future; for now
-  // we just compute "X of unknown" when set).
-  const [truncatedTo, setTruncatedTo] = useState<number | null>(null);
+  // In "filter-first" mode, pass 1 populates this array with just
+  // the .properties subdoc per feature — much lighter than the
+  // full feature (no geometry coords). Drives the filter sidebar
+  // before the map ever renders.
+  const [filterIndex, setFilterIndex] = useState<
+    Array<Record<string, unknown>> | null
+  >(null);
+
+  // Pass 2 (filtered render) is async and we want a distinct
+  // "loading polygons" spinner during that step.
+  const [pass2Loading, setPass2Loading] = useState(false);
+
+  // Cached gzipped Blob from pass 1, replayed during pass 2 so we
+  // never re-download. Held in a ref because nothing in the render
+  // tree needs to react to its identity.
+  const cachedBlobRef = useRef<{ blob: Blob; isGz: boolean } | null>(null);
 
   // Filter-list sort mode. "count" is the default (descending by
   // feature count, so the most-represented values surface first);
@@ -375,117 +361,175 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   };
 
   useEffect(() => {
-    // Wait for explicit opt-in on small screens — the fetch is heavy
+    // Wait for explicit choice on small screens — the fetch is heavy
     // enough to OOM-kill the tab on phones, so we don't start it
-    // until the user clicks "טען מפה".
-    if (!userOptedIn) return;
+    // until the user picks "load all" or "filter first".
+    if (mobileChoice === null) return;
+    // Skip pass 1 if we already have data from a previous run on
+    // this URL (mode toggle without remount — defensive).
+    if (fc) return;
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(geojsonDownloadUrl);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        if (!resp.body) throw new Error("Response has no body");
-
-        // Two paths diverge here.
-        //
-        // MOBILE: stream-decompress and stream-parse, capping the
-        // feature count at MOBILE_FEATURE_LIMIT. Peak memory stays
-        // ~tens of MB regardless of the layer's total size. We also
-        // cancel the reader once the cap is reached, so the rest of
-        // the body never crosses the network — important on weak
-        // cellular connections.
-        //
-        // DESKTOP: keep the current native arrayBuffer + JSON.parse
-        // path; it's much faster, and desktop browsers handle the
-        // memory fine.
-        if (isSmallScreen) {
-          await streamParseGeoJSON({
-            resp,
-            limit: MOBILE_FEATURE_LIMIT,
-            isCancelled: () => cancelled,
-            onProgress: setDownloadProgress,
-            onParseStart: () => setParsing(true),
-            onComplete: (features, truncated) => {
-              if (cancelled) return;
-              setFc({ type: "FeatureCollection", features });
-              if (truncated) setTruncatedTo(features.length);
-            },
-          });
-          return;
-        }
-
-        // === Desktop path (unchanged from previous commit) ===
-        const totalRaw = resp.headers.get("content-length");
-        const total = totalRaw ? Number(totalRaw) : 0;
-        const reader = resp.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let received = 0;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader.read();
-          if (cancelled) return;
-          if (done) break;
-          if (value) {
-            chunks.push(value);
-            received += value.byteLength;
-            if (total > 0) setDownloadProgress(received / total);
-          }
-        }
-        const buf = new Uint8Array(received);
-        let off = 0;
-        for (const c of chunks) {
-          buf.set(c, off);
-          off += c.byteLength;
-        }
-        setDownloadProgress(1);
-
-        const isGz =
-          buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
-        let text: string;
-        if (isGz) {
-          if (typeof DecompressionStream === "undefined") {
-            throw new Error("Browser lacks DecompressionStream support");
-          }
-          const stream = new Blob([buf])
-            .stream()
-            .pipeThrough(new DecompressionStream("gzip"));
-          text = await new Response(stream).text();
-        } else {
-          text = new TextDecoder("utf-8").decode(buf);
-        }
+        // Pass 1: download the body once, cache as Blob for reuse.
+        const cached = await downloadToBlob({
+          url: geojsonDownloadUrl,
+          isCancelled: () => cancelled,
+          onProgress: setDownloadProgress,
+        });
         if (cancelled) return;
+        cachedBlobRef.current = cached;
+        setDownloadProgress(1);
         setParsing(true);
+        // Yield once so the parse-progress UI paints before we tie up
+        // the main thread inside the JSON parser.
         await new Promise((r) => setTimeout(r, 0));
         if (cancelled) return;
-        const data = JSON.parse(text) as FeatureCollection;
-        if (cancelled) return;
-        setFc(data);
+
+        if (mobileChoice === "all") {
+          // Parse every feature with full geometry. No cap — the user
+          // explicitly accepted the risk by clicking "load all" (or
+          // they're on desktop, which handles this fine).
+          const features: MinimalFeature[] = [];
+          await parseStream<MinimalFeature>({
+            blob: cached.blob,
+            isGz: cached.isGz,
+            path: "$.features.*",
+            onValue: (f) => features.push(f),
+            isCancelled: () => cancelled,
+          });
+          if (cancelled) return;
+          setFc({ type: "FeatureCollection", features });
+        } else {
+          // "filter-first": parse only the properties subdoc. Memory
+          // cost is roughly 1/10 of the full features — drops the
+          // peak from ~1 GB to ~100 MB on the agricultural-parcels
+          // layer, well within mobile-tab budgets.
+          const props: Array<Record<string, unknown>> = [];
+          await parseStream<Record<string, unknown>>({
+            blob: cached.blob,
+            isGz: cached.isGz,
+            path: "$.features.*.properties",
+            onValue: (p) => props.push(p),
+            isCancelled: () => cancelled,
+          });
+          if (cancelled) return;
+          setFilterIndex(props);
+        }
+        setParsing(false);
+        setDownloadProgress(null);
       } catch (e) {
-        if (!cancelled) setLoadError(String((e as Error)?.message ?? e));
+        if (cancelled) return;
+        const msg = (e as Error)?.message ?? String(e);
+        if (msg !== "cancelled") setLoadError(msg);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [geojsonDownloadUrl, userOptedIn, isSmallScreen]);
+    // fc intentionally excluded — including it would re-trigger the
+    // fetch immediately after we set it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geojsonDownloadUrl, mobileChoice]);
 
-  // The full set of feature properties → distinct value counts. Doesn't
-  // change when the user toggles filters — the chip list itself stays
-  // stable; only the visible-feature counter and checkbox states move.
-  const fieldCounts = useMemo(
-    () =>
-      fc
-        ? discoverCategoricalFields(fc.features, {
-            blocklist: FILTER_BLOCKLIST,
-          })
-        : {},
-    [fc],
-  );
+  /**
+   * Pass 2 for "filter-first" mode: re-stream the cached body and
+   * keep only features whose properties pass the user's filter.
+   * Called on the "Apply filters" button click. Zero network because
+   * we read from the cached Blob.
+   */
+  const applyFiltersAndLoad = async () => {
+    const cached = cachedBlobRef.current;
+    if (!cached) return;
+    setPass2Loading(true);
+    setLoadError(null);
+    try {
+      const filterEntries = Object.entries(filters).filter(
+        ([, s]) => s.size > 0,
+      );
+      const predicate = (
+        props: Record<string, unknown> | null | undefined,
+      ): boolean => {
+        if (filterEntries.length === 0) return true;
+        const p = props || {};
+        for (const [field, allowed] of filterEntries) {
+          const raw = p[field];
+          const v = typeof raw === "string" ? raw.trim() : "";
+          if (!allowed.has(v)) return false;
+        }
+        return true;
+      };
+      const features: MinimalFeature[] = [];
+      await parseStream<MinimalFeature>({
+        blob: cached.blob,
+        isGz: cached.isGz,
+        path: "$.features.*",
+        onValue: (f) => {
+          const p = (f.properties || null) as Record<string, unknown> | null;
+          if (predicate(p)) features.push(f);
+        },
+        isCancelled: () => false,
+      });
+      setFc({ type: "FeatureCollection", features });
+    } catch (e) {
+      setLoadError(String((e as Error)?.message ?? e));
+    } finally {
+      setPass2Loading(false);
+    }
+  };
+
+  /**
+   * Switch back to the gate (mobile only). Resets pass 1 state so the
+   * user can re-choose between "load all" and "filter first".
+   */
+  const resetToGate = () => {
+    cachedBlobRef.current = null;
+    setFc(null);
+    setFilterIndex(null);
+    setDownloadProgress(null);
+    setParsing(false);
+    setLoadError(null);
+    setMobileChoice(null);
+  };
+
+  // The full set of feature properties → distinct value counts.
+  // Drives the sidebar's checklist.
+  //
+  // Source of truth depends on the mode:
+  //   - "filter-first" before pass 2: we only have properties (no
+  //     geometry), so we shim them into MinimalFeature shells.
+  //   - "all" or "filter-first" after pass 2: read from fc.features
+  //     so the counts reflect the rendered set.
+  const fieldCounts = useMemo(() => {
+    if (mobileChoice === "filter-first" && !fc && filterIndex) {
+      const shells = filterIndex.map((p) => ({
+        type: "Feature" as const,
+        properties: p,
+      }));
+      return discoverCategoricalFields(shells, { blocklist: FILTER_BLOCKLIST });
+    }
+    return fc
+      ? discoverCategoricalFields(fc.features, { blocklist: FILTER_BLOCKLIST })
+      : {};
+  }, [fc, filterIndex, mobileChoice]);
 
   const filteredFeatures = useMemo(() => {
     if (!fc) return [];
     return applyFilters(fc.features, filters);
   }, [fc, filters]);
+
+  // In "filter-first" mode, before the user has hit "apply", we still
+  // want to show them how many polygons their current selection
+  // would match — so they don't tap "load filtered" expecting 20 K
+  // and get 200 K. Computed from the lightweight property index.
+  const filterFirstMatchCount = useMemo(() => {
+    if (mobileChoice !== "filter-first" || !filterIndex || fc) return 0;
+    const shells = filterIndex.map((p) => ({
+      type: "Feature" as const,
+      properties: p,
+    }));
+    return applyFilters(shells, filters).length;
+  }, [filterIndex, filters, fc, mobileChoice]);
 
   // The serialized filter state drives the GeoJSON component's `key`:
   // changing the key forces Leaflet to drop the old layer and add a
@@ -660,7 +704,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               {geojsonDownloadUrl}
             </a>
           </div>
-        ) : !userOptedIn ? (
+        ) : mobileChoice === null ? (
           <div
             role="status"
             style={{
@@ -678,23 +722,76 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             <div style={{ fontWeight: 500, color: "var(--text)" }}>
               {t("map.mobile_gate_title")}
             </div>
-            <div style={{ fontSize: "0.85rem", maxWidth: 280 }}>
+            <div style={{ fontSize: "0.85rem", maxWidth: 320 }}>
               {t("map.mobile_gate_body")}
             </div>
-            <button
-              type="button"
-              onClick={() => setUserOptedIn(true)}
-              className="btn-primary"
+            <div
               style={{
-                padding: "0.4rem 1rem",
-                fontSize: "0.9rem",
-                marginTop: "0.25rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+                width: "100%",
+                maxWidth: 280,
+                marginTop: "0.5rem",
               }}
             >
-              {t("map.mobile_gate_button")}
-            </button>
+              {/* "Filter first" is the recommended path on mobile, so
+                  it gets the primary button styling. */}
+              <button
+                type="button"
+                onClick={() => setMobileChoice("filter-first")}
+                className="btn-primary"
+                style={{ padding: "0.5rem 1rem", fontSize: "0.9rem" }}
+              >
+                {t("map.mobile_gate_button_filter")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileChoice("all")}
+                style={{
+                  padding: "0.45rem 1rem",
+                  fontSize: "0.85rem",
+                  background: "none",
+                  border: "1px solid var(--border, #cbd5e1)",
+                  color: "var(--text-muted)",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                {t("map.mobile_gate_button_all")}
+              </button>
+            </div>
           </div>
-        ) : !fc ? (
+        ) : mobileChoice === "filter-first" && filterIndex && !fc && !pass2Loading ? (
+          // Pass 1 done, awaiting user's filter pick + apply.
+          <div
+            role="status"
+            style={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.75rem",
+              color: "var(--text-muted)",
+              padding: "1rem",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontWeight: 500, color: "var(--text)" }}>
+              {t("map.filters_title")}
+            </div>
+            <div style={{ fontSize: "0.85rem", maxWidth: 320 }}>
+              {t("map.filter_first_hint")}
+            </div>
+            <div style={{ fontSize: "0.8rem" }}>
+              {t("map.estimating_filter_match", {
+                visible: filterFirstMatchCount.toLocaleString(),
+                total: filterIndex.length.toLocaleString(),
+              })}
+            </div>
+          </div>
+        ) : !fc || pass2Loading ? (
           <div
             role="status"
             style={{
@@ -710,15 +807,25 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             }}
           >
             <div style={{ fontWeight: 500 }}>
-              {parsing
-                ? t("map.parsing")
+              {pass2Loading
+                ? t("map.filter_loading_progress")
+                : parsing
+                ? mobileChoice === "filter-first"
+                  ? t("map.discovering_filters", {
+                      pct: 100,
+                    })
+                  : t("map.parsing")
                 : downloadProgress !== null
-                ? t("map.downloading", {
-                    pct: Math.round(downloadProgress * 100),
-                  })
+                ? mobileChoice === "filter-first"
+                  ? t("map.discovering_filters", {
+                      pct: Math.round(downloadProgress * 100),
+                    })
+                  : t("map.downloading", {
+                      pct: Math.round(downloadProgress * 100),
+                    })
                 : t("common.loading")}
             </div>
-            {downloadProgress !== null && !parsing && (
+            {downloadProgress !== null && !parsing && !pass2Loading && (
               <div
                 aria-hidden
                 style={{
@@ -831,24 +938,67 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           </button>
         </div>
         <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
-          {t("map.visible_count", { visible: visibleCount, total: totalCount })}
+          {mobileChoice === "filter-first" && !fc && filterIndex
+            ? t("map.estimating_filter_match", {
+                visible: filterFirstMatchCount.toLocaleString(),
+                total: filterIndex.length.toLocaleString(),
+              })
+            : t("map.visible_count", {
+                visible: visibleCount,
+                total: totalCount,
+              })}
         </div>
-        {truncatedTo !== null && (
-          <div
-            role="note"
+
+        {/* "Apply filters and load" — only shown in filter-first mode
+            before pass 2 has run. Streams from cache, applies the
+            predicate, renders the matching subset. No cap. */}
+        {mobileChoice === "filter-first" && filterIndex && !fc && (
+          <button
+            type="button"
+            onClick={applyFiltersAndLoad}
+            disabled={pass2Loading}
+            className="btn-primary"
             style={{
-              fontSize: "0.75rem",
-              color: "#92400e",
-              background: "#fef3c7",
-              border: "1px solid #fcd34d",
-              borderRadius: 4,
-              padding: "0.35rem 0.5rem",
+              width: "100%",
+              padding: "0.5rem 0.75rem",
+              fontSize: "0.85rem",
               marginBottom: "0.5rem",
-              lineHeight: 1.35,
+              cursor: pass2Loading ? "not-allowed" : "pointer",
+              opacity: pass2Loading ? 0.6 : 1,
             }}
           >
-            {t("map.truncated_note", { n: truncatedTo.toLocaleString() })}
-          </div>
+            {filterFirstMatchCount === filterIndex.length
+              ? t("map.apply_filter_and_load_all", {
+                  total: filterIndex.length.toLocaleString(),
+                })
+              : t("map.apply_filter_and_load", {
+                  n: filterFirstMatchCount.toLocaleString(),
+                })}
+          </button>
+        )}
+
+        {/* "Change choice" — let the user back out of their mode pick
+            on mobile (e.g. they hit "load all", realised the layer is
+            huge, want to switch to filter-first). Desktop hides this
+            since there's no gate to return to. */}
+        {isSmallScreen && mobileChoice !== null && (
+          <button
+            type="button"
+            onClick={resetToGate}
+            style={{
+              width: "100%",
+              padding: "0.3rem 0.5rem",
+              fontSize: "0.7rem",
+              background: "none",
+              border: "1px dashed var(--border, #cbd5e1)",
+              color: "var(--text-muted)",
+              borderRadius: 4,
+              cursor: "pointer",
+              marginBottom: "0.5rem",
+            }}
+          >
+            {t("map.back_to_filter_choice")}
+          </button>
         )}
 
         {/* Display controls — collapsed by default so the filter list
