@@ -406,6 +406,31 @@ class ODataClient:
             payload["calculate_record_count"] = True
         return await self._post("datastore_upsert", payload, timeout=DATASTORE_TIMEOUT)
 
+    class AutopusherRaceDetected(Exception):
+        """Raised from _push_batch_with_retry when datastore_create's 409
+        unambiguously says CKAN's autopusher created the schema between
+        our probe and our create. Caller (push_csv_to_datastore) catches
+        this, re-probes, and switches the entire push to upsert+remap
+        mode — instead of burning the remaining create retries on the
+        same losing race."""
+
+    @staticmethod
+    def _is_autopusher_race(err: Exception) -> bool:
+        """409 'Supplied field <X> not present or in wrong order' is the
+        autopusher signature: a schema already exists with normalised
+        column names and rejects our original Hebrew/quoted names.
+
+        Match both English ('not present' / 'wrong order') and the
+        bracket form CKAN sometimes returns. Conservatively narrow: a
+        bare 409 isn't enough — we only want to re-route when CKAN is
+        explicitly telling us the schema is wrong."""
+        s = str(err)
+        if "409" not in s:
+            return False
+        if "Supplied field" not in s:
+            return False
+        return ("not present" in s) or ("wrong order" in s)
+
     async def _push_batch_with_retry(
         self,
         resource_id: str,
@@ -498,6 +523,21 @@ class ODataClient:
                 return
             except Exception as e:
                 last_err = e
+                # Autopusher race: CKAN already has a schema with
+                # normalised column names and rejects our originals
+                # ('Supplied field "סוג" not present or in wrong order').
+                # Retrying datastore_create cannot win this — every
+                # retry sees the same schema and fails the same way.
+                # Raise a typed exception so push_csv_to_datastore can
+                # re-probe and switch the whole push to upsert + remap.
+                if create and self._is_autopusher_race(e):
+                    logger.warning(
+                        "Datastore batch %d hit autopusher-race 409 on "
+                        "create — bailing for caller to re-probe and "
+                        "switch to upsert (resource %s)",
+                        batch_num, resource_id,
+                    )
+                    raise self.AutopusherRaceDetected(str(e)) from e
                 # On the first type-validation 409 we re-issue with every
                 # column declared text. Only useful on create batches —
                 # on upsert the schema is already fixed, so the same row
@@ -638,21 +678,70 @@ class ODataClient:
         if actual_fields is None:
             # No datastore yet — create it ourselves.
             logger.info("No autopusher schema for %s; running datastore_create", resource_id)
-            await self._push_batch_with_retry(
-                resource_id=resource_id,
-                fields=fields,
-                records_batch=batches[0],
-                create=True,
-                batch_num=1,
-                is_last=(total_batches == 1),
-            )
-            start_batch = 2
-            # Re-probe in case datastore_create renamed columns.
+            race_recovered = False
             try:
-                info = await self.datastore_info(resource_id)
-                actual_fields = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
-            except Exception:
-                actual_fields = expected_fields
+                await self._push_batch_with_retry(
+                    resource_id=resource_id,
+                    fields=fields,
+                    records_batch=batches[0],
+                    create=True,
+                    batch_num=1,
+                    is_last=(total_batches == 1),
+                )
+            except self.AutopusherRaceDetected as race_err:
+                # Autopusher committed its schema between our probe and
+                # our create. Re-probe with an extended budget (autopusher
+                # often takes 15-45s on big CSVs after the file resource
+                # is registered) and switch the entire push to upsert
+                # mode. start_batch reset to 1 because the failed create
+                # didn't actually push any rows.
+                logger.warning(
+                    "Autopusher race on %s — re-probing for committed schema "
+                    "and switching to upsert: %s",
+                    resource_id, race_err,
+                )
+                actual_fields, autoloaded_rows = None, 0
+                for _ in range(15):  # ~45s total at 3s intervals
+                    await asyncio.sleep(3)
+                    try:
+                        info = await self.datastore_info(resource_id)
+                    except Exception:
+                        info = None
+                    if info:
+                        fs = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
+                        if fs:
+                            actual_fields = fs
+                            autoloaded_rows = int(info.get("total", 0) or 0)
+                            break
+                if actual_fields is None:
+                    # CKAN told us the schema exists but datastore_info
+                    # can't see it — give up; surface the original error.
+                    raise RuntimeError(
+                        f"Autopusher race on {resource_id}: "
+                        f"datastore_create rejected our schema but "
+                        f"datastore_info still reports no schema. "
+                        f"Original error: {race_err}"
+                    ) from race_err
+                # If autopusher already populated all rows we'd be
+                # appending duplicates — bail like the early-exit
+                # at the top of this function does.
+                if autoloaded_rows >= len(records):
+                    logger.info(
+                        "Autopusher fully populated %s post-race "
+                        "(%d rows ≥ %d uploaded); skipping our push",
+                        resource_id, autoloaded_rows, len(records),
+                    )
+                    return resource
+                start_batch = 1
+                race_recovered = True
+            if not race_recovered:
+                start_batch = 2
+                # Re-probe in case datastore_create renamed columns.
+                try:
+                    info = await self.datastore_info(resource_id)
+                    actual_fields = [f["id"] for f in info.get("fields", []) if f["id"] != "_id"]
+                except Exception:
+                    actual_fields = expected_fields
         else:
             logger.info(
                 "Autopusher provided partial schema for %s "
