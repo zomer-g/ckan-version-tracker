@@ -258,6 +258,15 @@
     "parsing": "מעבד את הנתונים...",
     "load_error": "טעינת הנתונים נכשלה",
     "basemap_osm": "מפה רגילה",
-    "basemap_aerial": "תצ\"א"
+    "basemap_aerial": "תצ\"א",
+    "diagnostics_title": "אבחון כיסוי",
+    "diagnostics_summary": "מתוך {{total}} פוליגונים בשכבת המקור, {{matched}} נכנסו לאחת מהשכבות",
+    "diag_total": "סה\"כ במקור",
+    "diag_matched": "נכנסו לשכבה",
+    "diag_empty": "ללא ערך growthname",
+    "diag_unmatched": "ערך לא תאם לאף שכבה",
+    "diag_per_layer": "פירוט לפי שכבה",
+    "diag_top_unmatched": "{{n}} הערכים הנפוצים שלא נתפסו",
+    "diag_top_unmatched_hint": "כדי לכלול גם אותם, הוסף את המחרוזת המתאימה ל-growthnameMatches בקובץ frontend/src/config/growthLayers.ts"
   }
 }

@@ -258,6 +258,15 @@
     "parsing": "Processing data...",
     "load_error": "Failed to load data",
     "basemap_osm": "Map",
-    "basemap_aerial": "Aerial imagery"
+    "basemap_aerial": "Aerial imagery",
+    "diagnostics_title": "Coverage diagnostics",
+    "diagnostics_summary": "{{matched}} of {{total}} source polygons fell into a configured layer",
+    "diag_total": "Total in source",
+    "diag_matched": "Matched a layer",
+    "diag_empty": "Empty growthname",
+    "diag_unmatched": "Value didn't match any layer",
+    "diag_per_layer": "Per layer",
+    "diag_top_unmatched": "Top {{n}} unmatched values",
+    "diag_top_unmatched_hint": "To include them too, add the matching string to growthnameMatches in frontend/src/config/growthLayers.ts"
   }
 }

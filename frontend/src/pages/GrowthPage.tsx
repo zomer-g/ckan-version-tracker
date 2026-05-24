@@ -65,6 +65,22 @@ const MAP_HEIGHT = 600;
 
 type LayerFeatures = Record<string, MinimalFeature[]>;
 
+/**
+ * Diagnostics gathered during the single streaming pass. Surfaced
+ * in the collapsible "אבחון כיסוי" panel below the map so the user
+ * can see at a glance whether ``growthLayers.ts`` covers every
+ * variant that actually shows up in the data — and which strings to
+ * add to a layer's ``growthnameMatches`` if not.
+ */
+interface Diagnostics {
+  totalFeatures: number;
+  emptyGrowthname: number;
+  /** Map of distinct growthname value → polygon count, for values
+   *  that did NOT match any layer. Lets the panel show the top-N
+   *  most-frequent unmatched values for triage. */
+  unmatchedCounts: Map<string, number>;
+}
+
 export default function GrowthPage() {
   const { t, i18n } = useTranslation();
   const isHe = i18n.language === "he";
@@ -75,6 +91,8 @@ export default function GrowthPage() {
   const [layerFeatures, setLayerFeatures] = useState<LayerFeatures | null>(
     null,
   );
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Progress reporter so the loading placeholder shows something
   // useful instead of a silent spinner — the GeoJSON is ~50 MB
@@ -121,28 +139,43 @@ export default function GrowthPage() {
         await new Promise((r) => setTimeout(r, 0));
         if (cancelled) return;
 
-        // Initialise per-layer buckets.
+        // Initialise per-layer buckets + diagnostics counters.
         const buckets: LayerFeatures = {};
         for (const layer of GROWTH_LAYERS) buckets[layer.id] = [];
+        let totalFeatures = 0;
+        let emptyGrowthname = 0;
+        const unmatchedCounts = new Map<string, number>();
         await parseStream<MinimalFeature>({
           blob: cached.blob,
           isGz: cached.isGz,
           path: "$.features.*",
           onValue: (f) => {
+            totalFeatures += 1;
             const props = (f.properties || null) as
               | Record<string, unknown>
               | null;
+            // Try the configured layers first.
             for (const layer of GROWTH_LAYERS) {
               if (featureMatchesLayer(layer, props)) {
                 buckets[layer.id].push(f);
-                break; // each polygon belongs to at most one layer in v1
+                return;
               }
+            }
+            // Diagnostics path: classify why this feature didn't
+            // make it into any layer.
+            const raw = props?.growthname;
+            const v = typeof raw === "string" ? raw.trim() : "";
+            if (!v) {
+              emptyGrowthname += 1;
+            } else {
+              unmatchedCounts.set(v, (unmatchedCounts.get(v) ?? 0) + 1);
             }
           },
           isCancelled: () => cancelled,
         });
         if (cancelled) return;
         setLayerFeatures(buckets);
+        setDiagnostics({ totalFeatures, emptyGrowthname, unmatchedCounts });
         setParsing(false);
         setDownloadProgress(null);
       } catch (e) {
@@ -367,7 +400,186 @@ export default function GrowthPage() {
             </MapContainer>
           )}
         </div>
+
+        {/* Coverage-diagnostics panel. Collapsed by default — the
+            user opens it when they want to verify which polygons
+            went where, and which growthname values weren't matched
+            by any layer (i.e. candidates to add to growthLayers.ts). */}
+        {diagnostics && (
+          <div
+            className="card"
+            style={{
+              padding: "0.75rem 1rem",
+              fontSize: "0.85rem",
+              background: "var(--bg-muted, #f8fafc)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics((v) => !v)}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--text)",
+                fontWeight: 600,
+                padding: 0,
+                fontSize: "0.85rem",
+              }}
+              aria-expanded={showDiagnostics}
+            >
+              {showDiagnostics ? "▾ " : "▸ "}
+              {t("growth.diagnostics_title")}
+              <span
+                className="text-muted"
+                style={{ fontWeight: 400, marginInlineStart: "0.5rem" }}
+              >
+                ({t("growth.diagnostics_summary", {
+                  total: diagnostics.totalFeatures.toLocaleString(),
+                  matched: Object.values(layerCounts)
+                    .reduce((a, b) => a + b, 0)
+                    .toLocaleString(),
+                })})
+              </span>
+            </button>
+            {showDiagnostics && (
+              <DiagnosticsBody
+                t={t}
+                diagnostics={diagnostics}
+                layerCounts={layerCounts}
+              />
+            )}
+          </div>
+        )}
       </section>
+    </div>
+  );
+}
+
+function DiagnosticsBody(props: {
+  t: (k: string, opts?: Record<string, unknown>) => string;
+  diagnostics: Diagnostics;
+  layerCounts: Record<string, number>;
+}) {
+  const { t, diagnostics, layerCounts } = props;
+  const { i18n } = useTranslation();
+  const isHe = i18n.language === "he";
+
+  // Top-N most-frequent unmatched values. We cap at 25 so the panel
+  // stays readable; the long tail past that point is almost always
+  // single-polygon misspellings / one-offs that aren't worth a config
+  // entry.
+  const topUnmatched = useMemo(() => {
+    return Array.from(diagnostics.unmatchedCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 25);
+  }, [diagnostics]);
+
+  const totalMatched = Object.values(layerCounts).reduce((a, b) => a + b, 0);
+  const totalUnmatched = Array.from(diagnostics.unmatchedCounts.values()).reduce(
+    (a, b) => a + b,
+    0,
+  );
+
+  return (
+    <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      {/* Headline counters. Three numbers must add up to total. */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem" }}>
+        <DiagStat
+          label={t("growth.diag_total")}
+          value={diagnostics.totalFeatures.toLocaleString()}
+        />
+        <DiagStat
+          label={t("growth.diag_matched")}
+          value={totalMatched.toLocaleString()}
+        />
+        <DiagStat
+          label={t("growth.diag_empty")}
+          value={diagnostics.emptyGrowthname.toLocaleString()}
+        />
+        <DiagStat
+          label={t("growth.diag_unmatched")}
+          value={totalUnmatched.toLocaleString()}
+        />
+      </div>
+
+      {/* Per-layer breakdown. */}
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
+          {t("growth.diag_per_layer")}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem" }}>
+          {GROWTH_LAYERS.map((layer) => (
+            <span key={layer.id} style={{ fontSize: "0.85rem" }}>
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-block",
+                  width: 10,
+                  height: 10,
+                  background: layer.color,
+                  borderRadius: 2,
+                  marginInlineEnd: "0.35rem",
+                  verticalAlign: "middle",
+                }}
+              />
+              {isHe ? layer.labelHe : layer.labelEn}
+              {": "}
+              <strong>{(layerCounts[layer.id] ?? 0).toLocaleString()}</strong>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Top unmatched values — these are the candidates the user
+          would add to a layer's matchers to improve coverage. */}
+      {topUnmatched.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
+            {t("growth.diag_top_unmatched", { n: topUnmatched.length })}
+          </div>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.35rem" }}>
+            {t("growth.diag_top_unmatched_hint")}
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingInlineStart: "1.2rem",
+              columns: 2,
+              columnGap: "1.5rem",
+            }}
+          >
+            {topUnmatched.map(([value, count]) => (
+              <li
+                key={value}
+                style={{
+                  fontSize: "0.8rem",
+                  breakInside: "avoid",
+                  marginBottom: "0.15rem",
+                }}
+                title={value}
+              >
+                <span style={{ direction: "ltr", unicodeBidi: "isolate" }}>
+                  {value.length > 60 ? value.slice(0, 60) + "…" : value}
+                </span>
+                {" "}
+                <span className="text-muted">({count.toLocaleString()})</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiagStat(props: { label: string; value: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", textTransform: "uppercase" }}>
+        {props.label}
+      </div>
+      <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>{props.value}</div>
     </div>
   );
 }
