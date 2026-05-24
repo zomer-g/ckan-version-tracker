@@ -249,5 +249,15 @@
     "filter_loading_progress": "טוען פוליגונים תואמים...",
     "back_to_filter_choice": "שנה את הבחירה",
     "estimating_filter_match": "מציג {{visible}} פוליגונים מתוך {{total}} שעוברים את הסינון הנוכחי"
+  },
+  "growth": {
+    "title": "גידולים חקלאיים",
+    "subtitle": "תצוגה מסוננת של החלקות החקלאיות במדינת ישראל לפי סוג גידול",
+    "version_caption": "מבוסס על גרסה {{n}} (עודכן {{date}})",
+    "downloading": "מוריד את נתוני השכבה... {{pct}}%",
+    "parsing": "מעבד את הנתונים...",
+    "load_error": "טעינת הנתונים נכשלה",
+    "basemap_osm": "מפה רגילה",
+    "basemap_aerial": "תצ\"א"
   }
 }

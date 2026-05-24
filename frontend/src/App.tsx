@@ -1,6 +1,6 @@
 import { Routes, Route, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, lazy, Suspense } from "react";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
@@ -14,6 +14,9 @@ import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
 import TagDetailPage from "./pages/TagDetailPage";
+// Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
+// gzipped. Other pages should not pay that cost.
+const GrowthPage = lazy(() => import("./pages/GrowthPage"));
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -48,6 +51,14 @@ export default function App() {
           <Route path="/tags" element={<TagsPage />} />
           <Route path="/tags/:tagId" element={<TagDetailPage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route
+            path="/growth"
+            element={
+              <Suspense fallback={<div className="loading" role="status">{t("common.loading")}</div>}>
+                <GrowthPage />
+              </Suspense>
+            }
+          />
           <Route
             path="/admin"
             element={

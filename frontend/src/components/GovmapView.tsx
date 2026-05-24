@@ -19,110 +19,11 @@ import { useSearchParams } from "react-router-dom";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { JSONParser } from "@streamparser/json";
+import { downloadToBlob, parseStream } from "../utils/geoStream";
 
-/**
- * Download the GeoJSON response body into an in-memory Blob and
- * detect whether the bytes are gzip-compressed (magic 0x1F 0x8B).
- *
- * Why a Blob: in "filter-first" mode we parse the body twice — once
- * for properties only (to populate the filter sidebar) and once for
- * geometry of the user-selected subset. Caching the raw bytes means
- * the second pass costs zero network. Memory cost is the gzipped
- * size (e.g. the agricultural-parcels layer at ~50 MB), which is
- * far below the parsed-JS-object cost we used to incur (~1 GB).
- */
-async function downloadToBlob(args: {
-  url: string;
-  isCancelled: () => boolean;
-  onProgress: (frac: number) => void;
-}): Promise<{ blob: Blob; isGz: boolean }> {
-  const { url, isCancelled, onProgress } = args;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  if (!resp.body) throw new Error("Response has no body");
-  const totalRaw = resp.headers.get("content-length");
-  const total = totalRaw ? Number(totalRaw) : 0;
-  const reader = resp.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (isCancelled()) {
-      await reader.cancel().catch(() => {});
-      throw new Error("cancelled");
-    }
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      received += value.byteLength;
-      if (total > 0) onProgress(received / total);
-    }
-  }
-  const isGz =
-    chunks.length > 0 &&
-    chunks[0].length >= 2 &&
-    chunks[0][0] === 0x1f &&
-    chunks[0][1] === 0x8b;
-  return { blob: new Blob(chunks), isGz };
-}
-
-/**
- * Generic streaming JSON parser. Re-reads bytes from a cached Blob
- * (so we can parse the same body twice), pipes through gzip
- * decompression when needed, and emits values matching `path` via
- * the `onValue` callback.
- *
- * Typical paths:
- *   - "$.features.*"            → every Feature object (full, with geometry)
- *   - "$.features.*.properties" → only the properties subdoc (small, ~10x lighter)
- *
- * Memory: `onValue` is called once per match; we never hold the
- * whole parsed array internally. The caller chooses what to collect
- * (everything, properties only, filter-matching subset, etc.).
- */
-async function parseStream<T>(args: {
-  blob: Blob;
-  isGz: boolean;
-  path: string;
-  onValue: (v: T) => void;
-  isCancelled: () => boolean;
-}): Promise<void> {
-  const { blob, isGz, path, onValue, isCancelled } = args;
-  const baseStream = blob.stream();
-  const stream =
-    isGz && typeof DecompressionStream !== "undefined"
-      ? baseStream.pipeThrough(new DecompressionStream("gzip"))
-      : baseStream;
-  const parser = new JSONParser({ paths: [path], keepStack: false });
-  let parserError: Error | null = null;
-  parser.onValue = (info: { value?: unknown }) => {
-    if (info.value !== undefined) onValue(info.value as T);
-  };
-  parser.onError = (e: Error) => {
-    parserError = e;
-  };
-  const reader = stream.getReader();
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (isCancelled()) {
-      await reader.cancel().catch(() => {});
-      throw new Error("cancelled");
-    }
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      parser.write(value);
-      if (parserError) throw parserError;
-    }
-  }
-  try {
-    parser.end();
-  } catch {
-    // ignore
-  }
-}
+// Streaming primitives (`downloadToBlob`, `parseStream`) live in
+// utils/geoStream so GrowthPage can share them. See that module for
+// the design rationale.
 
 /** Reserved query-string keys this component may NOT use as filter
  *  fields. Today the dataset page itself doesn't read any URL params,

@@ -249,5 +249,15 @@
     "filter_loading_progress": "Loading matching polygons...",
     "back_to_filter_choice": "Change choice",
     "estimating_filter_match": "Showing {{visible}} of {{total}} polygons matching the current filter"
+  },
+  "growth": {
+    "title": "Agricultural Crops",
+    "subtitle": "Curated view of Israeli agricultural parcels by crop type",
+    "version_caption": "Based on version {{n}} (updated {{date}})",
+    "downloading": "Downloading layer data... {{pct}}%",
+    "parsing": "Processing data...",
+    "load_error": "Failed to load data",
+    "basemap_osm": "Map",
+    "basemap_aerial": "Aerial imagery"
   }
 }
