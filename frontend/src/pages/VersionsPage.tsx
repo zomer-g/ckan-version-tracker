@@ -141,13 +141,23 @@ export default function VersionsPage() {
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
               target="_blank"
               rel="noopener noreferrer"
+              // Promoted to a filled primary button — this is the
+              // canonical "see the actual files" CTA on the page and
+              // was previously hiding as a faint underline. The
+              // explanation card below the header now spells out
+              // exactly what the user will find on the other side.
               style={{
-                textDecoration: "none",
                 fontSize: "0.85rem",
-                color: "var(--primary)",
+                padding: "0.4rem 0.9rem",
+                background: "var(--primary, #0f766e)",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                textDecoration: "none",
+                fontWeight: 500,
               }}
             >
-              {t("tracked.view_on_odata")} &#8599;
+              {t("tracked.open_archive")} &#8599;
             </a>
           )}
           {dataset && (() => {
@@ -206,6 +216,20 @@ export default function VersionsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Archive explanation card. Visible only when the dataset has
+          an ODATA mirror (almost always, but defensive). Surfaces the
+          big "ארכיון הקבצים" CTA again — in case the user scrolled
+          past the header — and a per-source-type explanation of what
+          the user will find on the other side, so the ODATA page
+          stops being a confusing wall of resources. */}
+      {dataset?.odata_dataset_id && (
+        <ArchiveExplanation
+          dataset={dataset}
+          odataUrl={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
+          t={t}
+        />
+      )}
 
       {govmapGeojsonUrl && (
         <Suspense
@@ -343,7 +367,7 @@ export default function VersionsPage() {
                         className="text-sm"
                         style={{ color: "var(--primary)", textDecoration: "none" }}
                       >
-                        {t("versions.view_on_odata")} &#8599;
+                        {t("versions.open_version_archive")} &#8599;
                       </a>
                     </div>
                   );
@@ -354,5 +378,111 @@ export default function VersionsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Per-source-type "what's in the archive" card.
+ *
+ * Picks the explanation paragraph based on:
+ *   - GovMap layers → GeoJSON + matching CSV
+ *   - Scraper sources (gov.il / IDF) → ZIP of documents + CSV index
+ *   - CKAN data.gov.il datasets → original files with their original names
+ *   - Anything else → a generic explanation
+ *
+ * The IDF detection mirrors sourceBadgeFor's logic (ckan_id starts
+ * with "idf-scraper-" or organization is one of the IDF synonyms) so
+ * the IDF copy fires in the same cases the IDF badge does.
+ */
+function ArchiveExplanation(props: {
+  dataset: TrackedDataset;
+  odataUrl: string;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  const { dataset, odataUrl, t } = props;
+  const isIdf =
+    (dataset.ckan_id || "").startsWith("idf-scraper-") ||
+    ["idf.il", "israel_defense_forces", "idf"].includes(
+      dataset.organization || "",
+    );
+  let explainKey = "versions.archive_explain_default";
+  if (dataset.source_type === "govmap") {
+    explainKey = "versions.archive_explain_govmap";
+  } else if (dataset.source_type === "scraper") {
+    explainKey = isIdf
+      ? "versions.archive_explain_idf"
+      : "versions.archive_explain_scraper";
+  } else if (
+    dataset.source_type === "ckan" ||
+    dataset.source_type === undefined ||
+    dataset.source_type === ""
+  ) {
+    explainKey = "versions.archive_explain_ckan";
+  }
+  return (
+    <section
+      className="card"
+      aria-label={t("versions.archive_section_title")}
+      style={{
+        marginBottom: "1.5rem",
+        padding: "1rem 1.25rem",
+        background: "var(--bg-muted, #f8fafc)",
+        borderInlineStart: "3px solid var(--primary, #0f766e)",
+      }}
+    >
+      <div
+        className="flex-between"
+        style={{
+          alignItems: "flex-start",
+          gap: "1rem",
+          flexWrap: "wrap",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>
+          {t("versions.archive_section_title")}
+        </h2>
+        <a
+          href={odataUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          // Big visible CTA — repeats the header button for users who
+          // landed on this card directly (anchor link, scroll position).
+          style={{
+            fontSize: "0.9rem",
+            padding: "0.5rem 1rem",
+            background: "var(--primary, #0f766e)",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            textDecoration: "none",
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {t("tracked.open_archive")} &#8599;
+        </a>
+      </div>
+      <p
+        style={{
+          margin: "0 0 0.6rem 0",
+          fontSize: "0.9rem",
+          lineHeight: 1.5,
+          color: "var(--text)",
+        }}
+      >
+        {t("versions.archive_section_intro")}
+      </p>
+      <p
+        style={{
+          margin: 0,
+          fontSize: "0.9rem",
+          lineHeight: 1.5,
+          color: "var(--text-muted)",
+        }}
+      >
+        {t(explainKey)}
+      </p>
+    </section>
   );
 }

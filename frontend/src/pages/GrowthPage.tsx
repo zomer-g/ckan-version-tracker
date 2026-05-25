@@ -33,6 +33,7 @@ import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { downloadToBlob, parseStream } from "../utils/geoStream";
+import { simplifyFeatureCollection } from "../utils/geoSimplify";
 import {
   DATASET_ID,
   GROWTH_LAYERS,
@@ -174,6 +175,18 @@ export default function GrowthPage() {
           isCancelled: () => cancelled,
         });
         if (cancelled) return;
+        // Topology-preserving simplification per layer. Each layer
+        // bucket is independent so shared borders between citrus and
+        // avocado don't matter; what matters is that adjacent citrus
+        // parcels (or adjacent avocado parcels) keep their shared
+        // edges after simplification. The helper skips itself for
+        // huge layers — see SIMPLIFY_MAX_FEATURES in geoSimplify.
+        for (const id of Object.keys(buckets)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const fc = { type: "FeatureCollection", features: buckets[id] as any };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          buckets[id] = (simplifyFeatureCollection(fc as any).features as unknown) as MinimalFeature[];
+        }
         setLayerFeatures(buckets);
         setDiagnostics({ totalFeatures, emptyGrowthname, unmatchedCounts });
         setParsing(false);

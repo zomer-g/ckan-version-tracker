@@ -632,10 +632,23 @@ export default function HomePage() {
                         href={`${ODATA_BASE}/dataset/${ds.odata_dataset_id}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
+                        // Promoted from "small underlined ODATA text"
+                        // to a visible outlined button so casual users
+                        // notice the archived files exist. Outlined
+                        // (not filled) so it stays clearly secondary
+                        // to the primary "גרסאות" button next to it.
+                        style={{
+                          fontSize: "0.85rem",
+                          padding: "0.35rem 0.85rem",
+                          background: "white",
+                          color: "var(--primary, #0f766e)",
+                          border: "1px solid var(--primary, #0f766e)",
+                          borderRadius: 4,
+                          textDecoration: "none",
+                          fontWeight: 500,
+                        }}
                       >
-                        ODATA &#8599;
+                        {t("tracked.open_archive_short")} &#8599;
                       </a>
                     )}
 

@@ -20,6 +20,7 @@ import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { downloadToBlob, parseStream } from "../utils/geoStream";
+import { simplifyFeatureCollection } from "../utils/geoSimplify";
 
 // Streaming primitives (`downloadToBlob`, `parseStream`) live in
 // utils/geoStream so GrowthPage can share them. See that module for
@@ -300,7 +301,16 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             isCancelled: () => cancelled,
           });
           if (cancelled) return;
-          setFc({ type: "FeatureCollection", features });
+          // Topology-preserving simplification for layers up to
+          // ~30K features. Shared borders between polygons stay
+          // shared (no "rivers" of background colour); vertex count
+          // drops to roughly half. Cuts canvas-rendering work on
+          // weak devices significantly. The helper bypasses itself
+          // for collections that are too big to topologise on the
+          // client, so this is safe to always call.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const simplified = simplifyFeatureCollection({ type: "FeatureCollection", features: features as any });
+          setFc(simplified as unknown as FeatureCollection);
         } else {
           // "filter-first": parse only the properties subdoc. Memory
           // cost is roughly 1/10 of the full features — drops the
@@ -371,7 +381,10 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         },
         isCancelled: () => false,
       });
-      setFc({ type: "FeatureCollection", features });
+      // Simplify before render — same reasoning as the "all" branch.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const simplified = simplifyFeatureCollection({ type: "FeatureCollection", features: features as any });
+      setFc(simplified as unknown as FeatureCollection);
     } catch (e) {
       setLoadError(String((e as Error)?.message ?? e));
     } finally {
