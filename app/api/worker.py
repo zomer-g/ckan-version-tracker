@@ -1024,11 +1024,100 @@ async def upload_csv(
             raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
 
     if not upload_file:
-        # Too big for CKAN file upload, or upload returned 413 above.
-        # Create a resource pointing at CKAN's built-in datastore dump
-        # endpoint — that way the UI Download button produces a CSV
-        # streamed from the datastore on the fly, with no file stored
-        # separately on the server.
+        # The plain CSV blew past CKAN's file-upload limit. Before
+        # falling back to a datastore-only resource (which leaves
+        # users with a dead Download button if the BackgroundTask
+        # datastore push fails or is killed by a dyno restart) try
+        # one more thing: gzip the CSV and upload the compressed
+        # blob. CSVs with repetitive content (HTML descriptions,
+        # repeated codes, etc.) typically gzip 5-10x — a 239 MB
+        # plain CSV becomes 25-50 MB gzipped, comfortably under the
+        # 90 MB ceiling. The user gets an honest downloadable file
+        # they can decompress locally; the datastore push still
+        # happens in the background but is no longer the only path
+        # to the data.
+        gzipped_path = csv_path + ".gz"
+        gz_size = 0
+        try:
+            import gzip as _gzip
+            with open(csv_path, "rb") as plain, _gzip.open(
+                gzipped_path, "wb", compresslevel=6
+            ) as gz_out:
+                shutil.copyfileobj(plain, gz_out, length=256 * 1024)
+            gz_size = os.path.getsize(gzipped_path)
+            logger.info(
+                "Pre-upload gzip: %d MB CSV → %d MB .csv.gz (%.1fx)",
+                csv_size // 1024 // 1024,
+                gz_size // 1024 // 1024,
+                csv_size / max(gz_size, 1),
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not gzip CSV (%s) — falling through to datastore-only path",
+                e,
+            )
+            try:
+                os.remove(gzipped_path)
+            except OSError:
+                pass
+            gz_size = csv_size + 1  # force the "doesn't fit" branch below
+
+        if gz_size <= FILE_UPLOAD_LIMIT:
+            try:
+                gz_filename = filename + ".gz"
+                csv_resource = await odata_client.upload_resource(
+                    dataset_id=ds.odata_dataset_id,
+                    filename=gz_filename,
+                    file_path=gzipped_path,
+                    name=f"{ts} v{version_number} - {safe_name}",
+                    description=(
+                        f"Version {version_number} ({ts}): {resource_name} "
+                        f"({row_count} rows). The plain CSV ({csv_size // 1024 // 1024} MB) "
+                        f"exceeded ODATA's direct-upload limit, so it is "
+                        f"served as gzip-compressed CSV "
+                        f"({gz_size // 1024 // 1024} MB). Decompress with "
+                        f"`gunzip` (Linux/macOS) or 7-Zip (Windows) after "
+                        f"download. The same data is also queryable via the "
+                        f"datastore API once the background ingest completes."
+                    ),
+                    resource_format="CSV",
+                )
+                resource_id = csv_resource["id"]
+                upload_file = True  # so we don't enter the datastore-only branch
+                upload_mode = "file-gz+datastore"
+                logger.info(
+                    "Uploaded gzipped CSV (%d MB → %d MB) → resource %s",
+                    csv_size // 1024 // 1024,
+                    gz_size // 1024 // 1024,
+                    resource_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Gzipped CSV upload failed (%s) — falling back to datastore-only",
+                    e,
+                )
+            finally:
+                try:
+                    os.remove(gzipped_path)
+                except OSError:
+                    pass
+        else:
+            # Gzip didn't get us under the limit (extremely compressible
+            # data would have, so this branch is rare). Drop the gz on
+            # disk before continuing.
+            try:
+                os.remove(gzipped_path)
+            except OSError:
+                pass
+
+    if not upload_file:
+        # Even gzip didn't fit. Last-resort: create a resource pointing
+        # at CKAN's built-in datastore dump endpoint. The Download
+        # button works ONLY if the background datastore push below
+        # succeeds — if the worker is recycled mid-push (Render restart,
+        # OOM, idle scale-down), the resource will be left orphaned
+        # with no downloadable content. We can't avoid that without a
+        # durable job queue, so this branch is a known fragile path.
         try:
             csv_resource = await odata_client.create_resource(
                 dataset_id=ds.odata_dataset_id,
