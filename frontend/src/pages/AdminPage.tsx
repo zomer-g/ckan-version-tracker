@@ -76,15 +76,16 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "requests" | "datasets" | "orgs" | "tags";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "orgs" | "tags";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
-  { id: "queue",    label: "תור גירוד",       emoji: "⏳" },
-  { id: "schedule", label: "תזמון משימות",     emoji: "📅" },
-  { id: "requests", label: "בקשות ממתינות",    emoji: "📥" },
-  { id: "datasets", label: "מאגרים פעילים",   emoji: "📂" },
-  { id: "orgs",     label: "ארגונים",          emoji: "🏛" },
-  { id: "tags",     label: "תגיות",            emoji: "🏷" },
+  { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
+  { id: "schedule",  label: "תזמון משימות",      emoji: "📅" },
+  { id: "push_jobs", label: "תור Datastore",    emoji: "🛢" },
+  { id: "requests",  label: "בקשות ממתינות",     emoji: "📥" },
+  { id: "datasets",  label: "מאגרים פעילים",    emoji: "📂" },
+  { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
+  { id: "tags",      label: "תגיות",             emoji: "🏷" },
 ];
 
 function readTabFromHash(): AdminTab {
@@ -1070,6 +1071,8 @@ export default function AdminPage() {
       </section>
       </>)}
 
+      {tab === "push_jobs" && <DatastorePushJobsPanel />}
+
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}
 
@@ -1750,3 +1753,237 @@ const tdStyle: React.CSSProperties = {
   overflowWrap: "anywhere",
   wordBreak: "break-word",
 };
+
+/**
+ * Admin panel for the durable datastore-push queue.
+ *
+ * Lives at /admin#push_jobs. Replaces a frequent prod head-scratcher
+ * ("dataset shows N rows but Download returns 404") with a clear
+ * "this push failed, here's the error, click Retry" surface. Refresh
+ * is manual + automatic on a 15s interval so running pushes show
+ * progressing row counts without the admin reloading.
+ */
+function DatastorePushJobsPanel() {
+  const [jobs, setJobs] = useState<import("../api/client").DatastorePushJob[]>([]);
+  const [filter, setFilter] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const rows = await adminApi.datastoreJobs(filter || undefined);
+      setJobs(rows);
+    } catch (e) {
+      setErrorMsg((e as Error)?.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+    // load is stable enough; we recreate it via filter dep
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
+
+  const handleRetry = async (id: string) => {
+    setRetrying((s) => new Set(s).add(id));
+    try {
+      await adminApi.retryDatastoreJob(id);
+      await load();
+    } catch (e) {
+      alert("ניסיון חוזר נכשל: " + ((e as Error)?.message ?? String(e)));
+    } finally {
+      setRetrying((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+    }
+  };
+
+  // Compact status summary at the top — one number per state. Useful
+  // for spotting trends without reading the whole table.
+  const counts: Record<string, number> = { pending: 0, running: 0, success: 0, failed: 0 };
+  for (const j of jobs) counts[j.status] = (counts[j.status] ?? 0) + 1;
+
+  return (
+    <section className="card mb-2">
+      <div
+        className="page-header flex-between"
+        style={{ flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}
+      >
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>
+          תור Datastore Push
+          <span
+            className="text-muted"
+            style={{ fontSize: "0.75rem", fontWeight: 400, marginInlineStart: "0.5rem" }}
+          >
+            (queue עמיד שמחליף את FastAPI BackgroundTasks)
+          </span>
+        </h2>
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+          {(["", "pending", "running", "success", "failed"] as const).map((f) => (
+            <button
+              key={f || "all"}
+              onClick={() => setFilter(f)}
+              className={filter === f ? "btn-primary" : "btn-secondary"}
+              style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+            >
+              {f === "" ? "הכל" : f}
+              {f && counts[f] !== undefined && (
+                <span style={{ marginInlineStart: "0.3rem", opacity: 0.7 }}>
+                  ({counts[f]})
+                </span>
+              )}
+            </button>
+          ))}
+          <button
+            onClick={load}
+            className="btn-secondary"
+            style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+          >
+            רענן ↻
+          </button>
+        </div>
+      </div>
+
+      {/* Inline status counters — visible even when no filter is active */}
+      <div
+        style={{
+          display: "flex",
+          gap: "1.5rem",
+          padding: "0.25rem 0.6rem 0.75rem",
+          fontSize: "0.8rem",
+          flexWrap: "wrap",
+          color: "var(--text-muted)",
+        }}
+      >
+        <span>⏳ ממתינות: <strong>{counts.pending}</strong></span>
+        <span>▶ רצות עכשיו: <strong>{counts.running}</strong></span>
+        <span style={{ color: "#15803d" }}>✓ הצליחו: <strong>{counts.success}</strong></span>
+        <span style={{ color: "#991b1b" }}>✗ נכשלו: <strong>{counts.failed}</strong></span>
+      </div>
+
+      {errorMsg && (
+        <div role="alert" style={{ color: "#991b1b", padding: "0.5rem 0.6rem" }}>
+          {errorMsg}
+        </div>
+      )}
+
+      {loading && jobs.length === 0 ? (
+        <div className="text-muted" style={{ fontSize: "0.85rem", padding: "0.75rem" }}>
+          טוען...
+        </div>
+      ) : jobs.length === 0 ? (
+        <div className="empty-state" style={{ padding: "1rem" }}>
+          אין משימות בתור.
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <thead>
+              <tr style={{ background: "#f9fafb", textAlign: "right" }}>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>סטטוס</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>resource_id</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שורות</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>ניסיונות</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נוצר</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>heartbeat</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שגיאה</th>
+                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((j) => {
+                const bg =
+                  j.status === "failed"
+                    ? "#fef2f2"
+                    : j.status === "running"
+                    ? "#fffbeb"
+                    : j.status === "success"
+                    ? "#f0fdf4"
+                    : undefined;
+                const fmtRows =
+                  j.total_rows != null
+                    ? `${j.rows_pushed.toLocaleString()} / ${j.total_rows.toLocaleString()}`
+                    : j.rows_pushed.toLocaleString();
+                return (
+                  <tr key={j.id} style={{ borderBottom: "1px solid #f0f0f0", background: bg }}>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          padding: "0.1rem 0.4rem",
+                          borderRadius: 999,
+                          background:
+                            j.status === "failed" ? "#fecaca"
+                            : j.status === "running" ? "#fde68a"
+                            : j.status === "success" ? "#bbf7d0"
+                            : "#e5e7eb",
+                          color:
+                            j.status === "failed" ? "#991b1b"
+                            : j.status === "running" ? "#92400e"
+                            : j.status === "success" ? "#166534"
+                            : "#374151",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {j.status}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>
+                      {j.tracked_dataset_id ? (
+                        <Link to={`/versions/${j.tracked_dataset_id}`}>
+                          {j.tracked_dataset_title || j.tracked_dataset_id}
+                        </Link>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: "0.75rem" }}>
+                      {j.resource_id.slice(0, 8)}…
+                    </td>
+                    <td style={tdStyle}>{fmtRows}</td>
+                    <td style={tdStyle}>{j.attempts}</td>
+                    <td style={{ ...tdStyle, whiteSpace: "nowrap" }} className="text-muted">
+                      {formatRelative(j.created_at)}
+                    </td>
+                    <td style={{ ...tdStyle, whiteSpace: "nowrap" }} className="text-muted">
+                      {formatRelative(j.updated_at)}
+                    </td>
+                    <td style={{ ...tdStyle, fontSize: "0.75rem", color: "#991b1b", maxWidth: 360 }}>
+                      {j.error || ""}
+                    </td>
+                    <td style={tdStyle}>
+                      {(j.status === "failed" || j.status === "success") && (
+                        <button
+                          onClick={() => handleRetry(j.id)}
+                          disabled={retrying.has(j.id)}
+                          className="btn-secondary"
+                          style={{
+                            fontSize: "0.75rem",
+                            padding: "0.2rem 0.55rem",
+                            cursor: retrying.has(j.id) ? "wait" : "pointer",
+                            opacity: retrying.has(j.id) ? 0.6 : 1,
+                          }}
+                        >
+                          {retrying.has(j.id) ? "..." : j.status === "success" ? "הרץ שוב" : "נסה שוב"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}

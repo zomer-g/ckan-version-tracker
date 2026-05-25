@@ -1,6 +1,7 @@
 """Admin endpoints for approving/rejecting dataset tracking requests."""
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -705,3 +706,130 @@ async def list_scheduled_jobs(
         "jobs": rows,
         "orphan_jobs": orphans,
     }
+
+
+# ---------------------------------------------------------------------------
+# Datastore-push queue admin
+# ---------------------------------------------------------------------------
+#
+# The durable queue that replaced FastAPI's BackgroundTasks for the
+# datastore ingest step (see app/worker/datastore_push_runner.py).
+# Two endpoints:
+#   GET  /api/admin/datastore-jobs            — list recent jobs
+#   POST /api/admin/datastore-jobs/{id}/retry — flip failed → pending
+
+class DatastorePushJobOut(BaseModel):
+    id: str
+    tracked_dataset_id: str | None
+    tracked_dataset_title: str | None
+    resource_id: str
+    csv_path: str
+    csv_is_gzipped_in_source: bool
+    status: str
+    attempts: int
+    rows_pushed: int
+    total_rows: int | None
+    error: str | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+    updated_at: str
+
+
+@router.get("/datastore-jobs", response_model=list[DatastorePushJobOut])
+@limiter.limit("60/minute")
+async def list_datastore_jobs(
+    request: Request,
+    status: str | None = None,
+    limit: int = 100,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recent datastore push jobs, newest first.
+
+    Optional ``?status=pending|running|success|failed`` filter for the
+    "show me only the broken ones" view.
+    """
+    from app.models.datastore_push_job import DatastorePushJob
+
+    q = select(DatastorePushJob).order_by(DatastorePushJob.created_at.desc())
+    if status:
+        q = q.where(DatastorePushJob.status == status)
+    q = q.limit(min(limit, 500))
+    rows = (await db.execute(q)).scalars().all()
+
+    # Resolve dataset titles in one extra query so the admin UI can
+    # show "which dataset is this push for" without N+1 round-trips.
+    ds_ids = {r.tracked_dataset_id for r in rows if r.tracked_dataset_id}
+    ds_titles: dict = {}
+    if ds_ids:
+        ds_rows = (
+            await db.execute(
+                select(TrackedDataset.id, TrackedDataset.title).where(
+                    TrackedDataset.id.in_(ds_ids)
+                )
+            )
+        ).all()
+        ds_titles = {str(r.id): r.title for r in ds_rows}
+
+    return [
+        DatastorePushJobOut(
+            id=str(r.id),
+            tracked_dataset_id=str(r.tracked_dataset_id) if r.tracked_dataset_id else None,
+            tracked_dataset_title=ds_titles.get(str(r.tracked_dataset_id)) if r.tracked_dataset_id else None,
+            resource_id=r.resource_id,
+            csv_path=r.csv_path,
+            csv_is_gzipped_in_source=r.csv_is_gzipped_in_source,
+            status=r.status,
+            attempts=r.attempts,
+            rows_pushed=r.rows_pushed,
+            total_rows=r.total_rows,
+            error=r.error,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+            started_at=r.started_at.isoformat() if r.started_at else None,
+            completed_at=r.completed_at.isoformat() if r.completed_at else None,
+            updated_at=r.updated_at.isoformat() if r.updated_at else "",
+        )
+        for r in rows
+    ]
+
+
+@router.post("/datastore-jobs/{job_id}/retry")
+@limiter.limit("30/minute")
+async def retry_datastore_job(
+    request: Request,
+    job_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Flip a failed job back to ``pending`` so the runner re-attempts.
+
+    Resets ``attempts`` to 0 — otherwise a job that already burned
+    through MAX_ATTEMPTS would be skipped by the runner. Keeps the
+    previous error in the column for audit (cleared once the new run
+    succeeds; overwritten if it fails again).
+    """
+    from app.models.datastore_push_job import DatastorePushJob
+
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid job id")
+    job = (
+        await db.execute(
+            select(DatastorePushJob).where(DatastorePushJob.id == jid)
+        )
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status not in ("failed", "success"):
+        # Already pending or running — no-op.
+        return {"status": job.status, "id": str(job.id)}
+    job.status = "pending"
+    job.attempts = 0
+    job.started_at = None
+    job.completed_at = None
+    job.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Admin %s retried datastore push job %s", user.email, job.id)
+    return {"status": "pending", "id": str(job.id)}

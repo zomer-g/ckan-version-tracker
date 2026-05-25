@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -857,7 +857,6 @@ async def upload_geojson(
 async def upload_csv(
     request: Request,
     tracked_dataset_id: str,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     version_number: int = Form(...),
     resource_name: str = Form("נתוני הסורק"),
@@ -1159,16 +1158,34 @@ async def upload_csv(
             _cleanup_paths(gz_path, csv_path)
             raise HTTPException(status_code=502, detail=f"resource_create failed: {e}")
 
-    # ---- Step 2: Stream rows from disk into datastore in the background ----
-    # The background task also deletes the temp CSV when done so we don't
-    # leak temp files across requests. Batch size is taken from the
-    # function's default (2500) — do NOT pass 5000 here, that override is
-    # exactly what used to cap the datastore at one batch worth of rows.
+    # ---- Step 2: Enqueue a durable push job for the datastore ingest ----
+    # Previously this used FastAPI's BackgroundTasks, which silently
+    # dies on Render dyno recycles mid-push. The new path persists a
+    # row in datastore_push_jobs; the runner in
+    # app/worker/datastore_push_runner.py drains pending jobs every
+    # 30s and survives restarts (the row stays "pending" until a
+    # worker actually picks it up).
     if fields:
-        background_tasks.add_task(
-            odata_client.push_records_to_datastore_from_file,
-            resource_id, fields, csv_path, True,
+        from app.worker.datastore_push_runner import enqueue as _enqueue_push
+        # csv_is_gzipped_in_source tells the runner's /tmp-recovery
+        # path whether to gunzip the bytes it pulls back from ODATA.
+        # Only "file-gz+datastore" puts a gzipped file in the
+        # downloadable resource; "file+datastore" (small CSV) puts a
+        # plain one, and "datastore-only" (worst case) has no
+        # recoverable file at all (recovery will fail and the job
+        # will be marked failed, which is the correct surface for
+        # the admin UI).
+        gzipped_in_source = upload_mode == "file-gz+datastore"
+        await _enqueue_push(
+            db=db,
+            tracked_dataset_id=ds.id,
+            resource_id=resource_id,
+            csv_path=csv_path,
+            csv_is_gzipped_in_source=gzipped_in_source,
+            fields=fields,
+            total_rows=row_count or None,
         )
+        await db.commit()
         datastore_status = "queued"
     else:
         datastore_status = "skipped (no fields detected)"

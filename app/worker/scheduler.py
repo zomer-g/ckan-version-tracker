@@ -9,6 +9,10 @@ from app.database import async_session
 from app.models.scrape_task import ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
 from app.worker.poll_job import poll_dataset
+from app.worker.datastore_push_runner import (
+    cleanup_stuck_push_jobs,
+    drain_one_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +83,30 @@ async def init_scheduler() -> None:
         cleanup_stuck_scrape_tasks,
         trigger=IntervalTrigger(minutes=5),
         id="cleanup_stuck_scrape_tasks",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+
+    # Durable datastore-push queue runner. Drains one pending job per
+    # 30s tick — keeps RSS bounded because the push itself is the
+    # heavy work and we never want two of them racing on the same
+    # dyno. ``max_instances=1`` is the safety belt (overlapping fires
+    # would otherwise stack up if a tick takes >30s).
+    scheduler.add_job(
+        drain_one_job,
+        trigger=IntervalTrigger(seconds=30),
+        id="drain_datastore_push_queue",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+    # And the matching stuck-job rescuer. Same pattern as
+    # cleanup_stuck_scrape_tasks above.
+    scheduler.add_job(
+        cleanup_stuck_push_jobs,
+        trigger=IntervalTrigger(minutes=5),
+        id="cleanup_stuck_push_jobs",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,

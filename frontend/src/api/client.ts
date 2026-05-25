@@ -375,6 +375,27 @@ export interface DatasetSizesResponse {
   datasets: DatasetSizeRow[];
 }
 
+// One row in the durable datastore-ingest queue (Render-recycle-safe
+// replacement for FastAPI BackgroundTasks). See
+// app/worker/datastore_push_runner.py.
+export interface DatastorePushJob {
+  id: string;
+  tracked_dataset_id: string | null;
+  tracked_dataset_title: string | null;
+  resource_id: string;
+  csv_path: string;
+  csv_is_gzipped_in_source: boolean;
+  status: "pending" | "running" | "success" | "failed";
+  attempts: number;
+  rows_pushed: number;
+  total_rows: number | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+}
+
 export function formatBytes(n: number | null | undefined): string {
   const v = Number(n) || 0;
   if (v <= 0) return "—";
@@ -399,6 +420,17 @@ export const admin = {
     }),
   scheduledJobs: () => request<ScheduledJobsResponse>("/admin/scheduled-jobs"),
   datasetSizes: () => request<DatasetSizesResponse>("/admin/dataset-sizes"),
+  datastoreJobs: (status?: string) =>
+    request<DatastorePushJob[]>(
+      status
+        ? `/admin/datastore-jobs?status=${encodeURIComponent(status)}`
+        : "/admin/datastore-jobs",
+    ),
+  retryDatastoreJob: (id: string) =>
+    request<{ status: string; id: string }>(
+      `/admin/datastore-jobs/${id}/retry`,
+      { method: "POST" },
+    ),
   syncOrganizations: () =>
     request<{ created: number; updated: number; total: number; linked_datasets: number }>(
       "/admin/organizations/sync",
