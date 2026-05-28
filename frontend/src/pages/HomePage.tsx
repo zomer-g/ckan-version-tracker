@@ -6,6 +6,10 @@ import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+// idf.il section pattern lives in utils/idfPattern.ts so the
+// HomePage and SearchPage versions can never drift when we add new
+// sections.
+import { IDF_PATTERN } from "../utils/idfPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -13,10 +17,6 @@ const ODATA_BASE = "https://www.odata.org.il";
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 /** Detect govmap.gov.il layer URLs (requires lay=<id>) */
 const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&]lay(?:er|ers)?=\d+/i;
-/** Detect idf.il Military-Prosecution pages (raw Hebrew OR %-encoded). The
- *  raw "אתרי-יחידות/הפרקליטות-הצבאית" pair lets users paste from the
- *  address bar in either form; the regex matches both. */
-const IDF_PATTERN = /^https?:\/\/(www\.)?idf\.il\/(?:אתרי-יחידות|%D7%90%D7%AA%D7%A8%D7%99-%D7%99%D7%97%D7%99%D7%93%D7%95%D7%AA)\/(?:הפרקליטות-הצבאית|%D7%94%D7%A4%D7%A8%D7%A7%D7%9C%D7%99%D7%98%D7%95%D7%AA-%D7%94%D7%A6%D7%91%D7%90%D7%99%D7%AA)\//i;
 
 interface CkanResource {
   id: string;

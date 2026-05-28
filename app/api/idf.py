@@ -9,9 +9,18 @@ the challenge) lives in the external govil-scraper worker; this
 module's job is just to recognise the URL shape and surface a
 reasonable title for the request form.
 
-V1 scope: only Military Prosecution unit pages
-(``/אתרי-יחידות/הפרקליטות-הצבאית/…``). Broader idf.il coverage is a
-follow-up once we see whether the layout varies per unit.
+Supported sections (allowlisted in ``IDF_ALLOWED_SECTIONS``):
+  - ``/אתרי-יחידות/הפרקליטות-הצבאית/…``  Military Prosecution
+  - ``/אתרי-יחידות/אתר-הפקודות/…``       Orders portal (פקודות מטכ"ל etc.)
+
+Both go through the same external Playwright scraper module
+(``govscraper.scrapers.idf``) — the page layout is consistent across
+unit sites on idf.il (Sitecore-rendered subtree of <a> tags pointing
+at PDFs/DOCs), so no per-section logic is needed in the crawler.
+
+To add a new section: append its kebab-cased Hebrew slug to
+``IDF_ALLOWED_SECTIONS`` and update the error message. No other
+code changes required.
 """
 
 import hashlib
@@ -35,9 +44,17 @@ router = APIRouter(prefix="/api/idf", tags=["idf"])
 # host+path start so other idf.il pages (irrelevant to this scraper)
 # can't slip through.
 _UNIT_SITES = "אתרי-יחידות"
-_MIL_PROSECUTION = "הפרקליטות-הצבאית"
-IDF_PROSECUTION_RE = re.compile(
-    rf"^/{re.escape(_UNIT_SITES)}/{re.escape(_MIL_PROSECUTION)}/(.+)$"
+# Sections under /אתרי-יחידות/ that are in scope for the scraper.
+# Order matters only for the error message — the regex tries all
+# alternatives. New sections: append below and update the user-
+# facing error message in validate_idf_url.
+IDF_ALLOWED_SECTIONS = (
+    "הפרקליטות-הצבאית",   # Military Prosecution
+    "אתר-הפקודות",         # Orders portal (פקודות מטכ"ל etc.)
+)
+_section_alt = "|".join(re.escape(s) for s in IDF_ALLOWED_SECTIONS)
+IDF_UNIT_RE = re.compile(
+    rf"^/{re.escape(_UNIT_SITES)}/({_section_alt})/(.+)$"
 )
 
 
@@ -81,9 +98,10 @@ def _idf_slug(path_tail: str) -> str:
     share the same trailing segment (``/הוראות`` etc.) and we don't
     want them to collide on ``ckan_id``/mirror name.
     """
-    # path_tail is everything after /אתרי-יחידות/הפרקליטות-הצבאית/ —
-    # e.g. "הנחיות-תצ-ר/פרק-1-כללי". Take the last segment as the
-    # human-readable part.
+    # path_tail is everything after /אתרי-יחידות/<section>/ —
+    # e.g. "הנחיות-תצ-ר/פרק-1-כללי" for prosecution or
+    # "פקודות-מטכ-ל" for the orders portal. Take the last segment as
+    # the human-readable part.
     last_segment = path_tail.rstrip("/").rsplit("/", 1)[-1] or "idf"
     digest = hashlib.sha1(path_tail.encode("utf-8")).hexdigest()[:8]
     return f"{last_segment}-{digest}"
@@ -92,9 +110,12 @@ def _idf_slug(path_tail: str) -> str:
 def _parse_idf_url(url: str) -> tuple[str | None, str | None]:
     """Parse an idf.il URL.
 
-    Returns ``("idf_prosecution", slug)`` for Military Prosecution unit
-    pages, ``(None, None)`` for anything else (so other idf.il areas
-    fall through cleanly until we add per-unit handling).
+    Returns ``("idf_unit", slug)`` for any URL under a whitelisted
+    section in ``IDF_ALLOWED_SECTIONS``, ``(None, None)`` otherwise.
+    The page_type used to be ``"idf_prosecution"`` back when only the
+    Military Prosecution section was supported; downstream callers in
+    ``app/api/datasets.py`` now check for the ``"idf_"`` prefix to
+    stay forward-compatible as we add more sections.
     """
     s = url.strip()
     parsed = urlparse(s)
@@ -102,11 +123,15 @@ def _parse_idf_url(url: str) -> tuple[str | None, str | None]:
     if host not in {"idf.il", "www.idf.il"}:
         return None, None
 
-    m = IDF_PROSECUTION_RE.match(_decoded_path(s))
+    m = IDF_UNIT_RE.match(_decoded_path(s))
     if not m:
         return None, None
-    path_tail = m.group(1)
-    return "idf_prosecution", _idf_slug(path_tail)
+    # m.group(1) is the section name, m.group(2) is everything after.
+    # The slug only needs the tail — same hash collision risk applies
+    # equally to all sections, and the section name doesn't
+    # disambiguate two tails with identical text.
+    path_tail = m.group(2)
+    return "idf_unit", _idf_slug(path_tail)
 
 
 def _format_idf_title(slug: str) -> str:
@@ -170,11 +195,15 @@ async def validate_idf_url(request: Request, body: ValidateRequest):
 
     page_type, slug = _parse_idf_url(url)
     if not page_type or not slug:
+        # Surface the supported list so the form's error message
+        # tells the user exactly what to paste. The list grows as
+        # we whitelist more sections in IDF_ALLOWED_SECTIONS.
+        allowed = ", ".join(IDF_ALLOWED_SECTIONS)
         return ValidateResponse(
             valid=False,
             error=(
-                "URL is not a supported IDF page. v1 scope: "
-                "https://www.idf.il/אתרי-יחידות/הפרקליטות-הצבאית/…"
+                f"URL is not a supported IDF page. Supported sections "
+                f"under https://www.idf.il/אתרי-יחידות/: {allowed}"
             ),
         )
 

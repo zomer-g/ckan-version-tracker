@@ -3,6 +3,10 @@ import { useTranslation } from "react-i18next";
 import { ckan, datasets as datasetsApi, govil, idf, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
+// idf.il section pattern lives in utils/idfPattern.ts — single
+// source of truth shared with HomePage so we never let one accept
+// URLs the other rejects.
+import { IDF_PATTERN } from "../utils/idfPattern";
 
 interface CkanResource {
   id: string;
@@ -25,8 +29,6 @@ interface SearchResult {
 
 /** Detect gov.il collector URLs */
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
-/** Detect idf.il Military-Prosecution pages (raw Hebrew OR %-encoded). */
-const IDF_PATTERN = /^https?:\/\/(www\.)?idf\.il\/(?:אתרי-יחידות|%D7%90%D7%AA%D7%A8%D7%99-%D7%99%D7%97%D7%99%D7%93%D7%95%D7%AA)\/(?:הפרקליטות-הצבאית|%D7%94%D7%A4%D7%A8%D7%A7%D7%9C%D7%99%D7%98%D7%95%D7%AA-%D7%94%D7%A6%D7%91%D7%90%D7%99%D7%AA)\//i;
 
 export default function SearchPage() {
   const { t } = useTranslation();

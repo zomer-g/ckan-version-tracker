@@ -280,11 +280,15 @@ async def track_dataset(
         # ``kind`` marker tells the poller to take the local path.
         if page_type == "data_collector_api":
             sc["kind"] = "datacollector_api"
-        elif page_type == "idf_prosecution":
+        elif page_type and page_type.startswith("idf_"):
             # IDF pages are scraped by the external worker via a
             # Playwright-backed module (govscraper.scrapers.idf). The
             # worker dispatches on scraper_config.kind, so this marker
             # is what makes it pick the right scraper.
+            # The page_type startswith check (rather than == "idf_unit")
+            # absorbs older values like "idf_prosecution" from any cached
+            # parse and keeps the branch alive if we re-split into
+            # per-section types later.
             sc["kind"] = "idf"
             sc.setdefault("download_files", True)
             sc.setdefault("max_depth", 3)
@@ -849,7 +853,9 @@ async def submit_tracking_request(
         sc: dict = {"download_files": False}
         if page_type == "data_collector_api":
             sc["kind"] = "datacollector_api"
-        elif page_type == "idf_prosecution":
+        elif page_type and page_type.startswith("idf_"):
+            # Mirror of the admin-POST branch — keep in sync. Same
+            # forward-compat reason for the startswith check.
             sc["kind"] = "idf"
             sc["download_files"] = True
             sc["max_depth"] = 3
