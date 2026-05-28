@@ -152,9 +152,15 @@ def _parse_idf_url(url: str) -> tuple[str | None, str | None]:
 # we measure it — better to overshoot than to silently truncate.
 IDF_SECTION_LIMITS: dict[str, tuple[int, int]] = {
     "הפרקליטות-הצבאית": (3, 500),
-    "אתר-הפקודות": (5, 3000),
+    # Orders portal: measured ~46 source pages and 80 docs collected
+    # in the first 137 page-visits during recon, projecting to roughly
+    # 1500-2500 docs across the full ~60-category corpus (plus
+    # referenced order PDFs on each order page). 5000 gives a 2x
+    # safety margin and the truncation marker still surfaces if we
+    # ever hit it.
+    "אתר-הפקודות": (6, 5000),
 }
-IDF_DEFAULT_LIMITS = (5, 3000)
+IDF_DEFAULT_LIMITS = (6, 5000)
 
 
 def get_idf_limits(page_type: str) -> tuple[int, int]:
