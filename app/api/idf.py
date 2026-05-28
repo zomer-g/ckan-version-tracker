@@ -110,12 +110,18 @@ def _idf_slug(path_tail: str) -> str:
 def _parse_idf_url(url: str) -> tuple[str | None, str | None]:
     """Parse an idf.il URL.
 
-    Returns ``("idf_unit", slug)`` for any URL under a whitelisted
-    section in ``IDF_ALLOWED_SECTIONS``, ``(None, None)`` otherwise.
-    The page_type used to be ``"idf_prosecution"`` back when only the
-    Military Prosecution section was supported; downstream callers in
-    ``app/api/datasets.py`` now check for the ``"idf_"`` prefix to
-    stay forward-compatible as we add more sections.
+    Returns ``("idf_unit:<section>", slug)`` for any URL under a
+    whitelisted section in ``IDF_ALLOWED_SECTIONS``, ``(None, None)``
+    otherwise. The section is embedded in the page_type so downstream
+    callers in ``app/api/datasets.py`` can pick section-appropriate
+    scraper config (e.g. the Orders portal needs a deeper crawl and a
+    higher document cap than the Prosecution section — it's a forest
+    of ~60 category pages, each containing many orders).
+
+    Compatibility:
+      - "idf_unit:<section>" matches ``startswith("idf_")``, so the
+        switch in datasets.py keeps working for both this format and
+        the legacy bare ``"idf_unit"`` / ``"idf_prosecution"``.
     """
     s = url.strip()
     parsed = urlparse(s)
@@ -130,8 +136,36 @@ def _parse_idf_url(url: str) -> tuple[str | None, str | None]:
     # The slug only needs the tail — same hash collision risk applies
     # equally to all sections, and the section name doesn't
     # disambiguate two tails with identical text.
+    section = m.group(1)
     path_tail = m.group(2)
-    return "idf_unit", _idf_slug(path_tail)
+    return f"idf_unit:{section}", _idf_slug(path_tail)
+
+
+# Section → (max_depth, max_docs) tuned per-section. The Prosecution
+# section we already supported is a flat "page with a list of files"
+# pattern — depth 3 + 500 docs is plenty. The Orders portal
+# (אתר-הפקודות) is a category tree: ~60 sub-pages under the root, each
+# of which is itself a list of orders. We need both deeper recursion
+# and a much higher document cap to cover the whole tree on first scrape.
+#
+# Fallback default applies to any future section we whitelist before
+# we measure it — better to overshoot than to silently truncate.
+IDF_SECTION_LIMITS: dict[str, tuple[int, int]] = {
+    "הפרקליטות-הצבאית": (3, 500),
+    "אתר-הפקודות": (5, 3000),
+}
+IDF_DEFAULT_LIMITS = (5, 3000)
+
+
+def get_idf_limits(page_type: str) -> tuple[int, int]:
+    """Return ``(max_depth, max_docs)`` for an ``"idf_unit:<section>"``
+    page_type. Bare ``"idf_unit"`` / ``"idf_prosecution"`` fall back
+    to the conservative default.
+    """
+    if not page_type or ":" not in page_type:
+        return IDF_DEFAULT_LIMITS
+    section = page_type.split(":", 1)[1]
+    return IDF_SECTION_LIMITS.get(section, IDF_DEFAULT_LIMITS)
 
 
 def _format_idf_title(slug: str) -> str:

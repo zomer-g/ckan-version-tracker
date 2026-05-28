@@ -289,10 +289,16 @@ async def track_dataset(
             # absorbs older values like "idf_prosecution" from any cached
             # parse and keeps the branch alive if we re-split into
             # per-section types later.
+            # max_depth / max_docs are section-aware: Orders portal
+            # has ~60 category pages each containing many orders, so
+            # it needs deeper recursion + a much higher document cap
+            # than the flat Prosecution layout.
+            from app.api.idf import get_idf_limits
+            depth, docs = get_idf_limits(page_type)
             sc["kind"] = "idf"
             sc.setdefault("download_files", True)
-            sc.setdefault("max_depth", 3)
-            sc.setdefault("max_docs", 500)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -856,10 +862,13 @@ async def submit_tracking_request(
         elif page_type and page_type.startswith("idf_"):
             # Mirror of the admin-POST branch — keep in sync. Same
             # forward-compat reason for the startswith check.
+            # Section-aware limits — see get_idf_limits for the table.
+            from app.api.idf import get_idf_limits
+            depth, docs = get_idf_limits(page_type)
             sc["kind"] = "idf"
             sc["download_files"] = True
-            sc["max_depth"] = 3
-            sc["max_docs"] = 500
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
