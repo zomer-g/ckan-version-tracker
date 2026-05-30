@@ -577,47 +577,139 @@ label {
   }
 }
 
-/* Home page hero */
+/* Home page hero — לעם family canonical (matches Ocoi DESIGN_SYSTEM.md) */
 .home-hero {
   background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-700) 100%);
   color: white;
-  padding: 3rem 0 2.5rem;
+  padding: 3rem 0 3rem;
 }
 
+.home-hero-inner {
+  text-align: center;
+  max-width: 48rem;
+}
+
+.home-hero-title {
+  font-size: 1.875rem;          /* text-3xl base */
+  font-weight: 700;
+  color: white;
+  margin-bottom: 0.5rem;
+  line-height: 1.15;
+}
+
+.home-hero-subtitle {
+  color: var(--primary-100);
+  font-size: 0.95rem;
+  margin-bottom: 2rem;
+  line-height: 1.5;
+}
+
+@media (min-width: 640px) {
+  .home-hero-title { font-size: 2.25rem; }   /* sm:text-4xl */
+  .home-hero-subtitle { font-size: 1rem; }
+  .home-hero { padding: 4rem 0; }
+}
+@media (min-width: 1024px) {
+  .home-hero-title { font-size: 3rem; }       /* lg:text-5xl */
+}
+
+/* Search bar — single white pill, internal icon, NO separate button.
+   Submit fires on Enter; the actual <button type="submit"> is sr-only. */
 .home-search-form {
+  position: relative;
   display: flex;
-  max-width: 640px;
+  align-items: center;
+  max-width: 40rem;             /* ~max-w-2xl */
   margin: 0 auto;
-  border-radius: var(--radius);
-  overflow: hidden;
+  background: #ffffff;
+  border-radius: var(--radius-full);
   box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
 
-.home-search-form input:focus {
+.home-search-icon {
+  flex-shrink: 0;
+  margin-inline-start: 1rem;
+  margin-inline-end: 0.5rem;
+  color: #9CA3AF;               /* gray-400 */
+}
+
+.home-search-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  padding: 0.85rem 0.75rem;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--text);
+  min-width: 0;                 /* allow shrink on mobile */
+}
+
+.home-search-input::placeholder {
+  color: #9CA3AF;
+}
+
+.home-search-input:focus {
   box-shadow: none;
   border-color: transparent;
+  outline: none;
 }
 
-@media (max-width: 640px) {
-  .home-hero {
-    padding: 2rem 0 1.5rem;
-  }
+/* sr-only — used for the hidden form label + hidden submit button.
+   Matches the standard accessibility class so screen readers pick it up
+   while sighted users see only the pill. */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0,0,0,0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 
-  .home-hero h1 {
-    font-size: 1.75rem !important;
-  }
+/* 3-stat row under the search — identical to Ocal/Ocoi */
+.home-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+  max-width: 36rem;
+  margin: 2rem auto 0;
+}
 
-  .home-search-form {
-    flex-direction: column;
-    border-radius: var(--radius);
-  }
+.home-stat {
+  text-align: center;
+}
 
-  .home-search-form input {
-    border-radius: var(--radius) var(--radius) 0 0 !important;
-  }
+.home-stat-number {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: white;
+  line-height: 1.15;
+}
 
-  .home-search-form button {
-    border-radius: 0 0 var(--radius) var(--radius) !important;
+.home-stat-label {
+  color: var(--primary-200);
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+@media (min-width: 640px) {
+  .home-stat-number { font-size: 2.25rem; }
+  .home-stats { gap: 3rem; }
+}
+
+@media (max-width: 480px) {
+  .home-search-icon {
+    margin-inline-start: 0.75rem;
+    margin-inline-end: 0.25rem;
+  }
+  .home-search-input {
+    padding: 0.75rem 0.5rem;
+    font-size: 0.95rem;
   }
 }
 

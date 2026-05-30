@@ -89,7 +89,10 @@
     "govmap_urls_summary": "{{valid}} valid, {{invalid}} invalid",
     "govmap_request_submit": "Submit Request ({{count}} layers)",
     "govmap_request_done": "Request submitted: {{created}} new, {{dup}} duplicates, {{bad}} invalid.",
-    "no_tracked": "No tracked datasets yet"
+    "no_tracked": "No tracked datasets yet",
+    "stats_datasets": "Tracked datasets",
+    "stats_versions": "Saved versions",
+    "stats_organizations": "Organizations"
   },
   "search": {
     "title": "Search Government Datasets",

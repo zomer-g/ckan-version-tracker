@@ -37,6 +37,53 @@ interface SearchResult {
   resources?: CkanResource[];
 }
 
+/**
+ * Three-stat row under the search bar.
+ *
+ * Mirrors the Ocal/Ocoi hero canonical: 3 columns, big white number,
+ * small primary-200 label. Numbers are derived from the dataset list
+ * we already fetch — no second roundtrip, no flash of zero.
+ *
+ * If the list is still loading we render placeholders ("—") instead
+ * of "0" so the user doesn't read a zero for a few hundred ms.
+ */
+function HomeStats({
+  datasets,
+  loading,
+  t,
+}: {
+  datasets: TrackedDataset[];
+  loading: boolean;
+  t: (k: string) => string;
+}) {
+  const datasetCount = datasets.length;
+  const versionCount = datasets.reduce((sum, d) => sum + (d.version_count || 0), 0);
+  const orgCount = new Set(
+    datasets
+      .map((d) => d.organization_id || d.organization)
+      .filter((x): x is string => Boolean(x)),
+  ).size;
+
+  const fmt = (n: number) => n.toLocaleString("he-IL");
+
+  return (
+    <div className="home-stats" aria-label="סטטיסטיקות">
+      <div className="home-stat">
+        <div className="home-stat-number">{loading ? "—" : fmt(datasetCount)}</div>
+        <div className="home-stat-label">{t("home.stats_datasets")}</div>
+      </div>
+      <div className="home-stat">
+        <div className="home-stat-number">{loading ? "—" : fmt(versionCount)}</div>
+        <div className="home-stat-label">{t("home.stats_versions")}</div>
+      </div>
+      <div className="home-stat">
+        <div className="home-stat-number">{loading ? "—" : fmt(orgCount)}</div>
+        <div className="home-stat-label">{t("home.stats_organizations")}</div>
+      </div>
+    </div>
+  );
+}
+
 function formatInterval(seconds: number, t: (k: string) => string): string {
   if (seconds < 60) return `${seconds} ${t("tracked.seconds")}`;
   const minutes = Math.round(seconds / 60);
@@ -193,52 +240,51 @@ export default function HomePage() {
 
   return (
     <div>
-      {/* Hero Section */}
+      {/* Hero Section — לעם family canonical (single white search pill + 3 stats) */}
       <section className="home-hero" aria-labelledby="hero-title">
-        <div className="container" style={{ textAlign: "center" }}>
-          <h1 id="hero-title" style={{ fontSize: "2.25rem", fontWeight: 700, color: "white", marginBottom: "0.5rem" }}>
+        <div className="container home-hero-inner">
+          <h1 id="hero-title" className="home-hero-title">
             {t("home.hero_title")}
           </h1>
-          <p style={{ color: "rgba(255,255,255,0.9)", fontSize: "1.1rem", marginBottom: "1.5rem" }}>
+          <p className="home-hero-subtitle">
             {t("home.hero_subtitle")}
           </p>
 
           <form onSubmit={search} className="home-search-form" role="search">
-            <label htmlFor="home-search" className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>
+            <label htmlFor="home-search" className="sr-only">
               {t("home.search_placeholder")}
             </label>
+            <svg
+              className="home-search-icon"
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
             <input
               id="home-search"
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t("home.search_placeholder")}
-              style={{
-                flex: 1,
-                padding: "0.75rem 1rem",
-                fontSize: "1rem",
-                border: "none",
-                borderRadius: "var(--radius) 0 0 var(--radius)",
-                outline: "none",
-              }}
-            />
-            <button
-              type="submit"
+              className="home-search-input"
               disabled={loading}
-              style={{
-                padding: "0.75rem 1.5rem",
-                fontSize: "1rem",
-                fontWeight: 600,
-                background: "var(--primary-dark)",
-                color: "white",
-                border: "none",
-                borderRadius: "0 var(--radius) var(--radius) 0",
-                cursor: "pointer",
-              }}
-            >
+            />
+            {/* Submit happens on Enter — no visible button, matching Ocal/Ocoi. */}
+            <button type="submit" className="sr-only" disabled={loading} aria-label={t("search.search_btn")}>
               {t("search.search_btn")}
             </button>
           </form>
+
+          <HomeStats datasets={trackedDatasets} loading={trackedLoading} t={t} />
         </div>
       </section>
 
