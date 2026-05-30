@@ -9,7 +9,8 @@
     "login": "Login",
     "logout": "Logout",
     "skip_to_content": "Skip to content",
-    "about": "About"
+    "about": "About",
+    "api": "API"
   },
   "tags": {
     "page_title": "Tags",
@@ -278,5 +279,13 @@
     "diag_per_layer": "Per layer",
     "diag_top_unmatched": "Top {{n}} unmatched values",
     "diag_top_unmatched_hint": "To include them too, add the matching string to growthnameMatches in frontend/src/config/growthLayers.ts"
+  },
+  "api": {
+    "title": "Public API",
+    "subtitle": "Open access to the data — datasets, versions, organizations and tags",
+    "base_url": "Base URL:",
+    "intro": "All endpoints are public GETs. No auth, no API key required.",
+    "intro_2": "Open for researchers, journalists, transparency activists, and civic projects. If you are building a heavy integration, please avoid millions of parallel calls and keep a local cache.",
+    "endpoints": "Endpoints"
   }
 }

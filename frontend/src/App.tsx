@@ -10,6 +10,7 @@ import HomePage from "./pages/HomePage";
 import VersionsPage from "./pages/VersionsPage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
+import ApiPage from "./pages/ApiPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="/organizations/:orgId" element={<OrganizationDetailPage />} />
           <Route path="/tags" element={<TagsPage />} />
           <Route path="/tags/:tagId" element={<TagDetailPage />} />
+          <Route path="/api" element={<ApiPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route
             path="/growth"
