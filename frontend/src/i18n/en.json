@@ -10,7 +10,8 @@
     "logout": "Logout",
     "skip_to_content": "Skip to content",
     "about": "About",
-    "api": "API"
+    "api": "API",
+    "menu": "Navigation menu"
   },
   "tags": {
     "page_title": "Tags",

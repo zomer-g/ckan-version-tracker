@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -25,9 +26,27 @@ function BrandIcon() {
   );
 }
 
+function HamburgerIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      className="hamburger-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {open ? <path d="M18 6L6 18M6 6l12 12" /> : <path d="M3 6h18M3 12h18M3 18h18" />}
+    </svg>
+  );
+}
+
 export default function Navbar() {
   const { t, i18n } = useTranslation();
   const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const toggleLang = () => {
     const next = i18n.language === "he" ? "en" : "he";
@@ -44,48 +63,42 @@ export default function Navbar() {
   const navClass = (path: string) =>
     `nav-link${isActive(path) ? " is-active" : ""}`;
 
+  const navItems: { to: string; label: string }[] = [
+    { to: "/", label: t("nav.search") },
+    { to: "/organizations", label: t("nav.organizations", "ארגונים") },
+    { to: "/tags", label: t("nav.tags", "תגיות") },
+    { to: "/api", label: t("nav.api", "API") },
+    { to: "/about", label: t("nav.about") },
+  ];
+
+  const closeMobile = () => setMobileOpen(false);
+
   return (
     <header>
       <nav className="navbar" role="navigation" aria-label={t("app_name")}>
-        <div className="container flex-between">
-          <div className="flex">
-            <Link to="/" className="brand" aria-label={t("app_name")}>
-              <BrandIcon />
-              <span>{t("app_name")}</span>
-            </Link>
-            <Link to="/" className={navClass("/")} aria-current={isActive("/") ? "page" : undefined}>
-              {t("nav.search")}
-            </Link>
-            <Link
-              to="/organizations"
-              className={navClass("/organizations")}
-              aria-current={isActive("/organizations") ? "page" : undefined}
-            >
-              {t("nav.organizations", "ארגונים")}
-            </Link>
-            <Link
-              to="/tags"
-              className={navClass("/tags")}
-              aria-current={isActive("/tags") ? "page" : undefined}
-            >
-              {t("nav.tags", "תגיות")}
-            </Link>
-            <Link
-              to="/api"
-              className={navClass("/api")}
-              aria-current={isActive("/api") ? "page" : undefined}
-            >
-              {t("nav.api", "API")}
-            </Link>
-            <Link
-              to="/about"
-              className={navClass("/about")}
-              aria-current={isActive("/about") ? "page" : undefined}
-            >
-              {t("nav.about")}
-            </Link>
-          </div>
-          <div className="flex">
+        <div className="container navbar-inner">
+          <Link
+            to="/"
+            className="brand"
+            aria-label={t("app_name")}
+            onClick={closeMobile}
+          >
+            <BrandIcon />
+            <span className="brand-text">{t("app_name")}</span>
+          </Link>
+
+          {/* Desktop nav — visible at ≥640px */}
+          <div className="navbar-nav-desktop">
+            {navItems.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={navClass(item.to)}
+                aria-current={isActive(item.to) ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
             <button
               className="btn-lang"
               onClick={toggleLang}
@@ -94,7 +107,53 @@ export default function Navbar() {
               {i18n.language === "he" ? "EN" : "HE"}
             </button>
           </div>
+
+          {/* Mobile hamburger — visible only <640px */}
+          <button
+            type="button"
+            className="navbar-hamburger"
+            aria-expanded={mobileOpen}
+            aria-controls="navbar-mobile-panel"
+            aria-label={t("nav.menu", "תפריט ניווט")}
+            onClick={() => setMobileOpen((v) => !v)}
+          >
+            <HamburgerIcon open={mobileOpen} />
+          </button>
         </div>
+
+        {/* Mobile dropdown panel */}
+        {mobileOpen && (
+          <div
+            id="navbar-mobile-panel"
+            className="navbar-mobile-panel"
+            role="region"
+            aria-label={t("nav.menu", "תפריט ניווט")}
+          >
+            <div className="container">
+              {navItems.map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={closeMobile}
+                  className={`navbar-mobile-link${isActive(item.to) ? " is-active" : ""}`}
+                  aria-current={isActive(item.to) ? "page" : undefined}
+                >
+                  {item.label}
+                </Link>
+              ))}
+              <button
+                className="btn-lang navbar-mobile-lang"
+                onClick={() => {
+                  toggleLang();
+                  closeMobile();
+                }}
+                aria-label={langLabel}
+              >
+                {langLabel}
+              </button>
+            </div>
+          </div>
+        )}
       </nav>
     </header>
   );

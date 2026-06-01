@@ -312,6 +312,18 @@ label {
   opacity: 0.85;
 }
 
+/* ── Navbar layout — לעם family canonical (Mobile Header) ────────────
+   Above sm (≥640px): brand + inline nav links + lang toggle.
+   Below sm (<640px): brand + hamburger; full-width dropdown panel
+   below the header with the same links + lang toggle.            */
+
+.navbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .navbar .brand {
   font-weight: 700;
   font-size: 1.1rem;
@@ -319,6 +331,8 @@ label {
   align-items: center;
   gap: 0.5rem;
   color: white;
+  min-width: 0;                   /* allow brand-text to truncate cleanly */
+  text-decoration: none;
 }
 
 .navbar .brand-icon {
@@ -328,6 +342,18 @@ label {
   color: var(--primary-200);
 }
 
+.navbar .brand-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navbar-nav-desktop {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .navbar .nav-link {
   color: rgba(255, 255, 255, 0.85);
   padding: 0.4rem 0.75rem;
@@ -335,6 +361,7 @@ label {
   font-size: 0.9rem;
   font-weight: 500;
   transition: background 0.15s, color 0.15s;
+  text-decoration: none;
 }
 
 .navbar .nav-link:hover {
@@ -345,6 +372,89 @@ label {
 .navbar .nav-link.is-active {
   color: white;
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* — Mobile hamburger — */
+.navbar-hamburger {
+  display: none;                  /* visible only via media query below */
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: var(--radius);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  width: 44px;                    /* a11y touch target */
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+}
+.navbar-hamburger:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+.navbar-hamburger:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}
+.hamburger-icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* — Mobile dropdown panel — */
+.navbar-mobile-panel {
+  background: var(--primary-700);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0.4rem 0 0.6rem;
+}
+
+.navbar-mobile-link {
+  display: block;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-decoration: none;
+  margin-bottom: 0.15rem;
+}
+.navbar-mobile-link:hover,
+.navbar-mobile-link.is-active {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.navbar-mobile-lang {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  text-align: center;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-full);
+}
+.navbar-mobile-lang:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Breakpoint switch — same 640px used across the family */
+@media (max-width: 640px) {
+  .navbar-nav-desktop {
+    display: none;
+  }
+  .navbar-hamburger {
+    display: inline-flex;
+  }
+  .navbar .brand {
+    font-size: 1rem;
+  }
+  .navbar .brand-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
 }
 
 .navbar .btn-lang {
