@@ -566,7 +566,7 @@ export default function SearchPage() {
       {/* practitioners.health.gov.il scraper result */}
       {healthResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #be123c" }}>
+          <article className="card" style={{ borderRight: "4px solid #7c3aed" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{healthResult.title}</h2>
@@ -576,10 +576,10 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ffe4e6",
-                  color: "#9f1239",
+                  background: "#ede9fe",
+                  color: "#5b21b6",
                 }}>
-                  HEALTH.GOV.IL
+                  PRACTITIONERS
                 </span>
               </div>
               {renderHealthTrackButton()}

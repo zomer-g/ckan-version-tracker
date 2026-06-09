@@ -21,15 +21,32 @@ export interface SourceBadge {
   bg: string;
   /** text colour of the chip */
   fg: string;
-  /** chip label shown to the user (e.g. "GOV.IL", "IDF.IL") */
+  /** chip label shown to the user (e.g. "GOV.IL", "IDF.IL", "PRACTITIONERS") */
   label: string;
   /** accent colour for borders / left-rails on the dataset card */
   accent: string;
   /** i18n key for the "source link" anchor under the card */
-  sourceLinkKey: "home.source_link" | "home.source_link_govil" | "home.source_link_govmap" | "home.source_link_idf";
+  sourceLinkKey:
+    | "home.source_link"
+    | "home.source_link_govil"
+    | "home.source_link_govmap"
+    | "home.source_link_idf"
+    | "home.source_link_health";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
+
+// Hints we accept for the practitioners.health.gov.il scraper. The
+// stamp written at create time is "practitioners.health.gov.il", but
+// admins routinely reassign datasets to a real Organization slug
+// (we've already seen "ministry-health" in the wild on registry 1) —
+// so check both. The ckan_id prefix is the only signal that never
+// drifts, and is what looksLikeHealth defers to first.
+const HEALTH_ORG_HINTS = [
+  "practitioners.health.gov.il",
+  "ministry-health",
+  "health",
+];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -37,6 +54,19 @@ function looksLikeIdf(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("idf-scraper-")) return true;
   if (organization && IDF_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeHealth(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  // ckan_id is set at create time and never changes (mirror of the
+  // IDF check above). For datasets created by the health.gov.il
+  // parser in app/api/datasets.py this prefix is the authoritative
+  // signal that the dataset came from the practitioners portal.
+  if (ckan_id && ckan_id.startsWith("health-scraper-")) return true;
+  if (organization && HEALTH_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -78,6 +108,19 @@ export function sourceBadgeFor(
         label: "IDF.IL",
         accent: "#0f766e",
         sourceLinkKey: "home.source_link_idf",
+      };
+    }
+    if (looksLikeHealth(organization, ckan_id)) {
+      // Purple pill per user request, for practitioners.health.gov.il.
+      // bg/fg combo lands on WCAG AA (~7.5:1) so the label stays
+      // readable on both light and dark page themes; accent matches
+      // the left-rail colour used on the result card.
+      return {
+        bg: "#ede9fe",
+        fg: "#5b21b6",
+        label: "PRACTITIONERS",
+        accent: "#7c3aed",
+        sourceLinkKey: "home.source_link_health",
       };
     }
     return {
