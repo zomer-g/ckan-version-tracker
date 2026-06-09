@@ -1,12 +1,15 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
 // source of truth shared with HomePage so we never let one accept
 // URLs the other rejects.
 import { IDF_PATTERN } from "../utils/idfPattern";
+// practitioners.health.gov.il per-registry URL pattern. Mirror of
+// HEALTH_PRACTITIONERS_RE in app/api/health.py.
+import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
 
 interface CkanResource {
   id: string;
@@ -58,6 +61,12 @@ export default function SearchPage() {
   const [idfTracking, setIdfTracking] = useState(false);
   const [showIdfInterval, setShowIdfInterval] = useState(false);
 
+  // practitioners.health.gov.il scraper result — same flow as IDF.
+  const [healthResult, setHealthResult] = useState<GovIlValidation | null>(null);
+  const [healthTracked, setHealthTracked] = useState<"tracked" | "pending" | null>(null);
+  const [healthTracking, setHealthTracking] = useState(false);
+  const [showHealthInterval, setShowHealthInterval] = useState(false);
+
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
   const [trackedByCkanId, setTrackedByCkanId] = useState<Map<string, { id: string; title: string }>>(new Map());
@@ -102,6 +111,10 @@ export default function SearchPage() {
     return IDF_PATTERN.test(input.trim());
   };
 
+  const detectHealthUrl = (input: string): boolean => {
+    return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
@@ -113,6 +126,9 @@ export default function SearchPage() {
     setIdfResult(null);
     setIdfTracked(null);
     setShowIdfInterval(false);
+    setHealthResult(null);
+    setHealthTracked(null);
+    setShowHealthInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -137,6 +153,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid idf.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1c. Check for practitioners.health.gov.il per-registry URL.
+      if (detectHealthUrl(query)) {
+        const validation = await health.validate(query.trim());
+        if (validation.valid) {
+          setHealthResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid practitioners.health.gov.il URL");
         }
         setLoading(false);
         return;
@@ -221,6 +251,25 @@ export default function SearchPage() {
       }
     }
     setIdfTracking(false);
+  };
+
+  // Same pattern as IDF — backend's /datasets endpoint dispatches by
+  // URL host (parser order: gov.il → idf.il → practitioners.health.gov.il).
+  const trackHealthDataset = async (interval: number) => {
+    if (!healthResult?.url || !healthResult?.title) return;
+    setShowHealthInterval(false);
+    setHealthTracking(true);
+    try {
+      await datasetsApi.trackScraper(healthResult.url, healthResult.title, interval);
+      setHealthTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setHealthTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setHealthTracking(false);
   };
 
   const INTERVAL_OPTIONS = [
@@ -323,6 +372,46 @@ export default function SearchPage() {
     );
   };
 
+  // Same shape as renderGovIlTrackButton, bound to the health state.
+  const renderHealthTrackButton = () => {
+    if (healthTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (healthTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showHealthInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackHealthDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowHealthInterval(!showHealthInterval)}
+          disabled={healthTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {healthTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   // Same shape as renderGovIlTrackButton, just bound to the IDF state.
   // Could be DRY'd up with a factory, but keeping the two parallel is
   // easier to read while we have only two scraper origins.
@@ -393,7 +482,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -468,6 +557,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={idfResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {idfResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* practitioners.health.gov.il scraper result */}
+      {healthResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #be123c" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{healthResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#ffe4e6",
+                  color: "#9f1239",
+                }}>
+                  HEALTH.GOV.IL
+                </span>
+              </div>
+              {renderHealthTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>בעלי מקצועות בריאות</span>
+              <span>practitioners.health.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={healthResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {healthResult.url}
               </a>
             </p>
           </article>

@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -10,6 +10,9 @@ import { sourceBadgeFor } from "../utils/sourceBadge";
 // HomePage and SearchPage versions can never drift when we add new
 // sections.
 import { IDF_PATTERN } from "../utils/idfPattern";
+// practitioners.health.gov.il per-registry URL pattern. Mirror of
+// HEALTH_PRACTITIONERS_RE in app/api/health.py.
+import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -121,6 +124,9 @@ export default function HomePage() {
   // IDF (idf.il) Military-Prosecution scraper result — same shape as
   // GovIlValidation (validator returns page_type/collector_name/title/url).
   const [idfResult, setIdfResult] = useState<GovIlValidation | null>(null);
+  // practitioners.health.gov.il per-registry scraper result — same
+  // shape as GovIlValidation.
+  const [healthResult, setHealthResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -157,6 +163,10 @@ export default function HomePage() {
     return IDF_PATTERN.test(input.trim());
   };
 
+  const detectHealthUrl = (input: string): boolean => {
+    return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -172,6 +182,7 @@ export default function HomePage() {
     setGovIlResult(null);
     setGovMapResult(null);
     setIdfResult(null);
+    setHealthResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -210,6 +221,23 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid idf.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2c. Check for practitioners.health.gov.il per-registry URL.
+      // Same auto-treat-as-scraper flow as idf.il — the backend's
+      // /api/health/validate returns the same shape so we render
+      // through the existing scraper card.
+      if (detectHealthUrl(query)) {
+        const validation = await health.validate(query.trim());
+        if (validation.valid) {
+          setHealthResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid practitioners.health.gov.il URL");
         }
         setLoading(false);
         return;
@@ -451,6 +479,62 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("idf")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* practitioners.health.gov.il scraper result — same card
+            layout, distinct badge so it's obvious this is a health
+            ministry registry. */}
+        {!loading && healthResult && (
+          <section aria-label="practitioners.health.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #be123c" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{healthResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ffe4e6",
+                      color: "#9f1239",
+                    }}>
+                      HEALTH.GOV.IL
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>בעלי מקצועות בריאות</span>
+                  <span>practitioners.health.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={healthResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {healthResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "health" ? (
+                    <RequestForm
+                      datasetTitle={healthResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={healthResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("health")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

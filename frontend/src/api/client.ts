@@ -233,6 +233,18 @@ export const idf = {
     }),
 };
 
+// practitioners.health.gov.il validation — shares the same response
+// shape as gov.il / idf (page_type, collector_name, title, url, error).
+// Server side at app/api/health.py; only per-registry
+// /Practitioners/{id} URLs accepted.
+export const health = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/health/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
