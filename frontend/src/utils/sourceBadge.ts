@@ -36,17 +36,16 @@ export interface SourceBadge {
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
 
-// Hints we accept for the practitioners.health.gov.il scraper. The
-// stamp written at create time is "practitioners.health.gov.il", but
-// admins routinely reassign datasets to a real Organization slug
-// (we've already seen "ministry-health" in the wild on registry 1) —
-// so check both. The ckan_id prefix is the only signal that never
-// drifts, and is what looksLikeHealth defers to first.
-const HEALTH_ORG_HINTS = [
-  "practitioners.health.gov.il",
-  "ministry-health",
-  "health",
-];
+// Hints we accept for the practitioners.health.gov.il scraper. ONLY
+// values unique to this source belong here — generic Ministry-of-Health
+// slugs like "ministry-health" or "health" must NOT be added because
+// they are shared with regular gov.il collectors that happen to belong
+// to the health ministry (e.g. /he/collectors/publications/...), and
+// any such ambiguity would mislabel them as PRACTITIONERS. The string
+// "practitioners.health.gov.il" is the exact organization slug the
+// backend stamps at create time in app/api/datasets.py for this
+// source and nothing else uses it.
+const HEALTH_ORG_HINTS = ["practitioners.health.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
