@@ -21,6 +21,7 @@ from app.api.worker import router as worker_router
 from app.api.govil import router as govil_router
 from app.api.govmap import router as govmap_router
 from app.api.idf import router as idf_router
+from app.api.health import router as health_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
@@ -77,6 +78,7 @@ app.include_router(worker_router)
 app.include_router(govil_router)
 app.include_router(govmap_router)
 app.include_router(idf_router)
+app.include_router(health_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)

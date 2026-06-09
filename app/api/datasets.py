@@ -210,11 +210,13 @@ async def track_dataset(
         if not body.title:
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
-        # Parse the URL — try gov.il first, then idf.il. The two
-        # validators don't overlap (different hosts) so order is
-        # cosmetic, but gov.il is by far the common case.
+        # Parse the URL — try gov.il first, then idf.il, then
+        # practitioners.health.gov.il. The validators don't overlap
+        # (different hosts) so order is cosmetic, but gov.il is by far
+        # the common case.
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
+        from app.api.health import _parse_health_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -226,9 +228,18 @@ async def track_dataset(
                 slug_prefix = "idf-scraper"
                 mirror_prefix = "gov-versions-idf"
         if not collector_name:
+            page_type, collector_name = _parse_health_url(body.source_url)
+            if collector_name:
+                origin = "practitioners.health.gov.il"
+                slug_prefix = "health-scraper"
+                mirror_prefix = "gov-versions-health"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid scraper URL — must be a gov.il collector or idf.il page",
+                detail=(
+                    "Invalid scraper URL — must be a gov.il collector, "
+                    "idf.il page, or practitioners.health.gov.il registry"
+                ),
             )
 
         # Build a unique slug that includes a hash of the full source URL,
@@ -299,6 +310,22 @@ async def track_dataset(
             sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
+        elif page_type and page_type.startswith("health_"):
+            # practitioners.health.gov.il is a SPA backed by REST
+            # endpoints behind a WAF — scraped by the external worker
+            # via Playwright (govscraper.scrapers.health). Per-registry
+            # limits live in app.api.health.get_health_limits;
+            # registry_id is duplicated into config so the worker
+            # doesn't have to re-parse the URL.
+            from app.api.health import get_health_limits
+            depth, docs = get_health_limits(page_type)
+            registry_id = page_type.split(":", 1)[1] if ":" in page_type else ""
+            sc["kind"] = "health_practitioners"
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            if registry_id:
+                sc.setdefault("registry_id", registry_id)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -830,10 +857,11 @@ async def submit_tracking_request(
         if not body.title:
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
-        # Try gov.il first, then idf.il. Mirrors the admin POST /datasets
-        # branch — keep the two in sync.
+        # Try gov.il first, then idf.il, then practitioners.health.gov.il.
+        # Mirrors the admin POST /datasets branch — keep the two in sync.
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
+        from app.api.health import _parse_health_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -843,9 +871,17 @@ async def submit_tracking_request(
                 origin = "idf.il"
                 slug_prefix = "idf-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_health_url(body.source_url)
+            if collector_name:
+                origin = "practitioners.health.gov.il"
+                slug_prefix = "health-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid scraper URL — must be a gov.il collector or idf.il page",
+                detail=(
+                    "Invalid scraper URL — must be a gov.il collector, "
+                    "idf.il page, or practitioners.health.gov.il registry"
+                ),
             )
 
         # Duplicate check by source_url
@@ -869,6 +905,17 @@ async def submit_tracking_request(
             sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs
+        elif page_type and page_type.startswith("health_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.health import get_health_limits
+            depth, docs = get_health_limits(page_type)
+            registry_id = page_type.split(":", 1)[1] if ":" in page_type else ""
+            sc["kind"] = "health_practitioners"
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            if registry_id:
+                sc["registry_id"] = registry_id
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
