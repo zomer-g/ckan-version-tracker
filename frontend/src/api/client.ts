@@ -245,6 +245,17 @@ export const health = {
     }),
 };
 
+// avodata.labor.gov.il validation — same response shape. Server side
+// at app/api/avodata.py; only /search?scope=<known-slug> URLs accepted
+// (22 scopes; the backend enforces the allowlist).
+export const avodata = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/avodata/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

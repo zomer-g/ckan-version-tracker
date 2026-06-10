@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -13,6 +13,9 @@ import { IDF_PATTERN } from "../utils/idfPattern";
 // practitioners.health.gov.il per-registry URL pattern. Mirror of
 // HEALTH_PRACTITIONERS_RE in app/api/health.py.
 import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
+// avodata.labor.gov.il per-scope URL pattern. Mirror of
+// AVODATA_SEARCH_RE in app/api/avodata.py.
+import { AVODATA_SEARCH_PATTERN } from "../utils/avodataPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -127,6 +130,8 @@ export default function HomePage() {
   // practitioners.health.gov.il per-registry scraper result — same
   // shape as GovIlValidation.
   const [healthResult, setHealthResult] = useState<GovIlValidation | null>(null);
+  // avodata.labor.gov.il per-scope scraper result — same shape.
+  const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -167,6 +172,10 @@ export default function HomePage() {
     return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
   };
 
+  const detectAvodataUrl = (input: string): boolean => {
+    return AVODATA_SEARCH_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -183,6 +192,7 @@ export default function HomePage() {
     setGovMapResult(null);
     setIdfResult(null);
     setHealthResult(null);
+    setAvodataResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -238,6 +248,20 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid practitioners.health.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2d. Check for avodata.labor.gov.il per-scope URL.
+      if (detectAvodataUrl(query)) {
+        const validation = await avodata.validate(query.trim());
+        if (validation.valid) {
+          setAvodataResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid avodata.labor.gov.il URL");
         }
         setLoading(false);
         return;
@@ -535,6 +559,62 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("health")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* avodata.labor.gov.il scraper result — sky-blue AVODATA chip
+            to keep it visually distinct from the purple practitioners
+            and green idf badges. */}
+        {!loading && avodataResult && (
+          <section aria-label="avodata.labor.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #2563eb" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{avodataResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#dbeafe",
+                      color: "#1e40af",
+                    }}>
+                      AVODATA
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>עולמות תעסוקה — משרד העבודה</span>
+                  <span>avodata.labor.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {avodataResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "avodata" ? (
+                    <RequestForm
+                      datasetTitle={avodataResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={avodataResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("avodata")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

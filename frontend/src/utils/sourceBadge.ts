@@ -31,7 +31,8 @@ export interface SourceBadge {
     | "home.source_link_govil"
     | "home.source_link_govmap"
     | "home.source_link_idf"
-    | "home.source_link_health";
+    | "home.source_link_health"
+    | "home.source_link_avodata";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -46,6 +47,13 @@ const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
 // backend stamps at create time in app/api/datasets.py for this
 // source and nothing else uses it.
 const HEALTH_ORG_HINTS = ["practitioners.health.gov.il"];
+
+// Same drift-immune rule for avodata. Only the exact "avodata.labor.gov.il"
+// stamp the backend writes at create time — NOT "ministry-labor" or
+// "labor", which are shared with regular gov.il collectors owned by
+// the Ministry of Labor. The ckan_id prefix "avodata-scraper-" is the
+// primary signal; this org hint is only a safety net for the same source.
+const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -66,6 +74,17 @@ function looksLikeHealth(
   // signal that the dataset came from the practitioners portal.
   if (ckan_id && ckan_id.startsWith("health-scraper-")) return true;
   if (organization && HEALTH_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeAvodata(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  // Same drift-immune scheme as IDF + health: ckan_id is the
+  // primary signal and never changes after creation.
+  if (ckan_id && ckan_id.startsWith("avodata-scraper-")) return true;
+  if (organization && AVODATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -120,6 +139,18 @@ export function sourceBadgeFor(
         label: "PRACTITIONERS",
         accent: "#7c3aed",
         sourceLinkKey: "home.source_link_health",
+      };
+    }
+    if (looksLikeAvodata(organization, ckan_id)) {
+      // Sky-blue pill for avodata.labor.gov.il, distinct from the
+      // PRACTITIONERS purple and IDF green so the source family is
+      // obvious at a glance.
+      return {
+        bg: "#dbeafe",
+        fg: "#1e40af",
+        label: "AVODATA",
+        accent: "#2563eb",
+        sourceLinkKey: "home.source_link_avodata",
       };
     }
     return {

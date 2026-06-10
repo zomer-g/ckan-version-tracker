@@ -211,12 +211,13 @@ async def track_dataset(
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
         # Parse the URL — try gov.il first, then idf.il, then
-        # practitioners.health.gov.il. The validators don't overlap
-        # (different hosts) so order is cosmetic, but gov.il is by far
-        # the common case.
+        # practitioners.health.gov.il, then avodata.labor.gov.il.
+        # The validators don't overlap (different hosts) so order is
+        # cosmetic, but gov.il is by far the common case.
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
+        from app.api.avodata import _parse_avodata_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -234,11 +235,18 @@ async def track_dataset(
                 slug_prefix = "health-scraper"
                 mirror_prefix = "gov-versions-health"
         if not collector_name:
+            page_type, collector_name = _parse_avodata_url(body.source_url)
+            if collector_name:
+                origin = "avodata.labor.gov.il"
+                slug_prefix = "avodata-scraper"
+                mirror_prefix = "gov-versions-avodata"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
-                    "idf.il page, or practitioners.health.gov.il registry"
+                    "idf.il page, practitioners.health.gov.il registry, "
+                    "or avodata.labor.gov.il scope"
                 ),
             )
 
@@ -326,6 +334,20 @@ async def track_dataset(
             sc.setdefault("max_docs", docs)
             if registry_id:
                 sc.setdefault("registry_id", registry_id)
+        elif page_type and page_type.startswith("avodata_"):
+            # avodata.labor.gov.il scope pages — fully server-rendered
+            # HTML, scraped via plain httpx + bs4 (no Playwright).
+            # The scope_slug is duplicated into scraper_config so the
+            # worker can dispatch / filter without re-parsing the URL.
+            from app.api.avodata import get_avodata_limits
+            depth, docs = get_avodata_limits(page_type)
+            scope_slug = page_type.split(":", 1)[1] if ":" in page_type else ""
+            sc["kind"] = "avodata"
+            sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            if scope_slug:
+                sc.setdefault("scope_slug", scope_slug)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -857,11 +879,13 @@ async def submit_tracking_request(
         if not body.title:
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
-        # Try gov.il first, then idf.il, then practitioners.health.gov.il.
-        # Mirrors the admin POST /datasets branch — keep the two in sync.
+        # Try gov.il first, then idf.il, then practitioners.health.gov.il,
+        # then avodata.labor.gov.il. Mirrors the admin POST /datasets
+        # branch — keep the two in sync.
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
+        from app.api.avodata import _parse_avodata_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -876,11 +900,17 @@ async def submit_tracking_request(
                 origin = "practitioners.health.gov.il"
                 slug_prefix = "health-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_avodata_url(body.source_url)
+            if collector_name:
+                origin = "avodata.labor.gov.il"
+                slug_prefix = "avodata-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
-                    "idf.il page, or practitioners.health.gov.il registry"
+                    "idf.il page, practitioners.health.gov.il registry, "
+                    "or avodata.labor.gov.il scope"
                 ),
             )
 
@@ -916,6 +946,17 @@ async def submit_tracking_request(
             sc["max_docs"] = docs
             if registry_id:
                 sc["registry_id"] = registry_id
+        elif page_type and page_type.startswith("avodata_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.avodata import get_avodata_limits
+            depth, docs = get_avodata_limits(page_type)
+            scope_slug = page_type.split(":", 1)[1] if ":" in page_type else ""
+            sc["kind"] = "avodata"
+            sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            if scope_slug:
+                sc["scope_slug"] = scope_slug
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
