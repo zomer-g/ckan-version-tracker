@@ -13,9 +13,9 @@ import { IDF_PATTERN } from "../utils/idfPattern";
 // practitioners.health.gov.il per-registry URL pattern. Mirror of
 // HEALTH_PRACTITIONERS_RE in app/api/health.py.
 import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
-// avodata.labor.gov.il per-scope URL pattern. Mirror of
-// AVODATA_SEARCH_RE in app/api/avodata.py.
-import { AVODATA_SEARCH_PATTERN } from "../utils/avodataPattern";
+// avodata.labor.gov.il occupations-index URL pattern. Mirror of
+// AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
+import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -173,7 +173,7 @@ export default function HomePage() {
   };
 
   const detectAvodataUrl = (input: string): boolean => {
-    return AVODATA_SEARCH_PATTERN.test(input.trim());
+    return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
   const stripHtml = (html: string) => {

@@ -335,19 +335,16 @@ async def track_dataset(
             if registry_id:
                 sc.setdefault("registry_id", registry_id)
         elif page_type and page_type.startswith("avodata_"):
-            # avodata.labor.gov.il scope pages — fully server-rendered
-            # HTML, scraped via plain httpx + bs4 (no Playwright).
-            # The scope_slug is duplicated into scraper_config so the
-            # worker can dispatch / filter without re-parsing the URL.
+            # avodata.labor.gov.il occupations index — fully server-
+            # rendered HTML, scraped via plain httpx + bs4 (no Playwright,
+            # no scope filtering). One dataset = the whole occupation
+            # corpus walked from the sitemap.
             from app.api.avodata import get_avodata_limits
             depth, docs = get_avodata_limits(page_type)
-            scope_slug = page_type.split(":", 1)[1] if ":" in page_type else ""
             sc["kind"] = "avodata"
             sc.setdefault("download_files", False)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
-            if scope_slug:
-                sc.setdefault("scope_slug", scope_slug)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -950,13 +947,10 @@ async def submit_tracking_request(
             # Mirror of the admin-POST branch — keep in sync.
             from app.api.avodata import get_avodata_limits
             depth, docs = get_avodata_limits(page_type)
-            scope_slug = page_type.split(":", 1)[1] if ":" in page_type else ""
             sc["kind"] = "avodata"
             sc["download_files"] = False
             sc["max_depth"] = depth
             sc["max_docs"] = docs
-            if scope_slug:
-                sc["scope_slug"] = scope_slug
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
