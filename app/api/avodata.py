@@ -34,8 +34,9 @@ router = APIRouter(prefix="/api/avodata", tags=["avodata"])
 
 
 AVODATA_HOSTS = {"avodata.labor.gov.il"}
-# The single trackable URL: the occupations index. Trailing slash ok.
+# Two trackable index URLs, each its own OVER dataset. Trailing slash ok.
 AVODATA_OCCUPATIONS_RE = re.compile(r"^/occupations/?$")
+AVODATA_EDUCATION_RE = re.compile(r"^/education/?$")
 
 
 class ValidateRequest(BaseModel):
@@ -54,24 +55,33 @@ class ValidateResponse(BaseModel):
 def _parse_avodata_url(url: str) -> tuple[str | None, str | None]:
     """Parse an avodata.labor.gov.il URL.
 
-    Returns ``("avodata_occupations", "avodata-occupations")`` for the
-    occupations index, ``(None, None)`` for everything else (the
-    homepage, ``/search?scope=...`` pages, naked ``/isco_group/...``
-    paths).
+    Returns one of:
+      - ``("avodata_occupations", "avodata-occupations")`` for ``/occupations``
+      - ``("avodata_education", "avodata-education")`` for ``/education``
+      - ``(None, None)`` for everything else (the homepage,
+        ``/search?scope=...`` pages, naked item paths).
 
     Compatibility:
-      - ``"avodata_occupations"`` matches ``startswith("avodata_")``,
-        keeping the dispatch switch in ``datasets.py`` symmetric with
-        the existing ``idf_`` / ``health_`` prefixes.
+      - both page_types match ``startswith("avodata_")``, keeping the
+        dispatch switch in ``datasets.py`` symmetric with the existing
+        ``idf_`` / ``health_`` prefixes.
     """
     s = url.strip()
     parsed = urlparse(s)
     host = (parsed.hostname or "").lower()
     if host not in AVODATA_HOSTS:
         return None, None
-    if not AVODATA_OCCUPATIONS_RE.match(parsed.path or ""):
-        return None, None
-    return "avodata_occupations", "avodata-occupations"
+    path = parsed.path or ""
+    if AVODATA_OCCUPATIONS_RE.match(path):
+        return "avodata_occupations", "avodata-occupations"
+    if AVODATA_EDUCATION_RE.match(path):
+        return "avodata_education", "avodata-education"
+    return None, None
+
+
+def corpus_of_page_type(page_type: str) -> str:
+    """Map an avodata page_type to its engine corpus name."""
+    return "education" if page_type == "avodata_education" else "occupations"
 
 
 # (max_depth, max_docs). max_depth is nominal — the scraper iterates a
@@ -106,18 +116,24 @@ async def validate_avodata_url(request: Request, body: ValidateRequest):
             valid=False,
             error=(
                 "URL is not a supported avodata.labor.gov.il page. "
-                "Expected the occupations index: "
-                "https://avodata.labor.gov.il/occupations — this tracks "
-                "the entire occupation corpus as one dataset. (Per-scope "
+                "Expected one of the two index pages: "
+                "https://avodata.labor.gov.il/occupations (occupation corpus) "
+                "or https://avodata.labor.gov.il/education (studies & training "
+                "corpus). Each is tracked as its own dataset. (Per-scope "
                 "/search?scope=… pages can't be tracked: the site's scope "
                 "filter is backed by a blocked Elasticsearch endpoint.)"
             ),
         )
 
+    title = (
+        "עבודאטה — מאגר הלימודים וההכשרות"
+        if page_type == "avodata_education"
+        else "עבודאטה — מאגר העיסוקים (כל העיסוקים)"
+    )
     return ValidateResponse(
         valid=True,
         page_type=page_type,
         collector_name=slug,
-        title="עבודאטה — מאגר העיסוקים (כל העיסוקים)",
+        title=title,
         url=url,
     )

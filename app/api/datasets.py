@@ -335,13 +335,14 @@ async def track_dataset(
             if registry_id:
                 sc.setdefault("registry_id", registry_id)
         elif page_type and page_type.startswith("avodata_"):
-            # avodata.labor.gov.il occupations index — fully server-
-            # rendered HTML, scraped via plain httpx + bs4 (no Playwright,
-            # no scope filtering). One dataset = the whole occupation
-            # corpus walked from the sitemap.
-            from app.api.avodata import get_avodata_limits
+            # avodata.labor.gov.il index page — fully server-rendered
+            # HTML, scraped via plain httpx + bs4 (no Playwright, no
+            # scope filtering). The corpus (occupations | education)
+            # is stamped so the worker walks the right sitemap family.
+            from app.api.avodata import get_avodata_limits, corpus_of_page_type
             depth, docs = get_avodata_limits(page_type)
             sc["kind"] = "avodata"
+            sc.setdefault("corpus", corpus_of_page_type(page_type))
             sc.setdefault("download_files", False)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
@@ -945,9 +946,10 @@ async def submit_tracking_request(
                 sc["registry_id"] = registry_id
         elif page_type and page_type.startswith("avodata_"):
             # Mirror of the admin-POST branch — keep in sync.
-            from app.api.avodata import get_avodata_limits
+            from app.api.avodata import get_avodata_limits, corpus_of_page_type
             depth, docs = get_avodata_limits(page_type)
             sc["kind"] = "avodata"
+            sc["corpus"] = corpus_of_page_type(page_type)
             sc["download_files"] = False
             sc["max_depth"] = depth
             sc["max_docs"] = docs
