@@ -368,6 +368,60 @@ async def push_version(
     if latest and latest.metadata_modified == body.metadata_modified:
         return {"message": "No change detected", "version_number": latest.version_number}
 
+    # ---- Shrink guard (data-integrity, hard-fail policy) ----
+    # An upstream blip (gov.il returning a partial/empty result set, a
+    # download that mostly failed) must NEVER overwrite a good version with
+    # a drastically smaller one. The scraper already hard-fails on
+    # incomplete scrapes, but this is the last line of defence on the OVER
+    # side: if the incoming version has far fewer rows than the previous
+    # good one, reject it (409 → the worker marks the task failed and
+    # retries; the prior version stays the latest). Genuine large
+    # shrinks (a source really did purge records) can be allowed by
+    # setting scraper_config.allow_shrink = true on the dataset.
+    new_total_rows = sum(r.row_count for r in body.resources)
+    sc = ds.scraper_config or {}
+    if (
+        latest is not None
+        and not sc.get("allow_shrink")
+        and new_total_rows >= 0  # always true; keeps the guard explicit
+    ):
+        prev_total = 0
+        try:
+            prev_total = int((latest.change_summary or {}).get("total_rows") or 0)
+        except (ValueError, TypeError):
+            prev_total = 0
+        # Only guard when the previous version actually had data, and the
+        # new one collapsed below the threshold (default 50%).
+        min_fraction = float(sc.get("min_shrink_fraction", 0.5))
+        if prev_total > 0 and new_total_rows < prev_total * min_fraction:
+            msg = (
+                f"Rejected version: {new_total_rows} rows is far below the "
+                f"previous good version's {prev_total} (< {min_fraction:.0%}). "
+                f"Likely a partial/failed upstream scrape — keeping v"
+                f"{latest.version_number}. Set scraper_config.allow_shrink "
+                f"to override if the source genuinely shrank."
+            )
+            logger.warning("Shrink guard for %s: %s", ds.id, msg)
+            # Mark the running task failed so the worker surfaces it and
+            # retries on the next poll (no version is created).
+            task_result = await db.execute(
+                select(ScrapeTask).where(
+                    ScrapeTask.tracked_dataset_id == ds.id,
+                    ScrapeTask.status == "running",
+                )
+            )
+            task = task_result.scalar_one_or_none()
+            if task:
+                task.status = "failed"
+                task.phase = "shrink_guard"
+                task.error = msg
+                task.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+            raise HTTPException(status_code=409, detail={
+                "error": "shrink_guard",
+                "message": msg,
+            })
+
     # Push tabular resources to odata.org.il
     resource_mappings: dict[str, Any] = {}
     odata_resource_ids = []
