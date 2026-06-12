@@ -507,8 +507,23 @@ class ODataClient:
                 return True
             return False
 
+        def _is_extra_keys_error(err: Exception) -> bool:
+            """True when an upsert 409 means the records carry columns the
+            datastore table doesn't have yet — CKAN says
+            ``row "1" has extra keys "col_a, col_b"``.
+
+            This happens in append mode when the source grows new columns
+            between versions: the shared resource was created with the old
+            field set, and datastore_upsert (insert) validates every record
+            against that frozen schema. We recover by extending the table's
+            schema (see below) rather than failing the whole push.
+            """
+            s = str(err)
+            return "409" in s and "extra keys" in s
+
         all_text_fields: list[dict] | None = None
         text_fallback_used = False
+        schema_extended = False
 
         last_err: Exception | None = None
         for attempt in range(1, max_attempts + 1):
@@ -556,6 +571,40 @@ class ODataClient:
                     # Do not consume an attempt: the fallback is a
                     # different kind of try.
                     continue
+                # Append-mode schema drift: the source grew new columns, so
+                # the upsert (insert against a frozen schema) rejects every
+                # record with "extra keys". datastore_create on an EXISTING
+                # resource with a superset of fields ALTERs the table to add
+                # the missing columns without touching existing data, so we
+                # run it once (records=[] — schema-only) and then retry the
+                # same upsert. Only meaningful on the upsert path; on a
+                # create batch the schema is defined from `fields` already.
+                if not create and not schema_extended and _is_extra_keys_error(e):
+                    schema_extended = True
+                    logger.warning(
+                        "Datastore batch %d hit 'extra keys' 409 on upsert — "
+                        "source grew new columns; extending resource %s schema "
+                        "(adding the missing fields) and retrying",
+                        batch_num, resource_id,
+                    )
+                    try:
+                        await self.datastore_create(
+                            resource_id=resource_id,
+                            fields=fields,
+                            records=[],
+                        )
+                    except Exception as ce:
+                        # If the schema extend itself fails, fall through to
+                        # the normal retry/backoff so we don't lose the
+                        # original error context.
+                        logger.warning(
+                            "Schema extend for resource %s failed: %s",
+                            resource_id, ce,
+                        )
+                    else:
+                        # Do not consume an attempt — the extend is a
+                        # different kind of try, like the text fallback.
+                        continue
                 if attempt < max_attempts:
                     wait = 5 * attempt  # 5s, 10s
                     logger.warning(
