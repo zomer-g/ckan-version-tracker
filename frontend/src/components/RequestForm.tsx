@@ -43,13 +43,24 @@ export default function RequestForm({
   sourceUrl,
 }: RequestFormProps) {
   const { t, i18n } = useTranslation();
-  const [name, setName] = useState("");
+  // The single editable text field now NAMES THE DATASET (sent as `title`
+  // for scraper requests). Prefilled with the auto-derived title so the
+  // user can keep it or refine it.
+  const [datasetName, setDatasetName] = useState(datasetTitle);
   const [notes, setNotes] = useState("");
-  const [contact, setContact] = useState("");
-  const [interval, setInterval] = useState(604800);
+  // Default to a quarterly refresh; the user reveals the picker only if
+  // they want it more often. 7776000s = 3 months = the last INTERVAL option.
+  const [interval, setInterval] = useState(7776000);
+  const [showFreq, setShowFreq] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
+
+  // If the parent swaps in a different dataset while the form is mounted,
+  // refresh the prefilled name to match (mirrors the resource-picker reset).
+  useEffect(() => {
+    setDatasetName(datasetTitle);
+  }, [datasetTitle]);
 
   // Resource picker state — only relevant for CKAN datasets that have
   // an `availableResources` list. We initialise with whatever the
@@ -93,14 +104,13 @@ export default function RequestForm({
     setSubmitting(true);
     setError("");
     try {
+      const trimmedName = datasetName.trim();
       if (sourceType === "scraper" && sourceUrl) {
         await publicApi.requestScraper({
           source_url: sourceUrl,
-          title: datasetTitle,
+          title: trimmedName || datasetTitle,
           preferred_interval: interval,
-          requester_name: name || undefined,
           requester_notes: notes || undefined,
-          requester_contact: contact || undefined,
         });
       } else {
         const ids = Array.from(selectedResources);
@@ -114,9 +124,12 @@ export default function RequestForm({
           resource_id: resourceId,
           resource_ids: ids.length > 0 ? ids : undefined,
           preferred_interval: interval,
-          requester_name: name || undefined,
+          // CKAN keeps its own authoritative title; pass a user-supplied
+          // name only when it differs from the prefill, so the admin sees
+          // the requester's preferred label.
+          requester_name:
+            trimmedName && trimmedName !== datasetTitle ? trimmedName : undefined,
           requester_notes: notes || undefined,
-          requester_contact: contact || undefined,
         });
       }
       setSuccess(true);
@@ -317,8 +330,8 @@ export default function RequestForm({
           <input
             id={`req-name-${formId}`}
             type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            value={datasetName}
+            onChange={(e) => setDatasetName(e.target.value)}
             placeholder={t("home.request_name")}
           />
         </div>
@@ -345,34 +358,48 @@ export default function RequestForm({
           />
         </div>
 
+        {/* Update frequency — quarterly by default, revealed on demand. */}
         <div>
-          <label htmlFor={`req-contact-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
-            {t("home.request_contact")}
-          </label>
-          <input
-            id={`req-contact-${formId}`}
-            type="text"
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            placeholder={t("home.request_contact")}
-          />
-        </div>
-
-        <div>
-          <label htmlFor={`req-interval-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
-            {t("home.request_interval")}
-          </label>
-          <select
-            id={`req-interval-${formId}`}
-            value={interval}
-            onChange={(e) => setInterval(Number(e.target.value))}
-          >
-            {INTERVAL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {i18n.language === "he" ? opt.labelHe : opt.labelEn}
-              </option>
-            ))}
-          </select>
+          {!showFreq ? (
+            <div
+              className="text-sm text-muted"
+              style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}
+            >
+              <span>{t("home.request_freq_default")}</span>
+              <button
+                type="button"
+                onClick={() => setShowFreq(true)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  color: "var(--primary)",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {t("home.request_freq_more")}
+              </button>
+            </div>
+          ) : (
+            <>
+              <label htmlFor={`req-interval-${formId}`} className="text-sm" style={{ fontWeight: 500 }}>
+                {t("home.request_interval")}
+              </label>
+              <select
+                id={`req-interval-${formId}`}
+                value={interval}
+                onChange={(e) => setInterval(Number(e.target.value))}
+              >
+                {INTERVAL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {i18n.language === "he" ? opt.labelHe : opt.labelEn}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
 
         <button
