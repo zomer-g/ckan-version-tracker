@@ -39,11 +39,15 @@ function parseLine(raw: string): ParsedLine {
 
 export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequestFormProps) {
   const { t, i18n } = useTranslation();
-  const [text, setText] = useState(initialUrl);
+  // The layer link comes straight from the search box — no editing needed.
+  // We parse it once and show the recognised layer(s) read-only above the
+  // (entirely optional) fields, instead of asking the user to re-type URLs.
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
-  const [contact, setContact] = useState("");
-  const [interval, setInterval] = useState(604800);
+  // Default to quarterly; the picker is hidden until the user asks for a
+  // faster cadence. 7776000s = 3 months = the last INTERVAL option.
+  const [interval, setInterval] = useState(7776000);
+  const [showFreq, setShowFreq] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<
     Array<{ url: string; status: string; layer_id?: string; error?: string }> | null
@@ -54,19 +58,21 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
     // Split ONLY on newlines, never on commas — govmap URLs contain
     // `c=x,y` ITM coordinates, so a comma split tears each URL into
     // two invalid chunks.
-    return text
+    return initialUrl
       .split(/\r?\n+/)
       .map((s) => s.trim())
       .filter(Boolean)
       .map(parseLine);
-  }, [text]);
+  }, [initialUrl]);
 
   const validUrls = parsed.filter((p) => p.valid);
-  const invalidCount = parsed.length - validUrls.length;
-  const canSubmit = validUrls.length > 0 && !submitting;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (validUrls.length === 0) {
+      setError(t("home.govmap_no_layer"));
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -75,7 +81,6 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
         preferred_interval: interval,
         requester_name: name || undefined,
         requester_notes: notes || undefined,
-        requester_contact: contact || undefined,
       });
       setResults(resp.results);
     } catch (err: any) {
@@ -167,10 +172,6 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
         </button>
       </div>
 
-      <p className="text-sm text-muted mb-1" style={{ margin: "0 0 0.75rem 0" }}>
-        {t("home.govmap_request_hint")}
-      </p>
-
       {error && (
         <div role="alert" className="badge badge-danger mb-1" style={{ display: "block" }}>
           {error}
@@ -178,63 +179,28 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-        <div>
-          <label htmlFor="govmap-urls" className="text-sm" style={{ fontWeight: 500 }}>
-            {t("home.govmap_urls_label")}
-            <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
-          </label>
-          <textarea
-            id="govmap-urls"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="https://www.govmap.gov.il/?c=...&lay=220826"
-            rows={4}
+        {/* The recognised layer link(s), read-only — this is the "if a link
+            is found, show it" confirmation. */}
+        {validUrls.length > 0 && (
+          <div
             style={{
-              width: "100%",
-              border: "1px solid var(--border)",
+              padding: "0.45rem 0.7rem",
+              border: "1px solid var(--primary-100)",
               borderRadius: "var(--radius)",
-              padding: "0.5rem 0.75rem",
-              fontSize: "0.85rem",
-              fontFamily: "monospace",
+              background: "white",
+              fontSize: "0.8rem",
               direction: "ltr",
-              resize: "vertical",
+              wordBreak: "break-all",
+              color: "#166534",
             }}
-          />
-          {parsed.length > 0 && (
-            <div
-              style={{
-                marginTop: "0.4rem",
-                maxHeight: "8rem",
-                overflowY: "auto",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                background: "white",
-                fontSize: "0.78rem",
-              }}
-            >
-              {parsed.map((p, i) => (
-                <div
-                  key={i}
-                  style={{
-                    padding: "0.3rem 0.6rem",
-                    borderBottom: "1px solid var(--border)",
-                    color: p.valid ? "#166534" : "#dc2626",
-                    direction: "ltr",
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {p.valid ? `✓ lay=${p.layerId}` : "✗ invalid"} — {p.url}
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="text-sm text-muted" style={{ marginTop: "0.25rem" }}>
-            {t("home.govmap_urls_summary", {
-              valid: validUrls.length,
-              invalid: invalidCount,
-            })}
+          >
+            {validUrls.map((p, i) => (
+              <div key={i} style={{ padding: "0.1rem 0" }}>
+                ✓ lay={p.layerId} — {p.url}
+              </div>
+            ))}
           </div>
-        </div>
+        )}
 
         <div>
           <label htmlFor="govmap-name" className="text-sm" style={{ fontWeight: 500 }}>
@@ -271,40 +237,54 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
           />
         </div>
 
+        {/* Update frequency — quarterly by default, revealed on demand. */}
         <div>
-          <label htmlFor="govmap-contact" className="text-sm" style={{ fontWeight: 500 }}>
-            {t("home.request_contact")}
-          </label>
-          <input
-            id="govmap-contact"
-            type="text"
-            value={contact}
-            onChange={(e) => setContact(e.target.value)}
-            placeholder={t("home.request_contact")}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="govmap-interval" className="text-sm" style={{ fontWeight: 500 }}>
-            {t("home.request_interval")}
-          </label>
-          <select
-            id="govmap-interval"
-            value={interval}
-            onChange={(e) => setInterval(Number(e.target.value))}
-          >
-            {INTERVAL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {i18n.language === "he" ? opt.labelHe : opt.labelEn}
-              </option>
-            ))}
-          </select>
+          {!showFreq ? (
+            <div
+              className="text-sm text-muted"
+              style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}
+            >
+              <span>{t("home.request_freq_default")}</span>
+              <button
+                type="button"
+                onClick={() => setShowFreq(true)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  color: "var(--primary)",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {t("home.request_freq_more")}
+              </button>
+            </div>
+          ) : (
+            <>
+              <label htmlFor="govmap-interval" className="text-sm" style={{ fontWeight: 500 }}>
+                {t("home.request_interval")}
+              </label>
+              <select
+                id="govmap-interval"
+                value={interval}
+                onChange={(e) => setInterval(Number(e.target.value))}
+              >
+                {INTERVAL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {i18n.language === "he" ? opt.labelHe : opt.labelEn}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
 
         <button
           type="submit"
           className="btn-primary"
-          disabled={!canSubmit}
+          disabled={submitting}
           style={{ alignSelf: "flex-start" }}
         >
           {submitting

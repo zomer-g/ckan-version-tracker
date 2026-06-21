@@ -199,6 +199,7 @@ export default function HomePage() {
         const validation = await govmap.validate(query.trim());
         if (validation.valid) {
           setGovMapResult(validation);
+          setRequestFormFor("govmap");
           setResults([]);
           setCount(0);
         } else {
@@ -213,6 +214,7 @@ export default function HomePage() {
         const validation = await govil.validate(query.trim());
         if (validation.valid) {
           setGovIlResult(validation);
+          setRequestFormFor("govil");
           setResults([]);
           setCount(0);
         } else {
@@ -227,6 +229,7 @@ export default function HomePage() {
         const validation = await idf.validate(query.trim());
         if (validation.valid) {
           setIdfResult(validation);
+          setRequestFormFor("idf");
           setResults([]);
           setCount(0);
         } else {
@@ -244,6 +247,7 @@ export default function HomePage() {
         const validation = await health.validate(query.trim());
         if (validation.valid) {
           setHealthResult(validation);
+          setRequestFormFor("health");
           setResults([]);
           setCount(0);
         } else {
@@ -258,6 +262,7 @@ export default function HomePage() {
         const validation = await avodata.validate(query.trim());
         if (validation.valid) {
           setAvodataResult(validation);
+          setRequestFormFor("avodata");
           setResults([]);
           setCount(0);
         } else {

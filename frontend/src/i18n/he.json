@@ -94,6 +94,7 @@
     "govmap_urls_summary": "{{valid}} תקינות, {{invalid}} לא תקינות",
     "govmap_request_submit": "שלח בקשה ({{count}} שכבות)",
     "govmap_request_done": "הבקשה נשלחה: {{created}} חדשות, {{dup}} כפולות, {{bad}} לא תקינות.",
+    "govmap_no_layer": "לא זוהתה שכבת GovMap תקינה בקישור.",
     "no_tracked": "עדיין אין מאגרים במעקב",
     "stats_datasets": "מאגרים במעקב",
     "stats_versions": "גרסאות שנשמרו",
