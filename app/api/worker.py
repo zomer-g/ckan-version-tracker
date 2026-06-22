@@ -823,6 +823,71 @@ async def upload_zip(
         raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
 
 
+class DeleteResourcesBody(BaseModel):
+    resource_ids: list[str]
+
+
+@router.post("/delete-resources/{tracked_dataset_id}")
+@limiter.limit("30/minute")
+async def delete_resources(
+    request: Request,
+    tracked_dataset_id: str,
+    body: DeleteResourcesBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """Worker rollback for a failed publish.
+
+    ZIP/CSV/GeoJSON resources are uploaded to ODATA (via /upload-zip etc.)
+    BEFORE /push-version commits the VersionIndex. If a task dies after those
+    uploads but before push-version (the common failure mode on huge datasets
+    that time out / get auto-reset mid-run), those resources are left orphaned —
+    no version references them — and every failed retry leaks another full set.
+    The worker calls this on its failure path to delete what it just uploaded.
+
+    Safety: a resource referenced by ANY committed version of this dataset is
+    never deleted, so a stale or duplicated rollback call can never destroy live
+    data — it can only remove genuinely-orphaned resources.
+    """
+    _verify_worker_key(request)
+
+    try:
+        ds_id = uuid.UUID(tracked_dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset ID")
+
+    # Every resource_id referenced by any version of this dataset is off-limits.
+    from app.api.versions import _extract_resource_ids
+    result = await db.execute(
+        select(VersionIndex).where(VersionIndex.tracked_dataset_id == ds_id)
+    )
+    referenced: set[str] = set()
+    for v in result.scalars().all():
+        for rid in _extract_resource_ids(v.resource_mappings):
+            referenced.add(rid)
+        if v.odata_metadata_resource_id:
+            referenced.add(v.odata_metadata_resource_id)
+
+    deleted, skipped, failed = 0, 0, 0
+    for rid in body.resource_ids:
+        if not rid:
+            continue
+        if rid in referenced:
+            skipped += 1  # belongs to a real version — never touch
+            continue
+        try:
+            await odata_client.resource_delete(rid)
+            deleted += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("rollback resource_delete(%s) failed: %s", rid, e)
+
+    logger.info(
+        "Worker rollback for dataset %s: %d deleted, %d kept (referenced), %d failed",
+        tracked_dataset_id, deleted, skipped, failed,
+    )
+    return {"deleted": deleted, "skipped_referenced": skipped, "failed": failed}
+
+
 @router.post("/upload-geojson/{tracked_dataset_id}")
 @limiter.limit("30/minute")
 async def upload_geojson(
