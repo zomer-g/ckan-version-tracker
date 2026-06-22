@@ -107,6 +107,7 @@ export interface TrackedDataset {
   source_url: string | null;
   storage_mode: "full_snapshot" | "append_only";
   append_key: string | null;
+  upload_mode: "full" | "local_only";
   last_error: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
@@ -130,7 +131,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "govmap", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),

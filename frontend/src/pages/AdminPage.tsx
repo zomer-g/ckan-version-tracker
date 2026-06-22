@@ -563,6 +563,18 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   };
 
+  const handleUpdateUploadMode = async (
+    id: string,
+    upload_mode: "full" | "local_only",
+  ) => {
+    try {
+      const updated = await datasetsApi.update(id, { upload_mode });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, upload_mode: updated.upload_mode } : d))
+      );
+    } catch (e) { console.error(e); }
+  };
+
   const handleSaveResourceIds = async (
     id: string,
     resource_ids: string[],
@@ -1475,6 +1487,20 @@ export default function AdminPage() {
                           style={{ width: "10rem", padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: "4px" }}
                         />
                       )}
+                      <select
+                        value={ds.upload_mode || "full"}
+                        onChange={(e) =>
+                          handleUpdateUploadMode(
+                            ds.id,
+                            e.target.value as "full" | "local_only",
+                          )
+                        }
+                        title="הורדה מקומית בלבד = הורדת הקבצים למחשב ה-worker ללא העלאה ל-ODATA וללא יצירת גרסה"
+                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.upload_mode === "local_only" ? "#b91c1c" : undefined }}
+                      >
+                        <option value="full">{t("admin.upload_full") || "העלאה מלאה ל-ODATA"}</option>
+                        <option value="local_only">{t("admin.upload_local") || "הורדה מקומית בלבד"}</option>
+                      </select>
                     </div>
                   </td>
                   <td style={tdStyle} className="text-sm">

@@ -44,6 +44,9 @@ class UpdateRequest(BaseModel):
     organization_id: str | None = None  # "" or null to clear; UUID to assign
     storage_mode: str | None = None  # "full_snapshot" | "append_only"
     append_key: str | None = None  # only meaningful when storage_mode="append_only"
+    # "full" (scrape→download→upload to ODATA→version) | "local_only"
+    # (scrape→download to the worker machine, skip ODATA upload + version).
+    upload_mode: str | None = None
     # New: replace the tracked-resources set. Empty list ([]) is rejected
     # so an admin can't accidentally orphan a CKAN dataset; pass null to
     # leave unchanged.
@@ -55,6 +58,12 @@ class UpdateRequest(BaseModel):
 def _validate_storage_mode(mode: str) -> str:
     if mode not in ("full_snapshot", "append_only"):
         raise HTTPException(status_code=400, detail="storage_mode must be 'full_snapshot' or 'append_only'")
+    return mode
+
+
+def _validate_upload_mode(mode: str) -> str:
+    if mode not in ("full", "local_only"):
+        raise HTTPException(status_code=400, detail="upload_mode must be 'full' or 'local_only'")
     return mode
 
 
@@ -106,6 +115,7 @@ class DatasetResponse(BaseModel):
     source_type: str = "ckan"
     storage_mode: str = "full_snapshot"
     append_key: str | None = None
+    upload_mode: str = "full"  # "full" | "local_only"
     last_error: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
@@ -178,6 +188,7 @@ async def list_tracked(
                 source_type=ds.source_type or "ckan",
                 storage_mode=ds.storage_mode or "full_snapshot",
                 append_key=(ds.scraper_config or {}).get("append_key"),
+                upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
                 last_error=ds.last_error,
                 resource_ids=ds.resource_ids,
                 new_resources_at_source=ds.new_resources_at_source,
@@ -386,6 +397,7 @@ async def track_dataset(
             source_type=ds.source_type,
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=(ds.scraper_config or {}).get("append_key"),
+            upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -640,6 +652,7 @@ async def track_dataset(
         source_type=ds.source_type,
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -704,6 +717,16 @@ async def update_tracked(
         else:
             sc.pop("append_key", None)
         ds.scraper_config = sc or None
+    if body.upload_mode is not None:
+        # Stored in scraper_config (no migration) — flows straight to the worker
+        # via the /poll response, which returns ds.scraper_config verbatim.
+        mode = _validate_upload_mode(body.upload_mode)
+        sc = dict(ds.scraper_config or {})
+        if mode == "local_only":
+            sc["upload_mode"] = "local_only"
+        else:
+            sc.pop("upload_mode", None)  # "full" is the default — keep config clean
+        ds.scraper_config = sc or None
 
     if body.organization_id is not None:
         if body.organization_id == "":
@@ -765,6 +788,7 @@ async def update_tracked(
         source_type=ds.source_type or "ckan",
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -1160,6 +1184,7 @@ async def get_tracked_public(
         source_type=ds.source_type or "ckan",
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
+        upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,

@@ -1391,3 +1391,47 @@ async def report_failure(
 
     logger.warning("Scrape task %s failed: %s", task_id, body.error)
     return {"status": "failed"}
+
+
+class CompleteLocalReport(BaseModel):
+    message: str = ""
+    file_count: int = 0
+    record_count: int = 0
+
+
+@router.post("/complete-local/{task_id}")
+@limiter.limit("30/minute")
+async def complete_local(
+    request: Request,
+    task_id: str,
+    body: CompleteLocalReport,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a task done in 'local_only' mode: the worker scraped + downloaded the
+    files to its own machine and deliberately skipped the ODATA upload + version
+    (per the dataset's upload_mode). No version is created — this is a clean
+    terminal state so the task isn't left 'running' (auto-reset) or flagged as a
+    failure. The informational message records the local path + counts."""
+    _verify_worker_key(request)
+
+    try:
+        tid = uuid.UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task ID")
+
+    result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "completed"
+    task.phase = "completed_local"
+    task.progress = 100
+    task.message = (body.message or "הורדה מקומית בלבד (ללא העלאה ל-ODATA)")[:500]
+    task.error = None
+    task.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    logger.info("Scrape task %s completed locally (no upload): %s files, %s records — %s",
+                task_id, body.file_count, body.record_count, task.message)
+    return {"status": "completed_local"}
