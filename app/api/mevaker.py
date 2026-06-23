@@ -14,7 +14,7 @@ for the request form. No live fetch — the URL is recognised by shape.
 
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -27,8 +27,27 @@ router = APIRouter(prefix="/api/mevaker", tags=["mevaker"])
 
 
 MEVAKER_HOSTS = {"www.mevaker.gov.il", "mevaker.gov.il"}
-# The single trackable index URL — the "דוחות לפי נושאים" landing page.
+# The trackable index URL — the "דוחות לפי נושאים" landing page.
 MEVAKER_SUBJECTS_RE = re.compile(r"^/subjects/?$")
+
+# The whole corpus (~37 GB of PDF+Word) is too big for one dataset, so we
+# split it by publication type — the 10 types the service's
+# ``publicationTypes`` endpoint returns. Each ``?type=<slug>`` is its own
+# OVER dataset; the slug maps to the exact Hebrew type string the scraper
+# matches against each volume's ``Type``. Bare /subjects (no type) still
+# means the whole corpus, for callers who want it.
+MEVAKER_TYPES: dict[str, str] = {
+    "annual": "דוחות שנתיים",
+    "special": "דוחות מיוחדים",
+    "local-government": "ביקורת על השלטון המקומי",
+    "ombudsman": "דוחות נציב תלונות הציבור",
+    "unions": "ביקורת על האיגודים",
+    "party-funding": "מימון מפלגות",
+    "primaries-funding": "מימון בחירות מקדימות (פריימריז)",
+    "local-elections-funding": "מימון בחירות ברשויות המקומיות",
+    "studies": "עיונים, מאמרים, ספרים",
+    "international": "דוחות בינלאומיים",
+}
 
 
 class ValidateRequest(BaseModel):
@@ -47,10 +66,16 @@ class ValidateResponse(BaseModel):
 def _parse_mevaker_url(url: str) -> tuple[str | None, str | None]:
     """Parse a mevaker.gov.il URL.
 
-    Returns ``("mevaker_reports", "mevaker-reports")`` for the
-    ``/subjects`` index, else ``(None, None)``. The page_type matches
-    ``startswith("mevaker_")``, keeping the dispatch switch in
-    ``datasets.py`` symmetric with the existing ``avodata_`` / ``health_``
+    Returns:
+      - ``("mevaker_reports:<slug>", "mevaker-<slug>")`` for a per-type
+        ``/subjects?type=<slug>`` URL (the recommended split),
+      - ``("mevaker_reports", "mevaker-reports")`` for bare ``/subjects``
+        (the whole corpus),
+      - ``(None, None)`` otherwise (incl. an unknown ``type`` slug, so a
+        typo can't silently scrape all 37 GB).
+
+    The page_type matches ``startswith("mevaker_")``, keeping the dispatch
+    switch in ``datasets.py`` symmetric with the ``avodata_`` / ``health_``
     prefixes.
     """
     s = url.strip()
@@ -58,10 +83,24 @@ def _parse_mevaker_url(url: str) -> tuple[str | None, str | None]:
     host = (parsed.hostname or "").lower()
     if host not in MEVAKER_HOSTS:
         return None, None
-    path = parsed.path or ""
-    if MEVAKER_SUBJECTS_RE.match(path):
-        return "mevaker_reports", "mevaker-reports"
-    return None, None
+    if not MEVAKER_SUBJECTS_RE.match(parsed.path or ""):
+        return None, None
+    type_vals = parse_qs(parsed.query or "").get("type")
+    if type_vals:
+        slug = type_vals[0].strip().lower()
+        if slug not in MEVAKER_TYPES:
+            return None, None
+        return f"mevaker_reports:{slug}", f"mevaker-{slug}"
+    return "mevaker_reports", "mevaker-reports"
+
+
+def type_hebrew_of(page_type: str) -> str | None:
+    """Map a ``mevaker_reports:<slug>`` page_type to the Hebrew
+    publication-type string the scraper filters on. Bare
+    ``mevaker_reports`` (whole corpus) returns None."""
+    if page_type and page_type.startswith("mevaker_reports:"):
+        return MEVAKER_TYPES.get(page_type.split(":", 1)[1])
+    return None
 
 
 # (max_depth, max_docs). max_depth is nominal. The corpus is a few
@@ -90,16 +129,22 @@ async def validate_mevaker_url(request: Request, body: ValidateRequest):
             valid=False,
             error=(
                 "URL is not a supported mevaker.gov.il page. Expected the "
-                "reports index: https://www.mevaker.gov.il/subjects "
-                "(the whole State Comptroller report corpus, tracked as one "
-                "dataset)."
+                "reports index https://www.mevaker.gov.il/subjects with a "
+                "publication-type filter, e.g. ?type=annual (the corpus is "
+                "split by type — one dataset each). Known types: "
+                + ", ".join(MEVAKER_TYPES.keys())
             ),
         )
 
+    hebrew_type = type_hebrew_of(page_type)
+    title = (
+        f"מבקר המדינה — {hebrew_type}"
+        if hebrew_type else "מבקר המדינה — דוחות ביקורת"
+    )
     return ValidateResponse(
         valid=True,
         page_type=page_type,
         collector_name=slug,
-        title="מבקר המדינה — דוחות ביקורת",
+        title=title,
         url=url,
     )

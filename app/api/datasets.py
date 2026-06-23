@@ -369,10 +369,13 @@ async def track_dataset(
             # SharePoint Digital Library's anonymous JSON REST service.
             # Plain httpx + bs4; one row per audit task with PDF + Word
             # downloaded.
-            from app.api.mevaker import get_mevaker_limits
+            from app.api.mevaker import get_mevaker_limits, type_hebrew_of
             depth, docs = get_mevaker_limits(page_type)
             sc["kind"] = "mevaker"
             sc.setdefault("download_files", True)
+            ptype = type_hebrew_of(page_type)
+            if ptype:
+                sc.setdefault("publication_type", ptype)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
 
@@ -1003,10 +1006,13 @@ async def submit_tracking_request(
             sc["max_docs"] = docs
         elif page_type and page_type.startswith("mevaker_"):
             # Mirror of the admin-POST branch — keep in sync.
-            from app.api.mevaker import get_mevaker_limits
+            from app.api.mevaker import get_mevaker_limits, type_hebrew_of
             depth, docs = get_mevaker_limits(page_type)
             sc["kind"] = "mevaker"
             sc["download_files"] = True
+            ptype = type_hebrew_of(page_type)
+            if ptype:
+                sc["publication_type"] = ptype
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         ds = TrackedDataset(
