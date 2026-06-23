@@ -46,11 +46,22 @@ def test_sticky_cold_start_none_stays_none():
     assert wv._store_sticky(key, None) is None
 
 
-def test_fail_open_default_so_cold_start_doesnt_block_good_workers():
-    # Default fail-OPEN: this server reaches GitHub unreliably, so a cold
-    # required=None must not block the correct worker. Hard protection is
-    # opt-in via worker_required_version + worker_version_fail_closed=True.
-    assert wv.settings.worker_version_fail_closed is False
+def test_gate_is_pinned_and_fail_closed():
+    # Stale-worker protection without GitHub: the required SHA is pinned
+    # (so it's never undetermined) and the gate fails closed. The engine-
+    # hash axis stays fail-open in worker.py so a GitHub blip can't block
+    # the correct worker.
+    assert wv.settings.worker_version_fail_closed is True
+    pin = wv.settings.worker_required_version.strip()
+    assert len(pin) == 40 and all(c in "0123456789abcdef" for c in pin), pin
+
+
+def test_pin_makes_required_sha_github_independent():
+    import asyncio
+    # With a pin set, get_required_worker_sha returns it without any
+    # network call.
+    sha = asyncio.run(wv.get_required_worker_sha())
+    assert sha == wv.settings.worker_required_version.strip()
 
 
 if __name__ == "__main__":

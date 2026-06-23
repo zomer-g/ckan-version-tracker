@@ -161,8 +161,13 @@ async def poll_for_task(
             (required_version is None and fail_open)
             or (bool(worker_version) and worker_version == required_version)
         )
+        # The engine-hash axis ALWAYS fails open when undetermined: it can
+        # only be sourced from GitHub (no env pin), so failing it closed on
+        # a GitHub blip would block the correct worker. The pinned
+        # required_version is the real gate; engine-hash is a bonus check
+        # that only ever tightens, never blocks on its own.
         engine_match = (
-            (required_engine_hash is None and fail_open)
+            required_engine_hash is None
             or (bool(worker_engine_hash) and worker_engine_hash == required_engine_hash)
         )
 

@@ -35,23 +35,23 @@ class Settings(BaseSettings):
     # WORKER_REQUIRED_VERSION pins to a specific SHA, skipping the GitHub
     # fetch entirely.
     worker_version_check_enabled: bool = True
-    # When the required SHA/engine-hash genuinely can't be determined,
-    # should the dispatch gate fail CLOSED (refuse) or OPEN (allow)?
-    #
-    # Default OPEN: this server reaches GitHub unreliably (Render egress
-    # rate-limits / blips), so on a cold start the required SHA can be None
-    # even though everything is fine — failing closed there blocks the
-    # CORRECT worker too (a total scraping outage). Fail-OPEN keeps work
-    # flowing; the sticky cache below already prevents a known-good value
-    # from being lost to a transient blip, which was the real hole.
-    #
-    # To get hard stale-worker protection without depending on GitHub, pin
-    # worker_required_version to the worker's full SHA (GitHub-independent)
-    # AND set this True — then the gate has a reliable value to enforce.
-    worker_version_fail_closed: bool = False
+    # Fail CLOSED when the required SHA can't be determined? Safe ONLY
+    # because worker_required_version below is pinned (so it's never
+    # undetermined). The engine-hash axis stays fail-open in worker.py, so
+    # a GitHub blip can't block the correct worker — the pinned SHA is the
+    # sole gate.
+    worker_version_fail_closed: bool = True
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
-    worker_required_version: str = ""  # explicit SHA override; empty = fetch latest
+    # PINNED to the worker's full git SHA — GitHub-independent, so the gate
+    # works even when this server can't reach GitHub (the reason stale
+    # workers slipped through and crashed govmap tasks with the old WFS
+    # ParseError). The correct worker reports this exact SHA; any other
+    # (stale) worker is refused.
+    # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
+    #   to the new `git rev-parse HEAD` of that repo, or the new worker is
+    #   refused. (OVER-only commits don't change it.)
+    worker_required_version: str = "f5ca3a2d24f14c9be7389e0b8dfe5546f36347c6"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
