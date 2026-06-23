@@ -46,9 +46,11 @@ def test_sticky_cold_start_none_stays_none():
     assert wv._store_sticky(key, None) is None
 
 
-def test_fail_closed_default():
-    # The gate is configured to refuse (not fail open) when undetermined.
-    assert wv.settings.worker_version_fail_closed is True
+def test_fail_open_default_so_cold_start_doesnt_block_good_workers():
+    # Default fail-OPEN: this server reaches GitHub unreliably, so a cold
+    # required=None must not block the correct worker. Hard protection is
+    # opt-in via worker_required_version + worker_version_fail_closed=True.
+    assert wv.settings.worker_version_fail_closed is False
 
 
 if __name__ == "__main__":

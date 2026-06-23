@@ -35,14 +35,20 @@ class Settings(BaseSettings):
     # WORKER_REQUIRED_VERSION pins to a specific SHA, skipping the GitHub
     # fetch entirely.
     worker_version_check_enabled: bool = True
-    # When the required SHA/engine-hash can't be determined (GitHub
-    # unreachable AND no cached known-good value), fail the dispatch gate
-    # CLOSED — refuse to hand out tasks rather than risk a stale worker
-    # grabbing one and crashing it. The sticky cache in worker_version.py
-    # makes the "undetermined" case rare (a known-good value persists
-    # across GitHub blips), so this almost never blocks legitimate work;
-    # pin worker_required_version to sidestep GitHub entirely if needed.
-    worker_version_fail_closed: bool = True
+    # When the required SHA/engine-hash genuinely can't be determined,
+    # should the dispatch gate fail CLOSED (refuse) or OPEN (allow)?
+    #
+    # Default OPEN: this server reaches GitHub unreliably (Render egress
+    # rate-limits / blips), so on a cold start the required SHA can be None
+    # even though everything is fine — failing closed there blocks the
+    # CORRECT worker too (a total scraping outage). Fail-OPEN keeps work
+    # flowing; the sticky cache below already prevents a known-good value
+    # from being lost to a transient blip, which was the real hole.
+    #
+    # To get hard stale-worker protection without depending on GitHub, pin
+    # worker_required_version to the worker's full SHA (GitHub-independent)
+    # AND set this True — then the gate has a reliable value to enforce.
+    worker_version_fail_closed: bool = False
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
     worker_required_version: str = ""  # explicit SHA override; empty = fetch latest
