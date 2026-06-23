@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, avodata, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -13,6 +13,9 @@ import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
+// in app/api/mevaker.py.
+import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
 
 interface CkanResource {
   id: string;
@@ -75,6 +78,11 @@ export default function SearchPage() {
   const [avodataTracked, setAvodataTracked] = useState<"tracked" | "pending" | null>(null);
   const [avodataTracking, setAvodataTracking] = useState(false);
   const [showAvodataInterval, setShowAvodataInterval] = useState(false);
+  // mevaker.gov.il scraper result — same flow.
+  const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
+  const [mevakerTracked, setMevakerTracked] = useState<"tracked" | "pending" | null>(null);
+  const [mevakerTracking, setMevakerTracking] = useState(false);
+  const [showMevakerInterval, setShowMevakerInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -124,6 +132,10 @@ export default function SearchPage() {
     return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
   };
 
+  const detectMevakerUrl = (input: string): boolean => {
+    return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
+  };
+
   const detectAvodataUrl = (input: string): boolean => {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
@@ -145,6 +157,9 @@ export default function SearchPage() {
     setAvodataResult(null);
     setAvodataTracked(null);
     setShowAvodataInterval(false);
+    setMevakerResult(null);
+    setMevakerTracked(null);
+    setShowMevakerInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -197,6 +212,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1e. Check for mevaker.gov.il reports-index URL.
+      if (detectMevakerUrl(query)) {
+        const validation = await mevaker.validate(query.trim());
+        if (validation.valid) {
+          setMevakerResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid mevaker.gov.il URL");
         }
         setLoading(false);
         return;
@@ -459,6 +488,63 @@ export default function SearchPage() {
     );
   };
 
+  const trackMevakerDataset = async (interval: number) => {
+    if (!mevakerResult?.url || !mevakerResult?.title) return;
+    setShowMevakerInterval(false);
+    setMevakerTracking(true);
+    try {
+      await datasetsApi.trackScraper(mevakerResult.url, mevakerResult.title, interval);
+      setMevakerTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setMevakerTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setMevakerTracking(false);
+  };
+
+  // Same shape as renderAvodataTrackButton, bound to the mevaker state.
+  const renderMevakerTrackButton = () => {
+    if (mevakerTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (mevakerTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showMevakerInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackMevakerDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowMevakerInterval(!showMevakerInterval)}
+          disabled={mevakerTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {mevakerTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   // Same shape as renderGovIlTrackButton, bound to the health state.
   const renderHealthTrackButton = () => {
     if (healthTracked === "tracked") {
@@ -569,7 +655,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -678,6 +764,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {avodataResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* mevaker.gov.il scraper result */}
+      {mevakerResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #dc2626" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mevakerResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                }}>
+                  MEVAKER
+                </span>
+              </div>
+              {renderMevakerTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>מבקר המדינה ונציב תלונות הציבור</span>
+              <span>mevaker.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={mevakerResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {mevakerResult.url}
               </a>
             </p>
           </article>

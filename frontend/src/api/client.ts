@@ -257,6 +257,17 @@ export const avodata = {
     }),
 };
 
+// mevaker.gov.il validation — same response shape. Server side at
+// app/api/mevaker.py; only the /subjects reports index is accepted (the
+// whole State Comptroller corpus, tracked as one dataset).
+export const mevaker = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/mevaker/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

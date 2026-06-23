@@ -32,7 +32,8 @@ export interface SourceBadge {
     | "home.source_link_govmap"
     | "home.source_link_idf"
     | "home.source_link_health"
-    | "home.source_link_avodata";
+    | "home.source_link_avodata"
+    | "home.source_link_mevaker";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -54,6 +55,11 @@ const HEALTH_ORG_HINTS = ["practitioners.health.gov.il"];
 // the Ministry of Labor. The ckan_id prefix "avodata-scraper-" is the
 // primary signal; this org hint is only a safety net for the same source.
 const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
+
+// Same drift-immune rule for mevaker — only the exact "mevaker.gov.il"
+// stamp the backend writes at create time. The ckan_id prefix
+// "mevaker-scraper-" is the primary signal.
+const MEVAKER_ORG_HINTS = ["mevaker.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -85,6 +91,15 @@ function looksLikeAvodata(
   // primary signal and never changes after creation.
   if (ckan_id && ckan_id.startsWith("avodata-scraper-")) return true;
   if (organization && AVODATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeMevaker(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("mevaker-scraper-")) return true;
+  if (organization && MEVAKER_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -151,6 +166,17 @@ export function sourceBadgeFor(
         label: "AVODATA",
         accent: "#2563eb",
         sourceLinkKey: "home.source_link_avodata",
+      };
+    }
+    if (looksLikeMevaker(organization, ckan_id)) {
+      // Deep-red pill for mevaker.gov.il (State Comptroller), distinct
+      // from the other source families.
+      return {
+        bg: "#fee2e2",
+        fg: "#991b1b",
+        label: "MEVAKER",
+        accent: "#dc2626",
+        sourceLinkKey: "home.source_link_mevaker",
       };
     }
     return {

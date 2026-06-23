@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -16,6 +16,9 @@ import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
+// in app/api/mevaker.py.
+import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -132,6 +135,8 @@ export default function HomePage() {
   const [healthResult, setHealthResult] = useState<GovIlValidation | null>(null);
   // avodata.labor.gov.il per-scope scraper result — same shape.
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
+  // mevaker.gov.il reports scraper result — same shape.
+  const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -176,6 +181,10 @@ export default function HomePage() {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
+  const detectMevakerUrl = (input: string): boolean => {
+    return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -193,6 +202,7 @@ export default function HomePage() {
     setIdfResult(null);
     setHealthResult(null);
     setAvodataResult(null);
+    setMevakerResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -267,6 +277,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2e. Check for mevaker.gov.il reports-index URL.
+      if (detectMevakerUrl(query)) {
+        const validation = await mevaker.validate(query.trim());
+        if (validation.valid) {
+          setMevakerResult(validation);
+          setRequestFormFor("mevaker");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid mevaker.gov.il URL");
         }
         setLoading(false);
         return;
@@ -620,6 +645,60 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("avodata")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* mevaker.gov.il scraper result — deep-red MEVAKER chip. */}
+        {!loading && mevakerResult && (
+          <section aria-label="mevaker.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #dc2626" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mevakerResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#fee2e2",
+                      color: "#991b1b",
+                    }}>
+                      MEVAKER
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>מבקר המדינה ונציב תלונות הציבור</span>
+                  <span>mevaker.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={mevakerResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {mevakerResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "mevaker" ? (
+                    <RequestForm
+                      datasetTitle={mevakerResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={mevakerResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("mevaker")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

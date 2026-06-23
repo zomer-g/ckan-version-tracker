@@ -229,6 +229,7 @@ async def track_dataset(
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
         from app.api.avodata import _parse_avodata_url
+        from app.api.mevaker import _parse_mevaker_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -252,12 +253,18 @@ async def track_dataset(
                 slug_prefix = "avodata-scraper"
                 mirror_prefix = "gov-versions-avodata"
         if not collector_name:
+            page_type, collector_name = _parse_mevaker_url(body.source_url)
+            if collector_name:
+                origin = "mevaker.gov.il"
+                slug_prefix = "mevaker-scraper"
+                mirror_prefix = "gov-versions-mevaker"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
-                    "or avodata.labor.gov.il scope"
+                    "avodata.labor.gov.il scope, or mevaker.gov.il reports"
                 ),
             )
 
@@ -355,6 +362,17 @@ async def track_dataset(
             sc["kind"] = "avodata"
             sc.setdefault("corpus", corpus_of_page_type(page_type))
             sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+        elif page_type and page_type.startswith("mevaker_"):
+            # mevaker.gov.il — State Comptroller reports from the
+            # SharePoint Digital Library's anonymous JSON REST service.
+            # Plain httpx + bs4; one row per audit task with PDF + Word
+            # downloaded.
+            from app.api.mevaker import get_mevaker_limits
+            depth, docs = get_mevaker_limits(page_type)
+            sc["kind"] = "mevaker"
+            sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
 
@@ -908,6 +926,7 @@ async def submit_tracking_request(
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
         from app.api.avodata import _parse_avodata_url
+        from app.api.mevaker import _parse_mevaker_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -927,12 +946,17 @@ async def submit_tracking_request(
                 origin = "avodata.labor.gov.il"
                 slug_prefix = "avodata-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_mevaker_url(body.source_url)
+            if collector_name:
+                origin = "mevaker.gov.il"
+                slug_prefix = "mevaker-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
-                    "or avodata.labor.gov.il scope"
+                    "avodata.labor.gov.il scope, or mevaker.gov.il reports"
                 ),
             )
 
@@ -975,6 +999,14 @@ async def submit_tracking_request(
             sc["kind"] = "avodata"
             sc["corpus"] = corpus_of_page_type(page_type)
             sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+        elif page_type and page_type.startswith("mevaker_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.mevaker import get_mevaker_limits
+            depth, docs = get_mevaker_limits(page_type)
+            sc["kind"] = "mevaker"
+            sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         ds = TrackedDataset(
