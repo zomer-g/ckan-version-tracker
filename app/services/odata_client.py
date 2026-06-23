@@ -292,31 +292,65 @@ class ODataClient:
         if file_path is None and file_content is None:
             raise ValueError("upload_resource: need file_content or file_path")
 
-        async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT) as client:
-            url = f"{self.api_url}/resource_create"
-            data = {
-                "package_id": dataset_id,
-                "name": name,
-                "description": description,
-                "format": resource_format,
-            }
-            if file_path is not None:
-                # Stream from disk — constant memory even for 200MB+ CSVs
-                with open(file_path, "rb") as fh:
-                    files = {"upload": (filename, fh, "application/octet-stream")}
-                    resp = await client.post(
-                        url, data=data, files=files, headers=self._headers(),
-                    )
-            else:
-                files = {"upload": (filename, io.BytesIO(file_content), "application/octet-stream")}
-                resp = await client.post(
-                    url, data=data, files=files, headers=self._headers(),
-                )
-            resp.raise_for_status()
-            result = resp.json()
-            if not result.get("success"):
-                raise RuntimeError(f"odata upload error: {result.get('error', 'unknown')}")
-            return result["result"]
+        import asyncio
+
+        url = f"{self.api_url}/resource_create"
+        data = {
+            "package_id": dataset_id,
+            "name": name,
+            "description": description,
+            "format": resource_format,
+        }
+
+        # odata.org.il runs xloader on every uploaded resource and gets
+        # hammered by concurrent version pushes, so resource_create
+        # intermittently returns a transient 5xx (seen consistently on the
+        # mevaker datasets while avodata pushed fine seconds apart — same
+        # endpoint, so it's load, not our payload). A single POST then
+        # failed the whole version. Retry 5xx / timeouts with backoff; 4xx
+        # (a real bad request) still raises immediately. The file handle /
+        # BytesIO is consumed per attempt, so we re-open inside the loop.
+        _RETRY_BACKOFF = (3.0, 8.0, 20.0)
+        last_exc: Exception | None = None
+        for attempt in range(len(_RETRY_BACKOFF) + 1):
+            try:
+                async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT) as client:
+                    if file_path is not None:
+                        # Stream from disk — constant memory even for 200MB+ CSVs
+                        with open(file_path, "rb") as fh:
+                            files = {"upload": (filename, fh, "application/octet-stream")}
+                            resp = await client.post(
+                                url, data=data, files=files, headers=self._headers(),
+                            )
+                    else:
+                        files = {"upload": (filename, io.BytesIO(file_content), "application/octet-stream")}
+                        resp = await client.post(
+                            url, data=data, files=files, headers=self._headers(),
+                        )
+                if resp.status_code >= 500 or resp.status_code == 429:
+                    last_exc = RuntimeError(
+                        f"odata resource_create HTTP {resp.status_code}: {resp.text[:200]}")
+                    if attempt < len(_RETRY_BACKOFF):
+                        logger.warning("odata resource_create %s (attempt %d/%d) — retrying in %ss",
+                                       resp.status_code, attempt + 1, len(_RETRY_BACKOFF) + 1,
+                                       _RETRY_BACKOFF[attempt])
+                        await asyncio.sleep(_RETRY_BACKOFF[attempt])
+                        continue
+                    raise last_exc
+                resp.raise_for_status()
+                result = resp.json()
+                if not result.get("success"):
+                    raise RuntimeError(f"odata upload error: {result.get('error', 'unknown')}")
+                return result["result"]
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                last_exc = e
+                if attempt < len(_RETRY_BACKOFF):
+                    logger.warning("odata resource_create network error (attempt %d/%d): %s — retrying",
+                                   attempt + 1, len(_RETRY_BACKOFF) + 1, e)
+                    await asyncio.sleep(_RETRY_BACKOFF[attempt])
+                    continue
+                raise
+        raise last_exc or RuntimeError("odata resource_create failed")
 
     async def upload_metadata_snapshot(
         self, dataset_id: str, version_number: int, metadata: dict, timestamp: str = ""
