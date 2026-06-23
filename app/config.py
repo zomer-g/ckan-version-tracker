@@ -13,6 +13,23 @@ class Settings(BaseSettings):
     odata_api_key: str = ""
     odata_owner_org: str = "zomer"
 
+    # ── Object storage (independent file backend, decoupled from ODATA) ──
+    # File archiving target. "odata" (default) keeps the legacy CKAN-mirror
+    # behavior untouched. "r2" routes file uploads to the S3-compatible
+    # object store configured below (Cloudflare R2 recommended — zero egress)
+    # and serves downloads straight from S3_PUBLIC_BASE_URL. See
+    # app/services/storage_client.py.
+    storage_backend: str = "odata"  # "odata" | "r2"
+    s3_endpoint: str = ""            # e.g. https://<account>.r2.cloudflarestorage.com
+    s3_bucket: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "auto"          # R2 ignores region; "auto" is the convention
+    # Public custom domain bound to the bucket for direct downloads
+    # (e.g. https://files.over.org.il). Downloads 302-redirect here, so the
+    # file bytes never pass through the OVER backend.
+    s3_public_base_url: str = ""
+
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
     default_poll_interval: int = 604800  # 1 week
@@ -51,7 +68,7 @@ class Settings(BaseSettings):
     # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
     #   to the new `git rev-parse HEAD` of that repo, or the new worker is
     #   refused. (OVER-only commits don't change it.)
-    worker_required_version: str = "f5ca3a2d24f14c9be7389e0b8dfe5546f36347c6"
+    worker_required_version: str = "65eba3b0a1ada2afc6f45f4a0209c0e4e44fcff4"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
