@@ -151,12 +151,18 @@ async def poll_for_task(
         # the engine-hash axis is the "did the operator restart after
         # pulling?" check (and also defends against WORKER_VERSION env
         # spoofing). Both must match.
+        # When the required value is undetermined (None), fail CLOSED if
+        # configured — refuse rather than let a possibly-stale worker
+        # through. The sticky cache (worker_version.py) keeps a known-good
+        # value across GitHub blips, so None here means a genuine cold
+        # outage, where blocking is safer than crashing a task on old code.
+        fail_open = not settings.worker_version_fail_closed
         sha_match = (
-            required_version is None  # nothing to compare against → fail open
+            (required_version is None and fail_open)
             or (bool(worker_version) and worker_version == required_version)
         )
         engine_match = (
-            required_engine_hash is None
+            (required_engine_hash is None and fail_open)
             or (bool(worker_engine_hash) and worker_engine_hash == required_engine_hash)
         )
 

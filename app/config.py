@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # WORKER_REQUIRED_VERSION pins to a specific SHA, skipping the GitHub
     # fetch entirely.
     worker_version_check_enabled: bool = True
+    # When the required SHA/engine-hash can't be determined (GitHub
+    # unreachable AND no cached known-good value), fail the dispatch gate
+    # CLOSED — refuse to hand out tasks rather than risk a stale worker
+    # grabbing one and crashing it. The sticky cache in worker_version.py
+    # makes the "undetermined" case rare (a known-good value persists
+    # across GitHub blips), so this almost never blocks legitimate work;
+    # pin worker_required_version to sidestep GitHub entirely if needed.
+    worker_version_fail_closed: bool = True
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
     worker_required_version: str = ""  # explicit SHA override; empty = fetch latest

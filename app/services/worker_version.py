@@ -60,6 +60,26 @@ def _engine_key() -> str:
     return f"{settings.worker_repo}@{settings.worker_branch}::engine"
 
 
+def _store_sticky(key: str, value: str | None) -> str | None:
+    """Cache a freshly-fetched value, but NEVER downgrade a known-good
+    value to None on a transient GitHub failure.
+
+    The dispatch gate fails *open* when the required SHA/hash is None (so a
+    GitHub outage doesn't halt all scraping). If a flaky GitHub overwrote
+    the cached good value with None, that open window let a STALE worker
+    (running pre-fix code) grab a task and crash it. Keeping the last
+    known-good value closes that window: None is cached only if we never
+    had a good value. The timestamp is bumped either way so we retry after
+    the TTL instead of hammering GitHub every poll."""
+    now = time.time()
+    _last_fetch[key] = now
+    if value is None:
+        prev = _cache.get(key)
+        value = prev[1] if prev else None  # keep last known-good, if any
+    _cache[key] = (now, value)
+    return value
+
+
 async def _fetch_from_github(key: str) -> str | None:
     """Single GitHub call; updates the cache. Returns the new SHA or None."""
     url = f"https://api.github.com/repos/{settings.worker_repo}/commits/{settings.worker_branch}"
@@ -81,11 +101,9 @@ async def _fetch_from_github(key: str) -> str | None:
     except Exception as e:
         logger.warning("Failed to fetch required worker SHA from %s: %s", url, e)
 
-    now = time.time()
-    # Cache even None so a flaky GitHub doesn't blast us with retries every poll.
-    _cache[key] = (now, sha)
-    _last_fetch[key] = now
-    return sha
+    # Sticky cache: don't let a flaky GitHub downgrade a known-good SHA to
+    # None (which would fail the dispatch gate open to stale workers).
+    return _store_sticky(key, sha)
 
 
 async def get_required_worker_sha(*, refresh: bool = False) -> str | None:
@@ -153,10 +171,7 @@ async def _fetch_engine_hash_from_github(key: str) -> str | None:
     except Exception as e:
         logger.warning("Failed to fetch engine file from %s: %s", url, e)
 
-    now = time.time()
-    _cache[key] = (now, digest)
-    _last_fetch[key] = now
-    return digest
+    return _store_sticky(key, digest)
 
 
 async def get_required_engine_hash(*, refresh: bool = False) -> str | None:
