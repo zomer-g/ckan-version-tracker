@@ -206,6 +206,28 @@ def test_use_r2_is_per_dataset(monkeypatch):
     assert w._use_r2(_DS({"storage_backend": "odata"})) is False
 
 
+def test_csv_roundtrip_for_append_cumulative():
+    """Append on R2 reads the cumulative CSV back, appends, and re-writes it.
+    That read-modify-write is only correct if records_to_csv_bytes →
+    parse_csv preserves values (incl. Hebrew + the UTF-8 BOM)."""
+    from app.services.csv_parser import records_to_csv_bytes, parse_csv
+
+    fields = [{"id": "id"}, {"id": "name"}]
+    v1 = [{"id": "1", "name": "אלף"}, {"id": "2", "name": "בית"}]
+    # write v1, read back, append v2's new row — simulate the R2 append cycle.
+    # parse_csv may type-coerce (id→int), so compare CSV values as strings.
+    b1 = records_to_csv_bytes(fields, v1)
+    _f, restored = parse_csv(b1)
+    assert [str(r["id"]) for r in restored] == ["1", "2"]
+    assert [r["name"] for r in restored] == ["אלף", "בית"]
+
+    cumulative = list(restored) + [{"id": "3", "name": "גימל"}]
+    b2 = records_to_csv_bytes(fields, cumulative)
+    _f2, restored2 = parse_csv(b2)
+    assert [str(r["id"]) for r in restored2] == ["1", "2", "3"]
+    assert restored2[2]["name"] == "גימל"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

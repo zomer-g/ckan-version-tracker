@@ -470,7 +470,9 @@ async def push_version(
 
     if ds.odata_dataset_id or _use_r2(ds):
         from app.services.snapshot_service import _timestamp
-        from app.services.csv_parser import batch_records, records_to_csv_bytes
+        from app.services.csv_parser import (
+            batch_records, records_to_csv_bytes, parse_csv,
+        )
         ts = _timestamp()
 
         csv_resource_ids = body.csv_resource_ids or {}
@@ -508,30 +510,65 @@ async def push_version(
             if not (res.records and res.fields):
                 continue
 
-            # R2 backend: write the records out as a downloadable CSV object
-            # (object stores have no datastore). Append mode stores this
-            # version's delta; full_snapshot stores the whole set. Either way
-            # the version points at an r2:<key>.
+            # R2 backend: object stores have no datastore, so tabular records
+            # are written as a downloadable CSV object.
             if _use_r2(ds):
-                rows = res.records
+                # --- append-only: maintain ONE growing cumulative CSV object,
+                # mirroring ODATA's shared appendonly_resource_id. Each version
+                # reads the current cumulative, appends the new rows, and
+                # re-uploads to a STABLE key (overwrite). Every version points
+                # at that same r2:<key>; the per-version changelog lives in
+                # change_summary.rows_added.
                 if is_append:
                     new_rows, seen_keys = compute_new_rows(
                         seen_keys, res.records, append_key
                     )
                     rows_added_total += len(new_rows)
-                    if not new_rows:
-                        prev = (
-                            (latest.resource_mappings or {}).get(res.name)
-                            if latest else None
-                        )
-                        if prev:
-                            resource_mappings[res.name] = prev
-                            odata_resource_ids.append(prev)
-                        logger.info("Append(R2): 0 new rows for %s", res.name)
+                    existing = ds.appendonly_resource_id  # r2:<key> or None/odata
+                    if not new_rows and storage.is_storage_value(existing):
+                        # Nothing new — reuse the existing cumulative object.
+                        resource_mappings[res.name] = existing
+                        odata_resource_ids.append(existing)
+                        logger.info("Append(R2): 0 new rows for %s — reuse %s",
+                                    res.name, existing)
                         continue
-                    rows = new_rows
+                    try:
+                        cumulative: list[dict] = []
+                        if storage.is_storage_value(existing):
+                            prev_bytes = await storage_client.get_object_bytes(existing)
+                            if prev_bytes:
+                                _f, cumulative = parse_csv(prev_bytes)
+                        cumulative = list(cumulative) + new_rows
+                        csv_bytes = records_to_csv_bytes(res.fields, cumulative)
+                        # Stable key: reuse the existing object's key, or mint a
+                        # fixed one under the dataset's appendonly/ prefix.
+                        if storage.is_storage_value(existing):
+                            key = storage.key_of(existing)
+                        else:
+                            key = (
+                                f"datasets/{ds.id}/appendonly/"
+                                f"{storage._safe_filename(res.name)}.csv"
+                            )
+                        await storage_client.upload_object(
+                            key, file_content=csv_bytes,
+                            content_type="text/csv; charset=utf-8",
+                        )
+                        marked = storage.mark(key)
+                        ds.appendonly_resource_id = marked
+                        resource_mappings[res.name] = marked
+                        odata_resource_ids.append(marked)
+                        logger.info(
+                            "Append(R2): +%d rows → %d cumulative for %s (%s)",
+                            len(new_rows), len(cumulative), res.name, key,
+                        )
+                    except Exception as e:
+                        logger.error("Failed R2 append for %s: %s", res.name, e)
+                        push_errors.append(f"r2 append {res.name}: {e}")
+                    continue
+
+                # --- full_snapshot: each version is its own immutable object.
                 try:
-                    csv_bytes = records_to_csv_bytes(res.fields, rows)
+                    csv_bytes = records_to_csv_bytes(res.fields, res.records)
                     key = storage.build_key(
                         str(ds.id), next_version, f"{res.name}.csv"
                     )
@@ -543,7 +580,7 @@ async def push_version(
                     resource_mappings[res.name] = marked
                     odata_resource_ids.append(marked)
                     logger.info("Pushed %d rows for %s to R2 (%s)",
-                                len(rows), res.name, key)
+                                len(res.records), res.name, key)
                 except Exception as e:
                     logger.error("Failed to push resource %s to R2: %s", res.name, e)
                     push_errors.append(f"r2 {res.name}: {e}")

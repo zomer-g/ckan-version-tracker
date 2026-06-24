@@ -216,6 +216,24 @@ class StorageClient:
         await asyncio.to_thread(_do)
         logger.info("Deleted object from R2: %s", key)
 
+    async def get_object_bytes(self, key_or_value: str) -> bytes | None:
+        """Download an object's full content as bytes, or None if missing /
+        unreachable. Used by the append-only path to read the current
+        cumulative CSV before appending new rows and re-uploading it."""
+        if not self.is_configured():
+            return None
+        key = key_of(key_or_value)
+
+        def _do() -> bytes | None:
+            client = self._get_client()
+            try:
+                resp = client.get_object(Bucket=settings.s3_bucket, Key=key)
+                return resp["Body"].read()
+            except Exception:
+                return None
+
+        return await asyncio.to_thread(_do)
+
     async def object_size(self, key_or_value: str) -> int | None:
         """Return the object's size in bytes via HEAD, or None if it's
         missing / unreachable (callers treat None as 'unknown size')."""
