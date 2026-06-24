@@ -168,6 +168,44 @@ def test_v1_extract_handles_r2_and_odata(monkeypatch):
     assert "_appendonly_seen" not in by_name
 
 
+def test_storage_target_helpers(monkeypatch):
+    from app.api.datasets import storage_target_of, apply_storage_target
+    monkeypatch.setattr(settings, "storage_backend", "odata")
+    # derive
+    assert storage_target_of(None) == "odata"  # falls back to global default
+    assert storage_target_of({"upload_mode": "local_only"}) == "local"
+    assert storage_target_of({"storage_backend": "r2"}) == "r2"
+    # apply: worker-facing upload_mode kept clean; odata/r2 pinned separately
+    assert apply_storage_target(None, "r2") == {"storage_backend": "r2"}
+    assert apply_storage_target({"x": 1}, "local") == {"x": 1, "upload_mode": "local_only"}
+    assert apply_storage_target(
+        {"upload_mode": "local_only", "storage_backend": "r2"}, "odata"
+    ) == {"storage_backend": "odata"}
+    # round-trips
+    assert storage_target_of(apply_storage_target(None, "local")) == "local"
+    assert storage_target_of(apply_storage_target(None, "r2")) == "r2"
+
+
+def test_use_r2_is_per_dataset(monkeypatch):
+    import app.api.worker as w
+    # Global default is ODATA, but R2 creds ARE configured.
+    monkeypatch.setattr(settings, "storage_backend", "odata")
+    for k, v in {
+        "s3_endpoint": "https://x.r2", "s3_bucket": "b", "s3_access_key": "a",
+        "s3_secret_key": "s", "s3_public_base_url": "https://files",
+    }.items():
+        monkeypatch.setattr(settings, k, v)
+
+    class _DS:
+        def __init__(self, sc):
+            self.scraper_config = sc
+
+    assert w._use_r2(_DS(None)) is False               # follows global default (odata)
+    assert w._use_r2(_DS({"storage_backend": "r2"})) is True   # per-dataset override wins
+    assert w._use_r2(_DS({"upload_mode": "local_only"})) is False
+    assert w._use_r2(_DS({"storage_backend": "odata"})) is False
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

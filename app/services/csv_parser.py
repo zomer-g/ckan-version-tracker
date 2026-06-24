@@ -13,6 +13,29 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 5000
 
 
+def records_to_csv_bytes(fields: list[dict] | None, records: list[dict]) -> bytes:
+    """Serialize datastore-style records back into a CSV file (UTF-8 with BOM).
+
+    Used by the R2 storage path: object stores have no datastore, so inline
+    tabular records are written out as a plain downloadable CSV instead of
+    being upserted into CKAN. Column order follows ``fields`` (list of
+    ``{"id", "type"}``) when given, else the keys of the first record. The BOM
+    keeps Excel happy with Hebrew, matching the rest of the project's CSVs.
+    """
+    if fields:
+        columns = [f["id"] for f in fields if "id" in f]
+    elif records:
+        columns = list(records[0].keys())
+    else:
+        columns = []
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for r in records:
+        writer.writerow({c: ("" if r.get(c) is None else r.get(c)) for c in columns})
+    return buf.getvalue().encode("utf-8-sig")
+
+
 def _sanitize_field_name(name: str) -> str:
     """Replace ASCII " (invalid in CKAN/PostgreSQL identifiers, causes
     datastore_create 409) with Hebrew gershayim (U+05F4), the canonical

@@ -223,7 +223,7 @@ async def delete_version(
     # Best-effort, mirroring the ODATA branch — a store error is logged but
     # never blocks the DB row deletion.
     r2_deleted, r2_failed = 0, 0
-    if storage_client.is_enabled():
+    if storage_client.is_configured():
         for skey in _extract_storage_keys(version.resource_mappings):
             try:
                 await storage_client.delete_object(skey)

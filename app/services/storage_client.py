@@ -105,21 +105,27 @@ class StorageClient:
 
     # ── configuration ───────────────────────────────────────────────────
 
-    def is_enabled(self) -> bool:
-        """True when the R2 backend is selected AND fully configured.
-
-        Callers use this to decide whether to route uploads here or fall back
-        to the legacy ODATA path. Missing any credential ⇒ disabled (fail back
-        to ODATA rather than erroring at import/startup).
+    def is_configured(self) -> bool:
+        """True when R2 credentials are fully present — i.e. R2 *can* be used,
+        regardless of the global default. Per-dataset routing decides whether a
+        given dataset actually goes to R2; this only answers "are we able to?".
+        Used by the read/delete/size paths (which must work for any object
+        already stored in R2) and by per-dataset upload routing.
         """
         return (
-            settings.storage_backend == "r2"
-            and bool(settings.s3_endpoint)
+            bool(settings.s3_endpoint)
             and bool(settings.s3_bucket)
             and bool(settings.s3_access_key)
             and bool(settings.s3_secret_key)
             and bool(settings.s3_public_base_url)
         )
+
+    def is_enabled(self) -> bool:
+        """True when R2 is the *global default* backend AND configured. This is
+        the fallback for datasets that don't pin a per-dataset choice. Missing
+        any credential ⇒ disabled (fall back to ODATA rather than erroring).
+        """
+        return settings.storage_backend == "r2" and self.is_configured()
 
     def public_url(self, key_or_value: str) -> str:
         """Public download URL for an object key (or an ``r2:``-marked value).
@@ -172,8 +178,8 @@ class StorageClient:
         """
         if file_content is None and file_path is None:
             raise ValueError("upload_object: need file_content or file_path")
-        if not self.is_enabled():
-            raise RuntimeError("storage backend not enabled/configured")
+        if not self.is_configured():
+            raise RuntimeError("R2 storage is not configured")
 
         extra: dict[str, Any] = {}
         if content_type:
@@ -199,8 +205,8 @@ class StorageClient:
     async def delete_object(self, key_or_value: str) -> None:
         """Delete an object by key (or ``r2:``-marked value). Idempotent —
         deleting a missing key is not an error on S3."""
-        if not self.is_enabled():
-            raise RuntimeError("storage backend not enabled/configured")
+        if not self.is_configured():
+            raise RuntimeError("R2 storage is not configured")
         key = key_of(key_or_value)
 
         def _do() -> None:
@@ -213,7 +219,7 @@ class StorageClient:
     async def object_size(self, key_or_value: str) -> int | None:
         """Return the object's size in bytes via HEAD, or None if it's
         missing / unreachable (callers treat None as 'unknown size')."""
-        if not self.is_enabled():
+        if not self.is_configured():
             return None
         key = key_of(key_or_value)
 

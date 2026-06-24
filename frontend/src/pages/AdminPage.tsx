@@ -123,6 +123,8 @@ export default function AdminPage() {
   // Organizations
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
+  // Per-pending-request storage destination chosen at approval (odata/r2/local).
+  const [storageOverrides, setStorageOverrides] = useState<Record<string, "odata" | "r2" | "local">>({});
   const [syncingOrgs, setSyncingOrgs] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
   // Tags
@@ -430,7 +432,10 @@ export default function AdminPage() {
         reqRow?.resource_ids && reqRow.resource_ids.length > 0
           ? reqRow.resource_ids
           : undefined;
-      await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride, pickedIds);
+      // Storage destination chosen in the row (undefined → backend default,
+      // which is R2 for scraper/govmap, ODATA for ckan).
+      const storageTarget = storageOverrides[id];
+      await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride, pickedIds, storageTarget);
       await loadAll();
     } catch (e) { console.error(e); }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
@@ -563,14 +568,18 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   };
 
-  const handleUpdateUploadMode = async (
+  const handleUpdateStorageTarget = async (
     id: string,
-    upload_mode: "full" | "local_only",
+    storage_target: "odata" | "r2" | "local",
   ) => {
     try {
-      const updated = await datasetsApi.update(id, { upload_mode });
+      const updated = await datasetsApi.update(id, { storage_target });
       setAllDatasets((prev) =>
-        prev.map((d) => (d.id === id ? { ...d, upload_mode: updated.upload_mode } : d))
+        prev.map((d) =>
+          d.id === id
+            ? { ...d, storage_target: updated.storage_target, upload_mode: updated.upload_mode }
+            : d,
+        )
       );
     } catch (e) { console.error(e); }
   };
@@ -1189,6 +1198,22 @@ export default function AdminPage() {
                   </button>
                 </div>
               )}
+              {!isCkanLike(req.source_type) && (
+                <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 500 }}>{t("admin.storage_target") || "יעד אחסון"}:</span>
+                  <select
+                    value={storageOverrides[req.id] ?? req.storage_target ?? "r2"}
+                    onChange={(e) => setStorageOverrides((prev) => ({
+                      ...prev, [req.id]: e.target.value as "odata" | "r2" | "local",
+                    }))}
+                    style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                  >
+                    <option value="r2">{t("admin.storage_r2") || "R2 (אחסון עצמאי)"}</option>
+                    <option value="odata">{t("admin.storage_odata") || "ODATA"}</option>
+                    <option value="local">{t("admin.storage_local") || "לוקאלי (ללא העלאה)"}</option>
+                  </select>
+                </div>
+              )}
               <div className="flex mt-1">
                 <button className="btn-primary" onClick={() => handleApprove(req.id)} disabled={processing.has(req.id)}>
                   {processing.has(req.id) ? "..." : t("admin.approve")}
@@ -1487,20 +1512,25 @@ export default function AdminPage() {
                           style={{ width: "10rem", padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: "4px" }}
                         />
                       )}
-                      <select
-                        value={ds.upload_mode || "full"}
-                        onChange={(e) =>
-                          handleUpdateUploadMode(
-                            ds.id,
-                            e.target.value as "full" | "local_only",
-                          )
-                        }
-                        title="הורדה מקומית בלבד = הורדת הקבצים למחשב ה-worker ללא העלאה ל-ODATA וללא יצירת גרסה"
-                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.upload_mode === "local_only" ? "#b91c1c" : undefined }}
-                      >
-                        <option value="full">{t("admin.upload_full") || "העלאה מלאה ל-ODATA"}</option>
-                        <option value="local_only">{t("admin.upload_local") || "הורדה מקומית בלבד"}</option>
-                      </select>
+                      {(ds.source_type === "scraper" || ds.source_type === "govmap") ? (
+                        <select
+                          value={ds.storage_target || "odata"}
+                          onChange={(e) =>
+                            handleUpdateStorageTarget(
+                              ds.id,
+                              e.target.value as "odata" | "r2" | "local",
+                            )
+                          }
+                          title="יעד אחסון הקבצים: R2 (אחסון עצמאי מ-ODATA), ODATA, או לוקאלי (הורדה למחשב ה-worker ללא העלאה וללא יצירת גרסה)"
+                          style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "#b91c1c" : undefined }}
+                        >
+                          <option value="r2">{t("admin.storage_r2") || "R2 (עצמאי)"}</option>
+                          <option value="odata">{t("admin.storage_odata") || "ODATA"}</option>
+                          <option value="local">{t("admin.storage_local") || "לוקאלי"}</option>
+                        </select>
+                      ) : (
+                        <span className="text-sm text-muted" title="מאגרי data.gov.il נשמרים תמיד ב-ODATA">ODATA</span>
+                      )}
                     </div>
                   </td>
                   <td style={tdStyle} className="text-sm">

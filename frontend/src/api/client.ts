@@ -108,6 +108,7 @@ export interface TrackedDataset {
   storage_mode: "full_snapshot" | "append_only";
   append_key: string | null;
   upload_mode: "full" | "local_only";
+  storage_target: "odata" | "r2" | "local";
   last_error: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
@@ -131,7 +132,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "govmap", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; storage_target?: "odata" | "r2" | "local"; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -346,6 +347,7 @@ export interface PendingRequest {
   requester_name: string;
   source_type: string;
   source_url: string | null;
+  storage_target?: "odata" | "r2" | "local";
   resource_ids?: string[] | null;
   resource_id?: string | null;
 }
@@ -453,10 +455,10 @@ export function formatBytes(n: number | null | undefined): string {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[]) =>
+  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[], storage_target?: "odata" | "r2" | "local") =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
-      body: JSON.stringify({ poll_interval, title, organization_id, resource_ids }),
+      body: JSON.stringify({ poll_interval, title, organization_id, resource_ids, storage_target }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),

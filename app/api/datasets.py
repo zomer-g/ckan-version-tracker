@@ -47,6 +47,9 @@ class UpdateRequest(BaseModel):
     # "full" (scrape→download→upload to ODATA→version) | "local_only"
     # (scrape→download to the worker machine, skip ODATA upload + version).
     upload_mode: str | None = None
+    # Per-dataset storage destination: "odata" | "r2" | "local". Supersedes
+    # upload_mode when given ("local" maps to upload_mode=local_only).
+    storage_target: str | None = None
     # New: replace the tracked-resources set. Empty list ([]) is rejected
     # so an admin can't accidentally orphan a CKAN dataset; pass null to
     # leave unchanged.
@@ -65,6 +68,38 @@ def _validate_upload_mode(mode: str) -> str:
     if mode not in ("full", "local_only"):
         raise HTTPException(status_code=400, detail="upload_mode must be 'full' or 'local_only'")
     return mode
+
+
+def storage_target_of(scraper_config: dict | None) -> str:
+    """Derive the 3-way storage target from a dataset's scraper_config:
+    'local' (upload_mode=local_only) | 'r2' | 'odata'. Falls back to the
+    global STORAGE_BACKEND default when no per-dataset choice is pinned."""
+    sc = scraper_config or {}
+    if sc.get("upload_mode") == "local_only":
+        return "local"
+    return sc.get("storage_backend") or settings.storage_backend
+
+
+def apply_storage_target(scraper_config: dict | None, target: str) -> dict | None:
+    """Return an updated scraper_config for the chosen storage target.
+
+    Keeps the worker-facing ``upload_mode`` contract intact (only ever
+    'local_only' or absent — the worker reads it to decide local vs upload)
+    and pins odata/r2 in ``storage_backend`` (read only by the OVER server).
+    """
+    if target not in ("odata", "r2", "local"):
+        raise HTTPException(
+            status_code=400,
+            detail="storage_target must be 'odata', 'r2' or 'local'",
+        )
+    sc = dict(scraper_config or {})
+    if target == "local":
+        sc["upload_mode"] = "local_only"
+        sc.pop("storage_backend", None)
+    else:
+        sc.pop("upload_mode", None)
+        sc["storage_backend"] = target
+    return sc or None
 
 
 def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
@@ -116,6 +151,7 @@ class DatasetResponse(BaseModel):
     storage_mode: str = "full_snapshot"
     append_key: str | None = None
     upload_mode: str = "full"  # "full" | "local_only"
+    storage_target: str = "odata"  # "odata" | "r2" | "local"
     last_error: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
@@ -189,6 +225,7 @@ async def list_tracked(
                 storage_mode=ds.storage_mode or "full_snapshot",
                 append_key=(ds.scraper_config or {}).get("append_key"),
                 upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
                 last_error=ds.last_error,
                 resource_ids=ds.resource_ids,
                 new_resources_at_source=ds.new_resources_at_source,
@@ -438,6 +475,7 @@ async def track_dataset(
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=(ds.scraper_config or {}).get("append_key"),
             upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -693,6 +731,7 @@ async def track_dataset(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -768,6 +807,11 @@ async def update_tracked(
             sc.pop("upload_mode", None)  # "full" is the default — keep config clean
         ds.scraper_config = sc or None
 
+    if body.storage_target is not None:
+        # Unified 3-way control (odata/r2/local). Applied after upload_mode so
+        # it wins if both are sent. Stored in scraper_config (no migration).
+        ds.scraper_config = apply_storage_target(ds.scraper_config, body.storage_target)
+
     if body.organization_id is not None:
         if body.organization_id == "":
             ds.organization_id = None
@@ -829,6 +873,7 @@ async def update_tracked(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -1257,6 +1302,7 @@ async def get_tracked_public(
         storage_mode=ds.storage_mode or "full_snapshot",
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,

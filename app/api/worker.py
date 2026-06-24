@@ -42,6 +42,26 @@ def _verify_worker_key(request: Request):
         raise HTTPException(status_code=403, detail="Invalid worker key")
 
 
+def _dataset_storage(ds) -> str:
+    """Resolve a dataset's storage target: 'odata' | 'r2' | 'local'.
+
+    A per-dataset choice (stored in scraper_config by the admin at approval /
+    in the panel) overrides the global STORAGE_BACKEND default. 'local' is the
+    legacy upload_mode='local_only' (worker keeps files, no upload).
+    """
+    sc = ds.scraper_config or {}
+    if sc.get("upload_mode") == "local_only":
+        return "local"
+    return sc.get("storage_backend") or settings.storage_backend
+
+
+def _use_r2(ds) -> bool:
+    """True if THIS dataset's files should be written to R2 (and R2 is usable).
+    Replaces the old global ``storage_client.is_enabled()`` gate so each
+    dataset routes independently."""
+    return _dataset_storage(ds) == "r2" and storage_client.is_configured()
+
+
 # --- Models ---
 
 class ResourceData(BaseModel):
@@ -448,9 +468,9 @@ async def push_version(
     if is_append and latest is not None:
         seen_keys = list((latest.resource_mappings or {}).get("_appendonly_seen", []) or [])
 
-    if ds.odata_dataset_id:
+    if ds.odata_dataset_id or _use_r2(ds):
         from app.services.snapshot_service import _timestamp
-        from app.services.csv_parser import batch_records
+        from app.services.csv_parser import batch_records, records_to_csv_bytes
         ts = _timestamp()
 
         csv_resource_ids = body.csv_resource_ids or {}
@@ -486,6 +506,47 @@ async def push_version(
                 continue
 
             if not (res.records and res.fields):
+                continue
+
+            # R2 backend: write the records out as a downloadable CSV object
+            # (object stores have no datastore). Append mode stores this
+            # version's delta; full_snapshot stores the whole set. Either way
+            # the version points at an r2:<key>.
+            if _use_r2(ds):
+                rows = res.records
+                if is_append:
+                    new_rows, seen_keys = compute_new_rows(
+                        seen_keys, res.records, append_key
+                    )
+                    rows_added_total += len(new_rows)
+                    if not new_rows:
+                        prev = (
+                            (latest.resource_mappings or {}).get(res.name)
+                            if latest else None
+                        )
+                        if prev:
+                            resource_mappings[res.name] = prev
+                            odata_resource_ids.append(prev)
+                        logger.info("Append(R2): 0 new rows for %s", res.name)
+                        continue
+                    rows = new_rows
+                try:
+                    csv_bytes = records_to_csv_bytes(res.fields, rows)
+                    key = storage.build_key(
+                        str(ds.id), next_version, f"{res.name}.csv"
+                    )
+                    await storage_client.upload_object(
+                        key, file_content=csv_bytes,
+                        content_type="text/csv; charset=utf-8",
+                    )
+                    marked = storage.mark(key)
+                    resource_mappings[res.name] = marked
+                    odata_resource_ids.append(marked)
+                    logger.info("Pushed %d rows for %s to R2 (%s)",
+                                len(rows), res.name, key)
+                except Exception as e:
+                    logger.error("Failed to push resource %s to R2: %s", res.name, e)
+                    push_errors.append(f"r2 {res.name}: {e}")
                 continue
 
             if is_append:
@@ -614,12 +675,12 @@ async def push_version(
             except Exception as e:
                 logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
                                body.zip_resource_id, next_version, e)
-    elif body.zip_file and (ds.odata_dataset_id or storage_client.is_enabled()):
+    elif body.zip_file and (ds.odata_dataset_id or _use_r2(ds)):
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)
             from app.services.snapshot_service import _timestamp
             ts_zip = _timestamp()
-            if storage_client.is_enabled():
+            if _use_r2(ds):
                 # R2: store the ZIP object directly; record the marked key.
                 key = storage.build_key(
                     str(ds.id), next_version,
@@ -823,7 +884,7 @@ async def upload_zip(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
         raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     zip_bytes = await file.read()
@@ -834,7 +895,7 @@ async def upload_zip(
     # marked key (r2:<key>) as the "resource_id". The worker passes it back
     # in push-version exactly like an ODATA resource_id; the marker lets the
     # version/download/delete paths route it to R2.
-    if storage_client.is_enabled():
+    if _use_r2(ds):
         part_label = (
             f"_part{part}of{total_parts}"
             if part is not None and total_parts is not None and total_parts > 1
@@ -984,7 +1045,7 @@ async def upload_geojson(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
         raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     body_bytes = await file.read()
@@ -1010,7 +1071,7 @@ async def upload_geojson(
     # the key when gzipped so GovmapView's fetch + DecompressionStream still
     # works; we deliberately do NOT set ContentEncoding (that would make the
     # CDN auto-inflate and break the client-side decompression contract).
-    if storage_client.is_enabled():
+    if _use_r2(ds):
         key = storage.build_key(str(ds.id), version_number, raw_filename)
         try:
             await storage_client.upload_object(
@@ -1090,7 +1151,7 @@ async def upload_csv(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
         raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     is_gzip = (compression or "").lower() == "gzip"
@@ -1172,7 +1233,7 @@ async def upload_csv(
     # download from R2's public domain) rather than a queryable table. This is
     # the file-only side of full decoupling; row-level querying would need a
     # separate layer (Datasette/DuckDB) and is intentionally out of scope.
-    if storage_client.is_enabled():
+    if _use_r2(ds):
         from app.services.snapshot_service import _timestamp
         ts = _timestamp()
         safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")

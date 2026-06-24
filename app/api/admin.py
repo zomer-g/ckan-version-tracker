@@ -17,6 +17,7 @@ from app.models.organization import Organization
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
+from app.api.datasets import apply_storage_target, storage_target_of
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
@@ -34,6 +35,10 @@ class ApproveRequest(BaseModel):
     # Optional override for the user's submitted resource selection.
     # null = keep what's already on the dataset row.
     resource_ids: list[str] | None = None
+    # Storage destination chosen at approval: "odata" | "r2" | "local".
+    # Honored for scraper/govmap datasets; ckan datasets are forced to odata.
+    # null → default ("r2" for scraper/govmap).
+    storage_target: str | None = None
 
 
 class PendingRequest(BaseModel):
@@ -52,6 +57,10 @@ class PendingRequest(BaseModel):
     source_type: str = "ckan"
     source_url: str | None = None
     storage_mode: str = "full_snapshot"
+    # Suggested storage destination for the approval UI. Scraper/govmap default
+    # to "r2"; ckan datasets are always "odata" (R2 ingestion isn't wired for
+    # the CKAN/snapshot_service path yet).
+    storage_target: str = "r2"
     resource_ids: list[str] | None = None  # what the requester chose
     resource_id: str | None = None  # legacy single-resource selection
 
@@ -89,6 +98,10 @@ async def list_pending(
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
             storage_mode=ds.storage_mode or "full_snapshot",
+            storage_target=(
+                "odata" if (ds.source_type or "ckan") not in ("scraper", "govmap")
+                else storage_target_of(ds.scraper_config)
+            ),
             resource_ids=ds.resource_ids,
             resource_id=ds.resource_id,
         )
@@ -150,11 +163,22 @@ async def approve_request(
         ds.organization_id = org_row.id
         ds.organization = org_row.name
 
+    # Resolve + pin the storage destination. Scraper/govmap datasets honor the
+    # admin's choice (default R2 = independent of ODATA). CKAN/data.gov.il
+    # datasets are ingested by the OVER server's snapshot_service, which isn't
+    # R2-wired yet, so they always use ODATA regardless of what's requested.
+    if ds.source_type in ("scraper", "govmap"):
+        target = (body.storage_target if (body and body.storage_target) else "r2")
+    else:
+        target = "odata"
+    ds.scraper_config = apply_storage_target(ds.scraper_config, target)
+
     # Update status to active
     ds.status = "active"
 
-    # Create odata mirror dataset if not already created
-    if not ds.odata_dataset_id and settings.odata_api_key:
+    # Create odata mirror dataset only when this dataset stores on ODATA. R2 and
+    # local datasets need no CKAN mirror (files go to R2 / stay on the worker).
+    if target == "odata" and not ds.odata_dataset_id and settings.odata_api_key:
         if ds.source_type == "scraper":
             mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ds.ckan_name)}"
             extras = [
@@ -574,7 +598,7 @@ async def dataset_sizes(
         # R2 backend: size objects via HEAD. Keyed by the FULL mapping value
         # ("r2:<key>") so the per-version sum below works unchanged. Fail-open
         # (missing → 0). Bounded: a version has a handful of objects.
-        if storage_client.is_enabled():
+        if storage_client.is_configured():
             r2_values: set[str] = set()
             for v in versions_by_ds.get(str(ds.id), []):
                 for val in (v.resource_mappings or {}).values():
