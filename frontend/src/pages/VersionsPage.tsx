@@ -19,6 +19,31 @@ const GovmapView = lazy(() => import("../components/GovmapView"));
 
 const ODATA_BASE = "https://www.odata.org.il";
 
+// Downloadable files of a version, derived from resource_mappings. Returns the
+// mapping KEY (what the backend /versions/{id}/download/{resource} endpoint
+// looks up) plus a friendly label. Works for BOTH ODATA- and R2-backed
+// versions — the backend redirects each to its real storage location.
+function versionFiles(
+  mappings: Record<string, unknown> | null | undefined,
+): Array<{ name: string; label: string }> {
+  if (!mappings) return [];
+  const out: Array<{ name: string; label: string }> = [];
+  for (const [key, val] of Object.entries(mappings)) {
+    if (["_hashes", "_resource_ids", "_appendonly_seen"].includes(key)) continue;
+    const hasValue =
+      (typeof val === "string" && val.length > 10) ||
+      (Array.isArray(val) &&
+        val.some((x) => typeof x === "string" && x.length > 10));
+    if (!hasValue) continue;
+    let label = key;
+    if (key === "_geojson") label = "GeoJSON";
+    else if (key === "_zip" || key === "_zip_parts") label = "קבצים מצורפים (ZIP)";
+    else if (key === "metadata") label = "מטא-דאטה";
+    out.push({ name: key, label });
+  }
+  return out;
+}
+
 export default function VersionsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -125,6 +150,21 @@ export default function VersionsPage() {
     return `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${rid}/download`;
   }, [dataset, versionsList]);
 
+  // True when the dataset's latest version stores files on R2 (an "r2:<key>"
+  // mapping). R2 versions have no ODATA mirror page, so the ODATA-archive CTAs
+  // are hidden in favor of the per-version download links below.
+  const latestIsR2 = useMemo<boolean>(() => {
+    if (versionsList.length === 0) return false;
+    const m = versionsList[0].resource_mappings as Record<string, unknown> | null;
+    if (!m) return false;
+    return Object.values(m).some(
+      (val) =>
+        (typeof val === "string" && val.startsWith("r2:")) ||
+        (Array.isArray(val) &&
+          val.some((x) => typeof x === "string" && x.startsWith("r2:"))),
+    );
+  }, [versionsList]);
+
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
   return (
@@ -146,7 +186,7 @@ export default function VersionsPage() {
           )}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
-          {dataset?.odata_dataset_id && (
+          {dataset?.odata_dataset_id && !latestIsR2 && (
             <a
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
               target="_blank"
@@ -233,7 +273,7 @@ export default function VersionsPage() {
           past the header — and a per-source-type explanation of what
           the user will find on the other side, so the ODATA page
           stops being a confusing wall of resources. */}
-      {dataset?.odata_dataset_id && (
+      {dataset?.odata_dataset_id && !latestIsR2 && (
         <ArchiveExplanation
           dataset={dataset}
           odataUrl={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
@@ -352,33 +392,27 @@ export default function VersionsPage() {
                   </div>
                 )}
 
-                {/* ODATA link — direct to resource if available */}
-                {dataset?.odata_dataset_id && (() => {
-                  // Find the first real odata resource_id from mappings
-                  // Skip internal keys (_hashes, _resource_ids, _large_dataset_info)
-                  const mappings = v.resource_mappings || {};
-                  let odataResourceId: string | null = null;
-                  for (const [key, val] of Object.entries(mappings)) {
-                    if (key.startsWith("_")) continue;
-                    if (typeof val === "string" && val.length > 10) {
-                      odataResourceId = val;
-                      break;
-                    }
-                  }
-                  const href = odataResourceId
-                    ? `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${odataResourceId}`
-                    : `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`;
+                {/* Per-version file downloads. Each link hits the backend
+                    download endpoint, which 302-redirects to the file's real
+                    storage (R2 or ODATA) — so this works for every version
+                    regardless of where its bytes live. */}
+                {(() => {
+                  const files = versionFiles(v.resource_mappings);
+                  if (files.length === 0) return null;
                   return (
-                    <div className="mt-1">
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm"
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
-                      >
-                        {t("versions.open_version_archive")} &#8599;
-                      </a>
+                    <div className="mt-1 flex" style={{ gap: "1rem", flexWrap: "wrap" }}>
+                      {files.map((f) => (
+                        <a
+                          key={f.name}
+                          href={`/api/versions/${v.id}/download/${encodeURIComponent(f.name)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm"
+                          style={{ color: "var(--primary)", textDecoration: "none" }}
+                        >
+                          &#8595; {f.label}
+                        </a>
+                      ))}
                     </div>
                   );
                 })()}
