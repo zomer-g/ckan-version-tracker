@@ -268,6 +268,17 @@ export const mevaker = {
     }),
 };
 
+// geo.mot.gov.il (חצב) validation — same response shape. Server side at
+// app/api/hatzav.py; only the portal root is accepted (the whole layer
+// catalog is tracked as one dataset).
+export const hatzav = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/hatzav/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

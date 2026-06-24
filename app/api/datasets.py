@@ -230,6 +230,7 @@ async def track_dataset(
         from app.api.health import _parse_health_url
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
+        from app.api.hatzav import _parse_hatzav_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -259,12 +260,19 @@ async def track_dataset(
                 slug_prefix = "mevaker-scraper"
                 mirror_prefix = "gov-versions-mevaker"
         if not collector_name:
+            page_type, collector_name = _parse_hatzav_url(body.source_url)
+            if collector_name:
+                origin = "geo.mot.gov.il"
+                slug_prefix = "hatzav-scraper"
+                mirror_prefix = "gov-versions-hatzav"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
-                    "avodata.labor.gov.il scope, or mevaker.gov.il reports"
+                    "avodata.labor.gov.il scope, mevaker.gov.il reports, "
+                    "or geo.mot.gov.il (חצב) portal"
                 ),
             )
 
@@ -376,6 +384,17 @@ async def track_dataset(
             ptype = type_hebrew_of(page_type)
             if ptype:
                 sc.setdefault("publication_type", ptype)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+        elif page_type and page_type.startswith("hatzav_"):
+            # geo.mot.gov.il (חצב) — the layer catalog ships as static JS
+            # files, scraped via plain httpx (no Playwright). One row per
+            # layer; each downloadable layer's data.gov.il files (shp /
+            # kml / csv / metadata) are attached, so download_files=True.
+            from app.api.hatzav import get_hatzav_limits
+            depth, docs = get_hatzav_limits(page_type)
+            sc["kind"] = "hatzav"
+            sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
 
@@ -930,6 +949,7 @@ async def submit_tracking_request(
         from app.api.health import _parse_health_url
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
+        from app.api.hatzav import _parse_hatzav_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -954,12 +974,18 @@ async def submit_tracking_request(
                 origin = "mevaker.gov.il"
                 slug_prefix = "mevaker-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_hatzav_url(body.source_url)
+            if collector_name:
+                origin = "geo.mot.gov.il"
+                slug_prefix = "hatzav-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
-                    "avodata.labor.gov.il scope, or mevaker.gov.il reports"
+                    "avodata.labor.gov.il scope, mevaker.gov.il reports, "
+                    "or geo.mot.gov.il (חצב) portal"
                 ),
             )
 
@@ -1013,6 +1039,14 @@ async def submit_tracking_request(
             ptype = type_hebrew_of(page_type)
             if ptype:
                 sc["publication_type"] = ptype
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+        elif page_type and page_type.startswith("hatzav_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.hatzav import get_hatzav_limits
+            depth, docs = get_hatzav_limits(page_type)
+            sc["kind"] = "hatzav"
+            sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         ds = TrackedDataset(

@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -19,6 +19,9 @@ import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
+// geo.mot.gov.il (חצב) portal URL pattern. Mirror of HATZAV_ROOT_RE in
+// app/api/hatzav.py.
+import { HATZAV_PATTERN } from "../utils/hatzavPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -137,6 +140,8 @@ export default function HomePage() {
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
   // mevaker.gov.il reports scraper result — same shape.
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
+  // geo.mot.gov.il (חצב) catalog scraper result — same shape.
+  const [hatzavResult, setHatzavResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -185,6 +190,10 @@ export default function HomePage() {
     return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
   };
 
+  const detectHatzavUrl = (input: string): boolean => {
+    return HATZAV_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -203,6 +212,7 @@ export default function HomePage() {
     setHealthResult(null);
     setAvodataResult(null);
     setMevakerResult(null);
+    setHatzavResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -292,6 +302,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid mevaker.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2f. Check for geo.mot.gov.il (חצב) portal URL.
+      if (detectHatzavUrl(query)) {
+        const validation = await hatzav.validate(query.trim());
+        if (validation.valid) {
+          setHatzavResult(validation);
+          setRequestFormFor("hatzav");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid geo.mot.gov.il URL");
         }
         setLoading(false);
         return;
@@ -699,6 +724,60 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("mevaker")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* geo.mot.gov.il (חצב) scraper result — indigo חצב chip. */}
+        {!loading && hatzavResult && (
+          <section aria-label="geo.mot.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{hatzavResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#e0e7ff",
+                      color: "#3730a3",
+                    }}>
+                      חצב
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>משרד התחבורה — מערכת חצב</span>
+                  <span>geo.mot.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={hatzavResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {hatzavResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "hatzav" ? (
+                    <RequestForm
+                      datasetTitle={hatzavResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={hatzavResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("hatzav")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

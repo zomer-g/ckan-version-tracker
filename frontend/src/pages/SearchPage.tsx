@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -16,6 +16,9 @@ import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
+// geo.mot.gov.il (חצב) portal URL pattern. Mirror of HATZAV_ROOT_RE in
+// app/api/hatzav.py.
+import { HATZAV_PATTERN } from "../utils/hatzavPattern";
 
 interface CkanResource {
   id: string;
@@ -83,6 +86,11 @@ export default function SearchPage() {
   const [mevakerTracked, setMevakerTracked] = useState<"tracked" | "pending" | null>(null);
   const [mevakerTracking, setMevakerTracking] = useState(false);
   const [showMevakerInterval, setShowMevakerInterval] = useState(false);
+  // geo.mot.gov.il (חצב) scraper result — same flow.
+  const [hatzavResult, setHatzavResult] = useState<GovIlValidation | null>(null);
+  const [hatzavTracked, setHatzavTracked] = useState<"tracked" | "pending" | null>(null);
+  const [hatzavTracking, setHatzavTracking] = useState(false);
+  const [showHatzavInterval, setShowHatzavInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -136,6 +144,10 @@ export default function SearchPage() {
     return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
   };
 
+  const detectHatzavUrl = (input: string): boolean => {
+    return HATZAV_PATTERN.test(input.trim());
+  };
+
   const detectAvodataUrl = (input: string): boolean => {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
@@ -160,6 +172,9 @@ export default function SearchPage() {
     setMevakerResult(null);
     setMevakerTracked(null);
     setShowMevakerInterval(false);
+    setHatzavResult(null);
+    setHatzavTracked(null);
+    setShowHatzavInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -226,6 +241,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid mevaker.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1f. Check for geo.mot.gov.il (חצב) portal URL.
+      if (detectHatzavUrl(query)) {
+        const validation = await hatzav.validate(query.trim());
+        if (validation.valid) {
+          setHatzavResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid geo.mot.gov.il URL");
         }
         setLoading(false);
         return;
@@ -545,6 +574,63 @@ export default function SearchPage() {
     );
   };
 
+  const trackHatzavDataset = async (interval: number) => {
+    if (!hatzavResult?.url || !hatzavResult?.title) return;
+    setShowHatzavInterval(false);
+    setHatzavTracking(true);
+    try {
+      await datasetsApi.trackScraper(hatzavResult.url, hatzavResult.title, interval);
+      setHatzavTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setHatzavTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setHatzavTracking(false);
+  };
+
+  // Same shape as renderMevakerTrackButton, bound to the hatzav state.
+  const renderHatzavTrackButton = () => {
+    if (hatzavTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (hatzavTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showHatzavInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackHatzavDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowHatzavInterval(!showHatzavInterval)}
+          disabled={hatzavTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {hatzavTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   // Same shape as renderGovIlTrackButton, bound to the health state.
   const renderHealthTrackButton = () => {
     if (healthTracked === "tracked") {
@@ -655,7 +741,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -798,6 +884,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={mevakerResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {mevakerResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* geo.mot.gov.il (חצב) scraper result */}
+      {hatzavResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{hatzavResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#e0e7ff",
+                  color: "#3730a3",
+                }}>
+                  חצב
+                </span>
+              </div>
+              {renderHatzavTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>משרד התחבורה — מערכת חצב</span>
+              <span>geo.mot.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={hatzavResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {hatzavResult.url}
               </a>
             </p>
           </article>

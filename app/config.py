@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
     #   to the new `git rev-parse HEAD` of that repo, or the new worker is
     #   refused. (OVER-only commits don't change it.)
-    worker_required_version: str = "65eba3b0a1ada2afc6f45f4a0209c0e4e44fcff4"
+    worker_required_version: str = "ace0598439778dada2fa3e3cd5b79fa1c2ea345c"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running

@@ -33,7 +33,8 @@ export interface SourceBadge {
     | "home.source_link_idf"
     | "home.source_link_health"
     | "home.source_link_avodata"
-    | "home.source_link_mevaker";
+    | "home.source_link_mevaker"
+    | "home.source_link_hatzav";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -60,6 +61,12 @@ const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
 // stamp the backend writes at create time. The ckan_id prefix
 // "mevaker-scraper-" is the primary signal.
 const MEVAKER_ORG_HINTS = ["mevaker.gov.il"];
+
+// Same drift-immune rule for hatzav (חצב, geo.mot.gov.il) — only the
+// exact "geo.mot.gov.il" stamp the backend writes at create time, NOT a
+// generic Ministry-of-Transport slug shared with regular gov.il
+// collectors. The ckan_id prefix "hatzav-scraper-" is the primary signal.
+const HATZAV_ORG_HINTS = ["geo.mot.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -100,6 +107,15 @@ function looksLikeMevaker(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("mevaker-scraper-")) return true;
   if (organization && MEVAKER_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeHatzav(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("hatzav-scraper-")) return true;
+  if (organization && HATZAV_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -177,6 +193,18 @@ export function sourceBadgeFor(
         label: "MEVAKER",
         accent: "#dc2626",
         sourceLinkKey: "home.source_link_mevaker",
+      };
+    }
+    if (looksLikeHatzav(organization, ckan_id)) {
+      // Indigo pill for חצב (geo.mot.gov.il, Ministry of Transport map
+      // viewer), distinct from the avodata sky-blue and the other
+      // source families.
+      return {
+        bg: "#e0e7ff",
+        fg: "#3730a3",
+        label: "חצב",
+        accent: "#4f46e5",
+        sourceLinkKey: "home.source_link_hatzav",
       };
     }
     return {
