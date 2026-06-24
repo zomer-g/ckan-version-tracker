@@ -130,6 +130,44 @@ def test_extract_storage_keys_collects_only_r2():
     assert keys == {"datasets/d/v2/zz_a.zip", "datasets/d/v2/g1.geojson"}
 
 
+def test_v1_extract_handles_r2_and_odata(monkeypatch):
+    """The public v1 versions payload must route r2: markers to the object
+    store's public URL and bare UUIDs to ODATA — not build a broken ODATA
+    URL out of an r2: key."""
+    monkeypatch.setattr(settings, "s3_public_base_url", "https://files.over.org.il")
+    from app.api.v1 import _extract_version_resources
+
+    class _DS:
+        odata_dataset_id = "odata-ds-1"
+
+    odata_uuid = "3f1c0e22-7a0b-4d9e-9c1a-2b6f5e8d4a10"
+    mappings = {
+        "data.csv": odata_uuid,
+        "_zip": sc.mark("datasets/d/v2/zz_a.zip"),
+        "_geojson": [sc.mark("datasets/d/v2/g.geojson")],
+        "_hashes": {"x": "y"},
+        "_appendonly_seen": ["k1", "k2"],
+    }
+    by_name = {r.name: r for r in _extract_version_resources(_DS(), mappings)}
+
+    # ODATA resource
+    assert by_name["data.csv"].storage == "odata"
+    assert by_name["data.csv"].odata_resource_id == odata_uuid
+    assert "odata.org.il" in by_name["data.csv"].download_url
+
+    # R2 resources → public URL, no odata id, never a broken odata URL
+    assert by_name["_zip"].storage == "r2"
+    assert by_name["_zip"].odata_resource_id is None
+    assert by_name["_zip"].download_url == "https://files.over.org.il/datasets/d/v2/zz_a.zip"
+    assert "odata.org.il" not in by_name["_zip"].download_url
+    assert by_name["_geojson"].storage == "r2"
+    assert by_name["_geojson"].format == "GeoJSON"
+
+    # bookkeeping keys are never emitted as resources
+    assert "_hashes" not in by_name
+    assert "_appendonly_seen" not in by_name
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

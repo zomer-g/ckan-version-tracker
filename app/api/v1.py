@@ -7,7 +7,7 @@ See `docs/API.md` for the human-readable reference.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.models.organization import Organization
 from app.models.tag import Tag, dataset_tags
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.services import storage_client as storage
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +67,16 @@ class DatasetSummary(BaseModel):
 
 
 class VersionResource(BaseModel):
-    name: str  # original resource key (or "_zip", "_metadata", ...)
-    odata_resource_id: str
-    odata_resource_url: str  # ODATA resource page
-    download_url: str  # direct download via ODATA
+    name: str  # original resource key (or "_zip", "_geojson", ...)
+    # Where the bytes live: "odata" (legacy CKAN mirror) or "r2" (object
+    # store). New versions land in R2; older ones stay on ODATA. Either way
+    # `download_url` is the link to use.
+    storage: str = "odata"
+    download_url: str  # direct download (ODATA download endpoint or R2 public URL)
+    # ODATA-specific — null for R2-stored resources (R2 has no CKAN
+    # resource id / resource page).
+    odata_resource_id: str | None = None
+    odata_resource_url: str | None = None
     # Inferred resource format ("GeoJSON" for entries built from the
     # _geojson list mapping; None otherwise). Lets the frontend route
     # govmap layers to the in-page map without HEADing the URL.
@@ -224,19 +231,40 @@ def _extract_version_resources(
         return []
     out: list[VersionResource] = []
     seen: set[str] = set()
+
+    def _make(name: str, value: str, fmt: str | None = None) -> VersionResource:
+        # R2-stored resource ("r2:<key>"): the download link is the object
+        # store's public URL; there is no ODATA resource id/page.
+        if storage.is_storage_value(value):
+            return VersionResource(
+                name=name,
+                storage="r2",
+                download_url=storage.storage_client.public_url(value),
+                odata_resource_id=None,
+                odata_resource_url=None,
+                format=fmt,
+            )
+        return VersionResource(
+            name=name,
+            storage="odata",
+            download_url=_odata_resource_download_url(ds, value),
+            odata_resource_id=value,
+            odata_resource_url=_odata_resource_url(ds, value),
+            format=fmt,
+        )
+
+    def _is_resource(v: object) -> bool:
+        # A real resource value is either an r2: marker or a long
+        # ODATA resource_id (UUID-ish, len>=30) — not a bookkeeping hash.
+        return isinstance(v, str) and (storage.is_storage_value(v) or len(v) >= 30)
+
     for key, value in mappings.items():
-        if key == "_hashes":
-            continue
-        if key == "_resource_ids":
-            continue  # already covered by named keys
-        if key == "_zip_parts":
+        if key in ("_hashes", "_resource_ids", "_zip_parts", "_appendonly_seen"):
             continue
         # Govmap GeoJSON layers are list-valued; emit one entry per id.
         if key == "_geojson" and isinstance(value, list):
             for idx, rid in enumerate(value):
-                if not (isinstance(rid, str) and len(rid) >= 30):
-                    continue
-                if rid in seen:
+                if not _is_resource(rid) or rid in seen:
                     continue
                 seen.add(rid)
                 # When the list has one entry the canonical "_geojson"
@@ -244,29 +272,33 @@ def _extract_version_resources(
                 # we suffix with the index so each entry has a unique
                 # key the frontend can react-key on.
                 name = "_geojson" if len(value) == 1 else f"_geojson_{idx}"
-                out.append(
-                    VersionResource(
-                        name=name,
-                        odata_resource_id=rid,
-                        odata_resource_url=_odata_resource_url(ds, rid),
-                        download_url=_odata_resource_download_url(ds, rid),
-                        format="GeoJSON",
-                    )
-                )
+                out.append(_make(name, rid, fmt="GeoJSON"))
             continue
-        if isinstance(value, str) and len(value) >= 30:
+        if _is_resource(value):
             if value in seen:
                 continue
             seen.add(value)
-            out.append(
-                VersionResource(
-                    name=key,
-                    odata_resource_id=value,
-                    odata_resource_url=_odata_resource_url(ds, value),
-                    download_url=_odata_resource_download_url(ds, value),
-                )
-            )
+            out.append(_make(key, value))
     return out
+
+
+def _version_detail(ds: TrackedDataset, v: VersionIndex) -> VersionDetail:
+    """Build the public VersionDetail payload for one version. Shared by the
+    list, latest, and by-number endpoints so they stay identical in shape."""
+    return VersionDetail(
+        id=str(v.id),
+        version_number=v.version_number,
+        detected_at=v.detected_at.isoformat(),
+        metadata_modified=v.metadata_modified,
+        change_summary=v.change_summary,
+        odata_metadata_resource_id=v.odata_metadata_resource_id,
+        odata_metadata_url=(
+            _odata_resource_url(ds, v.odata_metadata_resource_id)
+            if v.odata_metadata_resource_id and ds.odata_dataset_id
+            else None
+        ),
+        resources=_extract_version_resources(ds, v.resource_mappings),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,46 +458,92 @@ async def get_dataset(
     return _dataset_summary(ds, org, version_count, request)
 
 
-@router.get(
-    "/datasets/{dataset_id}/versions",
-    response_model=list[VersionDetail],
-)
-async def list_dataset_versions(
-    dataset_id: str,
-    db: AsyncSession = Depends(get_db),
-):
+async def _get_dataset_or_404(dataset_id: str, db: AsyncSession) -> TrackedDataset:
     uid = parse_uuid(dataset_id, "dataset_id")
     ds = (
         await db.execute(select(TrackedDataset).where(TrackedDataset.id == uid))
     ).scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    return ds
 
+
+@router.get(
+    "/datasets/{dataset_id}/versions",
+    response_model=list[VersionDetail],
+    summary="List all versions of a dataset (newest first)",
+)
+async def list_dataset_versions(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Full version history of a dataset, ordered newest-first. Each entry
+    carries its `version_number`, `detected_at`, change summary, and the list
+    of downloadable `resources` (with a `download_url` per file)."""
+    ds = await _get_dataset_or_404(dataset_id, db)
     rows = (
         await db.execute(
             select(VersionIndex)
-            .where(VersionIndex.tracked_dataset_id == uid)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
             .order_by(VersionIndex.version_number.desc())
         )
     ).scalars().all()
+    return [_version_detail(ds, v) for v in rows]
 
-    return [
-        VersionDetail(
-            id=str(v.id),
-            version_number=v.version_number,
-            detected_at=v.detected_at.isoformat(),
-            metadata_modified=v.metadata_modified,
-            change_summary=v.change_summary,
-            odata_metadata_resource_id=v.odata_metadata_resource_id,
-            odata_metadata_url=(
-                _odata_resource_url(ds, v.odata_metadata_resource_id)
-                if v.odata_metadata_resource_id and ds.odata_dataset_id
-                else None
-            ),
-            resources=_extract_version_resources(ds, v.resource_mappings),
+
+@router.get(
+    "/datasets/{dataset_id}/versions/latest",
+    response_model=VersionDetail,
+    summary="Get the most recent version of a dataset",
+)
+async def get_latest_version(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """The newest version of a dataset (highest `version_number`). Returns
+    404 if the dataset has no versions yet. Declared before the
+    `{version_number}` route so the literal "latest" never collides with it."""
+    ds = await _get_dataset_or_404(dataset_id, db)
+    v = (
+        await db.execute(
+            select(VersionIndex)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
+            .order_by(VersionIndex.version_number.desc())
+            .limit(1)
         )
-        for v in rows
-    ]
+    ).scalar_one_or_none()
+    if not v:
+        raise HTTPException(status_code=404, detail="No versions for this dataset yet")
+    return _version_detail(ds, v)
+
+
+@router.get(
+    "/datasets/{dataset_id}/versions/{version_number}",
+    response_model=VersionDetail,
+    summary="Get a specific version of a dataset by its number",
+)
+async def get_version_by_number(
+    dataset_id: str,
+    version_number: int = Path(..., ge=1, description="1-based version number"),
+    db: AsyncSession = Depends(get_db),
+):
+    """A single version addressed by its `version_number` (1-based, as shown
+    in the versions list). Returns 404 if that version doesn't exist."""
+    ds = await _get_dataset_or_404(dataset_id, db)
+    v = (
+        await db.execute(
+            select(VersionIndex).where(
+                VersionIndex.tracked_dataset_id == ds.id,
+                VersionIndex.version_number == version_number,
+            )
+        )
+    ).scalar_one_or_none()
+    if not v:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Version {version_number} not found for this dataset",
+        )
+    return _version_detail(ds, v)
 
 
 # ---------------------------------------------------------------------------

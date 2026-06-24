@@ -25,7 +25,9 @@ If you find a bug or want a field added, open an issue on the
 |---|---|---|
 | GET | `/api/v1/datasets` | List datasets, with filters |
 | GET | `/api/v1/datasets/{id}` | One dataset by UUID |
-| GET | `/api/v1/datasets/{id}/versions` | Version history of a dataset |
+| GET | `/api/v1/datasets/{id}/versions` | Version history of a dataset (newest first) |
+| GET | `/api/v1/datasets/{id}/versions/latest` | The most recent version of a dataset |
+| GET | `/api/v1/datasets/{id}/versions/{number}` | A specific version by its number |
 | GET | `/api/v1/tags` | All tags + dataset counts |
 | GET | `/api/v1/tags/{id}` | One tag + the datasets under it |
 | GET | `/api/v1/organizations` | All organizations + dataset counts |
@@ -158,9 +160,19 @@ what changed and where to download the snapshot data on odata.org.il.
     "resources": [
       {
         "name": "main",
+        "storage": "odata",
+        "download_url": "https://www.odata.org.il/dataset/abcd1234-.../resource/33...e1/download",
         "odata_resource_id": "33...e1",
         "odata_resource_url": "https://www.odata.org.il/dataset/abcd1234-.../resource/33...e1",
-        "download_url": "https://www.odata.org.il/dataset/abcd1234-.../resource/33...e1/download"
+        "format": null
+      },
+      {
+        "name": "_zip",
+        "storage": "r2",
+        "download_url": "https://files.over.org.il/datasets/9d4c.../v7/ab12cd34_attachments.zip",
+        "odata_resource_id": null,
+        "odata_resource_url": null,
+        "format": null
       }
     ]
   }
@@ -173,11 +185,43 @@ what changed and where to download the snapshot data on odata.org.il.
 - `odata_metadata_url` points at the **CKAN metadata snapshot** captured
   at this version (a JSON blob on odata.org.il). Use it for
   point-in-time metadata queries.
-- `resources[]` lists the actual data files mirrored to ODATA. Use
-  `download_url` to fetch the file directly.
+- `resources[]` lists the actual data files for the version. **Always use
+  `download_url`** to fetch a file — it is correct regardless of where the
+  bytes live. The `storage` field tells you where that is:
+  - `"odata"` — legacy CKAN mirror; `odata_resource_id` / `odata_resource_url`
+    are populated and `download_url` points at odata.org.il.
+  - `"r2"` — independent object store; `download_url` is the object's public
+    URL and the two `odata_*` fields are `null`. (Newer versions land in R2;
+    older ones remain on ODATA. Both are served transparently.)
 
 `404` if the dataset UUID does not exist. An empty array means the
 dataset has been registered but no versions have been detected yet.
+
+---
+
+## `GET /api/v1/datasets/{id}/versions/latest`
+
+The single most recent version of a dataset (the highest `version_number`).
+Same object shape as one entry of the versions list above.
+
+```
+GET /api/v1/datasets/9d4c6e2a-.../versions/latest
+```
+
+`404` if the dataset does not exist, or if it has no versions yet.
+
+---
+
+## `GET /api/v1/datasets/{id}/versions/{number}`
+
+A specific version addressed by its `version_number` (1-based, as shown in
+the versions list). Same object shape as one entry of the list.
+
+```
+GET /api/v1/datasets/9d4c6e2a-.../versions/3
+```
+
+`404` if the dataset does not exist or has no version with that number.
 
 ---
 
@@ -312,6 +356,20 @@ the page. Pass `limit` and `offset` for the rest.
 ```bash
 curl 'https://example.org/api/v1/datasets/<id>/versions' \
   | jq '[.[].resources[].download_url]'
+```
+
+### "Download every file of the latest version"
+
+```bash
+curl 'https://example.org/api/v1/datasets/<id>/versions/latest' \
+  | jq -r '.resources[].download_url' \
+  | xargs -n1 curl -LO
+```
+
+### "Fetch one specific version by number"
+
+```bash
+curl 'https://example.org/api/v1/datasets/<id>/versions/3'
 ```
 
 ### "All datasets in one organization that carry a specific tag"

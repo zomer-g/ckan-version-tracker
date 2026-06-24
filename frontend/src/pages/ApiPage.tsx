@@ -47,9 +47,23 @@ const ENDPOINTS: ApiEndpoint[] = [
   {
     path: "/api/v1/datasets/{id}/versions",
     description:
-      "היסטוריית הגרסאות של מאגר — כל גרסה עם מספרה, תאריך זיהוי וקישורי הורדה.",
+      "היסטוריית הגרסאות של מאגר (מהחדשה לישנה) — כל גרסה עם מספרה, תאריך זיהוי, סיכום שינויים ורשימת קבצים, כשלכל קובץ יש download_url ישיר.",
     example:
       "/api/v1/datasets/00000000-0000-0000-0000-000000000000/versions",
+  },
+  {
+    path: "/api/v1/datasets/{id}/versions/latest",
+    description:
+      "הגרסה העדכנית ביותר של מאגר (מספר הגרסה הגבוה ביותר) — אותו מבנה כמו גרסה ברשימה, כולל download_url לכל קובץ. מחזיר 404 אם אין עדיין גרסאות.",
+    example:
+      "/api/v1/datasets/00000000-0000-0000-0000-000000000000/versions/latest",
+  },
+  {
+    path: "/api/v1/datasets/{id}/versions/{number}",
+    description:
+      "גרסה ספציפית לפי מספרה (1-based, כפי שמופיע ברשימת הגרסאות). מחזיר 404 אם הגרסה לא קיימת.",
+    example:
+      "/api/v1/datasets/00000000-0000-0000-0000-000000000000/versions/1",
   },
   {
     path: "/api/v1/tags",
@@ -248,6 +262,16 @@ export default function ApiPage() {
               "api.intro_2",
               "השימוש פתוח לחוקרים, עיתונאים, פעילי שקיפות ופרויקטים אזרחיים. אם אתם בונים אינטגרציה רחבה — נא להימנע ממיליוני קריאות מקבילות ולשמור מטמון מקומי.",
             )}
+          </p>
+          <p>
+            {t(
+              "api.intro_versions",
+              "כל גרסה מחזירה רשימת קבצים (resources); לכל קובץ יש download_url ישיר ושדה storage (odata או r2) שמציין היכן הקובץ מאוחסן. תיעוד אינטראקטיבי מלא (OpenAPI) זמין ב-",
+            )}
+            <a href="/docs" target="_blank" rel="noopener noreferrer" dir="ltr">/docs</a>
+            {" · "}
+            <a href="/redoc" target="_blank" rel="noopener noreferrer" dir="ltr">/redoc</a>
+            .
           </p>
         </div>
 
