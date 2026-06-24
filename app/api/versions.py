@@ -248,6 +248,11 @@ async def delete_version(
 async def download_resource(
     version_id: str,
     resource_id: str,
+    index: int = Query(
+        0, ge=0,
+        description="For list-valued resources (e.g. multi-part ZIP "
+        "`_zip_parts`, multi-layer `_geojson`): which element to download.",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     vid = parse_uuid(version_id, "version_id")
@@ -262,11 +267,13 @@ async def download_resource(
     # Conditional-source versions reuse the previous version's
     # odata_resource_ids verbatim, so the same lookup works for them.
     mapped = mappings.get(resource_id)
-    # List-valued mappings (e.g. `_geojson`, `_zip_parts`) point at one or
-    # more resources — redirect to the first one (single-layer/single-part is
-    # the common case; multi-part download isn't exposed here).
+    # List-valued mappings (e.g. `_geojson`, multi-part `_zip_parts`) hold one
+    # or more resources. `index` selects which element (default 0); each part
+    # is addressable so the UI can offer a link per part. Out-of-range falls
+    # back to the first element rather than 404-ing.
     if isinstance(mapped, list):
-        mapped = next((x for x in mapped if x), None)
+        valid = [x for x in mapped if x]
+        mapped = (valid[index] if index < len(valid) else (valid[0] if valid else None))
     if not mapped:
         if resource_id == "metadata":
             mapped = version.odata_metadata_resource_id

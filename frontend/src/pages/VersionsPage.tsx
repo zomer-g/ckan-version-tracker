@@ -25,21 +25,30 @@ const ODATA_BASE = "https://www.odata.org.il";
 // versions — the backend redirects each to its real storage location.
 function versionFiles(
   mappings: Record<string, unknown> | null | undefined,
-): Array<{ name: string; label: string }> {
+): Array<{ name: string; index: number; label: string }> {
   if (!mappings) return [];
-  const out: Array<{ name: string; label: string }> = [];
+  const out: Array<{ name: string; index: number; label: string }> = [];
   for (const [key, val] of Object.entries(mappings)) {
     if (["_hashes", "_resource_ids", "_appendonly_seen"].includes(key)) continue;
-    const hasValue =
-      (typeof val === "string" && val.length > 10) ||
-      (Array.isArray(val) &&
-        val.some((x) => typeof x === "string" && x.length > 10));
-    if (!hasValue) continue;
-    let label = key;
-    if (key === "_geojson") label = "GeoJSON";
-    else if (key === "_zip" || key === "_zip_parts") label = "קבצים מצורפים (ZIP)";
-    else if (key === "metadata") label = "מטא-דאטה";
-    out.push({ name: key, label });
+    const base =
+      key === "_geojson"
+        ? "GeoJSON"
+        : key === "_zip" || key === "_zip_parts"
+          ? "קבצים מצורפים (ZIP)"
+          : key === "metadata"
+            ? "מטא-דאטה"
+            : key;
+    if (Array.isArray(val)) {
+      // List-valued (multi-part ZIP, multi-layer GeoJSON): one link per part,
+      // each addressing its own element via the download endpoint's ?index=.
+      const items = val.filter((x) => typeof x === "string" && x.length > 10);
+      items.forEach((_, i) => {
+        const label = items.length > 1 ? `${base} (חלק ${i + 1}/${items.length})` : base;
+        out.push({ name: key, index: i, label });
+      });
+    } else if (typeof val === "string" && val.length > 10) {
+      out.push({ name: key, index: 0, label: base });
+    }
   }
   return out;
 }
@@ -403,8 +412,11 @@ export default function VersionsPage() {
                     <div className="mt-1 flex" style={{ gap: "1rem", flexWrap: "wrap" }}>
                       {files.map((f) => (
                         <a
-                          key={f.name}
-                          href={`/api/versions/${v.id}/download/${encodeURIComponent(f.name)}`}
+                          key={`${f.name}-${f.index}`}
+                          href={
+                            `/api/versions/${v.id}/download/${encodeURIComponent(f.name)}` +
+                            (f.index > 0 ? `?index=${f.index}` : "")
+                          }
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm"
