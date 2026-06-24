@@ -318,6 +318,13 @@ async def poll_for_task(
         "source_url": ds.source_url,
         "scraper_config": ds.scraper_config or {"download_files": False},
         "callback_url": "/api/worker/push-version",
+        # How big the worker may make each attachment ZIP part. R2 datasets get
+        # a much larger limit (no CKAN/edge upload cap), so 1.5GB of files →
+        # ~2 parts instead of ~19. Worker falls back to its own default if absent.
+        "max_zip_part_bytes": (
+            settings.zip_part_bytes_r2 if _use_r2(ds)
+            else settings.zip_part_bytes_odata
+        ),
     }
 
 
@@ -924,7 +931,6 @@ async def upload_zip(
     if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
         raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
-    zip_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
     ts_zip = _timestamp()
 
@@ -932,7 +938,14 @@ async def upload_zip(
     # marked key (r2:<key>) as the "resource_id". The worker passes it back
     # in push-version exactly like an ODATA resource_id; the marker lets the
     # version/download/delete paths route it to R2.
+    #
+    # The upload is STREAMED to a temp file and handed to boto3's managed
+    # multipart transfer (file_path) — constant memory regardless of size, so
+    # the 1GB R2 parts don't OOM the dyno (the ODATA path below stays ≤80MB and
+    # can afford the in-memory read).
     if _use_r2(ds):
+        import os as _os
+        import tempfile as _tempfile
         part_label = (
             f"_part{part}of{total_parts}"
             if part is not None and total_parts is not None and total_parts > 1
@@ -942,17 +955,36 @@ async def upload_zip(
             str(ds.id), version_number,
             (file.filename or f"v{version_number}_attachments{part_label}.zip"),
         )
+        tmp_dir = "/tmp/upload_zip"
+        _os.makedirs(tmp_dir, exist_ok=True)
+        tmp_path = _os.path.join(tmp_dir, uuid.uuid4().hex + ".zip")
+        size = 0
         try:
+            with open(tmp_path, "wb") as out:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    size += len(chunk)
             await storage_client.upload_object(
-                key, file_content=zip_bytes, content_type="application/zip",
+                key, file_path=tmp_path, content_type="application/zip",
             )
-            logger.info("Uploaded ZIP %s (%d KB) → R2 %s",
+            logger.info("Uploaded ZIP %s (%d KB) → R2 %s (streamed)",
                         f"part {part}/{total_parts}" if total_parts else "(single)",
-                        len(zip_bytes) // 1024, key)
-            return {"resource_id": storage.mark(key), "size": len(zip_bytes)}
+                        size // 1024, key)
+            return {"resource_id": storage.mark(key), "size": size}
         except Exception as e:
             logger.exception("Failed to upload ZIP to R2")
             raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
+        finally:
+            try:
+                _os.remove(tmp_path)
+            except OSError:
+                pass
+
+    # ODATA path: parts are ≤80MB here, so the in-memory read is fine.
+    zip_bytes = await file.read()
 
     # Build resource name/description, including part info when split
     if part is not None and total_parts is not None and total_parts > 1:

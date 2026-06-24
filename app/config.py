@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # file bytes never pass through the OVER backend.
     s3_public_base_url: str = ""
 
+    # Max ZIP part size the worker splits attachments into, per destination.
+    # ODATA stays small (CKAN/Cloudflare ~100MB upload edge limit); R2 has no
+    # such limit (multipart streams GBs), so bigger parts ⇒ fewer parts. The
+    # worker reads `max_zip_part_bytes` from the poll response and splits to it.
+    zip_part_bytes_odata: int = 80 * 1024 * 1024     # 80 MB
+    zip_part_bytes_r2: int = 1024 * 1024 * 1024      # 1 GB
+
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
     default_poll_interval: int = 604800  # 1 week
