@@ -157,6 +157,10 @@
     "storage_mode": "Storage mode",
     "storage_full": "Full snapshot",
     "storage_append": "Append only",
+    "storage_target": "Storage target",
+    "storage_r2": "R2 (independent)",
+    "storage_odata": "ODATA",
+    "storage_local": "Local only (no upload)",
     "append_key_placeholder": "Key column (optional)"
   },
   "versions": {

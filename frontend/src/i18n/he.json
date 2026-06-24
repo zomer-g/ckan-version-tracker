@@ -157,6 +157,10 @@
     "storage_mode": "אופן שמירה",
     "storage_full": "שמירה מלאה",
     "storage_append": "תוספת בלבד",
+    "storage_target": "יעד אחסון",
+    "storage_r2": "R2 (אחסון עצמאי)",
+    "storage_odata": "ODATA",
+    "storage_local": "לוקאלי (ללא העלאה)",
     "append_key_placeholder": "עמודת מפתח (אופציונלי)"
   },
   "versions": {
