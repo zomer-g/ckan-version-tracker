@@ -20,6 +20,8 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
+from app.services import storage_client as storage
+from app.services.storage_client import storage_client
 from app.services.version_detector import compute_new_rows
 from app.services.worker_version import (
     get_required_worker_sha,
@@ -470,15 +472,17 @@ async def push_version(
                 # know next_version yet — same constraint as the ZIP path).
                 # Now that we do, rewrite the resource's 'vN' marker so the
                 # dataset page doesn't show every CSV version stuck at v1.
-                try:
-                    await odata_client.update_resource_version_number(
-                        pre_uploaded, next_version,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to rename pre-uploaded CSV %s to v%d: %s",
-                        pre_uploaded, next_version, e,
-                    )
+                # ODATA-only display rename; R2 keys carry no editable name.
+                if not storage.is_storage_value(pre_uploaded):
+                    try:
+                        await odata_client.update_resource_version_number(
+                            pre_uploaded, next_version,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to rename pre-uploaded CSV %s to v%d: %s",
+                            pre_uploaded, next_version, e,
+                        )
                 continue
 
             if not (res.records and res.fields):
@@ -569,6 +573,8 @@ async def push_version(
         resource_mappings["_geojson"] = list(body.geojson_resource_ids)
         logger.info("Linked %d pre-uploaded GeoJSON resource(s)", len(body.geojson_resource_ids))
         for rid in body.geojson_resource_ids:
+            if storage.is_storage_value(rid):
+                continue  # R2 key — no ODATA resource to rename
             try:
                 await odata_client.update_resource_version_number(rid, next_version)
             except Exception as e:
@@ -588,6 +594,8 @@ async def push_version(
         # next_version yet). Now that we do, rewrite each resource's
         # 'v1' marker to match the version we're about to commit.
         for rid in body.zip_resource_ids:
+            if storage.is_storage_value(rid):
+                continue  # R2 key — no ODATA resource to rename
             try:
                 await odata_client.update_resource_version_number(rid, next_version)
             except Exception as e:
@@ -598,33 +606,47 @@ async def push_version(
         odata_resource_ids.append(body.zip_resource_id)
         resource_mappings["_zip"] = body.zip_resource_id
         logger.info("Using pre-uploaded ZIP resource %s", body.zip_resource_id)
-        try:
-            await odata_client.update_resource_version_number(
-                body.zip_resource_id, next_version,
-            )
-        except Exception as e:
-            logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
-                           body.zip_resource_id, next_version, e)
-    elif body.zip_file and ds.odata_dataset_id:
+        if not storage.is_storage_value(body.zip_resource_id):
+            try:
+                await odata_client.update_resource_version_number(
+                    body.zip_resource_id, next_version,
+                )
+            except Exception as e:
+                logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
+                               body.zip_resource_id, next_version, e)
+    elif body.zip_file and (ds.odata_dataset_id or storage_client.is_enabled()):
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)
             from app.services.snapshot_service import _timestamp
             ts_zip = _timestamp()
-            zip_result = await odata_client.upload_resource(
-                dataset_id=ds.odata_dataset_id,
-                file_content=zip_bytes,
-                filename=body.zip_file.filename,
-                name=f"{ts_zip} v{next_version} - קבצים מצורפים",
-                description=f"Version {next_version}: {len(body.attachments)} attached files",
-                resource_format="ZIP",
-            )
-            zip_resource_id = zip_result["id"]
+            if storage_client.is_enabled():
+                # R2: store the ZIP object directly; record the marked key.
+                key = storage.build_key(
+                    str(ds.id), next_version,
+                    body.zip_file.filename or f"v{next_version}_attachments.zip",
+                )
+                await storage_client.upload_object(
+                    key, file_content=zip_bytes, content_type="application/zip",
+                )
+                zip_resource_id = storage.mark(key)
+                logger.info("Uploaded ZIP (%d KB) to R2 (%s)",
+                            len(zip_bytes) // 1024, key)
+            else:
+                zip_result = await odata_client.upload_resource(
+                    dataset_id=ds.odata_dataset_id,
+                    file_content=zip_bytes,
+                    filename=body.zip_file.filename,
+                    name=f"{ts_zip} v{next_version} - קבצים מצורפים",
+                    description=f"Version {next_version}: {len(body.attachments)} attached files",
+                    resource_format="ZIP",
+                )
+                zip_resource_id = zip_result["id"]
+                logger.info("Uploaded ZIP (%d KB) to odata (resource %s)",
+                            len(zip_bytes) // 1024, zip_resource_id)
             odata_resource_ids.append(zip_resource_id)
             resource_mappings["_zip"] = zip_resource_id
-            logger.info("Uploaded ZIP (%d KB) to odata (resource %s)",
-                        len(zip_bytes) // 1024, zip_resource_id)
         except Exception as e:
-            logger.error("Failed to upload ZIP to odata: %s", e)
+            logger.error("Failed to upload ZIP: %s", e)
             push_errors.append(f"zip upload: {e}")
 
     # Compute hash for change detection
@@ -801,12 +823,38 @@ async def upload_zip(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not ds.odata_dataset_id:
-        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     zip_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
     ts_zip = _timestamp()
+
+    # R2 backend: store the ZIP directly in the object store and return a
+    # marked key (r2:<key>) as the "resource_id". The worker passes it back
+    # in push-version exactly like an ODATA resource_id; the marker lets the
+    # version/download/delete paths route it to R2.
+    if storage_client.is_enabled():
+        part_label = (
+            f"_part{part}of{total_parts}"
+            if part is not None and total_parts is not None and total_parts > 1
+            else ""
+        )
+        key = storage.build_key(
+            str(ds.id), version_number,
+            (file.filename or f"v{version_number}_attachments{part_label}.zip"),
+        )
+        try:
+            await storage_client.upload_object(
+                key, file_content=zip_bytes, content_type="application/zip",
+            )
+            logger.info("Uploaded ZIP %s (%d KB) → R2 %s",
+                        f"part {part}/{total_parts}" if total_parts else "(single)",
+                        len(zip_bytes) // 1024, key)
+            return {"resource_id": storage.mark(key), "size": len(zip_bytes)}
+        except Exception as e:
+            logger.exception("Failed to upload ZIP to R2")
+            raise HTTPException(status_code=502, detail=f"ZIP upload failed: {e}")
 
     # Build resource name/description, including part info when split
     if part is not None and total_parts is not None and total_parts > 1:
@@ -936,8 +984,8 @@ async def upload_geojson(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not ds.odata_dataset_id:
-        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     body_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
@@ -957,6 +1005,25 @@ async def upload_geojson(
     if label_base.lower().endswith(".geojson"):
         label_base = label_base[:-8]
     label = (resource_name or "").strip() or label_base or "GeoJSON"
+
+    # R2 backend: store the GeoJSON object directly. Keeps the .gz suffix on
+    # the key when gzipped so GovmapView's fetch + DecompressionStream still
+    # works; we deliberately do NOT set ContentEncoding (that would make the
+    # CDN auto-inflate and break the client-side decompression contract).
+    if storage_client.is_enabled():
+        key = storage.build_key(str(ds.id), version_number, raw_filename)
+        try:
+            await storage_client.upload_object(
+                key, file_content=body_bytes,
+                content_type="application/gzip" if is_gzip else "application/geo+json",
+            )
+            logger.info("Uploaded GeoJSON %s (%d KB%s) → R2 %s",
+                        raw_filename, len(body_bytes) // 1024,
+                        ", gzipped" if is_gzip else "", key)
+            return {"resource_id": storage.mark(key), "size": len(body_bytes)}
+        except Exception as e:
+            logger.exception("Failed to upload GeoJSON to R2")
+            raise HTTPException(status_code=502, detail=f"GeoJSON upload failed: {e}")
 
     try:
         result_resource = await odata_client.upload_resource(
@@ -1023,8 +1090,8 @@ async def upload_csv(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not ds.odata_dataset_id:
-        raise HTTPException(status_code=404, detail="Dataset not found or no odata mirror")
+    if not ds or not (ds.odata_dataset_id or storage_client.is_enabled()):
+        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
 
     is_gzip = (compression or "").lower() == "gzip"
 
@@ -1099,6 +1166,37 @@ async def upload_csv(
             logger.warning("Bad fields_json — falling back to header inference")
     if not fields:
         fields = [{"id": col, "type": "text"} for col in header]
+
+    # ---- R2 backend: store the CSV as a downloadable object and return ----
+    # Object stores have no datastore, so the CSV is served as a file (direct
+    # download from R2's public domain) rather than a queryable table. This is
+    # the file-only side of full decoupling; row-level querying would need a
+    # separate layer (Datasette/DuckDB) and is intentionally out of scope.
+    if storage_client.is_enabled():
+        from app.services.snapshot_service import _timestamp
+        ts = _timestamp()
+        safe_name = (resource_name or "data").replace("/", "_").replace("\\", "_")
+        csv_size = os.path.getsize(csv_path)
+        key = storage.build_key(str(ds.id), version_number, f"{safe_name}.csv")
+        try:
+            await storage_client.upload_object(
+                key, file_path=csv_path, content_type="text/csv; charset=utf-8",
+            )
+        except Exception as e:
+            logger.exception("Failed to upload CSV to R2")
+            _cleanup_paths(gz_path, csv_path)
+            raise HTTPException(status_code=502, detail=f"CSV upload failed: {e}")
+        _cleanup_paths(gz_path, csv_path)
+        logger.info("Uploaded CSV (%d KB, ~%d rows) → R2 %s",
+                    csv_size // 1024, row_count, key)
+        return {
+            "resource_id": storage.mark(key),
+            "size": csv_size,
+            "rows": row_count,
+            "compression": compression or "none",
+            "datastore": "skipped (r2 backend — file only, no queryable table)",
+            "upload_mode": "r2",
+        }
 
     # ---- Step 1: Create the resource on odata ----
     # CKAN itself has a ~100MB limit on uploaded files (resource_create returns

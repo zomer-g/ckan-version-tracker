@@ -18,6 +18,8 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services.odata_client import odata_client
+from app.services import storage_client as storage_lib
+from app.services.storage_client import storage_client
 from app.worker.scheduler import add_poll_job, scheduler
 
 logger = logging.getLogger(__name__)
@@ -557,19 +559,36 @@ async def dataset_sizes(
     sem = asyncio.Semaphore(10)
 
     async def _fetch_resource_sizes(ds: TrackedDataset) -> dict[str, int]:
-        if not ds.odata_dataset_id:
-            return {}
-        async with sem:
-            try:
-                pkg = await odata_client.package_show(ds.odata_dataset_id)
-            except Exception as e:
-                logger.warning("package_show failed for %s: %s", ds.ckan_name, e)
-                return {}
-        return {
-            r["id"]: int(r.get("size") or 0)
-            for r in (pkg.get("resources") or [])
-            if r.get("id")
-        }
+        sizes: dict[str, int] = {}
+        if ds.odata_dataset_id:
+            async with sem:
+                try:
+                    pkg = await odata_client.package_show(ds.odata_dataset_id)
+                    sizes.update({
+                        r["id"]: int(r.get("size") or 0)
+                        for r in (pkg.get("resources") or [])
+                        if r.get("id")
+                    })
+                except Exception as e:
+                    logger.warning("package_show failed for %s: %s", ds.ckan_name, e)
+        # R2 backend: size objects via HEAD. Keyed by the FULL mapping value
+        # ("r2:<key>") so the per-version sum below works unchanged. Fail-open
+        # (missing → 0). Bounded: a version has a handful of objects.
+        if storage_client.is_enabled():
+            r2_values: set[str] = set()
+            for v in versions_by_ds.get(str(ds.id), []):
+                for val in (v.resource_mappings or {}).values():
+                    if storage_lib.is_storage_value(val):
+                        r2_values.add(val)
+                    elif isinstance(val, list):
+                        r2_values.update(x for x in val if storage_lib.is_storage_value(x))
+            async with sem:
+                for val in r2_values:
+                    try:
+                        sizes[val] = await storage_client.object_size(val) or 0
+                    except Exception:
+                        sizes[val] = 0
+        return sizes
 
     rid_size_lists = await asyncio.gather(
         *[_fetch_resource_sizes(ds) for ds in datasets],

@@ -13,6 +13,10 @@ PyJWT[crypto]==2.10.1
 # HTTP client
 httpx==0.28.1
 
+# Object storage (S3-compatible: Cloudflare R2 etc.) — used when
+# STORAGE_BACKEND=r2 (app/services/storage_client.py)
+boto3==1.35.99
+
 # Scheduler
 apscheduler==3.10.4
 

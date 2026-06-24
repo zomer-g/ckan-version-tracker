@@ -101,7 +101,7 @@ export default function VersionsPage() {
   // layer-selector dropdown we haven't built yet.
   const govmapGeojsonUrl = useMemo<string | null>(() => {
     if (!dataset || dataset.source_type !== "govmap") return null;
-    if (!dataset.odata_dataset_id || versionsList.length === 0) return null;
+    if (versionsList.length === 0) return null;
     const latest = versionsList[0];
     const m = latest.resource_mappings as Record<string, unknown> | null;
     const ids = m?._geojson;
@@ -112,6 +112,16 @@ export default function VersionsPage() {
       rid = ids;
     }
     if (!rid) return null;
+    // R2-stored GeoJSON ("r2:<key>"): fetch via the backend download route,
+    // which 302-redirects to the object store's public domain. This avoids
+    // needing the R2 base URL on the client; downloadToBlob sniffs gzip by
+    // magic bytes, so the stripped filename on the redirect target is fine.
+    // (The object store must allow this app's origin via CORS for the
+    // GovmapView fetch to read the body.)
+    if (rid.startsWith("r2:")) {
+      return `/api/versions/${latest.id}/download/_geojson`;
+    }
+    if (!dataset.odata_dataset_id) return null;
     return `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${rid}/download`;
   }, [dataset, versionsList]);
 
