@@ -60,6 +60,12 @@ class UpdateRequest(BaseModel):
     resource_ids: list[str] | None = None
     # Acknowledge the new_resources_at_source alert without adding any.
     dismiss_new_resources: bool | None = None
+    # Force the next poll to redo the snapshot: nulls last_modified (so the
+    # unchanged-metadata_modified check is bypassed → forced_repoll path) and
+    # clears last_error. Used to re-run a dataset whose last poll failed for a
+    # now-fixed reason (e.g. an IAP-blocked attachment) without changing the
+    # tracked-resource set or deleting version history.
+    force_repoll: bool | None = None
 
 
 def _validate_storage_mode(mode: str) -> str:
@@ -802,6 +808,10 @@ async def update_tracked(
         ds.new_resources_at_source = None
     if body.dismiss_new_resources:
         ds.new_resources_at_source = None
+    if body.force_repoll:
+        # See UpdateRequest.force_repoll: re-run the snapshot on next poll.
+        ds.last_modified = None
+        ds.last_error = None
     if body.append_key is not None:
         sc = dict(ds.scraper_config or {})
         if body.append_key.strip():

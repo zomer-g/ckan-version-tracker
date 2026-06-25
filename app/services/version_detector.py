@@ -86,6 +86,24 @@ async def detect_resource_changes(
                     except OSError:
                         pass
         except Exception as e:
+            # data.gov.il IAP-blocks headless downloads of non-tabular FILES
+            # (PDF instruction sheets, etc.). Their data comes through the
+            # datastore API fine, so an un-fetchable file attachment must NOT
+            # flag the whole dataset as failed on subsequent polls — exactly as
+            # the first-version path in poll_job.py handles it. Skip quietly,
+            # preserving the prior hash so the skip doesn't register as a change
+            # (which would churn a new version on every poll). Surface only real
+            # download errors.
+            blocked = "Got HTML" in str(e) or "IAP" in str(e)
+            if blocked and not resource.get("datastore_active"):
+                logger.info(
+                    "Skipping IAP-blocked non-datastore resource %s (%s) — "
+                    "data collected via datastore API",
+                    resource.get("name"), resource.get("format"),
+                )
+                if rid in old_hashes:
+                    hash_map[rid] = old_hashes[rid]
+                continue
             logger.warning("Failed to download resource %s: %s", rid, e)
             hash_map[rid] = "download_failed"
             errors.append(f"download {resource.get('name', rid[:8])}: {e}")
