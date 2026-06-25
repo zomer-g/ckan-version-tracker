@@ -22,6 +22,7 @@ from app.services.snapshot_service import (
     create_version_snapshot,
 )
 from app.services import conditional_archiver
+from app.services.storage_client import dataset_uses_r2
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +173,31 @@ async def poll_dataset(dataset_id: str) -> None:
             resource_to_check = resources[0] if len(resources) == 1 else None
             if resource_to_check:
                 target_rid = resource_to_check["id"]
+                ds_info = None
                 try:
                     ds_info = await ckan_client.datastore_info(target_rid)
                     total_rows = ds_info["total"]
                 except Exception:
                     total_rows = 0
 
-                if total_rows >= settings.large_dataset_threshold:
-                    # LARGE DATASET PATH: metadata + sample only
+                # Route to the datastore-streaming path (_poll_large_dataset →
+                # delta_archiver) when EITHER the dataset is too big for the
+                # file-download snapshot, OR it's an append_only dataset backed
+                # by a live datastore. The append_only branch matters even for
+                # SMALL datasets because some sources IAP-block the file
+                # download (the flights board returns Google-OAuth HTML), so
+                # the datastore API is the only way to read them — and it lets
+                # small append_only datasets reuse the same keyless/windowed
+                # delta path as the huge vehicle registry.
+                appendonly_datastore = (
+                    ds.storage_mode == "append_only"
+                    and ds_info is not None
+                    and bool(resource_to_check.get("datastore_active"))
+                )
+                if ds_info is not None and (
+                    total_rows >= settings.large_dataset_threshold
+                    or appendonly_datastore
+                ):
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
 
@@ -268,8 +286,14 @@ async def poll_dataset(dataset_id: str) -> None:
                                 logger.warning("Failed to download resource %s: %s", r["id"], e)
                                 errors.append(f"download {r.get('name', r['id'][:8])}: {e}")
 
-                # Lazily create mirror dataset if it doesn't exist yet
-                if not ds.odata_dataset_id and settings.odata_api_key:
+                # Storage routing: a dataset pinned to R2 stores its files in
+                # the object store and never touches the ODATA mirror, so we
+                # skip mirror creation entirely for it.
+                use_r2 = dataset_uses_r2(ds)
+
+                # Lazily create mirror dataset if it doesn't exist yet (ODATA
+                # backend only).
+                if not use_r2 and not ds.odata_dataset_id and settings.odata_api_key:
                     from app.services.odata_client import odata_client
                     from app.api.utils import sanitize_ckan_name
                     mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
@@ -290,8 +314,8 @@ async def poll_dataset(dataset_id: str) -> None:
                             logger.error("Mirror find also failed for %s: %s", mirror_name, e2)
                             errors.append(f"mirror create/find: {e2}")
 
-                # Upload snapshot to odata.org.il
-                if ds.odata_dataset_id:
+                # Upload snapshot — to R2 (object store) or the ODATA mirror.
+                if use_r2 or ds.odata_dataset_id:
                     meta_resource_id, resource_mappings, upload_errors = await create_version_snapshot(
                         odata_dataset_id=ds.odata_dataset_id,
                         version_number=next_version,
@@ -299,6 +323,8 @@ async def poll_dataset(dataset_id: str) -> None:
                         changed_resources=resources_to_upload,
                         hash_map=hash_map,
                         old_mappings=old_mappings,
+                        use_r2=use_r2,
+                        tracked_dataset_id=str(ds.id) if use_r2 else None,
                     )
                     errors.extend(upload_errors)
                 else:
@@ -699,6 +725,7 @@ async def _poll_append_only(
                 fields=fields,
                 new_rows=new_rows,
                 resource_format=fmt.upper(),
+                add_first_seen=True,
             )
             if rid and not ds.appendonly_resource_id:
                 ds.appendonly_resource_id = rid
@@ -764,8 +791,12 @@ async def _poll_large_dataset(
     total_rows = ds_info["total"]
     fields = ds_info["fields"]
 
-    # Delta-archive opt-in. Skips the metadata-stub path below.
-    if ds.storage_mode == "append_only" and (ds.scraper_config or {}).get("append_key"):
+    # Delta-archive opt-in. Skips the metadata-stub path below. append_key is
+    # OPTIONAL now: with it, delta dedups by that column (vehicle registry);
+    # without it, delta dedups by full-row hash (flights board). The streaming
+    # path reads via the datastore API, so it also covers append_only sources
+    # whose file download is IAP-blocked regardless of size.
+    if ds.storage_mode == "append_only":
         from app.services.delta_archiver import archive_via_datastore_streaming
         latest_result = await db.execute(
             select(VersionIndex)

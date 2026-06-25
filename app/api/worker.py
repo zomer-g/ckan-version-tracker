@@ -42,24 +42,11 @@ def _verify_worker_key(request: Request):
         raise HTTPException(status_code=403, detail="Invalid worker key")
 
 
-def _dataset_storage(ds) -> str:
-    """Resolve a dataset's storage target: 'odata' | 'r2' | 'local'.
-
-    A per-dataset choice (stored in scraper_config by the admin at approval /
-    in the panel) overrides the global STORAGE_BACKEND default. 'local' is the
-    legacy upload_mode='local_only' (worker keeps files, no upload).
-    """
-    sc = ds.scraper_config or {}
-    if sc.get("upload_mode") == "local_only":
-        return "local"
-    return sc.get("storage_backend") or settings.storage_backend
-
-
-def _use_r2(ds) -> bool:
-    """True if THIS dataset's files should be written to R2 (and R2 is usable).
-    Replaces the old global ``storage_client.is_enabled()`` gate so each
-    dataset routes independently."""
-    return _dataset_storage(ds) == "r2" and storage_client.is_configured()
+# Per-dataset storage routing lives in storage_client (shared with the CKAN
+# poll path: snapshot_service / poll_job). These thin aliases preserve the
+# worker-local call sites unchanged.
+_dataset_storage = storage.dataset_storage_target
+_use_r2 = storage.dataset_uses_r2
 
 
 # --- Models ---

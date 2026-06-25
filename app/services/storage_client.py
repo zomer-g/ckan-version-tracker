@@ -254,3 +254,33 @@ class StorageClient:
 
 # Module-level singleton, mirroring `odata_client`.
 storage_client = StorageClient()
+
+
+# ── per-dataset storage routing ─────────────────────────────────────────
+# A dataset's file destination is resolved from its ``scraper_config`` (an
+# admin choice made at approval / in the panel) falling back to the global
+# ``STORAGE_BACKEND`` default. These two helpers are the single source of
+# truth for that decision, shared by the worker path (scraper/govmap) AND
+# the CKAN poll path (snapshot_service / poll_job) so every backend routes
+# identically. Kept here, rather than in app.api.worker, to avoid an import
+# cycle (poll_job / snapshot_service must not import the worker API module).
+
+def dataset_storage_target(ds) -> str:
+    """Resolve a dataset's storage target: ``'odata'`` | ``'r2'`` | ``'local'``.
+
+    A per-dataset choice (``scraper_config.storage_backend``) overrides the
+    global ``STORAGE_BACKEND`` default. ``'local'`` is the legacy
+    ``upload_mode='local_only'`` (worker keeps files, no upload).
+    """
+    sc = getattr(ds, "scraper_config", None) or {}
+    if sc.get("upload_mode") == "local_only":
+        return "local"
+    return sc.get("storage_backend") or settings.storage_backend
+
+
+def dataset_uses_r2(ds) -> bool:
+    """True if THIS dataset's files should be written to R2 (and R2 is usable).
+    Routes each dataset independently of the global default; requires the R2
+    credentials to actually be present (else falls back to the ODATA path
+    rather than erroring)."""
+    return dataset_storage_target(ds) == "r2" and storage_client.is_configured()
