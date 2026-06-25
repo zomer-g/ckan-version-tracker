@@ -35,6 +35,11 @@ class TrackRequest(BaseModel):
     resource_ids: list[str] | None = None
     storage_mode: str = "full_snapshot"  # "full_snapshot" | "append_only"
     append_key: str | None = None  # column name when storage_mode="append_only"
+    # Bounds the append seen-set to a sliding window of N versions (opt-in).
+    # Needed for high-churn live boards (e.g. flights, polled every 15 min)
+    # where an unbounded seen-set would grow without limit. Leave null for
+    # slow-cadence append datasets (e.g. the vehicle registry).
+    seen_window_versions: int | None = None
 
 
 class UpdateRequest(BaseModel):
@@ -44,6 +49,8 @@ class UpdateRequest(BaseModel):
     organization_id: str | None = None  # "" or null to clear; UUID to assign
     storage_mode: str | None = None  # "full_snapshot" | "append_only"
     append_key: str | None = None  # only meaningful when storage_mode="append_only"
+    # Sliding-window bound for the append seen-set; <=0 or null clears it.
+    seen_window_versions: int | None = None
     # "full" (scrape→download→upload to ODATA→version) | "local_only"
     # (scrape→download to the worker machine, skip ODATA upload + version).
     upload_mode: str | None = None
@@ -704,8 +711,12 @@ async def track_dataset(
         logger.info("ODATA_API_KEY not set — tracking without odata.org.il mirror")
 
     ckan_scraper_config = None
-    if body.append_key:
-        ckan_scraper_config = {"append_key": body.append_key}
+    if body.append_key or (body.seen_window_versions and body.seen_window_versions > 0):
+        ckan_scraper_config = {}
+        if body.append_key:
+            ckan_scraper_config["append_key"] = body.append_key
+        if body.seen_window_versions and body.seen_window_versions > 0:
+            ckan_scraper_config["seen_window_versions"] = body.seen_window_versions
 
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
@@ -818,6 +829,13 @@ async def update_tracked(
             sc["append_key"] = body.append_key.strip()
         else:
             sc.pop("append_key", None)
+        ds.scraper_config = sc or None
+    if body.seen_window_versions is not None:
+        sc = dict(ds.scraper_config or {})
+        if body.seen_window_versions > 0:
+            sc["seen_window_versions"] = body.seen_window_versions
+        else:
+            sc.pop("seen_window_versions", None)
         ds.scraper_config = sc or None
     if body.upload_mode is not None:
         # Stored in scraper_config (no migration) — flows straight to the worker

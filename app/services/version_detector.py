@@ -179,3 +179,34 @@ def compute_new_rows(
         out_rows.append(row)
         out_keys.append(ident)
     return out_rows, out_keys
+
+
+def compute_new_rows_windowed(
+    seen_gen: dict[str, int],
+    new_records: list[dict],
+    key_field: str | None,
+    current_gen: int,
+) -> tuple[list[dict], dict[str, int]]:
+    """Windowed variant of compute_new_rows for high-churn live boards.
+
+    Instead of an ever-growing list of every identity ever seen, the seen-set
+    is a ``{identity: last_seen_generation}`` map. A row is "new" only if its
+    identity isn't currently in the map; either way its generation is refreshed
+    to ``current_gen`` (so a row that stays on the source board keeps getting
+    refreshed and never ages out while present). The CALLER evicts entries
+    whose generation has fallen outside the window after all pages are
+    processed — see archive_via_datastore_streaming.
+
+    Refresh-on-seen makes eviction safe regardless of how long a row lingers:
+    only rows ABSENT for a full window of polls age out, and (for date-stamped
+    sources like flights) an aged-out row's exact content never recurs, so it
+    can't be wrongly re-appended. Returns (rows_to_insert, updated_seen_gen).
+    """
+    out: dict[str, int] = dict(seen_gen or {})
+    out_rows: list[dict] = []
+    for row in new_records:
+        ident = _row_identity(row, key_field)
+        if ident not in out:
+            out_rows.append(row)
+        out[ident] = current_gen
+    return out_rows, out

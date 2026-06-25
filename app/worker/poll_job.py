@@ -775,18 +775,20 @@ async def _poll_large_dataset(
     old_mappings: dict | None,
     db,
 ):
-    """Handle large datasets.
+    """Handle large datasets — and append_only datastore-backed datasets of
+    any size (the caller also routes small append_only sources here so they
+    read via the datastore API instead of an IAP-blocked file download).
 
     Default path: metadata-only versioning (record count + sample rows).
     Cheap and safe but doesn't actually preserve data — every version is
     a few KB instead of the source's 100s of MB.
 
-    Opt-in path: when the operator sets storage_mode='append_only' AND
-    populates scraper_config.append_key, we stream the dataset out of
-    CKAN's datastore and append only the new-by-key rows to a shared
-    odata resource. This is the "delta archive" mode for vehicle-style
-    datasets where new identities are added but existing ones rarely
-    change shape.
+    Opt-in path: when the operator sets storage_mode='append_only', we stream
+    the dataset out of CKAN's datastore and append only the new rows to a
+    shared odata resource (the "delta archive" mode). Dedup is by
+    scraper_config.append_key when set (vehicle registry), else by full-row
+    hash (flights board); scraper_config.seen_window_versions bounds the
+    seen-set for high-churn boards. See delta_archiver.
     """
     total_rows = ds_info["total"]
     fields = ds_info["fields"]

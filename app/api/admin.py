@@ -434,6 +434,50 @@ async def migrate_dataset_to_r2(
     }
 
 
+@router.post("/register-append-datasets")
+@limiter.limit("5/minute")
+async def register_append_datasets_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    poll: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently register the APPEND-set datasets (flights + vehicle
+    registry) as tracked append_only sources. Same server-side-via-admin
+    pattern as the R2 backfill, so prod can run it without shell access.
+
+    For each newly-created dataset we schedule its recurring poll job
+    immediately (don't wait for the next deploy's init_scheduler). With
+    ``poll=true`` we also kick an initial seeding poll in the background
+    (the vehicle seed streams ~4.1M rows — it runs detached, not inline).
+    Re-running is safe: already-tracked datasets are skipped.
+    """
+    from app.services.append_registrar import register_append_datasets
+
+    results = await register_append_datasets(db)
+
+    # Schedule recurring polls for the rows that were just created (or already
+    # exist but might be missing a job after a cold start). add_poll_job
+    # anchors to last_polled_at=None → fires on the next due tick.
+    for r in results:
+        if r.get("status") in ("created", "skipped") and r.get("id"):
+            try:
+                ds = (await db.execute(
+                    select(TrackedDataset).where(TrackedDataset.id == parse_uuid(r["id"], "id"))
+                )).scalar_one_or_none()
+                if ds:
+                    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at)
+                    if poll:
+                        from app.worker.poll_job import poll_dataset
+                        background_tasks.add_task(poll_dataset, str(ds.id))
+            except Exception:
+                logger.exception("register-append: scheduling failed for %s", r.get("ckan_id"))
+
+    logger.info("register-append-datasets by %s: %s", user.email, results)
+    return {"results": results, "polled": poll}
+
+
 @router.get("/scrape-tasks")
 @limiter.limit("60/minute")
 async def list_scrape_tasks(
