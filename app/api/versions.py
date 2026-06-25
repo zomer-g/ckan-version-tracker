@@ -285,7 +285,20 @@ async def download_resource(
     if storage.is_storage_value(mapped):
         return RedirectResponse(url=storage_client.public_url(mapped))
 
-    download_url = f"{settings.odata_url}/dataset/{version.tracked_dataset_id}/resource/{mapped}/download"
+    # ODATA-stored resource: redirect to the file on the CKAN mirror. The URL
+    # must use the ODATA *package* id (ds.odata_dataset_id), NOT the OVER
+    # dataset UUID — CKAN validates the /dataset/<id>/ segment and 404s a
+    # mismatch (this silently broke every ODATA download via this endpoint).
+    ds = (
+        await db.execute(
+            select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
+        )
+    ).scalar_one_or_none()
+    odata_pkg = (
+        ds.odata_dataset_id if ds and ds.odata_dataset_id
+        else version.tracked_dataset_id
+    )
+    download_url = f"{settings.odata_url}/dataset/{odata_pkg}/resource/{mapped}/download"
     return RedirectResponse(url=download_url)
 
 
