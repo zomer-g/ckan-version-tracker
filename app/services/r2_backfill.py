@@ -18,6 +18,7 @@ module docstring for the full rationale; in short:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid as uuidlib
@@ -42,6 +43,11 @@ _UUID_RE = re.compile(
 SKIP_KEYS = {"_hashes", "_resource_ids", "_appendonly_seen", "_large_dataset_info"}
 
 TABULAR = {"csv", "tsv", "txt"}
+
+# Bounded concurrency for the ODATA round-trips (resource_show + download) and
+# R2 uploads. Keeps the dyno's memory/socket use sane while collapsing dozens
+# of sequential round-trips into a few seconds.
+MAX_CONCURRENCY = 6
 
 
 def _looks_like_odata_id(v) -> bool:
@@ -191,27 +197,28 @@ async def backfill_dataset_to_r2(
         summary["note"] = "nothing to migrate (already on R2 or no files)"
         return summary
 
+    # Process the unique resources CONCURRENTLY (bounded) — 55+ sequential
+    # ODATA round-trips would otherwise blow past any reasonable request
+    # timeout. Each task does resource_show (+ download+upload when applying).
     id_to_r2: dict[str, str] = {}
-    async with httpx.AsyncClient() as client:
-        for oid in sorted(odata_ids):
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def _process(client: httpx.AsyncClient, oid: str) -> dict:
+        async with sem:
             res = await _resource_show(client, oid)
             if not res:
-                summary["failed"].append({"id": oid, "reason": "no resource_show"})
-                continue
+                return {"id": oid, "ok": False, "reason": "no resource_show"}
             name = res.get("name") or oid
             fmt = res.get("format") or ""
             key = backfill_key(str(ds_uuid), oid, name, fmt)
-            summary["plan"].append({
-                "odata_id": oid, "name": name, "format": fmt,
-                "size": res.get("size"), "key": key,
-            })
+            entry = {"odata_id": oid, "name": name, "format": fmt,
+                     "size": res.get("size"), "key": key}
             if not apply:
-                id_to_r2[oid] = storage.mark(key)
-                continue
+                return {"id": oid, "ok": True, "key": key, "plan": entry}
             data = await _download(client, res)
             if not data:
-                summary["failed"].append({"id": oid, "reason": "download failed"})
-                continue
+                return {"id": oid, "ok": False, "reason": "download failed",
+                        "plan": entry}
             ctype = (
                 "text/csv; charset=utf-8" if (fmt or "").lower() in TABULAR
                 else (res.get("mimetype") or None)
@@ -219,8 +226,23 @@ async def backfill_dataset_to_r2(
             await storage_client.upload_object(
                 key, file_content=data, content_type=ctype,
             )
-            id_to_r2[oid] = storage.mark(key)
-            summary["migrated"] += 1
+            return {"id": oid, "ok": True, "key": key, "plan": entry,
+                    "uploaded": True}
+
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(
+            *(_process(client, oid) for oid in sorted(odata_ids))
+        )
+    # Reassemble in stable id order.
+    for r in sorted(results, key=lambda x: x["id"]):
+        if r.get("plan"):
+            summary["plan"].append(r["plan"])
+        if r["ok"]:
+            id_to_r2[r["id"]] = storage.mark(r["key"])
+            if r.get("uploaded"):
+                summary["migrated"] += 1
+        else:
+            summary["failed"].append({"id": r["id"], "reason": r["reason"]})
 
     # Rewrite every version's mappings + metadata column.
     total_repl = 0
