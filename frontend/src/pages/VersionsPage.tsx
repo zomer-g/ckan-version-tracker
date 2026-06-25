@@ -37,7 +37,15 @@ function versionFiles(
           ? "קבצים מצורפים (ZIP)"
           : key === "metadata"
             ? "מטא-דאטה"
-            : key;
+            : // The worker names the main tabular resource "נתוני הסורק"
+              // (worker.py resource_name default), which becomes the
+              // mapping key. As a download label that's opaque — it's the
+              // scraped records as a CSV table, so say so. Mapped here (not
+              // renamed in the backend) so existing versions' keys, which
+              // the download endpoint looks up, stay intact.
+              key === "נתוני הסורק"
+              ? "טבלת נתונים (CSV)"
+              : key;
     if (Array.isArray(val)) {
       // List-valued (multi-part ZIP, multi-layer GeoJSON): one link per part,
       // each addressing its own element via the download endpoint's ?index=.
