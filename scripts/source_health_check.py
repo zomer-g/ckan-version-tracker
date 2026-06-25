@@ -87,7 +87,9 @@ def classify(d):
 EXPECT = {
     "mevaker": {"zip": True, "geojson": False},
     "idf": {"zip": True, "geojson": False},
-    "health": {"zip": True, "geojson": False},
+    # health = professional registries (records/CSV); some have document
+    # attachments, many don't, so a ZIP is optional, not required.
+    "health": {"zip": None, "geojson": False},
     "govmap": {"zip": False, "geojson": True},
     "hatzav": {"zip": False, "geojson": False},
     "avodata": {"zip": False, "geojson": False},
