@@ -61,6 +61,37 @@ function versionFiles(
   return out;
 }
 
+// Build the backend download URL for one version file (same endpoint the
+// per-file links use; it 302-redirects to the file's real storage).
+function fileDownloadUrl(versionId: string, f: { name: string; index: number }): string {
+  return (
+    `/api/versions/${versionId}/download/${encodeURIComponent(f.name)}` +
+    (f.index > 0 ? `?index=${f.index}` : "")
+  );
+}
+
+// "Download all" — trigger each file's download in turn. We stagger the
+// clicks (~500ms) so the browser treats them as one batch (it shows a
+// single "allow multiple downloads" prompt) instead of dropping the
+// rapid back-to-back navigations. Each file streams straight from its
+// storage via the redirect, so this scales to large GeoJSON/ZIP parts
+// without pulling bytes through the page.
+function downloadAllFiles(
+  versionId: string,
+  files: Array<{ name: string; index: number }>,
+): void {
+  files.forEach((f, i) => {
+    window.setTimeout(() => {
+      const a = document.createElement("a");
+      a.href = fileDownloadUrl(versionId, f);
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, i * 500);
+  });
+}
+
 export default function VersionsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -417,14 +448,33 @@ export default function VersionsPage() {
                   const files = versionFiles(v.resource_mappings);
                   if (files.length === 0) return null;
                   return (
-                    <div className="mt-1 flex" style={{ gap: "1rem", flexWrap: "wrap" }}>
+                    <div
+                      className="mt-1 flex"
+                      style={{ gap: "1rem", flexWrap: "wrap", alignItems: "center" }}
+                    >
+                      {files.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => downloadAllFiles(v.id, files)}
+                          className="text-sm"
+                          title="הורדת כל הקבצים בגרסה זו"
+                          style={{
+                            color: "var(--primary)",
+                            background: "none",
+                            border: "1px solid var(--primary)",
+                            borderRadius: "4px",
+                            padding: "0.15rem 0.6rem",
+                            cursor: "pointer",
+                            fontWeight: 600,
+                          }}
+                        >
+                          &#8595; הורד הכל ({files.length})
+                        </button>
+                      )}
                       {files.map((f) => (
                         <a
                           key={`${f.name}-${f.index}`}
-                          href={
-                            `/api/versions/${v.id}/download/${encodeURIComponent(f.name)}` +
-                            (f.index > 0 ? `?index=${f.index}` : "")
-                          }
+                          href={fileDownloadUrl(v.id, f)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm"
