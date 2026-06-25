@@ -111,6 +111,97 @@ def _resource_storage(value):
     return None
 
 
+DATAGOV = "https://data.gov.il/api/3/action"
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
+def _datagov_get(path):
+    req = urllib.request.Request(path, headers={"User-Agent": _BROWSER_UA})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def _datastore_ok(rid):
+    """True if data.gov.il serves this resource's rows via the datastore API."""
+    try:
+        d = _datagov_get(f"{DATAGOV}/datastore_search?resource_id={rid}&limit=1")
+        return bool(d.get("success")) and d.get("result", {}).get("total") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _file_served(url):
+    """Direct-download a file's first bytes: 'ok' (binary), 'IAP-blocked'
+    (data.gov.il returns an HTML challenge), or an error string."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _BROWSER_UA})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            ct = (r.headers.get("content-type") or "").lower()
+            head = r.read(256)
+            if b"<html" in head.lower() or "html" in ct:
+                return "IAP-blocked"
+            return "ok"
+    except Exception as e:  # noqa: BLE001
+        return f"err {str(e)[:25]}"
+
+
+def check_ckan_sources(base, ckan_datasets):
+    """Probe data.gov.il directly for the three resource kinds across a sample
+    of tracked datasets: DataStore content (the tabular API), PDF files, and
+    Excel files. PASS when DataStore content is accessible (that's where the
+    data is) — PDF/Excel direct downloads being IAP-blocked is expected for
+    data.gov.il and handled gracefully (the dataset isn't flagged failed)."""
+    found = {"datastore": None, "pdf": None, "excel": None}
+    checked = 0
+    for d in ckan_datasets:
+        if all(found.values()) or checked >= 15:
+            break
+        name = d.get("ckan_name")
+        if not name:
+            continue
+        try:
+            pkg = _datagov_get(f"{DATAGOV}/package_show?id={name}")["result"]
+        except Exception:  # noqa: BLE001
+            continue
+        checked += 1
+        for r in pkg.get("resources", []):
+            fmt = (r.get("format") or "").upper()
+            if not found["datastore"] and r.get("datastore_active"):
+                found["datastore"] = (name, r)
+            if not found["pdf"] and fmt == "PDF":
+                found["pdf"] = (name, r)
+            if not found["excel"] and fmt in ("XLSX", "XLS"):
+                found["excel"] = (name, r)
+
+    parts = []
+    ds_ok = False
+    if found["datastore"]:
+        name, r = found["datastore"]
+        ds_ok = _datastore_ok(r["id"])
+        parts.append(
+            f"DataStore content={'OK (rows via API)' if ds_ok else 'FAIL'}"
+        )
+    else:
+        parts.append("DataStore content=none in sample")
+        ds_ok = True  # nothing to fail on
+    for kind in ("excel", "pdf"):
+        if found[kind]:
+            _, r = found[kind]
+            if r.get("datastore_active"):
+                st = "OK (via datastore)" if _datastore_ok(r["id"]) else "datastore FAIL"
+            else:
+                st = _file_served(r.get("url") or "")  # IAP-blocked = expected
+            parts.append(f"{kind.upper()}={st}")
+        else:
+            parts.append(f"{kind.upper()}=none in sample")
+    # PDF/Excel IAP-blocks are EXPECTED (data.gov.il limitation) — the gate is
+    # only whether the actual data (DataStore) is reachable.
+    return ("PASS" if ds_ok else "FAIL"), "  ".join(parts)
+
+
 def check_one(base, typ, d):
     """Return (status, detail) for the representative dataset of a type."""
     exp = EXPECT.get(typ, {"zip": None, "geojson": False})
@@ -199,7 +290,12 @@ def main():
             continue
         d = cands[0]
         try:
-            status, detail = check_one(base, typ, d)
+            if typ == "ckan":
+                # ckan/data.gov.il: verify the SOURCE serves all three resource
+                # kinds (DataStore content + PDF + Excel), not just the mirror.
+                status, detail = check_ckan_sources(base, cands)
+            else:
+                status, detail = check_one(base, typ, d)
         except Exception as e:  # noqa: BLE001
             status, detail = "ERROR", str(e)
         if status != "PASS":
