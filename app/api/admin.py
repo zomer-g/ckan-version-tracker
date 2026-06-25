@@ -21,6 +21,7 @@ from app.api.datasets import apply_storage_target, storage_target_of
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
+from app.services.r2_backfill import backfill_dataset_to_r2
 from app.worker.scheduler import add_poll_job, scheduler
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,81 @@ async def backfill_versions(
 
     await db.commit()
     return {"message": f"Backfilled {created} versions", "dataset_id": str(ds.id)}
+
+
+async def _run_migrate_r2_bg(ds_uuid: uuid.UUID, activate: bool, who: str) -> None:
+    """Background runner for the ODATA→R2 migration. Opens its own DB session
+    (the request's session is closed once the 202 response is sent) and runs
+    the full download+upload+repoint, which can exceed the HTTP timeout."""
+    from app.database import async_session
+    async with async_session() as db:
+        try:
+            s = await backfill_dataset_to_r2(
+                db, ds_uuid, apply=True, activate=activate,
+            )
+            logger.info(
+                "R2 migrate for %s by %s: migrated=%s repointed=%s failed=%s "
+                "activated=%s committed=%s",
+                ds_uuid, who, s.get("migrated"), s.get("repointed_values"),
+                len(s.get("failed") or []), s.get("activated"), s.get("committed"),
+            )
+        except Exception:
+            logger.exception("R2 migrate background task failed for %s", ds_uuid)
+
+
+@router.post("/datasets/{dataset_id}/migrate-r2")
+@limiter.limit("5/minute")
+async def migrate_dataset_to_r2(
+    request: Request,
+    dataset_id: str,
+    background_tasks: BackgroundTasks,
+    apply: bool = False,
+    activate: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Migrate a dataset's file history from the ODATA mirror onto R2.
+
+    See ``app.services.r2_backfill`` for mechanics. Dates/metadata already live
+    in Postgres and are untouched; ODATA originals are kept as a backup.
+
+    - ``apply=false`` (default): DRY-RUN. Returns the full plan inline (every
+      unique ODATA resource → its target R2 key) without uploading or writing.
+    - ``apply=true``: runs in the BACKGROUND (the download+upload of every
+      version's files can exceed the HTTP request timeout) and returns 202.
+      Verify completion via the versions API — mappings flip to ``r2:`` once
+      done — or the server logs.
+    - ``activate=true`` (with apply): also sets ``storage_backend=r2`` and
+      ``is_active=true`` so future polls archive straight to R2.
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    if not storage_client.is_configured():
+        raise HTTPException(status_code=503, detail="R2 storage is not configured")
+
+    if not apply:
+        s = await backfill_dataset_to_r2(db, uid, apply=False, activate=False)
+        if s.get("error"):
+            raise HTTPException(status_code=404, detail=s["error"])
+        return s
+
+    # apply=true → validate the dataset exists, then hand off to the background.
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    background_tasks.add_task(_run_migrate_r2_bg, uid, activate, user.email)
+    logger.info("R2 migrate started for %s (activate=%s) by %s",
+                uid, activate, user.email)
+    return {
+        "status": "started",
+        "dataset_id": str(uid),
+        "activate": activate,
+        "message": (
+            "Migration running in the background. Re-check the versions API; "
+            "resource_mappings flip to r2:<key> as it completes."
+        ),
+    }
 
 
 @router.get("/scrape-tasks")
