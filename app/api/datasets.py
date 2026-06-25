@@ -50,6 +50,10 @@ class UpdateRequest(BaseModel):
     # Per-dataset storage destination: "odata" | "r2" | "local". Supersedes
     # upload_mode when given ("local" maps to upload_mode=local_only).
     storage_target: str | None = None
+    # Whether the scraper downloads the actual document files (PDF/Word/…) and
+    # archives them as a ZIP, vs catalog-only (index CSV only). Stored in
+    # scraper_config; honored by mevaker/idf/health engines.
+    download_files: bool | None = None
     # New: replace the tracked-resources set. Empty list ([]) is rejected
     # so an admin can't accidentally orphan a CKAN dataset; pass null to
     # leave unchanged.
@@ -353,7 +357,13 @@ async def track_dataset(
                 except Exception as e2:
                     logger.error("Mirror find also failed: %s", e2)
 
-        sc = dict(body.scraper_config or {"download_files": False})
+        # Start empty (NOT {"download_files": False}) so each per-type branch's
+        # `setdefault("download_files", True)` can actually take effect — the
+        # old default pre-seeded False, which silently neutered the True
+        # defaults for mevaker/idf/health (they scraped catalog-only, no docs).
+        # Types with no branch fall back to download_files=False at poll time
+        # (worker.py: `ds.scraper_config or {"download_files": False}`).
+        sc = dict(body.scraper_config or {})
         if body.append_key:
             sc["append_key"] = body.append_key
         # Raw collector API URLs are collected locally (see poll_job /
@@ -814,6 +824,11 @@ async def update_tracked(
         # Unified 3-way control (odata/r2/local). Applied after upload_mode so
         # it wins if both are sent. Stored in scraper_config (no migration).
         ds.scraper_config = apply_storage_target(ds.scraper_config, body.storage_target)
+
+    if body.download_files is not None:
+        sc = dict(ds.scraper_config or {})
+        sc["download_files"] = body.download_files
+        ds.scraper_config = sc or None
 
     if body.organization_id is not None:
         if body.organization_id == "":
