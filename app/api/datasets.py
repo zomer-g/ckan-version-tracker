@@ -424,14 +424,17 @@ async def track_dataset(
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
         elif page_type and page_type.startswith("hatzav_"):
-            # geo.mot.gov.il (חצב) — the layer catalog ships as static JS
-            # files, scraped via plain httpx (no Playwright). One row per
-            # layer; each downloadable layer's data.gov.il files (shp /
-            # kml / csv / metadata) are attached, so download_files=True.
+            # geo.mot.gov.il (חצב) — CATALOG-ONLY. The layer catalog ships
+            # as static JS, scraped via plain httpx (no Playwright). One row
+            # per layer, with each layer's data.gov.il download URLs as
+            # columns. We do NOT mirror the files: data.gov.il bot-blocks
+            # automated/bulk downloads (Google IAP), so the headless worker
+            # can't fetch them — that's the in-browser GovScraper extension's
+            # job. download_files=False; the worker also forces it off.
             from app.api.hatzav import get_hatzav_limits
             depth, docs = get_hatzav_limits(page_type)
             sc["kind"] = "hatzav"
-            sc.setdefault("download_files", True)
+            sc.setdefault("download_files", False)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
 
@@ -1087,11 +1090,12 @@ async def submit_tracking_request(
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         elif page_type and page_type.startswith("hatzav_"):
-            # Mirror of the admin-POST branch — keep in sync.
+            # Mirror of the admin-POST branch — keep in sync. Catalog-only:
+            # data.gov.il bot-blocks bulk downloads, so no file mirroring.
             from app.api.hatzav import get_hatzav_limits
             depth, docs = get_hatzav_limits(page_type)
             sc["kind"] = "hatzav"
-            sc["download_files"] = True
+            sc["download_files"] = False
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         ds = TrackedDataset(
