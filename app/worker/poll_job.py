@@ -249,8 +249,24 @@ async def poll_dataset(dataset_id: str) -> None:
                             })
                             hash_map[r["id"]] = sha256
                         except Exception as e:
-                            logger.warning("Failed to download resource %s: %s", r["id"], e)
-                            errors.append(f"download {r.get('name', r['id'][:8])}: {e}")
+                            # data.gov.il IAP-blocks headless downloads of
+                            # non-tabular FILES (PDF instruction sheets, etc.).
+                            # Tabular resources come through the datastore API
+                            # fine, so an un-fetchable file attachment must NOT
+                            # flag the whole dataset as failed — its data is
+                            # collected; only the cosmetic attachment is missing
+                            # (and it's un-fetchable headlessly anyway). Skip it
+                            # quietly; surface only real download errors.
+                            blocked = "Got HTML" in str(e) or "IAP" in str(e)
+                            if blocked and not r.get("datastore_active"):
+                                logger.info(
+                                    "Skipping IAP-blocked non-datastore resource "
+                                    "%s (%s) for %s — data collected via datastore API",
+                                    r.get("name"), r.get("format"), ds.ckan_name,
+                                )
+                            else:
+                                logger.warning("Failed to download resource %s: %s", r["id"], e)
+                                errors.append(f"download {r.get('name', r['id'][:8])}: {e}")
 
                 # Lazily create mirror dataset if it doesn't exist yet
                 if not ds.odata_dataset_id and settings.odata_api_key:
