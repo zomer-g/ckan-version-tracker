@@ -8,6 +8,7 @@ import Footer from "./components/Footer";
 import LoginPage from "./pages/LoginPage";
 import HomePage from "./pages/HomePage";
 import VersionsPage from "./pages/VersionsPage";
+import AppendArchivePage from "./pages/AppendArchivePage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
 import ApiPage from "./pages/ApiPage";
@@ -47,6 +48,7 @@ export default function App() {
             path="/versions/:datasetId"
             element={<div className="container mt-3"><VersionsPage /></div>}
           />
+          <Route path="/archive/:datasetId" element={<AppendArchivePage />} />
           <Route path="/organizations" element={<OrganizationsPage />} />
           <Route path="/organizations/:orgId" element={<OrganizationDetailPage />} />
           <Route path="/tags" element={<TagsPage />} />

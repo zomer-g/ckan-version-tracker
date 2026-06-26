@@ -187,6 +187,61 @@ export const versions = {
     }>(`/diff?from=${fromId}&to=${toId}`),
 };
 
+// Append archive (per-dataset Postgres tables — the row-level APPEND store).
+// Public read: browse, filter, and download the accumulated rows of a
+// data.gov.il datastore dataset that OVER archives append-only.
+export interface AppendSchema {
+  dataset_id: string;
+  dataset_title: string;
+  table: string;
+  total: number;
+  columns: string[];
+  key: string | null;
+  first_seen_column: string;
+}
+
+export interface AppendRows {
+  columns: string[];
+  rows: Array<Record<string, string | null>>;
+  total: number;
+  limit: number;
+  offset: number;
+  sort: string;
+  order: string;
+}
+
+// Build the query string from paging + sort + free-text q + per-column filters.
+function appendQuery(opts: {
+  limit?: number;
+  offset?: number;
+  sort?: string;
+  order?: string;
+  q?: string;
+  filters?: Record<string, string>;
+}): string {
+  const p = new URLSearchParams();
+  if (opts.limit != null) p.set("limit", String(opts.limit));
+  if (opts.offset != null) p.set("offset", String(opts.offset));
+  if (opts.sort) p.set("sort", opts.sort);
+  if (opts.order) p.set("order", opts.order);
+  if (opts.q) p.set("q", opts.q);
+  for (const [k, v] of Object.entries(opts.filters || {})) {
+    if (v) p.set(k, v);
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+export const appendArchive = {
+  schema: (datasetId: string) =>
+    request<AppendSchema>(`/append/${datasetId}/schema`),
+  rows: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
+    request<AppendRows>(`/append/${datasetId}/rows${appendQuery(opts)}`),
+  // Direct browser download (streams server-side); not a fetch.
+  downloadUrl: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
+    `/api/append/${datasetId}/download.csv${appendQuery({ ...opts, limit: undefined, offset: undefined })}`,
+};
+
 // Gov.il Validation
 export interface GovIlValidation {
   valid: boolean;

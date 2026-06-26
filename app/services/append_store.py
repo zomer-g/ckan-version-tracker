@@ -188,10 +188,18 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
         if not existing:
             cols_sql = ", ".join(f"{_qi(c)} text" for c in source_cols)
             hashcol = ', "row_hash" text' if keyless else ""
-            await conn.execute(
-                f'CREATE TABLE IF NOT EXISTS {_qi(table)} '
-                f'({cols_sql}, "first_seen" timestamptz NOT NULL DEFAULT now(){hashcol})'
-            )
+            try:
+                await conn.execute(
+                    f'CREATE TABLE IF NOT EXISTS {_qi(table)} '
+                    f'({cols_sql}, "first_seen" timestamptz NOT NULL DEFAULT now(){hashcol})'
+                )
+            except (asyncpg.DuplicateTableError, asyncpg.UniqueViolationError):
+                # CREATE TABLE IF NOT EXISTS isn't atomic against the pg_type
+                # catalog: two concurrent polls of the same dataset can race and
+                # one loses with a pg_type_typname duplicate. Benign — the table
+                # now exists; fall through to the column/index reconciliation.
+                pass
+            existing = source_cols  # treat as present for the drift pass below
         else:
             for c in source_cols:
                 if c not in existing:
@@ -248,3 +256,143 @@ async def table_count(table: str) -> int:
             return int(await conn.fetchval(f'SELECT count(*) FROM {_qi(table)}'))
         except asyncpg.UndefinedTableError:
             return 0
+
+
+# ── Read side: powering the OVER "view & pull the archive" UI ────────────────
+#
+# All of the below validate every column name against the table's REAL columns
+# (so a caller can't inject an identifier), parameterize every value, and quote
+# identifiers — the table/column names are operator-controlled but the filter
+# VALUES come from the public UI.
+
+# Internal columns hidden from the UI (dedup bookkeeping, not data).
+_HIDDEN_COLS = {"row_hash"}
+
+# Hard ceiling on a single rows page, regardless of what the client asks.
+MAX_PAGE = 500
+
+
+async def user_columns(table: str) -> list[str]:
+    """Ordered list of the table's user-facing columns (source columns +
+    first_seen, with internal bookkeeping hidden). Empty if the table is gone."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position",
+            table,
+        )
+    return [r["column_name"] for r in rows if r["column_name"] not in _HIDDEN_COLS]
+
+
+def _build_where(
+    cols: list[str], q: str | None, filters: dict[str, str], start_param: int,
+) -> tuple[str, list]:
+    """Build a WHERE clause: optional free-text ``q`` (ILIKE across every
+    column) AND per-column ILIKE ``filters``. Only known columns are honored.
+    Returns (clause_without_WHERE_or_empty, params)."""
+    conds: list[str] = []
+    params: list = []
+    p = start_param
+    colset = set(cols)
+    if q:
+        ph = f"${p}"  # one param, referenced by every column's ILIKE
+        clause = " OR ".join(f"{_qi(c)}::text ILIKE {ph}" for c in cols)
+        conds.append("(" + clause + ")")
+        params.append(f"%{q}%")
+        p += 1
+    for col, val in filters.items():
+        if col not in colset or val is None or val == "":
+            continue
+        conds.append(f"{_qi(col)}::text ILIKE ${p}")
+        params.append(f"%{val}%")
+        p += 1
+    return (" WHERE " + " AND ".join(conds)) if conds else "", params
+
+
+async def query(
+    table: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    sort: str | None = None,
+    order: str = "desc",
+    q: str | None = None,
+    filters: dict[str, str] | None = None,
+) -> dict:
+    """Paginated, filtered read for the UI. Returns
+    {columns, rows, total, limit, offset}. Validates sort/filter columns
+    against the live schema; caps the page at MAX_PAGE."""
+    cols = await user_columns(table)
+    if not cols:
+        return {"columns": [], "rows": [], "total": 0, "limit": limit, "offset": offset}
+    filters = {k: v for k, v in (filters or {}).items() if k in cols}
+    limit = max(1, min(int(limit or 50), MAX_PAGE))
+    offset = max(0, int(offset or 0))
+    sort_col = sort if (sort in cols) else ("first_seen" if "first_seen" in cols else cols[0])
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+
+    where, params = _build_where(cols, q, filters, start_param=1)
+    select_cols = ", ".join(_qi(c) for c in cols)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = int(await conn.fetchval(f'SELECT count(*) FROM {_qi(table)}{where}', *params))
+        rows = await conn.fetch(
+            f'SELECT {select_cols} FROM {_qi(table)}{where} '
+            f'ORDER BY {_qi(sort_col)} {direction} NULLS LAST '
+            f'LIMIT ${len(params)+1} OFFSET ${len(params)+2}',
+            *params, limit, offset,
+        )
+    return {
+        "columns": cols,
+        "rows": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort_col,
+        "order": direction.lower(),
+    }
+
+
+async def iter_csv(
+    table: str,
+    *,
+    sort: str | None = None,
+    order: str = "desc",
+    q: str | None = None,
+    filters: dict[str, str] | None = None,
+):
+    """Async generator yielding the filtered table as CSV (utf-8-sig) chunks,
+    server-side cursor so even multi-million-row exports stay memory-bounded."""
+    import csv as _csv
+    import io as _io
+
+    cols = await user_columns(table)
+    if not cols:
+        yield "﻿".encode("utf-8")
+        return
+    filters = {k: v for k, v in (filters or {}).items() if k in cols}
+    sort_col = sort if (sort in cols) else ("first_seen" if "first_seen" in cols else cols[0])
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    where, params = _build_where(cols, q, filters, start_param=1)
+    select_cols = ", ".join(_qi(c) for c in cols)
+    sql = (
+        f'SELECT {select_cols} FROM {_qi(table)}{where} '
+        f'ORDER BY {_qi(sort_col)} {direction} NULLS LAST'
+    )
+
+    def _row_to_csv(values) -> bytes:
+        buf = _io.StringIO()
+        _csv.writer(buf).writerow(["" if v is None else str(v) for v in values])
+        return buf.getvalue().encode("utf-8")
+
+    # Header with BOM so Excel reads Hebrew correctly.
+    head = _io.StringIO()
+    _csv.writer(head).writerow(cols)
+    yield ("﻿" + head.getvalue()).encode("utf-8")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            async for rec in conn.cursor(sql, *params):
+                yield _row_to_csv([rec[c] for c in cols])

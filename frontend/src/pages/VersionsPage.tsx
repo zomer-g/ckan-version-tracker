@@ -308,6 +308,19 @@ export default function VersionsPage() {
     );
   }, [versionsList]);
 
+  // True when this dataset has a row-level APPEND archive in Postgres (any
+  // version of type "append_db" / carrying an append_table). Those datasets get
+  // a "view & pull the accumulated rows" CTA → /archive/:id.
+  const hasAppendArchive = useMemo<boolean>(
+    () =>
+      versionsList.some(
+        (v) =>
+          (v.change_summary as Record<string, unknown> | null)?.type === "append_db" ||
+          !!(v.resource_mappings as Record<string, unknown> | null)?.append_table,
+      ),
+    [versionsList],
+  );
+
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
   return (
@@ -329,6 +342,23 @@ export default function VersionsPage() {
           )}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
+          {hasAppendArchive && datasetId && (
+            <Link
+              to={`/archive/${datasetId}`}
+              style={{
+                fontSize: "0.85rem",
+                padding: "0.4rem 0.9rem",
+                background: "var(--primary, #0f766e)",
+                color: "white",
+                borderRadius: 4,
+                textDecoration: "none",
+                fontWeight: 600,
+              }}
+              title="צפייה ושליפה מתוך הארכיון המצטבר"
+            >
+              צפה בארכיון המצטבר &#8599;
+            </Link>
+          )}
           {dataset?.odata_dataset_id && !latestIsR2 && (
             <a
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
