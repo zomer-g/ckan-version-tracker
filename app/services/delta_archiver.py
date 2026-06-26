@@ -269,6 +269,17 @@ async def archive_via_datastore_streaming(
             "delta_archiver: streaming aborted for %s at page %d: %s",
             ds.ckan_name, pages_processed, e,
         )
+        # Surface the real reason — a silent fall-through to the metadata stub
+        # otherwise hides that the append never happened (no last_error, just a
+        # "large_dataset" version that records counts but accumulates nothing).
+        ds.last_error = (
+            f"delta append failed (page {pages_processed}): "
+            f"{type(e).__name__}: {e}"
+        )[:2000]
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
         return False
 
     if rid is None:
