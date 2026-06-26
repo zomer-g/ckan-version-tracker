@@ -40,7 +40,8 @@ _UUID_RE = re.compile(
 
 # resource_mappings keys whose values are NOT ODATA mirror ids (data.gov.il
 # source ids / hashes / bookkeeping) — never migrate these.
-SKIP_KEYS = {"_hashes", "_resource_ids", "_appendonly_seen", "_large_dataset_info"}
+SKIP_KEYS = {"_hashes", "_resource_ids", "_appendonly_seen", "_large_dataset_info",
+             "_names", "_filedates"}
 
 TABULAR = {"csv", "tsv", "txt"}
 
@@ -287,12 +288,25 @@ async def backfill_dataset_to_r2(
 
 _NAME_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\s+v\d+\s*-\s*")
 _R2_ODATA_ID_RE = re.compile(r"/backfill/([0-9a-f-]{36})_", re.I)
+# Date that prefixes every ODATA resource name (the archive date), e.g.
+# "2026-05-03_10-43 v17 - ..." or "2026-01-24 - ... (1282 שורות)".
+_NAME_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 
 
 def _clean_resource_name(name: str | None) -> str | None:
     if not name:
         return None
     return _NAME_PREFIX_RE.sub("", name).strip() or None
+
+
+def _date_from_name(name: str | None) -> str | None:
+    """The archive date (YYYY-MM-DD) embedded at the start of an ODATA resource
+    name. This is the AUTHORITATIVE marker of which version a file belongs to —
+    NOT the version number, which carry-forward/recovery can misattribute."""
+    if not name:
+        return None
+    m = _NAME_DATE_RE.match(name)
+    return m.group(1) if m else None
 
 
 def _odata_id_from_r2(value: str) -> str | None:
@@ -342,12 +356,14 @@ async def repair_dataset_r2(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
     summary = {
         "dataset_id": str(ds_uuid), "title": ds.title,
         "versions": len(versions), "apply": apply,
-        "recovered": 0, "unrecoverable": [], "named": 0, "committed": False,
+        "recovered": 0, "unrecoverable": [], "named": 0, "dated": 0,
+        "committed": False,
     }
 
-    # 2. Collect the unique ODATA ids we still need names for, then resource_show
-    #    each once (cached), concurrently.
+    # 2. Collect the unique ODATA ids we still need names/dates for, then
+    #    resource_show each once (cached), concurrently.
     name_cache: dict[str, str | None] = {}
+    date_cache: dict[str, str | None] = {}
     odata_ids_for_names: set[str] = set()
     for v in versions:
         for key, value in _iter_resource_keys(v.resource_mappings or {}):
@@ -361,16 +377,19 @@ async def repair_dataset_r2(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
     async def _fetch_name(client, oid):
         async with sem:
             res = await _resource_show(client, oid)
-            name_cache[oid] = _clean_resource_name(res.get("name")) if res else None
+            raw = res.get("name") if res else None
+            name_cache[oid] = _clean_resource_name(raw)
+            date_cache[oid] = _date_from_name(raw)
 
     async with httpx.AsyncClient() as client:
         await asyncio.gather(*(_fetch_name(client, o) for o in odata_ids_for_names))
 
-    # 3. Per version: recover dead refs + build _names.
+    # 3. Per version: recover dead refs + build _names + build _filedates.
     for v in versions:
         m = dict(v.resource_mappings or {})
         hh = m.get("_hashes") or {}
         names: dict[str, str] = {}
+        filedates: dict[str, str] = {}
         changed = False
 
         for key, value in list(_iter_resource_keys(m)):
@@ -387,17 +406,24 @@ async def repair_dataset_r2(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
                     summary["unrecoverable"].append(
                         {"version": v.version_number, "key": key}
                     )
-            # name capture (for r2 values, incl. just-recovered ones)
+            # name + date capture (for r2 values, incl. just-recovered ones)
             if isinstance(value, str) and storage.is_storage_value(value):
                 oid = _odata_id_from_r2(value)
                 nm = name_cache.get(oid) if oid else None
                 if nm:
                     names[key] = nm
+                dt = date_cache.get(oid) if oid else None
+                if dt:
+                    filedates[key] = dt
 
         if names:
             m["_names"] = names
             changed = True
             summary["named"] += len(names)
+        if filedates:
+            m["_filedates"] = filedates
+            changed = True
+            summary["dated"] += len(filedates)
 
         if apply and changed:
             v.resource_mappings = m

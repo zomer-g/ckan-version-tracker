@@ -56,7 +56,7 @@ function versionFiles(
   const nameSeen: Record<string, number> = {};
   const out: Array<{ name: string; index: number; label: string }> = [];
   for (const [key, val] of Object.entries(mappings)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names"].includes(key)) continue;
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"].includes(key)) continue;
     const friendly = names[key];
     let base: string;
     if (friendly) {
@@ -102,13 +102,38 @@ function versionFiles(
   return out;
 }
 
-// Mapping KEYS whose value differs from the previous (older) version — i.e.
-// the resources actually added/changed in THIS version. The CKAN archiver
-// carries unchanged resources forward verbatim (identical r2:<key> value), so a
-// version that really changed one file would otherwise render all ~12
-// carried-forward files. Diffing against the previous version and showing only
-// the changed ones mirrors how the source / ODATA lists a version's real files
-// (typically 1–2). The oldest version (no previous) shows everything.
+// The archive date (YYYY-MM-DD, UTC) a version was captured on. The ODATA
+// resource names embed this same date, so it's the authoritative key for which
+// files belong to a version (see `_filedates` / ownDateKeys below).
+function versionDateUTC(detectedAt: string | null | undefined): string | null {
+  if (!detectedAt) return null;
+  const d = new Date(detectedAt);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+// Mapping KEYS that genuinely belong to THIS version, decided by the DATE in
+// each file's source name (stored per-version as `_filedates`), NOT by the
+// version number — carry-forward and content-hash recovery can attach files
+// from other dates to a version's mapping, so date is the reliable signal.
+// Keep only files whose `_filedates[key]` equals the version's own archive date.
+function ownDateKeys(
+  mappings: Record<string, unknown> | null | undefined,
+  vDate: string | null,
+): Set<string> | null {
+  const fd = mappings?._filedates as Record<string, string> | undefined;
+  if (!fd || !vDate) return null; // no date info → caller falls back
+  const out = new Set<string>();
+  for (const [k, d] of Object.entries(fd)) if (d === vDate) out.add(k);
+  return out;
+}
+
+// Fallback for versions WITHOUT `_filedates` (e.g. new versions created by the
+// forward poll): show keys whose value differs from the previous (older)
+// version — the resources actually added/changed this version. The CKAN
+// archiver carries unchanged resources forward verbatim (identical r2:<key>),
+// so diffing against the previous version yields the 1–2 files that really
+// changed. The oldest version (no previous) shows everything.
 function changedKeys(
   curr: Record<string, unknown> | null | undefined,
   prev: Record<string, unknown> | null | undefined,
@@ -117,7 +142,7 @@ function changedKeys(
   if (!curr) return out;
   const norm = (x: unknown) => (Array.isArray(x) ? JSON.stringify(x) : x);
   for (const [k, val] of Object.entries(curr)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names"].includes(k)) continue;
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"].includes(k)) continue;
     if (!prev || norm(prev[k]) !== norm(val)) out.add(k);
   }
   return out;
@@ -511,15 +536,23 @@ export default function VersionsPage() {
                     regardless of where its bytes live. */}
                 {(() => {
                   const allFiles = versionFiles(v.resource_mappings);
-                  // Show only files that changed vs the previous version. The
-                  // oldest version (no older) shows its full file set.
-                  const changed = changedKeys(
-                    v.resource_mappings as Record<string, unknown> | null,
-                    (olderVersion?.resource_mappings as Record<string, unknown> | null) ?? null,
-                  );
-                  const files = olderVersion
-                    ? allFiles.filter((f) => changed.has(f.name))
-                    : allFiles;
+                  // Authoritative: keep only files whose source-name date matches
+                  // this version's archive date (_filedates). Falls back to the
+                  // changed-vs-previous diff for versions without date info.
+                  const mappings = v.resource_mappings as Record<string, unknown> | null;
+                  const byDate = ownDateKeys(mappings, versionDateUTC(v.detected_at));
+                  let files: typeof allFiles;
+                  if (byDate) {
+                    files = allFiles.filter((f) => byDate.has(f.name));
+                  } else if (olderVersion) {
+                    const changed = changedKeys(
+                      mappings,
+                      (olderVersion.resource_mappings as Record<string, unknown> | null) ?? null,
+                    );
+                    files = allFiles.filter((f) => changed.has(f.name));
+                  } else {
+                    files = allFiles;
+                  }
                   if (files.length === 0) return null;
                   return (
                     <div
