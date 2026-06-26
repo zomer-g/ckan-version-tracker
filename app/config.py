@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     zip_part_bytes_odata: int = 80 * 1024 * 1024     # 80 MB
     zip_part_bytes_r2: int = 1024 * 1024 * 1024      # 1 GB
 
+    # ── Append archive DB (dedicated Postgres for data.gov.il datastore pulls) ──
+    # Where the row-level APPEND archive lives. data.gov.il datastore-backed
+    # datasets tracked as append_only stream their rows here — one table per
+    # dataset, deduped by the DB (UNIQUE index + ON CONFLICT DO NOTHING), each
+    # row stamped with first_seen DEFAULT now(). Decoupled from the app's
+    # operational DB (and from the broken ODATA write path). Empty = feature
+    # off (falls back to the legacy/metadata path). See app/services/append_store.py.
+    append_database_url: str = ""
+
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
     default_poll_interval: int = 604800  # 1 week

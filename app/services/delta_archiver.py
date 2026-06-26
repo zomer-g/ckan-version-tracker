@@ -51,6 +51,7 @@ from app.services.version_detector import (
     compute_new_rows,
     compute_new_rows_windowed,
 )
+from app.services import append_store
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,117 @@ def _fields_for_odata(ds_info_fields: list[dict]) -> list[dict]:
     return out
 
 
+async def _archive_streaming_to_db(
+    *,
+    ds: TrackedDataset,
+    resource: dict,
+    ds_info: dict,
+    next_version: int,
+    new_modified: str,
+    db,
+) -> bool:
+    """Stream the dataset's datastore rows into the dedicated append Postgres.
+
+    Dedup + first_seen are the DB's job (UNIQUE index + ON CONFLICT DO NOTHING,
+    first_seen DEFAULT now()), so there's no seen-set to carry or window. Keyed
+    (append_key) datasets dedup on that column; keyless ones on a row_hash. The
+    pending buffer is flushed every PENDING_FLUSH_THRESHOLD rows so peak memory
+    is bounded even on the 4M-row vehicle seed. Records a VersionIndex with the
+    per-poll insert count + running total. Returns True on commit, False to let
+    the caller fall through to the metadata stub."""
+    append_key = (ds.scraper_config or {}).get("append_key")  # None → keyless
+    keyless = not append_key
+
+    target_rid = resource.get("id") or ds.resource_id
+    if not target_rid:
+        logger.info("append-db: %s no resource id", ds.ckan_name)
+        return False
+
+    fields = _fields_for_odata(ds_info.get("fields") or [])
+    if not fields:
+        logger.info("append-db: %s no usable fields", ds.ckan_name)
+        return False
+    source_cols = [f["id"] for f in fields]
+    table = append_store.table_name(ds)
+
+    try:
+        await append_store.ensure_table(
+            table, source_cols, key_col=append_key, keyless=keyless,
+        )
+    except Exception as e:
+        logger.error("append-db: ensure_table failed for %s: %s", ds.ckan_name, e)
+        ds.last_error = f"append-db ensure_table: {type(e).__name__}: {e}"[:2000]
+        await db.commit()
+        return False
+
+    rows_inserted_total = 0
+    pages_processed = 0
+    pending: list[dict] = []
+
+    async def _flush() -> None:
+        nonlocal rows_inserted_total, pending
+        if not pending:
+            return
+        n = await append_store.append_rows(
+            table, source_cols, pending, key_col=append_key, keyless=keyless,
+        )
+        rows_inserted_total += n
+        pending = []
+
+    try:
+        async for batch in _stream_datastore_pages(target_rid):
+            pages_processed += 1
+            pending.extend(batch)
+            if len(pending) >= PENDING_FLUSH_THRESHOLD:
+                await _flush()
+        await _flush()
+    except Exception as e:
+        logger.error("append-db: streaming/insert aborted for %s at page %d: %s",
+                     ds.ckan_name, pages_processed, e)
+        ds.last_error = (
+            f"append-db insert failed (page {pages_processed}): "
+            f"{type(e).__name__}: {e}"
+        )[:2000]
+        await db.commit()
+        return False
+
+    try:
+        total = await append_store.table_count(table)
+    except Exception:
+        total = rows_inserted_total
+
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=new_modified,
+        odata_metadata_resource_id=None,
+        change_summary={
+            "type": "append_db",
+            "rows_added": rows_inserted_total,
+            "rows_total": total,
+            "key": append_key or "_hash",
+            "pages_processed": pages_processed,
+            "resources_added": [],
+            "resources_removed": [],
+            "resources_modified": [],
+        },
+        resource_mappings={
+            "_resource_ids": [target_rid],
+            "append_table": table,
+        },
+    )
+    db.add(version)
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = new_modified
+    ds.last_error = None
+    await db.commit()
+    logger.info(
+        "append-db: %s v%d committed (%d new rows, %d total, %d pages) → %s",
+        ds.ckan_name, next_version, rows_inserted_total, total, pages_processed, table,
+    )
+    return True
+
+
 async def archive_via_datastore_streaming(
     *,
     ds: TrackedDataset,
@@ -147,7 +259,19 @@ async def archive_via_datastore_streaming(
     Returns True if a version was committed; False if the function
     couldn't proceed (caller should fall through to the legacy
     metadata-only stub).
+
+    STORAGE: when an append DB is configured (APPEND_DATABASE_URL), rows are
+    written there — one table per dataset, deduped by the DB (UNIQUE index +
+    ON CONFLICT), first_seen stamped by a column default. That's the supported
+    path now that ODATA's write endpoint is down. The legacy ODATA datastore
+    path below is kept only as a fallback for when no append DB is configured.
     """
+    if append_store.is_configured():
+        return await _archive_streaming_to_db(
+            ds=ds, resource=resource, ds_info=ds_info,
+            next_version=next_version, new_modified=new_modified, db=db,
+        )
+
     cfg = ds.scraper_config or {}
     append_key = cfg.get("append_key")  # None → keyless full-row-hash dedup
     window = cfg.get("seen_window_versions")
