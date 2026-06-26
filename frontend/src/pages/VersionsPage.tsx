@@ -102,6 +102,27 @@ function versionFiles(
   return out;
 }
 
+// Mapping KEYS whose value differs from the previous (older) version — i.e.
+// the resources actually added/changed in THIS version. The CKAN archiver
+// carries unchanged resources forward verbatim (identical r2:<key> value), so a
+// version that really changed one file would otherwise render all ~12
+// carried-forward files. Diffing against the previous version and showing only
+// the changed ones mirrors how the source / ODATA lists a version's real files
+// (typically 1–2). The oldest version (no previous) shows everything.
+function changedKeys(
+  curr: Record<string, unknown> | null | undefined,
+  prev: Record<string, unknown> | null | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!curr) return out;
+  const norm = (x: unknown) => (Array.isArray(x) ? JSON.stringify(x) : x);
+  for (const [k, val] of Object.entries(curr)) {
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names"].includes(k)) continue;
+    if (!prev || norm(prev[k]) !== norm(val)) out.add(k);
+  }
+  return out;
+}
+
 // Build the backend download URL for one version file (same endpoint the
 // per-file links use; it 302-redirects to the file's real storage).
 function fileDownloadUrl(versionId: string, f: { name: string; index: number }): string {
@@ -397,8 +418,11 @@ export default function VersionsPage() {
         <div className="empty-state">{t("versions.no_versions")}</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }} role="list" aria-label={t("versions.title")}>
-          {versionsList.map((v) => {
+          {versionsList.map((v, idx) => {
             const summary = v.change_summary;
+            // versionsList is newest-first, so the previous (older) version is
+            // the next item. Used to show only this version's changed files.
+            const olderVersion = versionsList[idx + 1];
 
             return (
               <div
@@ -486,7 +510,16 @@ export default function VersionsPage() {
                     storage (R2 or ODATA) — so this works for every version
                     regardless of where its bytes live. */}
                 {(() => {
-                  const files = versionFiles(v.resource_mappings);
+                  const allFiles = versionFiles(v.resource_mappings);
+                  // Show only files that changed vs the previous version. The
+                  // oldest version (no older) shows its full file set.
+                  const changed = changedKeys(
+                    v.resource_mappings as Record<string, unknown> | null,
+                    (olderVersion?.resource_mappings as Record<string, unknown> | null) ?? null,
+                  );
+                  const files = olderVersion
+                    ? allFiles.filter((f) => changed.has(f.name))
+                    : allFiles;
                   if (files.length === 0) return null;
                   return (
                     <div
