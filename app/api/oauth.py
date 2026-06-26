@@ -164,7 +164,10 @@ async def google_drive_callback(
 ):
     """Handle the Drive consent callback: store the refresh token on the
     admin and redirect back to ``next``."""
-    token, _, next_b64 = state.partition(".")
+    # state = "<JWT>.<base64url(next)>". The JWT itself contains two dots
+    # (header.payload.signature), and base64url has no dots — so split on the
+    # LAST dot to recover the full JWT and the encoded return path.
+    token, _, next_b64 = state.rpartition(".")
     try:
         next_path = _b64u_dec(next_b64) if next_b64 else "/"
     except Exception:
