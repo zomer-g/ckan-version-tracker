@@ -287,7 +287,11 @@ async def backfill_dataset_to_r2(
 #      each migrated id ONCE, strip the "YYYY-MM-DD_HH-MM vN - " prefix, and
 #      store a `_names` map {mapping_key -> clean name} the frontend renders.
 
-_NAME_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\s+v\d+\s*-\s*")
+# Leading archive-date/version prefix on every ODATA resource name, covering
+# both "2026-05-03_10-43 v17 - ..." and "2026-01-24 - ..." (backfill) shapes.
+_NAME_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_\d{2}-\d{2})?(\s+v\d+)?\s*-\s*")
+# Trailing "(1282 שורות)" row-count suffix on backfill names.
+_NAME_ROWS_SUFFIX_RE = re.compile(r"\s*\(\s*[\d,]+\s*שורות\s*\)\s*$")
 _R2_ODATA_ID_RE = re.compile(r"/backfill/([0-9a-f-]{36})_", re.I)
 # Date that prefixes every ODATA resource name (the archive date), e.g.
 # "2026-05-03_10-43 v17 - ..." or "2026-01-24 - ... (1282 שורות)".
@@ -297,7 +301,9 @@ _NAME_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 def _clean_resource_name(name: str | None) -> str | None:
     if not name:
         return None
-    return _NAME_PREFIX_RE.sub("", name).strip() or None
+    s = _NAME_PREFIX_RE.sub("", name)
+    s = _NAME_ROWS_SUFFIX_RE.sub("", s)
+    return s.strip() or None
 
 
 def _date_from_name(name: str | None) -> str | None:
@@ -480,8 +486,7 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
         .order_by(VersionIndex.version_number.asc())
     )).scalars().all())
 
-    # 1. Source resources from data.gov.il: id -> (name, format, created).
-    src: dict[str, dict] = {}
+    # 1. Live resource id (data.gov.il source) for forward tracking.
     live_id: str | None = None
     try:
         url = f"{settings.data_gov_il_url}/api/3/action/package_show"
@@ -489,31 +494,52 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
             r = await client.get(url, params={"id": ds.ckan_id}, timeout=40)
             r.raise_for_status()
             for x in (r.json().get("result", {}) or {}).get("resources", []) or []:
-                src[x["id"]] = x
                 nm = x.get("name") or ""
-                fmt = (x.get("format") or "").upper()
-                if _LIVE_NAME_HINT in nm and fmt == "CSV" and not live_id:
+                if _LIVE_NAME_HINT in nm and (x.get("format") or "").upper() == "CSV":
                     live_id = x["id"]
+                    break
     except Exception as e:
         return {"error": f"failed to fetch source package: {e}"}
 
-    # 2. Gather one snapshot per DATE — this dataset is a single file captured
-    #    over time, so a date == a version, and dedup-by-date guarantees no file
-    #    appears twice (it collapses the same static archive recorded under
-    #    different hashes across captures, and any backfill/live overlap on a
-    #    date). On collision we keep the richest entry: a live capture WITH a
-    #    content hash (feeds forward change-detection) beats a live one without,
-    #    which beats a static archive.
+    # 2. The ODATA mirror is the authoritative record of WHAT was archived WHEN:
+    #    every resource name carries its real archive date (all 2026) + vN. Map
+    #    the original odata resource id -> (date, clean name, is_live), skipping
+    #    the metadata JSON. We date snapshots from here, NOT from data.gov.il's
+    #    resource `created` (which is 2016-2020 — when the publisher first posted
+    #    the file, not when OVER captured it; mixing those produced a date salad).
+    odata: dict[str, dict] = {}
+    if ds.odata_dataset_id:
+        try:
+            url = f"{settings.odata_url}/api/3/action/package_show"
+            async with httpx.AsyncClient() as client:
+                r = await client.get(url, params={"id": ds.odata_dataset_id}, timeout=40)
+                r.raise_for_status()
+                for x in (r.json().get("result", {}) or {}).get("resources", []) or []:
+                    if (x.get("format") or "").upper() == "JSON":
+                        continue
+                    nm = x.get("name") or ""
+                    odata[x["id"]] = {
+                        "date": _date_from_name(nm),
+                        "name": _clean_resource_name(nm),
+                        "is_live": _LIVE_NAME_HINT in nm,
+                    }
+        except Exception as e:
+            return {"error": f"failed to fetch ODATA mirror: {e}"}
+
+    # 3. Gather one snapshot per ARCHIVE DATE (all 2026). Each r2 object embeds
+    #    its original odata id; date + name come from the ODATA record above.
+    #    Dedup by date guarantees no file appears twice and collapses the
+    #    same-day static-archive copies into the live "updating" file (preferred).
     snaps: dict[str, dict] = {}  # date -> entry
+    live_hash: str | None = None  # latest live content hash (forward detection)
 
     def _score(e: dict) -> int:
-        return (2 if (e["is_live"] and e["hash"]) else (1 if e["is_live"] else 0))
+        return 1 if e["is_live"] else 0
 
-    def _add(date_str, base_name, r2, hash_, source_id, is_live):
+    def _add(date_str, base_name, r2, is_live):
         if not date_str:
             return
-        cand = {"date": date_str, "name": base_name, "r2": r2,
-                "hash": hash_, "source_id": source_id, "is_live": is_live}
+        cand = {"date": date_str, "name": base_name or "", "r2": r2, "is_live": is_live}
         prev = snaps.get(date_str)
         if prev is None or _score(cand) > _score(prev):
             snaps[date_str] = cand
@@ -521,30 +547,16 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
     for v in versions:
         m = v.resource_mappings or {}
         hh = m.get("_hashes") or {}
-        fd = m.get("_filedates") or {}
-        nm = m.get("_names") or {}
-        vdate_utc = v.detected_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        if live_id and hh.get(live_id) and hh.get(live_id) != "download_failed":
+            live_hash = hh[live_id]  # versions are asc, so the last seen wins
         for key, value in _iter_resource_keys(m):
             if not (isinstance(value, str) and storage.is_storage_value(value)):
                 continue
-            h = hh.get(key)
-            h = h if (h and h != "download_failed") else None
-            s = src.get(key)
-            if key == "backfilled":
-                # backfill snapshot of the live file; no content hash recorded.
-                date_str = fd.get(key) or (v.metadata_modified or "")[:10] or vdate_utc
-                base = "תושבים בישראל לפי ישובים וקבוצות גיל"
-                _add(date_str, base, value, None, live_id, True)
-            elif s and _LIVE_NAME_HINT in (s.get("name") or ""):
-                # a capture of the live "updating" resource — date = capture day.
-                date_str = fd.get(key) or vdate_utc
-                base = (nm.get(key) or s.get("name") or "").strip()
-                _add(date_str, base, value, h, key, True)
-            else:
-                # static archive — date = its source creation date (stable).
-                date_str = (s.get("created") or "")[:10] if s else (fd.get(key) or vdate_utc)
-                base = (nm.get(key) or (s.get("name") if s else "") or "").strip()
-                _add(date_str, base, value, h, key, False)
+            oid = _odata_id_from_r2(value)
+            o = odata.get(oid) if oid else None
+            if not o or not o.get("date"):
+                continue
+            _add(o["date"], o["name"], value, o["is_live"])
 
     ordered = sorted(snaps.values(), key=lambda e: e["date"])
 
@@ -577,7 +589,10 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
     n = len(ordered)
     for i, e in enumerate(ordered, 1):
         is_latest = (i == n)
-        key = e["source_id"] or "file"
+        # All snapshots are the one logical residents resource over time, so the
+        # mapping key is the live source id throughout (keeps forward carry-
+        # forward + change-detection consistent on the latest row).
+        key = live_id
         label = f"{e['name']} — {_fmt_ddmmyyyy(e['date'])}"
         dt = datetime.fromisoformat(e["date"] + "T12:00:00+00:00")
         mappings = {
@@ -585,8 +600,9 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
             "_names": {key: label},
             "_filedates": {key: e["date"]},
             # Only the latest row feeds forward change-detection; give it the
-            # live resource's hash + tracked id so the next poll diffs cleanly.
-            "_hashes": ({live_id: e["hash"]} if (is_latest and e["hash"]) else {}),
+            # live resource's last-known hash + tracked id so the next poll
+            # diffs cleanly (empty is fine — it just re-downloads once).
+            "_hashes": ({live_id: live_hash} if (is_latest and live_hash) else {}),
             "_resource_ids": ([live_id] if is_latest else []),
         }
         db.add(VersionIndex(
