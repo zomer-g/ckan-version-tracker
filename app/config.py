@@ -14,12 +14,17 @@ class Settings(BaseSettings):
     odata_owner_org: str = "zomer"
 
     # ── Object storage (independent file backend, decoupled from ODATA) ──
-    # File archiving target. "odata" (default) keeps the legacy CKAN-mirror
-    # behavior untouched. "r2" routes file uploads to the S3-compatible
-    # object store configured below (Cloudflare R2 recommended — zero egress)
-    # and serves downloads straight from S3_PUBLIC_BASE_URL. See
-    # app/services/storage_client.py.
-    storage_backend: str = "odata"  # "odata" | "r2"
+    # File archiving target — the GLOBAL DEFAULT for any dataset that hasn't
+    # pinned its own destination (scraper_config.storage_backend). "r2" routes
+    # file uploads to the S3-compatible object store configured below
+    # (Cloudflare R2 — zero egress) and serves downloads straight from
+    # S3_PUBLIC_BASE_URL. "odata" keeps the legacy CKAN-mirror behavior.
+    # Default is "r2": every dataset not explicitly configured otherwise is
+    # archived as a full independent snapshot on R2 (the user's storage model).
+    # A per-dataset override (append, odata, local) still wins. The
+    # STORAGE_BACKEND env var, if set, overrides this code default.
+    # See app/services/storage_client.py.
+    storage_backend: str = "r2"  # "odata" | "r2"
     s3_endpoint: str = ""            # e.g. https://<account>.r2.cloudflarestorage.com
     s3_bucket: str = ""
     s3_access_key: str = ""

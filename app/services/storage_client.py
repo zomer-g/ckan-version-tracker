@@ -18,10 +18,12 @@ Key design points
   custom domain (``S3_PUBLIC_BASE_URL``, e.g. ``https://files.over.org.il``).
   The OVER backend only ever issues a 302 redirect to that URL — the file
   bytes never proxy through our dyno (no egress cost, no load).
-* **Flag-gated.** Nothing changes until ``STORAGE_BACKEND=r2`` and the S3
-  credentials are configured. With the default (``odata``) ``is_enabled()`` is
-  False and callers fall back to the existing ODATA path, so production is
-  untouched by merely deploying this code.
+* **Default backend = R2.** ``STORAGE_BACKEND`` defaults to ``r2`` — every
+  dataset not explicitly pinned otherwise is archived as a full independent
+  snapshot on R2. ``is_enabled()`` is True once the S3 credentials are present;
+  if they're missing, ``is_configured()`` is False and callers fall back to the
+  ODATA path rather than erroring. Set ``STORAGE_BACKEND=odata`` to revert the
+  global default.
 * **Marker convention.** A resource stored here is recorded in a version's
   ``resource_mappings`` as the string ``"r2:<object-key>"`` (see
   ``mark`` / ``is_storage_value`` / ``key_of``). That lets the download,
