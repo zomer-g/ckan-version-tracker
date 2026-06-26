@@ -16,6 +16,7 @@ from app.api.oauth import router as oauth_router
 from app.api.proxy import router as proxy_router
 from app.api.datasets import router as datasets_router
 from app.api.versions import router as versions_router
+from app.api.drive import router as drive_router
 from app.api.append import router as append_router
 from app.api.admin import router as admin_router
 from app.api.worker import router as worker_router
@@ -77,6 +78,7 @@ app.include_router(oauth_router)
 app.include_router(proxy_router)
 app.include_router(datasets_router)
 app.include_router(versions_router)
+app.include_router(drive_router)
 app.include_router(append_router)
 app.include_router(admin_router)
 app.include_router(worker_router)

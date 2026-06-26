@@ -242,6 +242,35 @@ export const appendArchive = {
     `/api/append/${datasetId}/download.csv${appendQuery({ ...opts, limit: undefined, offset: undefined })}`,
 };
 
+// Google Drive export (admin)
+export interface DriveExportJob {
+  id: string;
+  status: "pending" | "running" | "success" | "failed";
+  total_files: number;
+  completed_files: number;
+  current_file: string | null;
+  error: string | null;
+}
+
+export const drive = {
+  status: () => request<{ connected: boolean }>("/drive/status"),
+  // Top-level navigation (can't carry an auth header), so the JWT rides in
+  // the query string — same pattern as the SSO callback's ?sso_token=.
+  connectUrl: (next: string) => {
+    const token = getToken() || "";
+    return `/api/auth/sso/google/drive/connect?token=${encodeURIComponent(
+      token
+    )}&next=${encodeURIComponent(next)}`;
+  },
+  exportVersion: (versionId: string, folderUrl: string) =>
+    request<DriveExportJob>(`/versions/${versionId}/export-to-drive`, {
+      method: "POST",
+      body: JSON.stringify({ folder_url: folderUrl }),
+    }),
+  exportStatus: (jobId: string) =>
+    request<DriveExportJob>(`/drive/exports/${jobId}`),
+};
+
 // Gov.il Validation
 export interface GovIlValidation {
   valid: boolean;

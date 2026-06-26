@@ -13,6 +13,10 @@ from app.worker.datastore_push_runner import (
     cleanup_stuck_push_jobs,
     drain_one_job,
 )
+from app.worker.drive_export_runner import (
+    cleanup_stuck_drive_exports,
+    drain_one_drive_export,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,26 @@ async def init_scheduler() -> None:
         cleanup_stuck_push_jobs,
         trigger=IntervalTrigger(minutes=5),
         id="cleanup_stuck_push_jobs",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+
+    # Durable Drive-export queue runner + its stuck-job rescuer. Same
+    # one-job-per-tick shape as the datastore-push queue above; the work is
+    # IO-bound (R2 → dyno → Drive) so it doesn't block other scheduler jobs.
+    scheduler.add_job(
+        drain_one_drive_export,
+        trigger=IntervalTrigger(seconds=30),
+        id="drain_drive_export_queue",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        cleanup_stuck_drive_exports,
+        trigger=IntervalTrigger(minutes=5),
+        id="cleanup_stuck_drive_exports",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,

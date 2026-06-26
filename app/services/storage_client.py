@@ -99,6 +99,71 @@ def build_key(dataset_id: str, version_number: int, filename: str) -> str:
     return f"datasets/{dataset_id}/v{version_number}/{unique}_{_safe_filename(filename)}"
 
 
+# Mapping keys that are internal bookkeeping, not downloadable files.
+_NON_FILE_KEYS = {"_hashes", "_resource_ids", "_filedates", "_probes"}
+# A staged-object key's tail looks like ``<8 hex>_<original-name>`` (see
+# build_key). This strips the random prefix back to a human filename.
+_KEY_PREFIX_RE = re.compile(r"^[0-9a-f]{8}_(.+)$")
+
+
+def _filename_from_value(value: str, fallback: str) -> str:
+    """Best-effort human filename for a stored file. For an R2 value we
+    recover the original name from the object key tail; for a bare ODATA
+    resource_id (a UUID, no name available here) we use ``fallback``."""
+    if is_storage_value(value):
+        tail = key_of(value).rsplit("/", 1)[-1]
+        m = _KEY_PREFIX_RE.match(tail)
+        name = (m.group(1) if m else tail) or fallback
+        # The CSV is stored under the key tail "csv" (no extension) — give
+        # it one so it opens correctly in Drive.
+        if name.lower() == "csv":
+            name = "data.csv"
+        return name
+    return fallback
+
+
+def enumerate_files(mappings: dict | None) -> list[tuple[str, str]]:
+    """Flatten a version's ``resource_mappings`` into an ordered, de-duplicated
+    list of ``(filename, storage_value)`` pairs — every downloadable file in
+    the version, ready to be pushed to Drive.
+
+    ``storage_value`` is either an ``r2:<key>`` marker or a bare ODATA
+    resource_id (UUID). Internal bookkeeping keys (``_hashes`` etc.) and
+    non-file scalars are skipped. Named resources are walked before the
+    underscore-prefixed aggregate lists (``_zip_parts`` …) so a file that
+    appears in both keeps its nicer name; the dedupe drops the second copy.
+    """
+    if not mappings:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _is_file(v: object) -> bool:
+        return isinstance(v, str) and bool(v) and (
+            is_storage_value(v) or len(v) >= 30
+        )
+
+    # Named (human) keys first, then the underscore aggregates.
+    ordered = sorted(mappings.items(), key=lambda kv: kv[0].startswith("_"))
+    for key, value in ordered:
+        if key in _NON_FILE_KEYS:
+            continue
+        if isinstance(value, list):
+            idx = 0
+            for v in value:
+                if not _is_file(v) or v in seen:
+                    continue
+                seen.add(v)
+                idx += 1
+                out.append((_filename_from_value(v, f"{key.lstrip('_')}-{idx}"), v))
+        elif _is_file(value):
+            if value in seen:
+                continue
+            seen.add(value)
+            out.append((_filename_from_value(value, key.lstrip("_") or "file"), value))
+    return out
+
+
 class StorageClient:
     """Async wrapper around an S3-compatible object store (Cloudflare R2)."""
 
@@ -217,6 +282,26 @@ class StorageClient:
 
         await asyncio.to_thread(_do)
         logger.info("Deleted object from R2: %s", key)
+
+    async def download_to_file(self, key_or_value: str, dest_path: str) -> bool:
+        """Stream an object straight to a file on disk (constant memory via
+        boto3's managed transfer). Returns True on success, False if the
+        object is missing / unreachable. Used by the Drive-export runner to
+        stage one file at a time before uploading it to Google Drive."""
+        if not self.is_configured():
+            return False
+        key = key_of(key_or_value)
+
+        def _do() -> bool:
+            client = self._get_client()
+            try:
+                client.download_file(settings.s3_bucket, key, dest_path)
+                return True
+            except Exception:
+                logger.exception("R2 download_to_file failed for key %s", key)
+                return False
+
+        return await asyncio.to_thread(_do)
 
     async def get_object_bytes(self, key_or_value: str) -> bytes | None:
         """Download an object's full content as bytes, or None if missing /

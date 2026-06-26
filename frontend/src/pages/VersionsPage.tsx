@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+import DriveExportButton from "../components/DriveExportButton";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
 // idf code paths. Only govmap pages that actually have a GeoJSON
@@ -610,6 +611,12 @@ export default function VersionsPage() {
                         >
                           &#8595; הורד הכל ({files.length})
                         </button>
+                      )}
+                      {isAdmin && (
+                        <DriveExportButton
+                          versionId={v.id}
+                          fileCount={versionFiles(v.resource_mappings, null).length}
+                        />
                       )}
                       {files.map((f) => (
                         <a

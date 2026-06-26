@@ -17,6 +17,10 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     oauth_provider: Mapped[str | None] = mapped_column(String(50))
+    # Google OAuth refresh token, stored when an admin connects Drive
+    # (the "export to Drive" feature). Lets the runner mint a fresh
+    # access token offline. NULL = Drive not connected for this user.
+    google_refresh_token: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -5,6 +5,7 @@ from app.models.scrape_task import ScrapeTask
 from app.models.organization import Organization
 from app.models.tag import Tag, dataset_tags
 from app.models.datastore_push_job import DatastorePushJob
+from app.models.drive_export_job import DriveExportJob
 
 __all__ = [
     "User",
@@ -15,4 +16,5 @@ __all__ = [
     "Tag",
     "dataset_tags",
     "DatastorePushJob",
+    "DriveExportJob",
 ]
