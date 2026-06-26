@@ -49,6 +49,30 @@ _dataset_storage = storage.dataset_storage_target
 _use_r2 = storage.dataset_uses_r2
 
 
+def _poll_scraper_config(ds) -> dict:
+    """Build the scraper_config sent to the worker in the /poll response.
+
+    Starts from the dataset's stored config and fills defaults the worker
+    relies on:
+
+    * ``download_files`` — preserve the historical fallback (catalog-only).
+    * ``max_missing_fraction`` — the worker's completeness gate fails a scrape
+      (and retries it forever) when more than this fraction of attachment
+      downloads are missing. gov.il document collections routinely have
+      ~10-20% genuinely-dead or IAP-blocked source links, and the worker's
+      downloader already exhausts ~5 retries per file (parallel → sequential
+      → 2 straggler rounds) before counting one missing — so the old 0.10
+      default just retried the same dead links on every poll and the version
+      never published. Default to a tolerance that publishes despite scattered
+      dead links while still catching genuine mass failure (CF storm / outage,
+      which loses far more than this). A dataset may pin its own value.
+    """
+    cfg = dict(ds.scraper_config or {})
+    cfg.setdefault("download_files", False)
+    cfg.setdefault("max_missing_fraction", 0.25)
+    return cfg
+
+
 # --- Models ---
 
 class ResourceData(BaseModel):
@@ -303,7 +327,7 @@ async def poll_for_task(
         "task_id": str(task.id),
         "tracked_dataset_id": str(ds.id),
         "source_url": ds.source_url,
-        "scraper_config": ds.scraper_config or {"download_files": False},
+        "scraper_config": _poll_scraper_config(ds),
         "callback_url": "/api/worker/push-version",
         # How big the worker may make each attachment ZIP part. R2 datasets get
         # a much larger limit (no CKAN/edge upload cap), so 1.5GB of files →
