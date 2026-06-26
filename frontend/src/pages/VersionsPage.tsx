@@ -46,17 +46,25 @@ function formatHebrewDate(value: string | null | undefined, withTime = true): st
 // content), a 1-based index is appended so each link is distinguishable.
 function versionFiles(
   mappings: Record<string, unknown> | null | undefined,
+  onlyKeys?: Set<string> | null,
 ): Array<{ name: string; index: number; label: string }> {
   if (!mappings) return [];
   const names = (mappings._names as Record<string, string> | undefined) || {};
-  // Count how many entries map to each friendly name, to decide when to add
-  // a disambiguating (#n) suffix.
+  const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"];
+  const include = (key: string) =>
+    !skip.includes(key) && (!onlyKeys || onlyKeys.has(key));
+  // Count how many DISPLAYED entries map to each friendly name, to decide when
+  // to add a disambiguating (#n) suffix (only over the files actually shown).
   const nameCounts: Record<string, number> = {};
-  for (const v of Object.values(names)) nameCounts[v] = (nameCounts[v] || 0) + 1;
+  for (const [key] of Object.entries(mappings)) {
+    if (!include(key)) continue;
+    const nm = names[key];
+    if (nm) nameCounts[nm] = (nameCounts[nm] || 0) + 1;
+  }
   const nameSeen: Record<string, number> = {};
   const out: Array<{ name: string; index: number; label: string }> = [];
   for (const [key, val] of Object.entries(mappings)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"].includes(key)) continue;
+    if (!include(key)) continue;
     const friendly = names[key];
     let base: string;
     if (friendly) {
@@ -535,24 +543,19 @@ export default function VersionsPage() {
                     storage (R2 or ODATA) — so this works for every version
                     regardless of where its bytes live. */}
                 {(() => {
-                  const allFiles = versionFiles(v.resource_mappings);
                   // Authoritative: keep only files whose source-name date matches
                   // this version's archive date (_filedates). Falls back to the
-                  // changed-vs-previous diff for versions without date info.
+                  // changed-vs-previous diff for versions without date info, and
+                  // to the full set for the oldest version.
                   const mappings = v.resource_mappings as Record<string, unknown> | null;
-                  const byDate = ownDateKeys(mappings, versionDateUTC(v.detected_at));
-                  let files: typeof allFiles;
-                  if (byDate) {
-                    files = allFiles.filter((f) => byDate.has(f.name));
-                  } else if (olderVersion) {
-                    const changed = changedKeys(
+                  let keyset: Set<string> | null = ownDateKeys(mappings, versionDateUTC(v.detected_at));
+                  if (!keyset && olderVersion) {
+                    keyset = changedKeys(
                       mappings,
                       (olderVersion.resource_mappings as Record<string, unknown> | null) ?? null,
                     );
-                    files = allFiles.filter((f) => changed.has(f.name));
-                  } else {
-                    files = allFiles;
                   }
+                  const files = versionFiles(v.resource_mappings, keyset);
                   if (files.length === 0) return null;
                   return (
                     <div
