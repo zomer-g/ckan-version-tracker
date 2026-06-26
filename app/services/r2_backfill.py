@@ -271,3 +271,139 @@ async def backfill_dataset_to_r2(
         summary["committed"] = True
 
     return summary
+
+
+# ── post-migration repair / enrichment ──────────────────────────────────────
+# After the bytes are on R2, two cosmetic/data-quality passes the UI depends on:
+#   1. RECOVER dead refs: a version may still point at an ODATA id that was
+#      deleted upstream (404). If that resource's CONTENT (its sha256 in
+#      `_hashes`) is identical to one we DID migrate (same file appears in a
+#      later surviving version), relink the dead value to that existing r2
+#      object — recovering the historical bytes with zero new upload.
+#   2. NAME capture: the mapping keys are opaque source UUIDs; the human name
+#      lives only on the (soon-to-be-abandoned) ODATA resource. We resource_show
+#      each migrated id ONCE, strip the "YYYY-MM-DD_HH-MM vN - " prefix, and
+#      store a `_names` map {mapping_key -> clean name} the frontend renders.
+
+_NAME_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\s+v\d+\s*-\s*")
+_R2_ODATA_ID_RE = re.compile(r"/backfill/([0-9a-f-]{36})_", re.I)
+
+
+def _clean_resource_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    return _NAME_PREFIX_RE.sub("", name).strip() or None
+
+
+def _odata_id_from_r2(value: str) -> str | None:
+    """Pull the original ODATA id back out of a backfill r2 key."""
+    m = _R2_ODATA_ID_RE.search(value or "")
+    return m.group(1) if m else None
+
+
+def _iter_resource_keys(mappings: dict):
+    """Yield (key, value, is_list_element_index) for every resource-bearing
+    mapping entry (named, backfilled, _zip*, _geojson), skipping bookkeeping."""
+    for key, value in (mappings or {}).items():
+        if key in SKIP_KEYS:
+            continue
+        yield key, value
+
+
+async def repair_dataset_r2(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
+    """Recover dead ODATA refs via content-hash match + capture friendly names.
+
+    Idempotent. ``apply=False`` reports what it would do without writing.
+    """
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+    )).scalar_one_or_none()
+    if not ds:
+        return {"error": "dataset not found"}
+
+    versions = list((await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds_uuid)
+        .order_by(VersionIndex.version_number.asc())
+    )).scalars().all())
+
+    # 1. Build content-hash -> r2 value index from every surviving r2 mapping.
+    #    The per-key sha256 lives in each version's `_hashes`.
+    hash_to_r2: dict[str, str] = {}
+    for v in versions:
+        m = v.resource_mappings or {}
+        hh = m.get("_hashes") or {}
+        for key, value in _iter_resource_keys(m):
+            if isinstance(value, str) and storage.is_storage_value(value):
+                h = hh.get(key)
+                if h and h != "download_failed":
+                    hash_to_r2.setdefault(h, value)
+
+    summary = {
+        "dataset_id": str(ds_uuid), "title": ds.title,
+        "versions": len(versions), "apply": apply,
+        "recovered": 0, "unrecoverable": [], "named": 0, "committed": False,
+    }
+
+    # 2. Collect the unique ODATA ids we still need names for, then resource_show
+    #    each once (cached), concurrently.
+    name_cache: dict[str, str | None] = {}
+    odata_ids_for_names: set[str] = set()
+    for v in versions:
+        for key, value in _iter_resource_keys(v.resource_mappings or {}):
+            if isinstance(value, str) and storage.is_storage_value(value):
+                oid = _odata_id_from_r2(value)
+                if oid:
+                    odata_ids_for_names.add(oid)
+
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def _fetch_name(client, oid):
+        async with sem:
+            res = await _resource_show(client, oid)
+            name_cache[oid] = _clean_resource_name(res.get("name")) if res else None
+
+    async with httpx.AsyncClient() as client:
+        await asyncio.gather(*(_fetch_name(client, o) for o in odata_ids_for_names))
+
+    # 3. Per version: recover dead refs + build _names.
+    for v in versions:
+        m = dict(v.resource_mappings or {})
+        hh = m.get("_hashes") or {}
+        names: dict[str, str] = {}
+        changed = False
+
+        for key, value in list(_iter_resource_keys(m)):
+            # recover a dead bare-ODATA value via hash match
+            if isinstance(value, str) and _UUID_RE.match(value) and not storage.is_storage_value(value):
+                h = hh.get(key)
+                repl = hash_to_r2.get(h) if h else None
+                if repl:
+                    m[key] = repl
+                    value = repl
+                    changed = True
+                    summary["recovered"] += 1
+                else:
+                    summary["unrecoverable"].append(
+                        {"version": v.version_number, "key": key}
+                    )
+            # name capture (for r2 values, incl. just-recovered ones)
+            if isinstance(value, str) and storage.is_storage_value(value):
+                oid = _odata_id_from_r2(value)
+                nm = name_cache.get(oid) if oid else None
+                if nm:
+                    names[key] = nm
+
+        if names:
+            m["_names"] = names
+            changed = True
+            summary["named"] += len(names)
+
+        if apply and changed:
+            v.resource_mappings = m
+
+    if apply:
+        await db.commit()
+        summary["committed"] = True
+
+    return summary

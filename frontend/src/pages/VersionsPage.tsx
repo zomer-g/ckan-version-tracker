@@ -19,33 +19,74 @@ const GovmapView = lazy(() => import("../components/GovmapView"));
 
 const ODATA_BASE = "https://www.odata.org.il";
 
+// Israeli date format DD.MM.YYYY (optionally with HH:MM). `toLocaleString()`
+// renders the browser locale (e.g. US "6/21/2026, 8:12 PM"), which the team
+// flagged as wrong — Israel uses day-first dotted dates.
+function formatHebrewDate(value: string | null | undefined, withTime = true): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) {
+    // Non-ISO / partial strings (e.g. "local:<hash>") — show as-is.
+    return value.slice(0, 19);
+  }
+  const p = (n: number) => String(n).padStart(2, "0");
+  const date = `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
+  return withTime ? `${date}, ${p(d.getHours())}:${p(d.getMinutes())}` : date;
+}
+
 // Downloadable files of a version, derived from resource_mappings. Returns the
 // mapping KEY (what the backend /versions/{id}/download/{resource} endpoint
 // looks up) plus a friendly label. Works for BOTH ODATA- and R2-backed
 // versions — the backend redirects each to its real storage location.
+//
+// Label precedence: the version's `_names` map (the real resource title,
+// captured from the source — see app/services/r2_backfill.repair_dataset_r2)
+// wins over the generic per-key fallback. When several files share the same
+// title (the source publishes many same-named resources with different
+// content), a 1-based index is appended so each link is distinguishable.
 function versionFiles(
   mappings: Record<string, unknown> | null | undefined,
 ): Array<{ name: string; index: number; label: string }> {
   if (!mappings) return [];
+  const names = (mappings._names as Record<string, string> | undefined) || {};
+  // Count how many entries map to each friendly name, to decide when to add
+  // a disambiguating (#n) suffix.
+  const nameCounts: Record<string, number> = {};
+  for (const v of Object.values(names)) nameCounts[v] = (nameCounts[v] || 0) + 1;
+  const nameSeen: Record<string, number> = {};
   const out: Array<{ name: string; index: number; label: string }> = [];
   for (const [key, val] of Object.entries(mappings)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen"].includes(key)) continue;
-    const base =
-      key === "_geojson"
-        ? "GeoJSON"
-        : key === "_zip" || key === "_zip_parts"
-          ? "קבצים מצורפים (ZIP)"
-          : key === "metadata"
-            ? "מטא-דאטה"
-            : // The worker names the main tabular resource "נתוני הסורק"
-              // (worker.py resource_name default), which becomes the
-              // mapping key. As a download label that's opaque — it's the
-              // scraped records as a CSV table, so say so. Mapped here (not
-              // renamed in the backend) so existing versions' keys, which
-              // the download endpoint looks up, stay intact.
-              key === "נתוני הסורק"
-              ? "טבלת נתונים (CSV)"
-              : key;
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names"].includes(key)) continue;
+    const friendly = names[key];
+    let base: string;
+    if (friendly) {
+      // Append (#n) only when the same title appears more than once.
+      if (nameCounts[friendly] > 1) {
+        nameSeen[friendly] = (nameSeen[friendly] || 0) + 1;
+        base = `${friendly} (${nameSeen[friendly]})`;
+      } else {
+        base = friendly;
+      }
+    } else {
+      base =
+        key === "_geojson"
+          ? "GeoJSON"
+          : key === "_zip" || key === "_zip_parts"
+            ? "קבצים מצורפים (ZIP)"
+            : key === "metadata"
+              ? "מטא-דאטה"
+              : key === "backfilled"
+                ? "קובץ מאוחד (CSV)"
+                : // The worker names the main tabular resource "נתוני הסורק"
+                  // (worker.py resource_name default), which becomes the
+                  // mapping key. As a download label that's opaque — it's the
+                  // scraped records as a CSV table, so say so. Mapped here (not
+                  // renamed in the backend) so existing versions' keys, which
+                  // the download endpoint looks up, stay intact.
+                  key === "נתוני הסורק"
+                  ? "טבלת נתונים (CSV)"
+                  : key;
+    }
     if (Array.isArray(val)) {
       // List-valued (multi-part ZIP, multi-layer GeoJSON): one link per part,
       // each addressing its own element via the download endpoint's ?index=.
@@ -371,7 +412,7 @@ export default function VersionsPage() {
                       {t("versions.version")} {v.version_number}
                     </h2>
                     <span className="text-sm text-muted">
-                      {t("versions.detected")}: {new Date(v.detected_at).toLocaleString()}
+                      {t("versions.detected")}: {formatHebrewDate(v.detected_at)}
                     </span>
                     {isAdmin && versionSizes && (
                       <span className="text-sm text-muted" title="גודל קבצי הגרסה (אדמין בלבד)">
@@ -381,7 +422,7 @@ export default function VersionsPage() {
                   </div>
                   <div className="flex" style={{ alignItems: "center", gap: "0.75rem" }}>
                     <span className="text-sm text-muted">
-                      {v.metadata_modified?.slice(0, 19)}
+                      {formatHebrewDate(v.metadata_modified)}
                     </span>
                     {isAdmin && (
                       <button

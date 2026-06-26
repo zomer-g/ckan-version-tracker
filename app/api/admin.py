@@ -21,7 +21,7 @@ from app.api.datasets import apply_storage_target, storage_target_of
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
-from app.services.r2_backfill import backfill_dataset_to_r2
+from app.services.r2_backfill import backfill_dataset_to_r2, repair_dataset_r2
 from app.worker.scheduler import add_poll_job, scheduler
 
 logger = logging.getLogger(__name__)
@@ -476,6 +476,41 @@ async def register_append_datasets_endpoint(
 
     logger.info("register-append-datasets by %s: %s", user.email, results)
     return {"results": results, "polled": poll}
+
+
+@router.post("/datasets/{dataset_id}/repair-r2")
+@limiter.limit("5/minute")
+async def repair_dataset_r2_endpoint(
+    request: Request,
+    dataset_id: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Post-migration repair for an R2-backed dataset (see
+    ``app.services.r2_backfill.repair_dataset_r2``):
+
+    1. Recover any version still pointing at a 404-deleted ODATA resource by
+       relinking it to an existing R2 object with identical content (matched on
+       the per-resource sha256 in ``_hashes``) — recovers historical bytes with
+       zero new upload.
+    2. Capture a friendly ``_names`` map (mapping key → clean Hebrew resource
+       name) from ODATA while it's still readable, so the UI can label files by
+       name instead of opaque source UUIDs.
+
+    Idempotent. ``apply=false`` (default) reports what it would do. Runs inline
+    (only resource_show round-trips + a DB write — no file transfers).
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    if not storage_client.is_configured():
+        raise HTTPException(status_code=503, detail="R2 storage is not configured")
+    s = await repair_dataset_r2(db, uid, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=404, detail=s["error"])
+    logger.info("R2 repair for %s by %s: recovered=%s named=%s unrecoverable=%s apply=%s",
+                uid, user.email, s.get("recovered"), s.get("named"),
+                len(s.get("unrecoverable") or []), apply)
+    return s
 
 
 @router.get("/scrape-tasks")
