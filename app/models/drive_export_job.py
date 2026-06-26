@@ -62,8 +62,21 @@ class DriveExportJob(Base):
         String(20), default="pending", nullable=False, index=True
     )
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # total_files / completed_files count SOURCE files (ZIP parts + CSV) — the
+    # 0..N coarse progress bar. The ZIPs are unpacked, so the real unit of work
+    # is documents:
+    #   documents_uploaded — running count of extracted documents pushed to
+    #                        Drive (the headline number; also the fine resume
+    #                        cursor within the current archive).
+    #   archive_base       — documents_uploaded as of the last fully-finished
+    #                        source file. (documents_uploaded - archive_base) =
+    #                        how many members of the current archive are already
+    #                        done, so a resume skips exactly them — no dupes,
+    #                        no re-download of finished archives.
     total_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     completed_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    documents_uploaded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archive_base: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Human-readable name of the file currently uploading (UI progress).
     current_file: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

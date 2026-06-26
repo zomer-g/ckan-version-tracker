@@ -165,9 +165,10 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
             {connected === true && !job && (
               <>
                 <p style={{ fontSize: "0.9rem", lineHeight: 1.5, margin: "0 0 0.5rem" }}>
-                  {fileCount} קבצים יועברו לתיקייה שתבחר. הדביקו קישור לתיקייה
-                  ב-Drive (התיקייה חייבת להיות בבעלות החשבון המחובר או משותפת לו
-                  עם הרשאת עריכה).
+                  כל המסמכים הגולמיים שבתוך {fileCount} חבילות ה-ZIP של הגרסה
+                  יחולצו ויועברו ישירות לתיקייה שתבחר ב-Drive (קובץ ה-CSV
+                  שמשמש כאינדקס יועבר גם הוא). התיקייה חייבת להיות בבעלות החשבון
+                  המחובר או משותפת לו עם הרשאת עריכה.
                 </p>
                 <input
                   type="text"
@@ -209,7 +210,8 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
               <div style={{ fontSize: "0.9rem", lineHeight: 1.6 }}>
                 {job.status === "success" ? (
                   <p style={{ color: "#166534" }}>
-                    ✓ הסתיים — {job.completed_files} קבצים הועברו לדרייב.
+                    ✓ הסתיים — {job.documents_uploaded.toLocaleString()} מסמכים
+                    הועברו לדרייב.
                   </p>
                 ) : job.status === "failed" ? (
                   <p style={{ color: "#b91c1c" }}>
@@ -218,7 +220,9 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                 ) : (
                   <>
                     <p>
-                      מעביר… {job.completed_files}/{job.total_files}
+                      מחלץ ומעביר מסמכים…{" "}
+                      <strong>{job.documents_uploaded.toLocaleString()}</strong>{" "}
+                      הועברו (חבילה {job.completed_files}/{job.total_files})
                     </p>
                     <div
                       style={{

@@ -43,6 +43,9 @@ TMP_DIR = "/tmp/drive_export"
 # Re-mint the access token after this long; Google access tokens last ~1h
 # and a large export can outrun a single one.
 TOKEN_REFRESH_SECONDS = 50 * 60
+# Persist progress every N documents. Smaller = more accurate resume but more
+# DB writes; on a crash at most this many documents may re-upload (duplicate).
+HEARTBEAT_EVERY = 20
 
 
 async def drain_one_drive_export() -> None:
@@ -89,7 +92,9 @@ async def _run_job(job_id) -> None:
         if not job:
             return
         folder_id = job.folder_id
-        already_done = job.completed_files
+        saved_archives = job.completed_files       # source files fully done
+        saved_base = job.archive_base              # docs done before current archive
+        saved_docs = job.documents_uploaded        # total docs uploaded so far
         version_id = job.version_id
         user_id = job.user_id
 
@@ -120,47 +125,60 @@ async def _run_job(job_id) -> None:
         await _mark_success(job_id)
         return
 
-    # Mint the first access token. expiry tracked by wall-clock since mint.
+    # Access token, refreshed lazily — a big export outruns one token's ~1h.
     try:
-        access_token = await drive_client.get_access_token(refresh_token)
+        token_state = {"token": await drive_client.get_access_token(refresh_token),
+                       "minted": time.monotonic()}
     except Exception as e:
         await _mark_failed(job_id, str(e))
         return
-    token_minted_at = time.monotonic()
+
+    async def ensure_token() -> str:
+        if time.monotonic() - token_state["minted"] > TOKEN_REFRESH_SECONDS:
+            token_state["token"] = await drive_client.get_access_token(refresh_token)
+            token_state["minted"] = time.monotonic()
+        return token_state["token"]
 
     os.makedirs(TMP_DIR, exist_ok=True)
+    n = len(files)
+    docs = saved_docs
 
-    # Resume: skip files already uploaded on a previous attempt.
-    for idx in range(already_done, len(files)):
-        filename, value = files[idx]
+    # Walk source files in order, resuming past finished ones. ZIP parts are
+    # unpacked and their /attachments/ members uploaded individually; non-ZIP
+    # source files (the CSV index) are uploaded as-is.
+    for a_idx in range(saved_archives, n):
+        filename, value = files[a_idx]
+        # Only the first archive we resume into has members already done.
+        if a_idx == saved_archives:
+            base, skip_n = saved_base, max(0, saved_docs - saved_base)
+        else:
+            base, skip_n = docs, 0
 
-        # Refresh the access token if it's getting old.
-        if time.monotonic() - token_minted_at > TOKEN_REFRESH_SECONDS:
-            try:
-                access_token = await drive_client.get_access_token(refresh_token)
-                token_minted_at = time.monotonic()
-            except Exception as e:
-                await _mark_failed(job_id, f"token refresh failed mid-export: {e}")
-                return
-
-        # Stage the file to /tmp. Use the index in the temp name to avoid any
-        # collision between same-named entries.
         safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename)
-        tmp_path = os.path.join(TMP_DIR, f"{str(job_id)[:8]}_{idx}_{safe}")
+        tmp_path = os.path.join(TMP_DIR, f"{str(job_id)[:8]}_{a_idx}_{safe}")
         try:
             ok = await _stage_file(value, tmp_path)
             if not ok:
-                # Source file unreachable (e.g. a 404-deleted resource). Don't
-                # abort the whole export over one missing file — skip it and
-                # advance so a resume won't retry it. Upload errors below ARE
-                # systemic and do fail the job.
+                # Source file unreachable (e.g. a 404-deleted resource) — skip
+                # it rather than fail the whole export, and advance the boundary
+                # so a resume won't retry it.
                 logger.warning(
                     "Drive export job %s: skipping unreachable file '%s' (%s)",
                     job_id, filename, value,
                 )
-                await _progress(job_id, completed=idx + 1, current_file=filename)
-                continue
-            await drive_client.upload_file(access_token, folder_id, filename, tmp_path)
+            elif filename.lower().endswith(".zip"):
+                docs = await _export_zip_members(
+                    job_id=job_id, ensure_token=ensure_token, folder_id=folder_id,
+                    zip_path=tmp_path, docs=docs, base=base, skip_n=skip_n,
+                    archive_label=filename, a_idx=a_idx, n_files=n,
+                )
+            else:
+                # A standalone file (CSV index): a single "document".
+                if skip_n < 1:
+                    await drive_client.upload_file(
+                        await ensure_token(), folder_id, filename, tmp_path
+                    )
+                    docs += 1
         except Exception as e:
             await _mark_failed(job_id, f"file '{filename}': {e}")
             return
@@ -170,13 +188,72 @@ async def _run_job(job_id) -> None:
             except OSError:
                 pass
 
-        await _progress(job_id, completed=idx + 1, current_file=filename)
+        # Archive done — commit the boundary: next archive's member-skip baseline
+        # is the current doc count.
+        await _archive_done(
+            job_id, completed_files=a_idx + 1, documents_uploaded=docs,
+            archive_base=docs, current_file=f"{filename} ({a_idx + 1}/{n})",
+        )
         logger.info(
-            "Drive export job %s: uploaded %d/%d (%s)",
-            job_id, idx + 1, len(files), filename,
+            "Drive export job %s: finished source %d/%d (%s) — %d docs total",
+            job_id, a_idx + 1, n, filename, docs,
         )
 
     await _mark_success(job_id)
+
+
+async def _export_zip_members(
+    *, job_id, ensure_token, folder_id: str, zip_path: str,
+    docs: int, base: int, skip_n: int, archive_label: str, a_idx: int, n_files: int,
+) -> int:
+    """Unpack one ZIP and upload its ``/attachments/`` members individually,
+    skipping the first ``skip_n`` (already done on a previous attempt). Returns
+    the updated total document count. Decompression is offloaded to a thread so
+    it doesn't block the event loop."""
+    import zipfile
+
+    with zipfile.ZipFile(zip_path) as zf:
+        # Only the scraped documents (under .../attachments/); the CSV embedded
+        # in part 1 is uploaded separately as the standalone index, so skip it.
+        members = [
+            zi for zi in zf.infolist()
+            if not zi.is_dir() and "/attachments/" in zi.filename
+        ]
+        member_idx = 0
+        for zi in members:
+            if member_idx < skip_n:
+                member_idx += 1
+                continue
+            name = os.path.basename(zi.filename) or f"file_{member_idx}"
+            token = await ensure_token()
+            if zi.file_size <= drive_client.SMALL_FILE_LIMIT:
+                data = await asyncio.to_thread(zf.read, zi)
+                await drive_client.upload_bytes(token, folder_id, name, data)
+            else:
+                ext_path = f"{zip_path}.m{member_idx}"
+                await asyncio.to_thread(_extract_member, zf, zi, ext_path)
+                try:
+                    await drive_client.upload_file(token, folder_id, name, ext_path)
+                finally:
+                    try:
+                        os.remove(ext_path)
+                    except OSError:
+                        pass
+            docs += 1
+            member_idx += 1
+            if docs % HEARTBEAT_EVERY == 0:
+                await _doc_progress(
+                    job_id, documents_uploaded=docs, archive_base=base,
+                    current_file=f"{archive_label} ({a_idx + 1}/{n_files})",
+                )
+    return docs
+
+
+def _extract_member(zf, zi, dest_path: str) -> None:
+    """Stream one large ZIP member to disk (constant memory)."""
+    import shutil
+    with zf.open(zi) as src, open(dest_path, "wb") as out:
+        shutil.copyfileobj(src, out, length=1024 * 1024)
 
 
 async def _stage_file(value: str, dest_path: str) -> bool:
@@ -213,13 +290,39 @@ async def _download_odata_to_file(resource_id: str, dest_path: str) -> bool:
         return False
 
 
-async def _progress(job_id, *, completed: int, current_file: str | None) -> None:
+async def _doc_progress(
+    job_id, *, documents_uploaded: int, archive_base: int, current_file: str | None
+) -> None:
+    """Heartbeat within an archive: bump the live document count (and the
+    resume baseline) without touching completed_files."""
     async with async_session() as db:
         await db.execute(
             update(DriveExportJob)
             .where(DriveExportJob.id == job_id)
             .values(
-                completed_files=completed,
+                documents_uploaded=documents_uploaded,
+                archive_base=archive_base,
+                current_file=(current_file or "")[:512],
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+
+
+async def _archive_done(
+    job_id, *, completed_files: int, documents_uploaded: int,
+    archive_base: int, current_file: str | None,
+) -> None:
+    """Commit a finished source file: advance the archive counter and reset the
+    member-skip baseline to the current doc count."""
+    async with async_session() as db:
+        await db.execute(
+            update(DriveExportJob)
+            .where(DriveExportJob.id == job_id)
+            .values(
+                completed_files=completed_files,
+                documents_uploaded=documents_uploaded,
+                archive_base=archive_base,
                 current_file=(current_file or "")[:512],
                 updated_at=datetime.now(timezone.utc),
             )

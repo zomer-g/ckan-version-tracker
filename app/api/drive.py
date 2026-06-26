@@ -38,8 +38,12 @@ class ExportRequest(BaseModel):
 class ExportJobResponse(BaseModel):
     id: str
     status: str
+    # total_files / completed_files = SOURCE files (ZIP parts + CSV), the coarse
+    # bar. documents_uploaded = individual documents extracted and pushed (the
+    # headline count, since the ZIPs are unpacked).
     total_files: int
     completed_files: int
+    documents_uploaded: int
     current_file: str | None = None
     error: str | None = None
 
@@ -52,6 +56,7 @@ def _job_response(job: DriveExportJob) -> ExportJobResponse:
         status=job.status,
         total_files=job.total_files,
         completed_files=job.completed_files,
+        documents_uploaded=job.documents_uploaded,
         current_file=job.current_file,
         error=job.error,
     )

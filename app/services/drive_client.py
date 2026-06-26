@@ -13,6 +13,8 @@ Resumable upload is required because scraper ZIP parts routinely exceed
 the 5 MB simple-upload ceiling; it also lets us stream the file from disk
 in fixed chunks (constant memory) and survive transient network blips.
 """
+import asyncio
+import json
 import logging
 import mimetypes
 import os
@@ -36,10 +38,26 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 # Resumable upload chunk size. Must be a multiple of 256 KB per the Drive
 # protocol. 8 MB balances request overhead against memory.
 _CHUNK = 8 * 1024 * 1024
+# Files at or below this go up in a single multipart request (one round-trip
+# instead of resumable's two+); above it we resume from disk. Tuned for the
+# thousands of small documents extracted from the ZIPs.
+SMALL_FILE_LIMIT = 4 * 1024 * 1024
+# Transient-error retry schedule (seconds). Covers Drive rate limits (429 /
+# 403 rateLimitExceeded) and 5xx blips on a long, many-file export.
+_RETRY_BACKOFF = [2, 5, 15, 45]
 
 
 class DriveError(RuntimeError):
     """Raised for Drive API failures the caller should surface to the user."""
+
+
+def _is_rate_limited(resp: httpx.Response) -> bool:
+    """True if a 403 is actually a rate-limit (retryable), not a hard auth /
+    service-disabled 403."""
+    if resp.status_code != 403:
+        return False
+    body = resp.text.lower()
+    return "ratelimitexceeded" in body or "userratelimitexceeded" in body
 
 
 def extract_folder_id(url_or_id: str) -> str | None:
@@ -86,6 +104,23 @@ async def get_access_token(refresh_token: str) -> str:
     return resp.json()["access_token"]
 
 
+def _drive_error_detail(resp: httpx.Response) -> str:
+    """Extract Google's human reason from an error response, so a 403 says
+    *why* (API disabled / insufficient scope / rate limit) instead of a bare
+    code."""
+    try:
+        err = (resp.json() or {}).get("error", {})
+        if isinstance(err, dict):
+            msg = err.get("message")
+            if msg:
+                return msg
+        if isinstance(err, str):
+            return err
+    except Exception:
+        pass
+    return (resp.text or "")[:300]
+
+
 async def validate_folder(access_token: str, folder_id: str) -> str:
     """Confirm the folder exists, is a folder, and we can add files to it.
     Returns the folder name. Raises DriveError otherwise."""
@@ -100,8 +135,12 @@ async def validate_folder(access_token: str, folder_id: str) -> str:
         )
     if resp.status_code == 404:
         raise DriveError("Drive folder not found, or it isn't shared with this Google account")
+    if resp.status_code == 403:
+        # Most common cause: the Drive API isn't enabled in the Cloud project,
+        # or the granted token lacks the drive scope. Surface Google's message.
+        raise DriveError(f"Drive access denied (403): {_drive_error_detail(resp)}")
     if resp.status_code != 200:
-        raise DriveError(f"Drive folder check failed ({resp.status_code})")
+        raise DriveError(f"Drive folder check failed ({resp.status_code}): {_drive_error_detail(resp)}")
     data = resp.json()
     if data.get("mimeType") != "application/vnd.google-apps.folder":
         raise DriveError("That link doesn't point to a Drive folder")
@@ -110,19 +149,58 @@ async def validate_folder(access_token: str, folder_id: str) -> str:
     return data.get("name") or folder_id
 
 
+async def upload_bytes(
+    access_token: str,
+    folder_id: str,
+    filename: str,
+    data: bytes,
+) -> str:
+    """Single-request multipart upload of in-memory bytes. For the many small
+    documents extracted from the ZIPs — one round-trip each. Retries transient
+    Drive errors (rate limit / 5xx)."""
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    boundary = "over_drive_boundary_7e1c"
+    meta = json.dumps({"name": filename, "parents": [folder_id]}, ensure_ascii=False)
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{meta}\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    async def _attempt(client: httpx.AsyncClient) -> httpx.Response:
+        return await client.post(
+            DRIVE_UPLOAD_URL,
+            params={"uploadType": "multipart", "supportsAllDrives": "true"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": f"multipart/related; boundary={boundary}",
+            },
+            content=body,
+        )
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0)) as client:
+        resp = await _with_retry(_attempt, client, filename)
+    return resp.json().get("id", "")
+
+
 async def upload_file(
     access_token: str,
     folder_id: str,
     filename: str,
     file_path: str,
 ) -> str:
-    """Resumable-upload a local file into ``folder_id``. Returns the new
-    Drive file id. Reads the file in fixed chunks (constant memory)."""
+    """Upload a local file into ``folder_id``. Small files go multipart;
+    larger ones stream via a resumable upload (constant memory). Returns the
+    new Drive file id."""
     size = os.path.getsize(file_path)
-    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    if size <= SMALL_FILE_LIMIT:
+        with open(file_path, "rb") as fh:
+            return await upload_bytes(access_token, folder_id, filename, fh.read())
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=20.0)) as client:
-        # 1. Initiate the resumable session.
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=20.0)) as client:
         init = await client.post(
             DRIVE_UPLOAD_URL,
             params={"uploadType": "resumable", "supportsAllDrives": "true"},
@@ -137,22 +215,11 @@ async def upload_file(
         if init.status_code not in (200, 201):
             raise DriveError(
                 f"Drive upload init failed for {filename} ({init.status_code}): "
-                f"{init.text[:300]}"
+                f"{_drive_error_detail(init)}"
             )
         session_url = init.headers.get("Location")
         if not session_url:
             raise DriveError(f"Drive upload init returned no session URL for {filename}")
-
-        # 2. Upload the bytes. Empty files get a single zero-length PUT.
-        if size == 0:
-            resp = await client.put(
-                session_url,
-                headers={"Content-Range": "bytes */0"},
-                content=b"",
-            )
-            if resp.status_code not in (200, 201):
-                raise DriveError(f"Drive empty-file upload failed for {filename} ({resp.status_code})")
-            return resp.json().get("id", "")
 
         offset = 0
         with open(file_path, "rb") as fh:
@@ -174,7 +241,25 @@ async def upload_file(
                     continue
                 raise DriveError(
                     f"Drive chunk upload failed for {filename} "
-                    f"({resp.status_code}): {resp.text[:300]}"
+                    f"({resp.status_code}): {_drive_error_detail(resp)}"
                 )
-    # Loop exhausted without a terminal 200/201 (shouldn't happen).
     raise DriveError(f"Drive upload did not complete for {filename}")
+
+
+async def _with_retry(attempt, client: httpx.AsyncClient, label: str) -> httpx.Response:
+    """Run ``attempt(client)``; retry on transient Drive errors (429, 5xx,
+    403 rate-limit) with backoff. Raises DriveError on a hard failure or after
+    the schedule is exhausted."""
+    last: httpx.Response | None = None
+    for i in range(len(_RETRY_BACKOFF) + 1):
+        resp = await attempt(client)
+        if resp.status_code in (200, 201):
+            return resp
+        last = resp
+        retryable = resp.status_code == 429 or resp.status_code >= 500 or _is_rate_limited(resp)
+        if not retryable or i == len(_RETRY_BACKOFF):
+            break
+        await asyncio.sleep(_RETRY_BACKOFF[i])
+    detail = _drive_error_detail(last) if last is not None else "no response"
+    code = last.status_code if last is not None else "?"
+    raise DriveError(f"Drive upload failed for {label} ({code}): {detail}")

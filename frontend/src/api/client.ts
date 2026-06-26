@@ -246,8 +246,11 @@ export const appendArchive = {
 export interface DriveExportJob {
   id: string;
   status: "pending" | "running" | "success" | "failed";
+  // SOURCE files (ZIP parts + CSV) — the coarse progress bar.
   total_files: number;
   completed_files: number;
+  // Individual documents extracted from the ZIPs and uploaded — the headline.
+  documents_uploaded: number;
   current_file: string | null;
   error: string | null;
 }
