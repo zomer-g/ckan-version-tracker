@@ -21,7 +21,11 @@ from app.api.datasets import apply_storage_target, storage_target_of
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
-from app.services.r2_backfill import backfill_dataset_to_r2, repair_dataset_r2
+from app.services.r2_backfill import (
+    backfill_dataset_to_r2,
+    repair_dataset_r2,
+    rebuild_dataset_versions,
+)
 from app.worker.scheduler import add_poll_job, scheduler
 
 logger = logging.getLogger(__name__)
@@ -510,6 +514,33 @@ async def repair_dataset_r2_endpoint(
     logger.info("R2 repair for %s by %s: recovered=%s named=%s unrecoverable=%s apply=%s",
                 uid, user.email, s.get("recovered"), s.get("named"),
                 len(s.get("unrecoverable") or []), apply)
+    return s
+
+
+@router.post("/datasets/{dataset_id}/rebuild-versions")
+@limiter.limit("5/minute")
+async def rebuild_versions_endpoint(
+    request: Request,
+    dataset_id: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rebuild a dataset's version history into a clean, deduplicated,
+    date-numbered series (see ``app.services.r2_backfill.rebuild_dataset_versions``).
+
+    DESTRUCTIVE on apply: deletes and recreates the dataset's VersionIndex rows
+    (R2 bytes untouched) and retracks only the live resource going forward.
+    ``apply=false`` (default) returns the proposed timeline without changing
+    anything — always review it first.
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    s = await rebuild_dataset_versions(db, uid, apply=apply)
+    if s.get("error") and not s.get("timeline"):
+        raise HTTPException(status_code=400, detail=s["error"])
+    logger.info("Rebuild versions for %s by %s: %s→%s versions, apply=%s",
+                uid, user.email, s.get("old_version_count"),
+                s.get("new_version_count"), apply)
     return s
 
 

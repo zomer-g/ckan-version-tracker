@@ -22,6 +22,7 @@ import asyncio
 import logging
 import re
 import uuid as uuidlib
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
@@ -432,4 +433,175 @@ async def repair_dataset_r2(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
         await db.commit()
         summary["committed"] = True
 
+    return summary
+
+
+# ── clean rebuild of a dataset's version history ─────────────────────────────
+# For datasets whose source publishes ONE live "updating" resource plus many
+# same-titled static archive copies (e.g. residents-by-town), the per-poll
+# carry-forward + full-snapshot captures produce noisy versions (the same file
+# shown many times, opaque names, version numbers tied to poll order). This
+# rebuilds the history into a clean, deduplicated, date-ordered series:
+#   * one version per DISTINCT file (deduped by content sha256, or by date for
+#     hash-less backfill snapshots) — no file appears twice;
+#   * versions renumbered 1..N strictly by date (oldest first);
+#   * each file labelled "<source title> — DD.MM.YYYY";
+#   * going forward, the dataset tracks ONLY the live resource (one file/version).
+#
+# Destructive: it deletes the dataset's VersionIndex rows and recreates them.
+# The R2 objects (the bytes) are untouched — only the index is rebuilt. Always
+# dry-run first.
+
+_LIVE_NAME_HINT = "מתעדכן"
+
+
+def _fmt_ddmmyyyy(date_str: str) -> str:
+    try:
+        y, m, d = date_str.split("-")
+        return f"{d}.{m}.{y}"
+    except Exception:
+        return date_str
+
+
+async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
+    """Rebuild a dataset's version history clean + deduped + date-numbered.
+
+    Returns the proposed (or applied) timeline. ``apply=False`` changes nothing.
+    """
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+    )).scalar_one_or_none()
+    if not ds:
+        return {"error": "dataset not found"}
+
+    versions = list((await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds_uuid)
+        .order_by(VersionIndex.version_number.asc())
+    )).scalars().all())
+
+    # 1. Source resources from data.gov.il: id -> (name, format, created).
+    src: dict[str, dict] = {}
+    live_id: str | None = None
+    try:
+        url = f"{settings.data_gov_il_url}/api/3/action/package_show"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, params={"id": ds.ckan_id}, timeout=40)
+            r.raise_for_status()
+            for x in (r.json().get("result", {}) or {}).get("resources", []) or []:
+                src[x["id"]] = x
+                nm = x.get("name") or ""
+                fmt = (x.get("format") or "").upper()
+                if _LIVE_NAME_HINT in nm and fmt == "CSV" and not live_id:
+                    live_id = x["id"]
+    except Exception as e:
+        return {"error": f"failed to fetch source package: {e}"}
+
+    # 2. Gather every distinct file snapshot from the current versions.
+    #    Each entry: {date, name, r2, hash, source_id, is_live}.
+    snaps: dict = {}  # dedup_key -> entry (earliest date wins)
+
+    def _add(dedup_key, date_str, base_name, r2, hash_, source_id, is_live):
+        if not date_str:
+            return
+        prev = snaps.get(dedup_key)
+        if prev is None or date_str < prev["date"]:
+            snaps[dedup_key] = {
+                "date": date_str, "name": base_name, "r2": r2,
+                "hash": hash_, "source_id": source_id, "is_live": is_live,
+            }
+
+    for v in versions:
+        m = v.resource_mappings or {}
+        hh = m.get("_hashes") or {}
+        fd = m.get("_filedates") or {}
+        nm = m.get("_names") or {}
+        vdate_utc = v.detected_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        for key, value in _iter_resource_keys(m):
+            if not (isinstance(value, str) and storage.is_storage_value(value)):
+                continue
+            h = hh.get(key)
+            h = h if (h and h != "download_failed") else None
+            s = src.get(key)
+            if key == "backfilled":
+                # backfill snapshot of the live file; no content hash recorded.
+                date_str = fd.get(key) or (v.metadata_modified or "")[:10] or vdate_utc
+                base = "תושבים בישראל לפי ישובים וקבוצות גיל"
+                _add(("date", date_str), date_str, base, value, None, live_id, True)
+            elif s and _LIVE_NAME_HINT in (s.get("name") or ""):
+                # a capture of the live "updating" resource — date = capture day.
+                date_str = fd.get(key) or vdate_utc
+                base = (nm.get(key) or s.get("name") or "").strip()
+                _add(("hash", h) if h else ("date", date_str),
+                     date_str, base, value, h, key, True)
+            else:
+                # static archive — date = its source creation date (stable).
+                date_str = (s.get("created") or "")[:10] if s else (fd.get(key) or vdate_utc)
+                base = (nm.get(key) or (s.get("name") if s else "") or "").strip()
+                _add(("hash", h) if h else ("src", key),
+                     date_str, base, value, h, key, False)
+
+    ordered = sorted(snaps.values(), key=lambda e: e["date"])
+
+    timeline = []
+    for i, e in enumerate(ordered, 1):
+        timeline.append({
+            "version": i, "date": e["date"], "is_live": e["is_live"],
+            "label": f"{e['name']} — {_fmt_ddmmyyyy(e['date'])}",
+            "r2": e["r2"],
+        })
+
+    summary = {
+        "dataset_id": str(ds_uuid), "title": ds.title, "apply": apply,
+        "live_resource_id": live_id,
+        "old_version_count": len(versions),
+        "new_version_count": len(ordered),
+        "timeline": timeline,
+        "committed": False,
+    }
+    if not apply:
+        return summary
+    if live_id is None:
+        return {**summary, "error": "live resource not found — refusing to apply"}
+
+    # 3. Apply: delete old rows, recreate clean ones, retrack the live resource.
+    for v in versions:
+        await db.delete(v)
+    await db.flush()
+
+    n = len(ordered)
+    for i, e in enumerate(ordered, 1):
+        is_latest = (i == n)
+        key = e["source_id"] or "file"
+        label = f"{e['name']} — {_fmt_ddmmyyyy(e['date'])}"
+        dt = datetime.fromisoformat(e["date"] + "T12:00:00+00:00")
+        mappings = {
+            key: e["r2"],
+            "_names": {key: label},
+            "_filedates": {key: e["date"]},
+            # Only the latest row feeds forward change-detection; give it the
+            # live resource's hash + tracked id so the next poll diffs cleanly.
+            "_hashes": ({live_id: e["hash"]} if (is_latest and e["hash"]) else {}),
+            "_resource_ids": ([live_id] if is_latest else []),
+        }
+        db.add(VersionIndex(
+            tracked_dataset_id=ds_uuid,
+            version_number=i,
+            metadata_modified=(ds.last_modified or e["date"]) if is_latest else e["date"],
+            detected_at=dt,
+            odata_metadata_resource_id=None,
+            change_summary={
+                "type": "rebuilt", "date": e["date"], "is_live": e["is_live"],
+                "resources_added": [], "resources_removed": [], "resources_modified": [],
+            },
+            resource_mappings=mappings,
+            source="legacy",
+        ))
+
+    # Track ONLY the live resource going forward (one file per future version).
+    ds.resource_ids = [live_id]
+    ds.resource_probes = None  # reset probe baseline for the new tracked set
+
+    await db.commit()
+    summary["committed"] = True
     return summary
