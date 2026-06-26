@@ -497,19 +497,26 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
     except Exception as e:
         return {"error": f"failed to fetch source package: {e}"}
 
-    # 2. Gather every distinct file snapshot from the current versions.
-    #    Each entry: {date, name, r2, hash, source_id, is_live}.
-    snaps: dict = {}  # dedup_key -> entry (earliest date wins)
+    # 2. Gather one snapshot per DATE — this dataset is a single file captured
+    #    over time, so a date == a version, and dedup-by-date guarantees no file
+    #    appears twice (it collapses the same static archive recorded under
+    #    different hashes across captures, and any backfill/live overlap on a
+    #    date). On collision we keep the richest entry: a live capture WITH a
+    #    content hash (feeds forward change-detection) beats a live one without,
+    #    which beats a static archive.
+    snaps: dict[str, dict] = {}  # date -> entry
 
-    def _add(dedup_key, date_str, base_name, r2, hash_, source_id, is_live):
+    def _score(e: dict) -> int:
+        return (2 if (e["is_live"] and e["hash"]) else (1 if e["is_live"] else 0))
+
+    def _add(date_str, base_name, r2, hash_, source_id, is_live):
         if not date_str:
             return
-        prev = snaps.get(dedup_key)
-        if prev is None or date_str < prev["date"]:
-            snaps[dedup_key] = {
-                "date": date_str, "name": base_name, "r2": r2,
-                "hash": hash_, "source_id": source_id, "is_live": is_live,
-            }
+        cand = {"date": date_str, "name": base_name, "r2": r2,
+                "hash": hash_, "source_id": source_id, "is_live": is_live}
+        prev = snaps.get(date_str)
+        if prev is None or _score(cand) > _score(prev):
+            snaps[date_str] = cand
 
     for v in versions:
         m = v.resource_mappings or {}
@@ -527,19 +534,17 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
                 # backfill snapshot of the live file; no content hash recorded.
                 date_str = fd.get(key) or (v.metadata_modified or "")[:10] or vdate_utc
                 base = "תושבים בישראל לפי ישובים וקבוצות גיל"
-                _add(("date", date_str), date_str, base, value, None, live_id, True)
+                _add(date_str, base, value, None, live_id, True)
             elif s and _LIVE_NAME_HINT in (s.get("name") or ""):
                 # a capture of the live "updating" resource — date = capture day.
                 date_str = fd.get(key) or vdate_utc
                 base = (nm.get(key) or s.get("name") or "").strip()
-                _add(("hash", h) if h else ("date", date_str),
-                     date_str, base, value, h, key, True)
+                _add(date_str, base, value, h, key, True)
             else:
                 # static archive — date = its source creation date (stable).
                 date_str = (s.get("created") or "")[:10] if s else (fd.get(key) or vdate_utc)
                 base = (nm.get(key) or (s.get("name") if s else "") or "").strip()
-                _add(("hash", h) if h else ("src", key),
-                     date_str, base, value, h, key, False)
+                _add(date_str, base, value, h, key, False)
 
     ordered = sorted(snaps.values(), key=lambda e: e["date"])
 
