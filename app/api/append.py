@@ -14,6 +14,7 @@ Filtering on rows/download: ``q`` does a free-text ILIKE across all columns;
 any query param whose name is a real column does a per-column ILIKE. Reserved
 params: limit, offset, sort, order, q.
 """
+import json as _json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -159,3 +160,78 @@ async def archive_sql(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+
+
+# ── CKAN datastore-API–inspired content query endpoints ──────────────────────
+# These mirror CKAN's datastore_search / datastore_search_sql so the row-level
+# CONTENT of NEON-archived datasets is queryable like a CKAN datastore (not just
+# the R2 files). Public + read-only.
+
+@router.get("/{dataset_id}/datastore_search")
+@limiter.limit("60/minute")
+async def datastore_search(
+    dataset_id: str,
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    q: str | None = None,
+    fields: str | None = None,
+    sort: str | None = None,
+    filters: str | None = None,
+    distinct: bool = False,
+    include_total: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """CKAN ``datastore_search``-style query over the dataset's NEON content.
+
+    Params (CKAN-aligned): ``filters`` (JSON object of exact-match column→value,
+    value may be a list for IN), ``q`` (substring across all columns),
+    ``fields`` (comma-separated projection), ``sort`` ("col, col2 desc"),
+    ``limit``/``offset``, ``distinct``, ``include_total``. Returns the CKAN
+    envelope ``{success, result:{resource_id, fields:[{id,type}], records, total,
+    limit, offset, _links}}``."""
+    ds, table = await _resolve(dataset_id, db)
+    field_list = [c.strip() for c in fields.split(",") if c.strip()] if fields else None
+    filt: dict = {}
+    if filters:
+        try:
+            filt = _json.loads(filters)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="filters must be valid JSON")
+        if not isinstance(filt, dict):
+            raise HTTPException(status_code=400, detail="filters must be a JSON object")
+    res = await append_store.datastore_search(
+        table, fields=field_list, filters=filt, q=q, sort=sort,
+        limit=limit, offset=offset, distinct=distinct, include_total=include_total,
+    )
+    if res is None:
+        raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
+    res["resource_id"] = str(ds.id)
+    base = request.url.remove_query_params("offset")
+    res["_links"] = {
+        "start": str(base.include_query_params(offset=0)),
+        "next": str(base.include_query_params(offset=res["offset"] + res["limit"])),
+    }
+    return {"success": True, "result": res}
+
+
+@router.get("/{dataset_id}/datastore_search_sql")
+@limiter.limit("20/minute")
+async def datastore_search_sql(
+    dataset_id: str,
+    request: Request,
+    sql: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """CKAN ``datastore_search_sql``-style read-only SQL (single SELECT/WITH).
+    Reference the dataset's table by the name in /schema. Returns the CKAN
+    envelope ``{success, result:{records, fields:[{id,type}]}}``."""
+    await _resolve(dataset_id, db)
+    try:
+        r = await append_store.run_readonly_sql(sql)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+    return {"success": True, "result": {"records": r["rows"], "fields": r["fields"],
+                                        "truncated": r["truncated"]}}

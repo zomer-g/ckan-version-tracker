@@ -86,6 +86,37 @@ const ENDPOINTS: ApiEndpoint[] = [
     example:
       "/api/v1/organizations/00000000-0000-0000-0000-000000000000",
   },
+  {
+    path: "/api/append/{id}/datastore_search",
+    description:
+      "תשאול תוכן מאגר (השורות עצמן, לא רק הקבצים) — בהשראת datastore_search של CKAN. זמין למאגרים שתוכנם נשמר ב-NEON (append). מחזיר עטיפת CKAN: {success, result:{fields:[{id,type}], records, total, _links}}.",
+    params: [
+      { name: "filters", desc: "אובייקט JSON של עמודה→ערך (התאמה מדויקת; ערך יכול להיות רשימה ל-IN)" },
+      { name: "q", desc: "חיפוש מחרוזת בכל העמודות" },
+      { name: "fields", desc: "רשימת עמודות מופרדת בפסיקים (projection)" },
+      { name: "sort", desc: '"עמודה" או "עמודה desc, עמודה2 asc"' },
+      { name: "limit / offset", desc: "עימוד (limit עד 500)" },
+      { name: "distinct / include_total", desc: "boolean" },
+    ],
+    example:
+      '/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/datastore_search?limit=5&filters={"tozeret_nm":"קיה קוריאה"}',
+  },
+  {
+    path: "/api/append/{id}/datastore_search_sql",
+    description:
+      "שאילתת SQL גולמית (SELECT/WITH בלבד) על תוכן המאגר — בהשראת datastore_search_sql של CKAN. רצה בטרנזקציית READ ONLY עם הגבלת זמן ושורות. שם הטבלה זמין ב-/schema.",
+    params: [
+      { name: "sql", desc: "משפט SELECT/WITH יחיד" },
+    ],
+    example:
+      "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/datastore_search_sql?sql=SELECT tozeret_nm, count(*) FROM append_private_and_commercial_vehicles_e437ab0b GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+  },
+  {
+    path: "/api/append/{id}/schema",
+    description:
+      "סכמת תוכן המאגר ב-NEON: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה).",
+    example: "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/schema",
+  },
 ];
 
 function CopyUrlButton({ value }: { value: string }) {

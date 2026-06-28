@@ -366,7 +366,9 @@ async def run_readonly_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 
         async with conn.transaction(readonly=True):
             await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             stmt = await conn.prepare(wrapped)
-            cols = [a.name for a in stmt.get_attributes()]
+            attrs = stmt.get_attributes()
+            cols = [a.name for a in attrs]
+            fields = [{"id": a.name, "type": _ckan_type(getattr(a.type, "name", None))} for a in attrs]
             recs = await stmt.fetch()
     truncated = len(recs) > max_rows
     rows = [
@@ -374,7 +376,8 @@ async def run_readonly_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 
          for k, v in dict(r).items()}
         for r in recs[:max_rows]
     ]
-    return {"columns": cols, "rows": rows, "truncated": truncated, "row_count": len(rows)}
+    return {"columns": cols, "fields": fields, "rows": rows,
+            "truncated": truncated, "row_count": len(rows)}
 
 
 async def table_count(table: str) -> int:
@@ -480,6 +483,126 @@ async def query(
         "offset": offset,
         "sort": sort_col,
         "order": direction.lower(),
+    }
+
+
+def _ckan_type(pg_type: str | None) -> str:
+    """Map a Postgres type (information_schema data_type OR asyncpg type name)
+    to a CKAN-datastore-ish field type name."""
+    t = (pg_type or "").lower()
+    if "timestamp" in t or t == "date":
+        return "timestamp"
+    if t in ("integer", "bigint", "smallint", "int2", "int4", "int8"):
+        return "int"
+    if t in ("numeric", "real", "double precision", "decimal", "float4", "float8"):
+        return "numeric"
+    if t in ("boolean", "bool"):
+        return "bool"
+    return "text"
+
+
+async def column_meta(table: str) -> list[dict]:
+    """[{id, type}, …] for the table's user columns — CKAN ``fields`` shape."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position",
+            table,
+        )
+    return [
+        {"id": r["column_name"], "type": _ckan_type(r["data_type"])}
+        for r in rows if r["column_name"] not in _HIDDEN_COLS
+    ]
+
+
+def _parse_sort(sort: str | None, cols: set[str]) -> str:
+    """CKAN-style ``sort`` ("col, col2 desc") → ORDER BY clause over known
+    columns only. Empty when nothing valid is given (caller may default)."""
+    out: list[str] = []
+    for seg in str(sort or "").split(","):
+        seg = seg.strip()
+        if not seg:
+            continue
+        toks = seg.split()
+        if toks[0] not in cols:
+            continue
+        direction = "DESC" if (len(toks) > 1 and toks[1].lower() == "desc") else "ASC"
+        out.append(f"{_qi(toks[0])} {direction}")
+    return " ORDER BY " + ", ".join(out) if out else ""
+
+
+async def datastore_search(
+    table: str,
+    *,
+    fields: list[str] | None = None,
+    filters: dict | None = None,
+    q: str | None = None,
+    sort: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    distinct: bool = False,
+    include_total: bool = True,
+) -> dict | None:
+    """CKAN ``datastore_search``-style query over an append table. ``filters``
+    are exact-match per column (scalar or list → IN); ``q`` is a substring match
+    across all columns; ``fields`` projects the output columns. Returns
+    {fields:[{id,type}], records, total, limit, offset} or None if the table is
+    gone. All column names are validated against the live schema; values are
+    parameterized."""
+    all_cols = await user_columns(table)
+    if not all_cols:
+        return None
+    colset = set(all_cols)
+    sel = [c for c in (fields or all_cols) if c in colset] or all_cols
+    limit = max(0, min(int(limit if limit is not None else 100), MAX_PAGE))
+    offset = max(0, int(offset or 0))
+
+    conds: list[str] = []
+    params: list = []
+    p = 1
+    if q:
+        ph = f"${p}"
+        conds.append("(" + " OR ".join(f"{_qi(c)}::text ILIKE {ph}" for c in all_cols) + ")")
+        params.append(f"%{q}%")
+        p += 1
+    for col, val in (filters or {}).items():
+        if col not in colset:
+            continue
+        if isinstance(val, list):
+            phs = []
+            for v in val:
+                params.append(None if v is None else str(v))
+                phs.append(f"${p}")
+                p += 1
+            conds.append(f"{_qi(col)}::text = ANY(ARRAY[{','.join(phs)}]::text[])")
+        else:
+            params.append(None if val is None else str(val))
+            conds.append(f"{_qi(col)}::text = ${p}")
+            p += 1
+    where = " WHERE " + " AND ".join(conds) if conds else ""
+    order = _parse_sort(sort, colset) or (
+        ' ORDER BY "first_seen" DESC' if "first_seen" in colset else ""
+    )
+    select = ("SELECT DISTINCT " if distinct else "SELECT ") + ", ".join(_qi(c) for c in sel)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = None
+        if include_total:
+            total = int(await conn.fetchval(f"SELECT count(*) FROM {_qi(table)}{where}", *params))
+        recs = await conn.fetch(
+            f"{select} FROM {_qi(table)}{where}{order} "
+            f"LIMIT ${len(params)+1} OFFSET ${len(params)+2}",
+            *params, limit, offset,
+        )
+    meta = [f for f in await column_meta(table) if f["id"] in sel]
+    return {
+        "fields": meta,
+        "records": [dict(r) for r in recs],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
