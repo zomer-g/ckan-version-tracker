@@ -1604,9 +1604,12 @@ async def update_progress(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    task.phase = body.phase
+    # Cap to the column widths (phase String(50), message String(500)) so an
+    # over-length progress report can't fail the commit (StringDataRightTruncation)
+    # and strand the task mid-run.
+    task.phase = (body.phase or "")[:50]
     task.progress = body.percentage
-    task.message = body.message
+    task.message = (body.message or "")[:500]
     await db.commit()
 
     return {"status": "ok"}

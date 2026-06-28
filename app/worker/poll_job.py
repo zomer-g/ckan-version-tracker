@@ -629,7 +629,12 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
         tracked_dataset_id=ds.id,
         status="pending",
         phase="queued",
-        message=f"Queued for scraping: {ds.source_url}",
+        # `message` is String(500); some source URLs are far longer than that
+        # (e.g. idf.il unit pages whose percent-encoded Hebrew+Arabic paths run
+        # 750+ chars), and an over-length value makes the INSERT fail with
+        # StringDataRightTruncation — silently aborting the whole poll so no
+        # task is ever created. Cap it to fit the column.
+        message=f"Queued for scraping: {ds.source_url}"[:500],
     )
     db.add(task)
     ds.last_polled_at = datetime.now(timezone.utc)
