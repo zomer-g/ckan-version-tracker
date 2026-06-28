@@ -77,6 +77,11 @@ class UpdateRequest(BaseModel):
     # now-fixed reason (e.g. an IAP-blocked attachment) without changing the
     # tracked-resource set or deleting version history.
     force_repoll: bool | None = None
+    # Admin escape hatch: merge arbitrary keys into scraper_config for
+    # per-dataset engine tuning that has no dedicated field yet (e.g.
+    # idf_recursion_root for a hub whose children sit under a sibling path).
+    # Keys with a null value are removed. Shallow merge; other keys untouched.
+    scraper_config_merge: dict | None = None
 
 
 def _validate_storage_mode(mode: str) -> str:
@@ -888,6 +893,16 @@ async def update_tracked(
         # See UpdateRequest.force_repoll: re-run the snapshot on next poll.
         ds.last_modified = None
         ds.last_error = None
+    if body.scraper_config_merge is not None:
+        # Admin escape hatch (see UpdateRequest): shallow-merge into
+        # scraper_config; a null value drops the key.
+        sc = dict(ds.scraper_config or {})
+        for k, v in body.scraper_config_merge.items():
+            if v is None:
+                sc.pop(k, None)
+            else:
+                sc[k] = v
+        ds.scraper_config = sc or None
     if body.append_key is not None:
         sc = dict(ds.scraper_config or {})
         if body.append_key.strip():
