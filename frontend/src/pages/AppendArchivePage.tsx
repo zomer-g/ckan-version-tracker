@@ -194,6 +194,8 @@ export default function AppendArchivePage() {
         </div>
       </div>
 
+      {schema && <StorageExplainBox schema={schema} />}
+
       <div className="flex" style={{ gap: "0.75rem", alignItems: "center", margin: "0.5rem 0 1rem", flexWrap: "wrap" }}>
         <input
           type="search"
@@ -372,5 +374,55 @@ export default function AppendArchivePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Config-aware "how is this data stored" box, shown at the top of the archive
+// for specially-configured (append/NEON) datasets. Explains the anchor (dedup
+// identity) and how changes are documented, tailored to the dataset's mode:
+//   - DIFF (capture_changes): anchored on the key, changes detected by full-row
+//     hash → each change becomes a new dated record (vehicle registry).
+//   - keyed: only new keys captured; in-place changes are NOT recorded.
+//   - keyless: every distinct row STATE captured (flights board).
+function StorageExplainBox({ schema }: { schema: AppendSchema }) {
+  const key = schema.key;
+  const diff = !!schema.capture_changes;
+
+  const anchor = diff ? (
+    <>כל ישות מזוהה לפי <code>{key}</code> (העוגן), וזיהוי השינויים נעשה על <strong>כל תוכן השורה</strong> (טביעת-אצבע / hash).</>
+  ) : key ? (
+    <>כל רשומה מזוהה לפי <code>{key}</code> (העוגן).</>
+  ) : (
+    <>אין מפתח יחיד — העוגן הוא <strong>כל תוכן השורה</strong> (hash).</>
+  );
+
+  const changes = diff ? (
+    <>בכל סריקה משווים את תוכן כל שורה מול מה שכבר נשמר. אם שורה של ישות <strong>קיימת השתנתה</strong> (למשל טסט, בעלות או צבע ברכב) — היא נשמרת כ<strong>רשומה חדשה</strong> עם <code>first_seen</code> חדש, והרשומה הקודמת נשמרת. כך נבנית <strong>היסטוריית שינויים מלאה</strong> לכל ישות; ישות חדשה לגמרי → רשומה חדשה.</>
+  ) : key ? (
+    <>נשמרות רק <strong>ישויות חדשות</strong> (מפתח שלא נראה קודם). <strong>שינוי</strong> בישות קיימת (אותו מפתח, תוכן אחר) <strong>אינו</strong> נלכד — נשמר המצב הראשון בלבד.</>
+  ) : (
+    <>כל <strong>מצב נבדל</strong> של שורה נשמר פעם אחת. כשערך משתנה (למשל סטטוס טיסה: ממתינה→המריאה→נחתה) — כל מצב נשמר כרשומה נפרדת עם <code>first_seen</code> משלו, כך שנשמרת היסטוריית כל המצבים.</>
+  );
+
+  return (
+    <section
+      className="card"
+      aria-label="אופן שמירת הנתונים"
+      style={{
+        marginBottom: "1rem", padding: "0.9rem 1.1rem",
+        background: "var(--bg-muted, #f8fafc)",
+        borderInlineStart: `3px solid ${diff ? "#b45309" : "var(--primary, #0f766e)"}`,
+      }}
+    >
+      <h2 style={{ margin: "0 0 0.4rem", fontSize: "0.95rem", fontWeight: 600 }}>
+        {diff ? "⚠ אופן שמירה מיוחד — מצב DIFF (לכידת שינויים)" : "אופן שמירת הנתונים"}
+      </h2>
+      <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.65, color: "var(--text)" }}>
+        <li><strong>שמירה:</strong> כל סריקה מוסיפה שורות (APPEND) לטבלה ב-PostgreSQL (NEON) בתוך OVER — נתונים ניתנים-לתשאול, לא קובץ.</li>
+        <li><strong>נקודת עוגן:</strong> {anchor}</li>
+        <li><strong>תיעוד שינויים:</strong> {changes}</li>
+        <li><strong>חותמת זמן:</strong> לכל רשומה עמודת <code>first_seen</code> — מתי נקלטה לראשונה לארכיון.</li>
+      </ul>
+    </section>
   );
 }

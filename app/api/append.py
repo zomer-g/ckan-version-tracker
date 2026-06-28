@@ -102,6 +102,7 @@ async def archive_schema(dataset_id: str, db: AsyncSession = Depends(get_db)):
         "total": total,
         "columns": cols,
         "key": (ds.scraper_config or {}).get("append_key"),
+        "capture_changes": bool((ds.scraper_config or {}).get("capture_changes")),
         "first_seen_column": "first_seen",
     }
 

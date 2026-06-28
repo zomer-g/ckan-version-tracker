@@ -213,6 +213,7 @@ export interface AppendSchema {
   total: number;
   columns: string[];
   key: string | null;
+  capture_changes?: boolean;
   first_seen_column: string;
 }
 
