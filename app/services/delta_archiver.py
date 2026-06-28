@@ -33,6 +33,7 @@ Caveats vs full-snapshot semantics:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -60,9 +61,50 @@ logger = logging.getLogger(__name__)
 # constant memory regardless of total dataset size).
 PENDING_FLUSH_THRESHOLD = 5000
 
-# httpx client timeout per page request. CKAN datastore_search is
-# usually <2s per 32k-row page; some are slower under load.
-PAGE_TIMEOUT_SECONDS = 60.0
+# httpx client timeout per page request. data.gov.il's datastore_search is
+# usually fast per 32k-row page, but under load some pages take far longer or
+# time out outright — and a single uncaught timeout used to abort the whole
+# multi-million-row seed. Bumped + retried (below) so a transient blip doesn't
+# kill a run; the checkpoint then only loses (at most) the in-flight page.
+PAGE_TIMEOUT_SECONDS = 120.0
+PAGE_MAX_RETRIES = 6
+
+
+async def _fetch_datastore_page(
+    client: httpx.AsyncClient, base_url: str, resource_id: str, page_size: int, offset: int,
+) -> dict:
+    """GET one datastore_search page, retrying transient timeouts / transport
+    errors / 5xx with capped exponential backoff. Raises only after the retry
+    budget is spent (so the caller's checkpoint holds and the next run resumes)."""
+    last: Exception | None = None
+    for attempt in range(1, PAGE_MAX_RETRIES + 1):
+        try:
+            resp = await client.get(
+                f"{base_url}/datastore_search",
+                params={"resource_id": resource_id, "limit": page_size, "offset": offset},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success"):
+                raise RuntimeError(f"success=false: {data.get('error')}")
+            return data
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                raise  # 4xx won't fix itself
+            last = e
+        except (httpx.TimeoutException, httpx.TransportError, RuntimeError) as e:
+            last = e
+        if attempt < PAGE_MAX_RETRIES:
+            backoff = min(30.0, 2.0 ** attempt)
+            logger.warning(
+                "datastore_search retry %d/%d at offset=%d (%s) — backoff %.0fs",
+                attempt, PAGE_MAX_RETRIES, offset, type(last).__name__, backoff,
+            )
+            await asyncio.sleep(backoff)
+    raise RuntimeError(
+        f"datastore_search failed after {PAGE_MAX_RETRIES} attempts at "
+        f"offset={offset}: {type(last).__name__}: {last}"
+    )
 
 
 async def _stream_datastore_pages(
@@ -75,27 +117,16 @@ async def _stream_datastore_pages(
     restarting). ``next_offset`` is the offset AFTER this page — persist it as
     the resume point. Strips the synthetic `_id` column on each row.
 
-    Stops when a page comes back empty (datastore exhausted) or when the
-    API returns success=False (treated as a hard error)."""
+    Stops when a page comes back empty (datastore exhausted). Per-page transient
+    failures are retried (see _fetch_datastore_page) so a single slow page can't
+    abort a long seed."""
     base_url = settings.data_gov_il_url.rstrip("/") + "/api/3/action"
     offset = max(0, int(start_offset or 0))
     async with httpx.AsyncClient(timeout=PAGE_TIMEOUT_SECONDS) as client:
         while True:
-            resp = await client.get(
-                f"{base_url}/datastore_search",
-                params={
-                    "resource_id": resource_id,
-                    "limit": page_size,
-                    "offset": offset,
-                },
+            data = await _fetch_datastore_page(
+                client, base_url, resource_id, page_size, offset,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("success"):
-                raise RuntimeError(
-                    f"datastore_search failed at offset={offset}: "
-                    f"{data.get('error')}"
-                )
             records = data.get("result", {}).get("records") or []
             if not records:
                 return
