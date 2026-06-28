@@ -47,6 +47,14 @@ function storageTargetOptions(
   return opts;
 }
 
+// Small caption above each control in the redesigned dataset cards.
+const admFieldLabel = {
+  fontSize: "0.68rem",
+  color: "var(--text-muted)",
+  marginBottom: "0.2rem",
+  fontWeight: 600,
+} as const;
+
 function formatRelative(iso: string | null): string {
   if (!iso) return "";
   const ms = Date.now() - new Date(iso).getTime();
@@ -1358,31 +1366,11 @@ export default function AdminPage() {
         <div className="empty-state">אין מאגרים פעילים</div>
       ) : (
         <div>
-          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
-            <colgroup>
-              <col style={{ width: "22%" }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "14%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "13%" }} />
-              <col style={{ width: "13%" }} />
-            </colgroup>
-            <thead>
-              <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
-                <th style={thStyle}>שם מאגר</th>
-                <th style={thStyle}>{t("organizations.admin_column")}</th>
-                <th style={thStyle}>תגיות</th>
-                <th style={thStyle}>תדירות</th>
-                <th style={thStyle}>{t("admin.storage_mode") || "אופן שמירה"}</th>
-                <th style={thStyle}>גרסאות / בדיקה</th>
-                <th style={thStyle}>פעולות</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               {activeDatasets.map((ds) => (
-                <tr key={ds.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={tdStyle}>
+                <div key={ds.id} className="card" style={{ padding: "0.85rem 1rem", boxShadow: "var(--shadow-sm)" }}>
+                  {/* ── Name / status / source ── */}
+                  <div style={{ marginBottom: "0.6rem" }}>
                     {editingTitleFor === ds.id ? (
                       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
                         <input
@@ -1563,8 +1551,11 @@ export default function AdminPage() {
                         )}
                       </div>
                     )}
-                  </td>
-                  <td style={tdStyle}>
+                  </div>
+                  {/* ── Controls (labeled, wrapping) ── */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.85rem", alignItems: "flex-start" }}>
+                    <div style={{ flex: "1 1 12rem", minWidth: "10rem" }}>
+                      <div style={admFieldLabel}>{t("organizations.admin_column")}</div>
                     <select
                       value={ds.organization_id ?? ""}
                       onChange={(e) => handleChangeOrg(ds.id, e.target.value)}
@@ -1584,16 +1575,18 @@ export default function AdminPage() {
                         {ds.organization}
                       </div>
                     )}
-                  </td>
-                  <td style={tdStyle}>
+                    </div>
+                    <div style={{ flex: "1 1 12rem", minWidth: "10rem" }}>
+                      <div style={admFieldLabel}>תגיות</div>
                     <TagPicker
                       value={ds.tags || []}
                       available={availableTags}
                       onChange={(next) => handleSetDatasetTags(ds.id, next)}
                       onCreate={handleCreateTag}
                     />
-                  </td>
-                  <td style={tdStyle}>
+                    </div>
+                    <div style={{ flex: "0 1 9rem", minWidth: "8rem" }}>
+                      <div style={admFieldLabel}>תדירות</div>
                     <select
                       value={ds.poll_interval}
                       onChange={(e) => handleUpdateInterval(ds.id, Number(e.target.value))}
@@ -1601,8 +1594,9 @@ export default function AdminPage() {
                     >
                       {INTERVAL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
-                  </td>
-                  <td style={tdStyle}>
+                    </div>
+                    <div style={{ flex: "1 1 14rem", minWidth: "12rem" }}>
+                      <div style={admFieldLabel}>{t("admin.storage_mode") || "אחסון"}</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                       <select
                         value={ds.storage_mode || "full_snapshot"}
@@ -1656,8 +1650,9 @@ export default function AdminPage() {
                         ))}
                       </select>
                     </div>
-                  </td>
-                  <td style={tdStyle} className="text-sm">
+                    </div>
+                    <div style={{ flex: "1 1 11rem", minWidth: "9rem" }} className="text-sm">
+                      <div style={admFieldLabel}>גרסאות / בדיקה</div>
                     <div>
                       <Link to={`/versions/${ds.id}`}>{ds.version_count}</Link>
                       <span className="text-muted"> גרסאות</span>
@@ -1690,13 +1685,15 @@ export default function AdminPage() {
                         💡 שקול ארכוב delta (append_only + מפתח)
                       </div>
                     )}
-                  </td>
-                  <td style={tdStyle}>
+                    </div>
+                  </div>
+                  {/* ── Actions ── */}
+                  <div style={{ marginTop: "0.75rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)", display: "flex", gap: "0.4rem", alignItems: "center" }}>
                     <div className="flex" style={{ gap: "0.4rem" }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
                         <button
                           className="btn-secondary"
-                          style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
+                          style={{ padding: "0.3rem 1rem", fontSize: "0.8rem" }}
                           onClick={() => handlePoll(ds.id)}
                           disabled={processing.has(ds.id)}
                         >
@@ -1717,18 +1714,17 @@ export default function AdminPage() {
                       </div>
                       <button
                         className="btn-danger"
-                        style={{ padding: "0.25rem 0.75rem", fontSize: "0.75rem" }}
+                        style={{ padding: "0.3rem 1rem", fontSize: "0.8rem" }}
                         onClick={() => handleDelete(ds.id, ds.title)}
                         disabled={processing.has(ds.id)}
                       >
                         מחק
                       </button>
                     </div>
-                  </td>
-                </tr>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+          </div>
         </div>
       )}
 
