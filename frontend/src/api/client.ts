@@ -133,6 +133,9 @@ export interface TrackedDataset {
 
 export const datasets = {
   list: () => request<TrackedDataset[]>("/datasets"),
+  // Public, lightweight count of pending tracking requests — powers the
+  // subtle "requests waiting" dot in the navbar (visible to everyone).
+  pendingCount: () => request<{ count: number }>("/datasets/pending-count"),
   track: (ckan_id: string, poll_interval = 3600, resource_id?: string) =>
     request<TrackedDataset>("/datasets", {
       method: "POST",

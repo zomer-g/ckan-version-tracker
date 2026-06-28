@@ -2,6 +2,7 @@
   "app_name": "גרסאות לעם",
   "nav": {
     "search": "חיפוש",
+    "pending_waiting": "יש בקשות ממתינות",
     "tracked": "מעקב",
     "organizations": "ארגונים",
     "tags": "תגיות",

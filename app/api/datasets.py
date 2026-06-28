@@ -1099,6 +1099,22 @@ async def trigger_poll(
 # Public endpoints (no auth required)
 # ---------------------------------------------------------------------------
 
+@router.get("/pending-count")
+@limiter.limit("120/minute")
+async def pending_count(request: Request, db: AsyncSession = Depends(get_db)):
+    """Public, lightweight count of pending tracking requests. Powers the
+    subtle "you have requests waiting" dot next to the site title — visible to
+    everyone so the admin spots a backlog the moment they land on the site,
+    without logging in. Exposes only a number (no titles / requesters)."""
+    from sqlalchemy import func
+    total = (await db.execute(
+        select(func.count()).select_from(TrackedDataset).where(
+            TrackedDataset.status == "pending"
+        )
+    )).scalar() or 0
+    return {"count": int(total)}
+
+
 class TrackingRequest(BaseModel):
     ckan_id: str | None = None
     source_type: str = "ckan"  # "ckan" | "scraper" | "govmap"

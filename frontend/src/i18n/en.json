@@ -2,6 +2,7 @@
   "app_name": "Versions for the People",
   "nav": {
     "search": "Search",
+    "pending_waiting": "Requests waiting for review",
     "tracked": "Tracked",
     "organizations": "Organizations",
     "tags": "Tags",

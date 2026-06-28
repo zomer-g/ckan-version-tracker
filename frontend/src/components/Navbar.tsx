@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { datasets as datasetsApi } from "../api/client";
 
 /**
  * Brand icon — inline SVG (no extra dep) shaped as a stacked-archive /
@@ -48,6 +49,22 @@ export default function Navbar() {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // Subtle public "requests waiting" dot: poll the pending count so the admin
+  // (or anyone) notices a backlog on landing, without logging in. Best-effort
+  // — a failed fetch just leaves the dot hidden.
+  const [pendingCount, setPendingCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      datasetsApi
+        .pendingCount()
+        .then((r) => { if (alive) setPendingCount(r.count || 0); })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   const toggleLang = () => {
     const next = i18n.language === "he" ? "en" : "he";
     i18n.changeLanguage(next);
@@ -85,6 +102,14 @@ export default function Navbar() {
           >
             <BrandIcon />
             <span className="brand-text">{t("app_name")}</span>
+            {pendingCount > 0 && (
+              <span
+                className="pending-dot"
+                role="status"
+                aria-label={t("nav.pending_waiting", "יש בקשות ממתינות")}
+                title={t("nav.pending_waiting", "יש בקשות ממתינות")}
+              />
+            )}
           </Link>
 
           {/* Desktop nav — visible at ≥640px */}
