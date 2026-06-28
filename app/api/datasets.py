@@ -221,6 +221,10 @@ class DatasetResponse(BaseModel):
     # Whether the NEON (tabular-rows) options are meaningful for this source
     # (CKAN only). The admin UI greys NEON out when false.
     neon_eligible: bool = True
+    # DIFF mode (append_only only): dedup by full-row hash so CHANGES to existing
+    # rows are captured, via a COPY-staged set diff + a one-time table migration.
+    # Heavy — reserved for rare cases (e.g. the vehicle registry). Default off.
+    capture_changes: bool = False
     last_error: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
@@ -296,6 +300,7 @@ async def list_tracked(
                 upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
                 last_error=ds.last_error,
                 resource_ids=ds.resource_ids,
                 new_resources_at_source=ds.new_resources_at_source,
@@ -556,6 +561,7 @@ async def track_dataset(
             upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -658,6 +664,7 @@ async def track_dataset(
             append_key=None,
             storage_target=storage_target_of(ds.scraper_config),
             neon_eligible=dataset_is_neon_eligible(ds),
+            capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -819,6 +826,7 @@ async def track_dataset(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -997,6 +1005,7 @@ async def update_tracked(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -1428,6 +1437,7 @@ async def get_tracked_public(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,

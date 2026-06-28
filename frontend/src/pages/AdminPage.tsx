@@ -694,6 +694,21 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   };
 
+  // DIFF mode (capture_changes) — reserved for rare/extreme cases. Enabling it
+  // triggers a one-time heavy table migration on the next poll, then per-poll
+  // content diffs. Confirm before turning on.
+  const handleUpdateCaptureChanges = async (id: string, capture_changes: boolean) => {
+    if (capture_changes && !confirm(
+      "מצב DIFF הוא כבד ושמור למקרים קיצוניים (כמו מאגר הרכב): בכל סריקה נלכדות גם שינויים בשורות קיימות, וההפעלה מריצה מיגרציה חד-פעמית על הטבלה. להפעיל?"
+    )) return;
+    try {
+      const updated = await datasetsApi.update(id, { capture_changes });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, capture_changes: updated.capture_changes } : d))
+      );
+    } catch (e) { console.error(e); }
+  };
+
   if (loading) return <div className="loading" role="status">{t("common.loading")}</div>;
 
   const activeDatasets = allDatasets.filter((d) => d.status === "active");
@@ -1599,6 +1614,7 @@ export default function AdminPage() {
                         <option value="append_only">{t("admin.storage_append") || "תוספת בלבד"}</option>
                       </select>
                       {ds.storage_mode === "append_only" && (
+                        <>
                         <input
                           type="text"
                           defaultValue={ds.append_key || ""}
@@ -1610,6 +1626,18 @@ export default function AdminPage() {
                           }}
                           style={{ width: "10rem", padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: "4px" }}
                         />
+                        <label
+                          title="מצב DIFF: לוכד גם שינויים בשורות קיימות (לא רק שורות חדשות), עם מיגרציה חד-פעמית כבדה. שמור למקרים קיצוניים בלבד (כמו מאגר הרכב)."
+                          style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", whiteSpace: "nowrap", color: ds.capture_changes ? "#b45309" : "var(--text-muted)", fontWeight: ds.capture_changes ? 600 : 400 }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!ds.capture_changes}
+                            onChange={(e) => handleUpdateCaptureChanges(ds.id, e.target.checked)}
+                          />
+                          ⚠ DIFF (לכידת שינויים)
+                        </label>
+                        </>
                       )}
                       <select
                         value={ds.storage_target || "r2"}
