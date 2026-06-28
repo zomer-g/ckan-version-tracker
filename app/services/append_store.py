@@ -123,14 +123,18 @@ def build_insert(
     *,
     key_col: str | None,
     keyless: bool,
+    first_seen: str | None = None,
 ) -> tuple[str, list]:
     """Build one multi-row ``INSERT … ON CONFLICT DO NOTHING`` for a chunk.
 
     Pure (no DB) so it's unit-testable. Dedups within the chunk by the conflict
     identity (so a single statement can't carry the same key twice). ``first_seen``
-    is filled by ``now()`` inline (same value for the batch — "first seen this
-    poll"); keyless rows also carry the computed ``row_hash``. Returns
-    (sql, params); sql is "" when the chunk has nothing to insert."""
+    defaults to ``now()`` inline ("first seen this poll"); pass an explicit
+    timestamp (ISO string) to backfill historical dates (e.g. a retroactive seed
+    from per-version snapshots — each row stamped with the version's date, oldest
+    first, so ON CONFLICT keeps the earliest). Keyless rows also carry the
+    computed ``row_hash``. Returns (sql, params); sql is "" when the chunk has
+    nothing to insert."""
     insert_cols = list(cols) + ["first_seen"] + (["row_hash"] if keyless else [])
     conflict_target = "row_hash" if keyless else key_col
     values_sql: list[str] = []
@@ -152,7 +156,12 @@ def build_insert(
             params.append(None if v is None else str(v))
             placeholders.append(f"${p}")
             p += 1
-        placeholders.append("now()")
+        if first_seen is not None:
+            params.append(first_seen)
+            placeholders.append(f"${p}::timestamptz")
+            p += 1
+        else:
+            placeholders.append("now()")
         if keyless:
             params.append(ident)
             placeholders.append(f"${p}")
@@ -224,10 +233,12 @@ async def append_rows(
     *,
     key_col: str | None,
     keyless: bool,
+    first_seen: str | None = None,
 ) -> int:
     """Insert ``rows`` into ``table``, skipping ones already present (by key or
     row_hash). Returns the number actually inserted (parsed from the INSERT
-    command tags). Assumes ensure_table has run for this (table, cols, mode)."""
+    command tags). Assumes ensure_table has run for this (table, cols, mode).
+    ``first_seen`` (ISO timestamp) backfills historical dates; default ``now()``."""
     if not rows:
         return 0
     pool = await get_pool()
@@ -237,6 +248,7 @@ async def append_rows(
         for i in range(0, len(rows), size):
             sql, params = build_insert(
                 table, source_cols, rows[i:i + size], key_col=key_col, keyless=keyless,
+                first_seen=first_seen,
             )
             if not sql:
                 continue

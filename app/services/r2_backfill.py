@@ -626,3 +626,103 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
     await db.commit()
     summary["committed"] = True
     return summary
+
+
+# ── retroactive NEON seed from existing per-version R2 snapshots ──────────────
+# A full-snapshot dataset already has its history as per-version CSVs on R2. To
+# ALSO make it queryable as a NEON append table (with the same `first_seen`/SEEN
+# column as the live append datasets), we replay those snapshots oldest→newest
+# into the NEON table: keyless full-row-hash dedup so every distinct row STATE is
+# captured once, stamped with the DATE OF THE VERSION it first appeared in (not
+# now()). Then flip the dataset to the r2+neon plan so future polls dual-write
+# (R2 file snapshot + NEON rows) automatically (delta_archiver._archive_streaming_to_db).
+#
+# Forward dedup consistency: the latest version's CSV columns equal the live
+# datastore columns, so a row the seed inserted from the newest snapshot hashes
+# identically to the same row the forward poll reads — no duplicate on the next
+# poll. Older versions with a different column set (e.g. an age-bucket rename)
+# hash in their own space and are kept as distinct historical states.
+
+async def seed_neon_from_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
+    """Replay a dataset's per-version R2 CSV snapshots into its NEON append table
+    with historical ``first_seen``, then enable the r2+neon dual-write going
+    forward. Idempotent (ON CONFLICT DO NOTHING). ``apply=False`` reports the plan
+    without writing to NEON or changing config."""
+    from app.services import append_store
+    from app.services.csv_parser import parse_csv
+
+    if not append_store.is_configured():
+        return {"error": "NEON append DB is not configured (APPEND_DATABASE_URL missing)"}
+
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+    )).scalar_one_or_none()
+    if not ds:
+        return {"error": "dataset not found"}
+
+    versions = list((await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds_uuid)
+        .order_by(VersionIndex.version_number.asc())  # oldest first → earliest first_seen wins
+    )).scalars().all())
+
+    table = append_store.table_name(ds)
+    summary = {
+        "dataset_id": str(ds_uuid), "title": ds.title, "apply": apply,
+        "table": table, "versions": len(versions),
+        "rows_inserted": 0, "per_version": [], "skipped": [],
+        "archive_neon_enabled": False, "table_total": None, "committed": False,
+    }
+
+    for v in versions:
+        m = v.resource_mappings or {}
+        # the single data file for this version (snapshot key → r2 value)
+        r2val = None
+        for k, val in m.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(val, str) and storage.is_storage_value(val):
+                r2val = val
+                break
+        if not r2val:
+            summary["skipped"].append({"version": v.version_number, "reason": "no r2 file"})
+            continue
+        # first_seen = the version's archive date (the date it represents)
+        fs = v.detected_at.astimezone(timezone.utc).isoformat()
+        data = await storage_client.get_object_bytes(r2val)
+        if not data:
+            summary["skipped"].append({"version": v.version_number, "reason": "download failed"})
+            continue
+        try:
+            fields, records = parse_csv(data)
+        except Exception as e:
+            summary["skipped"].append({"version": v.version_number, "reason": f"parse: {e}"})
+            continue
+        cols = [f["id"] for f in fields]
+        n = 0
+        if apply and records and cols:
+            await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+            n = await append_store.append_rows(
+                table, cols, records, key_col=None, keyless=True, first_seen=fs,
+            )
+            summary["rows_inserted"] += n
+        summary["per_version"].append({
+            "version": v.version_number, "date": fs[:10],
+            "rows_in_file": len(records), "inserted": n,
+        })
+
+    if apply:
+        # Enable r2+neon dual-write going forward (keep file snapshots on R2,
+        # also stream rows to NEON on each future poll).
+        sc = dict(ds.scraper_config or {})
+        sc["archive_neon"] = True
+        ds.scraper_config = sc
+        summary["archive_neon_enabled"] = True
+        try:
+            summary["table_total"] = await append_store.table_count(table)
+        except Exception:
+            pass
+        await db.commit()
+        summary["committed"] = True
+
+    return summary

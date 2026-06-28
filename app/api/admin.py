@@ -29,6 +29,7 @@ from app.services.r2_backfill import (
     backfill_dataset_to_r2,
     repair_dataset_r2,
     rebuild_dataset_versions,
+    seed_neon_from_versions,
 )
 from app.worker.scheduler import add_poll_job, scheduler
 
@@ -561,6 +562,32 @@ async def rebuild_versions_endpoint(
     logger.info("Rebuild versions for %s by %s: %s→%s versions, apply=%s",
                 uid, user.email, s.get("old_version_count"),
                 s.get("new_version_count"), apply)
+    return s
+
+
+@router.post("/datasets/{dataset_id}/seed-neon")
+@limiter.limit("3/minute")
+async def seed_neon_endpoint(
+    request: Request,
+    dataset_id: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replay a dataset's per-version R2 snapshots into its NEON append table with
+    historical first_seen, and enable the r2+neon dual-write going forward
+    (see ``app.services.r2_backfill.seed_neon_from_versions``).
+
+    Idempotent (ON CONFLICT DO NOTHING). ``apply=false`` (default) reports the
+    per-version plan without writing to NEON or changing config. Runs inline —
+    for this dataset it's ~25 small CSVs; very large histories should be batched.
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    s = await seed_neon_from_versions(db, uid, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=400, detail=s["error"])
+    logger.info("Seed NEON for %s by %s: inserted=%s table_total=%s apply=%s",
+                uid, user.email, s.get("rows_inserted"), s.get("table_total"), apply)
     return s
 
 
