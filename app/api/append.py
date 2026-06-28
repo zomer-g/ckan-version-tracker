@@ -18,6 +18,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,11 +26,16 @@ from app.api.utils import parse_uuid
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.rate_limit import limiter
 from app.services import append_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/append", tags=["append"])
+
+
+class SqlBody(BaseModel):
+    sql: str
 
 _RESERVED = {"limit", "offset", "sort", "order", "q"}
 
@@ -131,3 +137,25 @@ async def archive_download(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{safe}_append.csv"'},
     )
+
+
+@router.post("/{dataset_id}/sql")
+@limiter.limit("20/minute")
+async def archive_sql(
+    dataset_id: str,
+    request: Request,
+    body: SqlBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """Run a user-supplied read-only SELECT against the append DB. Guarded by a
+    READ ONLY transaction + statement_timeout + row cap (see
+    append_store.run_readonly_sql). The dataset's table name is in /schema so
+    the client can reference it. Errors (validation, SQL syntax, timeout) come
+    back as 400 with the message."""
+    await _resolve(dataset_id, db)  # 404/409 if not an append dataset
+    try:
+        return await append_store.run_readonly_sql(body.sql)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")

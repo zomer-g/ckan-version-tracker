@@ -333,6 +333,50 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
         return 0
 
 
+import re as _re
+
+# Only single SELECT/WITH queries reach the DB; the READ ONLY transaction is the
+# real guard (Postgres rejects any write), this denylist just fails obvious
+# write/DDL attempts early with a clear message.
+_SQL_STARTS_OK = _re.compile(r"^\s*(with|select)\b", _re.IGNORECASE)
+_SQL_DENY = _re.compile(
+    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|merge|call|do|vacuum|reindex)\b",
+    _re.IGNORECASE,
+)
+
+
+async def run_readonly_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
+    """Run a user-supplied read-only SELECT against the append DB and return
+    {columns, rows, truncated}. Defense in depth: single statement, must start
+    with SELECT/WITH, write/DDL keywords rejected, executed inside a Postgres
+    READ ONLY transaction with a statement_timeout, result hard-capped at
+    max_rows. The append DB holds only public data and no app secrets."""
+    s = (sql or "").strip().rstrip(";").strip()
+    if not s:
+        raise ValueError("השאילתה ריקה")
+    if ";" in s:
+        raise ValueError("רק משפט יחיד מותר (ללא ';')")
+    if not _SQL_STARTS_OK.match(s):
+        raise ValueError("רק שאילתות SELECT / WITH מותרות")
+    if _SQL_DENY.search(s):
+        raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
+    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+            stmt = await conn.prepare(wrapped)
+            cols = [a.name for a in stmt.get_attributes()]
+            recs = await stmt.fetch()
+    truncated = len(recs) > max_rows
+    rows = [
+        {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
+         for k, v in dict(r).items()}
+        for r in recs[:max_rows]
+    ]
+    return {"columns": cols, "rows": rows, "truncated": truncated, "row_count": len(rows)}
+
+
 async def table_count(table: str) -> int:
     """Total rows currently in the dataset's archive table (0 if absent)."""
     pool = await get_pool()

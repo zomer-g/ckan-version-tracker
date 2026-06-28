@@ -232,6 +232,13 @@ function appendQuery(opts: {
   return s ? `?${s}` : "";
 }
 
+export interface AppendSqlResult {
+  columns: string[];
+  rows: Array<Record<string, string | number | boolean | null>>;
+  truncated: boolean;
+  row_count: number;
+}
+
 export const appendArchive = {
   schema: (datasetId: string) =>
     request<AppendSchema>(`/append/${datasetId}/schema`),
@@ -240,6 +247,12 @@ export const appendArchive = {
   // Direct browser download (streams server-side); not a fetch.
   downloadUrl: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
     `/api/append/${datasetId}/download.csv${appendQuery({ ...opts, limit: undefined, offset: undefined })}`,
+  // Read-only SQL (single SELECT/WITH); server runs it in a READ ONLY tx.
+  sql: (datasetId: string, sql: string) =>
+    request<AppendSqlResult>(`/append/${datasetId}/sql`, {
+      method: "POST",
+      body: JSON.stringify({ sql }),
+    }),
 };
 
 // Google Drive export (admin)

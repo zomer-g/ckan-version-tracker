@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { appendArchive, AppendSchema, AppendRows } from "../api/client";
+import { appendArchive, AppendSchema, AppendRows, AppendSqlResult } from "../api/client";
 
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
@@ -27,6 +27,13 @@ export default function AppendArchivePage() {
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
 
+  // SQL console
+  const [sqlOpen, setSqlOpen] = useState(false);
+  const [sqlText, setSqlText] = useState("");
+  const [sqlResult, setSqlResult] = useState<AppendSqlResult | null>(null);
+  const [sqlError, setSqlError] = useState<string | null>(null);
+  const [sqlRunning, setSqlRunning] = useState(false);
+
   // Debounce text inputs so each keystroke doesn't fire a query.
   const [debounced, setDebounced] = useState({ q: "", filters: {} as Record<string, string> });
   const tRef = useRef<number | undefined>(undefined);
@@ -43,9 +50,23 @@ export default function AppendArchivePage() {
     if (!datasetId) return;
     appendArchive
       .schema(datasetId)
-      .then(setSchema)
+      .then((s) => {
+        setSchema(s);
+        setSqlText((prev) => prev || `SELECT *\nFROM ${s.table}\nORDER BY first_seen DESC\nLIMIT 100`);
+      })
       .catch((e) => setError(e?.message || "schema error"));
   }, [datasetId]);
+
+  const runSql = useCallback(() => {
+    if (!datasetId || !sqlText.trim()) return;
+    setSqlRunning(true);
+    setSqlError(null);
+    appendArchive
+      .sql(datasetId, sqlText)
+      .then((r) => { setSqlResult(r); setSqlError(null); })
+      .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); })
+      .finally(() => setSqlRunning(false));
+  }, [datasetId, sqlText]);
 
   const load = useCallback(() => {
     if (!datasetId) return;
@@ -148,7 +169,87 @@ export default function AppendArchivePage() {
             {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
+        <button
+          type="button"
+          onClick={() => setSqlOpen((o) => !o)}
+          style={{
+            padding: "0.45rem 0.9rem", borderRadius: 4, cursor: "pointer", fontWeight: 600,
+            border: "1px solid var(--primary, #0f766e)",
+            background: sqlOpen ? "var(--primary, #0f766e)" : "none",
+            color: sqlOpen ? "white" : "var(--primary, #0f766e)",
+          }}
+          title="כתיבת שאילתות SQL (קריאה בלבד)"
+        >
+          {"</>"} SQL
+        </button>
       </div>
+
+      {sqlOpen && (
+        <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
+          <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
+            שאילתת <code>SELECT</code> בלבד (קריאה בלבד, מוגבלת בזמן ובמספר שורות). הטבלה:{" "}
+            <code>{schema?.table}</code>
+          </div>
+          <textarea
+            value={sqlText}
+            onChange={(e) => setSqlText(e.target.value)}
+            onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runSql(); }}
+            spellCheck={false}
+            dir="ltr"
+            rows={5}
+            style={{
+              width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.6rem",
+              border: "1px solid var(--border, #d1d5db)", borderRadius: 4, resize: "vertical",
+            }}
+            aria-label="שאילתת SQL"
+          />
+          <div className="flex" style={{ gap: "0.75rem", alignItems: "center", marginTop: "0.5rem" }}>
+            <button
+              type="button" onClick={runSql} disabled={sqlRunning}
+              style={{
+                padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
+                background: "var(--primary, #0f766e)", color: "white",
+                cursor: sqlRunning ? "wait" : "pointer", opacity: sqlRunning ? 0.7 : 1,
+              }}
+            >
+              {sqlRunning ? "מריץ…" : "▶ הרץ"}
+            </button>
+            <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
+            {sqlResult && (
+              <span className="text-sm text-muted">
+                {sqlResult.row_count.toLocaleString()} שורות{sqlResult.truncated ? " (נחתך)" : ""}
+              </span>
+            )}
+          </div>
+          {sqlError && (
+            <div style={{ marginTop: "0.6rem", color: "var(--danger, #dc2626)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+              {sqlError}
+            </div>
+          )}
+          {sqlResult && !sqlError && (
+            <div style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 360 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
+                <thead>
+                  <tr style={{ background: "var(--bg-muted, #f8fafc)" }}>
+                    {sqlResult.columns.map((c) => (
+                      <th key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0 }}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sqlResult.rows.map((row, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                      {sqlResult.columns.map((c) => (
+                        <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
