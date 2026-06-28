@@ -51,7 +51,7 @@ function versionFiles(
 ): Array<{ name: string; index: number; label: string }> {
   if (!mappings) return [];
   const names = (mappings._names as Record<string, string> | undefined) || {};
-  const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"];
+  const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table"];
   const include = (key: string) =>
     !skip.includes(key) && (!onlyKeys || onlyKeys.has(key));
   // Count how many DISPLAYED entries map to each friendly name, to decide when
@@ -151,7 +151,7 @@ function changedKeys(
   if (!curr) return out;
   const norm = (x: unknown) => (Array.isArray(x) ? JSON.stringify(x) : x);
   for (const [k, val] of Object.entries(curr)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates"].includes(k)) continue;
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table"].includes(k)) continue;
     if (!prev || norm(prev[k]) !== norm(val)) out.add(k);
   }
   return out;
