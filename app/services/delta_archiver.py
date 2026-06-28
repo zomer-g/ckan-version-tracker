@@ -183,11 +183,19 @@ async def _archive_streaming_to_db(
         return False
     source_cols = [f["id"] for f in fields]
     table = append_store.table_name(ds)
+    # Content-diff mode (opt-in): dedup by full-row hash so CHANGES to existing
+    # rows are captured (new archive row + first_seen), and writes go through a
+    # COPY-staged set-based diff instead of millions of per-row ON CONFLICT
+    # probes — for heavy registries (vehicles). First call migrates the table.
+    capture_changes = bool((ds.scraper_config or {}).get("capture_changes"))
 
     try:
-        await append_store.ensure_table(
-            table, source_cols, key_col=append_key, keyless=keyless,
-        )
+        if capture_changes:
+            await append_store.ensure_content_diff(table, source_cols, append_key)
+        else:
+            await append_store.ensure_table(
+                table, source_cols, key_col=append_key, keyless=keyless,
+            )
     except Exception as e:
         logger.error("append-db: ensure_table failed for %s: %s", ds.ckan_name, e)
         ds.last_error = f"append-db ensure_table: {type(e).__name__}: {e}"[:2000]
@@ -207,9 +215,12 @@ async def _archive_streaming_to_db(
         nonlocal rows_inserted_total, pending
         if not pending:
             return
-        n = await append_store.append_rows(
-            table, source_cols, pending, key_col=append_key, keyless=keyless,
-        )
+        if capture_changes:
+            n = await append_store.append_diff(table, source_cols, pending)
+        else:
+            n = await append_store.append_rows(
+                table, source_cols, pending, key_col=append_key, keyless=keyless,
+            )
         rows_inserted_total += n
         pending = []
         # Persist the resume point ONLY after the rows are durably in the append

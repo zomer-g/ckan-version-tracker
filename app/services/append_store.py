@@ -248,6 +248,91 @@ async def append_rows(
     return inserted
 
 
+# ── Content-diff mode (capture new AND changed rows, efficiently) ────────────
+#
+# For heavy registries (vehicles) where we want to record CHANGES to existing
+# rows — not just new keys — the dedup identity is a hash of the WHOLE row, and
+# inserts go through a COPY-staged set-based diff instead of millions of
+# per-row ON CONFLICT probes. The hash is computed in SQL (md5 over the source
+# columns) so the one-time backfill of existing rows and every ongoing poll use
+# the exact same value — an unchanged row hashes identically and is skipped.
+
+_HASH_SEP = "chr(31)"  # unit separator — won't appear in the text values
+
+
+def _content_hash_expr(cols: list[str], alias: str = "") -> str:
+    """SQL expression hashing the row's source columns (NULL→'') in a fixed
+    order. Identical for the backfill (no alias) and the staging diff (alias)."""
+    pfx = (alias + ".") if alias else ""
+    parts = ",".join(f"coalesce({pfx}{_qi(c)}::text,'')" for c in cols)
+    return f"md5(concat_ws({_HASH_SEP},{parts}))"
+
+
+async def ensure_content_diff(table: str, source_cols: list[str], key_col: str | None) -> None:
+    """One-time, idempotent, resumable migration of a keyed append table to
+    content-diff mode: add a ``row_hash`` column, backfill it in committed
+    batches (so a kill resumes), drop the old single-key unique index (which
+    would block a changed row that reuses the same key), and add a UNIQUE index
+    on ``row_hash``. After the migration every call is a few cheap no-ops."""
+    pool = await get_pool()
+    expr = _content_hash_expr(source_cols)
+    async with pool.acquire() as conn:
+        await conn.execute(f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" text')
+    # Batched backfill — each batch is its own committed statement so an
+    # interrupted migration resumes from WHERE row_hash IS NULL.
+    while True:
+        async with pool.acquire() as conn:
+            tag = await conn.execute(
+                f'UPDATE {_qi(table)} SET "row_hash" = {expr} '
+                f'WHERE ctid IN (SELECT ctid FROM {_qi(table)} '
+                f'WHERE "row_hash" IS NULL LIMIT 50000)'
+            )
+        try:
+            done = int(tag.split()[-1])
+        except (ValueError, IndexError):
+            done = 0
+        if done == 0:
+            break
+    async with pool.acquire() as conn:
+        await conn.execute(f'DROP INDEX IF EXISTS {_qi((table + "_uq")[:63])}')
+        await conn.execute(
+            f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi((table + "_hash_uq")[:63])} '
+            f'ON {_qi(table)} ("row_hash")'
+        )
+
+
+async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> int:
+    """Insert only NEW or CHANGED rows (by full-row hash) via a COPY-staged,
+    set-based diff — one COPY + one INSERT…SELECT…ON CONFLICT per batch instead
+    of thousands of per-row probes. Returns the number inserted. Requires
+    ensure_content_diff to have run for this table."""
+    if not rows:
+        return 0
+    pool = await get_pool()
+    expr_s = _content_hash_expr(source_cols, alias="s")
+    cols_q = ",".join(_qi(c) for c in source_cols)
+    sel_q = ",".join("s." + _qi(c) for c in source_cols)
+    records = [
+        tuple(None if r.get(c) is None else str(r.get(c)) for c in source_cols)
+        for r in rows
+    ]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                f'CREATE TEMP TABLE _stg (LIKE {_qi(table)}) ON COMMIT DROP'
+            )
+            await conn.copy_records_to_table("_stg", records=records, columns=source_cols)
+            tag = await conn.execute(
+                f'INSERT INTO {_qi(table)} ({cols_q}, "first_seen", "row_hash") '
+                f'SELECT {sel_q}, now(), {expr_s} FROM _stg s '
+                f'ON CONFLICT ("row_hash") DO NOTHING'
+            )
+    try:
+        return int(tag.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 async def table_count(table: str) -> int:
     """Total rows currently in the dataset's archive table (0 if absent)."""
     pool = await get_pool()

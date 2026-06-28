@@ -51,6 +51,10 @@ class UpdateRequest(BaseModel):
     append_key: str | None = None  # only meaningful when storage_mode="append_only"
     # Sliding-window bound for the append seen-set; <=0 or null clears it.
     seen_window_versions: int | None = None
+    # Content-diff mode for a heavy append_only registry: dedup by full-row hash
+    # (capture changes to existing rows, not just new keys) via a COPY-staged
+    # set-based diff. First poll migrates the table. null = leave unchanged.
+    capture_changes: bool | None = None
     # "full" (scrape→download→upload to ODATA→version) | "local_only"
     # (scrape→download to the worker machine, skip ODATA upload + version).
     upload_mode: str | None = None
@@ -836,6 +840,13 @@ async def update_tracked(
             sc["seen_window_versions"] = body.seen_window_versions
         else:
             sc.pop("seen_window_versions", None)
+        ds.scraper_config = sc or None
+    if body.capture_changes is not None:
+        sc = dict(ds.scraper_config or {})
+        if body.capture_changes:
+            sc["capture_changes"] = True
+        else:
+            sc.pop("capture_changes", None)
         ds.scraper_config = sc or None
     if body.upload_mode is not None:
         # Stored in scraper_config (no migration) — flows straight to the worker

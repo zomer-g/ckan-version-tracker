@@ -96,6 +96,21 @@ def test_build_insert_empty_chunk():
     assert sql == "" and params == []
 
 
+def test_content_hash_expr_is_deterministic_sql_over_all_cols():
+    cols = ["mispar_rechev", "baalut"]
+    no_alias = A._content_hash_expr(cols)
+    aliased = A._content_hash_expr(cols, alias="s")
+    # md5 over coalesced columns in order, separated by a control char.
+    assert no_alias.startswith("md5(concat_ws(chr(31),")
+    assert 'coalesce("mispar_rechev"::text' in no_alias
+    assert 'coalesce("baalut"::text' in no_alias
+    # The aliased form (staging diff) references the alias; the bare form
+    # (backfill of existing rows) doesn't — but both hash the same columns in
+    # the same order, so an unchanged row hashes identically either way.
+    assert 'coalesce(s."mispar_rechev"::text' in aliased
+    assert no_alias == aliased.replace("s.", "")
+
+
 def test_chunk_size_keeps_params_under_ceiling():
     # 24-col keyed vehicle rows
     n = A.chunk_size_for(24, keyless=False)
