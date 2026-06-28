@@ -148,7 +148,7 @@ def build_insert(
     *,
     key_col: str | None,
     keyless: bool,
-    first_seen: str | None = None,
+    first_seen=None,  # datetime | None — explicit backfill timestamp, else now()
 ) -> tuple[str, list]:
     """Build one multi-row ``INSERT … ON CONFLICT DO NOTHING`` for a chunk.
 
@@ -182,8 +182,11 @@ def build_insert(
             placeholders.append(f"${p}")
             p += 1
         if first_seen is not None:
+            # asyncpg binds this against the timestamptz column, so it must be a
+            # datetime instance (a str raises DataError). Callers pass a
+            # tz-aware datetime for retroactive backfill.
             params.append(first_seen)
-            placeholders.append(f"${p}::timestamptz")
+            placeholders.append(f"${p}")
             p += 1
         else:
             placeholders.append("now()")

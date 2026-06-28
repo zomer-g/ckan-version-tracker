@@ -693,8 +693,10 @@ async def seed_neon_from_versions(
         if not r2val:
             summary["skipped"].append({"version": v.version_number, "reason": "no r2 file"})
             continue
-        # first_seen = the version's archive date (the date it represents)
-        fs = v.detected_at.astimezone(timezone.utc).isoformat()
+        # first_seen = the version's archive date (the date it represents).
+        # Pass a tz-aware datetime (NOT a string) — asyncpg binds it against the
+        # timestamptz column and rejects a str.
+        fs = v.detected_at.astimezone(timezone.utc)
         data = await storage_client.get_object_bytes(r2val)
         if not data:
             summary["skipped"].append({"version": v.version_number, "reason": "download failed"})
@@ -725,7 +727,7 @@ async def seed_neon_from_versions(
                 )
                 continue
         summary["per_version"].append({
-            "version": v.version_number, "date": fs[:10],
+            "version": v.version_number, "date": fs.date().isoformat(),
             "rows_in_file": len(records), "inserted": n,
         })
 
