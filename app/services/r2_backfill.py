@@ -701,11 +701,18 @@ async def seed_neon_from_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> 
         cols = [f["id"] for f in fields]
         n = 0
         if apply and records and cols:
-            await append_store.ensure_table(table, cols, key_col=None, keyless=True)
-            n = await append_store.append_rows(
-                table, cols, records, key_col=None, keyless=True, first_seen=fs,
-            )
-            summary["rows_inserted"] += n
+            try:
+                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                n = await append_store.append_rows(
+                    table, cols, records, key_col=None, keyless=True, first_seen=fs,
+                )
+                summary["rows_inserted"] += n
+            except Exception as e:
+                logger.exception("seed_neon: version %d insert failed", v.version_number)
+                summary["skipped"].append(
+                    {"version": v.version_number, "reason": f"insert: {type(e).__name__}: {e}"}
+                )
+                continue
         summary["per_version"].append({
             "version": v.version_number, "date": fs[:10],
             "rows_in_file": len(records), "inserted": n,

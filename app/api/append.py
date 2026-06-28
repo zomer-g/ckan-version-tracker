@@ -68,7 +68,12 @@ async def _resolve(dataset_id: str, db: AsyncSession) -> tuple[TrackedDataset, s
             table = mappings["append_table"]
             break
     if not table:
-        if ds.storage_mode != "append_only":
+        # No append_db version yet. Still resolvable when this dataset archives
+        # to NEON — either a classic append_only dataset, or a full-snapshot
+        # dataset opted into the r2+neon plan (archive_neon) and seeded
+        # retroactively before its first forward dual-write version exists.
+        from app.services.storage_client import dataset_archives_neon
+        if ds.storage_mode != "append_only" and not dataset_archives_neon(ds):
             raise HTTPException(status_code=409, detail="Dataset is not an append archive")
         table = append_store.table_name(ds)
     return ds, table

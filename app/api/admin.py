@@ -565,11 +565,28 @@ async def rebuild_versions_endpoint(
     return s
 
 
+async def _run_seed_neon_bg(ds_uuid: uuid.UUID, who: str) -> None:
+    """Background runner for the NEON seed (replaying ~25 snapshots + NEON
+    inserts can exceed the HTTP timeout). Opens its own DB session."""
+    from app.database import async_session
+    async with async_session() as db:
+        try:
+            s = await seed_neon_from_versions(db, ds_uuid, apply=True)
+            logger.info(
+                "Seed NEON for %s by %s: inserted=%s table_total=%s skipped=%s archive_neon=%s",
+                ds_uuid, who, s.get("rows_inserted"), s.get("table_total"),
+                len(s.get("skipped") or []), s.get("archive_neon_enabled"),
+            )
+        except Exception:
+            logger.exception("Seed NEON background task failed for %s", ds_uuid)
+
+
 @router.post("/datasets/{dataset_id}/seed-neon")
 @limiter.limit("3/minute")
 async def seed_neon_endpoint(
     request: Request,
     dataset_id: str,
+    background_tasks: BackgroundTasks,
     apply: bool = False,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
@@ -578,17 +595,29 @@ async def seed_neon_endpoint(
     historical first_seen, and enable the r2+neon dual-write going forward
     (see ``app.services.r2_backfill.seed_neon_from_versions``).
 
-    Idempotent (ON CONFLICT DO NOTHING). ``apply=false`` (default) reports the
-    per-version plan without writing to NEON or changing config. Runs inline —
-    for this dataset it's ~25 small CSVs; very large histories should be batched.
-    """
+    Idempotent (ON CONFLICT DO NOTHING). ``apply=false`` (default) returns the
+    per-version plan inline without writing. ``apply=true`` runs in the
+    BACKGROUND (replaying snapshots + NEON inserts can exceed the HTTP timeout)
+    and returns 'started'; verify via GET /api/append/{id}/schema (total grows
+    as it runs)."""
     uid = parse_uuid(dataset_id, "dataset_id")
-    s = await seed_neon_from_versions(db, uid, apply=apply)
-    if s.get("error"):
-        raise HTTPException(status_code=400, detail=s["error"])
-    logger.info("Seed NEON for %s by %s: inserted=%s table_total=%s apply=%s",
-                uid, user.email, s.get("rows_inserted"), s.get("table_total"), apply)
-    return s
+    from app.services import append_store as _as
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="NEON append DB is not configured")
+    if not apply:
+        s = await seed_neon_from_versions(db, uid, apply=False)
+        if s.get("error"):
+            raise HTTPException(status_code=400, detail=s["error"])
+        return s
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    background_tasks.add_task(_run_seed_neon_bg, uid, user.email)
+    logger.info("Seed NEON started for %s by %s", uid, user.email)
+    return {"status": "started", "dataset_id": str(uid),
+            "message": "Seeding NEON in the background; check /api/append/{id}/schema."}
 
 
 @router.get("/scrape-tasks")
