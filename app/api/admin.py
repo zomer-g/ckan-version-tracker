@@ -261,6 +261,12 @@ async def approve_request(
     from app.worker.poll_job import poll_dataset
     background_tasks.add_task(poll_dataset, str(ds.id))
 
+    from app.services.activity_log import log_event
+    await log_event(
+        event="approved", dataset=ds, status="ok", actor=user.email,
+        message=f"הבקשה אושרה (אחסון: {target}) — נשלחה לגירוד",
+    )
+
     return {"message": "Dataset approved", "dataset_id": str(ds.id)}
 
 
@@ -286,6 +292,12 @@ async def reject_request(
     ds.status = "rejected"
     ds.updated_at = datetime.now(timezone.utc)
     await db.commit()
+
+    from app.services.activity_log import log_event
+    await log_event(
+        event="rejected", dataset=ds, status="error", actor=user.email,
+        message="הבקשה נדחתה",
+    )
 
     return {"message": "Dataset rejected", "dataset_id": str(ds.id)}
 
@@ -615,6 +627,12 @@ async def seed_neon_endpoint(
     )).scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="dataset not found")
+    if request.query_params.get("sync") in ("1", "true", "yes"):
+        # Diagnostic: run inline and return the full summary (incl. per-version
+        # skip reasons). Use only when the background run isn't inserting, since
+        # a healthy seed can exceed the HTTP timeout.
+        s = await seed_neon_from_versions(db, uid, apply=True, reset=reset)
+        return s
     background_tasks.add_task(_run_seed_neon_bg, uid, user.email, reset)
     logger.info("Seed NEON started for %s by %s", uid, user.email)
     return {"status": "started", "dataset_id": str(uid),
