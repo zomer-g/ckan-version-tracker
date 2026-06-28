@@ -31,11 +31,15 @@ MEVAKER_HOSTS = {"www.mevaker.gov.il", "mevaker.gov.il"}
 MEVAKER_SUBJECTS_RE = re.compile(r"^/subjects/?$")
 
 # The whole corpus (~37 GB of PDF+Word) is too big for one dataset, so we
-# split it by publication type — the 10 types the service's
-# ``publicationTypes`` endpoint returns. Each ``?type=<slug>`` is its own
-# OVER dataset; the slug maps to the exact Hebrew type string the scraper
-# matches against each volume's ``Type``. Bare /subjects (no type) still
-# means the whole corpus, for callers who want it.
+# split it by publication type. The service's ``publicationTypes`` endpoint
+# advertises 10 types, but one of them — "דוחות בינלאומיים" (international)
+# — has ZERO actual publications in the library (verified 2026-06-28 by
+# scanning all ~446 volumes, pages 1-697: 9 of the 10 types are populated,
+# international is not). It's a dropdown label with nothing behind it, so we
+# DON'T expose it as a trackable type — registering it only produced empty
+# versions every poll. The 9 populated types below each map a ``?type=<slug>``
+# to the exact Hebrew ``Type`` string the scraper matches against each
+# volume. Bare /subjects (no type) still means the whole corpus.
 MEVAKER_TYPES: dict[str, str] = {
     "annual": "דוחות שנתיים",
     "special": "דוחות מיוחדים",
@@ -46,7 +50,6 @@ MEVAKER_TYPES: dict[str, str] = {
     "primaries-funding": "מימון בחירות מקדימות (פריימריז)",
     "local-elections-funding": "מימון בחירות ברשויות המקומיות",
     "studies": "עיונים, מאמרים, ספרים",
-    "international": "דוחות בינלאומיים",
 }
 
 
