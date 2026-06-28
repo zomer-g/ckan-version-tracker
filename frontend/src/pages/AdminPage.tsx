@@ -24,13 +24,14 @@ import ResourcePickerModal from "../components/ResourcePickerModal";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
-//   • NEON (queryable tabular-rows DB) — CKAN/data.gov.il sources only.
+//   • NEON (queryable tabular-rows DB) and "R2 + NEON" (a per-version CSV
+//     snapshot on R2 AND the queryable NEON table, written in one pass) —
+//     CKAN/data.gov.il tabular sources only.
 //   • local (worker keeps files, nothing on OVER) — worker-driven sources only
 //     (scraper/govmap); the CKAN inline poll has no worker machine, so it isn't
 //     offered there. R2 / ODATA file snapshots are available to both.
-// The simultaneous "R2 + NEON" dual-write is intentionally not offered yet (the
-// snapshot and streaming paths each create their own version — a same-version
-// dual-write is a pending follow-up); the API still accepts the combo.
+// (odata+neon is accepted by the API but not offered — the dual-write file side
+// is wired for R2 only.)
 function storageTargetOptions(
   neonEligible: boolean,
 ): Array<{ value: StorageTarget; label: string; disabled: boolean }> {
@@ -38,7 +39,10 @@ function storageTargetOptions(
   if (!neonEligible) opts.push({ value: "local", label: "מקומי (לא ב-OVER)", disabled: false });
   opts.push({ value: "r2", label: "R2 — סנפשוט מלא", disabled: false });
   opts.push({ value: "odata", label: "ODATA (legacy)", disabled: false });
-  if (neonEligible) opts.push({ value: "neon", label: "NEON — DB טבלאי", disabled: false });
+  if (neonEligible) {
+    opts.push({ value: "neon", label: "NEON — DB טבלאי", disabled: false });
+    opts.push({ value: "r2+neon", label: "R2 + NEON — סנפשוט וגם DB", disabled: false });
+  }
   return opts;
 }
 

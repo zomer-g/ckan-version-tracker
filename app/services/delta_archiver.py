@@ -34,7 +34,10 @@ Caveats vs full-snapshot semantics:
 from __future__ import annotations
 
 import asyncio
+import csv as _csv
 import logging
+import os as _os
+import tempfile as _tempfile
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
@@ -211,6 +214,34 @@ async def _archive_streaming_to_db(
     last_offset = start_offset
     pending: list[dict] = []
 
+    # Dual-write (r2+neon plan): in addition to the NEON row table, write a FULL
+    # CSV snapshot of every current row to R2 and attach it to this version, so
+    # the dataset has BOTH a queryable table and a downloadable per-version file.
+    # Memory-safe: rows are streamed to a temp file on disk as they arrive (never
+    # buffered whole). Only on a full scan (start_offset == 0) — a resumed giant
+    # seed would yield a partial file, so it's skipped until the next full pass.
+    from app.services import storage_client as _storage
+    from app.services.storage_client import (
+        storage_client as _r2,
+        dataset_stores_files as _stores_files,
+        dataset_storage_target as _file_target,
+    )
+    also_r2 = (
+        _stores_files(ds)
+        and _file_target(ds) == "r2"
+        and _r2.is_configured()
+        and start_offset == 0
+    )
+    snap_path: str | None = None
+    snap_writer = None
+    snap_fh = None
+    if also_r2:
+        fd, snap_path = _tempfile.mkstemp(prefix="neon-r2-snap-", suffix=".csv")
+        _os.close(fd)
+        snap_fh = open(snap_path, "w", encoding="utf-8-sig", newline="")
+        snap_writer = _csv.DictWriter(snap_fh, fieldnames=source_cols, extrasaction="ignore")
+        snap_writer.writeheader()
+
     async def _flush_and_checkpoint() -> None:
         nonlocal rows_inserted_total, pending
         if not pending:
@@ -235,11 +266,24 @@ async def _archive_streaming_to_db(
         ):
             pages_processed += 1
             last_offset = next_offset
+            if snap_writer is not None:
+                # Full-snapshot CSV: every streamed row, not just NEON-new ones.
+                snap_writer.writerows(batch)
             pending.extend(batch)
             if len(pending) >= PENDING_FLUSH_THRESHOLD:
                 await _flush_and_checkpoint()
         await _flush_and_checkpoint()
     except Exception as e:
+        if snap_fh is not None:
+            try:
+                snap_fh.close()
+            except Exception:
+                pass
+        if snap_path:
+            try:
+                _os.unlink(snap_path)
+            except OSError:
+                pass
         logger.error("append-db: streaming/insert aborted for %s at offset %d: %s",
                      ds.ckan_name, last_offset, e)
         ds.last_error = (
@@ -262,6 +306,46 @@ async def _archive_streaming_to_db(
     except Exception:
         total = rows_inserted_total
 
+    # Finalize the dual-write R2 snapshot: upload the full-scan CSV and attach it
+    # to this same version (best-effort — a failed file upload must NOT lose the
+    # NEON rows that already committed, so it only logs and drops the file ref).
+    resource_mappings: dict = {"_resource_ids": [target_rid], "append_table": table}
+    r2_snapshot_key: str | None = None
+    if snap_fh is not None:
+        try:
+            snap_fh.close()
+        except Exception:
+            pass
+    if also_r2 and snap_path:
+        try:
+            res_name = resource.get("name") or ds.ckan_name
+            key = _storage.build_key(
+                str(ds.id), next_version, f"{res_name}.csv",
+            )
+            await _r2.upload_object(
+                key, file_path=snap_path,
+                content_type="text/csv; charset=utf-8",
+            )
+            r2_snapshot_key = _storage.mark(key)
+            resource_mappings[target_rid] = r2_snapshot_key
+            try:
+                from zoneinfo import ZoneInfo
+                today = datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%d.%m.%Y")
+            except Exception:
+                today = datetime.now(timezone.utc).strftime("%d.%m.%Y")
+            resource_mappings["_names"] = {target_rid: f"{res_name} — {today}"}
+            logger.info("append-db: dual-write R2 snapshot for %s → %s", ds.ckan_name, key)
+        except Exception as e:
+            logger.error(
+                "append-db: R2 snapshot upload failed for %s (NEON rows kept): %s",
+                ds.ckan_name, e,
+            )
+        finally:
+            try:
+                _os.unlink(snap_path)
+            except OSError:
+                pass
+
     version = VersionIndex(
         tracked_dataset_id=ds.id,
         version_number=next_version,
@@ -274,14 +358,12 @@ async def _archive_streaming_to_db(
             "key": append_key or "_hash",
             "pages_processed": pages_processed,
             "start_offset": start_offset,
+            "r2_snapshot": bool(r2_snapshot_key),
             "resources_added": [],
             "resources_removed": [],
             "resources_modified": [],
         },
-        resource_mappings={
-            "_resource_ids": [target_rid],
-            "append_table": table,
-        },
+        resource_mappings=resource_mappings,
     )
     db.add(version)
     ds.last_polled_at = datetime.now(timezone.utc)
