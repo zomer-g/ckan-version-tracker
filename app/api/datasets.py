@@ -1257,6 +1257,9 @@ async def submit_tracking_request(
         )
         db.add(ds)
         await db.commit()
+        from app.services.activity_log import log_event
+        await log_event(event="requested", dataset=ds, status="info", actor="request",
+                        message="התקבלה בקשת גירוד (ממתינה לאישור)")
         return {"message": "Request submitted", "status": "pending"}
 
     # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
@@ -1275,6 +1278,7 @@ async def submit_tracking_request(
 
         results: list[dict] = []
         any_created = False
+        created_govmap: list = []
         for url in urls:
             parsed = parse_govmap_url(url)
             if not parsed:
@@ -1317,6 +1321,7 @@ async def submit_tracking_request(
             )
             db.add(ds)
             any_created = True
+            created_govmap.append(ds)
             results.append({
                 "url": url,
                 "status": "pending",
@@ -1325,6 +1330,11 @@ async def submit_tracking_request(
 
         if any_created:
             await db.commit()
+            from app.services.activity_log import log_event
+            for created in created_govmap:
+                await log_event(event="requested", dataset=created, status="info",
+                                actor="request",
+                                message="התקבלה בקשת גירוד (govmap, ממתינה לאישור)")
 
         return {
             "message": "Request submitted" if any_created else "No new layers added",
@@ -1408,6 +1418,10 @@ async def submit_tracking_request(
     )
     db.add(ds)
     await db.commit()
+
+    from app.services.activity_log import log_event
+    await log_event(event="requested", dataset=ds, status="info", actor="request",
+                    message="התקבלה בקשת גירוד (ממתינה לאישור)")
 
     return {"message": "Request submitted", "status": "pending"}
 

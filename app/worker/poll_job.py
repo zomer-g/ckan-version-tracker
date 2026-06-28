@@ -371,6 +371,12 @@ async def poll_dataset(dataset_id: str) -> None:
                         "Aborting version %d for %s — 0/%d resources succeeded: %s",
                         next_version, ds.ckan_name, expected, msg,
                     )
+                    from app.services.activity_log import log_event
+                    await log_event(
+                        event="failed", dataset=ds, status="error", actor="system",
+                        message="הגירוד נכשל — אף משאב לא נשמר",
+                        detail=msg,
+                    )
                 else:
                     # Compute change summary
                     change_summary = compute_change_summary(
@@ -396,6 +402,13 @@ async def poll_dataset(dataset_id: str) -> None:
                         "Version %d created for %s (%d/%d resources)",
                         next_version, ds.ckan_name, successes, expected,
                     )
+                    from app.services.activity_log import log_event
+                    await log_event(
+                        event="completed", dataset=ds,
+                        status="ok" if not errors else "info", actor="system",
+                        message=f"גירוד הסתיים — גרסה {next_version} נוצרה ({successes}/{expected} משאבים)",
+                        detail="; ".join(errors)[:2000] if errors else None,
+                    )
             else:
                 logger.info(
                     "Metadata changed but no resource content changed for %s",
@@ -407,10 +420,17 @@ async def poll_dataset(dataset_id: str) -> None:
             ds.last_modified = new_modified
             await db.commit()
 
-        except Exception:
+        except Exception as exc:
             logger.exception("Error polling dataset %s", ds.ckan_name)
             ds.last_polled_at = datetime.now(timezone.utc)
+            ds.last_error = f"{type(exc).__name__}: {exc}"[:2000]
             await db.commit()
+            from app.services.activity_log import log_event
+            await log_event(
+                event="failed", dataset=ds, status="error", actor="system",
+                message="הגירוד נכשל (שגיאה בלתי צפויה)",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
 
 
 def _is_datacollector_api(ds: TrackedDataset) -> bool:
@@ -640,6 +660,11 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
     ds.last_polled_at = datetime.now(timezone.utc)
     await db.commit()
     logger.info("Created scrape task for %s (source: %s)", ds.ckan_name, ds.source_url)
+    from app.services.activity_log import log_event
+    await log_event(
+        event="queued", dataset=ds, status="info", actor="system",
+        message="המאגר נכנס לתור הגירוד",
+    )
 
 
 async def _poll_append_only(

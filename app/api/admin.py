@@ -1274,3 +1274,104 @@ async def over_coverage_fix(
         user.email, len(ids), ", ".join(i[:8] for i in ids),
     )
     return report
+
+
+# ---------------------------------------------------------------------------
+# Activity log — append-only event stream of the dataset/scrape lifecycle
+# (requested / approved / rejected / queued / started / completed / failed),
+# with the error message on failed or rejected steps. See
+# app/models/activity_log.py and app/services/activity_log.py.
+# ---------------------------------------------------------------------------
+
+class ActivityLogEntry(BaseModel):
+    id: str
+    tracked_dataset_id: str | None
+    dataset_title: str | None
+    source_type: str | None
+    event: str
+    status: str
+    message: str | None
+    detail: str | None
+    actor: str | None
+    created_at: str
+
+
+class ActivityLogPage(BaseModel):
+    entries: list[ActivityLogEntry]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("/activity-log", response_model=ActivityLogPage)
+@limiter.limit("60/minute")
+async def activity_log(
+    request: Request,
+    dataset_id: str | None = None,
+    event: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Newest-first page of activity-log events. Optional filters: a specific
+    dataset, an event type, a status (ok/error/info), or a free-text match on
+    the dataset title / message / detail."""
+    from sqlalchemy import func, or_
+    from app.models.activity_log import ActivityLog
+
+    limit = max(1, min(int(limit or 100), 500))
+    offset = max(0, int(offset or 0))
+
+    conds = []
+    if dataset_id:
+        try:
+            conds.append(ActivityLog.tracked_dataset_id == uuid.UUID(dataset_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid dataset_id")
+    if event:
+        conds.append(ActivityLog.event == event)
+    if status:
+        conds.append(ActivityLog.status == status)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        conds.append(or_(
+            ActivityLog.dataset_title.ilike(like),
+            ActivityLog.message.ilike(like),
+            ActivityLog.detail.ilike(like),
+        ))
+
+    base = select(ActivityLog)
+    for c in conds:
+        base = base.where(c)
+
+    total = (await db.execute(
+        select(func.count()).select_from(base.subquery())
+    )).scalar() or 0
+
+    rows = (await db.execute(
+        base.order_by(ActivityLog.created_at.desc()).limit(limit).offset(offset)
+    )).scalars().all()
+
+    return ActivityLogPage(
+        entries=[
+            ActivityLogEntry(
+                id=str(e.id),
+                tracked_dataset_id=str(e.tracked_dataset_id) if e.tracked_dataset_id else None,
+                dataset_title=e.dataset_title,
+                source_type=e.source_type,
+                event=e.event,
+                status=e.status,
+                message=e.message,
+                detail=e.detail,
+                actor=e.actor,
+                created_at=e.created_at.isoformat() if e.created_at else "",
+            )
+            for e in rows
+        ],
+        total=int(total),
+        limit=limit,
+        offset=offset,
+    )

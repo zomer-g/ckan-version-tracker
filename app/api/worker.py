@@ -323,6 +323,12 @@ async def poll_for_task(
     task.message = "Assigned to worker"
     await db.commit()
 
+    from app.services.activity_log import log_event
+    await log_event(
+        event="started", dataset=ds, status="info", actor="worker",
+        message="גירוד התחיל (המשימה נמסרה ל-worker)",
+    )
+
     return {
         "task_id": str(task.id),
         "tracked_dataset_id": str(ds.id),
@@ -403,6 +409,11 @@ async def push_version(
             task.phase = "complete"
             task.message = "No new items — archive up to date"
         await db.commit()
+        from app.services.activity_log import log_event
+        await log_event(
+            event="completed", dataset=ds, status="ok", actor="worker",
+            message="גירוד הסתיים — אין פריטים חדשים (הארכיון מעודכן)",
+        )
         return {"message": "No new items — task marked done, checkpoint updated"}
 
     # Get next version number
@@ -468,6 +479,12 @@ async def push_version(
                 task.error = msg
                 task.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+            from app.services.activity_log import log_event
+            await log_event(
+                event="failed", dataset=ds, status="error", actor="system",
+                message="הגרסה נדחתה (shrink guard — ירידה חדה במספר השורות)",
+                detail=msg,
+            )
             raise HTTPException(status_code=409, detail={
                 "error": "shrink_guard",
                 "message": msg,
@@ -804,6 +821,12 @@ async def push_version(
             task.phase = "push_failed"
             task.error = msg
         await db.commit()
+        from app.services.activity_log import log_event
+        await log_event(
+            event="failed", dataset=ds, status="error", actor="system",
+            message="העלאת הגרסה נכשלה (אף משאב לא נשמר)",
+            detail=msg,
+        )
         logger.error("Aborting scraper version for %s — 0/%d resources succeeded: %s",
                      ds.title, expected, msg)
         raise HTTPException(status_code=502, detail={"error": "all_pushes_failed", "message": msg})
@@ -886,6 +909,12 @@ async def push_version(
         task.progress = 100
         task.phase = "complete"
         await db.commit()
+
+    from app.services.activity_log import log_event
+    await log_event(
+        event="completed", dataset=ds, status="ok", actor="worker",
+        message=f"גירוד הסתיים — גרסה {next_version} נוצרה",
+    )
 
     # Persist checkpoint patch back to scraper_config (archive mode).
     # Done after task commit so a failure here doesn't block version creation.
@@ -1642,6 +1671,18 @@ async def report_failure(
     task.completed_at = datetime.now(timezone.utc)
     await db.commit()
 
+    ds_row = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == task.tracked_dataset_id)
+    )).scalar_one_or_none()
+    from app.services.activity_log import log_event
+    await log_event(
+        event="failed", dataset=ds_row,
+        dataset_id=str(task.tracked_dataset_id),
+        status="error", actor="worker",
+        message=f"גירוד נכשל בשלב «{body.phase}»",
+        detail=body.error,
+    )
+
     logger.warning("Scrape task %s failed: %s", task_id, body.error)
     return {"status": "failed"}
 
@@ -1684,6 +1725,16 @@ async def complete_local(
     task.error = None
     task.completed_at = datetime.now(timezone.utc)
     await db.commit()
+
+    ds_row = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == task.tracked_dataset_id)
+    )).scalar_one_or_none()
+    from app.services.activity_log import log_event
+    await log_event(
+        event="completed", dataset=ds_row, dataset_id=str(task.tracked_dataset_id),
+        status="ok", actor="worker",
+        message=f"גירוד מקומי הסתיים ({body.file_count} קבצים, ללא העלאה ל-OVER)",
+    )
 
     logger.info("Scrape task %s completed locally (no upload): %s files, %s records — %s",
                 task_id, body.file_count, body.record_count, task.message)

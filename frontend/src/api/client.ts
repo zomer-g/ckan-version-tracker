@@ -587,8 +587,49 @@ export interface CoverageReport {
   local_only: CoverageDataset[];
 }
 
+// Activity-log event types (mirror app/models/activity_log.py).
+export type ActivityEvent =
+  | "requested"
+  | "approved"
+  | "rejected"
+  | "queued"
+  | "started"
+  | "completed"
+  | "failed";
+
+export interface ActivityLogEntry {
+  id: string;
+  tracked_dataset_id: string | null;
+  dataset_title: string | null;
+  source_type: string | null;
+  event: ActivityEvent | string;
+  status: "ok" | "error" | "info" | string;
+  message: string | null;
+  detail: string | null;
+  actor: string | null;
+  created_at: string;
+}
+
+export interface ActivityLogPage {
+  entries: ActivityLogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
+  activityLog: (opts: { dataset_id?: string; event?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.dataset_id) p.set("dataset_id", opts.dataset_id);
+    if (opts.event) p.set("event", opts.event);
+    if (opts.status) p.set("status", opts.status);
+    if (opts.q) p.set("q", opts.q);
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.offset != null) p.set("offset", String(opts.offset));
+    const qs = p.toString();
+    return request<ActivityLogPage>(`/admin/activity-log${qs ? `?${qs}` : ""}`);
+  },
   approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[], storage_target?: StorageTarget) =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
