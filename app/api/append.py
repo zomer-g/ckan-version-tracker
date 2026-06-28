@@ -108,6 +108,7 @@ async def archive_schema(dataset_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{dataset_id}/rows")
+@limiter.limit("60/minute")
 async def archive_rows(
     dataset_id: str,
     request: Request,
@@ -127,6 +128,7 @@ async def archive_rows(
 
 
 @router.get("/{dataset_id}/download.csv")
+@limiter.limit("6/minute")
 async def archive_download(
     dataset_id: str,
     request: Request,

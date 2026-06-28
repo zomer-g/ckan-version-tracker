@@ -108,6 +108,18 @@ class Settings(BaseSettings):
 
     cors_origins: str = ""
 
+    # ── Public-API data budget (anti-abuse) ──
+    # Caps how many bytes a single client IP may pull from the bulk public data
+    # API (/api/v1, /api/append) within a rolling window, on top of slowapi's
+    # per-minute request limit. Over the cap → HTTP 429 + a "contact us to
+    # arrange access" message. Sized well below the cost-pain threshold (Render
+    # egress ~$0.3/GB, so "tens of shekels" ≈ 25-80GB) so a scraper is stopped
+    # long before it costs real money, while normal research never hits it.
+    api_budget_enabled: bool = True
+    api_daily_byte_budget: int = 2 * 1024 ** 3   # 2 GB per IP per window
+    api_budget_window_seconds: int = 86400        # rolling 24h
+    api_contact_email: str = "guy@z-g.co.il"
+
     # SSO
     app_base_url: str = "http://localhost:8000"
     google_client_id: str = ""

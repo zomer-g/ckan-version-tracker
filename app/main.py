@@ -62,6 +62,12 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Per-IP data budget for the bulk public API (/api/v1, /api/append): blocks a
+# single client from siphoning an unreasonable VOLUME of data (cost guard) on
+# top of the per-minute request limiter. See app/api_budget_middleware.py.
+from app.api_budget_middleware import ApiBudgetMiddleware
+app.add_middleware(ApiBudgetMiddleware)
+
 # CORS — restrict to configured origins, fall back to permissive only in dev
 cors_origins = settings.get_cors_origins()
 app.add_middleware(
