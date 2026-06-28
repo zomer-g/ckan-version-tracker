@@ -321,11 +321,16 @@ export default function VersionsPage() {
       ),
     [versionsList],
   );
-  // An append/NEON dataset: either a completed append_db version exists, or the
-  // dataset is configured append_only (covers the mid-seed window before the
-  // first append_db version lands). These live in OVER's NEON Postgres, not
+  // An append/NEON dataset: a completed append_db version exists, OR the dataset
+  // is configured append_only, OR its storage plan archives rows to NEON
+  // (neon / r2+neon / odata+neon). The last case covers a full-snapshot dataset
+  // opted into r2+neon and seeded into NEON before its first forward dual-write
+  // (append_db) version lands. These rows live in OVER's NEON Postgres, not
   // ODATA — so we surface the /archive CTA + a NEON note and hide ODATA.
-  const isAppend = hasAppendArchive || dataset?.storage_mode === "append_only";
+  const isAppend =
+    hasAppendArchive ||
+    dataset?.storage_mode === "append_only" ||
+    !!dataset?.storage_target?.includes("neon");
 
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
