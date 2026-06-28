@@ -242,6 +242,37 @@ async def create_version_snapshot(
     resource_mappings["_hashes"] = hash_map
     resource_mappings["_resource_ids"] = [r["id"] for r in metadata.get("resources", [])]
 
+    # R2 backend: stamp a friendly per-file label (`_names`) and the archive
+    # date (`_filedates`) so the dataset page shows "<title> — DD.MM.YYYY"
+    # instead of a raw source UUID, and the date filter attributes each file to
+    # this version (consistent with the one-off rebuild). Carry forward labels
+    # for unchanged resources; (re)stamp changed ones with today's date.
+    if use_r2:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            from zoneinfo import ZoneInfo
+            today = datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        d, mo, y = today.split("-")[2], today.split("-")[1], today.split("-")[0]
+        today_disp = f"{d}.{mo}.{y}"
+        names = dict((old_mappings or {}).get("_names") or {}) if old_mappings else {}
+        filedates = dict((old_mappings or {}).get("_filedates") or {}) if old_mappings else {}
+        for cr in changed_resources:
+            rid = cr["resource"]["id"]
+            if rid in resource_mappings:
+                base = (cr["resource"].get("name") or rid).strip()
+                names[rid] = f"{base} — {today_disp}"
+                filedates[rid] = today
+        # keep only labels for resources still mapped this version
+        mapped = {k for k in resource_mappings if not k.startswith("_")}
+        names = {k: v for k, v in names.items() if k in mapped}
+        filedates = {k: v for k, v in filedates.items() if k in mapped}
+        if names:
+            resource_mappings["_names"] = names
+        if filedates:
+            resource_mappings["_filedates"] = filedates
+
     return metadata_resource_id, resource_mappings, errors
 
 
