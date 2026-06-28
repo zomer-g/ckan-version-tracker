@@ -565,13 +565,13 @@ async def rebuild_versions_endpoint(
     return s
 
 
-async def _run_seed_neon_bg(ds_uuid: uuid.UUID, who: str) -> None:
+async def _run_seed_neon_bg(ds_uuid: uuid.UUID, who: str, reset: bool) -> None:
     """Background runner for the NEON seed (replaying ~25 snapshots + NEON
     inserts can exceed the HTTP timeout). Opens its own DB session."""
     from app.database import async_session
     async with async_session() as db:
         try:
-            s = await seed_neon_from_versions(db, ds_uuid, apply=True)
+            s = await seed_neon_from_versions(db, ds_uuid, apply=True, reset=reset)
             logger.info(
                 "Seed NEON for %s by %s: inserted=%s table_total=%s skipped=%s archive_neon=%s",
                 ds_uuid, who, s.get("rows_inserted"), s.get("table_total"),
@@ -588,6 +588,7 @@ async def seed_neon_endpoint(
     dataset_id: str,
     background_tasks: BackgroundTasks,
     apply: bool = False,
+    reset: bool = False,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -599,7 +600,7 @@ async def seed_neon_endpoint(
     per-version plan inline without writing. ``apply=true`` runs in the
     BACKGROUND (replaying snapshots + NEON inserts can exceed the HTTP timeout)
     and returns 'started'; verify via GET /api/append/{id}/schema (total grows
-    as it runs)."""
+    as it runs). ``reset=true`` drops the table first (clean re-seed)."""
     uid = parse_uuid(dataset_id, "dataset_id")
     from app.services import append_store as _as
     if not _as.is_configured():
@@ -614,7 +615,7 @@ async def seed_neon_endpoint(
     )).scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="dataset not found")
-    background_tasks.add_task(_run_seed_neon_bg, uid, user.email)
+    background_tasks.add_task(_run_seed_neon_bg, uid, user.email, reset)
     logger.info("Seed NEON started for %s by %s", uid, user.email)
     return {"status": "started", "dataset_id": str(uid),
             "message": "Seeding NEON in the background; check /api/append/{id}/schema."}

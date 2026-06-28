@@ -104,6 +104,31 @@ def _qi(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
 
+def _index_name(table: str, suffix: str) -> str:
+    """Collision-safe index name ≤63 chars (Postgres identifier limit).
+
+    Naively ``f"{table}_{suffix}"[:63]`` BREAKS when ``table`` is already ~63
+    chars: the truncation drops the suffix and the index name ends up EQUAL to
+    the table name, so ``CREATE UNIQUE INDEX IF NOT EXISTS`` sees the name as
+    already taken (by the table) and silently creates nothing — leaving the
+    table with no unique index, which then makes every ``ON CONFLICT`` insert
+    fail. When the plain name fits and differs from the table, use it; otherwise
+    fall back to a hashed name that's guaranteed distinct and within the limit."""
+    name = f"{table}_{suffix}"
+    if len(name) <= 63 and name != table:
+        return name
+    h = hashlib.md5(table.encode("utf-8")).hexdigest()[:8]
+    return f"{table[:48]}_{suffix}_{h}"[:63]
+
+
+async def drop_table(table: str) -> None:
+    """Drop a dataset's append table (used to reset a mis-created table before a
+    clean re-seed). Idempotent."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(f'DROP TABLE IF EXISTS {_qi(table)}')
+
+
 def row_hash(row: dict, cols: list[str]) -> str:
     """SHA-256 over the row's column values (str-coerced, None→''), used as the
     dedup identity for keyless datasets. Matches version_detector._row_identity
@@ -220,7 +245,7 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
                     f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" text'
                 )
         target = "row_hash" if keyless else key_col
-        idx = (f"{table}_uq")[:63]
+        idx = _index_name(table, "uq")
         await conn.execute(
             f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(idx)} ON {_qi(table)} ({_qi(target)})'
         )
@@ -306,9 +331,9 @@ async def ensure_content_diff(table: str, source_cols: list[str], key_col: str |
         if done == 0:
             break
     async with pool.acquire() as conn:
-        await conn.execute(f'DROP INDEX IF EXISTS {_qi((table + "_uq")[:63])}')
+        await conn.execute(f'DROP INDEX IF EXISTS {_qi(_index_name(table, "uq"))}')
         await conn.execute(
-            f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi((table + "_hash_uq")[:63])} '
+            f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(_index_name(table, "hash_uq"))} '
             f'ON {_qi(table)} ("row_hash")'
         )
 

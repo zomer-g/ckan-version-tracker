@@ -643,11 +643,14 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
 # poll. Older versions with a different column set (e.g. an age-bucket rename)
 # hash in their own space and are kept as distinct historical states.
 
-async def seed_neon_from_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> dict:
+async def seed_neon_from_versions(
+    db, ds_uuid: uuidlib.UUID, *, apply: bool, reset: bool = False
+) -> dict:
     """Replay a dataset's per-version R2 CSV snapshots into its NEON append table
     with historical ``first_seen``, then enable the r2+neon dual-write going
     forward. Idempotent (ON CONFLICT DO NOTHING). ``apply=False`` reports the plan
-    without writing to NEON or changing config."""
+    without writing to NEON or changing config. ``reset=True`` drops the table
+    first (clean re-seed after a schema fix)."""
     from app.services import append_store
     from app.services.csv_parser import parse_csv
 
@@ -672,7 +675,10 @@ async def seed_neon_from_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> 
         "table": table, "versions": len(versions),
         "rows_inserted": 0, "per_version": [], "skipped": [],
         "archive_neon_enabled": False, "table_total": None, "committed": False,
+        "reset": reset,
     }
+    if apply and reset:
+        await append_store.drop_table(table)
 
     for v in versions:
         m = v.resource_mappings or {}
@@ -698,7 +704,12 @@ async def seed_neon_from_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) -> 
         except Exception as e:
             summary["skipped"].append({"version": v.version_number, "reason": f"parse: {e}"})
             continue
-        cols = [f["id"] for f in fields]
+        # Drop the synthetic CKAN `_id` column: it's per-dump row id, not data,
+        # and including it would (a) bloat the table with a meaningless column
+        # and (b) break dedup — the forward delta path strips `_id`, so a seed
+        # that kept it would hash differently and the next poll would re-insert
+        # every row. build_insert reads only `cols`, so filtering cols is enough.
+        cols = [f["id"] for f in fields if f["id"] != "_id"]
         n = 0
         if apply and records and cols:
             try:
