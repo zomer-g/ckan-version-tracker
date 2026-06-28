@@ -22,7 +22,11 @@ from app.services.snapshot_service import (
     create_version_snapshot,
 )
 from app.services import conditional_archiver
-from app.services.storage_client import dataset_uses_r2
+from app.services.storage_client import (
+    dataset_archives_neon,
+    dataset_stores_files,
+    dataset_uses_r2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +206,19 @@ async def poll_dataset(dataset_id: str) -> None:
                     and ds_info is not None
                     and bool(resource_to_check.get("datastore_active"))
                 )
+                # NEON archive (admin-chosen storage plan): a datastore-backed
+                # dataset whose plan streams rows to NEON ('neon' / 'r2+neon' /
+                # 'odata+neon') routes to the streaming path regardless of size
+                # or storage_mode, so the rows actually reach the append DB.
+                neon_datastore = (
+                    dataset_archives_neon(ds)
+                    and ds_info is not None
+                    and bool(resource_to_check.get("datastore_active"))
+                )
                 if ds_info is not None and (
                     total_rows >= settings.large_dataset_threshold
                     or appendonly_datastore
+                    or neon_datastore
                 ):
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
@@ -296,12 +310,14 @@ async def poll_dataset(dataset_id: str) -> None:
 
                 # Storage routing: a dataset pinned to R2 stores its files in
                 # the object store and never touches the ODATA mirror, so we
-                # skip mirror creation entirely for it.
+                # skip mirror creation entirely for it. A NEON-only dataset
+                # stores NO file snapshot at all (its archive is the row table).
                 use_r2 = dataset_uses_r2(ds)
+                stores_files = dataset_stores_files(ds)
 
                 # Lazily create mirror dataset if it doesn't exist yet (ODATA
-                # backend only).
-                if not use_r2 and not ds.odata_dataset_id and settings.odata_api_key:
+                # backend only). Never for R2 or NEON-only datasets.
+                if stores_files and not use_r2 and not ds.odata_dataset_id and settings.odata_api_key:
                     from app.services.odata_client import odata_client
                     from app.api.utils import sanitize_ckan_name
                     mirror_name = f"gov-versions-{sanitize_ckan_name(ds.ckan_name)}"
@@ -323,7 +339,8 @@ async def poll_dataset(dataset_id: str) -> None:
                             errors.append(f"mirror create/find: {e2}")
 
                 # Upload snapshot — to R2 (object store) or the ODATA mirror.
-                if use_r2 or ds.odata_dataset_id:
+                # NEON-only datasets skip this entirely (no file snapshot).
+                if stores_files and (use_r2 or ds.odata_dataset_id):
                     meta_resource_id, resource_mappings, upload_errors = await create_version_snapshot(
                         odata_dataset_id=ds.odata_dataset_id,
                         version_number=next_version,
@@ -806,7 +823,11 @@ async def _poll_large_dataset(
     # without it, delta dedups by full-row hash (flights board). The streaming
     # path reads via the datastore API, so it also covers append_only sources
     # whose file download is IAP-blocked regardless of size.
-    if ds.storage_mode == "append_only":
+    #
+    # Also runs when the admin's storage plan archives rows to NEON
+    # ('neon' / 'r2+neon' / 'odata+neon') — independent of storage_mode — so a
+    # full-snapshot tabular dataset still gets its queryable NEON row table.
+    if ds.storage_mode == "append_only" or dataset_archives_neon(ds):
         from app.services.delta_archiver import archive_via_datastore_streaming
         latest_result = await db.execute(
             select(VersionIndex)

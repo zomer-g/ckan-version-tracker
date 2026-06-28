@@ -84,6 +84,17 @@ export interface TagDetail extends TagWithCount {
 }
 
 // Tracked Datasets
+// Unified per-dataset storage plan. Folds the file destination (local / r2 /
+// odata) and the NEON tabular-rows archive into ONE selector. NEON options are
+// only valid for CKAN tabular sources (see `neon_eligible`).
+export type StorageTarget =
+  | "local"
+  | "odata"
+  | "r2"
+  | "neon"
+  | "r2+neon"
+  | "odata+neon";
+
 export interface TrackedDataset {
   id: string;
   ckan_id: string;
@@ -108,7 +119,9 @@ export interface TrackedDataset {
   storage_mode: "full_snapshot" | "append_only";
   append_key: string | null;
   upload_mode: "full" | "local_only";
-  storage_target: "odata" | "r2" | "local";
+  storage_target: StorageTarget;
+  // Whether NEON (tabular-rows) plans are offered for this source (CKAN only).
+  neon_eligible: boolean;
   last_error: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
@@ -132,7 +145,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "govmap", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; storage_target?: "odata" | "r2" | "local"; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; storage_target?: StorageTarget; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -447,7 +460,8 @@ export interface PendingRequest {
   requester_name: string;
   source_type: string;
   source_url: string | null;
-  storage_target?: "odata" | "r2" | "local";
+  storage_target?: StorageTarget;
+  neon_eligible?: boolean;
   resource_ids?: string[] | null;
   resource_id?: string | null;
 }
@@ -553,14 +567,32 @@ export function formatBytes(n: number | null | undefined): string {
   return `${(v / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+export interface CoverageDataset {
+  id: string;
+  title: string;
+  source_type: string;
+  storage_target: StorageTarget;
+  version_count: number;
+  reason: string;
+}
+
+export interface CoverageReport {
+  total_active: number;
+  covered: number;
+  missing: CoverageDataset[];
+  local_only: CoverageDataset[];
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
-  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[], storage_target?: "odata" | "r2" | "local") =>
+  approve: (id: string, poll_interval?: number, title?: string, organization_id?: string, resource_ids?: string[], storage_target?: StorageTarget) =>
     request<void>(`/admin/approve/${id}`, {
       method: "POST",
       body: JSON.stringify({ poll_interval, title, organization_id, resource_ids, storage_target }),
     }),
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
+  overCoverage: () => request<CoverageReport>("/admin/over-coverage"),
+  overCoverageFix: () => request<CoverageReport>("/admin/over-coverage/fix", { method: "POST" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
   cancelScrapeTask: (taskId: string) =>
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {

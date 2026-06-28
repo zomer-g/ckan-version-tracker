@@ -17,7 +17,11 @@ from app.models.organization import Organization
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
-from app.api.datasets import apply_storage_target, storage_target_of
+from app.api.datasets import (
+    apply_storage_target,
+    dataset_is_neon_eligible,
+    storage_target_of,
+)
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
@@ -62,10 +66,13 @@ class PendingRequest(BaseModel):
     source_type: str = "ckan"
     source_url: str | None = None
     storage_mode: str = "full_snapshot"
-    # Suggested storage destination for the approval UI. Scraper/govmap default
-    # to "r2"; ckan datasets are always "odata" (R2 ingestion isn't wired for
-    # the CKAN/snapshot_service path yet).
+    # Suggested unified storage plan for the approval UI, derived from the
+    # request's scraper_config (falls back to the global STORAGE_BACKEND
+    # default, R2). The admin can override it on approve.
     storage_target: str = "r2"
+    # Whether the NEON (tabular-rows) plans are offered for this source (CKAN
+    # only). The approval UI greys NEON out when false.
+    neon_eligible: bool = True
     resource_ids: list[str] | None = None  # what the requester chose
     resource_id: str | None = None  # legacy single-resource selection
 
@@ -103,10 +110,8 @@ async def list_pending(
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
             storage_mode=ds.storage_mode or "full_snapshot",
-            storage_target=(
-                "odata" if (ds.source_type or "ckan") not in ("scraper", "govmap")
-                else storage_target_of(ds.scraper_config)
-            ),
+            storage_target=storage_target_of(ds.scraper_config),
+            neon_eligible=dataset_is_neon_eligible(ds),
             resource_ids=ds.resource_ids,
             resource_id=ds.resource_id,
         )
@@ -168,22 +173,37 @@ async def approve_request(
         ds.organization_id = org_row.id
         ds.organization = org_row.name
 
-    # Resolve + pin the storage destination. Scraper/govmap datasets honor the
-    # admin's choice (default R2 = independent of ODATA). CKAN/data.gov.il
-    # datasets are ingested by the OVER server's snapshot_service, which isn't
-    # R2-wired yet, so they always use ODATA regardless of what's requested.
-    if ds.source_type in ("scraper", "govmap"):
-        target = (body.storage_target if (body and body.storage_target) else "r2")
+    # Resolve + pin the unified storage plan. The admin's explicit choice wins
+    # for every source type; with no choice we default scraper/govmap to R2 and
+    # CKAN to its derived target (the global STORAGE_BACKEND default, R2). NEON
+    # plans are valid only for CKAN tabular sources.
+    if body and body.storage_target:
+        target = body.storage_target
+    elif ds.source_type in ("scraper", "govmap"):
+        target = "r2"
     else:
-        target = "odata"
+        target = storage_target_of(ds.scraper_config)
+    if "neon" in target and not dataset_is_neon_eligible(ds):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "NEON archiving is only available for CKAN (data.gov.il) "
+                "tabular datasets; this source archives files/catalog data."
+            ),
+        )
     ds.scraper_config = apply_storage_target(ds.scraper_config, target)
+    # The file-snapshot destination drives whether an ODATA mirror is needed.
+    file_target = "odata" if target.startswith("odata") else (
+        "local" if target == "local" else ("neon" if target == "neon" else "r2")
+    )
 
     # Update status to active
     ds.status = "active"
 
-    # Create odata mirror dataset only when this dataset stores on ODATA. R2 and
-    # local datasets need no CKAN mirror (files go to R2 / stay on the worker).
-    if target == "odata" and not ds.odata_dataset_id and settings.odata_api_key:
+    # Create odata mirror dataset only when this dataset stores files on ODATA.
+    # R2 / local / neon datasets need no CKAN mirror (files go to R2, stay on
+    # the worker, or there's no file snapshot at all for neon-only).
+    if file_target == "odata" and not ds.odata_dataset_id and settings.odata_api_key:
         if ds.source_type == "scraper":
             mirror_name = f"gov-versions-scraper-{sanitize_ckan_name(ds.ckan_name)}"
             extras = [
@@ -1062,3 +1082,120 @@ async def retry_datastore_job(
     await db.commit()
     logger.info("Admin %s retried datastore push job %s", user.email, job.id)
     return {"status": "pending", "id": str(job.id)}
+
+
+# ---------------------------------------------------------------------------
+# OVER full-version coverage audit (requirement: every dataset must hold at
+# least one full version archived on OVER, not just a request with no data).
+# ---------------------------------------------------------------------------
+
+class CoverageDataset(BaseModel):
+    id: str
+    title: str
+    source_type: str
+    storage_target: str
+    version_count: int
+    reason: str  # why it's listed (no_version | local_only)
+
+
+class CoverageReport(BaseModel):
+    total_active: int
+    covered: int
+    missing: list[CoverageDataset]       # active, on-OVER, but 0 versions
+    local_only: list[CoverageDataset]    # intentionally not on OVER (local plan)
+
+
+async def _coverage_scan(db: AsyncSession) -> CoverageReport:
+    """Classify every active dataset by whether it has ≥1 version on OVER.
+
+    'On OVER' = any storage plan except 'local' (local keeps files on the
+    worker only). A dataset with 0 versions and a non-local plan is a real
+    gap. Local-plan datasets are reported separately (off-OVER by design),
+    not as gaps.
+    """
+    from sqlalchemy import func
+    from app.models.version_index import VersionIndex
+
+    rows = (await db.execute(
+        select(TrackedDataset, func.count(VersionIndex.id))
+        .outerjoin(VersionIndex, VersionIndex.tracked_dataset_id == TrackedDataset.id)
+        .where(TrackedDataset.is_active.is_(True), TrackedDataset.status == "active")
+        .group_by(TrackedDataset.id)
+    )).all()
+
+    missing: list[CoverageDataset] = []
+    local_only: list[CoverageDataset] = []
+    covered = 0
+    for ds, vcount in rows:
+        plan = storage_target_of(ds.scraper_config)
+        brief = CoverageDataset(
+            id=str(ds.id),
+            title=ds.title,
+            source_type=ds.source_type or "ckan",
+            storage_target=plan,
+            version_count=int(vcount or 0),
+            reason="",
+        )
+        if plan == "local":
+            brief.reason = "local_only"
+            local_only.append(brief)
+        elif (vcount or 0) == 0:
+            brief.reason = "no_version"
+            missing.append(brief)
+        else:
+            covered += 1
+    return CoverageReport(
+        total_active=len(rows),
+        covered=covered,
+        missing=missing,
+        local_only=local_only,
+    )
+
+
+@router.get("/over-coverage", response_model=CoverageReport)
+@limiter.limit("30/minute")
+async def over_coverage(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Report which active datasets still lack a full version archived on OVER."""
+    return await _coverage_scan(db)
+
+
+@router.post("/over-coverage/fix", response_model=CoverageReport)
+@limiter.limit("10/minute")
+async def over_coverage_fix(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force a full snapshot for every active on-OVER dataset that has 0
+    versions. Mirrors the per-dataset force_repoll + poll: nulls last_modified
+    (so the unchanged-metadata guard is bypassed) and enqueues a poll, which
+    creates a scrape task for scraper/govmap or runs the CKAN snapshot inline.
+    Returns the coverage report AS OF BEFORE triggering (so the caller sees
+    exactly what was kicked off)."""
+    report = await _coverage_scan(db)
+    if not report.missing:
+        return report
+
+    from app.worker.poll_job import poll_dataset
+
+    ids = [m.id for m in report.missing]
+    for did in ids:
+        ds = (await db.execute(
+            select(TrackedDataset).where(TrackedDataset.id == uuid.UUID(did))
+        )).scalar_one_or_none()
+        if ds:
+            ds.last_modified = None   # force re-snapshot (bypass no-change guard)
+            ds.last_error = None
+    await db.commit()
+    for did in ids:
+        background_tasks.add_task(poll_dataset, did)
+    logger.info(
+        "Admin %s triggered full-snapshot for %d uncovered datasets: %s",
+        user.email, len(ids), ", ".join(i[:8] for i in ids),
+    )
+    return report

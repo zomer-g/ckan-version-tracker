@@ -9,6 +9,8 @@ import {
   tagsApi,
   PendingRequest,
   TrackedDataset,
+  StorageTarget,
+  CoverageReport,
   ScrapeQueueResponse,
   ScheduledJobsResponse,
   DatasetSizesResponse,
@@ -20,6 +22,25 @@ import {
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
+
+// Unified storage-plan options for the admin selectors, source-aware:
+//   • NEON (queryable tabular-rows DB) — CKAN/data.gov.il sources only.
+//   • local (worker keeps files, nothing on OVER) — worker-driven sources only
+//     (scraper/govmap); the CKAN inline poll has no worker machine, so it isn't
+//     offered there. R2 / ODATA file snapshots are available to both.
+// The simultaneous "R2 + NEON" dual-write is intentionally not offered yet (the
+// snapshot and streaming paths each create their own version — a same-version
+// dual-write is a pending follow-up); the API still accepts the combo.
+function storageTargetOptions(
+  neonEligible: boolean,
+): Array<{ value: StorageTarget; label: string; disabled: boolean }> {
+  const opts: Array<{ value: StorageTarget; label: string; disabled: boolean }> = [];
+  if (!neonEligible) opts.push({ value: "local", label: "מקומי (לא ב-OVER)", disabled: false });
+  opts.push({ value: "r2", label: "R2 — סנפשוט מלא", disabled: false });
+  opts.push({ value: "odata", label: "ODATA (legacy)", disabled: false });
+  if (neonEligible) opts.push({ value: "neon", label: "NEON — DB טבלאי", disabled: false });
+  return opts;
+}
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "";
@@ -123,8 +144,12 @@ export default function AdminPage() {
   // Organizations
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [orgOverrides, setOrgOverrides] = useState<Record<string, string>>({});
-  // Per-pending-request storage destination chosen at approval (odata/r2/local).
-  const [storageOverrides, setStorageOverrides] = useState<Record<string, "odata" | "r2" | "local">>({});
+  // Per-pending-request storage plan chosen at approval (the unified selector).
+  const [storageOverrides, setStorageOverrides] = useState<Record<string, StorageTarget>>({});
+  // OVER full-version coverage audit (#4): which active datasets lack a version.
+  const [coverage, setCoverage] = useState<CoverageReport | null>(null);
+  const [coverageBusy, setCoverageBusy] = useState(false);
+  const [coverageMsg, setCoverageMsg] = useState<string | null>(null);
   const [syncingOrgs, setSyncingOrgs] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
   // Tags
@@ -570,7 +595,7 @@ export default function AdminPage() {
 
   const handleUpdateStorageTarget = async (
     id: string,
-    storage_target: "odata" | "r2" | "local",
+    storage_target: StorageTarget,
   ) => {
     try {
       const updated = await datasetsApi.update(id, { storage_target });
@@ -581,7 +606,37 @@ export default function AdminPage() {
             : d,
         )
       );
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      alert((e as Error)?.message || "שגיאה בעדכון יעד האחסון");
+    }
+  };
+
+  const runCoverageScan = async () => {
+    setCoverageBusy(true);
+    setCoverageMsg(null);
+    try {
+      setCoverage(await adminApi.overCoverage());
+    } catch (e) {
+      setCoverageMsg((e as Error)?.message || "שגיאה בסריקה");
+    } finally {
+      setCoverageBusy(false);
+    }
+  };
+
+  const runCoverageFix = async () => {
+    if (!confirm("להפעיל סריקת snapshot מלאה לכל המאגרים שחסרה להם גרסה על OVER?")) return;
+    setCoverageBusy(true);
+    setCoverageMsg(null);
+    try {
+      const report = await adminApi.overCoverageFix();
+      setCoverage(report);
+      setCoverageMsg(`הופעלה סריקה מחדש ל-${report.missing.length} מאגרים. הגרסאות ייווצרו ברקע — רענן בעוד כמה דקות.`);
+    } catch (e) {
+      setCoverageMsg((e as Error)?.message || "שגיאה בהפעלת התיקון");
+    } finally {
+      setCoverageBusy(false);
+    }
   };
 
   const handleSaveResourceIds = async (
@@ -1198,22 +1253,20 @@ export default function AdminPage() {
                   </button>
                 </div>
               )}
-              {!isCkanLike(req.source_type) && (
-                <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 500 }}>{t("admin.storage_target") || "יעד אחסון"}:</span>
-                  <select
-                    value={storageOverrides[req.id] ?? req.storage_target ?? "r2"}
-                    onChange={(e) => setStorageOverrides((prev) => ({
-                      ...prev, [req.id]: e.target.value as "odata" | "r2" | "local",
-                    }))}
-                    style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
-                  >
-                    <option value="r2">{t("admin.storage_r2") || "R2 (אחסון עצמאי)"}</option>
-                    <option value="odata">{t("admin.storage_odata") || "ODATA"}</option>
-                    <option value="local">{t("admin.storage_local") || "לוקאלי (ללא העלאה)"}</option>
-                  </select>
-                </div>
-              )}
+              <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 500 }}>{t("admin.storage_target") || "יעד אחסון"}:</span>
+                <select
+                  value={storageOverrides[req.id] ?? req.storage_target ?? "r2"}
+                  onChange={(e) => setStorageOverrides((prev) => ({
+                    ...prev, [req.id]: e.target.value as StorageTarget,
+                  }))}
+                  style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+                >
+                  {storageTargetOptions(req.neon_eligible ?? isCkanLike(req.source_type)).map((o) => (
+                    <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
               <div className="flex mt-1">
                 <button className="btn-primary" onClick={() => handleApprove(req.id)} disabled={processing.has(req.id)}>
                   {processing.has(req.id) ? "..." : t("admin.approve")}
@@ -1234,6 +1287,48 @@ export default function AdminPage() {
       {/* Section 2: Active Datasets Management */}
       <div className="page-header">
         <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)" }}>{activeDatasets.length} מאגרים</h2>
+      </div>
+
+      {/* OVER full-version coverage audit (#4) */}
+      <div className="card mb-2" style={{ padding: "0.75rem 1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <strong style={{ fontSize: "0.95rem" }}>כיסוי גרסה מלאה על OVER</strong>
+          <button className="btn-secondary" onClick={runCoverageScan} disabled={coverageBusy}
+            style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}>
+            {coverageBusy ? "סורק…" : "סרוק"}
+          </button>
+          {coverage && coverage.missing.length > 0 && (
+            <button className="btn-primary" onClick={runCoverageFix} disabled={coverageBusy}
+              style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}>
+              צור גרסה מלאה ל-{coverage.missing.length} החסרים
+            </button>
+          )}
+        </div>
+        {coverageMsg && <div className="text-sm" style={{ marginTop: "0.4rem", color: "#0369a1" }}>{coverageMsg}</div>}
+        {coverage && (
+          <div className="text-sm" style={{ marginTop: "0.5rem", lineHeight: 1.6 }}>
+            <div>
+              ✅ מכוסים: <strong>{coverage.covered}</strong> / {coverage.total_active} מאגרים פעילים
+              {coverage.local_only.length > 0 && <> · 🗂️ מקומיים (מחוץ ל-OVER מבחירה): <strong>{coverage.local_only.length}</strong></>}
+            </div>
+            {coverage.missing.length === 0 ? (
+              <div style={{ color: "#15803d" }}>כל המאגרים (שאינם מקומיים) כוללים לפחות גרסה מלאה אחת על OVER.</div>
+            ) : (
+              <div style={{ marginTop: "0.3rem" }}>
+                <div style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ חסרה גרסה מלאה ({coverage.missing.length}):</div>
+                <ul style={{ margin: "0.25rem 0 0", paddingInlineStart: "1.2rem" }}>
+                  {coverage.missing.slice(0, 30).map((m) => (
+                    <li key={m.id}>
+                      <Link to={`/versions/${m.id}`}>{m.title}</Link>{" "}
+                      <span className="text-muted" style={{ fontSize: "0.75rem" }}>({m.source_type} · {m.storage_target})</span>
+                    </li>
+                  ))}
+                  {coverage.missing.length > 30 && <li className="text-muted">…ועוד {coverage.missing.length - 30}</li>}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {activeDatasets.length === 0 ? (
@@ -1512,25 +1607,18 @@ export default function AdminPage() {
                           style={{ width: "10rem", padding: "0.2rem 0.4rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: "4px" }}
                         />
                       )}
-                      {(ds.source_type === "scraper" || ds.source_type === "govmap") ? (
-                        <select
-                          value={ds.storage_target || "odata"}
-                          onChange={(e) =>
-                            handleUpdateStorageTarget(
-                              ds.id,
-                              e.target.value as "odata" | "r2" | "local",
-                            )
-                          }
-                          title="יעד אחסון הקבצים: R2 (אחסון עצמאי מ-ODATA), ODATA, או לוקאלי (הורדה למחשב ה-worker ללא העלאה וללא יצירת גרסה)"
-                          style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "#b91c1c" : undefined }}
-                        >
-                          <option value="r2">{t("admin.storage_r2") || "R2 (עצמאי)"}</option>
-                          <option value="odata">{t("admin.storage_odata") || "ODATA"}</option>
-                          <option value="local">{t("admin.storage_local") || "לוקאלי"}</option>
-                        </select>
-                      ) : (
-                        <span className="text-sm text-muted" title="מאגרי data.gov.il נשמרים תמיד ב-ODATA">ODATA</span>
-                      )}
+                      <select
+                        value={ds.storage_target || "r2"}
+                        onChange={(e) =>
+                          handleUpdateStorageTarget(ds.id, e.target.value as StorageTarget)
+                        }
+                        title="תוכנית האחסון: היכן נשמרים הקבצים (מקומי / R2 / ODATA) והאם השורות הטבלאיות נשמרות גם ב-NEON (DB לתשאול). NEON זמין למאגרי data.gov.il טבלאיים בלבד."
+                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "#b91c1c" : (ds.storage_target?.includes("neon") ? "#0369a1" : undefined) }}
+                      >
+                        {storageTargetOptions(ds.neon_eligible ?? (ds.source_type === "ckan")).map((o) => (
+                          <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
+                        ))}
+                      </select>
                     </div>
                   </td>
                   <td style={tdStyle} className="text-sm">

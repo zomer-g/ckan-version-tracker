@@ -353,11 +353,14 @@ storage_client = StorageClient()
 # cycle (poll_job / snapshot_service must not import the worker API module).
 
 def dataset_storage_target(ds) -> str:
-    """Resolve a dataset's storage target: ``'odata'`` | ``'r2'`` | ``'local'``.
+    """Resolve a dataset's FILE-snapshot destination:
+    ``'odata'`` | ``'r2'`` | ``'local'`` | ``'neon'``.
 
     A per-dataset choice (``scraper_config.storage_backend``) overrides the
     global ``STORAGE_BACKEND`` default. ``'local'`` is the legacy
-    ``upload_mode='local_only'`` (worker keeps files, no upload).
+    ``upload_mode='local_only'`` (worker keeps files, no upload). ``'neon'``
+    means NEON-only: tabular rows are streamed to the append DB and NO file
+    snapshot is written (see ``dataset_stores_files``).
     """
     sc = getattr(ds, "scraper_config", None) or {}
     if sc.get("upload_mode") == "local_only":
@@ -371,3 +374,20 @@ def dataset_uses_r2(ds) -> bool:
     credentials to actually be present (else falls back to the ODATA path
     rather than erroring)."""
     return dataset_storage_target(ds) == "r2" and storage_client.is_configured()
+
+
+def dataset_archives_neon(ds) -> bool:
+    """True if THIS dataset should stream its tabular rows to the NEON append
+    DB — either as the sole archive (``storage_backend='neon'``) or alongside a
+    file snapshot (the ``r2+neon`` / ``odata+neon`` combos set
+    ``scraper_config.archive_neon``). Independent of ``storage_mode``: an admin
+    can opt a full-snapshot dataset into a queryable NEON mirror."""
+    sc = getattr(ds, "scraper_config", None) or {}
+    return sc.get("storage_backend") == "neon" or bool(sc.get("archive_neon"))
+
+
+def dataset_stores_files(ds) -> bool:
+    """True if THIS dataset writes a file snapshot at all. False only for the
+    NEON-only plan (``storage_backend='neon'``), where the archive is the
+    queryable row table and there is no per-version CSV/ZIP object."""
+    return dataset_storage_target(ds) != "neon"

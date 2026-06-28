@@ -91,36 +91,80 @@ def _validate_upload_mode(mode: str) -> str:
     return mode
 
 
+# The unified per-dataset storage plan the admin picks. It folds two
+# orthogonal backend axes into ONE selector:
+#   • file destination — where snapshot files (CSV/PDF/ZIP) land:
+#       local (worker keeps them) | odata (CKAN mirror) | r2 (object store)
+#   • NEON archive — whether tabular rows are ALSO streamed to the NEON
+#       append DB (queryable Postgres). NEON-only ("neon") writes rows and
+#       stores NO file snapshot; the "+neon" combos do both.
+# Encoded in scraper_config as: upload_mode (local), storage_backend
+# (odata/r2/neon), and archive_neon (bool, for the r2+neon / odata+neon combos).
+VALID_STORAGE_TARGETS = (
+    "local",       # files on the worker machine, nothing on OVER
+    "odata",       # files → ODATA CKAN mirror (legacy)
+    "r2",          # files → Cloudflare R2 object store
+    "neon",        # tabular rows → NEON only, no file snapshot
+    "r2+neon",     # files → R2  AND  rows → NEON
+    "odata+neon",  # files → ODATA AND rows → NEON (legacy combo)
+)
+
+
 def storage_target_of(scraper_config: dict | None) -> str:
-    """Derive the 3-way storage target from a dataset's scraper_config:
-    'local' (upload_mode=local_only) | 'r2' | 'odata'. Falls back to the
-    global STORAGE_BACKEND default when no per-dataset choice is pinned."""
+    """Derive the unified storage plan from a dataset's scraper_config:
+    one of VALID_STORAGE_TARGETS. Falls back to the global STORAGE_BACKEND
+    default for the file destination when no per-dataset choice is pinned."""
     sc = scraper_config or {}
     if sc.get("upload_mode") == "local_only":
         return "local"
-    return sc.get("storage_backend") or settings.storage_backend
+    backend = sc.get("storage_backend") or settings.storage_backend
+    if backend == "neon":
+        return "neon"
+    if sc.get("archive_neon"):
+        return f"{backend}+neon"
+    return backend
 
 
 def apply_storage_target(scraper_config: dict | None, target: str) -> dict | None:
-    """Return an updated scraper_config for the chosen storage target.
+    """Return an updated scraper_config for the chosen unified storage plan.
 
     Keeps the worker-facing ``upload_mode`` contract intact (only ever
-    'local_only' or absent — the worker reads it to decide local vs upload)
-    and pins odata/r2 in ``storage_backend`` (read only by the OVER server).
+    'local_only' or absent — the worker reads it to decide local vs upload),
+    pins the file destination in ``storage_backend`` (odata/r2/neon, read by
+    the OVER server), and sets ``archive_neon`` for the dual-write combos.
     """
-    if target not in ("odata", "r2", "local"):
+    if target not in VALID_STORAGE_TARGETS:
         raise HTTPException(
             status_code=400,
-            detail="storage_target must be 'odata', 'r2' or 'local'",
+            detail=f"storage_target must be one of {VALID_STORAGE_TARGETS}",
         )
     sc = dict(scraper_config or {})
+    # Reset all three storage keys, then set the ones this plan needs.
+    sc.pop("upload_mode", None)
+    sc.pop("archive_neon", None)
+    sc.pop("storage_backend", None)
     if target == "local":
         sc["upload_mode"] = "local_only"
-        sc.pop("storage_backend", None)
-    else:
-        sc.pop("upload_mode", None)
+    elif target == "neon":
+        sc["storage_backend"] = "neon"
+    elif target.endswith("+neon"):
+        sc["storage_backend"] = target.split("+", 1)[0]  # "r2" | "odata"
+        sc["archive_neon"] = True
+    else:  # "odata" | "r2"
         sc["storage_backend"] = target
     return sc or None
+
+
+def dataset_is_neon_eligible(ds) -> bool:
+    """Whether the NEON (tabular-rows) archive is meaningful for this dataset.
+
+    NEON stores queryable tabular rows, which only the CKAN/data.gov.il
+    datastore path produces. Scraper/govmap sources archive files
+    (PDF/ZIP) or a catalog index, not row-level tabular data, so the NEON
+    options are offered for CKAN datasets only — the admin UI greys them
+    out otherwise and the API rejects a NEON plan for a non-eligible source.
+    """
+    return (getattr(ds, "source_type", None) or "ckan") == "ckan"
 
 
 def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
@@ -172,7 +216,11 @@ class DatasetResponse(BaseModel):
     storage_mode: str = "full_snapshot"
     append_key: str | None = None
     upload_mode: str = "full"  # "full" | "local_only"
-    storage_target: str = "odata"  # "odata" | "r2" | "local"
+    # Unified storage plan: local | odata | r2 | neon | r2+neon | odata+neon
+    storage_target: str = "odata"
+    # Whether the NEON (tabular-rows) options are meaningful for this source
+    # (CKAN only). The admin UI greys NEON out when false.
+    neon_eligible: bool = True
     last_error: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
@@ -247,6 +295,7 @@ async def list_tracked(
                 append_key=(ds.scraper_config or {}).get("append_key"),
                 upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
                 last_error=ds.last_error,
                 resource_ids=ds.resource_ids,
                 new_resources_at_source=ds.new_resources_at_source,
@@ -506,6 +555,7 @@ async def track_dataset(
             append_key=(ds.scraper_config or {}).get("append_key"),
             upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -606,6 +656,8 @@ async def track_dataset(
             source_type=ds.source_type,
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=None,
+            storage_target=storage_target_of(ds.scraper_config),
+            neon_eligible=dataset_is_neon_eligible(ds),
             last_error=ds.last_error,
             resource_ids=ds.resource_ids,
             new_resources_at_source=ds.new_resources_at_source,
@@ -766,6 +818,7 @@ async def track_dataset(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -860,8 +913,20 @@ async def update_tracked(
         ds.scraper_config = sc or None
 
     if body.storage_target is not None:
-        # Unified 3-way control (odata/r2/local). Applied after upload_mode so
-        # it wins if both are sent. Stored in scraper_config (no migration).
+        # Unified storage plan (local/odata/r2/neon/r2+neon/odata+neon).
+        # Applied after upload_mode so it wins if both are sent. Stored in
+        # scraper_config (no migration). NEON plans require a tabular (CKAN)
+        # source — reject them on a file/catalog source so the admin can't
+        # pick an archive that would never write a row.
+        if "neon" in body.storage_target and not dataset_is_neon_eligible(ds):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "NEON archiving is only available for CKAN (data.gov.il) "
+                    "datasets with tabular rows; this source archives files/"
+                    "catalog data. Choose 'local', 'r2' or 'odata'."
+                ),
+            )
         ds.scraper_config = apply_storage_target(ds.scraper_config, body.storage_target)
 
     if body.download_files is not None:
@@ -931,6 +996,7 @@ async def update_tracked(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
@@ -1361,6 +1427,7 @@ async def get_tracked_public(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
         last_error=ds.last_error,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
