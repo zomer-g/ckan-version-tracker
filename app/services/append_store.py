@@ -316,11 +316,13 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
         tuple(None if r.get(c) is None else str(r.get(c)) for c in source_cols)
         for r in rows
     ]
+    stg_def = ", ".join(f"{_qi(c)} text" for c in source_cols)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                f'CREATE TEMP TABLE _stg (LIKE {_qi(table)}) ON COMMIT DROP'
-            )
+            # Staging holds ONLY the source columns (all text). Using LIKE the
+            # target would inherit first_seen's NOT NULL without its DEFAULT, and
+            # COPY (source cols only) would leave it NULL → violation.
+            await conn.execute(f"CREATE TEMP TABLE _stg ({stg_def}) ON COMMIT DROP")
             await conn.copy_records_to_table("_stg", records=records, columns=source_cols)
             tag = await conn.execute(
                 f'INSERT INTO {_qi(table)} ({cols_q}, "first_seen", "row_hash") '
