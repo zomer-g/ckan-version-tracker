@@ -88,6 +88,16 @@ async def try_conditional_archive(ds: TrackedDataset, db) -> Result:
 
 
 async def _try(ds: TrackedDataset, db) -> Result:
+    # 0. Append-only mode requires row-level work on EVERY poll — the source
+    #    rows accumulate independently of metadata_modified (a live board's
+    #    rows churn, a registry grows, a seed may be mid-flight), so the
+    #    metadata-unchanged short-circuit must NOT apply. Fall back to the full
+    #    poll path before any NO_CHANGE check (which would otherwise strand a
+    #    half-finished seed — the append scan never re-runs once metadata is
+    #    stale). The legacy path then routes to the datastore-streaming append.
+    if ds.storage_mode == "append_only":
+        return Result.FALLBACK
+
     # 1. Cheap metadata fetch from data.gov.il
     pkg = await ckan_client.package_show(ds.ckan_id)
     new_modified = pkg.get("metadata_modified", "")
@@ -118,11 +128,6 @@ async def _try(ds: TrackedDataset, db) -> Result:
     if not resources:
         # Tracked subset isn't on the source anymore — let legacy log
         # this properly via its own path.
-        return Result.FALLBACK
-
-    # 4. Append-only mode requires row-level work; conditional probe
-    #    doesn't apply. Let legacy run.
-    if ds.storage_mode == "append_only":
         return Result.FALLBACK
 
     # 5. Probe each tracked resource against the persistent baseline

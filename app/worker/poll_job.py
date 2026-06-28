@@ -79,8 +79,15 @@ async def poll_dataset(dataset_id: str) -> None:
             pkg = await ckan_client.package_show(ds.ckan_id)
             new_modified = pkg.get("metadata_modified", "")
 
+            # append_only datasets re-scan the datastore on EVERY poll: their
+            # rows accumulate independently of metadata_modified, and a seed may
+            # be mid-flight, so the metadata-unchanged short-circuits below must
+            # not strand them. Dedup is the append DB's job (ON CONFLICT), so
+            # re-scanning an unchanged source is a cheap no-op insert.
+            is_append = ds.storage_mode == "append_only"
+
             # Quick check: has anything changed?
-            if not has_metadata_changed(ds.last_modified, new_modified):
+            if not is_append and not has_metadata_changed(ds.last_modified, new_modified):
                 logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
                 ds.last_polled_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -104,7 +111,8 @@ async def poll_dataset(dataset_id: str) -> None:
             # forced poll silently no-ops on every run.
             forced_repoll = ds.last_modified is None
             if (
-                not forced_repoll
+                not is_append
+                and not forced_repoll
                 and latest_version
                 and latest_version.metadata_modified == new_modified
             ):

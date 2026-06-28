@@ -68,14 +68,17 @@ PAGE_TIMEOUT_SECONDS = 60.0
 async def _stream_datastore_pages(
     resource_id: str,
     page_size: int = DATASTORE_PAGE_SIZE,
-) -> AsyncGenerator[list[dict], None]:
-    """Yield successive pages of records from data.gov.il's datastore for
-    `resource_id`. Strips the synthetic `_id` column on each row.
+    start_offset: int = 0,
+) -> AsyncGenerator[tuple[int, list[dict]], None]:
+    """Yield ``(next_offset, page)`` for data.gov.il's datastore, starting at
+    ``start_offset`` (a checkpoint, so a killed seed resumes instead of
+    restarting). ``next_offset`` is the offset AFTER this page — persist it as
+    the resume point. Strips the synthetic `_id` column on each row.
 
     Stops when a page comes back empty (datastore exhausted) or when the
     API returns success=False (treated as a hard error)."""
     base_url = settings.data_gov_il_url.rstrip("/") + "/api/3/action"
-    offset = 0
+    offset = max(0, int(start_offset or 0))
     async with httpx.AsyncClient(timeout=PAGE_TIMEOUT_SECONDS) as client:
         while True:
             resp = await client.get(
@@ -96,8 +99,8 @@ async def _stream_datastore_pages(
             records = data.get("result", {}).get("records") or []
             if not records:
                 return
-            yield [{k: v for k, v in r.items() if k != "_id"} for r in records]
             offset += len(records)
+            yield offset, [{k: v for k, v in r.items() if k != "_id"} for r in records]
 
 
 def _fields_for_odata(ds_info_fields: list[dict]) -> list[dict]:
@@ -160,11 +163,16 @@ async def _archive_streaming_to_db(
         await db.commit()
         return False
 
+    # Resume point: a prior run may have been killed mid-scan (e.g. a dyno
+    # restart from a parallel deploy). seed_offset is the datastore offset the
+    # last successful flush reached; start there instead of re-scanning from 0.
+    start_offset = int((ds.scraper_config or {}).get("seed_offset") or 0)
     rows_inserted_total = 0
     pages_processed = 0
+    last_offset = start_offset
     pending: list[dict] = []
 
-    async def _flush() -> None:
+    async def _flush_and_checkpoint() -> None:
         nonlocal rows_inserted_total, pending
         if not pending:
             return
@@ -173,23 +181,39 @@ async def _archive_streaming_to_db(
         )
         rows_inserted_total += n
         pending = []
+        # Persist the resume point ONLY after the rows are durably in the append
+        # DB, so a kill resumes from here (ON CONFLICT makes a replayed page a
+        # cheap no-op either way). Checkpoint lives in scraper_config (OVER DB).
+        ds.scraper_config = {**(ds.scraper_config or {}), "seed_offset": last_offset}
+        await db.commit()
 
     try:
-        async for batch in _stream_datastore_pages(target_rid):
+        async for next_offset, batch in _stream_datastore_pages(
+            target_rid, start_offset=start_offset,
+        ):
             pages_processed += 1
+            last_offset = next_offset
             pending.extend(batch)
             if len(pending) >= PENDING_FLUSH_THRESHOLD:
-                await _flush()
-        await _flush()
+                await _flush_and_checkpoint()
+        await _flush_and_checkpoint()
     except Exception as e:
-        logger.error("append-db: streaming/insert aborted for %s at page %d: %s",
-                     ds.ckan_name, pages_processed, e)
+        logger.error("append-db: streaming/insert aborted for %s at offset %d: %s",
+                     ds.ckan_name, last_offset, e)
         ds.last_error = (
-            f"append-db insert failed (page {pages_processed}): "
+            f"append-db insert failed (offset {last_offset}): "
             f"{type(e).__name__}: {e}"
         )[:2000]
-        await db.commit()
+        await db.commit()  # keeps seed_offset so the next run resumes here
         return False
+
+    # Datastore exhausted → the full scan finished. Clear the checkpoint so the
+    # next scheduled poll starts a fresh full re-scan (catches new rows anywhere
+    # in the registry), and record the completed append_db version so the UI
+    # recognizes this dataset as a NEON-backed append archive.
+    ds.scraper_config = {
+        k: v for k, v in (ds.scraper_config or {}).items() if k != "seed_offset"
+    } or None
 
     try:
         total = await append_store.table_count(table)
@@ -207,6 +231,7 @@ async def _archive_streaming_to_db(
             "rows_total": total,
             "key": append_key or "_hash",
             "pages_processed": pages_processed,
+            "start_offset": start_offset,
             "resources_added": [],
             "resources_removed": [],
             "resources_modified": [],
@@ -222,8 +247,9 @@ async def _archive_streaming_to_db(
     ds.last_error = None
     await db.commit()
     logger.info(
-        "append-db: %s v%d committed (%d new rows, %d total, %d pages) → %s",
-        ds.ckan_name, next_version, rows_inserted_total, total, pages_processed, table,
+        "append-db: %s v%d committed (%d new rows, %d total, %d pages from offset %d) → %s",
+        ds.ckan_name, next_version, rows_inserted_total, total, pages_processed,
+        start_offset, table,
     )
     return True
 
@@ -371,7 +397,7 @@ async def archive_via_datastore_streaming(
         pending = []
 
     try:
-        async for batch in _stream_datastore_pages(target_rid):
+        async for _next_offset, batch in _stream_datastore_pages(target_rid):
             pages_processed += 1
             if windowed:
                 new_rows_in_batch, seen_gen = compute_new_rows_windowed(

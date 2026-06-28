@@ -321,6 +321,11 @@ export default function VersionsPage() {
       ),
     [versionsList],
   );
+  // An append/NEON dataset: either a completed append_db version exists, or the
+  // dataset is configured append_only (covers the mid-seed window before the
+  // first append_db version lands). These live in OVER's NEON Postgres, not
+  // ODATA — so we surface the /archive CTA + a NEON note and hide ODATA.
+  const isAppend = hasAppendArchive || dataset?.storage_mode === "append_only";
 
   if (loading) return <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>;
 
@@ -343,7 +348,7 @@ export default function VersionsPage() {
           )}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
-          {hasAppendArchive && datasetId && (
+          {isAppend && datasetId && (
             <Link
               to={`/archive/${datasetId}`}
               style={{
@@ -360,7 +365,7 @@ export default function VersionsPage() {
               צפה בארכיון המצטבר &#8599;
             </Link>
           )}
-          {dataset?.odata_dataset_id && !latestIsR2 && (
+          {dataset?.odata_dataset_id && !latestIsR2 && !isAppend && (
             <a
               href={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
               target="_blank"
@@ -441,13 +446,21 @@ export default function VersionsPage() {
         </div>
       </div>
 
+      {/* NEON append archive card. For append/NEON datasets the data lives in
+          OVER's own Postgres (queryable at /archive/:id), NOT ODATA — so this
+          replaces the ODATA explanation card below. */}
+      {isAppend && datasetId && (
+        <NeonArchiveExplanation datasetId={datasetId} />
+      )}
+
       {/* Archive explanation card. Visible only when the dataset has
           an ODATA mirror (almost always, but defensive). Surfaces the
           big "ארכיון הקבצים" CTA again — in case the user scrolled
           past the header — and a per-source-type explanation of what
           the user will find on the other side, so the ODATA page
-          stops being a confusing wall of resources. */}
-      {dataset?.odata_dataset_id && !latestIsR2 && (
+          stops being a confusing wall of resources. Hidden for append/NEON
+          datasets, which surface the NEON card above instead. */}
+      {dataset?.odata_dataset_id && !latestIsR2 && !isAppend && (
         <ArchiveExplanation
           dataset={dataset}
           odataUrl={`${ODATA_BASE}/dataset/${dataset.odata_dataset_id}`}
@@ -655,6 +668,54 @@ export default function VersionsPage() {
  * with "idf-scraper-" or organization is one of the IDF synonyms) so
  * the IDF copy fires in the same cases the IDF badge does.
  */
+/**
+ * "What's in the archive" card for append/NEON datasets — the row-level append
+ * archive lives inside OVER on a NEON Postgres, browsable and pullable at
+ * /archive/:id (filter, sort, search, CSV). Replaces the ODATA card.
+ */
+function NeonArchiveExplanation({ datasetId }: { datasetId: string }) {
+  return (
+    <section
+      className="card"
+      aria-label="ארכיון מצטבר"
+      style={{
+        marginBottom: "1.5rem",
+        padding: "1rem 1.25rem",
+        background: "var(--bg-muted, #f8fafc)",
+        borderInlineStart: "3px solid var(--primary, #0f766e)",
+      }}
+    >
+      <div className="flex-between" style={{ alignItems: "flex-start", gap: "1rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+        <h2 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>הארכיון המצטבר (APPEND)</h2>
+        <Link
+          to={`/archive/${datasetId}`}
+          style={{
+            fontSize: "0.9rem",
+            padding: "0.5rem 1rem",
+            background: "var(--primary, #0f766e)",
+            color: "white",
+            borderRadius: 4,
+            textDecoration: "none",
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          צפה ושלוף &#8599;
+        </Link>
+      </div>
+      <p style={{ margin: "0 0 0.6rem 0", fontSize: "0.9rem", lineHeight: 1.5, color: "var(--text)" }}>
+        בכל סריקה נשמרות השורות החדשות מתוך ה-datastore של data.gov.il לטבלה מצטברת
+        שיושבת <strong>בתוך OVER</strong> (מסד נתונים PostgreSQL ייעודי). כל שורה נושאת
+        חותמת <code>first_seen</code> — מתי נקלטה לראשונה — כך שנשמרת ההיסטוריה גם אחרי
+        שהמקור החי מתעדכן.
+      </p>
+      <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5, color: "var(--text-muted)" }}>
+        בעמוד הארכיון אפשר לעיין, לסנן, למיין, לחפש ולהוריד את הנתונים כ-CSV.
+      </p>
+    </section>
+  );
+}
+
 function ArchiveExplanation(props: {
   dataset: TrackedDataset;
   odataUrl: string;
