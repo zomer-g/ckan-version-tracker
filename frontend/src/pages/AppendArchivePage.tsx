@@ -13,6 +13,30 @@ function fmtDate(value: string | null): string {
 
 const PAGE_SIZES = [50, 100, 200];
 
+// Build a CSV (utf-8 BOM for Excel/Hebrew) from columns + rows and trigger a
+// browser download — used for the SQL result (rows already in memory).
+function downloadRowsCsv(
+  filename: string,
+  columns: string[],
+  rows: Array<Record<string, unknown>>,
+) {
+  const esc = (v: unknown) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [columns.map(esc).join(",")];
+  for (const r of rows) lines.push(columns.map((c) => esc(r[c])).join(","));
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function AppendArchivePage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const [schema, setSchema] = useState<AppendSchema | null>(null);
@@ -100,12 +124,17 @@ export default function AppendArchivePage() {
     setOffset(0);
   }
 
+  const hasFilter = !!(debounced.q || Object.values(debounced.filters).some(Boolean));
   const downloadHref = useMemo(
     () =>
       datasetId
         ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, filters: debounced.filters })
         : "#",
     [datasetId, sort, order, debounced],
+  );
+  const downloadAllHref = useMemo(
+    () => (datasetId ? appendArchive.downloadUrl(datasetId, {}) : "#"),
+    [datasetId],
   );
 
   if (error && !schema) {
@@ -128,21 +157,32 @@ export default function AppendArchivePage() {
             {" · עמודת "}<code>first_seen</code>{" = זמן הוספת השורה"}
           </div>
         </div>
-        <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
+        <div className="flex" style={{ alignItems: "center", gap: "0.6rem" }}>
           <a
-            href={downloadHref}
+            href={downloadAllHref}
             style={{
-              fontSize: "0.85rem",
-              padding: "0.4rem 0.9rem",
-              background: "var(--primary, #0f766e)",
-              color: "white",
-              borderRadius: 4,
-              textDecoration: "none",
-              fontWeight: 500,
+              fontSize: "0.85rem", padding: "0.4rem 0.9rem",
+              background: "var(--primary, #0f766e)", color: "white",
+              borderRadius: 4, textDecoration: "none", fontWeight: 500,
             }}
+            title="הורדת כל הנתונים הגולמיים כ-CSV"
           >
-            &#8595; הורד CSV{(debounced.q || Object.values(debounced.filters).some(Boolean)) ? " (מסונן)" : ""}
+            &#8595; CSV — הכל
           </a>
+          {hasFilter && (
+            <a
+              href={downloadHref}
+              style={{
+                fontSize: "0.85rem", padding: "0.4rem 0.9rem",
+                background: "none", color: "var(--primary, #0f766e)",
+                border: "1px solid var(--primary, #0f766e)",
+                borderRadius: 4, textDecoration: "none", fontWeight: 500,
+              }}
+              title="הורדת התוצאה המסוננת הנוכחית כ-CSV"
+            >
+              &#8595; CSV — מסונן
+            </a>
+          )}
           {datasetId && (
             <Link to={`/versions/${datasetId}`} style={{ fontSize: "0.85rem", color: "var(--text-muted)", textDecoration: "none" }}>
               גרסאות &rarr;
@@ -216,9 +256,25 @@ export default function AppendArchivePage() {
             </button>
             <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
             {sqlResult && (
-              <span className="text-sm text-muted">
-                {sqlResult.row_count.toLocaleString()} שורות{sqlResult.truncated ? " (נחתך)" : ""}
-              </span>
+              <>
+                <span className="text-sm text-muted">
+                  {sqlResult.row_count.toLocaleString()} שורות{sqlResult.truncated ? " (נחתך)" : ""}
+                </span>
+                {sqlResult.rows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => downloadRowsCsv(`${schema?.table || "query"}_sql.csv`, sqlResult.columns, sqlResult.rows)}
+                    style={{
+                      fontSize: "0.82rem", padding: "0.3rem 0.7rem",
+                      background: "none", color: "var(--primary, #0f766e)",
+                      border: "1px solid var(--primary, #0f766e)", borderRadius: 4, cursor: "pointer",
+                    }}
+                    title="הורדת תוצאת ה-SQL כ-CSV"
+                  >
+                    &#8595; CSV — תוצאת SQL
+                  </button>
+                )}
+              </>
             )}
           </div>
           {sqlError && (
@@ -230,9 +286,9 @@ export default function AppendArchivePage() {
             <div style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 360 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
                 <thead>
-                  <tr style={{ background: "var(--bg-muted, #f8fafc)" }}>
+                  <tr>
                     {sqlResult.columns.map((c) => (
-                      <th key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0 }}>{c}</th>
+                      <th key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>{c}</th>
                     ))}
                   </tr>
                 </thead>
@@ -254,19 +310,19 @@ export default function AppendArchivePage() {
       <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
           <thead>
-            <tr style={{ background: "var(--bg-muted, #f8fafc)", borderBottom: "2px solid var(--border, #e5e7eb)" }}>
+            <tr>
               {cols.map((c) => (
                 <th
                   key={c}
                   onClick={() => toggleSort(c)}
                   title="מיון"
-                  style={{ textAlign: "start", padding: "0.5rem 0.7rem", cursor: "pointer", position: "sticky", top: 0, userSelect: "none" }}
+                  style={{ textAlign: "start", padding: "0.5rem 0.7rem", cursor: "pointer", position: "sticky", top: 0, zIndex: 1, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)", userSelect: "none" }}
                 >
                   {c}{sort === c ? (order === "asc" ? " ▲" : " ▼") : ""}
                 </th>
               ))}
             </tr>
-            <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)" }}>
+            <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)", background: "var(--bg, #fff)" }}>
               {cols.map((c) => (
                 <th key={c} style={{ padding: "0.25rem 0.4rem" }}>
                   <input
