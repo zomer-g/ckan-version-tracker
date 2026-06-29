@@ -590,6 +590,19 @@ export interface CoverageReport {
   local_only: CoverageDataset[];
 }
 
+// MCP closed-beta invited user (api_users row).
+export interface McpUser {
+  id: string;
+  email: string;
+  name: string | null;
+  tier: string;
+  is_active: boolean;
+  monthly_quota: number | null;
+  last_seen_at: string | null;
+  created_at: string;
+  calls_30d: number;
+}
+
 // Activity-log event types (mirror app/models/activity_log.py).
 export type ActivityEvent =
   | "requested"
@@ -641,6 +654,12 @@ export const admin = {
   reject: (id: string) => request<void>(`/admin/reject/${id}`, { method: "POST" }),
   overCoverage: () => request<CoverageReport>("/admin/over-coverage"),
   overCoverageFix: () => request<CoverageReport>("/admin/over-coverage/fix", { method: "POST" }),
+  mcpUsers: () => request<McpUser[]>("/admin/mcp-users"),
+  mcpInvite: (email: string, name?: string, tier?: string) =>
+    request<McpUser>("/admin/mcp-users", { method: "POST", body: JSON.stringify({ email, name, tier: tier || "beta" }) }),
+  mcpUpdateUser: (id: string, data: { tier?: string; is_active?: boolean; monthly_quota?: number | null }) =>
+    request<McpUser>(`/admin/mcp-users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  mcpDisableUser: (id: string) => request<void>(`/admin/mcp-users/${id}`, { method: "DELETE" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
   cancelScrapeTask: (taskId: string) =>
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {

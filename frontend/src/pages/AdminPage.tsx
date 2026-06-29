@@ -22,6 +22,7 @@ import {
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
+import McpUsersPanel from "../components/McpUsersPanel";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
@@ -110,7 +111,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "orgs" | "tags";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -119,6 +120,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "requests",  label: "בקשות ממתינות",     emoji: "📥" },
   { id: "datasets",  label: "מאגרים פעילים",    emoji: "📂" },
   { id: "log",       label: "לוג משימות",        emoji: "📜" },
+  { id: "mcp",       label: "גישת MCP",          emoji: "🔌" },
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
 ];
@@ -1179,6 +1181,8 @@ export default function AdminPage() {
       {tab === "push_jobs" && <DatastorePushJobsPanel />}
 
       {tab === "log" && <ActivityLogPanel />}
+
+      {tab === "mcp" && <McpUsersPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}
