@@ -31,6 +31,7 @@ from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
 from app.api.tags import admin_router as admin_tags_router
+from app.api.admin_mcp_users import router as admin_mcp_users_router
 from app.api.v1 import router as v1_router
 from app.config import settings
 from app.rate_limit import limiter
@@ -78,6 +79,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# MCP needs permissive cross-origin access (claude.ai etc.). Added AFTER the
+# global CORS so it's the OUTERMOST layer — it answers /mcp preflight before the
+# restrictive global policy can reject it, and no-ops on every other path.
+from app.mcp.routes import MCPCorsMiddleware
+app.add_middleware(MCPCorsMiddleware)
+
 # API routes
 app.include_router(auth_router)
 app.include_router(oauth_router)
@@ -100,6 +107,13 @@ app.include_router(admin_organizations_router)
 app.include_router(tags_router)
 app.include_router(admin_tags_router)
 app.include_router(v1_router)
+app.include_router(admin_mcp_users_router)
+
+# MCP server + its OAuth (registered before the SPA fallback so /mcp and the
+# root-path /.well-known/*/mcp metadata return real responses, not index.html).
+from app.mcp.routes import mcp_router, mcp_wellknown_router
+app.include_router(mcp_wellknown_router)
+app.include_router(mcp_router)
 
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
