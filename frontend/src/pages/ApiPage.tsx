@@ -30,11 +30,12 @@ const ENDPOINTS: ApiEndpoint[] = [
   {
     path: "/api/v1/datasets",
     description:
-      "רשימת כל המאגרים שבמעקב — סינון לפי ארגון, תגית או סטטוס, עם עימוד.",
+      "רשימת כל המאגרים שבמעקב — כל פריט כולל id (ה-UUID של OVER לשאר הקריאות), וגם ckan_id + ckan_name (מזהה ה-dataset וה-slug ב-data.gov.il). סינון לפי ארגון, תגית, סטטוס או מקור, עם עימוד.",
     params: [
       { name: "organization_id", desc: "UUID של ארגון" },
       { name: "tag / tag_id", desc: "שם תגית או UUID — ניתן לחזור (AND)" },
       { name: "status", desc: "active | pending | all (ברירת מחדל: active)" },
+      { name: "ckan_id", desc: "גישור מ-data.gov.il: מחזיר את מאגר ה-OVER שעוקב אחרי dataset נתון. מתאים ל-ckan_id (ה-UUID שב-data.gov.il/dataset/<id>) או ל-ckan_name (slug)." },
       { name: "limit / offset", desc: "עימוד (limit 1-500, ברירת מחדל 100)" },
     ],
     example: "/api/v1/datasets?status=active&limit=10",

@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -48,6 +48,13 @@ class OrganizationBrief(BaseModel):
 class DatasetSummary(BaseModel):
     id: str
     title: str
+    # The source's own identifiers. For CKAN (data.gov.il) datasets, `ckan_id`
+    # is the data.gov.il dataset id and `ckan_name` is its slug — exactly what
+    # appears in data.gov.il/dataset/<ckan_id-or-name>/... URLs. Use them to map
+    # a data.gov.il dataset back to its OVER record (see the ?ckan_id= filter on
+    # /api/v1/datasets). For scraper/govmap sources these are OVER's internal ids.
+    ckan_id: str
+    ckan_name: str
     source_type: str  # "ckan" | "scraper"
     source_url: str  # data.gov.il page or gov.il scraper URL
     odata_dataset_id: str | None
@@ -189,6 +196,8 @@ def _dataset_summary(
     return DatasetSummary(
         id=str(ds.id),
         title=ds.title,
+        ckan_id=ds.ckan_id or "",
+        ckan_name=ds.ckan_name or "",
         source_type=ds.source_type or "ckan",
         source_url=_source_url(ds),
         odata_dataset_id=ds.odata_dataset_id,
@@ -331,6 +340,15 @@ async def list_datasets(
         description="active | pending | all (default: active)",
         pattern="^(active|pending|all)$",
     ),
+    ckan_id: str | None = Query(
+        None,
+        description=(
+            "Bridge filter: find the OVER dataset(s) tracking a specific "
+            "data.gov.il dataset. Matches the source ckan_id (the UUID in "
+            "data.gov.il/dataset/<id>/...) OR the ckan_name (slug) — pass "
+            "whichever you have. Combine with status=all to include pending."
+        ),
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -386,6 +404,10 @@ async def list_datasets(
     if organization_id:
         oid = parse_uuid(organization_id, "organization_id")
         base = base.where(TrackedDataset.organization_id == oid)
+
+    if ckan_id:
+        v = ckan_id.strip()
+        base = base.where(or_(TrackedDataset.ckan_id == v, TrackedDataset.ckan_name == v))
 
     if resolved_tag_ids:
         n = len(resolved_tag_ids)
