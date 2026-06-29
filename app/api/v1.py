@@ -55,6 +55,9 @@ class DatasetSummary(BaseModel):
     # /api/v1/datasets). For scraper/govmap sources these are OVER's internal ids.
     ckan_id: str
     ckan_name: str
+    # The data.gov.il dataset UUID (the <id> in data.gov.il/dataset/<id>/...),
+    # captured on poll for CKAN sources. Lets a catalog's UUID resolve to OVER.
+    ckan_dataset_uuid: str | None = None
     source_type: str  # "ckan" | "scraper"
     source_url: str  # data.gov.il page or gov.il scraper URL
     odata_dataset_id: str | None
@@ -198,6 +201,7 @@ def _dataset_summary(
         title=ds.title,
         ckan_id=ds.ckan_id or "",
         ckan_name=ds.ckan_name or "",
+        ckan_dataset_uuid=(ds.scraper_config or {}).get("ckan_dataset_uuid"),
         source_type=ds.source_type or "ckan",
         source_url=_source_url(ds),
         odata_dataset_id=ds.odata_dataset_id,
@@ -344,9 +348,9 @@ async def list_datasets(
         None,
         description=(
             "Bridge filter: find the OVER dataset(s) tracking a specific "
-            "data.gov.il dataset. Matches the source ckan_id (the UUID in "
-            "data.gov.il/dataset/<id>/...) OR the ckan_name (slug) — pass "
-            "whichever you have. Combine with status=all to include pending."
+            "data.gov.il dataset. Matches the slug (ckan_name), the data.gov.il "
+            "dataset UUID, OR a tracked resource UUID — pass any identifier you "
+            "have from a data.gov.il URL. Combine with status=all for pending."
         ),
     ),
     limit: int = Query(100, ge=1, le=500),
@@ -407,7 +411,15 @@ async def list_datasets(
 
     if ckan_id:
         v = ckan_id.strip()
-        base = base.where(or_(TrackedDataset.ckan_id == v, TrackedDataset.ckan_name == v))
+        # Match the OVER ckan_id/slug, the captured data.gov.il dataset UUID, OR
+        # a tracked data.gov.il resource UUID — so any identifier a consumer has
+        # from a data.gov.il URL (slug, dataset UUID, or resource UUID) resolves.
+        base = base.where(or_(
+            TrackedDataset.ckan_id == v,
+            TrackedDataset.ckan_name == v,
+            TrackedDataset.scraper_config["ckan_dataset_uuid"].astext == v,
+            TrackedDataset.resource_ids.contains([v]),
+        ))
 
     if resolved_tag_ids:
         n = len(resolved_tag_ids)

@@ -1375,3 +1375,42 @@ async def activity_log(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/backfill-ckan-uuids")
+@limiter.limit("2/minute")
+async def backfill_ckan_uuids(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-time: populate each CKAN dataset's data.gov.il dataset UUID
+    (scraper_config.ckan_dataset_uuid) by calling package_show, so the
+    /api/v1/datasets ?ckan_id= bridge resolves a data.gov.il UUID. Idempotent —
+    skips datasets that already have it. New datasets fill in on their next poll."""
+    from app.services.ckan_client import ckan_client
+
+    rows = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.source_type == "ckan")
+    )).scalars().all()
+    updated = skipped = 0
+    failed: list[dict] = []
+    for ds in rows:
+        sc = ds.scraper_config or {}
+        if sc.get("ckan_dataset_uuid"):
+            skipped += 1
+            continue
+        try:
+            pkg = await ckan_client.package_show(ds.ckan_id)
+            gov = pkg.get("id")
+            if gov:
+                ds.scraper_config = {**sc, "ckan_dataset_uuid": gov}
+                updated += 1
+            else:
+                failed.append({"id": str(ds.id), "ckan_id": ds.ckan_id, "error": "no id in package"})
+        except Exception as e:  # noqa: BLE001
+            failed.append({"id": str(ds.id), "ckan_id": ds.ckan_id, "error": str(e)[:150]})
+    await db.commit()
+    logger.info("Admin %s backfilled %d ckan_dataset_uuid (%d skipped, %d failed)",
+                user.email, updated, skipped, len(failed))
+    return {"total_ckan": len(rows), "updated": updated, "skipped": skipped, "failed": failed}

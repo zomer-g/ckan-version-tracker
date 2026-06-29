@@ -83,6 +83,13 @@ async def poll_dataset(dataset_id: str) -> None:
             pkg = await ckan_client.package_show(ds.ckan_id)
             new_modified = pkg.get("metadata_modified", "")
 
+            # Capture the data.gov.il dataset UUID (pkg["id"]) so an API consumer
+            # holding a data.gov.il id (e.g. from a catalog's download URLs) can
+            # resolve it back to this OVER record via /api/v1/datasets?ckan_id=.
+            gov_uuid = pkg.get("id")
+            if gov_uuid and (ds.scraper_config or {}).get("ckan_dataset_uuid") != gov_uuid:
+                ds.scraper_config = {**(ds.scraper_config or {}), "ckan_dataset_uuid": gov_uuid}
+
             # append_only datasets re-scan the datastore on EVERY poll: their
             # rows accumulate independently of metadata_modified, and a seed may
             # be mid-flight, so the metadata-unchanged short-circuits below must
