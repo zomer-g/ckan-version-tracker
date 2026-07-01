@@ -732,17 +732,28 @@ async def seed_neon_from_versions(
         })
 
     if apply:
-        # Enable r2+neon dual-write going forward (keep file snapshots on R2,
-        # also stream rows to NEON on each future poll).
-        sc = dict(ds.scraper_config or {})
-        sc["archive_neon"] = True
-        ds.scraper_config = sc
-        summary["archive_neon_enabled"] = True
         try:
             summary["table_total"] = await append_store.table_count(table)
         except Exception:
             pass
-        await db.commit()
-        summary["committed"] = True
+        # Enable r2+neon dual-write going forward (keep file snapshots on R2,
+        # also stream rows to NEON on each future poll). Use a FRESH session:
+        # the seed above streams from R2 through append_store's own pool for
+        # minutes, during which the passed-in `db` connection sits idle and is
+        # dropped by the pool/Neon — committing on it fails with "connection is
+        # closed" and the flag never persists. A short-lived session re-fetches
+        # the row and commits cleanly regardless of how long the seed ran.
+        from app.database import async_session
+        async with async_session() as fresh:
+            fresh_ds = (await fresh.execute(
+                select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+            )).scalar_one_or_none()
+            if fresh_ds is not None:
+                sc = dict(fresh_ds.scraper_config or {})
+                sc["archive_neon"] = True
+                fresh_ds.scraper_config = sc
+                await fresh.commit()
+                summary["archive_neon_enabled"] = True
+                summary["committed"] = True
 
     return summary
