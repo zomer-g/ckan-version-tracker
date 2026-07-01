@@ -31,7 +31,79 @@ from app.services.storage_client import (
 logger = logging.getLogger(__name__)
 
 
+# In-process single-flight guard. Every poll — the per-dataset weekly job, the
+# resume driver below, and manual /poll triggers — runs poll_dataset on the SAME
+# web-dyno event loop, so a plain module-level set is enough to guarantee we
+# never run two scans of the same dataset at once. That matters most for the
+# giant append datasets (4.1M-row vehicle registry): two concurrent datastore
+# streams would double RSS and OOM the dyno. The set is process-local, so a
+# recycle clears it — no risk of a stale lock stranding a dataset.
+_active_polls: set[str] = set()
+
+
 async def poll_dataset(dataset_id: str) -> None:
+    """Poll a single tracked dataset for changes (single-flight wrapper)."""
+    if dataset_id in _active_polls:
+        logger.info(
+            "Poll for %s already running in this process; skipping duplicate",
+            dataset_id,
+        )
+        return
+    _active_polls.add(dataset_id)
+    try:
+        await _poll_dataset(dataset_id)
+    finally:
+        _active_polls.discard(dataset_id)
+
+
+async def resume_interrupted_appends() -> None:
+    """Scheduler tick: continue ONE append/delta poll that was interrupted
+    mid-scan, so a giant datastore-backed dataset finishes even though it can't
+    complete in a single web-process invocation.
+
+    A full content-diff scan of a 4.1M-row dataset (e.g. the vehicle registry)
+    runs for tens of minutes; a dyno recycle or deploy kills it partway. The
+    delta archiver checkpoints its datastore offset in
+    ``scraper_config.seed_offset`` after every flush and clears it only on a
+    completed scan (see delta_archiver). So a lingering ``seed_offset`` is the
+    marker of an interrupted poll: re-running poll_dataset resumes from the
+    checkpoint (ON CONFLICT makes replayed rows a cheap no-op), and successive
+    ticks drive it to completion — which clears seed_offset and refreshes
+    last_polled_at.
+
+    One dataset per tick, guarded by ``max_instances=1`` on the scheduler job,
+    so we never run two heavy streams concurrently (RSS/OOM safety) — the same
+    one-job-per-tick shape as drain_one_job. The single-flight guard in
+    poll_dataset additionally prevents colliding with the dataset's own
+    scheduled poll.
+    """
+    async with async_session() as db:
+        row = (
+            await db.execute(
+                select(TrackedDataset.id)
+                .where(
+                    TrackedDataset.is_active.is_(True),
+                    # JSONB ->> 'seed_offset' IS NOT NULL: key present with a
+                    # non-null value == interrupted mid-scan.
+                    TrackedDataset.scraper_config["seed_offset"].astext.isnot(None),
+                )
+                .order_by(TrackedDataset.id)
+                .limit(1)
+            )
+        ).first()
+    if not row:
+        return
+    dataset_id = str(row[0])
+    if dataset_id in _active_polls:
+        # Its scheduled poll is already resuming it — nothing to do this tick.
+        return
+    logger.info(
+        "Resuming interrupted append poll for %s (checkpoint present)", dataset_id
+    )
+    await poll_dataset(dataset_id)
+
+
+async def _poll_dataset(dataset_id: str) -> None:
     """Poll a single tracked dataset for changes."""
     logger.info("Polling dataset %s", dataset_id)
 

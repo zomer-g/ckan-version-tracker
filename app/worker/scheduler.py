@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models.scrape_task import ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
-from app.worker.poll_job import poll_dataset
+from app.worker.poll_job import poll_dataset, resume_interrupted_appends
 from app.worker.datastore_push_runner import (
     cleanup_stuck_push_jobs,
     drain_one_job,
@@ -114,6 +114,24 @@ async def init_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+
+    # Resume driver for interrupted giant append polls. A full content-diff
+    # scan of a multi-million-row datastore dataset can't finish in one
+    # web-process invocation (a dyno recycle/deploy kills it partway); the
+    # delta archiver checkpoints seed_offset so this driver re-runs the poll to
+    # resume from the checkpoint, one dataset per tick, until the scan
+    # completes and clears the checkpoint. ``max_instances=1`` guarantees we
+    # never run two heavy streams at once (RSS/OOM safety). 3-minute cadence:
+    # long enough that a still-running resume isn't nagged, short enough that a
+    # killed scan restarts promptly.
+    scheduler.add_job(
+        resume_interrupted_appends,
+        trigger=IntervalTrigger(minutes=3),
+        id="resume_interrupted_appends",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
 
     # Durable Drive-export queue runner + its stuck-job rescuer. Same
