@@ -544,6 +544,11 @@ async def track_dataset(
             sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
+            # 20-year archive → some source links have rotted (~2% dead in a
+            # sample, likely higher in old items). Tolerate scattered dead
+            # links so link-rot never blocks the whole collection from
+            # publishing (the completeness gate default is 10%).
+            sc.setdefault("max_missing_fraction", 0.25)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -1296,6 +1301,10 @@ async def submit_tracking_request(
             sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs
+            # Tolerate the source's scattered dead links (link-rot in a
+            # 20-year archive) so the collection still publishes. Mirror of
+            # the admin-POST branch.
+            sc["max_missing_fraction"] = 0.25
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
