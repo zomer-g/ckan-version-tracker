@@ -680,26 +680,51 @@ async def seed_neon_from_versions(
     if apply and reset:
         await append_store.drop_table(table)
 
+    import httpx
+    from app.services.odata_client import odata_client
+
     for v in versions:
         m = v.resource_mappings or {}
-        # the single data file for this version (snapshot key → r2 value)
+        # The single data file for this version. Prefer an R2 marker; fall back
+        # to a legacy ODATA resource id so a mixed-history dataset (older
+        # versions on ODATA, newer on R2 — e.g. the flights board) seeds fully.
         r2val = None
+        odata_rid = None
         for k, val in m.items():
-            if k.startswith("_"):
+            if k.startswith("_") or not isinstance(val, str):
                 continue
-            if isinstance(val, str) and storage.is_storage_value(val):
+            if storage.is_storage_value(val):
                 r2val = val
                 break
-        if not r2val:
-            summary["skipped"].append({"version": v.version_number, "reason": "no r2 file"})
-            continue
+            if odata_rid is None:
+                odata_rid = val  # a plain value = an ODATA resource id
         # first_seen = the version's archive date (the date it represents).
         # Pass a tz-aware datetime (NOT a string) — asyncpg binds it against the
         # timestamptz column and rejects a str.
         fs = v.detected_at.astimezone(timezone.utc)
-        data = await storage_client.get_object_bytes(r2val)
+        data = None
+        if r2val:
+            data = await storage_client.get_object_bytes(r2val)
+            if not data:
+                summary["skipped"].append({"version": v.version_number, "reason": "r2 download failed"})
+                continue
+        elif odata_rid and ds.odata_dataset_id:
+            # Download the version's CSV from ODATA (resource_show → url → GET).
+            try:
+                info = await odata_client.get_resource(odata_rid)
+                url = (info or {}).get("url")
+                if not url:
+                    summary["skipped"].append({"version": v.version_number, "reason": "odata no url"})
+                    continue
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as c:
+                    resp = await c.get(url)
+                    resp.raise_for_status()
+                    data = resp.content
+            except Exception as e:  # noqa: BLE001
+                summary["skipped"].append({"version": v.version_number, "reason": f"odata download: {type(e).__name__}"})
+                continue
         if not data:
-            summary["skipped"].append({"version": v.version_number, "reason": "download failed"})
+            summary["skipped"].append({"version": v.version_number, "reason": "no file (r2/odata)"})
             continue
         try:
             fields, records = parse_csv(data)
