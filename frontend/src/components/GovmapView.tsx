@@ -16,9 +16,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
+import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+// Marker clustering. Point layers (e.g. the גני-ילדים dataset) render
+// one DOM <img> marker per feature under Leaflet's default handling —
+// `preferCanvas` doesn't touch markers, so a few thousand points swamp
+// the DOM and stall the page. We route points through a
+// MarkerClusterGroup instead: nearby points collapse into a single
+// bubble that expands on zoom-in, so only a handful of DOM nodes exist
+// at any zoom. The CSS ships the cluster-bubble styling.
+import "leaflet.markercluster";
+import "leaflet.markercluster/dist/MarkerCluster.css";
+import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { downloadToBlob, parseStream } from "../utils/geoStream";
 import { simplifyFeatureCollection } from "../utils/geoSimplify";
 
@@ -138,6 +148,146 @@ interface LayerStyle {
   weight: number;
   fillColor: string;
   fillOpacity: number;
+}
+
+// Above this many point features we cluster; below it the points are
+// few enough to draw individually (a "3" bubble over three points reads
+// worse than just showing the three). Clustering is purely a density
+// affordance, so the exact number isn't load-bearing.
+const POINT_CLUSTER_THRESHOLD = 200;
+
+/** A GeoJSON geometry as it arrives at runtime. ``MinimalFeature``
+ *  deliberately omits geometry (the filter helpers never look at it),
+ *  but the streamed features carry it, so we read it structurally. */
+interface RawGeometry {
+  type: string;
+  coordinates?: unknown;
+}
+type FeatureWithGeometry = MinimalFeature & { geometry?: RawGeometry | null };
+
+/** True for Point / MultiPoint features — the ones we route through the
+ *  cluster layer instead of the vector <GeoJSON>. Everything else
+ *  (polygons, lines) stays on the canvas-rendered path where it's
+ *  already fast. */
+function isPointFeature(f: MinimalFeature): boolean {
+  const g = (f as FeatureWithGeometry).geometry;
+  return !!g && (g.type === "Point" || g.type === "MultiPoint");
+}
+
+/** Pull [lat, lng] pairs out of a Point/MultiPoint feature. A Point
+ *  yields one; a MultiPoint yields several. GeoJSON stores [lng, lat];
+ *  Leaflet wants [lat, lng]. Non-finite / malformed coords are skipped
+ *  defensively — some gov layers carry null-island or empty-geometry
+ *  rows that would otherwise render at [0,0]. */
+function pointLatLngs(f: MinimalFeature): L.LatLngTuple[] {
+  const g = (f as FeatureWithGeometry).geometry;
+  if (!g) return [];
+  const out: L.LatLngTuple[] = [];
+  const push = (pair: unknown) => {
+    if (!Array.isArray(pair)) return;
+    const [lng, lat] = pair as number[];
+    if (
+      typeof lat === "number" &&
+      typeof lng === "number" &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lng)
+    ) {
+      out.push([lat, lng]);
+    }
+  };
+  if (g.type === "Point") push(g.coordinates);
+  else if (g.type === "MultiPoint" && Array.isArray(g.coordinates)) {
+    for (const pair of g.coordinates) push(pair);
+  }
+  return out;
+}
+
+/** Circle-marker path options for one point, derived from the shared
+ *  layer style. Points get a firmer fill floor than area polygons —
+ *  the polygon default (0.25) is invisible at a 5px radius. */
+function pointPathOptions(style: LayerStyle): L.CircleMarkerOptions {
+  return {
+    radius: 5,
+    color: style.color,
+    weight: style.weight,
+    fillColor: style.fillColor,
+    fillOpacity: Math.max(style.fillOpacity, 0.7),
+  };
+}
+
+/**
+ * Renders point features on the map, clustered when dense.
+ *
+ * Why not let <GeoJSON> draw the points itself? Its default
+ * pointToLayer is ``L.marker()`` — an image pin per feature, always in
+ * the DOM and immune to the map's canvas renderer. A few thousand of
+ * them (the גני-ילדים layer) stall the page. Instead we draw each point
+ * as an ``L.circleMarker`` (a vector, so it rides the canvas renderer
+ * under ``preferCanvas`` — cheap), and above POINT_CLUSTER_THRESHOLD we
+ * drop the whole set into a ``MarkerClusterGroup`` so only visible
+ * clusters and declustered points ever reach the renderer.
+ *
+ * Managed imperatively through ``useMap()`` rather than as a
+ * react-leaflet child because MarkerClusterGroup has no first-class
+ * wrapper at react-leaflet v5, and addLayers()/removeLayer() is the
+ * entire API we need.
+ */
+function PointLayer({
+  features,
+  style,
+  cluster,
+  t,
+}: {
+  features: MinimalFeature[];
+  style: LayerStyle;
+  cluster: boolean;
+  t: (k: string) => string;
+}) {
+  const map = useMap();
+  // Keep the built markers so style-slider changes can re-style them in
+  // place (setStyle) rather than rebuilding thousands of layers on every
+  // drag tick — mirrors how the polygon layer uses geojsonRef.
+  const markersRef = useRef<L.CircleMarker[]>([]);
+  // Read the latest style at build time without making it a build dep;
+  // the separate effect below handles live re-styling.
+  const styleRef = useRef(style);
+  styleRef.current = style;
+
+  useEffect(() => {
+    const markers: L.CircleMarker[] = [];
+    for (const f of features) {
+      for (const latlng of pointLatLngs(f)) {
+        const m = L.circleMarker(latlng, pointPathOptions(styleRef.current));
+        m.bindPopup(() => renderPopup(f, t));
+        markers.push(m);
+      }
+    }
+    markersRef.current = markers;
+    if (markers.length === 0) return;
+
+    const container: L.Layer = cluster
+      ? L.markerClusterGroup({
+          // Stream the markers in so building the group doesn't block
+          // one long frame on big layers.
+          chunkedLoading: true,
+          // Bigger radius → fewer, larger cluster bubbles → fewer DOM
+          // nodes. 50px is Leaflet's default sweet spot.
+          maxClusterRadius: 50,
+        }).addLayers(markers)
+      : L.layerGroup(markers);
+    container.addTo(map);
+    return () => {
+      map.removeLayer(container);
+      markersRef.current = [];
+    };
+  }, [features, cluster, map, t]);
+
+  useEffect(() => {
+    const opts = pointPathOptions(style);
+    for (const m of markersRef.current) m.setStyle(opts);
+  }, [style]);
+
+  return null;
 }
 
 export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
@@ -458,9 +608,23 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     return sorted || "none";
   }, [filters]);
 
-  const filteredCollection = useMemo<FeatureCollection>(
-    () => ({ type: "FeatureCollection", features: filteredFeatures }),
+  // Split by geometry: points go to the clustered PointLayer, everything
+  // else stays on the canvas-rendered <GeoJSON>. Point layers otherwise
+  // fall through to Leaflet's default image-marker-per-feature handling,
+  // which ignores preferCanvas and stalls dense layers (גני ילדים).
+  const pointFeatures = useMemo(
+    () => filteredFeatures.filter(isPointFeature),
     [filteredFeatures],
+  );
+  const nonPointFeatures = useMemo(
+    () => filteredFeatures.filter((f) => !isPointFeature(f)),
+    [filteredFeatures],
+  );
+  const shouldCluster = pointFeatures.length > POINT_CLUSTER_THRESHOLD;
+
+  const filteredCollection = useMemo<FeatureCollection>(
+    () => ({ type: "FeatureCollection", features: nonPointFeatures }),
+    [nonPointFeatures],
   );
 
   // Compute the layer bbox once, from the unfiltered FeatureCollection.
@@ -811,6 +975,14 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
                 layer.bindPopup(() => renderPopup(feature, t));
               }}
             />
+            {pointFeatures.length > 0 && (
+              <PointLayer
+                features={pointFeatures}
+                style={layerStyle}
+                cluster={shouldCluster}
+                t={t}
+              />
+            )}
           </MapContainer>
         )}
       </div>
