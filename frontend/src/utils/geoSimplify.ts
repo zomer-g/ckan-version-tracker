@@ -36,6 +36,33 @@ import type { Feature, FeatureCollection, GeoJsonObject } from "geojson";
  *  is fast and the rendering win is huge. */
 export const SIMPLIFY_MAX_FEATURES = 30000;
 
+/** Geometry types that carry arcs (paths) simplification can actually
+ *  reduce. Point / MultiPoint have none — running the topology pipeline
+ *  over them builds a topology and computes a tolerance for nothing,
+ *  burning O(vertex) main-thread time (the גני-ילדים layer: 20K points,
+ *  tolerance comes out 0, output identical to input). */
+const ARC_GEOMETRY_TYPES = new Set([
+  "LineString",
+  "MultiLineString",
+  "Polygon",
+  "MultiPolygon",
+  "GeometryCollection",
+]);
+
+/** True if at least one feature has geometry worth simplifying. A
+ *  point-only collection returns false so the caller can skip the
+ *  whole pipeline. GeometryCollection is treated as simplifiable
+ *  conservatively — it *may* wrap lines/polygons, and they're rare
+ *  enough that the extra topology pass on the odd point-only wrapper
+ *  isn't worth a recursive check. */
+function hasSimplifiableGeometry(fc: FeatureCollection): boolean {
+  for (const f of fc.features) {
+    const t = f.geometry?.type;
+    if (t && ARC_GEOMETRY_TYPES.has(t)) return true;
+  }
+  return false;
+}
+
 /** Fraction of arc points to drop. 0.5 keeps the heaviest 50% of
  *  points (those whose triangle area is in the top half); 0.7 is
  *  more aggressive. The visual difference at typical map zoom is
@@ -60,6 +87,11 @@ export function simplifyFeatureCollection(
 ): FeatureCollection {
   if (!fc.features || fc.features.length === 0) return fc;
   if (fc.features.length > SIMPLIFY_MAX_FEATURES) return fc;
+  // Point / MultiPoint layers have no arcs to simplify — the topology
+  // pipeline would just churn the main thread and hand back the same
+  // geometry. Bail before paying that cost (the clustered point
+  // renderer is what keeps those layers fast, not simplification).
+  if (!hasSimplifiableGeometry(fc)) return fc;
   try {
     // topojson-server wants a record of GeoJSON objects; we stuff
     // the whole collection under a single key. Cast through any
