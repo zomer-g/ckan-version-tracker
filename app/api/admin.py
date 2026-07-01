@@ -631,8 +631,12 @@ async def seed_neon_endpoint(
         # Diagnostic: run inline and return the full summary (incl. per-version
         # skip reasons). Use only when the background run isn't inserting, since
         # a healthy seed can exceed the HTTP timeout.
-        s = await seed_neon_from_versions(db, uid, apply=True, reset=reset)
-        return s
+        try:
+            return await seed_neon_from_versions(db, uid, apply=True, reset=reset)
+        except Exception as e:  # noqa: BLE001 — surface the real error for diagnosis
+            import traceback
+            logger.exception("seed_neon sync crashed for %s", uid)
+            return {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-2500:]}
     background_tasks.add_task(_run_seed_neon_bg, uid, user.email, reset)
     logger.info("Seed NEON started for %s by %s", uid, user.email)
     return {"status": "started", "dataset_id": str(uid),
