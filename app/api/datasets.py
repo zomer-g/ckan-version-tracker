@@ -537,9 +537,10 @@ async def track_dataset(
             # The worker walks the three ?siduri= sequences (Horaa/Hodaa/
             # Chozer). Attached PDFs/Word live on meyda.education.gov.il
             # (plain IIS, no WAF) so files ARE mirrored.
-            from app.api.mankal import get_mankal_limits
+            from app.api.mankal import get_mankal_limits, corpus_of_page_type
             depth, docs = get_mankal_limits(page_type)
             sc["kind"] = "mankal"
+            sc.setdefault("corpus", corpus_of_page_type(page_type))
             sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
@@ -1288,9 +1289,10 @@ async def submit_tracking_request(
         elif page_type and page_type.startswith("mankal_"):
             # Mirror of the admin-POST branch — keep in sync. Files on
             # meyda.education.gov.il ARE mirrored (plain IIS, no WAF).
-            from app.api.mankal import get_mankal_limits
+            from app.api.mankal import get_mankal_limits, corpus_of_page_type
             depth, docs = get_mankal_limits(page_type)
             sc["kind"] = "mankal"
+            sc["corpus"] = corpus_of_page_type(page_type)
             sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs

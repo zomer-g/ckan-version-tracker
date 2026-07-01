@@ -27,8 +27,22 @@ router = APIRouter(prefix="/api/mankal", tags=["mankal"])
 
 
 MANKAL_HOSTS = {"apps.education.gov.il"}
-# The trackable index paths (case-insensitive, trailing slash optional).
-MANKAL_INDEX_PATHS = {"/mankal", "/mankal/default.aspx", "/mankal/etznosim.aspx"}
+# Trackable URLs, each its own OVER dataset (mirrors avodata's
+# /occupations vs /education split). The portal index → the whole corpus;
+# the bare per-type paths → one document category each.
+MANKAL_ALL_PATHS = {"/mankal", "/mankal/default.aspx", "/mankal/etznosim.aspx"}
+MANKAL_CORPUS_BY_PATH = {
+    "/mankal/horaa.aspx": "horaot",
+    "/mankal/hodaa.aspx": "hodaot",
+    "/mankal/chozer.aspx": "chozarim",
+}
+# Hebrew titles surfaced on the request form, per corpus.
+MANKAL_TITLES = {
+    "all": "חוזרי מנכ\"ל משרד החינוך — כל החוזרים, ההוראות וההודעות",
+    "horaot": "חוזרי מנכ\"ל משרד החינוך — הוראות (הוראות קבע ושעה)",
+    "hodaot": "חוזרי מנכ\"ל משרד החינוך — הודעות",
+    "chozarim": "חוזרי מנכ\"ל משרד החינוך — חוזרים (עלונים חודשיים)",
+}
 
 
 class ValidateRequest(BaseModel):
@@ -44,23 +58,43 @@ class ValidateResponse(BaseModel):
     error: str | None = None
 
 
+def _corpus_of_url(url: str) -> str | None:
+    """Return the corpus (``all`` / ``horaot`` / ``hodaot`` / ``chozarim``)
+    for a trackable Mankal URL, or ``None``. A per-type path carrying a
+    ``?siduri=`` is a naked item page → ``None``."""
+    parsed = urlparse(url.strip())
+    if (parsed.hostname or "").lower() not in MANKAL_HOSTS:
+        return None
+    path = (parsed.path or "").lower().rstrip("/")
+    if path in {p.rstrip("/") for p in MANKAL_ALL_PATHS}:
+        return "all"
+    corpus = MANKAL_CORPUS_BY_PATH.get(path)
+    if corpus and "siduri=" not in (parsed.query or "").lower():
+        return corpus
+    return None
+
+
 def _parse_mankal_url(url: str) -> tuple[str | None, str | None]:
     """Parse an apps.education.gov.il/Mankal URL.
 
-    Returns ``("mankal_all", "mankal-all")`` for the portal index, or
-    ``(None, None)`` for everything else (naked ?siduri= item pages,
-    wrong host). The page_type matches ``startswith("mankal_")`` so the
-    dispatch switch in ``datasets.py`` stays symmetric with the existing
-    ``idf_`` / ``health_`` / ``avodata_`` prefixes.
+    Returns ``("mankal_<corpus>", "mankal-<corpus>")`` for a trackable URL
+    (corpus one of all/horaot/hodaot/chozarim), or ``(None, None)`` for
+    everything else (naked ?siduri= item pages, wrong host). The page_type
+    matches ``startswith("mankal_")`` so the dispatch switch in
+    ``datasets.py`` stays symmetric with the existing ``idf_`` / ``health_``
+    / ``avodata_`` prefixes.
     """
-    parsed = urlparse(url.strip())
-    host = (parsed.hostname or "").lower()
-    if host not in MANKAL_HOSTS:
+    corpus = _corpus_of_url(url)
+    if not corpus:
         return None, None
-    path = (parsed.path or "").lower().rstrip("/")
-    if path in {p.rstrip("/") for p in MANKAL_INDEX_PATHS}:
-        return "mankal_all", "mankal-all"
-    return None, None
+    return f"mankal_{corpus}", f"mankal-{corpus}"
+
+
+def corpus_of_page_type(page_type: str) -> str:
+    """Map a mankal page_type (``mankal_horaot`` etc.) to its engine
+    corpus name. Defaults to ``all``."""
+    corpus = (page_type or "").split("_", 1)[1] if "_" in (page_type or "") else ""
+    return corpus if corpus in ("all", "horaot", "hodaot", "chozarim") else "all"
 
 
 # (max_depth, max_docs). max_depth is nominal — the scraper walks flat
@@ -91,19 +125,21 @@ async def validate_mankal_url(request: Request, body: ValidateRequest):
         return ValidateResponse(
             valid=False,
             error=(
-                "URL is not a supported חוזרי מנכ\"ל page. Expected the "
-                "portal index: https://apps.education.gov.il/Mankal/default.aspx "
-                "(the whole corpus is tracked as one dataset — the scraper "
-                "walks every הוראה / הודעה / חוזר). Individual "
-                "Horaa/Hodaa/Chozer.aspx?siduri=… pages can't be tracked on "
-                "their own."
+                "URL is not a supported חוזרי מנכ\"ל page. Track a whole "
+                "category as its own dataset by pasting one of: "
+                "https://apps.education.gov.il/Mankal/default.aspx (all), "
+                "https://apps.education.gov.il/Mankal/Horaa.aspx (הוראות), "
+                "https://apps.education.gov.il/Mankal/Hodaa.aspx (הודעות), or "
+                "https://apps.education.gov.il/Mankal/Chozer.aspx (חוזרים). "
+                "Individual …?siduri=… item pages can't be tracked on their own."
             ),
         )
 
+    corpus = corpus_of_page_type(page_type)
     return ValidateResponse(
         valid=True,
         page_type=page_type,
         collector_name=slug,
-        title="חוזרי מנכ\"ל משרד החינוך — כל החוזרים, ההוראות וההודעות",
+        title=MANKAL_TITLES.get(corpus, MANKAL_TITLES["all"]),
         url=url,
     )
