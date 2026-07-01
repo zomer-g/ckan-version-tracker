@@ -254,29 +254,57 @@ function PointLayer({
   styleRef.current = style;
 
   useEffect(() => {
-    const markers: L.CircleMarker[] = [];
-    for (const f of features) {
-      for (const latlng of pointLatLngs(f)) {
-        const m = L.circleMarker(latlng, pointPathOptions(styleRef.current));
-        m.bindPopup(() => renderPopup(f, t));
-        markers.push(m);
-      }
-    }
-    markersRef.current = markers;
-    if (markers.length === 0) return;
+    markersRef.current = [];
+    if (features.length === 0) return;
 
-    const container: L.Layer = cluster
+    // Empty container added up front so tiles paint immediately; markers
+    // stream in afterwards.
+    const container: L.LayerGroup = cluster
       ? L.markerClusterGroup({
-          // Stream the markers in so building the group doesn't block
-          // one long frame on big layers.
+          // Spreads the cluster math across frames inside each
+          // addLayers() call. Bigger radius → fewer, larger bubbles →
+          // fewer DOM nodes. 50px is Leaflet's default sweet spot.
           chunkedLoading: true,
-          // Bigger radius → fewer, larger cluster bubbles → fewer DOM
-          // nodes. 50px is Leaflet's default sweet spot.
           maxClusterRadius: 50,
-        }).addLayers(markers)
-      : L.layerGroup(markers);
+        })
+      : L.layerGroup();
     container.addTo(map);
+
+    // Build + add markers in yielding batches. Constructing all 20K
+    // circleMarkers in one synchronous pass blocks the main thread for
+    // ~0.7s (measured on the גני-ילדים layer) before the first cluster
+    // ever paints; batching lets the map show tiles and fill in clusters
+    // progressively instead of freezing. addLayers() per batch also
+    // interleaves the (heavier) cluster computation with construction.
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const BATCH = 1500;
+    let i = 0;
+    const buildNextBatch = () => {
+      if (cancelled) return;
+      const end = Math.min(i + BATCH, features.length);
+      const batch: L.CircleMarker[] = [];
+      for (let j = i; j < end; j++) {
+        const f = features[j];
+        for (const latlng of pointLatLngs(f)) {
+          const m = L.circleMarker(latlng, pointPathOptions(styleRef.current));
+          m.bindPopup(() => renderPopup(f, t));
+          batch.push(m);
+          markersRef.current.push(m);
+        }
+      }
+      i = end;
+      if (batch.length) {
+        if (cluster) (container as L.MarkerClusterGroup).addLayers(batch);
+        else for (const m of batch) container.addLayer(m);
+      }
+      if (i < features.length) timer = setTimeout(buildNextBatch, 0);
+    };
+    buildNextBatch();
+
     return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
       map.removeLayer(container);
       markersRef.current = [];
     };
