@@ -1,12 +1,28 @@
 """Scrape task queue for external worker integration."""
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 class ScrapeTask(Base):
     __tablename__ = "scrape_tasks"
+
+    # At most one ACTIVE (pending/running) task per dataset. The app-side check
+    # in poll_job._create_scrape_task ("is there already a task?") is a
+    # check-then-act race: two concurrent polls both read "none" and both
+    # INSERT, producing duplicate scrapes of the same dataset. The in-process
+    # single-flight guard on poll_dataset covers the single-dyno case; this
+    # partial unique index is the DB-level backstop for the cross-process case
+    # (a losing INSERT hits a unique violation, handled as a skip).
+    __table_args__ = (
+        Index(
+            "uq_scrape_tasks_active_per_dataset",
+            "tracked_dataset_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending','running')"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tracked_dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tracked_datasets.id", ondelete="CASCADE"), nullable=False)

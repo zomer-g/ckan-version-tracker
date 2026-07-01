@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import async_session
@@ -737,7 +738,21 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
     )
     db.add(task)
     ds.last_polled_at = datetime.now(timezone.utc)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Lost a cross-process race to the partial unique index
+        # (uq_scrape_tasks_active_per_dataset): another poll already queued the
+        # one allowed active task for this dataset. Same outcome as the
+        # check-then-act skip above — no duplicate scrape, just record the poll.
+        await db.rollback()
+        logger.info(
+            "Scrape task already exists for %s (unique-index race), skipping",
+            ds.ckan_name,
+        )
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
     logger.info("Created scrape task for %s (source: %s)", ds.ckan_name, ds.source_url)
     from app.services.activity_log import log_event
     await log_event(
