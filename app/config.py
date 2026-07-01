@@ -81,11 +81,11 @@ class Settings(BaseSettings):
     worker_version_fail_closed: bool = True
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
-    # PINNED to the worker's full git SHA — GitHub-independent, so the gate
-    # works even when this server can't reach GitHub (the reason stale
-    # workers slipped through and crashed govmap tasks with the old WFS
-    # ParseError). The correct worker reports this exact SHA; any other
-    # (stale) worker is refused.
+    # PINNED to the worker's full git SHA. NOTE: auto-tracking (empty →
+    # follow GitHub master HEAD) is NOT usable here — govil-scraper is a
+    # PRIVATE repo and this server has no GitHub token, so the commits API
+    # returns 404 and the fail-closed gate would refuse every worker. So the
+    # pin must stay explicit and GitHub-independent.
     # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
     #   to the new `git rev-parse HEAD` of that repo, or the new worker is
     #   refused. (OVER-only commits don't change it.)
