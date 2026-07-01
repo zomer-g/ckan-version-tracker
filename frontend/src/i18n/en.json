@@ -90,6 +90,7 @@
     "source_link_avodata": "Source on avodata.labor.gov.il",
     "source_link_mevaker": "Source on mevaker.gov.il",
     "source_link_hatzav": "Source on Hatzav (geo.mot.gov.il)",
+    "source_link_mankal": "Source on Mankal circulars (apps.education.gov.il)",
     "govmap_request_btn": "Request Layer Tracking",
     "govmap_request_title": "Request GovMap Layer Tracking",
     "govmap_request_hint": "You can add more layer URLs from govmap.gov.il (one per line).",

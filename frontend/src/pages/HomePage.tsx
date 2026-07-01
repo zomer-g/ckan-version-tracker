@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -22,6 +22,9 @@ import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
 // geo.mot.gov.il (חצב) portal URL pattern. Mirror of HATZAV_ROOT_RE in
 // app/api/hatzav.py.
 import { HATZAV_PATTERN } from "../utils/hatzavPattern";
+// apps.education.gov.il/Mankal (חוזרי מנכ"ל) portal URL pattern. Mirror of
+// MANKAL_INDEX_PATHS in app/api/mankal.py.
+import { MANKAL_PATTERN } from "../utils/mankalPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -142,6 +145,8 @@ export default function HomePage() {
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
   // geo.mot.gov.il (חצב) catalog scraper result — same shape.
   const [hatzavResult, setHatzavResult] = useState<GovIlValidation | null>(null);
+  // apps.education.gov.il/Mankal (חוזרי מנכ"ל) scraper result — same shape.
+  const [mankalResult, setMankalResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -194,6 +199,10 @@ export default function HomePage() {
     return HATZAV_PATTERN.test(input.trim());
   };
 
+  const detectMankalUrl = (input: string): boolean => {
+    return MANKAL_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -213,6 +222,7 @@ export default function HomePage() {
     setAvodataResult(null);
     setMevakerResult(null);
     setHatzavResult(null);
+    setMankalResult(null);
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -317,6 +327,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid geo.mot.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2g. Check for apps.education.gov.il/Mankal (חוזרי מנכ"ל) portal URL.
+      if (detectMankalUrl(query)) {
+        const validation = await mankal.validate(query.trim());
+        if (validation.valid) {
+          setMankalResult(validation);
+          setRequestFormFor("mankal");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid apps.education.gov.il URL");
         }
         setLoading(false);
         return;
@@ -778,6 +803,61 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("hatzav")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* apps.education.gov.il/Mankal (חוזרי מנכ"ל) scraper result —
+            emerald חוזרי מנכ"ל chip. */}
+        {!loading && mankalResult && (
+          <section aria-label="apps.education.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #059669" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mankalResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#d1fae5",
+                      color: "#065f46",
+                    }}>
+                      חוזרי מנכ"ל
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>משרד החינוך — חוזרי מנכ"ל</span>
+                  <span>apps.education.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={mankalResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {mankalResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "mankal" ? (
+                    <RequestForm
+                      datasetTitle={mankalResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={mankalResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("mankal")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

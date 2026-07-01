@@ -400,6 +400,17 @@ export const hatzav = {
     }),
 };
 
+// apps.education.gov.il/Mankal validation — same response shape. Server
+// side at app/api/mankal.py; only the portal index is accepted (the whole
+// חוזרי מנכ"ל corpus is tracked as one dataset).
+export const mankal = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/mankal/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

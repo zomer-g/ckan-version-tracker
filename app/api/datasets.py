@@ -348,6 +348,7 @@ async def track_dataset(
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
+        from app.api.mankal import _parse_mankal_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -383,13 +384,20 @@ async def track_dataset(
                 slug_prefix = "hatzav-scraper"
                 mirror_prefix = "gov-versions-hatzav"
         if not collector_name:
+            page_type, collector_name = _parse_mankal_url(body.source_url)
+            if collector_name:
+                origin = "apps.education.gov.il"
+                slug_prefix = "mankal-scraper"
+                mirror_prefix = "gov-versions-mankal"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "or geo.mot.gov.il (חצב) portal"
+                    "geo.mot.gov.il (חצב) portal, or apps.education.gov.il "
+                    "חוזרי מנכ\"ל portal"
                 ),
             )
 
@@ -521,6 +529,18 @@ async def track_dataset(
             depth, docs = get_hatzav_limits(page_type)
             sc["kind"] = "hatzav"
             sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+        elif page_type and page_type.startswith("mankal_"):
+            # apps.education.gov.il/Mankal (חוזרי מנכ"ל) — whole-corpus,
+            # server-rendered ASP.NET HTML scraped via plain httpx + bs4.
+            # The worker walks the three ?siduri= sequences (Horaa/Hodaa/
+            # Chozer). Attached PDFs/Word live on meyda.education.gov.il
+            # (plain IIS, no WAF) so files ARE mirrored.
+            from app.api.mankal import get_mankal_limits
+            depth, docs = get_mankal_limits(page_type)
+            sc["kind"] = "mankal"
+            sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
 
@@ -1158,6 +1178,7 @@ async def submit_tracking_request(
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
+        from app.api.mankal import _parse_mankal_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -1187,13 +1208,19 @@ async def submit_tracking_request(
                 origin = "geo.mot.gov.il"
                 slug_prefix = "hatzav-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_mankal_url(body.source_url)
+            if collector_name:
+                origin = "apps.education.gov.il"
+                slug_prefix = "mankal-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "or geo.mot.gov.il (חצב) portal"
+                    "geo.mot.gov.il (חצב) portal, or apps.education.gov.il "
+                    "חוזרי מנכ\"ל portal"
                 ),
             )
 
@@ -1256,6 +1283,15 @@ async def submit_tracking_request(
             depth, docs = get_hatzav_limits(page_type)
             sc["kind"] = "hatzav"
             sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+        elif page_type and page_type.startswith("mankal_"):
+            # Mirror of the admin-POST branch — keep in sync. Files on
+            # meyda.education.gov.il ARE mirrored (plain IIS, no WAF).
+            from app.api.mankal import get_mankal_limits
+            depth, docs = get_mankal_limits(page_type)
+            sc["kind"] = "mankal"
+            sc["download_files"] = True
             sc["max_depth"] = depth
             sc["max_docs"] = docs
         ds = TrackedDataset(

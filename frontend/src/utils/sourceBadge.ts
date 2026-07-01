@@ -34,7 +34,8 @@ export interface SourceBadge {
     | "home.source_link_health"
     | "home.source_link_avodata"
     | "home.source_link_mevaker"
-    | "home.source_link_hatzav";
+    | "home.source_link_hatzav"
+    | "home.source_link_mankal";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -67,6 +68,13 @@ const MEVAKER_ORG_HINTS = ["mevaker.gov.il"];
 // generic Ministry-of-Transport slug shared with regular gov.il
 // collectors. The ckan_id prefix "hatzav-scraper-" is the primary signal.
 const HATZAV_ORG_HINTS = ["geo.mot.gov.il"];
+
+// Same drift-immune rule for חוזרי מנכ"ל (apps.education.gov.il/Mankal) —
+// only the exact "apps.education.gov.il" stamp the backend writes at
+// create time, NOT a generic Ministry-of-Education slug shared with
+// regular gov.il collectors. The ckan_id prefix "mankal-scraper-" is the
+// primary signal.
+const MANKAL_ORG_HINTS = ["apps.education.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -116,6 +124,15 @@ function looksLikeHatzav(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("hatzav-scraper-")) return true;
   if (organization && HATZAV_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeMankal(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("mankal-scraper-")) return true;
+  if (organization && MANKAL_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -205,6 +222,18 @@ export function sourceBadgeFor(
         label: "חצב",
         accent: "#4f46e5",
         sourceLinkKey: "home.source_link_hatzav",
+      };
+    }
+    if (looksLikeMankal(organization, ckan_id)) {
+      // Emerald pill for חוזרי מנכ"ל (apps.education.gov.il, Ministry of
+      // Education Director-General circulars), distinct from the other
+      // source families.
+      return {
+        bg: "#d1fae5",
+        fg: "#065f46",
+        label: "חוזרי מנכ\"ל",
+        accent: "#059669",
+        sourceLinkKey: "home.source_link_mankal",
       };
     }
     return {
