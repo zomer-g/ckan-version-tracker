@@ -1,4 +1,5 @@
 import { Trans, useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 // Small helper for external links so the Trans <1> placeholder stays terse.
 function ExtLink({ href, children }: { href: string; children?: React.ReactNode }) {
@@ -34,6 +35,12 @@ export default function AboutPage() {
         <div className="about-card">
           <h2>{t("about.why_title")}</h2>
           <p>{t("about.why_text")}</p>
+          <p>
+            <Trans
+              i18nKey="about.rationale_teaser"
+              components={{ 1: <Link to="/rationale" /> }}
+            />
+          </p>
         </div>
 
         <div className="about-card">

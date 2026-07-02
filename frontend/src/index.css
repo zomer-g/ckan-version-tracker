@@ -640,6 +640,37 @@ label {
   margin-top: 0.75rem;
 }
 
+/* Rationale page (/rationale) — shares the about-* shell */
+.rationale-hero-sub {
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 0.5rem;
+  font-size: 1.05rem;
+  max-width: 640px;
+  margin-inline: auto;
+  line-height: 1.6;
+}
+
+.rationale-principle {
+  background: var(--primary-50);
+  border-inline-start: 4px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.rationale-principle p {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--primary-800);
+  line-height: 1.6;
+}
+
+.rationale-principle footer {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .project-link {
   display: block;
   padding: 1rem 1.25rem;

@@ -11,6 +11,7 @@ import VersionsPage from "./pages/VersionsPage";
 import AppendArchivePage from "./pages/AppendArchivePage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
+import RationalePage from "./pages/RationalePage";
 import ApiPage from "./pages/ApiPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/tags/:tagId" element={<TagDetailPage />} />
           <Route path="/api" element={<ApiPage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route path="/rationale" element={<RationalePage />} />
           <Route
             path="/growth"
             element={

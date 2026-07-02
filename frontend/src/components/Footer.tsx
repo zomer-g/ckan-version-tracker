@@ -13,6 +13,7 @@ export default function Footer() {
           </div>
           <div className="footer-links">
             <a href="/about">{t("nav.about")}</a>
+            <a href="/rationale">{t("nav.rationale")}</a>
             <a
               href="https://github.com/zomer-g/ckan-version-tracker"
               target="_blank"

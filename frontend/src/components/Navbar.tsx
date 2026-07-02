@@ -86,6 +86,7 @@ export default function Navbar() {
     { to: "/tags", label: t("nav.tags", "תגיות") },
     { to: "/api", label: t("nav.api", "API") },
     { to: "/about", label: t("nav.about") },
+    { to: "/rationale", label: t("nav.rationale", "הרציונל") },
   ];
 
   const closeMobile = () => setMobileOpen(false);
