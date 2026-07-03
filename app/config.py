@@ -65,6 +65,18 @@ class Settings(BaseSettings):
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 
+    # ── MCP machine-to-machine service token ──
+    # Optional shared secret that lets a trusted machine — the "חיפוש רוחבי"
+    # discovery gateway — call /mcp WITHOUT the interactive Google OAuth flow.
+    # A request whose Bearer token equals this value is authenticated as the
+    # fixed "service-gateway" principal (see app/mcp/auth.py), bypassing JWT
+    # verification and the api_users allow-list. Empty ⇒ this path is OFF
+    # entirely (no bypass possible). Equivalent to full MCP access — keep it in
+    # secrets only, never in the repo. Rotate by changing it here AND in the
+    # gateway. Human users keep using OAuth; this is a parallel path, not a
+    # replacement. See docs (mcp-service-token) for the gateway side.
+    mcp_service_token: str = ""
+
     # Worker version gate: refuse to dispatch tasks to a worker whose git
     # commit doesn't match what's on the upstream repo's master branch.
     # Prevents stale workers from picking up tasks and producing opaque
@@ -89,7 +101,7 @@ class Settings(BaseSettings):
     # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
     #   to the new `git rev-parse HEAD` of that repo, or the new worker is
     #   refused. (OVER-only commits don't change it.)
-    worker_required_version: str = "6c7d0b8395c5501ae170e20bee660374de08de59"
+    worker_required_version: str = "ed424c4c065da21b004fe55faf44b9fef35a3022"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
