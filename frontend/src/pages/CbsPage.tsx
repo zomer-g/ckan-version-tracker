@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   cbs,
@@ -23,7 +24,16 @@ export default function CbsPage() {
   const { t, i18n } = useTranslation();
   const he = i18n.language === "he";
 
-  const [query, setQuery] = useState("");
+  // Search + filter state is mirrored into the URL query string so a specific
+  // search is shareable / deep-linkable. On first render we seed state FROM the
+  // URL; runSearch() writes state back TO the URL. We read the params once for
+  // the initial state — later URL writes go through setSearchParams, and we
+  // don't re-seed from `searchParams` on every change (that would fight the
+  // controlled inputs).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initial = new URLSearchParams(searchParams);
+
+  const [query, setQuery] = useState(() => initial.get("q") || "");
   const [facets, setFacets] = useState<CbsFacets | null>(null);
   const [results, setResults] = useState<CbsResult[]>([]);
   const [total, setTotal] = useState(0);
@@ -32,11 +42,11 @@ export default function CbsPage() {
   const [offset, setOffset] = useState(0);
 
   // Active facet filters.
-  const [subject, setSubject] = useState("");
-  const [geo, setGeo] = useState("");
-  const [fileType, setFileType] = useState("");
-  const [yearFrom, setYearFrom] = useState("");
-  const [yearTo, setYearTo] = useState("");
+  const [subject, setSubject] = useState(() => initial.get("subject") || "");
+  const [geo, setGeo] = useState(() => initial.get("geo") || "");
+  const [fileType, setFileType] = useState(() => initial.get("file_type") || "");
+  const [yearFrom, setYearFrom] = useState(() => initial.get("year_from") || "");
+  const [yearTo, setYearTo] = useState(() => initial.get("year_to") || "");
 
   useEffect(() => {
     cbs.facets().then(setFacets).catch(() => {
@@ -48,6 +58,20 @@ export default function CbsPage() {
     async (nextOffset = 0) => {
       setLoading(true);
       setError("");
+      // On a fresh search (page 1) reflect the active query + filters into the
+      // URL so the address bar is a shareable link. `replace` keeps filter
+      // tweaks out of the browser history. Paging ("load more") doesn't touch
+      // the URL — a shared link always opens on the first page.
+      if (nextOffset === 0) {
+        const sp = new URLSearchParams();
+        if (query.trim()) sp.set("q", query.trim());
+        if (subject) sp.set("subject", subject);
+        if (geo) sp.set("geo", geo);
+        if (fileType) sp.set("file_type", fileType);
+        if (yearFrom) sp.set("year_from", yearFrom);
+        if (yearTo) sp.set("year_to", yearTo);
+        setSearchParams(sp, { replace: true });
+      }
       try {
         const params: CbsSearchParams = {
           q: query.trim() || undefined,
@@ -71,7 +95,7 @@ export default function CbsPage() {
       }
       setLoading(false);
     },
-    [query, subject, geo, fileType, yearFrom, yearTo]
+    [query, subject, geo, fileType, yearFrom, yearTo, setSearchParams]
   );
 
   // Load an initial (unfiltered, newest-first) page on mount, and re-run
