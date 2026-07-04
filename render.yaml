@@ -31,4 +31,9 @@ services:
         sync: false
       - key: WORKER_API_KEY
         sync: false
+      # Shared M2M secret for the "חיפוש רוחבי" gateway to call /mcp without
+      # OAuth. Set the VALUE in the Render dashboard (must match the gateway's
+      # MCP_TOKEN_OVER). Empty ⇒ the service-token bypass is off. See app/mcp/auth.py.
+      - key: MCP_SERVICE_TOKEN
+        sync: false
 # No databases section — using external Neon PostgreSQL (free tier)
