@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.database import async_session
@@ -73,6 +74,12 @@ async def init_scheduler() -> None:
         datasets = result.scalars().all()
 
         for ds in datasets:
+            # GovMap coverage datasets are driven ONLY by the twice-daily
+            # coverage rollout (below), never by a per-dataset poll job — skip
+            # them here so we don't also fire them on their own interval (and
+            # never mass-fire the whole catalog on a deploy).
+            if (ds.scraper_config or {}).get("coverage_managed"):
+                continue
             add_poll_job(
                 str(ds.id), ds.poll_interval,
                 last_polled_at=ds.last_polled_at,
@@ -152,6 +159,21 @@ async def init_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+
+    # GovMap full-coverage rollout: scrape the next catalog layer twice a day
+    # (08:00 + 20:00 Israel time — "one in the morning, one in the evening"),
+    # but only when the worker is idle (the tick self-skips otherwise), so the
+    # whole catalog gets covered gradually without overloading GovMap or the
+    # single worker. See app/services/govmap_coverage.py.
+    from app.services.govmap_coverage import scrape_next_layer
+    scheduler.add_job(
+        scrape_next_layer,
+        trigger=CronTrigger(hour="8,20", minute=0, timezone="Asia/Jerusalem"),
+        id="govmap_coverage_rollout",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()

@@ -810,6 +810,49 @@ async def all_scrape_tasks_for_dataset(
     }
 
 
+# ---------------------------------------------------------------------------
+# GovMap full-coverage rollout (throttled — 2 layers/day, morning + evening)
+# ---------------------------------------------------------------------------
+
+@router.post("/govmap-coverage/populate")
+@limiter.limit("6/minute")
+async def govmap_coverage_populate(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch GovMap's layer catalog and upsert the coverage inventory. Safe to
+    re-run (idempotent). The twice-daily scheduler then walks this inventory."""
+    from app.services.govmap_coverage import populate_from_catalog
+    return await populate_from_catalog(db)
+
+
+@router.get("/govmap-coverage/status")
+@limiter.limit("60/minute")
+async def govmap_coverage_status_ep(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rollout progress: total layers, how many have ever been triggered, etc."""
+    from app.services.govmap_coverage import coverage_status
+    return await coverage_status(db)
+
+
+@router.post("/govmap-coverage/scrape-next")
+@limiter.limit("6/minute")
+async def govmap_coverage_scrape_next(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually run one coverage tick now (same logic as the scheduled job:
+    skips if the worker is busy, else scrapes the next layer). For testing /
+    kicking off the rollout without waiting for the next 08:00/20:00 tick."""
+    from app.services.govmap_coverage import scrape_next_layer
+    return await scrape_next_layer()
+
+
 _dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
 _DATASET_SIZES_TTL = 60.0  # seconds
 
