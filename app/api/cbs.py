@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/cbs", tags=["cbs"])
 _INGEST_FIELDS = (
     "lang", "section", "series", "item_type", "title", "title_en", "summary",
     "subject_tags", "year_start", "year_end", "geo_levels", "file_links",
-    "file_types", "full_text", "content_hash", "crawl_status", "crawl_error",
+    "file_types", "extra", "full_text", "content_hash", "crawl_status", "crawl_error",
 )
 
 
@@ -71,6 +71,7 @@ class CbsPageIn(BaseModel):
     geo_levels: list[str] | None = None
     file_links: list[FileLink] | None = None
     file_types: list[str] | None = None
+    extra: dict | None = None
     full_text: str | None = None
     content_hash: str | None = None
     crawl_status: str = "ok"
@@ -127,6 +128,7 @@ class CbsResult(BaseModel):
     geo_levels: list | None
     file_links: list | None
     file_types: list | None
+    extra: dict | None
     last_crawled: datetime | None
 
 
@@ -202,7 +204,7 @@ async def search(
     cols = (
         "url, lang, section, series, item_type, title, title_en, summary, "
         "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
-        "last_crawled"
+        "extra, last_crawled"
     )
     params["limit"] = limit
     params["offset"] = offset

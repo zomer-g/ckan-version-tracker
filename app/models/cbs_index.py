@@ -73,6 +73,13 @@ class CbsIndex(Base):
     # "has an xlsx" filtering without unnesting file_links.
     file_types: Mapped[list | None] = mapped_column(JSONB)
 
+    # Additional structured metadata that doesn't warrant a first-class column
+    # (dict): interval/frequency, keywords, gathering_method, article_type,
+    # surveys, publisher, languages... Keeps rich taxonomy without over-fitting
+    # the schema. Filterable first-class facets (subject/geo/year/file_type)
+    # stay as their own columns.
+    extra: Mapped[dict | None] = mapped_column(JSONB)
+
     # Extracted plain text of the rendered page (feeds search_vector).
     full_text: Mapped[str | None] = mapped_column(Text)
     # SHA-256 of the extracted content — lets the worker skip re-writing
