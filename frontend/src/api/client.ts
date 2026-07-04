@@ -411,6 +411,86 @@ export const mankal = {
     }),
 };
 
+// CBS (cbs.gov.il) content index — a searchable catalog of the Central Bureau
+// of Statistics site (one row per crawled page). Server side at app/api/cbs.py;
+// the table is populated by the govil-scraper `cbs` engine (Playwright crawl,
+// HEAD-only file sizing — bytes are never mirrored). Read-only + public.
+export interface CbsFileLink {
+  label: string | null;
+  href: string;
+  ext: string | null;
+  size: number | null;
+  last_modified: string | null;
+}
+
+export interface CbsResult {
+  url: string;
+  lang: string | null;
+  section: string | null;
+  series: string | null;
+  item_type: string | null;
+  title: string | null;
+  title_en: string | null;
+  summary: string | null;
+  subject_tags: string[] | null;
+  year_start: number | null;
+  year_end: number | null;
+  geo_levels: string[] | null;
+  file_links: CbsFileLink[] | null;
+  file_types: string[] | null;
+  last_crawled: string | null;
+}
+
+export interface CbsSearchResponse {
+  total: number;
+  results: CbsResult[];
+}
+
+export interface CbsFacets {
+  subjects: string[];
+  geo_levels: string[];
+  file_types: string[];
+  sections: string[];
+  item_types: string[];
+  year_min: number | null;
+  year_max: number | null;
+}
+
+export interface CbsStats {
+  total: number;
+  crawled: number;
+  pending: number;
+  errored: number;
+  by_section: Record<string, number>;
+}
+
+export interface CbsSearchParams {
+  q?: string;
+  subject?: string;
+  geo?: string;
+  file_type?: string;
+  section?: string;
+  item_type?: string;
+  lang?: string;
+  year_from?: number;
+  year_to?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export const cbs = {
+  search: (params: CbsSearchParams = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+    }
+    const qs = p.toString();
+    return request<CbsSearchResponse>(`/cbs/search${qs ? `?${qs}` : ""}`);
+  },
+  facets: () => request<CbsFacets>("/cbs/facets"),
+  stats: () => request<CbsStats>("/cbs/stats"),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

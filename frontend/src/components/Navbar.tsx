@@ -84,6 +84,7 @@ export default function Navbar() {
     { to: "/", label: t("nav.search") },
     { to: "/organizations", label: t("nav.organizations", "ארגונים") },
     { to: "/tags", label: t("nav.tags", "תגיות") },
+    { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
     { to: "/api", label: t("nav.api", "API") },
     { to: "/about", label: t("nav.about") },
     { to: "/rationale", label: t("nav.rationale", "הרציונל") },

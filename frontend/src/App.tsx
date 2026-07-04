@@ -17,6 +17,7 @@ import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
 import TagDetailPage from "./pages/TagDetailPage";
+import CbsPage from "./pages/CbsPage";
 // Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
 // gzipped. Other pages should not pay that cost.
 const GrowthPage = lazy(() => import("./pages/GrowthPage"));
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/organizations/:orgId" element={<OrganizationDetailPage />} />
           <Route path="/tags" element={<TagsPage />} />
           <Route path="/tags/:tagId" element={<TagDetailPage />} />
+          <Route path="/cbs" element={<CbsPage />} />
           <Route path="/api" element={<ApiPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />
