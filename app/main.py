@@ -28,6 +28,7 @@ from app.api.avodata import router as avodata_router
 from app.api.mevaker import router as mevaker_router
 from app.api.hatzav import router as hatzav_router
 from app.api.mankal import router as mankal_router
+from app.api.cbs import router as cbs_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
@@ -104,6 +105,7 @@ app.include_router(avodata_router)
 app.include_router(mevaker_router)
 app.include_router(hatzav_router)
 app.include_router(mankal_router)
+app.include_router(cbs_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)
