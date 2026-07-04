@@ -39,3 +39,9 @@ def google_callback_url(request: Request) -> str:
 
 def mcp_jwt_secret() -> str:
     return settings.get_jwt_secret()
+
+
+def mcp_service_token() -> str:
+    """Shared machine-to-machine secret for the discovery gateway (or "" if the
+    service-token bypass is disabled). See app/mcp/auth.py."""
+    return (settings.mcp_service_token or "").strip()

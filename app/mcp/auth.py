@@ -8,6 +8,7 @@ auth server.
 """
 from __future__ import annotations
 
+import hmac
 import uuid
 from dataclasses import dataclass
 
@@ -17,8 +18,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.mcp.config import MCP_JWT_AUDIENCE, mcp_jwt_secret, mcp_url
+from app.mcp.config import (
+    MCP_JWT_AUDIENCE, mcp_jwt_secret, mcp_service_token, mcp_url,
+)
 from app.models.mcp import ApiUser
+
+# Fixed identity of the machine-to-machine "service gateway" principal. This
+# UUID is SEEDED as a real api_users row by migration 024 so tool-call usage
+# events (mcp_usage_events.api_user_id → api_users.id, NOT NULL FK) still log
+# for service traffic. MUST stay in lockstep with that migration's insert.
+SERVICE_USER_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 
 
 @dataclass
@@ -28,6 +37,16 @@ class McpUser:
     name: str | None
     tier: str
     client_id: str | None
+
+
+def _service_user() -> "McpUser":
+    return McpUser(
+        id=SERVICE_USER_ID,
+        email="service-gateway@over.org.il",
+        name="Discovery Gateway (service)",
+        tier="service",
+        client_id=None,
+    )
 
 
 def challenge(request: Request, error: str, description: str) -> JSONResponse:
@@ -46,6 +65,18 @@ async def authenticate(request: Request, db: AsyncSession) -> McpUser | Response
     if not header.lower().startswith("bearer "):
         return challenge(request, "invalid_token", "Missing Bearer token")
     token = header[7:].strip()
+
+    # ── service-token path (machine-to-machine; bypasses OAuth) ──
+    # A trusted gateway presents a static shared secret instead of a per-user
+    # JWT. Checked BEFORE jwt.decode / the api_users lookup so the gateway never
+    # needs a Google login. Timing-safe compare (hmac.compare_digest also
+    # tolerates unequal lengths). OFF entirely unless MCP_SERVICE_TOKEN is set —
+    # an empty configured secret can never match a presented token here.
+    svc = mcp_service_token()
+    if svc and hmac.compare_digest(token, svc):
+        return _service_user()
+
+    # ── otherwise: the normal per-user OAuth flow (JWT + api_users) ──
     try:
         claims = jwt.decode(token, mcp_jwt_secret(), algorithms=["HS256"], audience=MCP_JWT_AUDIENCE)
     except Exception:
