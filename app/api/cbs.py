@@ -235,10 +235,14 @@ class FacetsResponse(BaseModel):
 async def facets(request: Request, db: AsyncSession = Depends(get_db)):
     """Distinct filter values for the search UI."""
     async def distinct_jsonb(col: str) -> list[str]:
+        # LATERAL + jsonb_typeof guard: a single non-array value (should never
+        # happen, but defensive) would otherwise crash the whole SRF query.
         r = await db.execute(
             text(
-                f"SELECT DISTINCT jsonb_array_elements_text({col}) AS v "
-                f"FROM cbs_index WHERE {col} IS NOT NULL ORDER BY v"
+                f"SELECT DISTINCT elem AS v FROM cbs_index "
+                f"CROSS JOIN LATERAL jsonb_array_elements_text({col}) AS elem "
+                f"WHERE {col} IS NOT NULL AND jsonb_typeof({col}) = 'array' "
+                f"ORDER BY v"
             )
         )
         return [row[0] for row in r]
