@@ -937,6 +937,123 @@ async def push_version(
     }
 
 
+# ── Direct-to-R2 presigned multipart uploads ──────────────────────────────
+# Multi-GB scraper outputs (GovMap heavy layers: 3.6GB CSV / 3.9GB GeoJSON)
+# can't be POSTed through this server: over.org.il is fronted by Cloudflare
+# and the giant request destabilises the dyno — observed as 502s on
+# /upload-csv that also starve every task's progress reports for >10 min,
+# tripping the stuck-task watchdog. These endpoints only ORCHESTRATE an S3
+# multipart upload against R2; the worker PUTs each part directly to the
+# presigned R2 URL, so the file bytes never touch this server. The completed
+# object is referenced exactly like an /upload-csv | /upload-geojson R2
+# result: an "r2:<key>" marker passed to push-version.
+
+
+class R2StartBody(BaseModel):
+    filename: str
+    content_type: str | None = None
+    version_number: int = 1  # placeholder, like the other pre-upload paths
+
+
+class R2PartUrlBody(BaseModel):
+    key: str
+    upload_id: str
+    part_number: int
+
+
+class R2CompleteBody(BaseModel):
+    key: str
+    upload_id: str
+    parts: list[dict]           # [{"part_number": n, "etag": "..."}]
+    row_count: int = 0
+    compression: str | None = None
+
+
+class R2AbortBody(BaseModel):
+    key: str
+    upload_id: str
+
+
+def _require_r2_key(key: str) -> None:
+    """Presign/complete only object keys our own build_key produces —
+    a worker-key holder shouldn't be able to write arbitrary bucket paths."""
+    if not key.startswith("datasets/") or ".." in key:
+        raise HTTPException(status_code=400, detail="Bad object key")
+
+
+@router.post("/upload-r2/start/{tracked_dataset_id}")
+@limiter.limit("60/minute")
+async def r2_upload_start(
+    request: Request,
+    tracked_dataset_id: str,
+    body: R2StartBody,
+    db: AsyncSession = Depends(get_db),
+):
+    _verify_worker_key(request)
+    result = await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uuid.UUID(tracked_dataset_id))
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not storage_client.is_configured():
+        raise HTTPException(status_code=400, detail="R2 storage not configured")
+    key = storage.build_key(str(ds.id), body.version_number, body.filename)
+    upload_id = await storage_client.create_multipart(key, body.content_type)
+    logger.info("R2 multipart started for %s: %s", ds.title, key)
+    return {"key": key, "upload_id": upload_id,
+            "part_size": 100 * 1024 * 1024}
+
+
+@router.post("/upload-r2/part-url")
+@limiter.limit("600/minute")
+async def r2_upload_part_url(request: Request, body: R2PartUrlBody):
+    _verify_worker_key(request)
+    _require_r2_key(body.key)
+    if not 1 <= body.part_number <= 10_000:
+        raise HTTPException(status_code=400, detail="part_number out of range")
+    url = await storage_client.presign_part(body.key, body.upload_id,
+                                            body.part_number)
+    return {"url": url}
+
+
+@router.post("/upload-r2/complete")
+@limiter.limit("60/minute")
+async def r2_upload_complete(request: Request, body: R2CompleteBody):
+    _verify_worker_key(request)
+    _require_r2_key(body.key)
+    if not body.parts:
+        raise HTTPException(status_code=400, detail="No parts")
+    parts = sorted(
+        ({"PartNumber": int(p["part_number"]), "ETag": str(p["etag"])}
+         for p in body.parts),
+        key=lambda p: p["PartNumber"],
+    )
+    try:
+        await storage_client.complete_multipart(body.key, body.upload_id, parts)
+    except Exception as e:
+        logger.exception("R2 multipart complete failed for %s", body.key)
+        raise HTTPException(status_code=502, detail=f"complete failed: {e}")
+    size = await storage_client.object_size(body.key)
+    return {
+        "resource_id": storage.mark(body.key),
+        "size": size or 0,
+        "rows": body.row_count,
+        "compression": body.compression or "none",
+        "datastore": "skipped (r2 direct — file only, no queryable table)",
+        "upload_mode": "r2-direct",
+    }
+
+
+@router.post("/upload-r2/abort")
+@limiter.limit("60/minute")
+async def r2_upload_abort(request: Request, body: R2AbortBody):
+    _verify_worker_key(request)
+    _require_r2_key(body.key)
+    await storage_client.abort_multipart(body.key, body.upload_id)
+    return {"status": "aborted"}
+
+
 @router.post("/upload-zip/{tracked_dataset_id}")
 @limiter.limit("30/minute")
 async def upload_zip(

@@ -269,6 +269,80 @@ class StorageClient:
         logger.info("Uploaded object to R2: %s", key)
         return key
 
+    # ── presigned multipart (direct worker→R2 uploads) ──────────────────
+    # Multi-GB scraper outputs (GovMap heavy layers: 3.6GB CSV, 3.9GB GeoJSON)
+    # cannot travel through the OVER dyno: over.org.il sits behind Cloudflare
+    # and the giant POST destabilises the dyno (502s that also starve task
+    # heartbeats). Instead the server only ORCHESTRATES: it creates an S3
+    # multipart upload and presigns per-part PUT URLs against the R2 S3
+    # endpoint — the worker PUTs the bytes straight to R2, then asks the
+    # server to complete. The file bytes never touch OVER.
+
+    async def create_multipart(self, key: str, content_type: str | None = None) -> str:
+        """Start a multipart upload for ``key``; returns the S3 UploadId."""
+        if not self.is_configured():
+            raise RuntimeError("R2 storage is not configured")
+
+        def _do() -> str:
+            client = self._get_client()
+            kwargs: dict[str, Any] = {"Bucket": settings.s3_bucket, "Key": key}
+            if content_type:
+                kwargs["ContentType"] = content_type
+            return client.create_multipart_upload(**kwargs)["UploadId"]
+
+        return await asyncio.to_thread(_do)
+
+    async def presign_part(self, key: str, upload_id: str, part_number: int,
+                           expires_s: int = 7200) -> str:
+        """Presigned PUT URL for one part (1-based part_number)."""
+        if not self.is_configured():
+            raise RuntimeError("R2 storage is not configured")
+
+        def _do() -> str:
+            client = self._get_client()
+            return client.generate_presigned_url(
+                "upload_part",
+                Params={
+                    "Bucket": settings.s3_bucket, "Key": key,
+                    "UploadId": upload_id, "PartNumber": part_number,
+                },
+                ExpiresIn=expires_s,
+            )
+
+        return await asyncio.to_thread(_do)
+
+    async def complete_multipart(self, key: str, upload_id: str,
+                                 parts: list[dict]) -> None:
+        """Finish a multipart upload. ``parts`` = [{"PartNumber": n, "ETag": e}]."""
+        if not self.is_configured():
+            raise RuntimeError("R2 storage is not configured")
+
+        def _do() -> None:
+            client = self._get_client()
+            client.complete_multipart_upload(
+                Bucket=settings.s3_bucket, Key=key, UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+
+        await asyncio.to_thread(_do)
+        logger.info("Completed multipart upload to R2: %s (%d parts)",
+                    key, len(parts))
+
+    async def abort_multipart(self, key: str, upload_id: str) -> None:
+        """Abort a multipart upload (frees R2's stored parts). Best-effort."""
+        if not self.is_configured():
+            return
+
+        def _do() -> None:
+            client = self._get_client()
+            try:
+                client.abort_multipart_upload(
+                    Bucket=settings.s3_bucket, Key=key, UploadId=upload_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("abort_multipart failed for %s", key, exc_info=True)
+
+        await asyncio.to_thread(_do)
+
     async def delete_object(self, key_or_value: str) -> None:
         """Delete an object by key (or ``r2:``-marked value). Idempotent —
         deleting a missing key is not an error on S3."""
