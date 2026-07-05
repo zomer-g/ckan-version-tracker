@@ -174,6 +174,31 @@ function isPointFeature(f: MinimalFeature): boolean {
   return !!g && (g.type === "Point" || g.type === "MultiPoint");
 }
 
+/** The geometry types Leaflet's `geoJSON` can turn into a layer. */
+const RENDERABLE_GEOMETRY_TYPES = new Set([
+  "Point", "MultiPoint", "LineString", "MultiLineString",
+  "Polygon", "MultiPolygon", "GeometryCollection",
+]);
+
+/** True when a feature's geometry is something Leaflet can render.
+ *  CRITICAL: `L.geoJSON().addData()` THROWS "Invalid GeoJSON object" on a
+ *  geometry with no recognized `type` — and the scraper emits `geometry: {}`
+ *  for features whose source WKT wouldn't parse. One such feature reaching
+ *  the <GeoJSON> layer used to crash the map and (with no boundary) blank the
+ *  entire page. We drop non-renderable features from the vector layer here;
+ *  they have no geometry to show anyway. Points are handled separately by
+ *  pointLatLngs, which is already defensive about bad coordinates. */
+function hasRenderableGeometry(f: MinimalFeature): boolean {
+  const g = (f as FeatureWithGeometry).geometry;
+  if (!g || typeof g !== "object" || !RENDERABLE_GEOMETRY_TYPES.has(g.type)) {
+    return false;
+  }
+  if (g.type === "GeometryCollection") {
+    return Array.isArray((g as { geometries?: unknown }).geometries);
+  }
+  return Array.isArray(g.coordinates) && g.coordinates.length > 0;
+}
+
 /** Pull [lat, lng] pairs out of a Point/MultiPoint feature. A Point
  *  yields one; a MultiPoint yields several. GeoJSON stores [lng, lat];
  *  Leaflet wants [lat, lng]. Non-finite / malformed coords are skipped
@@ -644,8 +669,13 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     () => filteredFeatures.filter(isPointFeature),
     [filteredFeatures],
   );
+  // Non-point features for the vector <GeoJSON> layer, EXCLUDING any with a
+  // geometry Leaflet would reject (empty `{}` etc.) — those would throw
+  // "Invalid GeoJSON object" and crash the map. See hasRenderableGeometry.
   const nonPointFeatures = useMemo(
-    () => filteredFeatures.filter((f) => !isPointFeature(f)),
+    () => filteredFeatures.filter(
+      (f) => !isPointFeature(f) && hasRenderableGeometry(f),
+    ),
     [filteredFeatures],
   );
   const shouldCluster = pointFeatures.length > POINT_CLUSTER_THRESHOLD;
@@ -666,9 +696,16 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // `filteredCollection`.
   const layerBounds = useMemo<L.LatLngBoundsExpression | null>(() => {
     if (!fc || fc.features.length === 0) return null;
+    // Only renderable geometries — a feature with an empty `{}` geometry
+    // makes L.geoJSON throw, which would otherwise silently fall back to a
+    // country-wide view (wrong framing) via the catch below.
+    const renderable = fc.features.filter(hasRenderableGeometry);
+    if (renderable.length === 0) return null;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tmpLayer = L.geoJSON(fc as any);
+      const tmpLayer = L.geoJSON(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { type: "FeatureCollection", features: renderable } as any,
+      );
       const b = tmpLayer.getBounds();
       if (!b.isValid()) return null;
       return b;

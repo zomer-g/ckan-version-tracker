@@ -17,6 +17,7 @@ import DriveExportButton from "../components/DriveExportButton";
 // idf code paths. Only govmap pages that actually have a GeoJSON
 // resource load it.
 const GovmapView = lazy(() => import("../components/GovmapView"));
+import ErrorBoundary from "../components/ErrorBoundary";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -478,26 +479,48 @@ export default function VersionsPage() {
       )}
 
       {govmapGeojsonUrl && (
-        <Suspense
+        // Error boundary is the hard guarantee that a map failure (a bad
+        // feature Leaflet rejects, an OOM on a giant layer) degrades to a
+        // notice and NEVER blanks the whole dataset page. The download links
+        // below still work regardless.
+        <ErrorBoundary
+          label="GovmapView"
           fallback={
             <div
               className="card"
-              role="status"
+              role="alert"
               style={{
-                height: 500,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
+                padding: "1rem",
                 color: "var(--text-muted)",
                 marginBottom: "1.5rem",
+                fontSize: "0.9rem",
               }}
             >
-              {t("common.loading")}
+              {t("map.load_error")}
             </div>
           }
         >
-          <GovmapView geojsonDownloadUrl={govmapGeojsonUrl} />
-        </Suspense>
+          <Suspense
+            fallback={
+              <div
+                className="card"
+                role="status"
+                style={{
+                  height: 500,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "var(--text-muted)",
+                  marginBottom: "1.5rem",
+                }}
+              >
+                {t("common.loading")}
+              </div>
+            }
+          >
+            <GovmapView geojsonDownloadUrl={govmapGeojsonUrl} />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {versionsList.length === 0 ? (
