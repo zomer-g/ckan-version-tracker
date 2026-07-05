@@ -3,14 +3,16 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   cbs,
-  formatBytes,
   CbsResult,
   CbsFacets,
   CbsSearchParams,
 } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import CbsFeatured from "../components/CbsFeatured";
+import CbsResultCard from "../components/CbsResultCard";
 
-// Human labels for the geographic-granularity codes the crawler emits.
+// Human labels for the geographic-granularity codes — used by the geo facet
+// dropdown. (Result cards render their own via CbsResultCard.)
 const GEO_LABELS: Record<string, string> = {
   national: "ארצי",
   district: "מחוז",
@@ -22,8 +24,9 @@ const GEO_LABELS: Record<string, string> = {
 const PAGE_SIZE = 30;
 
 export default function CbsPage() {
-  const { t, i18n } = useTranslation();
-  const he = i18n.language === "he";
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const canPin = !!user?.is_admin;
 
   // Search + filter state is mirrored into the URL query string so a specific
   // search is shareable / deep-linkable. On first render we seed state FROM the
@@ -41,6 +44,38 @@ export default function CbsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
+
+  // Admin-pinned quick-access pages. `featured` is the pinned records shown at
+  // the top of the default view; `pinnedUrls` is the same set as URLs, used to
+  // light up the pin star on any matching search-result card. `pinBusy` holds
+  // the URL of an in-flight pin/unpin so its star can show a wait state.
+  const [featured, setFeatured] = useState<CbsResult[]>([]);
+  const [pinBusy, setPinBusy] = useState<string | null>(null);
+  const pinnedUrls = new Set(featured.map((r) => r.url));
+
+  useEffect(() => {
+    cbs.featured().then((res) => setFeatured(res.results)).catch(() => {
+      // Non-fatal — the page still works without the pinned strip.
+    });
+  }, []);
+
+  const togglePin = useCallback(
+    async (record: CbsResult) => {
+      setPinBusy(record.url);
+      const isPinned = featured.some((r) => r.url === record.url);
+      try {
+        const res = isPinned
+          ? await cbs.unpin(record.url)
+          : await cbs.pin(record.url);
+        setFeatured(res.results);
+      } catch (e: any) {
+        setError(e?.message || "שגיאה בעדכון המועדפים");
+      } finally {
+        setPinBusy(null);
+      }
+    },
+    [featured]
+  );
 
   // Active facet filters.
   const [subject, setSubject] = useState(() => initial.get("subject") || "");
@@ -125,15 +160,6 @@ export default function CbsPage() {
   // unfiltered) view — the URL reflects the last SUBMITTED search, so typing
   // in the box doesn't hide them, submitting does.
   const showFeatured = !hasFilters && !searchParams.get("q");
-
-  const yearSpan = (r: CbsResult) => {
-    if (r.year_start && r.year_end) {
-      return r.year_start === r.year_end
-        ? String(r.year_start)
-        : `${r.year_start}–${r.year_end}`;
-    }
-    return r.year_start || r.year_end || null;
-  };
 
   return (
     <div className="container mt-3">
@@ -244,7 +270,14 @@ export default function CbsPage() {
         </div>
       )}
 
-      {showFeatured && <CbsFeatured />}
+      {showFeatured && (
+        <CbsFeatured
+          records={featured}
+          canPin={canPin}
+          pinBusy={pinBusy}
+          onTogglePin={togglePin}
+        />
+      )}
 
       {error && <div role="alert" className="badge badge-danger mb-2">{error}</div>}
 
@@ -265,125 +298,16 @@ export default function CbsPage() {
       </div>
 
       <div className="grid grid-2">
-        {results.map((r) => {
-          const span = yearSpan(r);
-          return (
-            <article
-              key={r.url}
-              className="card"
-              style={{ borderRight: "4px solid #0ea5e9" }}
-            >
-              <div className="flex-between mb-1">
-                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
-                  <a
-                    href={r.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: "var(--text, inherit)" }}
-                  >
-                    {(he ? r.title : r.title_en) || r.title || r.title_en || r.url}
-                  </a>
-                </h2>
-                <span
-                  style={{
-                    display: "inline-block",
-                    padding: "0.15rem 0.5rem",
-                    borderRadius: "9999px",
-                    fontSize: "0.65rem",
-                    fontWeight: 600,
-                    background: "#e0f2fe",
-                    color: "#075985",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  למ"ס
-                </span>
-              </div>
-
-              {r.summary && (
-                <p
-                  className="text-sm text-muted mb-1"
-                  style={{ maxHeight: "3.2em", overflow: "hidden" }}
-                >
-                  {r.summary}
-                </p>
-              )}
-
-              <div
-                className="flex text-sm text-muted"
-                style={{ gap: "0.75rem", flexWrap: "wrap" }}
-              >
-                {r.section && <span>{r.section}</span>}
-                {span && <span>{span}</span>}
-                {r.geo_levels && r.geo_levels.length > 0 && (
-                  <span>{r.geo_levels.map((g) => GEO_LABELS[g] || g).join(", ")}</span>
-                )}
-              </div>
-
-              {r.subject_tags && r.subject_tags.length > 0 && (
-                <div
-                  style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.5rem" }}
-                >
-                  {r.subject_tags.map((s) => (
-                    <span
-                      key={s}
-                      className="badge"
-                      style={{ fontSize: "0.7rem", background: "#f1f5f9", color: "#334155" }}
-                    >
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {r.file_links && r.file_links.length > 0 && (
-                <div style={{ marginTop: "0.6rem" }}>
-                  <div style={{ fontSize: "0.8rem", fontWeight: 600, marginBottom: "0.35rem" }}>
-                    {t("cbs.files", "קבצים")}:
-                  </div>
-                  {r.file_links.map((f, idx) => (
-                    <div
-                      key={`${f.href}-${idx}`}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                        padding: "0.35rem 0.55rem",
-                        marginBottom: "0.25rem",
-                        background: "var(--bg-secondary, #f8f9fa)",
-                        borderRadius: "4px",
-                        border: "1px solid var(--border, #e2e8f0)",
-                      }}
-                    >
-                      <a
-                        href={f.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ fontSize: "0.82rem", color: "var(--primary)", wordBreak: "break-word" }}
-                      >
-                        {f.label || f.href.split("/").pop()}
-                        {f.ext && (
-                          <span
-                            className="badge"
-                            style={{ marginInlineStart: "0.4rem", fontSize: "0.65rem" }}
-                          >
-                            {f.ext.toUpperCase()}
-                          </span>
-                        )}
-                      </a>
-                      {f.size != null && (
-                        <span className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>
-                          {formatBytes(f.size)}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-          );
-        })}
+        {results.map((r) => (
+          <CbsResultCard
+            key={r.url}
+            record={r}
+            canPin={canPin}
+            pinned={pinnedUrls.has(r.url)}
+            busy={pinBusy === r.url}
+            onTogglePin={togglePin}
+          />
+        ))}
       </div>
 
       {results.length < total && (

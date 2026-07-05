@@ -374,10 +374,10 @@
     "results_count": "{{count}} תוצאות",
     "no_results": "לא נמצאו תוצאות באינדקס הלמ\"ס.",
     "load_more": "טען עוד",
-    "featured_title": "הקבצים המבוקשים ביותר",
+    "featured_title": "מועדפים",
     "featured_badge": "מבוקש",
-    "featured_series_page": "כל השנים בעמוד הלמ\"ס",
-    "featured_show_history": "שנים קודמות ({{count}})",
-    "featured_hide_history": "הסתר שנים קודמות"
+    "featured_admin_hint": "עדיין לא נעצת עמודים. חפש עמוד ולחץ על הכוכב (☆) כדי לנעוץ אותו כאן.",
+    "pin": "נעץ למועדפים",
+    "unpin": "הסר מהמועדפים"
   }
 }

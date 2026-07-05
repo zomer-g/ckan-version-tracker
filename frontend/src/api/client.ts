@@ -478,6 +478,10 @@ export interface CbsSearchParams {
   offset?: number;
 }
 
+export interface CbsFeaturedResponse {
+  results: CbsResult[];
+}
+
 export const cbs = {
   search: (params: CbsSearchParams = {}) => {
     const p = new URLSearchParams();
@@ -489,6 +493,18 @@ export const cbs = {
   },
   facets: () => request<CbsFacets>("/cbs/facets"),
   stats: () => request<CbsStats>("/cbs/stats"),
+  // Admin-pinned quick-access pages (public read; pin/unpin are admin-only and
+  // return the updated list). See app/api/cbs.py.
+  featured: () => request<CbsFeaturedResponse>("/cbs/featured"),
+  pin: (url: string) =>
+    request<CbsFeaturedResponse>("/cbs/featured", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  unpin: (url: string) =>
+    request<CbsFeaturedResponse>(`/cbs/featured?url=${encodeURIComponent(url)}`, {
+      method: "DELETE",
+    }),
 };
 
 // Public API (no auth required)

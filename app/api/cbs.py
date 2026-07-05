@@ -22,9 +22,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
+from app.models.cbs_featured import CbsFeatured
 from app.models.cbs_index import CbsIndex
+from app.models.user import User
 from app.rate_limit import limiter
 from app.services import cbs_neon
 
@@ -331,3 +334,80 @@ async def stats(request: Request, db: AsyncSession = Depends(get_db)):
         errored=by_status.get("error", 0),
         by_section={s: c for s, c in by_section_rows},
     )
+
+
+# ── Featured (admin-pinned quick-access pages) ─────────────────────────────
+# Columns returned by /search — reused verbatim so a featured card renders
+# exactly like a search-result card on the frontend.
+_RESULT_COLS = (
+    "url, lang, section, series, item_type, title, title_en, summary, "
+    "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
+    "extra, last_crawled"
+)
+
+
+class FeaturedResponse(BaseModel):
+    results: list[CbsResult]
+
+
+class FeaturedPinRequest(BaseModel):
+    url: str
+
+
+async def _featured_rows(db: AsyncSession) -> "FeaturedResponse":
+    """Shared reader — the current featured cards in order.
+
+    Inner-joins cbs_featured against cbs_index so a pin whose page has left the
+    index (or was never crawled) simply yields no card — no error, no gap."""
+    result = await db.execute(
+        text(
+            f"SELECT {_RESULT_COLS} FROM cbs_index i "
+            "JOIN cbs_featured f ON f.url = i.url "
+            "ORDER BY f.sort_order, f.id"
+        )
+    )
+    rows = [CbsResult(**dict(r._mapping)) for r in result]
+    return FeaturedResponse(results=rows)
+
+
+@router.get("/featured", response_model=FeaturedResponse)
+@limiter.limit("60/minute")
+async def featured(request: Request, db: AsyncSession = Depends(get_db)):
+    """The admin-pinned pages, in card order."""
+    return await _featured_rows(db)
+
+
+@router.post("/featured", response_model=FeaturedResponse)
+async def pin_featured(
+    body: FeaturedPinRequest,
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pin a CBS page (admin). Idempotent; new pins sort to the end."""
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="url is required")
+    # New pin goes after the current last card.
+    next_order = (
+        await db.execute(select(func.coalesce(func.max(CbsFeatured.sort_order), 0)))
+    ).scalar_one()
+    stmt = (
+        pg_insert(CbsFeatured)
+        .values(url=url, sort_order=next_order + 1)
+        .on_conflict_do_nothing(index_elements=["url"])
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return await _featured_rows(db)
+
+
+@router.delete("/featured", response_model=FeaturedResponse)
+async def unpin_featured(
+    url: str = Query(..., description="The pinned page URL to remove"),
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unpin a CBS page (admin)."""
+    await db.execute(text("DELETE FROM cbs_featured WHERE url = :url"), {"url": url})
+    await db.commit()
+    return await _featured_rows(db)
