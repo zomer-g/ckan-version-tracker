@@ -8,6 +8,7 @@ import {
   CbsFacets,
   CbsSearchParams,
 } from "../api/client";
+import CbsFeatured from "../components/CbsFeatured";
 
 // Human labels for the geographic-granularity codes the crawler emits.
 const GEO_LABELS: Record<string, string> = {
@@ -119,6 +120,11 @@ export default function CbsPage() {
   };
 
   const hasFilters = !!(subject || geo || fileType || yearFrom || yearTo);
+
+  // Featured quick-access cards are shown only on the default (unsearched,
+  // unfiltered) view — the URL reflects the last SUBMITTED search, so typing
+  // in the box doesn't hide them, submitting does.
+  const showFeatured = !hasFilters && !searchParams.get("q");
 
   const yearSpan = (r: CbsResult) => {
     if (r.year_start && r.year_end) {
@@ -237,6 +243,8 @@ export default function CbsPage() {
           )}
         </div>
       )}
+
+      {showFeatured && <CbsFeatured />}
 
       {error && <div role="alert" className="badge badge-danger mb-2">{error}</div>}
 

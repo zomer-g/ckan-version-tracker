@@ -373,6 +373,11 @@
     "files": "קבצים",
     "results_count": "{{count}} תוצאות",
     "no_results": "לא נמצאו תוצאות באינדקס הלמ\"ס.",
-    "load_more": "טען עוד"
+    "load_more": "טען עוד",
+    "featured_title": "הקבצים המבוקשים ביותר",
+    "featured_badge": "מבוקש",
+    "featured_series_page": "כל השנים בעמוד הלמ\"ס",
+    "featured_show_history": "שנים קודמות ({{count}})",
+    "featured_hide_history": "הסתר שנים קודמות"
   }
 }

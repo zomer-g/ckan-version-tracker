@@ -373,6 +373,11 @@
     "files": "Files",
     "results_count": "{{count}} results",
     "no_results": "No results found in the CBS index.",
-    "load_more": "Load more"
+    "load_more": "Load more",
+    "featured_title": "Most requested files",
+    "featured_badge": "Popular",
+    "featured_series_page": "All years on the CBS site",
+    "featured_show_history": "Previous years ({{count}})",
+    "featured_hide_history": "Hide previous years"
   }
 }
