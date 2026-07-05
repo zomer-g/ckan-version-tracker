@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { CbsResult } from "../api/client";
+import { YearVersion } from "../utils/cbsSeries";
 import CbsResultCard from "./CbsResultCard";
 
 // The admin-pinned quick-access strip shown at the top of the CBS page on the
@@ -12,9 +13,17 @@ interface Props {
   canPin: boolean;
   pinBusy: string | null;
   onTogglePin: (record: CbsResult) => void;
+  // Per-pin historical versions, keyed by the pinned page's url.
+  history: Record<string, YearVersion[]>;
 }
 
-export default function CbsFeatured({ records, canPin, pinBusy, onTogglePin }: Props) {
+export default function CbsFeatured({
+  records,
+  canPin,
+  pinBusy,
+  onTogglePin,
+  history,
+}: Props) {
   const { t } = useTranslation();
 
   // Nothing pinned yet: admins still get a hint about how to pin; visitors see
@@ -54,6 +63,7 @@ export default function CbsFeatured({ records, canPin, pinBusy, onTogglePin }: P
             pinned
             busy={pinBusy === r.url}
             onTogglePin={onTogglePin}
+            history={history[r.url]}
           />
         ))}
       </div>

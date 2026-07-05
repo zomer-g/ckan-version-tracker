@@ -10,16 +10,12 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
-
-// Human labels for the geographic-granularity codes — used by the geo facet
-// dropdown. (Result cards render their own via CbsResultCard.)
-const GEO_LABELS: Record<string, string> = {
-  national: "ארצי",
-  district: "מחוז",
-  subdistrict: "נפה",
-  municipality: "רשות מקומית",
-  locality: "יישוב",
-};
+import { geoLabel, sectionLabel } from "../utils/cbsLabels";
+import {
+  seriesQuery,
+  historicalVersions,
+  YearVersion,
+} from "../utils/cbsSeries";
 
 const PAGE_SIZE = 30;
 
@@ -53,11 +49,46 @@ export default function CbsPage() {
   const [pinBusy, setPinBusy] = useState<string | null>(null);
   const pinnedUrls = new Set(featured.map((r) => r.url));
 
+  // Historical yearly versions of each pinned page (keyed by its url), detected
+  // heuristically from titles — always shown under the featured card.
+  const [featuredHistory, setFeaturedHistory] = useState<
+    Record<string, YearVersion[]>
+  >({});
+
   useEffect(() => {
     cbs.featured().then((res) => setFeatured(res.results)).catch(() => {
       // Non-fatal — the page still works without the pinned strip.
     });
   }, []);
+
+  // For each pinned page, search its series (title minus year) and derive the
+  // prior-year versions. Runs whenever the pinned set changes.
+  useEffect(() => {
+    let cancelled = false;
+    if (featured.length === 0) {
+      setFeaturedHistory({});
+      return;
+    }
+    Promise.all(
+      featured.map(async (rec) => {
+        try {
+          const res = await cbs.search({
+            q: seriesQuery(rec),
+            sort: "chrono",
+            limit: 100,
+          });
+          return [rec.url, historicalVersions(rec, res.results)] as const;
+        } catch {
+          return [rec.url, [] as YearVersion[]] as const;
+        }
+      })
+    ).then((entries) => {
+      if (!cancelled) setFeaturedHistory(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [featured]);
 
   const togglePin = useCallback(
     async (record: CbsResult) => {
@@ -80,9 +111,14 @@ export default function CbsPage() {
   // Active facet filters.
   const [subject, setSubject] = useState(() => initial.get("subject") || "");
   const [geo, setGeo] = useState(() => initial.get("geo") || "");
+  const [section, setSection] = useState(() => initial.get("section") || "");
   const [fileType, setFileType] = useState(() => initial.get("file_type") || "");
   const [yearFrom, setYearFrom] = useState(() => initial.get("year_from") || "");
   const [yearTo, setYearTo] = useState(() => initial.get("year_to") || "");
+  // Result ordering: relevance (default) or chronological (newest data year).
+  const [sort, setSort] = useState<"relevance" | "chrono">(
+    () => (initial.get("sort") === "chrono" ? "chrono" : "relevance")
+  );
 
   useEffect(() => {
     cbs.facets().then(setFacets).catch(() => {
@@ -103,9 +139,11 @@ export default function CbsPage() {
         if (query.trim()) sp.set("q", query.trim());
         if (subject) sp.set("subject", subject);
         if (geo) sp.set("geo", geo);
+        if (section) sp.set("section", section);
         if (fileType) sp.set("file_type", fileType);
         if (yearFrom) sp.set("year_from", yearFrom);
         if (yearTo) sp.set("year_to", yearTo);
+        if (sort !== "relevance") sp.set("sort", sort);
         setSearchParams(sp, { replace: true });
       }
       try {
@@ -113,9 +151,11 @@ export default function CbsPage() {
           q: query.trim() || undefined,
           subject: subject || undefined,
           geo: geo || undefined,
+          section: section || undefined,
           file_type: fileType || undefined,
           year_from: yearFrom ? Number(yearFrom) : undefined,
           year_to: yearTo ? Number(yearTo) : undefined,
+          sort,
           limit: PAGE_SIZE,
           offset: nextOffset,
         };
@@ -131,15 +171,16 @@ export default function CbsPage() {
       }
       setLoading(false);
     },
-    [query, subject, geo, fileType, yearFrom, yearTo, setSearchParams]
+    [query, subject, geo, section, fileType, yearFrom, yearTo, sort, setSearchParams]
   );
 
   // Load an initial (unfiltered, newest-first) page on mount, and re-run
-  // whenever a facet filter changes so the results stay in sync with the UI.
+  // whenever a facet filter or the sort order changes so the results stay in
+  // sync with the UI.
   useEffect(() => {
     runSearch(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, geo, fileType, yearFrom, yearTo]);
+  }, [subject, geo, section, fileType, yearFrom, yearTo, sort]);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -149,12 +190,13 @@ export default function CbsPage() {
   const clearFilters = () => {
     setSubject("");
     setGeo("");
+    setSection("");
     setFileType("");
     setYearFrom("");
     setYearTo("");
   };
 
-  const hasFilters = !!(subject || geo || fileType || yearFrom || yearTo);
+  const hasFilters = !!(subject || geo || section || fileType || yearFrom || yearTo);
 
   // Featured quick-access cards are shown only on the default (unsearched,
   // unfiltered) view — the URL reflects the last SUBMITTED search, so typing
@@ -220,7 +262,19 @@ export default function CbsPage() {
           >
             <option value="">{t("cbs.all_geo", "כל הרמות הגאוגרפיות")}</option>
             {facets.geo_levels.map((g) => (
-              <option key={g} value={g}>{GEO_LABELS[g] || g}</option>
+              <option key={g} value={g}>{geoLabel(g)}</option>
+            ))}
+          </select>
+
+          <select
+            value={section}
+            onChange={(e) => setSection(e.target.value)}
+            aria-label={t("cbs.section", "סוג עמוד")}
+            style={{ width: "auto", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
+          >
+            <option value="">{t("cbs.all_sections", "כל סוגי העמודים")}</option>
+            {facets.sections.map((s) => (
+              <option key={s} value={s}>{sectionLabel(s)}</option>
             ))}
           </select>
 
@@ -276,25 +330,46 @@ export default function CbsPage() {
           canPin={canPin}
           pinBusy={pinBusy}
           onTogglePin={togglePin}
+          history={featuredHistory}
         />
       )}
 
       {error && <div role="alert" className="badge badge-danger mb-2">{error}</div>}
 
-      <div aria-live="polite" aria-atomic="true">
-        {loading && offset === 0 && (
-          <div className="loading" role="status">{t("common.loading", "טוען…")}</div>
-        )}
-        {!loading && total === 0 && (
-          <div className="empty-state">
-            {t("cbs.no_results", "לא נמצאו תוצאות באינדקס הלמ\"ס.")}
-          </div>
-        )}
-        {!loading && total > 0 && (
-          <p className="text-sm text-muted mb-2">
-            {t("cbs.results_count", { count: total, defaultValue: `${total} תוצאות` })}
-          </p>
-        )}
+      <div
+        className="flex-between mb-2"
+        style={{ gap: "0.75rem", flexWrap: "wrap" }}
+      >
+        <div aria-live="polite" aria-atomic="true">
+          {loading && offset === 0 && (
+            <span className="loading" role="status">{t("common.loading", "טוען…")}</span>
+          )}
+          {!loading && total === 0 && (
+            <span className="text-sm text-muted">
+              {t("cbs.no_results", "לא נמצאו תוצאות באינדקס הלמ\"ס.")}
+            </span>
+          )}
+          {!loading && total > 0 && (
+            <span className="text-sm text-muted">
+              {t("cbs.results_count", { count: total, defaultValue: `${total} תוצאות` })}
+            </span>
+          )}
+        </div>
+
+        <label className="flex" style={{ gap: "0.35rem", fontSize: "0.82rem", margin: 0 }}>
+          <span className="text-muted" style={{ fontWeight: 400 }}>
+            {t("cbs.sort_by", "מיון")}:
+          </span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as "relevance" | "chrono")}
+            aria-label={t("cbs.sort_by", "מיון")}
+            style={{ width: "auto", padding: "0.25rem 0.5rem", fontSize: "0.82rem" }}
+          >
+            <option value="relevance">{t("cbs.sort_relevance", "רלוונטיות")}</option>
+            <option value="chrono">{t("cbs.sort_chrono", "כרונולוגי (שנה יורדת)")}</option>
+          </select>
+        </label>
       </div>
 
       <div className="grid grid-2">

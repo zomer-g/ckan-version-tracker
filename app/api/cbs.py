@@ -179,6 +179,11 @@ async def search(
     lang: str | None = Query(None),
     year_from: int | None = Query(None),
     year_to: int | None = Query(None),
+    sort: str = Query(
+        "relevance",
+        pattern="^(relevance|chrono)$",
+        description="'relevance' (text rank, default) or 'chrono' (newest data year first)",
+    ),
     limit: int = Query(30, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -224,8 +229,17 @@ async def search(
         await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)
     ).scalar_one()
 
-    # Rank by text relevance when a query is present, else newest-crawled first.
-    if q:
+    # Ordering:
+    # * chrono    → newest data year first (year_end, then year_start), then
+    #   most-recently crawled. The user's "chronological" toggle.
+    # * relevance → text rank when a query is present, else newest-crawled first
+    #   (the default). ``ts_rank`` needs :q, so only use it when q is set.
+    if sort == "chrono":
+        order = (
+            "coalesce(year_end, year_start) DESC NULLS LAST, "
+            "last_crawled DESC NULLS LAST, id DESC"
+        )
+    elif q:
         order = "ts_rank(search_vector, plainto_tsquery('simple', :q)) DESC, last_crawled DESC NULLS LAST"
     else:
         order = "last_crawled DESC NULLS LAST, id DESC"

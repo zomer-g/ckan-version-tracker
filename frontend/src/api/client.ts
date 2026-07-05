@@ -474,6 +474,7 @@ export interface CbsSearchParams {
   lang?: string;
   year_from?: number;
   year_to?: number;
+  sort?: "relevance" | "chrono";
   limit?: number;
   offset?: number;
 }

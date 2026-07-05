@@ -1,15 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatBytes, CbsResult } from "../api/client";
-
-// Human labels for the geographic-granularity codes the crawler emits.
-const GEO_LABELS: Record<string, string> = {
-  national: "ארצי",
-  district: "מחוז",
-  subdistrict: "נפה",
-  municipality: "רשות מקומית",
-  locality: "יישוב",
-};
+import { geoLabel, sectionLabel } from "../utils/cbsLabels";
+import { YearVersion } from "../utils/cbsSeries";
 
 // One emoji per file family, shown on the compact file-type chips.
 const FILE_ICON: Record<string, string> = {
@@ -50,6 +43,10 @@ interface Props {
   // A pinned card at the top of the page gets an amber accent instead of the
   // default blue, so the pinned strip reads as distinct from search results.
   featured?: boolean;
+  // Prior-year versions of this item (featured cards only). Always shown, as a
+  // row of clickable year chips, so the admin/user can jump straight to a past
+  // year. `undefined` while still loading; `[]` = no historical versions.
+  history?: YearVersion[];
 }
 
 function yearSpan(r: CbsResult): string | null {
@@ -68,6 +65,7 @@ export default function CbsResultCard({
   busy,
   onTogglePin,
   featured,
+  history,
 }: Props) {
   const { t, i18n } = useTranslation();
   const he = i18n.language === "he";
@@ -153,12 +151,41 @@ export default function CbsResultCard({
         className="flex text-sm text-muted"
         style={{ gap: "0.75rem", flexWrap: "wrap" }}
       >
-        {r.section && <span>{r.section}</span>}
+        {r.section && <span>{sectionLabel(r.section)}</span>}
         {span && <span>{span}</span>}
         {r.geo_levels && r.geo_levels.length > 0 && (
-          <span>{r.geo_levels.map((g) => GEO_LABELS[g] || g).join(", ")}</span>
+          <span>{r.geo_levels.map(geoLabel).join(", ")}</span>
         )}
       </div>
+
+      {history && history.length > 0 && (
+        <div style={{ marginTop: "0.55rem" }}>
+          <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "#92400e", marginBottom: "0.3rem" }}>
+            {t("cbs.history_label", "גרסאות קודמות")}:
+          </div>
+          <div className="flex" style={{ gap: "0.3rem", flexWrap: "wrap" }}>
+            {history.map((h) => (
+              <a
+                key={h.url}
+                href={h.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={h.title}
+                className="badge"
+                style={{
+                  fontSize: "0.7rem",
+                  background: "#fffbeb",
+                  color: "#92400e",
+                  border: "1px solid #fde68a",
+                  textDecoration: "none",
+                }}
+              >
+                {h.yearLabel}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {r.subject_tags && r.subject_tags.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.5rem" }}>
