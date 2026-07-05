@@ -1,6 +1,6 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
@@ -50,6 +50,29 @@ interface SearchResult {
   metadata_modified: string;
   num_resources: number;
   resources?: CkanResource[];
+}
+
+// Lower-cased "searchable text" for a tracked dataset — its title, org,
+// tags, ckan id, source URL. Powers the in-site keyword search so a query
+// matches datasets ALREADY tracked here, not just data.gov.il.
+function trackedHaystack(ds: TrackedDataset): string {
+  const tags = Array.isArray((ds as any).tags)
+    ? (ds as any).tags
+        .map((tg: any) => (typeof tg === "string" ? tg : tg?.name || ""))
+        .join(" ")
+    : "";
+  return [
+    ds.title,
+    ds.organization_title,
+    ds.organization,
+    ds.ckan_id,
+    ds.source_url,
+    ds.resource_name,
+    tags,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 /**
@@ -115,16 +138,34 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
 
 export default function HomePage() {
   const { t } = useTranslation();
-  const [query, setQuery] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [targetResourceId, setTargetResourceId] = useState<string | null>(null);
+  // The last SUBMITTED keyword query (empty for URL-detect searches / no
+  // search yet). Drives the in-site filter over already-tracked datasets.
+  const [submittedQuery, setSubmittedQuery] = useState("");
 
   // Tracked datasets
   const [trackedDatasets, setTrackedDatasets] = useState<TrackedDataset[]>([]);
   const [trackedLoading, setTrackedLoading] = useState(true);
+
+  // Tracked datasets that match the submitted keyword search. Reactive so
+  // it fills in once the dataset list finishes loading (e.g. on a deep
+  // link like /?q=...). Empty when there's no active keyword search.
+  const matchedTracked = useMemo(() => {
+    const tokens = submittedQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    // Match datasets where EVERY query word appears (order-independent),
+    // so "ממשלה החלטות" still finds "החלטות ממשלה".
+    return trackedDatasets.filter((ds) => {
+      const hay = trackedHaystack(ds);
+      return tokens.every((tok) => hay.includes(tok));
+    });
+  }, [submittedQuery, trackedDatasets]);
 
   // Request form state — which dataset has form open
   const [requestFormFor, setRequestFormFor] = useState<string | null>(null);
@@ -210,7 +251,10 @@ export default function HomePage() {
 
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
-    if (!query.trim()) return;
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    // Reflect the query in the URL so a search is shareable / bookmarkable.
+    setSearchParams({ q: trimmed }, { replace: true });
     setLoading(true);
     setError("");
     setTargetResourceId(null);
@@ -223,6 +267,7 @@ export default function HomePage() {
     setMevakerResult(null);
     setHatzavResult(null);
     setMankalResult(null);
+    setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
@@ -356,10 +401,12 @@ export default function HomePage() {
         setResults([pkg]);
         setCount(1);
       } else {
-        // 3. Keyword search
+        // 3. Keyword search — data.gov.il AND, via submittedQuery, the
+        // datasets already tracked here (matchedTracked memo + section).
         const data = await ckan.search(query);
         setResults(data.results);
         setCount(data.count);
+        setSubmittedQuery(trimmed);
       }
     } catch (err: any) {
       setError(err.message);
@@ -369,6 +416,13 @@ export default function HomePage() {
 
   const resultKey = (datasetId: string, resourceId?: string) =>
     resourceId ? `${datasetId}::${resourceId}` : datasetId;
+
+  // Deep link: a page opened at /?q=... runs that search on mount (query
+  // was seeded from the URL in useState). Runs once.
+  useEffect(() => {
+    if (query.trim()) search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div>
@@ -405,7 +459,17 @@ export default function HomePage() {
               id="home-search"
               type="search"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setQuery(v);
+                // Emptying the box returns to the full browse view.
+                if (!v.trim()) {
+                  setSubmittedQuery("");
+                  setResults([]);
+                  setCount(0);
+                  setSearchParams({}, { replace: true });
+                }
+              }}
               placeholder={t("home.search_placeholder")}
               className="home-search-input"
               disabled={loading}
@@ -1003,23 +1067,30 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
+        {!loading && results.length === 0 && matchedTracked.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 
-        {/* Tracked Datasets Section */}
+        {/* Tracked Datasets Section. During an in-site keyword search this
+            is filtered to the datasets that match (matchedTracked) so the
+            search covers "my own site", not just data.gov.il; otherwise it
+            lists everything tracked. */}
         <section aria-labelledby="tracked-heading" style={{ marginTop: "1rem" }}>
           <h2 id="tracked-heading" style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>
-            {t("home.tracked_title")}
+            {submittedQuery
+              ? `${t("home.tracked_matches_title")} (${matchedTracked.length})`
+              : t("home.tracked_title")}
           </h2>
 
           {trackedLoading ? (
             <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>
-          ) : trackedDatasets.length === 0 ? (
-            <div className="empty-state">{t("home.no_tracked")}</div>
+          ) : (submittedQuery ? matchedTracked : trackedDatasets).length === 0 ? (
+            <div className="empty-state">
+              {submittedQuery ? t("home.tracked_matches_empty") : t("home.no_tracked")}
+            </div>
           ) : (
             <div className="grid grid-2">
-              {trackedDatasets.map((ds) => (
+              {(submittedQuery ? matchedTracked : trackedDatasets).map((ds) => (
                 <article key={ds.id} className="card">
                   <div className="flex-between mb-1">
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
