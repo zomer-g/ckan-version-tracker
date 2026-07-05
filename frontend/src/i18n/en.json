@@ -104,7 +104,8 @@
     "no_tracked": "No tracked datasets yet",
     "stats_datasets": "Tracked datasets",
     "stats_versions": "Saved versions",
-    "stats_organizations": "Organizations"
+    "stats_organizations": "Organizations",
+    "source_link_cbs": "Source on cbs.gov.il"
   },
   "search": {
     "title": "Search Government Datasets",

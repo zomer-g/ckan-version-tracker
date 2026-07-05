@@ -240,7 +240,7 @@ class DatasetResponse(BaseModel):
 
 def _build_source_url(ds: TrackedDataset) -> str:
     """Compute the source URL for a tracked dataset."""
-    if ds.source_type in ("scraper", "govmap") and ds.source_url:
+    if ds.source_type in ("scraper", "govmap", "cbs") and ds.source_url:
         return ds.source_url
     org = ds.organization or ""
     name = ds.ckan_name or ""

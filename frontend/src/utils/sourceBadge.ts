@@ -35,7 +35,8 @@ export interface SourceBadge {
     | "home.source_link_avodata"
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
-    | "home.source_link_mankal";
+    | "home.source_link_mankal"
+    | "home.source_link_cbs";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -159,6 +160,17 @@ export function sourceBadgeFor(
       label: "GOVMAP",
       accent: "#0ea5e9",
       sourceLinkKey: "home.source_link_govmap",
+    };
+  }
+  if (source_type === "cbs") {
+    // Cyan pill for the CBS (למ"ס) content index — distinct from the sky-blue
+    // GOVMAP chip so the two aren't confused.
+    return {
+      bg: "#cffafe",
+      fg: "#155e75",
+      label: 'למ"ס',
+      accent: "#06b6d4",
+      sourceLinkKey: "home.source_link_cbs",
     };
   }
   if (source_type === "scraper") {

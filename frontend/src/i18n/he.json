@@ -104,7 +104,8 @@
     "no_tracked": "עדיין אין מאגרים במעקב",
     "stats_datasets": "מאגרים במעקב",
     "stats_versions": "גרסאות שנשמרו",
-    "stats_organizations": "ארגונים"
+    "stats_organizations": "ארגונים",
+    "source_link_cbs": "מקור ב-cbs.gov.il"
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",

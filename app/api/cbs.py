@@ -13,6 +13,7 @@ Read side (public, rate-limited):
 The same table backs a future dedicated MCP (app/mcp) — keep the query logic in
 helpers so it can be shared. See app/models/cbs_index.py.
 """
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -25,6 +26,9 @@ from app.config import settings
 from app.database import get_db
 from app.models.cbs_index import CbsIndex
 from app.rate_limit import limiter
+from app.services import cbs_neon
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cbs", tags=["cbs"])
 
@@ -109,7 +113,29 @@ async def ingest(request: Request, body: IngestRequest, db: AsyncSession = Depen
     stmt = stmt.on_conflict_do_update(index_elements=["url"], set_=update_set)
     await db.execute(stmt)
     await db.commit()
+
+    # Dual-write the same batch into the NEON append archive so CBS behaves like
+    # every other tabular tracked dataset (card + /archive SQL console +
+    # /api/append). Best-effort: a NEON hiccup must never fail the crawl ingest.
+    try:
+        await cbs_neon.upsert_pages(rows)
+    except Exception:  # noqa: BLE001 — mirror is advisory, cbs_index is the source of truth
+        logger.warning("cbs_neon dual-write failed for %d rows", len(rows), exc_info=True)
+
     return IngestResponse(upserted=len(rows))
+
+
+@router.post("/sync-neon")
+async def sync_neon(request: Request, db: AsyncSession = Depends(get_db)):
+    """Backfill the NEON append table from cbs_index (worker-key auth).
+
+    One-shot after deploy: seeds the CBS append archive with the rows that
+    predate the ingest dual-write. Idempotent (upsert by url)."""
+    _verify_worker_key(request)
+    if not cbs_neon.is_configured():
+        raise HTTPException(status_code=409, detail="Append archive DB is not configured")
+    synced = await cbs_neon.backfill(db)
+    return {"synced": synced, "table": cbs_neon.CBS_APPEND_TABLE}
 
 
 # ── Search ───────────────────────────────────────────────────────────────

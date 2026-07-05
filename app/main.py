@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
     await init_scheduler()
+    # One-time seed of the CBS content index into the NEON append archive
+    # (no-op once populated). Non-blocking so it never delays boot. See
+    # app/services/cbs_neon.py.
+    import asyncio
+    from app.services import cbs_neon
+    asyncio.create_task(cbs_neon.backfill_if_empty())
     yield
     shutdown_scheduler()
     logger.info("Shutting down גרסאות לעם")
