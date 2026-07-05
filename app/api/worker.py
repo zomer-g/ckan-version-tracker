@@ -110,6 +110,9 @@ class PushVersionRequest(BaseModel):
     # CSV+GeoJSON — uploaded via the direct-R2 multipart path). Absence of a
     # _geojson mapping is what (deliberately) hides the site's map preview.
     gpkg_resource_ids: list[str] | None = None
+    # GeoParquet resources (heavy layers' analytics artifact, WGS84 — shipped
+    # alongside the GPKG). Same direct-R2 upload path.
+    parquet_resource_ids: list[str] | None = None
     # For huge record sets that would exceed 100MB JSON limit: worker uploads
     # CSV via /upload-csv first and references its resource_id here per
     # resource name (so we can skip push_csv_to_datastore for that resource).
@@ -729,6 +732,12 @@ async def push_version(
         resource_mappings["_gpkg"] = list(body.gpkg_resource_ids)
         logger.info("Linked %d pre-uploaded GPKG resource(s)",
                     len(body.gpkg_resource_ids))
+    if body.parquet_resource_ids:
+        for rid in body.parquet_resource_ids:
+            odata_resource_ids.append(rid)
+        resource_mappings["_parquet"] = list(body.parquet_resource_ids)
+        logger.info("Linked %d pre-uploaded GeoParquet resource(s)",
+                    len(body.parquet_resource_ids))
 
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
