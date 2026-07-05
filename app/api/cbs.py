@@ -344,6 +344,10 @@ _RESULT_COLS = (
     "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
     "extra, last_crawled"
 )
+# Same list qualified with the cbs_index alias — the featured query joins
+# cbs_featured, and BOTH tables have a ``url`` column, so an unqualified
+# ``SELECT url`` is ambiguous. Every column here lives on cbs_index.
+_RESULT_COLS_I = ", ".join(f"i.{c.strip()}" for c in _RESULT_COLS.split(","))
 
 
 class FeaturedResponse(BaseModel):
@@ -361,7 +365,7 @@ async def _featured_rows(db: AsyncSession) -> "FeaturedResponse":
     index (or was never crawled) simply yields no card — no error, no gap."""
     result = await db.execute(
         text(
-            f"SELECT {_RESULT_COLS} FROM cbs_index i "
+            f"SELECT {_RESULT_COLS_I} FROM cbs_index i "
             "JOIN cbs_featured f ON f.url = i.url "
             "ORDER BY f.sort_order, f.id"
         )
