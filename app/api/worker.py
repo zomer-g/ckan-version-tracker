@@ -106,6 +106,10 @@ class PushVersionRequest(BaseModel):
     # GeoJSON resources already uploaded via /upload-geojson — referenced here
     # so push-version can link them into the version index without re-uploading.
     geojson_resource_ids: list[str] | None = None
+    # GeoPackage resources (heavy GovMap layers publish a GPKG INSTEAD of
+    # CSV+GeoJSON — uploaded via the direct-R2 multipart path). Absence of a
+    # _geojson mapping is what (deliberately) hides the site's map preview.
+    gpkg_resource_ids: list[str] | None = None
     # For huge record sets that would exceed 100MB JSON limit: worker uploads
     # CSV via /upload-csv first and references its resource_id here per
     # resource name (so we can skip push_csv_to_datastore for that resource).
@@ -715,6 +719,16 @@ async def push_version(
                     "Failed to rename pre-uploaded GeoJSON %s to v%d: %s",
                     rid, next_version, e,
                 )
+
+    # GeoPackage resources (heavy GovMap layers: GPKG only, uploaded straight
+    # to R2 via /upload-r2) — link them into this version. R2-marked keys
+    # carry no ODATA resource to rename, so no vN patching is needed.
+    if body.gpkg_resource_ids:
+        for rid in body.gpkg_resource_ids:
+            odata_resource_ids.append(rid)
+        resource_mappings["_gpkg"] = list(body.gpkg_resource_ids)
+        logger.info("Linked %d pre-uploaded GPKG resource(s)",
+                    len(body.gpkg_resource_ids))
 
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.

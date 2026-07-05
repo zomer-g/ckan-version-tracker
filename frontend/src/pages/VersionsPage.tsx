@@ -80,7 +80,9 @@ function versionFiles(
       base =
         key === "_geojson"
           ? "GeoJSON"
-          : key === "_zip" || key === "_zip_parts"
+          : key === "_gpkg"
+            ? "שכבה גיאוגרפית (GPKG)"
+            : key === "_zip" || key === "_zip_parts"
             ? "קבצים מצורפים (ZIP)"
             : key === "metadata"
               ? "מטא-דאטה"
