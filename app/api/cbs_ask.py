@@ -70,9 +70,16 @@ _PARSE_TOOL = {
 
 _SYSTEM = (
     "אתה עוזר חיפוש מעל אינדקס אתר הלשכה המרכזית לסטטיסטיקה (למ\"ס). המשתמש שואל "
-    "שאלה חופשית; פרק אותה לפילטרים מובנים ולשאילתת מילות-מפתח. חשוב: "
-    "geo/file_type/section חייבים להיות ערך מדויק מתוך הרשימות שסופקו (או ריק). "
-    "answer = משפט קצר וממוקד בעברית שמנחה איפה למצוא את המידע."
+    "שאלה חופשית; פרק אותה לפילטרים מובנים ולשאילתת מילות-מפתח.\n"
+    "כללים חשובים:\n"
+    "1. query = רק מילות התוכן המהותיות (שמות נושא, מקום, שנה) — בלי מילות שאלה "
+    "כמו 'האם/יש/כמה/דרך/להגיע/נתונים'.\n"
+    "2. השתמש בכמה שפחות פילטרים. הגדר פילטר רק אם הוא נובע ישירות מהשאלה, אחרת "
+    "השאר ריק/0. עדיף פחות פילטרים ותוצאות מאשר סינון-יתר ואפס תוצאות.\n"
+    "3. file_type — השאר ריק אלא אם המשתמש ציין פורמט מפורשות (למשל 'קובץ אקסל'). "
+    "אל תנחש פורמט.\n"
+    "4. geo/file_type/section חייבים להיות ערך מדויק מתוך הרשימות שסופקו (או ריק).\n"
+    "5. answer = משפט קצר וממוקד בעברית שמנחה איפה למצוא את המידע."
 )
 
 
@@ -206,6 +213,31 @@ async def _run_search(db: AsyncSession, p: dict, limit: int) -> tuple[int, list[
     return int(total), [dict(r) for r in rows]
 
 
+# Order in which filters are relaxed when the LLM over-constrains and the search
+# comes back empty. file_type first (the LLM guesses a format the user never
+# asked for), then section, then the year window, geo last (geo is usually the
+# strongest signal of intent). The text query is never dropped.
+_RELAX_ORDER = ("file_type", "section", "year_from", "year_to", "geo")
+
+
+async def _search_relaxed(db: AsyncSession, parsed: dict, limit: int) -> tuple[int, list[dict], dict]:
+    """Run the search; if the full filter set yields nothing, drop filters one by
+    one (per _RELAX_ORDER) until results appear. Returns the filters actually used."""
+    active = dict(parsed)
+    total, results = await _run_search(db, active, limit)
+    if total:
+        return total, results, active
+    for key in _RELAX_ORDER:
+        if not active.get(key):
+            continue
+        active = dict(active)
+        active[key] = 0 if key in ("year_from", "year_to") else ""
+        total, results = await _run_search(db, active, limit)
+        if total:
+            return total, results, active
+    return total, results, active
+
+
 @router.post("/ask")
 @limiter.limit("20/minute")
 async def ask(request: Request, body: AskRequest, db: AsyncSession = Depends(get_db)):
@@ -230,12 +262,15 @@ async def ask(request: Request, body: AskRequest, db: AsyncSession = Depends(get
     if not parsed:
         raise HTTPException(status_code=502, detail="could not parse the question")
 
-    total, results = await _run_search(db, parsed, body.limit)
+    total, results, used = await _search_relaxed(db, parsed, body.limit)
+    keys = ("query", "geo", "file_type", "section", "year_from", "year_to")
+    relaxed = [k for k in keys if parsed.get(k) and not used.get(k)]
     return {
         "answer": parsed.get("answer") or "",
         "provider": provider,
-        "filters": {k: parsed.get(k) for k in
-                    ("query", "geo", "file_type", "section", "year_from", "year_to")},
+        "filters": {k: used.get(k) for k in keys},
+        "requested_filters": {k: parsed.get(k) for k in keys},
+        "relaxed": relaxed,
         "total": total,
         "results": results,
     }
