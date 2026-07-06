@@ -157,7 +157,12 @@ async def _ensure_dataset(db, row: GovmapCoverage) -> TrackedDataset:
                 "coverage_managed": True,
             },
             storage_mode="full_snapshot",
-            poll_interval=315360000,  # 10y — the coverage scheduler drives it, not this
+            # One quarter (90d). These datasets are coverage_managed (init_scheduler
+            # skips per-dataset polling for them — the twice/4×-daily coverage
+            # rollout drives re-scrapes stalest-first), so poll_interval is the
+            # DISPLAYED "check frequency" / target cadence, not a live per-dataset
+            # timer. A quarter reads sensibly in the UI (was 10y → "41 רבעונים").
+            poll_interval=7776000,  # 90 days = 1 quarter
             status="active",
             is_active=True,
             # Stamp last_polled_at so init_scheduler never treats it as
