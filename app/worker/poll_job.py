@@ -259,6 +259,24 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                 ]
                 ds.new_resources_at_source = new_at_source or None
 
+            # Standing indication: tracked resources that are non-datastore
+            # FILES (SHP/KMZ/PDF…) can't be fetched server-side — data.gov.il
+            # gates their download behind Google-OAuth / an Imperva bot wall,
+            # which no headless worker passes. Surface them so the operator
+            # knows those files await the browser extension (they're NOT lost;
+            # they're just not server-archivable). Tabular/datastore resources
+            # come through the datastore API and are unaffected.
+            iap_pending = [
+                f"{r.get('name') or r['id'][:8]} ({(r.get('format') or '?').upper()})"
+                for r in resources
+                if r.get("url") and not r.get("datastore_active")
+            ]
+            pending_note = (
+                "ℹ ממתין לתוסף הדפדפן — "
+                f"{len(iap_pending)} קבצים חסומים להורדה שרתית ב-data.gov.il: "
+                + ", ".join(iap_pending)
+            ) if iap_pending else None
+
             # Check if this is a large dataset.
             # Lightweight path handles a single tracked resource at a
             # time. The legacy condition only checked ds.resource_id
@@ -518,7 +536,10 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                     db.add(version)
                     # Partial success → keep last_error so the user knows
                     # something didn't make it; full success → clear it.
-                    ds.last_error = "; ".join(errors)[:2000] if errors else None
+                    if errors:
+                        ds.last_error = ("; ".join(errors) + (f" | {pending_note}" if pending_note else ""))[:2000]
+                    else:
+                        ds.last_error = pending_note[:2000] if pending_note else None
                     logger.info(
                         "Version %d created for %s (%d/%d resources)",
                         next_version, ds.ckan_name, successes, expected,
@@ -535,6 +556,9 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                     "Metadata changed but no resource content changed for %s",
                     ds.ckan_name,
                 )
+                # Keep the extension-pending indication current even when no new
+                # version is created (the CSV was unchanged this poll).
+                ds.last_error = pending_note[:2000] if pending_note else None
 
             # Update tracking state
             ds.last_polled_at = datetime.now(timezone.utc)
