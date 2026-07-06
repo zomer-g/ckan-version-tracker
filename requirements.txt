@@ -32,3 +32,6 @@ slowapi==0.1.9
 
 # Utilities
 python-multipart==0.0.20
+
+# LLM (natural-language CBS search — app/api/cbs_ask.py)
+anthropic==0.96.0

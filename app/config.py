@@ -65,6 +65,11 @@ class Settings(BaseSettings):
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 
+    # Anthropic API key for the natural-language CBS search endpoint
+    # (POST /api/cbs/ask — app/api/cbs_ask.py). Empty ⇒ the endpoint returns
+    # 503 (feature off). Set the VALUE in the Render dashboard.
+    anthropic_api_key: str = ""
+
     # ── MCP machine-to-machine service token ──
     # Optional shared secret that lets a trusted machine — the "חיפוש רוחבי"
     # discovery gateway — call /mcp WITHOUT the interactive Google OAuth flow.
