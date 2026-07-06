@@ -1117,7 +1117,9 @@ async def trigger_poll(
 
     from app.worker.poll_job import poll_dataset
 
-    background_tasks.add_task(poll_dataset, str(ds.id))
+    # Manual "retry" from the admin → force a real re-poll (bypass the
+    # unchanged-metadata short-circuits) so a stuck dataset actually re-runs.
+    background_tasks.add_task(poll_dataset, str(ds.id), force=True)
     return {"message": "Poll triggered", "dataset_id": str(ds.id)}
 
 

@@ -42,8 +42,13 @@ logger = logging.getLogger(__name__)
 _active_polls: set[str] = set()
 
 
-async def poll_dataset(dataset_id: str) -> None:
-    """Poll a single tracked dataset for changes (single-flight wrapper)."""
+async def poll_dataset(dataset_id: str, force: bool = False) -> None:
+    """Poll a single tracked dataset for changes (single-flight wrapper).
+
+    ``force=True`` (a manual "retry" from the admin) bypasses the
+    unchanged-metadata short-circuits so a genuinely stuck dataset actually
+    re-runs the download/upload instead of no-opping.
+    """
     if dataset_id in _active_polls:
         logger.info(
             "Poll for %s already running in this process; skipping duplicate",
@@ -52,7 +57,7 @@ async def poll_dataset(dataset_id: str) -> None:
         return
     _active_polls.add(dataset_id)
     try:
-        await _poll_dataset(dataset_id)
+        await _poll_dataset(dataset_id, force=force)
     finally:
         _active_polls.discard(dataset_id)
 
@@ -104,9 +109,9 @@ async def resume_interrupted_appends() -> None:
     await poll_dataset(dataset_id)
 
 
-async def _poll_dataset(dataset_id: str) -> None:
+async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
     """Poll a single tracked dataset for changes."""
-    logger.info("Polling dataset %s", dataset_id)
+    logger.info("Polling dataset %s%s", dataset_id, " (forced)" if force else "")
 
     async with async_session() as db:
         result = await db.execute(
@@ -147,9 +152,12 @@ async def _poll_dataset(dataset_id: str) -> None:
         # terminal — the archiver already committed. FALLBACK means
         # the probes were unverifiable or detected a real change, in
         # which case we silently drop into the legacy path below.
-        _result = await conditional_archiver.try_conditional_archive(ds, db)
-        if _result in (conditional_archiver.Result.CREATED, conditional_archiver.Result.NO_CHANGE):
-            return
+        # A forced retry must re-run the full download/upload, so skip the
+        # cheap "nothing changed" archiver that would otherwise no-op.
+        if not force:
+            _result = await conditional_archiver.try_conditional_archive(ds, db)
+            if _result in (conditional_archiver.Result.CREATED, conditional_archiver.Result.NO_CHANGE):
+                return
 
         try:
             # Fetch current state from data.gov.il
@@ -170,8 +178,8 @@ async def _poll_dataset(dataset_id: str) -> None:
             # re-scanning an unchanged source is a cheap no-op insert.
             is_append = ds.storage_mode == "append_only"
 
-            # Quick check: has anything changed?
-            if not is_append and not has_metadata_changed(ds.last_modified, new_modified):
+            # Quick check: has anything changed? (Skipped on a forced retry.)
+            if not force and not is_append and not has_metadata_changed(ds.last_modified, new_modified):
                 logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
                 ds.last_polled_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -338,6 +346,14 @@ async def _poll_dataset(dataset_id: str) -> None:
                 await db.commit()
                 return
 
+            # Whether to advance ds.last_modified (the "already processed this
+            # metadata revision" watermark) at the end. A poll that fails to
+            # archive ANYTHING must NOT advance it — otherwise the next poll
+            # sees "metadata unchanged", short-circuits, and the dataset is
+            # stuck forever on the failure instead of retrying. Defined here so
+            # it's in scope for both the create-version and the no-op branches.
+            advance_watermark = True
+
             if is_first_version or changed_resources:
                 logger.info(
                     "Creating version %d for %s (%d resources changed)",
@@ -469,6 +485,9 @@ async def _poll_dataset(dataset_id: str) -> None:
                     detail = " | ".join(parts) or "no per-resource detail captured"
                     msg = f"0/{expected} resources archived — {detail}"[:2000]
                     ds.last_error = msg
+                    # Don't advance the watermark — leave the dataset eligible
+                    # to retry on the next poll instead of stranding it here.
+                    advance_watermark = False
                     logger.error(
                         "Aborting version %d for %s — 0/%d resources succeeded: %s",
                         next_version, ds.ckan_name, expected, msg,
@@ -519,7 +538,8 @@ async def _poll_dataset(dataset_id: str) -> None:
 
             # Update tracking state
             ds.last_polled_at = datetime.now(timezone.utc)
-            ds.last_modified = new_modified
+            if advance_watermark:
+                ds.last_modified = new_modified
             await db.commit()
 
         except Exception as exc:
