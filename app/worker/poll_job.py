@@ -345,6 +345,11 @@ async def _poll_dataset(dataset_id: str) -> None:
                 )
 
                 errors: list[str] = list(detect_errors)
+                # Resources quietly skipped because data.gov.il IAP-blocks the
+                # headless download of a non-datastore FILE (SHP/KMZ/XLSX/PDF…).
+                # Tracked so a 0-success version can explain WHY instead of the
+                # opaque "no detail" — these files need the browser extension.
+                skipped_iap: list[str] = []
 
                 # For first version, download all resources. Each download
                 # streams to a temp file on disk (returned as ``file_path``)
@@ -379,6 +384,9 @@ async def _poll_dataset(dataset_id: str) -> None:
                             # quietly; surface only real download errors.
                             blocked = "Got HTML" in str(e) or "IAP" in str(e)
                             if blocked and not r.get("datastore_active"):
+                                skipped_iap.append(
+                                    f"{r.get('name', r['id'][:8])} ({r.get('format') or '?'})"
+                                )
                                 logger.info(
                                     "Skipping IAP-blocked non-datastore resource "
                                     "%s (%s) for %s — data collected via datastore API",
@@ -445,7 +453,21 @@ async def _poll_dataset(dataset_id: str) -> None:
                 # working resources, do NOT create a misleading empty version.
                 # Persist the failure so the user can see it in the UI.
                 if expected > 0 and successes == 0:
-                    msg = "; ".join(errors)[:2000] or "all resource downloads/uploads failed (no detail)"
+                    # Build an ACTIONABLE message — never opaque. Distinguish
+                    # real download/upload errors from resources skipped because
+                    # data.gov.il IAP-blocks their headless file download (those
+                    # need the browser extension, not a server-side fix).
+                    parts: list[str] = []
+                    if errors:
+                        parts.append("; ".join(errors))
+                    if skipped_iap:
+                        parts.append(
+                            f"{len(skipped_iap)} file(s) blocked by data.gov.il "
+                            f"(headless download not possible — use the browser "
+                            f"extension): " + ", ".join(skipped_iap)
+                        )
+                    detail = " | ".join(parts) or "no per-resource detail captured"
+                    msg = f"0/{expected} resources archived — {detail}"[:2000]
                     ds.last_error = msg
                     logger.error(
                         "Aborting version %d for %s — 0/%d resources succeeded: %s",
