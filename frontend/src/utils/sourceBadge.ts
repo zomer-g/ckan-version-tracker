@@ -17,6 +17,10 @@
  */
 
 export interface SourceBadge {
+  /** Stable, URL-safe source id — the grouping key for the Sources page
+   *  (/sources/:id). Unlike `label` (Hebrew/quotes/spaces on some sources)
+   *  this is a clean ASCII slug and never changes. */
+  id: string;
   /** background colour of the chip */
   bg: string;
   /** text colour of the chip */
@@ -157,6 +161,7 @@ export function sourceBadgeFor(
     return {
       bg: "#e0f2fe",
       fg: "#075985",
+      id: "govmap",
       label: "GOVMAP",
       accent: "#0ea5e9",
       sourceLinkKey: "home.source_link_govmap",
@@ -168,6 +173,7 @@ export function sourceBadgeFor(
     return {
       bg: "#cffafe",
       fg: "#155e75",
+      id: "cbs",
       label: 'למ"ס',
       accent: "#06b6d4",
       sourceLinkKey: "home.source_link_cbs",
@@ -183,6 +189,7 @@ export function sourceBadgeFor(
         // green pill instead of a tinted outline.
         bg: "#5d936c",
         fg: "#ffffff",
+        id: "idf",
         label: "IDF.IL",
         accent: "#0f766e",
         sourceLinkKey: "home.source_link_idf",
@@ -196,6 +203,7 @@ export function sourceBadgeFor(
       return {
         bg: "#ede9fe",
         fg: "#5b21b6",
+        id: "health",
         label: "PRACTITIONERS",
         accent: "#7c3aed",
         sourceLinkKey: "home.source_link_health",
@@ -208,6 +216,7 @@ export function sourceBadgeFor(
       return {
         bg: "#dbeafe",
         fg: "#1e40af",
+        id: "avodata",
         label: "AVODATA",
         accent: "#2563eb",
         sourceLinkKey: "home.source_link_avodata",
@@ -219,6 +228,7 @@ export function sourceBadgeFor(
       return {
         bg: "#fee2e2",
         fg: "#991b1b",
+        id: "mevaker",
         label: "MEVAKER",
         accent: "#dc2626",
         sourceLinkKey: "home.source_link_mevaker",
@@ -231,6 +241,7 @@ export function sourceBadgeFor(
       return {
         bg: "#e0e7ff",
         fg: "#3730a3",
+        id: "hatzav",
         label: "חצב",
         accent: "#4f46e5",
         sourceLinkKey: "home.source_link_hatzav",
@@ -243,6 +254,7 @@ export function sourceBadgeFor(
       return {
         bg: "#d1fae5",
         fg: "#065f46",
+        id: "mankal",
         label: "חוזרי מנכ\"ל",
         accent: "#059669",
         sourceLinkKey: "home.source_link_mankal",
@@ -251,6 +263,7 @@ export function sourceBadgeFor(
     return {
       bg: "#fef3c7",
       fg: "#92400e",
+      id: "govil",
       label: "GOV.IL",
       accent: "#f59e0b",
       sourceLinkKey: "home.source_link_govil",
@@ -260,6 +273,7 @@ export function sourceBadgeFor(
   return {
     bg: "#ccfbf1",
     fg: "#0f766e",
+    id: "datagovil",
     label: "DATA.GOV.IL",
     accent: "var(--warning)",
     sourceLinkKey: "home.source_link",

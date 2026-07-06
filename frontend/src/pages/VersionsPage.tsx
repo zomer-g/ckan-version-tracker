@@ -277,6 +277,15 @@ export default function VersionsPage() {
     if (!dataset || dataset.source_type !== "govmap") return null;
     if (versionsList.length === 0) return null;
     const latest = versionsList[0];
+    // Suppress the in-browser map for HEAVY layers. A 100k+ feature GeoJSON
+    // (layer 52 = 329,182 features → a ~3.9GB GeoJSON) OOM-crashes the
+    // browser tab the moment GovmapView tries to download+parse it. Heavy
+    // layers publish GPKG + GeoParquet for download instead of a preview —
+    // mirrors the worker's GPKG_THRESHOLD. The download links below still
+    // list every file (incl. any legacy GeoJSON) for tools that can handle it.
+    const MAP_MAX_FEATURES = 100_000;
+    const featureCount = latest.change_summary?.total_rows ?? 0;
+    if (featureCount >= MAP_MAX_FEATURES) return null;
     const m = latest.resource_mappings as Record<string, unknown> | null;
     const ids = m?._geojson;
     let rid: string | null = null;

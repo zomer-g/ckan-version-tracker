@@ -83,6 +83,7 @@ export default function Navbar() {
   const navItems: { to: string; label: string }[] = [
     { to: "/", label: t("nav.search") },
     { to: "/organizations", label: t("nav.organizations", "ארגונים") },
+    { to: "/sources", label: t("nav.sources", "מקורות") },
     { to: "/tags", label: t("nav.tags", "תגיות") },
     { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
     { to: "/api", label: t("nav.api", "API") },

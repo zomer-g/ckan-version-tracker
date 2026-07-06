@@ -180,6 +180,10 @@ export interface Version {
     delta?: number;
     fields?: string[];
     sample_rows?: number;
+    // Total feature/row count of a scraper/govmap version. Used to suppress
+    // the in-browser map for heavy GovMap layers whose GeoJSON is too large
+    // to load in a browser tab without crashing it.
+    total_rows?: number;
   } | null;
   resource_mappings: Record<string, any> | null;
   dataset_title?: string | null;
