@@ -13,6 +13,10 @@ from starlette.requests import Request
 from app.config import settings
 
 MCP_PREFIX = "/mcp"
+# Dedicated CBS index MCP — a SECOND protected resource that reuses the SAME
+# authorization server (the /mcp OAuth endpoints + api_users allow-list). Only
+# the resource identity differs; tokens (aud=over-mcp) authenticate on both.
+CBS_MCP_PREFIX = "/cbs/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -31,6 +35,17 @@ def base_url(request: Request) -> str:
 
 def mcp_url(request: Request, path: str = "") -> str:
     return f"{base_url(request)}{MCP_PREFIX}{path}"
+
+
+def cbs_mcp_url(request: Request, path: str = "") -> str:
+    """The CBS MCP resource URL, e.g. https://www.over.org.il/cbs/mcp."""
+    return f"{base_url(request)}{CBS_MCP_PREFIX}{path}"
+
+
+def cbs_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the CBS resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/cbs/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{CBS_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:

@@ -30,6 +30,7 @@ from app.mcp.config import (
     MCP_REFRESH_TOKEN_TTL_SECONDS,
     MCP_STATE_TTL_SECONDS,
     base_url,
+    cbs_mcp_url,
     google_callback_url,
     mcp_jwt_secret,
     mcp_url,
@@ -72,6 +73,19 @@ def protected_resource_metadata(request: Request) -> JSONResponse:
         "authorization_servers": [mcp_url(request)],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base_url(request)}/api",
+        "scopes_supported": ["mcp"],
+    })
+
+
+def cbs_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728 metadata for the CBS index MCP. Its authorization server is the
+    SAME as the main MCP's (the /mcp OAuth endpoints) — only the resource
+    identity differs, so one login + one api_users invite grants both."""
+    return JSONResponse({
+        "resource": cbs_mcp_url(request),
+        "authorization_servers": [mcp_url(request)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{base_url(request)}/cbs",
         "scopes_supported": ["mcp"],
     })
 

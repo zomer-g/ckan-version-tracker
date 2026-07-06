@@ -125,6 +125,14 @@ from app.mcp.routes import mcp_router, mcp_wellknown_router
 app.include_router(mcp_wellknown_router)
 app.include_router(mcp_router)
 
+# Dedicated CBS index MCP at /cbs/mcp (same OAuth server + api_users gate; its
+# own tools + resource metadata). Registered before the SPA fallback so
+# /cbs/mcp and /.well-known/oauth-protected-resource/cbs/mcp aren't swallowed by
+# the React /cbs route.
+from app.mcp.cbs_routes import cbs_mcp_router, cbs_mcp_wellknown_router
+app.include_router(cbs_mcp_wellknown_router)
+app.include_router(cbs_mcp_router)
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"

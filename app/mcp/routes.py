@@ -167,8 +167,11 @@ def _is_mcp_path(path: str) -> bool:
     return (
         path == "/mcp"
         or path.startswith("/mcp/")
+        or path == "/cbs/mcp"
+        or path.startswith("/cbs/mcp/")
         or path.startswith("/.well-known/oauth-protected-resource/mcp")
         or path.startswith("/.well-known/oauth-authorization-server/mcp")
+        or path.startswith("/.well-known/oauth-protected-resource/cbs/mcp")
     )
 
 

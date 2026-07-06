@@ -49,8 +49,13 @@ def _service_user() -> "McpUser":
     )
 
 
-def challenge(request: Request, error: str, description: str) -> JSONResponse:
-    resource_metadata = f"{mcp_url(request)}/.well-known/oauth-protected-resource"
+def challenge(
+    request: Request, error: str, description: str, resource_metadata: str | None = None
+) -> JSONResponse:
+    # Which protected-resource metadata to advertise. Defaults to the main /mcp
+    # resource; the CBS MCP passes its own so clients discover the right resource
+    # (both point at the same authorization server).
+    resource_metadata = resource_metadata or f"{mcp_url(request)}/.well-known/oauth-protected-resource"
     resp = JSONResponse(status_code=401, content={"error": error, "error_description": description})
     resp.headers["WWW-Authenticate"] = (
         f'Bearer realm="over-mcp", error="{error}", '
@@ -59,11 +64,21 @@ def challenge(request: Request, error: str, description: str) -> JSONResponse:
     return resp
 
 
-async def authenticate(request: Request, db: AsyncSession) -> McpUser | Response:
-    """Return a McpUser, or a 401 challenge Response to send back."""
+async def authenticate(
+    request: Request, db: AsyncSession, resource_metadata: str | None = None
+) -> McpUser | Response:
+    """Return a McpUser, or a 401 challenge Response to send back.
+
+    ``resource_metadata`` overrides the WWW-Authenticate metadata URL (the CBS
+    MCP passes its own resource's metadata). Token validation is identical for
+    every resource — the JWT audience is resource-agnostic and the api_users
+    allow-list is shared."""
+    def _challenge(err: str, desc: str) -> JSONResponse:
+        return challenge(request, err, desc, resource_metadata)
+
     header = request.headers.get("authorization") or ""
     if not header.lower().startswith("bearer "):
-        return challenge(request, "invalid_token", "Missing Bearer token")
+        return _challenge("invalid_token", "Missing Bearer token")
     token = header[7:].strip()
 
     # ── service-token path (machine-to-machine; bypasses OAuth) ──
@@ -80,16 +95,16 @@ async def authenticate(request: Request, db: AsyncSession) -> McpUser | Response
     try:
         claims = jwt.decode(token, mcp_jwt_secret(), algorithms=["HS256"], audience=MCP_JWT_AUDIENCE)
     except Exception:
-        return challenge(request, "invalid_token", "Token invalid or expired")
+        return _challenge("invalid_token", "Token invalid or expired")
     if claims.get("typ") == "refresh":
-        return challenge(request, "invalid_token", "Refresh tokens are not accepted here")
+        return _challenge("invalid_token", "Refresh tokens are not accepted here")
     try:
         uid = uuid.UUID(str(claims.get("sub")))
     except (ValueError, TypeError):
-        return challenge(request, "invalid_token", "Malformed token subject")
+        return _challenge("invalid_token", "Malformed token subject")
     user = (await db.execute(
         select(ApiUser).where(ApiUser.id == uid, ApiUser.is_active.is_(True))
     )).scalar_one_or_none()
     if not user:
-        return challenge(request, "invalid_token", "User no longer active")
+        return _challenge("invalid_token", "User no longer active")
     return McpUser(id=user.id, email=user.email, name=user.name, tier=user.tier, client_id=claims.get("cid"))
