@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cbs_search_util import or_tsquery
 from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
@@ -173,9 +174,13 @@ async def _parse_deepseek(q: str, facets: dict) -> dict | None:
 async def _run_search(db: AsyncSession, p: dict, limit: int) -> tuple[int, list[dict]]:
     conds, params = [], {}
     q = (p.get("query") or "").strip()
+    tsq = or_tsquery(q) if q else ""
     if q:
-        conds.append("(search_vector @@ plainto_tsquery('simple', :q) OR title ILIKE :qlike)")
-        params["q"] = q
+        if tsq:
+            conds.append("(search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike)")
+            params["tsq"] = tsq
+        else:
+            conds.append("title ILIKE :qlike")
         params["qlike"] = f"%{q}%"
     if p.get("geo"):
         conds.append("geo_levels @> :geo"); params["geo"] = f'["{p["geo"]}"]'
@@ -190,8 +195,8 @@ async def _run_search(db: AsyncSession, p: dict, limit: int) -> tuple[int, list[
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
 
     total = (await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)).scalar_one()
-    order = ("ts_rank(search_vector, plainto_tsquery('simple', :q)) DESC, last_crawled DESC NULLS LAST"
-             if q else "last_crawled DESC NULLS LAST, id DESC")
+    order = ("ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, last_crawled DESC NULLS LAST"
+             if tsq else "last_crawled DESC NULLS LAST, id DESC")
     params["limit"] = max(1, min(int(limit), 60))
     rows = (await db.execute(
         text(f"SELECT {_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit"), params

@@ -22,6 +22,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cbs_search_util import or_tsquery
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
@@ -192,11 +193,15 @@ async def search(
     conds = []
     params: dict = {}
 
+    tsq = or_tsquery(q) if q else ""
     if q:
-        conds.append(
-            "(search_vector @@ plainto_tsquery('simple', :q) OR title ILIKE :qlike)"
-        )
-        params["q"] = q
+        if tsq:
+            conds.append(
+                "(search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike)"
+            )
+            params["tsq"] = tsq
+        else:
+            conds.append("title ILIKE :qlike")
         params["qlike"] = f"%{q}%"
     if subject:
         conds.append("subject_tags @> :subject")
@@ -239,8 +244,8 @@ async def search(
             "coalesce(year_end, year_start) DESC NULLS LAST, "
             "last_crawled DESC NULLS LAST, id DESC"
         )
-    elif q:
-        order = "ts_rank(search_vector, plainto_tsquery('simple', :q)) DESC, last_crawled DESC NULLS LAST"
+    elif tsq:
+        order = "ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, last_crawled DESC NULLS LAST"
     else:
         order = "last_crawled DESC NULLS LAST, id DESC"
 
