@@ -10,9 +10,11 @@ Provider is chosen by whichever key is set (DeepSeek preferred, then Anthropic):
   * DEEPSEEK_API_KEY  → DeepSeek ``deepseek-chat`` via the OpenAI-compatible API.
   * ANTHROPIC_API_KEY → Claude ``claude-opus-4-8``.
 Neither set ⇒ 503 (feature off), so the rest of the CBS API keeps working.
-"""
-from __future__ import annotations
 
+NOTE: no ``from __future__ import annotations`` here — with the slowapi
+``@limiter.limit`` wrapper it stringifies the endpoint hints and FastAPI then
+mis-reads ``body: AskRequest`` as a query param (422). Keep hints as real types.
+"""
 import json
 import logging
 
