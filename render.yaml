@@ -31,8 +31,11 @@ services:
         sync: false
       - key: WORKER_API_KEY
         sync: false
-      # Anthropic API key for POST /api/cbs/ask (natural-language CBS search).
-      # Empty ⇒ the endpoint returns 503. Set the VALUE in the dashboard.
+      # LLM keys for POST /api/cbs/ask (natural-language CBS search). Provider is
+      # chosen by whichever is set: DeepSeek preferred, then Anthropic. Both
+      # empty ⇒ the endpoint returns 503. Set the VALUE(s) in the dashboard.
+      - key: DEEPSEEK_API_KEY
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       # Shared M2M secret for the "חיפוש רוחבי" gateway to call /mcp without

@@ -65,9 +65,11 @@ class Settings(BaseSettings):
 
     worker_api_key: str = ""  # API key for govil-scraper worker
 
-    # Anthropic API key for the natural-language CBS search endpoint
-    # (POST /api/cbs/ask — app/api/cbs_ask.py). Empty ⇒ the endpoint returns
-    # 503 (feature off). Set the VALUE in the Render dashboard.
+    # LLM keys for the natural-language CBS search endpoint (POST /api/cbs/ask —
+    # app/api/cbs_ask.py). The provider is chosen by whichever key is set:
+    # DeepSeek is preferred (cheaper), then Anthropic. Both empty ⇒ the endpoint
+    # returns 503 (feature off). Set the VALUE in the Render dashboard.
+    deepseek_api_key: str = ""
     anthropic_api_key: str = ""
 
     # ── MCP machine-to-machine service token ──

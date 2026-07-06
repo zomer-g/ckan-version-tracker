@@ -33,5 +33,7 @@ slowapi==0.1.9
 # Utilities
 python-multipart==0.0.20
 
-# LLM (natural-language CBS search — app/api/cbs_ask.py)
+# LLM (natural-language CBS search — app/api/cbs_ask.py). Provider chosen by
+# whichever key is set: DeepSeek (OpenAI-compatible SDK) preferred, then Anthropic.
+openai==2.26.0
 anthropic==0.96.0
