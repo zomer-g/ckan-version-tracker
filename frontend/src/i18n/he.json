@@ -107,7 +107,8 @@
     "stats_datasets": "מאגרים במעקב",
     "stats_versions": "גרסאות שנשמרו",
     "stats_organizations": "ארגונים",
-    "source_link_cbs": "מקור ב-cbs.gov.il"
+    "source_link_cbs": "מקור ב-cbs.gov.il",
+    "source_link_jda": "מקור ב-jda.gov.il (הרשות לפיתוח ירושלים)"
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",

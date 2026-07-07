@@ -415,6 +415,18 @@ export const mankal = {
     }),
 };
 
+// jda.gov.il (הרשות לפיתוח ירושלים) validation — same response shape. Server
+// side at app/api/jda.py; only the three tenders-domain index pages are
+// accepted (מכרזים / הודעות לפי תקנות חובת המכרזים / החלטות ועדת המכרזים),
+// each its own dataset.
+export const jda = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/jda/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // CBS (cbs.gov.il) content index — a searchable catalog of the Central Bureau
 // of Statistics site (one row per crawled page). Server side at app/api/cbs.py;
 // the table is populated by the govil-scraper `cbs` engine (Playwright crawl,

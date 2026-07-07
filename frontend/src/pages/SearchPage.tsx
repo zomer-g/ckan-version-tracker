@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, mankal, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, mankal, jda, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -22,6 +22,9 @@ import { HATZAV_PATTERN } from "../utils/hatzavPattern";
 // apps.education.gov.il/Mankal (חוזרי מנכ"ל) portal URL pattern. Mirror of
 // MANKAL_INDEX_PATHS in app/api/mankal.py.
 import { MANKAL_PATTERN } from "../utils/mankalPattern";
+// jda.gov.il (הרשות לפיתוח ירושלים) tenders-portal URL pattern. Mirror of
+// corpus_of in app/api/jda.py.
+import { JDA_PATTERN } from "../utils/jdaPattern";
 
 interface CkanResource {
   id: string;
@@ -99,6 +102,11 @@ export default function SearchPage() {
   const [mankalTracked, setMankalTracked] = useState<"tracked" | "pending" | null>(null);
   const [mankalTracking, setMankalTracking] = useState(false);
   const [showMankalInterval, setShowMankalInterval] = useState(false);
+  // jda.gov.il (הרשות לפיתוח ירושלים) scraper result — same flow.
+  const [jdaResult, setJdaResult] = useState<GovIlValidation | null>(null);
+  const [jdaTracked, setJdaTracked] = useState<"tracked" | "pending" | null>(null);
+  const [jdaTracking, setJdaTracking] = useState(false);
+  const [showJdaInterval, setShowJdaInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -164,6 +172,10 @@ export default function SearchPage() {
     return MANKAL_PATTERN.test(input.trim());
   };
 
+  const detectJdaUrl = (input: string): boolean => {
+    return JDA_PATTERN.test(input.trim());
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
@@ -190,6 +202,9 @@ export default function SearchPage() {
     setMankalResult(null);
     setMankalTracked(null);
     setShowMankalInterval(false);
+    setJdaResult(null);
+    setJdaTracked(null);
+    setShowJdaInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -284,6 +299,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid apps.education.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1h. Check for jda.gov.il (הרשות לפיתוח ירושלים) tenders-portal URL.
+      if (detectJdaUrl(query)) {
+        const validation = await jda.validate(query.trim());
+        if (validation.valid) {
+          setJdaResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid jda.gov.il URL");
         }
         setLoading(false);
         return;
@@ -717,6 +746,63 @@ export default function SearchPage() {
     );
   };
 
+  const trackJdaDataset = async (interval: number) => {
+    if (!jdaResult?.url || !jdaResult?.title) return;
+    setShowJdaInterval(false);
+    setJdaTracking(true);
+    try {
+      await datasetsApi.trackScraper(jdaResult.url, jdaResult.title, interval);
+      setJdaTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setJdaTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setJdaTracking(false);
+  };
+
+  // Same shape as renderMankalTrackButton, bound to the jda state.
+  const renderJdaTrackButton = () => {
+    if (jdaTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (jdaTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showJdaInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackJdaDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowJdaInterval(!showJdaInterval)}
+          disabled={jdaTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {jdaTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   // Same shape as renderGovIlTrackButton, bound to the health state.
   const renderHealthTrackButton = () => {
     if (healthTracked === "tracked") {
@@ -827,7 +913,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1038,6 +1124,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={mankalResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {mankalResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* jda.gov.il (הרשות לפיתוח ירושלים) scraper result */}
+      {jdaResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #db2777" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{jdaResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#fce7f3",
+                  color: "#9d174d",
+                }}>
+                  JDA
+                </span>
+              </div>
+              {renderJdaTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>הרשות לפיתוח ירושלים</span>
+              <span>jda.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={jdaResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {jdaResult.url}
               </a>
             </p>
           </article>

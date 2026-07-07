@@ -107,7 +107,8 @@
     "stats_datasets": "Tracked datasets",
     "stats_versions": "Saved versions",
     "stats_organizations": "Organizations",
-    "source_link_cbs": "Source on cbs.gov.il"
+    "source_link_cbs": "Source on cbs.gov.il",
+    "source_link_jda": "Source on jda.gov.il (Jerusalem Development Authority)"
   },
   "search": {
     "title": "Search Government Datasets",

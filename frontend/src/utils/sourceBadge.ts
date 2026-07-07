@@ -40,7 +40,8 @@ export interface SourceBadge {
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
     | "home.source_link_mankal"
-    | "home.source_link_cbs";
+    | "home.source_link_cbs"
+    | "home.source_link_jda";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -80,6 +81,13 @@ const HATZAV_ORG_HINTS = ["geo.mot.gov.il"];
 // regular gov.il collectors. The ckan_id prefix "mankal-scraper-" is the
 // primary signal.
 const MANKAL_ORG_HINTS = ["apps.education.gov.il"];
+
+// Same drift-immune rule for jda.gov.il (הרשות לפיתוח ירושלים / Jerusalem
+// Development Authority tenders portal) — only the exact "jda.gov.il"
+// stamp the backend writes at create time, NOT a generic ministry slug
+// shared with regular gov.il collectors. The ckan_id prefix
+// "jda-scraper-" is the primary signal.
+const JDA_ORG_HINTS = ["jda.gov.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -138,6 +146,15 @@ function looksLikeMankal(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("mankal-scraper-")) return true;
   if (organization && MANKAL_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeJda(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("jda-scraper-")) return true;
+  if (organization && JDA_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -258,6 +275,19 @@ export function sourceBadgeFor(
         label: "חוזרי מנכ\"ל",
         accent: "#059669",
         sourceLinkKey: "home.source_link_mankal",
+      };
+    }
+    if (looksLikeJda(organization, ckan_id)) {
+      // Rose/pink pill for jda.gov.il (הרשות לפיתוח ירושלים, Jerusalem
+      // Development Authority tenders portal), distinct from the other
+      // source families.
+      return {
+        bg: "#fce7f3",
+        fg: "#9d174d",
+        id: "jda",
+        label: "JDA",
+        accent: "#db2777",
+        sourceLinkKey: "home.source_link_jda",
       };
     }
     return {

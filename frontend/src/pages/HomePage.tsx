@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -25,6 +25,9 @@ import { HATZAV_PATTERN } from "../utils/hatzavPattern";
 // apps.education.gov.il/Mankal (חוזרי מנכ"ל) portal URL pattern. Mirror of
 // MANKAL_INDEX_PATHS in app/api/mankal.py.
 import { MANKAL_PATTERN } from "../utils/mankalPattern";
+// jda.gov.il (הרשות לפיתוח ירושלים) tenders-portal URL pattern. Mirror of
+// corpus_of in app/api/jda.py.
+import { JDA_PATTERN } from "../utils/jdaPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -188,6 +191,8 @@ export default function HomePage() {
   const [hatzavResult, setHatzavResult] = useState<GovIlValidation | null>(null);
   // apps.education.gov.il/Mankal (חוזרי מנכ"ל) scraper result — same shape.
   const [mankalResult, setMankalResult] = useState<GovIlValidation | null>(null);
+  // jda.gov.il (הרשות לפיתוח ירושלים) scraper result — same shape.
+  const [jdaResult, setJdaResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -244,6 +249,10 @@ export default function HomePage() {
     return MANKAL_PATTERN.test(input.trim());
   };
 
+  const detectJdaUrl = (input: string): boolean => {
+    return JDA_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -267,6 +276,7 @@ export default function HomePage() {
     setMevakerResult(null);
     setHatzavResult(null);
     setMankalResult(null);
+    setJdaResult(null);
     setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
@@ -387,6 +397,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid apps.education.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2h. Check for jda.gov.il (הרשות לפיתוח ירושלים) tenders-portal URL.
+      if (detectJdaUrl(query)) {
+        const validation = await jda.validate(query.trim());
+        if (validation.valid) {
+          setJdaResult(validation);
+          setRequestFormFor("jda");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid jda.gov.il URL");
         }
         setLoading(false);
         return;
@@ -922,6 +947,61 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("mankal")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* jda.gov.il (הרשות לפיתוח ירושלים) scraper result — rose/pink
+            JDA chip. */}
+        {!loading && jdaResult && (
+          <section aria-label="jda.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #db2777" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{jdaResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#fce7f3",
+                      color: "#9d174d",
+                    }}>
+                      JDA
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>הרשות לפיתוח ירושלים</span>
+                  <span>jda.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={jdaResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {jdaResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "jda" ? (
+                    <RequestForm
+                      datasetTitle={jdaResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={jdaResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("jda")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

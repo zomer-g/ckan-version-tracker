@@ -349,6 +349,7 @@ async def track_dataset(
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
+        from app.api.jda import _parse_jda_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -390,14 +391,21 @@ async def track_dataset(
                 slug_prefix = "mankal-scraper"
                 mirror_prefix = "gov-versions-mankal"
         if not collector_name:
+            page_type, collector_name = _parse_jda_url(body.source_url)
+            if collector_name:
+                origin = "jda.gov.il"
+                slug_prefix = "jda-scraper"
+                mirror_prefix = "gov-versions-jda"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "geo.mot.gov.il (חצב) portal, or apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal"
+                    "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
+                    "חוזרי מנכ\"ל portal, or jda.gov.il (הרשות לפיתוח "
+                    "ירושלים) tenders portal"
                 ),
             )
 
@@ -549,6 +557,26 @@ async def track_dataset(
             # links so link-rot never blocks the whole collection from
             # publishing (the completeness gate default is 10%).
             sc.setdefault("max_missing_fraction", 0.25)
+        elif page_type and page_type.startswith("jda_"):
+            # jda.gov.il (הרשות לפיתוח ירושלים) — three static, non-paginated
+            # WordPress archive pages (מכרזים / הודעות לפי תקנות חובת
+            # המכרזים / החלטות ועדת המכרזים), each its own corpus. Plain
+            # httpx + bs4, no WAF. Attached PDFs live on a CloudFront CDN
+            # host and ARE mirrored.
+            from app.api.jda import get_jda_limits, corpus_of_page_type
+            depth, docs = get_jda_limits(page_type)
+            sc["kind"] = "jda"
+            sc.setdefault("corpus", corpus_of_page_type(page_type))
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            # Incremental archive mode: the worker walks the full page each
+            # poll but downloads/stores only genuinely-new documents (keyed on
+            # a checkpoint of known file URLs) and writes no version when
+            # nothing changed — so twice-daily polling stays cheap. Routed on
+            # the worker via archive_type == "jda".
+            sc.setdefault("archive", True)
+            sc.setdefault("archive_type", "jda")
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -1187,6 +1215,7 @@ async def submit_tracking_request(
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
+        from app.api.jda import _parse_jda_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -1221,14 +1250,20 @@ async def submit_tracking_request(
                 origin = "apps.education.gov.il"
                 slug_prefix = "mankal-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_jda_url(body.source_url)
+            if collector_name:
+                origin = "jda.gov.il"
+                slug_prefix = "jda-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "geo.mot.gov.il (חצב) portal, or apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal"
+                    "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
+                    "חוזרי מנכ\"ל portal, or jda.gov.il (הרשות לפיתוח "
+                    "ירושלים) tenders portal"
                 ),
             )
 
@@ -1307,6 +1342,18 @@ async def submit_tracking_request(
             # 20-year archive) so the collection still publishes. Mirror of
             # the admin-POST branch.
             sc["max_missing_fraction"] = 0.25
+        elif page_type and page_type.startswith("jda_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.jda import get_jda_limits, corpus_of_page_type
+            depth, docs = get_jda_limits(page_type)
+            sc["kind"] = "jda"
+            sc["corpus"] = corpus_of_page_type(page_type)
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            # Incremental archive mode — mirror of the admin-POST branch.
+            sc["archive"] = True
+            sc["archive_type"] = "jda"
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
