@@ -350,6 +350,7 @@ async def track_dataset(
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
         from app.api.jda import _parse_jda_url
+        from app.api.eden import _parse_eden_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -397,6 +398,12 @@ async def track_dataset(
                 slug_prefix = "jda-scraper"
                 mirror_prefix = "gov-versions-jda"
         if not collector_name:
+            page_type, collector_name = _parse_eden_url(body.source_url)
+            if collector_name:
+                origin = "jeden.co.il"
+                slug_prefix = "eden-scraper"
+                mirror_prefix = "gov-versions-eden"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -404,8 +411,8 @@ async def track_dataset(
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal, or jda.gov.il (הרשות לפיתוח "
-                    "ירושלים) tenders portal"
+                    "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
+                    "ירושלים), or jeden.co.il (חברת עדן) tenders portal"
                 ),
             )
 
@@ -577,6 +584,20 @@ async def track_dataset(
             # the worker via archive_type == "jda".
             sc.setdefault("archive", True)
             sc.setdefault("archive_type", "jda")
+        elif page_type and page_type.startswith("eden_"):
+            # jeden.co.il (חברת עדן) — two procurement tabs (מכרזים / החלטות
+            # ועדת מכרזים) share one custom-theme page, selected by the URL's
+            # ?category= marker. Plain httpx + bs4, no WAF; files on
+            # jeden.co.il mirrored. Same incremental-archive path as jda.
+            from app.api.eden import get_eden_limits, corpus_of_page_type
+            depth, docs = get_eden_limits(page_type)
+            sc["kind"] = "eden"
+            sc.setdefault("corpus", corpus_of_page_type(page_type))
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            sc.setdefault("archive", True)
+            sc.setdefault("archive_type", "eden")
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -1216,6 +1237,7 @@ async def submit_tracking_request(
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
         from app.api.jda import _parse_jda_url
+        from app.api.eden import _parse_eden_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -1255,6 +1277,11 @@ async def submit_tracking_request(
                 origin = "jda.gov.il"
                 slug_prefix = "jda-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_eden_url(body.source_url)
+            if collector_name:
+                origin = "jeden.co.il"
+                slug_prefix = "eden-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -1262,8 +1289,8 @@ async def submit_tracking_request(
                     "idf.il page, practitioners.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal, or jda.gov.il (הרשות לפיתוח "
-                    "ירושלים) tenders portal"
+                    "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
+                    "ירושלים), or jeden.co.il (חברת עדן) tenders portal"
                 ),
             )
 
@@ -1354,6 +1381,17 @@ async def submit_tracking_request(
             # Incremental archive mode — mirror of the admin-POST branch.
             sc["archive"] = True
             sc["archive_type"] = "jda"
+        elif page_type and page_type.startswith("eden_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.eden import get_eden_limits, corpus_of_page_type
+            depth, docs = get_eden_limits(page_type)
+            sc["kind"] = "eden"
+            sc["corpus"] = corpus_of_page_type(page_type)
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            sc["archive"] = True
+            sc["archive_type"] = "eden"
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,

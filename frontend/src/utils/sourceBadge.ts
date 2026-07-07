@@ -41,7 +41,8 @@ export interface SourceBadge {
     | "home.source_link_hatzav"
     | "home.source_link_mankal"
     | "home.source_link_cbs"
-    | "home.source_link_jda";
+    | "home.source_link_jda"
+    | "home.source_link_eden";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -88,6 +89,13 @@ const MANKAL_ORG_HINTS = ["apps.education.gov.il"];
 // shared with regular gov.il collectors. The ckan_id prefix
 // "jda-scraper-" is the primary signal.
 const JDA_ORG_HINTS = ["jda.gov.il"];
+
+// Same drift-immune rule for jeden.co.il (חברת עדן / Eden, the Jerusalem
+// municipal development company — tenders + committee decisions) — only
+// the exact "jeden.co.il" stamp the backend writes at create time, NOT a
+// generic municipal slug shared with other sources. The ckan_id prefix
+// "eden-scraper-" is the primary signal.
+const EDEN_ORG_HINTS = ["jeden.co.il"];
 
 function looksLikeIdf(
   organization: string | null | undefined,
@@ -155,6 +163,15 @@ function looksLikeJda(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("jda-scraper-")) return true;
   if (organization && JDA_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeEden(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("eden-scraper-")) return true;
+  if (organization && EDEN_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -288,6 +305,19 @@ export function sourceBadgeFor(
         label: "JDA",
         accent: "#db2777",
         sourceLinkKey: "home.source_link_jda",
+      };
+    }
+    if (looksLikeEden(organization, ckan_id)) {
+      // Orange pill for jeden.co.il (חברת עדן, Eden — Jerusalem municipal
+      // development company; tenders + committee decisions), distinct from
+      // the jda rose (#db2777) and the govil amber (#f59e0b).
+      return {
+        bg: "#ffedd5",
+        fg: "#9a3412",
+        id: "eden",
+        label: "EDEN",
+        accent: "#ea580c",
+        sourceLinkKey: "home.source_link_eden",
       };
     }
     return {

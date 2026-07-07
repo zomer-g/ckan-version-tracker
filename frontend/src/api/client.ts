@@ -427,6 +427,19 @@ export const jda = {
     }),
 };
 
+// jeden.co.il (חברת עדן / Eden Company) validation — same response shape.
+// Server side at app/api/eden.py; two corpora (eden_tenders / eden_decisions)
+// share ONE page, so the corpus is chosen by a ?category=tenders /
+// ?category=decisions query param. A bare jeden.co.il URL (no category)
+// validates as INVALID and the endpoint explains which param to add.
+export const eden = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/eden/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // CBS (cbs.gov.il) content index — a searchable catalog of the Central Bureau
 // of Statistics site (one row per crawled page). Server side at app/api/cbs.py;
 // the table is populated by the govil-scraper `cbs` engine (Playwright crawl,

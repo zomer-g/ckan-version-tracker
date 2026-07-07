@@ -29,6 +29,7 @@ from app.api.mevaker import router as mevaker_router
 from app.api.hatzav import router as hatzav_router
 from app.api.mankal import router as mankal_router
 from app.api.jda import router as jda_router
+from app.api.eden import router as eden_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
 from app.api.organizations import router as organizations_router
@@ -114,6 +115,7 @@ app.include_router(mevaker_router)
 app.include_router(hatzav_router)
 app.include_router(mankal_router)
 app.include_router(jda_router)
+app.include_router(eden_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)
 app.include_router(organizations_router)

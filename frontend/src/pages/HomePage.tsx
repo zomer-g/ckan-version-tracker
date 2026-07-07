@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -28,6 +28,10 @@ import { MANKAL_PATTERN } from "../utils/mankalPattern";
 // jda.gov.il (הרשות לפיתוח ירושלים) tenders-portal URL pattern. Mirror of
 // corpus_of in app/api/jda.py.
 import { JDA_PATTERN } from "../utils/jdaPattern";
+// jeden.co.il (חברת עדן / Eden) tenders + committee-decisions portal URL
+// pattern. Host-only; the corpus comes from a ?category= marker and the
+// backend /api/eden/validate is authoritative.
+import { EDEN_PATTERN } from "../utils/edenPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -193,6 +197,8 @@ export default function HomePage() {
   const [mankalResult, setMankalResult] = useState<GovIlValidation | null>(null);
   // jda.gov.il (הרשות לפיתוח ירושלים) scraper result — same shape.
   const [jdaResult, setJdaResult] = useState<GovIlValidation | null>(null);
+  // jeden.co.il (חברת עדן / Eden) scraper result — same shape.
+  const [edenResult, setEdenResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -253,6 +259,10 @@ export default function HomePage() {
     return JDA_PATTERN.test(input.trim());
   };
 
+  const detectEdenUrl = (input: string): boolean => {
+    return EDEN_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -277,6 +287,7 @@ export default function HomePage() {
     setHatzavResult(null);
     setMankalResult(null);
     setJdaResult(null);
+    setEdenResult(null);
     setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
@@ -412,6 +423,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid jda.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2i. Check for jeden.co.il (חברת עדן / Eden) tenders/decisions URL.
+      if (detectEdenUrl(query)) {
+        const validation = await eden.validate(query.trim());
+        if (validation.valid) {
+          setEdenResult(validation);
+          setRequestFormFor("eden");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid jeden.co.il URL");
         }
         setLoading(false);
         return;
@@ -1002,6 +1028,61 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("jda")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* jeden.co.il (חברת עדן / Eden) scraper result — orange EDEN
+            chip. */}
+        {!loading && edenResult && (
+          <section aria-label="jeden.co.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{edenResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ffedd5",
+                      color: "#9a3412",
+                    }}>
+                      EDEN
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>חברת עדן</span>
+                  <span>jeden.co.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={edenResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {edenResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "eden" ? (
+                    <RequestForm
+                      datasetTitle={edenResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={edenResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("eden")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}
