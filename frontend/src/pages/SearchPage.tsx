@@ -111,11 +111,15 @@ export default function SearchPage() {
   const [jdaTracked, setJdaTracked] = useState<"tracked" | "pending" | null>(null);
   const [jdaTracking, setJdaTracking] = useState(false);
   const [showJdaInterval, setShowJdaInterval] = useState(false);
-  // jeden.co.il (חברת עדן / Eden) scraper result — same flow.
-  const [edenResult, setEdenResult] = useState<GovIlValidation | null>(null);
-  const [edenTracked, setEdenTracked] = useState<"tracked" | "pending" | null>(null);
-  const [edenTracking, setEdenTracking] = useState(false);
-  const [showEdenInterval, setShowEdenInterval] = useState(false);
+  // jeden.co.il (חברת עדן / Eden) scraper results. The two corpora
+  // (מכרזים / החלטות ועדת מכרזים) share ONE page, so a bare URL can't be
+  // validated — we probe both ?category= variants and show one card per
+  // valid corpus, each trackable independently. The track state is keyed
+  // by page_type so the two cards don't share a button.
+  const [edenResults, setEdenResults] = useState<GovIlValidation[]>([]);
+  const [edenTracked, setEdenTracked] = useState<Record<string, "tracked" | "pending">>({});
+  const [edenTracking, setEdenTracking] = useState<Record<string, boolean>>({});
+  const [showEdenInterval, setShowEdenInterval] = useState<Record<string, boolean>>({});
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -218,9 +222,9 @@ export default function SearchPage() {
     setJdaResult(null);
     setJdaTracked(null);
     setShowJdaInterval(false);
-    setEdenResult(null);
-    setEdenTracked(null);
-    setShowEdenInterval(false);
+    setEdenResults([]);
+    setEdenTracked({});
+    setShowEdenInterval({});
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -334,15 +338,24 @@ export default function SearchPage() {
         return;
       }
 
-      // 1i. Check for jeden.co.il (חברת עדן / Eden) tenders/decisions URL.
+      // 1i. Check for jeden.co.il (חברת עדן / Eden) URL. The two corpora
+      // (מכרזים / החלטות ועדת מכרזים) share ONE page, so we can't validate
+      // the raw pasted URL — instead probe BOTH ?category= variants off the
+      // site origin and show one card per valid corpus.
       if (detectEdenUrl(query)) {
-        const validation = await eden.validate(query.trim());
-        if (validation.valid) {
-          setEdenResult(validation);
+        let origin = "https://jeden.co.il";
+        try { origin = new URL(query.trim()).origin; } catch {}
+        const [tenders, decisions] = await Promise.all([
+          eden.validate(`${origin}/?category=tenders`),
+          eden.validate(`${origin}/?category=decisions`),
+        ]);
+        const valid = [tenders, decisions].filter((r) => r.valid);
+        if (valid.length > 0) {
+          setEdenResults(valid);
           setResults([]);
           setCount(0);
         } else {
-          setError(validation.error || "Invalid jeden.co.il URL");
+          setError("כתובת jeden.co.il לא תקינה");
         }
         setLoading(false);
         return;
@@ -833,29 +846,33 @@ export default function SearchPage() {
     );
   };
 
-  const trackEdenDataset = async (interval: number) => {
-    if (!edenResult?.url || !edenResult?.title) return;
-    setShowEdenInterval(false);
-    setEdenTracking(true);
+  // Track one eden corpus. Keyed by page_type so the tenders and decisions
+  // cards each carry their own button/interval/tracked state.
+  const trackEdenDataset = async (r: GovIlValidation, interval: number) => {
+    if (!r.url || !r.title) return;
+    const key = r.page_type || r.url;
+    setShowEdenInterval((s) => ({ ...s, [key]: false }));
+    setEdenTracking((s) => ({ ...s, [key]: true }));
     try {
-      await datasetsApi.trackScraper(edenResult.url, edenResult.title, interval);
-      setEdenTracked(isAdmin ? "tracked" : "pending");
+      await datasetsApi.trackScraper(r.url, r.title, interval);
+      setEdenTracked((s) => ({ ...s, [key]: isAdmin ? "tracked" : "pending" }));
     } catch (err: any) {
       if (err.message?.includes("already tracked")) {
-        setEdenTracked("tracked");
+        setEdenTracked((s) => ({ ...s, [key]: "tracked" }));
       } else {
         setError(err.message);
       }
     }
-    setEdenTracking(false);
+    setEdenTracking((s) => ({ ...s, [key]: false }));
   };
 
-  // Same shape as renderJdaTrackButton, bound to the eden state.
-  const renderEdenTrackButton = () => {
-    if (edenTracked === "tracked") {
+  // Same shape as renderJdaTrackButton, bound to the per-corpus eden state.
+  const renderEdenTrackButton = (r: GovIlValidation) => {
+    const key = r.page_type || r.url || "";
+    if (edenTracked[key] === "tracked") {
       return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
     }
-    if (edenTracked === "pending") {
+    if (edenTracked[key] === "pending") {
       return (
         <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
@@ -864,10 +881,10 @@ export default function SearchPage() {
     }
     return (
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-        {showEdenInterval && (
+        {showEdenInterval[key] && (
           <select
             defaultValue={604800}
-            onChange={(e) => trackEdenDataset(Number(e.target.value))}
+            onChange={(e) => trackEdenDataset(r, Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
             autoFocus
@@ -880,11 +897,11 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowEdenInterval(!showEdenInterval)}
-          disabled={edenTracking}
+          onClick={() => setShowEdenInterval((s) => ({ ...s, [key]: !s[key] }))}
+          disabled={edenTracking[key]}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
-          {edenTracking ? t("common.loading") : t("search.track_btn")}
+          {edenTracking[key] ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1000,7 +1017,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && !edenResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1251,37 +1268,40 @@ export default function SearchPage() {
         </div>
       )}
 
-      {/* jeden.co.il (חברת עדן / Eden) scraper result */}
-      {edenResult && (
+      {/* jeden.co.il (חברת עדן / Eden) scraper results — one card per valid
+          corpus (מכרזים / החלטות ועדת מכרזים), each trackable independently. */}
+      {edenResults.length > 0 && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
-            <div className="flex-between mb-1">
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{edenResult.title}</h2>
-                <span style={{
-                  display: "inline-block",
-                  padding: "0.15rem 0.5rem",
-                  borderRadius: "9999px",
-                  fontSize: "0.65rem",
-                  fontWeight: 600,
-                  background: "#ffedd5",
-                  color: "#9a3412",
-                }}>
-                  EDEN
-                </span>
+          {edenResults.map((r) => (
+            <article key={r.page_type || r.url} className="card" style={{ borderRight: "4px solid #ea580c" }}>
+              <div className="flex-between mb-1">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{r.title}</h2>
+                  <span style={{
+                    display: "inline-block",
+                    padding: "0.15rem 0.5rem",
+                    borderRadius: "9999px",
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    background: "#ffedd5",
+                    color: "#9a3412",
+                  }}>
+                    EDEN
+                  </span>
+                </div>
+                {renderEdenTrackButton(r)}
               </div>
-              {renderEdenTrackButton()}
-            </div>
-            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
-              <span>חברת עדן</span>
-              <span>jeden.co.il</span>
-            </div>
-            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
-              <a href={edenResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
-                {edenResult.url}
-              </a>
-            </p>
-          </article>
+              <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                <span>חברת עדן</span>
+                <span>jeden.co.il</span>
+              </div>
+              <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                  {r.url}
+                </a>
+              </p>
+            </article>
+          ))}
         </div>
       )}
 

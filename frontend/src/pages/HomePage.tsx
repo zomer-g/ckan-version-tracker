@@ -197,8 +197,11 @@ export default function HomePage() {
   const [mankalResult, setMankalResult] = useState<GovIlValidation | null>(null);
   // jda.gov.il (הרשות לפיתוח ירושלים) scraper result — same shape.
   const [jdaResult, setJdaResult] = useState<GovIlValidation | null>(null);
-  // jeden.co.il (חברת עדן / Eden) scraper result — same shape.
-  const [edenResult, setEdenResult] = useState<GovIlValidation | null>(null);
+  // jeden.co.il (חברת עדן / Eden) scraper results. The two corpora
+  // (מכרזים / החלטות ועדת מכרזים) share ONE page, so a bare URL can't be
+  // validated — instead we probe both ?category= variants and show one
+  // card per valid corpus.
+  const [edenResults, setEdenResults] = useState<GovIlValidation[]>([]);
 
   useEffect(() => {
     publicApi.datasets()
@@ -287,7 +290,7 @@ export default function HomePage() {
     setHatzavResult(null);
     setMankalResult(null);
     setJdaResult(null);
-    setEdenResult(null);
+    setEdenResults([]);
     setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
@@ -428,16 +431,24 @@ export default function HomePage() {
         return;
       }
 
-      // 2i. Check for jeden.co.il (חברת עדן / Eden) tenders/decisions URL.
+      // 2i. Check for jeden.co.il (חברת עדן / Eden) URL. The two corpora
+      // (מכרזים / החלטות ועדת מכרזים) share ONE page, so we can't validate
+      // the raw pasted URL — instead probe BOTH ?category= variants off the
+      // site origin and show one card per valid corpus.
       if (detectEdenUrl(query)) {
-        const validation = await eden.validate(query.trim());
-        if (validation.valid) {
-          setEdenResult(validation);
-          setRequestFormFor("eden");
+        let origin = "https://jeden.co.il";
+        try { origin = new URL(query.trim()).origin; } catch {}
+        const [tenders, decisions] = await Promise.all([
+          eden.validate(`${origin}/?category=tenders`),
+          eden.validate(`${origin}/?category=decisions`),
+        ]);
+        const valid = [tenders, decisions].filter((r) => r.valid);
+        if (valid.length > 0) {
+          setEdenResults(valid);
           setResults([]);
           setCount(0);
         } else {
-          setError(validation.error || "Invalid jeden.co.il URL");
+          setError("כתובת jeden.co.il לא תקינה");
         }
         setLoading(false);
         return;
@@ -1039,57 +1050,63 @@ export default function HomePage() {
           </section>
         )}
 
-        {/* jeden.co.il (חברת עדן / Eden) scraper result — orange EDEN
-            chip. */}
-        {!loading && edenResult && (
+        {/* jeden.co.il (חברת עדן / Eden) scraper results — orange EDEN
+            chip. One card per valid corpus (מכרזים / החלטות ועדת מכרזים),
+            each trackable independently. */}
+        {!loading && edenResults.length > 0 && (
           <section aria-label="jeden.co.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
-                <div className="flex-between mb-1">
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{edenResult.title}</h2>
-                    <span style={{
-                      display: "inline-block",
-                      padding: "0.15rem 0.5rem",
-                      borderRadius: "9999px",
-                      fontSize: "0.65rem",
-                      fontWeight: 600,
-                      background: "#ffedd5",
-                      color: "#9a3412",
-                    }}>
-                      EDEN
-                    </span>
-                  </div>
-                </div>
-                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
-                  <span>חברת עדן</span>
-                  <span>jeden.co.il</span>
-                </div>
-                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
-                  <a href={edenResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
-                    {edenResult.url}
-                  </a>
-                </p>
+              {edenResults.map((r) => {
+                const formKey = `eden:${r.page_type}`;
+                return (
+                  <article key={formKey} className="card" style={{ borderRight: "4px solid #ea580c" }}>
+                    <div className="flex-between mb-1">
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{r.title}</h2>
+                        <span style={{
+                          display: "inline-block",
+                          padding: "0.15rem 0.5rem",
+                          borderRadius: "9999px",
+                          fontSize: "0.65rem",
+                          fontWeight: 600,
+                          background: "#ffedd5",
+                          color: "#9a3412",
+                        }}>
+                          EDEN
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                      <span>חברת עדן</span>
+                      <span>jeden.co.il</span>
+                    </div>
+                    <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                      <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                        {r.url}
+                      </a>
+                    </p>
 
-                <div style={{ marginTop: "0.75rem" }}>
-                  {requestFormFor === "eden" ? (
-                    <RequestForm
-                      datasetTitle={edenResult.title || ""}
-                      onClose={() => setRequestFormFor(null)}
-                      sourceType="scraper"
-                      sourceUrl={edenResult.url}
-                    />
-                  ) : (
-                    <button
-                      className="btn-primary"
-                      onClick={() => setRequestFormFor("eden")}
-                      style={{ fontSize: "0.85rem" }}
-                    >
-                      {t("home.request_btn")}
-                    </button>
-                  )}
-                </div>
-              </article>
+                    <div style={{ marginTop: "0.75rem" }}>
+                      {requestFormFor === formKey ? (
+                        <RequestForm
+                          datasetTitle={r.title || ""}
+                          onClose={() => setRequestFormFor(null)}
+                          sourceType="scraper"
+                          sourceUrl={r.url}
+                        />
+                      ) : (
+                        <button
+                          className="btn-primary"
+                          onClick={() => setRequestFormFor(formKey)}
+                          style={{ fontSize: "0.85rem" }}
+                        >
+                          {t("home.request_btn")}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </section>
         )}
