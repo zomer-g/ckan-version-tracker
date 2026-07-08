@@ -161,21 +161,23 @@ async def init_scheduler() -> None:
         misfire_grace_time=60,
     )
 
-    # GovMap full-coverage rollout: scrape the next catalog layer 4 times a day
-    # (every 6h — 00:00/06:00/12:00/18:00 Israel time), but only when the worker
-    # is idle (the tick self-skips otherwise), so the whole 859-layer catalog
-    # gets covered gradually without overloading GovMap or the single worker.
-    # 4/day is the MAX attempt rate; the worker-idle gate caps the real rate to
-    # the worker's throughput (giant layers span multiple ticks). See
+    # GovMap full-coverage rollout: a TOP-UP queue for the worker fleet. Every
+    # 10 min the tick refills the active coverage tasks up to
+    # GOVMAP_COVERAGE_CONCURRENCY (default 4 — the operator runs 4 OVER
+    # workers on 3 machines), never-triggered layers first, then stalest. The
+    # real scrape rate is capped by the workers' throughput; the tick itself
+    # is cheap (two SELECTs) and self-skips at the concurrency target. The
+    # old shape — one layer per 6h tick, only when the single worker was
+    # idle — fed exactly one worker and starved the rest of the fleet. See
     # app/services/govmap_coverage.py.
     from app.services.govmap_coverage import scrape_next_layer
     scheduler.add_job(
         scrape_next_layer,
-        trigger=CronTrigger(hour="0,6,12,18", minute=0, timezone="Asia/Jerusalem"),
+        trigger=IntervalTrigger(minutes=10),
         id="govmap_coverage_rollout",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=3600,
+        misfire_grace_time=300,
     )
 
     scheduler.start()

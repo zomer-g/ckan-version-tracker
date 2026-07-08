@@ -141,6 +141,14 @@ class Settings(BaseSettings):
     # case it misbehaves on a particular dataset shape.
     conditional_archive_enabled: bool = True
 
+    # How many govmap-coverage scrape tasks may be ACTIVE (pending/running)
+    # at once. Sized to the worker fleet: the operator runs several OVER
+    # workers on several machines, and the rollout's top-up tick keeps this
+    # many coverage tasks in flight so all of them stay fed. Regular
+    # (non-coverage) datasets' tasks share the same queue and interleave.
+    # Set GOVMAP_COVERAGE_CONCURRENCY=1 to restore the old one-at-a-time pace.
+    govmap_coverage_concurrency: int = 4
+
     cors_origins: str = ""
 
     # ── Public-API data budget (anti-abuse) ──

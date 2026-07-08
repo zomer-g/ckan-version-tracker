@@ -1,16 +1,19 @@
-"""Throttled full-coverage rollout of the GovMap layer catalog.
+"""Full-coverage rollout of the GovMap layer catalog, sized to the worker fleet.
 
-Goal: eventually scrape every GovMap vector layer, but gently — two a day
-(morning + evening), and never while the single self-hosted worker is already
-busy, so we don't pile up a queue or hammer GovMap (which rate-limits hard).
+Goal: eventually scrape every GovMap vector layer. The rollout is a TOP-UP
+queue: a frequent scheduler tick keeps up to ``GOVMAP_COVERAGE_CONCURRENCY``
+coverage scrape-tasks active at once (never-triggered layers first, then
+stalest). The operator runs several OVER workers on several machines — the
+old "one layer per tick, only when the (single) worker is idle" gating fed
+exactly one of them and starved the rest.
 
 Pieces:
   * ``populate_from_catalog`` — fetch GovMap's public layers catalog and upsert
     one ``GovmapCoverage`` row per vector layer.
-  * ``scrape_next_layer`` — the twice-daily scheduler tick: if the worker is
-    idle, pick the next layer (never-triggered first, then stalest), lazily
-    create a govmap TrackedDataset for it (marked ``coverage_managed`` so the
-    normal per-dataset scheduler leaves it to us), and trigger its scrape.
+  * ``scrape_next_layer`` — the scheduler tick: top up the active coverage
+    tasks to the concurrency target, lazily creating a govmap TrackedDataset
+    per layer (marked ``coverage_managed`` so the normal per-dataset scheduler
+    leaves it to us).
 
 Coverage datasets are ordinary govmap datasets once created, so their versions,
 storage plan, streaming/resume scrape path, etc. are all the existing pipeline.
@@ -22,6 +25,7 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import func, select
 
+from app.config import settings
 from app.database import async_session
 from app.models.govmap_coverage import GovmapCoverage
 from app.models.scrape_task import ScrapeTask
@@ -110,15 +114,21 @@ async def populate_from_catalog(db) -> dict:
             "updated": len(layers) - inserted, "total": int(total)}
 
 
-async def _worker_busy(db) -> bool:
-    """True if any scrape task is pending or running — the single worker is
-    occupied, so we must not stack another coverage scrape on top of it."""
-    n = (await db.execute(
-        select(func.count()).select_from(ScrapeTask).where(
-            ScrapeTask.status.in_(("pending", "running"))
+def _active_coverage_tasks_q():
+    """Active (pending/running) scrape tasks that belong to COVERAGE-managed
+    datasets. Regular datasets' tasks don't count against the rollout's
+    concurrency target — they share the queue but have their own cadence."""
+    return (
+        select(ScrapeTask.tracked_dataset_id)
+        .where(
+            ScrapeTask.status.in_(("pending", "running")),
+            ScrapeTask.tracked_dataset_id.in_(
+                select(GovmapCoverage.tracked_dataset_id).where(
+                    GovmapCoverage.tracked_dataset_id.is_not(None)
+                )
+            ),
         )
-    )).scalar() or 0
-    return n > 0
+    )
 
 
 async def _ensure_dataset(db, row: GovmapCoverage) -> TrackedDataset:
@@ -176,41 +186,67 @@ async def _ensure_dataset(db, row: GovmapCoverage) -> TrackedDataset:
 
 
 async def scrape_next_layer() -> dict:
-    """Twice-daily scheduler tick: if the worker is idle, scrape the next layer
-    in the coverage rollout (never-triggered first, then stalest). One layer per
-    tick. Own session so it's independent of any request context."""
+    """Scheduler tick: top up the rollout to ``GOVMAP_COVERAGE_CONCURRENCY``
+    active coverage tasks (never-triggered layers first, then stalest). With a
+    fleet of workers each new pending task is claimed by a free worker, so the
+    whole fleet stays busy; a single-worker deploy behaves like the old
+    one-at-a-time pace (target=1). Own session, independent of any request."""
+    target = max(1, int(settings.govmap_coverage_concurrency))
     async with async_session() as db:
-        if await _worker_busy(db):
-            logger.info("govmap coverage: worker busy, skipping this tick")
-            return {"skipped": "worker_busy"}
+        active_ids = [
+            r[0] for r in (await db.execute(_active_coverage_tasks_q())).all()
+        ]
+        slots = target - len(active_ids)
+        if slots <= 0:
+            logger.info("govmap coverage: %d task(s) active ≥ target %d — skip",
+                        len(active_ids), target)
+            return {"skipped": "at_concurrency", "active": len(active_ids)}
 
-        # Next layer: NULL last_triggered_at first (never scraped), then the
-        # stalest, tie-broken by sort_order.
-        row = (await db.execute(
+        # Next layers: NULL last_triggered_at first (never scraped), then the
+        # stalest, tie-broken by sort_order. Exclude layers whose dataset
+        # already has an active task (their last_triggered_at may be old —
+        # e.g. a giant layer still scraping since yesterday's tick).
+        q = (
             select(GovmapCoverage)
             .order_by(
                 GovmapCoverage.last_triggered_at.asc().nullsfirst(),
                 GovmapCoverage.sort_order.asc(),
             )
-            .limit(1)
-        )).scalar_one_or_none()
-        if row is None:
+            .limit(slots)
+        )
+        if active_ids:
+            q = q.where(
+                (GovmapCoverage.tracked_dataset_id.is_(None))
+                | (GovmapCoverage.tracked_dataset_id.not_in(active_ids))
+            )
+        rows = (await db.execute(q)).scalars().all()
+        if not rows:
             logger.info("govmap coverage: inventory empty (run populate first)")
             return {"skipped": "empty_inventory"}
 
-        ds = await _ensure_dataset(db, row)
-        row.last_triggered_at = datetime.now(timezone.utc)
+        triggered = []
+        for row in rows:
+            ds = await _ensure_dataset(db, row)
+            row.last_triggered_at = datetime.now(timezone.utc)
+            triggered.append((str(ds.id), row.layer_id, row.caption))
         await db.commit()
-        ds_id = str(ds.id)
-        layer_id = row.layer_id
-        caption = row.caption
 
-    # Trigger the scrape (creates a pending scrape task the worker picks up).
+    # Trigger the scrapes (each creates a pending task a free worker claims).
+    # poll_dataset's single-flight guard + the DB's one-active-task-per-dataset
+    # unique index make double-triggers harmless.
     from app.worker.poll_job import poll_dataset
-    await poll_dataset(ds_id)
-    logger.info("govmap coverage: triggered layer %s (%s) → ds %s",
-                layer_id, caption, ds_id)
-    return {"triggered_layer": layer_id, "caption": caption, "dataset_id": ds_id}
+    for ds_id, layer_id, caption in triggered:
+        await poll_dataset(ds_id)
+        logger.info("govmap coverage: triggered layer %s (%s) → ds %s",
+                    layer_id, caption, ds_id)
+    return {
+        "triggered": [
+            {"layer_id": lid, "caption": cap, "dataset_id": dsid}
+            for dsid, lid, cap in triggered
+        ],
+        "active_before": len(active_ids),
+        "target": target,
+    }
 
 
 async def coverage_status(db) -> dict:

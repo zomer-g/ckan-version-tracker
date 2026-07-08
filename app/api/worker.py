@@ -260,6 +260,9 @@ async def poll_for_task(
             ScrapeTask.status == "running",
             ScrapeTask.updated_at < heartbeat_cutoff,
         )
+        # Multiple workers poll concurrently; skip rows another poll is
+        # already auto-failing (avoids double writes / duplicate log lines).
+        .with_for_update(skip_locked=True)
     )
     cleaned = 0
     for stuck_task in stuck_result.scalars().all():
@@ -296,6 +299,14 @@ async def poll_for_task(
             .where(ScrapeTask.status == "pending")
             .order_by(ScrapeTask.created_at.asc())
             .limit(1)
+            # CRITICAL with multiple workers: the claim must be atomic.
+            # Without a row lock, two workers polling in the same instant
+            # both SELECT the same pending task, both flip it to 'running',
+            # and BOTH receive the same task_id — the dataset gets scraped
+            # twice concurrently (interleaved heartbeats, duplicate
+            # push-version). FOR UPDATE SKIP LOCKED makes each concurrent
+            # poll claim a DIFFERENT pending row (or none).
+            .with_for_update(of=ScrapeTask, skip_locked=True)
         )
         candidate = result.first()
         if not candidate:
@@ -327,7 +338,16 @@ async def poll_for_task(
     task, ds = row
     task.status = "running"
     task.phase = "assigned"
-    task.message = "Assigned to worker"
+    # Attribute the assignment to a specific worker machine (client IP via
+    # Cloudflare/Render forwarding headers). With several workers on several
+    # machines this is what lets monitoring show WHICH worker holds each task
+    # — the worker itself sends no identity beyond its version headers.
+    worker_ip = (
+        (request.headers.get("cf-connecting-ip")
+         or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+         or (request.client.host if request.client else ""))
+    )
+    task.message = f"Assigned to worker {worker_ip}" if worker_ip else "Assigned to worker"
     await db.commit()
 
     from app.services.activity_log import log_event
