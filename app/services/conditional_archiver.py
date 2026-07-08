@@ -98,6 +98,19 @@ async def _try(ds: TrackedDataset, db) -> Result:
     if ds.storage_mode == "append_only":
         return Result.FALLBACK
 
+    # 0b. Same exemption for the NEON archive plan ('neon'/'r2+neon'/
+    #     'odata+neon', independent of storage_mode): its rows live in the
+    #     append DB, which this archiver knows nothing about. A NO_CHANGE /
+    #     CREATED here would return before poll_job's neon_datastore routing
+    #     ever runs — stranding a dataset whose NEON table was never seeded
+    #     (bytes unchanged ⇒ first stream never happens; observed on the
+    #     cooperative registry, which got a metadata_only version instead of
+    #     its first NEON stream). The legacy path streams via delta_archiver,
+    #     where an unchanged re-scan is a cheap ON-CONFLICT no-op.
+    from app.services.storage_client import dataset_archives_neon
+    if dataset_archives_neon(ds):
+        return Result.FALLBACK
+
     # 1. Cheap metadata fetch from data.gov.il
     pkg = await ckan_client.package_show(ds.ckan_id)
     new_modified = pkg.get("metadata_modified", "")
