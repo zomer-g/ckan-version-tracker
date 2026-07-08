@@ -356,12 +356,30 @@ async def poll_for_task(
         message="גירוד התחיל (המשימה נמסרה ל-worker)",
     )
 
+    # Previous version's row count — lets the worker (a) fail FAST on heavy
+    # layers when its high-fidelity engine is unavailable and (b) skip the
+    # GB-scale uploads for a partial that this server's shrink guard would
+    # reject anyway. Same extraction the shrink guard itself uses.
+    prev_total_rows = 0
+    latest_v = (await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds.id)
+        .order_by(VersionIndex.version_number.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if latest_v is not None:
+        try:
+            prev_total_rows = int((latest_v.change_summary or {}).get("total_rows") or 0)
+        except (ValueError, TypeError):
+            prev_total_rows = 0
+
     return {
         "task_id": str(task.id),
         "tracked_dataset_id": str(ds.id),
         "source_url": ds.source_url,
         "scraper_config": _poll_scraper_config(ds),
         "callback_url": "/api/worker/push-version",
+        "prev_total_rows": prev_total_rows,
         # How big the worker may make each attachment ZIP part. R2 datasets get
         # a much larger limit (no CKAN/edge upload cap), so 1.5GB of files →
         # ~2 parts instead of ~19. Worker falls back to its own default if absent.
