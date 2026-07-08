@@ -53,6 +53,20 @@ class Settings(BaseSettings):
 
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
+    # ── Poll memory guards (512MB Render dyno) ──
+    # Max dataset polls allowed to run CONCURRENTLY on the web dyno. Every poll
+    # can parse a full CSV or stream a datastore into memory; without a global
+    # cap, each deploy re-schedules every overdue dataset to fire at once (see
+    # scheduler.add_poll_job → start_date=now+1s) and the resulting stampede
+    # OOM-kills the 512MB dyno. 1 = fully serialized (safest for 512MB); raise
+    # once the dyno has more RAM. See app/worker/poll_job.py.
+    poll_max_concurrency: int = 1
+    # Rows per datastore_search page when streaming a datastore-backed dataset.
+    # Each page's row batch AND its JSON response are held in memory, so this is
+    # the dominant per-poll peak. Lower = smaller RSS at the cost of more HTTP
+    # round-trips. Tuned down from 32000 to fit under the 512MB dyno.
+    datastore_page_size: int = 10000
+
     default_poll_interval: int = 604800  # 1 week
     min_poll_interval: int = 300
     # Hard cap per resource. Even with stream-to-disk downloads we still

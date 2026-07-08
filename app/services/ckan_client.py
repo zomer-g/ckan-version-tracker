@@ -31,8 +31,10 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
-# data.gov.il datastore page size (max records per request)
-DATASTORE_PAGE_SIZE = 32000
+# data.gov.il datastore page size (max records per request). Configurable so it
+# can be tuned to the dyno's memory (each page is held in RAM). See
+# settings.datastore_page_size.
+DATASTORE_PAGE_SIZE = settings.datastore_page_size
 
 
 def _validate_url(url: str) -> None:

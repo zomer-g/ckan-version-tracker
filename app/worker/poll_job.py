@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -41,6 +42,18 @@ logger = logging.getLogger(__name__)
 # recycle clears it — no risk of a stale lock stranding a dataset.
 _active_polls: set[str] = set()
 
+# Global concurrency cap across DIFFERENT datasets. `_active_polls` above only
+# stops the SAME dataset overlapping itself; it does nothing when a deploy
+# re-schedules every overdue dataset to fire at once (scheduler.add_poll_job
+# uses start_date=now+1s), so dozens of poll_dataset coroutines — each parsing a
+# full CSV or streaming a datastore into memory — run together and OOM the
+# 512MB dyno. This semaphore bounds how many heavy polls run concurrently;
+# queued ones await here holding only a coroutine frame. Sized by
+# settings.poll_max_concurrency (default 1 = fully serialized). Constructed at
+# import (no running loop needed on Python ≥3.10) and used on the app's single
+# event loop.
+_POLL_SEMAPHORE = asyncio.Semaphore(max(1, settings.poll_max_concurrency))
+
 
 async def poll_dataset(dataset_id: str, force: bool = False) -> None:
     """Poll a single tracked dataset for changes (single-flight wrapper).
@@ -57,7 +70,10 @@ async def poll_dataset(dataset_id: str, force: bool = False) -> None:
         return
     _active_polls.add(dataset_id)
     try:
-        await _poll_dataset(dataset_id, force=force)
+        # Bound global concurrency BEFORE any heavy work so a deploy-time
+        # stampede queues here instead of all spiking memory at once.
+        async with _POLL_SEMAPHORE:
+            await _poll_dataset(dataset_id, force=force)
     finally:
         _active_polls.discard(dataset_id)
 
