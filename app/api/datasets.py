@@ -1163,6 +1163,14 @@ async def trigger_poll(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    # poll_dataset silently skips inactive datasets (its is_active guard), so
+    # without this check the admin gets "Poll triggered" and then... nothing —
+    # no version, no last_polled_at, no error. Surface the real state instead.
+    if not ds.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה",
+        )
 
     from app.worker.poll_job import poll_dataset
 
