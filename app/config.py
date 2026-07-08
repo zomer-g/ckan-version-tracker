@@ -58,9 +58,11 @@ class Settings(BaseSettings):
     # can parse a full CSV or stream a datastore into memory; without a global
     # cap, each deploy re-schedules every overdue dataset to fire at once (see
     # scheduler.add_poll_job → start_date=now+1s) and the resulting stampede
-    # OOM-kills the 512MB dyno. 1 = fully serialized (safest for 512MB); raise
-    # once the dyno has more RAM. See app/worker/poll_job.py.
-    poll_max_concurrency: int = 1
+    # OOM-kills the 512MB dyno. Automatic polls only — a manual "דגום" (force)
+    # bypasses this so a user click is never starved behind a long-running
+    # stream (see poll_job.poll_dataset). 2 gives a light poll a lane alongside
+    # one giant stream while still bounding the stampede; raise with more RAM.
+    poll_max_concurrency: int = 2
     # Rows per datastore_search page when streaming a datastore-backed dataset.
     # Each page's row batch AND its JSON response are held in memory, so this is
     # the dominant per-poll peak. Lower = smaller RSS at the cost of more HTTP

@@ -70,10 +70,20 @@ async def poll_dataset(dataset_id: str, force: bool = False) -> None:
         return
     _active_polls.add(dataset_id)
     try:
-        # Bound global concurrency BEFORE any heavy work so a deploy-time
-        # stampede queues here instead of all spiking memory at once.
-        async with _POLL_SEMAPHORE:
+        if force:
+            # Manual admin trigger ("דגום"): run immediately, bypassing the
+            # concurrency semaphore. A user click must never be starved behind a
+            # long-running automatic stream (e.g. the 4.1M-row vehicle registry
+            # holds a slot for its whole invocation). Single-flight (_active_polls)
+            # still prevents this dataset overlapping itself; a manually-polled
+            # dataset is the user's explicit choice, so its memory cost is
+            # accepted.
             await _poll_dataset(dataset_id, force=force)
+        else:
+            # Automatic poll: bound global concurrency BEFORE any heavy work so a
+            # deploy-time stampede queues here instead of all spiking memory.
+            async with _POLL_SEMAPHORE:
+                await _poll_dataset(dataset_id, force=force)
     finally:
         _active_polls.discard(dataset_id)
 
