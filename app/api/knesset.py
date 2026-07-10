@@ -182,6 +182,24 @@ def get_knesset_limits(page_type: str) -> tuple[int, int]:
     return KNESSET_DEFAULT_LIMITS
 
 
+def mmm_max_docs_override(url: str) -> int | None:
+    """Optional ``?max_docs=N`` (or ``?smoke=N``) on an MMM source URL — lets a
+    bounded smoke run be registered without editing config, before the full
+    ~6,500-doc backfill. Returns a positive int or ``None`` (use the default)."""
+    from urllib.parse import parse_qs
+
+    try:
+        q = parse_qs(urlparse(url).query)
+        raw = q.get("max_docs") or q.get("smoke")
+        if raw:
+            n = int(raw[0])
+            if n > 0:
+                return n
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 async def _probe_committee_name(scope: tuple[str, int]) -> str | None:
     """Live-probe the ODATA feed for the committee's display name (the Name of
     its most-recent instance). Best-effort: any failure returns ``None`` and

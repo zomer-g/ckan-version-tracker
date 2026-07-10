@@ -611,12 +611,14 @@ async def track_dataset(
             # whole-corpus dataset. SharePoint search behind a Radware challenge;
             # the worker does a Playwright cookie warmup then httpx-paginates and
             # mirrors each PDF (fs.knesset.gov.il, open host).
-            from app.api.knesset import get_knesset_limits
+            from app.api.knesset import get_knesset_limits, mmm_max_docs_override
             depth, docs = get_knesset_limits(page_type)
             sc["kind"] = "knesset_mmm"
             sc.setdefault("download_files", True)
             sc.setdefault("max_depth", depth)
-            sc.setdefault("max_docs", docs)
+            # An optional ?max_docs=N on the source URL caps the run — used to
+            # register a bounded smoke before the full ~6,500-doc backfill.
+            sc.setdefault("max_docs", mmm_max_docs_override(body.source_url) or docs)
         elif page_type and page_type.startswith("knesset_"):
             # knesset.gov.il committee protocols — the open ODATA-v4 feed
             # (KNS_Committee → KNS_CommitteeSession → protocol docs). Plain
@@ -1446,12 +1448,13 @@ async def submit_tracking_request(
             sc["archive_type"] = "eden"
         elif page_type == "knesset_mmm":
             # Mirror of the admin-POST branch — keep in sync. MMM whole-corpus.
-            from app.api.knesset import get_knesset_limits
+            from app.api.knesset import get_knesset_limits, mmm_max_docs_override
             depth, docs = get_knesset_limits(page_type)
             sc["kind"] = "knesset_mmm"
             sc["download_files"] = True
             sc["max_depth"] = depth
-            sc["max_docs"] = docs
+            # Optional ?max_docs=N cap on the URL for a bounded smoke run.
+            sc["max_docs"] = mmm_max_docs_override(body.source_url) or docs
         elif page_type and page_type.startswith("knesset_"):
             # Mirror of the admin-POST branch — keep in sync. knesset.gov.il
             # committee protocols from the open ODATA-v4 feed; each committee
