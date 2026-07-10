@@ -13,5 +13,8 @@
  * and rejects a query that carries no committee scope.
  */
 
+// Matches either a committee ODATA query (knesset.gov.il) or the MMM
+// Research-center page (main.knesset.gov.il/…/research/…). Both validate via
+// the same /api/knesset/validate endpoint, which distinguishes them.
 export const KNESSET_PATTERN =
-  /^https?:\/\/knesset\.gov\.il\/OdataV4\/ParliamentInfo\/KNS_Committee(?:[?#].*)?$/i;
+  /^https?:\/\/(knesset\.gov\.il\/OdataV4\/ParliamentInfo\/KNS_Committee|main\.knesset\.gov\.il\/[Aa]ctivity\/[Ii]nfo\/[Rr]esearch)(?:[/?#].*)?$/i;

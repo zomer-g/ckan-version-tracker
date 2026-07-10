@@ -606,6 +606,17 @@ async def track_dataset(
             sc.setdefault("max_docs", docs)
             sc.setdefault("archive", True)
             sc.setdefault("archive_type", "eden")
+        elif page_type == "knesset_mmm":
+            # main.knesset.gov.il MMM (מרכז המחקר והמידע) research documents —
+            # whole-corpus dataset. SharePoint search behind a Radware challenge;
+            # the worker does a Playwright cookie warmup then httpx-paginates and
+            # mirrors each PDF (fs.knesset.gov.il, open host).
+            from app.api.knesset import get_knesset_limits
+            depth, docs = get_knesset_limits(page_type)
+            sc["kind"] = "knesset_mmm"
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
         elif page_type and page_type.startswith("knesset_"):
             # knesset.gov.il committee protocols — the open ODATA-v4 feed
             # (KNS_Committee → KNS_CommitteeSession → protocol docs). Plain
@@ -1433,6 +1444,14 @@ async def submit_tracking_request(
             sc["max_docs"] = docs
             sc["archive"] = True
             sc["archive_type"] = "eden"
+        elif page_type == "knesset_mmm":
+            # Mirror of the admin-POST branch — keep in sync. MMM whole-corpus.
+            from app.api.knesset import get_knesset_limits
+            depth, docs = get_knesset_limits(page_type)
+            sc["kind"] = "knesset_mmm"
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
         elif page_type and page_type.startswith("knesset_"):
             # Mirror of the admin-POST branch — keep in sync. knesset.gov.il
             # committee protocols from the open ODATA-v4 feed; each committee

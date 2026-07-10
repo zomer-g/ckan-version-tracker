@@ -51,6 +51,18 @@ class Settings(BaseSettings):
     # off (falls back to the legacy/metadata path). See app/services/append_store.py.
     append_database_url: str = ""
 
+    # ── Knesset ODATA mirror ("מסד הנתונים של הכנסת") ──
+    # Syncs all ~48 Knesset ODATA-v4 entity sets into a `knesset` schema in the
+    # append DB above, with a public read-only SQL console at /knesset. Requires
+    # append_database_url; this flag is the feature kill switch, and the
+    # interval controls how often each table is refreshed incrementally.
+    # See app/services/knesset_db.py.
+    knesset_db_enabled: bool = True
+    knesset_db_sync_interval_hours: float = 12.0
+    # Per scheduler tick, how long the sync may work before yielding (the
+    # initial ~3M-row load spans many ticks; each tick checkpoints).
+    knesset_db_tick_budget_seconds: float = 240.0
+
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
     # ── Poll memory guards (512MB Render dyno) ──
@@ -124,7 +136,7 @@ class Settings(BaseSettings):
     # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
     #   to the new `git rev-parse HEAD` of that repo, or the new worker is
     #   refused. (OVER-only commits don't change it.)
-    worker_required_version: str = "d52e8e738d039d83a944c310fb57edd108c51261"
+    worker_required_version: str = "e5f4c867d953bf04482c4f718662efeda0f57179"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running

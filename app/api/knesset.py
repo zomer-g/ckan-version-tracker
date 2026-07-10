@@ -10,14 +10,21 @@ files on ``fs.knesset.gov.il``).
 The trackable URL is an honest ODATA query against ``KNS_Committee`` that
 returns exactly the committee being tracked:
 
-    https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Committee?$filter=CategoryID eq 2   # ועדת הכספים (all Knessets)
-    https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Committee?$filter=Id eq 4187          # a single committee
+    https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Committee?$filter=Id eq 4186          # ועדת הכספים (כנסת 25)
+    https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Committee?$filter=CategoryID eq 2      # ועדת הכספים (all Knessets)
 
-``CategoryID eq N`` → the persistent committee across all Knessets (incl. its
-sub-committees sharing the category); ``Id eq N`` → a single committee (used
-for one-off inquiry/joint committees that carry no category). Unlike
-practitioners/idf, the feed is fully open, so ``/validate`` probes it live for
-the real committee name.
+``Id eq N`` → a single committee instance, tracked exactly and nothing else
+(an ``Id`` is a *per-Knesset* committee, so this pins the dataset to one
+Knesset). ``CategoryID eq N`` → the persistent committee across all Knessets
+(incl. its sub-committees sharing the category) — the historical model.
+
+The **Knesset-25 rollout** registers every one of the ~90 Knesset-25
+committees — main, special, joint, House, *and* every ועדת משנה — as its own
+dataset by ``Id eq N`` (see ``/bootstrap-knesset25`` below). Single scope pulls
+no sub-committee children, so the 90 datasets never double-count each other.
+
+Unlike practitioners/idf, the feed is fully open, so ``/validate`` probes it
+live for the real committee name.
 
 The actual scrape runs in the external govil-scraper worker
 (``govscraper.scrapers.knesset``), which dispatches on
@@ -29,9 +36,15 @@ import re
 from urllib.parse import unquote, urlparse
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_admin_user
+from app.database import get_db
+from app.models.tracked_dataset import TrackedDataset
+from app.models.user import User
 from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -49,6 +62,27 @@ KNESSET_ODATA_BASE = "https://knesset.gov.il/OdataV4/ParliamentInfo"
 # the ``ID`` tail of ``CommitteeTypeID`` / ``CategoryID``.
 _CATEGORY_RE = re.compile(r"CategoryID\s+eq\s+(\d+)", re.IGNORECASE)
 _ID_RE = re.compile(r"\bId\s+eq\s+(\d+)", re.IGNORECASE)
+
+# MMM (מרכז המחקר והמידע) — the Knesset Research & Information Center. Its
+# research documents are NOT in the ODATA feed; they live in a SharePoint
+# search app on main.knesset.gov.il (behind a Radware challenge). The whole
+# corpus is one OVER dataset, scraped by the worker's ``knesset_mmm`` engine.
+MMM_HOSTS = {"main.knesset.gov.il"}
+_MMM_PATH_PREFIX = "/activity/info/research"
+
+
+def is_mmm_url(url: str) -> bool:
+    """True for any main.knesset.gov.il Research-center page (the landing page
+    the user pastes, or the search page)."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return False
+    if (parsed.hostname or "").lower() not in MMM_HOSTS:
+        return False
+    return (parsed.path or "").lower().startswith(_MMM_PATH_PREFIX)
 
 
 class ValidateRequest(BaseModel):
@@ -95,7 +129,12 @@ def _parse_knesset_url(url: str) -> tuple[str | None, str | None]:
 
     Both page_types match ``startswith("knesset_")`` so the dispatch switch in
     ``datasets.py`` works the same way it does for ``idf_`` / ``health_``.
+
+    The MMM Research-center page maps to ``("knesset_mmm", "knesset-mmm")`` —
+    one whole-corpus dataset (also ``startswith("knesset_")``).
     """
+    if is_mmm_url(url):
+        return "knesset_mmm", "knesset-mmm"
     scope = committee_scope_of(url)
     if scope is None:
         return None, None
@@ -130,9 +169,16 @@ def scope_of_page_type(page_type: str) -> tuple[str, int] | None:
 KNESSET_DEFAULT_LIMITS: tuple[int, int] = (3, 100_000)
 
 
+# The MMM corpus (every research doc since Dec 1999) is ~6,500 and growing;
+# 20k is a generous cap that still surfaces a truncation marker.
+MMM_DEFAULT_LIMITS: tuple[int, int] = (3, 20_000)
+
+
 def get_knesset_limits(page_type: str) -> tuple[int, int]:
     """Return ``(max_depth, max_docs)`` for a knesset page_type. Single cap for
     all committees; kept as a function for symmetry with the other parsers."""
+    if page_type == "knesset_mmm":
+        return MMM_DEFAULT_LIMITS
     return KNESSET_DEFAULT_LIMITS
 
 
@@ -171,6 +217,17 @@ async def validate_knesset_url(request: Request, body: ValidateRequest):
     """
     url = body.url.strip()
 
+    # MMM Research-center corpus (whole-corpus, one dataset).
+    if is_mmm_url(url):
+        page_type, slug = _parse_knesset_url(url)
+        return ValidateResponse(
+            valid=True,
+            page_type=page_type,
+            collector_name=slug,
+            title='מסמכי מרכז המחקר והמידע של הכנסת (ממ"מ)',
+            url=url,
+        )
+
     scope = committee_scope_of(url)
     if scope is None:
         return ValidateResponse(
@@ -203,4 +260,197 @@ async def validate_knesset_url(request: Request, body: ValidateRequest):
         collector_name=slug,
         title=title,
         url=url,
+    )
+
+
+# --------------------------------------------------------------------------
+# Bulk bootstrap: register every committee of a given Knesset in one call.
+# --------------------------------------------------------------------------
+
+# The rollout target. Every committee active in this Knesset — main, special,
+# joint, House, and every ועדת משנה — becomes its own dataset (Id eq N).
+BOOTSTRAP_KNESSET = 25
+
+
+class BootstrapCommitteeResult(BaseModel):
+    committee_id: int
+    name: str
+    committee_type: str | None = None
+    source_url: str
+    status: str  # "created" | "skipped" | "failed" | "would_create"
+    dataset_id: str | None = None
+    error: str | None = None
+
+
+class BootstrapResponse(BaseModel):
+    knesset: int
+    total_committees: int
+    created: int
+    skipped: int
+    failed: int
+    would_create: int
+    dry_run: bool
+    results: list[BootstrapCommitteeResult]
+
+
+async def _fetch_committees_for_knesset(knesset_num: int) -> list[dict]:
+    """Page ``KNS_Committee`` for every committee row of one Knesset.
+
+    Drives ``$skip`` manually (the feed's nextLink is unreliable — see the
+    engine). Each row is a distinct committee instance whose ``Id`` uniquely
+    identifies it within that Knesset."""
+    rows: list[dict] = []
+    skip = 0
+    select_fields = "Id,Name,CommitteeTypeID,CommitteeTypeDesc"
+    async with httpx.AsyncClient(timeout=30) as client:
+        while True:
+            url = (
+                f"{KNESSET_ODATA_BASE}/KNS_Committee"
+                f"?$filter=KnessetNum eq {knesset_num}"
+                f"&$select={select_fields}&$orderby=Id&$top=100&$skip={skip}"
+            )
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            page = (resp.json() or {}).get("value") or []
+            if not page:
+                break
+            rows.extend(page)
+            if len(page) < 100:
+                break
+            skip += 100
+    return rows
+
+
+@router.post("/bootstrap-knesset25", response_model=BootstrapResponse)
+@limiter.limit("4/hour")
+async def bootstrap_knesset25(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    dry_run: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Register **every** committee of Knesset 25 as its own tracked dataset.
+
+    Enumerates all Knesset-25 committees from the open ODATA feed and, for each,
+    registers a dataset scoped to that committee instance (``Id eq N``) by
+    reusing the normal ``track_dataset`` admin flow — so the ckan_id / slug /
+    mirror / scraper_config wiring is identical to a hand-registered committee.
+    Already-tracked committees (e.g. ועדת הכספים from the trial) are skipped, so
+    the call is idempotent and safe to re-run.
+
+    Pass ``?dry_run=true`` to preview the committee list (and which would be
+    created vs already exist) without registering anything.
+    """
+    # Deferred import: datasets.py lazily imports this module, so importing it
+    # at module top would risk a circular import at startup.
+    from fastapi import HTTPException
+
+    from app.api.datasets import TrackRequest, track_dataset
+
+    committees = await _fetch_committees_for_knesset(BOOTSTRAP_KNESSET)
+
+    # Pre-load already-tracked committee URLs so we skip without provoking (and
+    # having to roll back) a duplicate error inside track_dataset.
+    existing_rows = await db.execute(
+        select(TrackedDataset.source_url).where(
+            TrackedDataset.source_url.like("%KNS_Committee%")
+        )
+    )
+    existing_urls = {u for (u,) in existing_rows.all() if u}
+
+    results: list[BootstrapCommitteeResult] = []
+    created = skipped = failed = would_create = 0
+
+    for c in committees:
+        cid = c.get("Id")
+        name = re.sub(r"\s+", " ", (c.get("Name") or "").strip())
+        ctype = (c.get("CommitteeTypeDesc") or "").strip() or None
+        if not cid:
+            failed += 1
+            results.append(BootstrapCommitteeResult(
+                committee_id=cid or 0, name=name, committee_type=ctype,
+                source_url="", status="failed", error="committee row missing Id",
+            ))
+            continue
+
+        source_url = f"{KNESSET_ODATA_BASE}/KNS_Committee?$filter=Id eq {cid}"
+        title = (
+            f"{name} — פרוטוקולי ועדה (כנסת {BOOTSTRAP_KNESSET})"
+            if name
+            else f"פרוטוקולי ועדת הכנסת (ועדה {cid}) (כנסת {BOOTSTRAP_KNESSET})"
+        )
+
+        if source_url in existing_urls:
+            skipped += 1
+            results.append(BootstrapCommitteeResult(
+                committee_id=cid, name=name, committee_type=ctype,
+                source_url=source_url, status="skipped",
+            ))
+            continue
+
+        if dry_run:
+            would_create += 1
+            results.append(BootstrapCommitteeResult(
+                committee_id=cid, name=name, committee_type=ctype,
+                source_url=source_url, status="would_create",
+            ))
+            continue
+
+        try:
+            resp = await track_dataset(
+                TrackRequest(
+                    source_type="scraper",
+                    source_url=source_url,
+                    title=title,
+                ),
+                background_tasks,
+                user=user,
+                db=db,
+            )
+            created += 1
+            existing_urls.add(source_url)
+            results.append(BootstrapCommitteeResult(
+                committee_id=cid, name=name, committee_type=ctype,
+                source_url=source_url, status="created", dataset_id=resp.id,
+            ))
+        except HTTPException as e:
+            await db.rollback()
+            detail = str(e.detail)
+            if e.status_code == 400 and "already tracked" in detail.lower():
+                skipped += 1
+                results.append(BootstrapCommitteeResult(
+                    committee_id=cid, name=name, committee_type=ctype,
+                    source_url=source_url, status="skipped",
+                ))
+            else:
+                failed += 1
+                results.append(BootstrapCommitteeResult(
+                    committee_id=cid, name=name, committee_type=ctype,
+                    source_url=source_url, status="failed", error=detail,
+                ))
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            failed += 1
+            logger.exception("bootstrap: failed to register committee %s", cid)
+            results.append(BootstrapCommitteeResult(
+                committee_id=cid, name=name, committee_type=ctype,
+                source_url=source_url, status="failed", error=str(e),
+            ))
+
+    logger.info(
+        "knesset bootstrap K%d: %d committees → created=%d skipped=%d failed=%d "
+        "(dry_run=%s)",
+        BOOTSTRAP_KNESSET, len(committees), created, skipped, failed, dry_run,
+    )
+
+    return BootstrapResponse(
+        knesset=BOOTSTRAP_KNESSET,
+        total_committees=len(committees),
+        created=created,
+        skipped=skipped,
+        failed=failed,
+        would_create=would_create,
+        dry_run=dry_run,
+        results=results,
     )
