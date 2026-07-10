@@ -19,6 +19,7 @@ from app.mcp.auth import McpUser
 from app.mcp.config import base_url
 from app.mcp.usage import log_usage
 from app.models.organization import Organization
+from app.models.tag import Tag, dataset_tags
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 
@@ -40,14 +41,26 @@ SERVER_INSTRUCTIONS = (
 TOOLS: list[dict] = [
     {
         "name": "search_datasets",
-        "description": "חיפוש מאגרים שבמעקב גרסאות לעם לפי טקסט חופשי / ארגון / סוג מקור. מחזיר רשימה עם קישורים.",
+        "description": "חיפוש מאגרים שבמעקב גרסאות לעם לפי טקסט חופשי / ארגון / סוג מקור / תגית. מחזיר רשימה עם קישורים ותגיות. לסינון קבוצתי (למשל כל ועדות הכנסת ה-25, או כל מופעי ועדת הכספים) השתמש ב-tag; הרץ list_tags כדי לגלות שמות תגיות.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "טקסט חופשי לחיפוש בכותרת המאגר"},
                 "source_type": {"type": "string", "enum": ["ckan", "scraper", "govmap"], "description": "סינון לפי סוג מקור"},
+                "tag": {"type": "string", "description": "סינון למאגרים הנושאים תגית בשם זה (התאמה מדויקת, ללא תלות ברישיות). למשל 'כנסת 25', 'ועדות כנסת', או שם ועדה כמו 'ועדת הכספים'."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
+            },
+        },
+    },
+    {
+        "name": "list_tags",
+        "description": "רשימת כל התגיות (קטגוריות רוחביות של מאגרים) עם מספר המאגרים לכל תגית. השתמש כדי לגלות תגיות זמינות (למשל 'כנסת 25', 'ועדות כנסת', שמות ועדות) ואז סנן דרך search_datasets עם הפרמטר tag.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "סינון שמות תגיות המכילים מחרוזת זו (אופציונלי)"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200},
             },
         },
     },
@@ -97,6 +110,16 @@ async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
         stmt = stmt.where(TrackedDataset.source_type == a["source_type"])
     if a.get("query"):
         stmt = stmt.where(TrackedDataset.title.ilike(f"%{a['query'].strip()}%"))
+    if a.get("tag"):
+        # Exact (case-insensitive) tag-name match via the dataset_tags join —
+        # this is how a user pulls a whole group (e.g. "כנסת 25", "ועדות כנסת",
+        # or a committee name to see all its instances across Knessets).
+        tag_name = a["tag"].strip()
+        stmt = (
+            stmt.join(dataset_tags, dataset_tags.c.dataset_id == TrackedDataset.id)
+            .join(Tag, Tag.id == dataset_tags.c.tag_id)
+            .where(func.lower(Tag.name) == tag_name.lower())
+        )
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
     rows = (await db.execute(stmt.order_by(TrackedDataset.title).limit(limit).offset(offset))).scalars().all()
     b = base_url(request)
@@ -104,18 +127,30 @@ async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
         "id": str(d.id), "title": d.title, "organization": d.organization,
         "source_type": d.source_type, "source_url": d.source_url,
         "version_count": 0,  # filled below
+        "tags": [],          # filled below
         "page_url": f"{b}/versions/{d.id}",
         "versions_url": f"{b}/api/v1/datasets/{d.id}/versions",
     } for d in rows]
-    # version counts
     if rows:
+        ids = [d.id for d in rows]
         counts = dict((await db.execute(
             select(VersionIndex.tracked_dataset_id, func.count(VersionIndex.id))
-            .where(VersionIndex.tracked_dataset_id.in_([d.id for d in rows]))
+            .where(VersionIndex.tracked_dataset_id.in_(ids))
             .group_by(VersionIndex.tracked_dataset_id)
         )).all())
+        # tag names per dataset (so the client sees the groups a dataset belongs to)
+        tag_rows = (await db.execute(
+            select(dataset_tags.c.dataset_id, Tag.name)
+            .join(Tag, Tag.id == dataset_tags.c.tag_id)
+            .where(dataset_tags.c.dataset_id.in_(ids))
+            .order_by(Tag.name)
+        )).all()
+        tags_by_ds: dict = {}
+        for ds_id, tname in tag_rows:
+            tags_by_ds.setdefault(ds_id, []).append(tname)
         for it, d in zip(items, rows):
             it["version_count"] = int(counts.get(d.id, 0))
+            it["tags"] = tags_by_ds.get(d.id, [])
     return {"total": int(total), "limit": limit, "offset": offset, "items": items}, len(items)
 
 
@@ -184,6 +219,32 @@ async def _tool_list_organizations(request, db, user, a) -> tuple[dict, int]:
     } for o in orgs]}, len(orgs)
 
 
+async def _tool_list_tags(request, db, user, a) -> tuple[dict, int]:
+    limit = min(int(a.get("limit") or 200), 500)
+    # dataset count per tag (active/pending only — mirrors the public /api/tags).
+    count_subq = (
+        select(
+            dataset_tags.c.tag_id.label("tag_id"),
+            func.count(dataset_tags.c.dataset_id).label("cnt"),
+        )
+        .join(TrackedDataset, TrackedDataset.id == dataset_tags.c.dataset_id)
+        .where(TrackedDataset.status.in_(["active", "pending"]))
+        .group_by(dataset_tags.c.tag_id)
+        .subquery()
+    )
+    stmt = (
+        select(Tag, count_subq.c.cnt)
+        .outerjoin(count_subq, Tag.id == count_subq.c.tag_id)
+        .order_by(func.coalesce(count_subq.c.cnt, 0).desc(), Tag.name.asc())
+    )
+    if a.get("query"):
+        stmt = stmt.where(Tag.name.ilike(f"%{a['query'].strip()}%"))
+    rows = (await db.execute(stmt.limit(limit))).all()
+    tags = [{"name": t.name, "description": t.description, "dataset_count": int(cnt or 0)}
+            for t, cnt in rows]
+    return {"total": len(tags), "tags": tags}, len(tags)
+
+
 async def _tool_get_stats(request, db, user, a) -> tuple[dict, int]:
     datasets = (await db.execute(select(func.count()).select_from(TrackedDataset).where(TrackedDataset.status == "active"))).scalar() or 0
     orgs = (await db.execute(select(func.count()).select_from(Organization))).scalar() or 0
@@ -197,6 +258,7 @@ _IMPL = {
     "get_dataset": _tool_get_dataset,
     "query_dataset_rows": _tool_query_dataset_rows,
     "list_organizations": _tool_list_organizations,
+    "list_tags": _tool_list_tags,
     "get_stats": _tool_get_stats,
 }
 
