@@ -550,6 +550,60 @@ export const cbs = {
     }),
 };
 
+// ── Knesset ODATA mirror (מסד הנתונים של הכנסת) ──────────────────────────────
+export interface KnessetDbColumn {
+  name: string;
+  type: string;
+}
+
+export interface KnessetDbTable {
+  table: string;
+  entity_set: string;
+  group: string;
+  description: string;
+  columns: KnessetDbColumn[];
+  total_rows: number;
+  source_count: number | null;
+  full_loaded: boolean;
+  status: string;
+  error: string | null;
+  last_synced_at: string | null;
+}
+
+export interface KnessetDbStatus {
+  enabled: boolean;
+  tables?: number;
+  loaded?: number;
+  rows?: number;
+  last_sync?: string | null;
+}
+
+export interface KnessetDbSqlResult {
+  columns: string[];
+  rows: Array<Record<string, string | number | boolean | null>>;
+  truncated: boolean;
+  row_count: number;
+}
+
+export const knessetDb = {
+  status: () => request<KnessetDbStatus>("/knesset-db/status"),
+  tables: () => request<{ tables: KnessetDbTable[] }>("/knesset-db/tables"),
+  sql: (sql: string) =>
+    request<KnessetDbSqlResult>("/knesset-db/sql", {
+      method: "POST",
+      body: JSON.stringify({ sql }),
+    }),
+  // Direct browser download (streams server-side); not a fetch.
+  exportUrl: (sql: string) =>
+    `/api/knesset-db/export.csv?sql=${encodeURIComponent(sql)}`,
+  // Admin: kick a sync pass now (optionally one table, optionally re-walk it).
+  sync: (opts: { table?: string; reset?: boolean } = {}) =>
+    request<{ started: boolean }>("/knesset-db/sync", {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

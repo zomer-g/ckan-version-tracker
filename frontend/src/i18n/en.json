@@ -14,7 +14,8 @@
     "rationale": "Why",
     "api": "API",
     "menu": "Navigation menu",
-    "cbs": "CBS"
+    "cbs": "CBS",
+    "knesset_db": "Knesset DB"
   },
   "tags": {
     "page_title": "Tags",

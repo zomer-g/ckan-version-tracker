@@ -181,6 +181,33 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # Knesset ODATA mirror: advance the sync within a per-tick time budget
+    # (initial full load of ~3M rows spans many ticks; each tick checkpoints,
+    # then it settles into 12h incremental refreshes). Memory-safe: at most
+    # ~1000 x 100-column rows are held between INSERT batches. max_instances=1
+    # + the module's own sync_lock keep it single-flight even against the
+    # admin's manual trigger. No-op when the append DB / feature is off.
+    from app.config import settings as _settings
+    from app.services.knesset_db import sync_tick as _knesset_sync_tick
+
+    async def knesset_db_sync_job() -> None:
+        try:
+            await _knesset_sync_tick(
+                budget_seconds=_settings.knesset_db_tick_budget_seconds,
+                sync_interval_hours=_settings.knesset_db_sync_interval_hours,
+            )
+        except Exception:  # noqa: BLE001 — never let a feed flap kill the job
+            logger.exception("knesset_db sync tick failed")
+
+    scheduler.add_job(
+        knesset_db_sync_job,
+        trigger=IntervalTrigger(minutes=3),
+        id="knesset_db_sync",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

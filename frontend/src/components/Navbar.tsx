@@ -86,6 +86,7 @@ export default function Navbar() {
     { to: "/sources", label: t("nav.sources", "מקורות") },
     { to: "/tags", label: t("nav.tags", "תגיות") },
     { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
+    { to: "/knesset", label: t("nav.knesset_db", "הכנסת") },
     { to: "/api", label: t("nav.api", "API") },
     { to: "/about", label: t("nav.about") },
     { to: "/rationale", label: t("nav.rationale", "הרציונל") },
