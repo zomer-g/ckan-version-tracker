@@ -13,6 +13,7 @@
     "i18next": "^24.2.2",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
+    "marked": "^18.0.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^15.4.1",

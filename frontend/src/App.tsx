@@ -24,6 +24,8 @@ import KnessetDbPage from "./pages/KnessetDbPage";
 // Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
 // gzipped. Other pages should not pay that cost.
 const GrowthPage = lazy(() => import("./pages/GrowthPage"));
+// Lazy: the Knesset SQL guide pulls the marked renderer (~15 KB gzipped).
+const KnessetGuidePage = lazy(() => import("./pages/KnessetGuidePage"));
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -62,6 +64,14 @@ export default function App() {
           <Route path="/sources/:sourceId" element={<SourceDetailPage />} />
           <Route path="/cbs" element={<CbsPage />} />
           <Route path="/knesset" element={<KnessetDbPage />} />
+          <Route
+            path="/knesset/guide"
+            element={
+              <Suspense fallback={<div className="loading" role="status">{t("common.loading")}</div>}>
+                <KnessetGuidePage />
+              </Suspense>
+            }
+          />
           <Route path="/api" element={<ApiPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />

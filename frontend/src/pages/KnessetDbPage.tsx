@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { Link } from "react-router-dom";
 import {
   knessetDb,
   KnessetDbTable,
@@ -161,6 +162,10 @@ export default function KnessetDbPage() {
           <a href="https://main.knesset.gov.il/activity/info/pages/databases.aspx" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
             תיעוד הכנסת
           </a>
+          {" · "}
+          <Link to="/knesset/guide" style={{ color: "var(--primary)", fontWeight: 600 }}>
+            📖 מדריך תשאול מלא + קטלוג הטבלאות
+          </Link>
         </div>
         {status?.enabled && (
           <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)" }}>
