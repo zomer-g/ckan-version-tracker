@@ -142,12 +142,13 @@ class Settings(BaseSettings):
     conditional_archive_enabled: bool = True
 
     # How many govmap-coverage scrape tasks may be ACTIVE (pending/running)
-    # at once. Sized to the worker fleet: the operator runs several OVER
-    # workers on several machines, and the rollout's top-up tick keeps this
-    # many coverage tasks in flight so all of them stay fed. Regular
-    # (non-coverage) datasets' tasks share the same queue and interleave.
+    # at once. Sized to the worker fleet PLUS a small buffer: the operator
+    # runs 4 OVER workers on 3 machines, and keeping a couple of tasks
+    # pending means a worker that finishes claims the next one instantly
+    # instead of idling until the next top-up tick. Regular (non-coverage)
+    # datasets' tasks share the same queue and interleave.
     # Set GOVMAP_COVERAGE_CONCURRENCY=1 to restore the old one-at-a-time pace.
-    govmap_coverage_concurrency: int = 4
+    govmap_coverage_concurrency: int = 6
 
     cors_origins: str = ""
 

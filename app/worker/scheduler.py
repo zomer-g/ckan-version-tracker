@@ -162,22 +162,23 @@ async def init_scheduler() -> None:
     )
 
     # GovMap full-coverage rollout: a TOP-UP queue for the worker fleet. Every
-    # 10 min the tick refills the active coverage tasks up to
-    # GOVMAP_COVERAGE_CONCURRENCY (default 4 — the operator runs 4 OVER
-    # workers on 3 machines), never-triggered layers first, then stalest. The
-    # real scrape rate is capped by the workers' throughput; the tick itself
-    # is cheap (two SELECTs) and self-skips at the concurrency target. The
-    # old shape — one layer per 6h tick, only when the single worker was
-    # idle — fed exactly one worker and starved the rest of the fleet. See
-    # app/services/govmap_coverage.py.
+    # 3 min the tick refills the active coverage tasks up to
+    # GOVMAP_COVERAGE_CONCURRENCY (default 6 — the operator runs 4 OVER
+    # workers on 3 machines; a small buffer above the fleet size keeps a
+    # finishing worker claiming instantly), never-triggered layers first,
+    # then stalest. 10-min ticks left the fleet idle most of each window:
+    # small layers finish in 1-3 min, so 4 workers drained the batch and
+    # waited ~7 min for the next one (observed ~17 layers/h vs the fleet's
+    # ~60/h capacity). The tick is cheap (two SELECTs) and self-skips at the
+    # concurrency target. See app/services/govmap_coverage.py.
     from app.services.govmap_coverage import scrape_next_layer
     scheduler.add_job(
         scrape_next_layer,
-        trigger=IntervalTrigger(minutes=10),
+        trigger=IntervalTrigger(minutes=3),
         id="govmap_coverage_rollout",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=300,
+        misfire_grace_time=120,
     )
 
     scheduler.start()
