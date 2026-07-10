@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -29,6 +29,9 @@ import { JDA_PATTERN } from "../utils/jdaPattern";
 // pattern. Host-only; the corpus comes from a ?category= marker and the
 // backend /api/eden/validate is authoritative.
 import { EDEN_PATTERN } from "../utils/edenPattern";
+// knesset.gov.il committee-protocols URL pattern (KNS_Committee ODATA query);
+// backend /api/knesset/validate is authoritative on the committee scope.
+import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
 interface CkanResource {
   id: string;
@@ -120,6 +123,12 @@ export default function SearchPage() {
   const [edenTracked, setEdenTracked] = useState<Record<string, "tracked" | "pending">>({});
   const [edenTracking, setEdenTracking] = useState<Record<string, boolean>>({});
   const [showEdenInterval, setShowEdenInterval] = useState<Record<string, boolean>>({});
+  // knesset.gov.il committee-protocols scraper result — same flow as avodata.
+  // One committee (CategoryID / Id scope) per pasted URL.
+  const [knessetResult, setKnessetResult] = useState<GovIlValidation | null>(null);
+  const [knessetTracked, setKnessetTracked] = useState<"tracked" | "pending" | null>(null);
+  const [knessetTracking, setKnessetTracking] = useState(false);
+  const [showKnessetInterval, setShowKnessetInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -193,6 +202,10 @@ export default function SearchPage() {
     return EDEN_PATTERN.test(input.trim());
   };
 
+  const detectKnessetUrl = (input: string): boolean => {
+    return KNESSET_PATTERN.test(input.trim());
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
@@ -225,6 +238,9 @@ export default function SearchPage() {
     setEdenResults([]);
     setEdenTracked({});
     setShowEdenInterval({});
+    setKnessetResult(null);
+    setKnessetTracked(null);
+    setShowKnessetInterval(false);
     try {
       // 1. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
@@ -361,6 +377,20 @@ export default function SearchPage() {
         return;
       }
 
+      // 1j. Check for a knesset.gov.il committee (KNS_Committee ODATA) URL.
+      if (detectKnessetUrl(query)) {
+        const validation = await knesset.validate(query.trim());
+        if (validation.valid) {
+          setKnessetResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "כתובת knesset.gov.il לא תקינה");
+        }
+        setLoading(false);
+        return;
+      }
+
       // 2. Check for data.gov.il URL
       const datasetName = extractDatasetName(query);
       const resourceId = extractResourceId(query);
@@ -476,6 +506,23 @@ export default function SearchPage() {
       }
     }
     setAvodataTracking(false);
+  };
+
+  const trackKnessetDataset = async (interval: number) => {
+    if (!knessetResult?.url || !knessetResult?.title) return;
+    setShowKnessetInterval(false);
+    setKnessetTracking(true);
+    try {
+      await datasetsApi.trackScraper(knessetResult.url, knessetResult.title, interval);
+      setKnessetTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setKnessetTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setKnessetTracking(false);
   };
 
   const INTERVAL_OPTIONS = [
@@ -613,6 +660,46 @@ export default function SearchPage() {
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
           {avodataTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
+  // Same shape as renderAvodataTrackButton, bound to the knesset state.
+  const renderKnessetTrackButton = () => {
+    if (knessetTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (knessetTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showKnessetInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackKnessetDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowKnessetInterval(!showKnessetInterval)}
+          disabled={knessetTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {knessetTracking ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1017,7 +1104,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1302,6 +1389,40 @@ export default function SearchPage() {
               </p>
             </article>
           ))}
+        </div>
+      )}
+
+      {/* knesset.gov.il committee-protocols scraper result — indigo "כנסת" chip */}
+      {knessetResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{knessetResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#e0e7ff",
+                  color: "#3730a3",
+                }}>
+                  כנסת
+                </span>
+              </div>
+              {renderKnessetTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>פרוטוקולי ועדות הכנסת</span>
+              <span>knesset.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={knessetResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {knessetResult.url}
+              </a>
+            </p>
+          </article>
         </div>
       )}
 

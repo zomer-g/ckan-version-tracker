@@ -440,6 +440,19 @@ export const eden = {
     }),
 };
 
+// knesset.gov.il committee protocols — same response shape. Server side at
+// app/api/knesset.py. Each committee is its own dataset, tracked from the open
+// ODATA-v4 feed via a KNS_Committee query with a committee scope
+// (?$filter=CategoryID eq N, or ?$filter=Id eq N). A KNS_Committee query with
+// no committee scope validates as INVALID and the endpoint explains what to add.
+export const knesset = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/knesset/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // CBS (cbs.gov.il) content index — a searchable catalog of the Central Bureau
 // of Statistics site (one row per crawled page). Server side at app/api/cbs.py;
 // the table is populated by the govil-scraper `cbs` engine (Playwright crawl,

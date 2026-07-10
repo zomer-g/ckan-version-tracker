@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -32,6 +32,10 @@ import { JDA_PATTERN } from "../utils/jdaPattern";
 // pattern. Host-only; the corpus comes from a ?category= marker and the
 // backend /api/eden/validate is authoritative.
 import { EDEN_PATTERN } from "../utils/edenPattern";
+// knesset.gov.il committee-protocols URL pattern (KNS_Committee ODATA query).
+// The committee scope (CategoryID / Id) is validated by the backend
+// /api/knesset/validate, which is authoritative.
+import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
@@ -202,6 +206,9 @@ export default function HomePage() {
   // validated — instead we probe both ?category= variants and show one
   // card per valid corpus.
   const [edenResults, setEdenResults] = useState<GovIlValidation[]>([]);
+  // knesset.gov.il committee-protocols scraper result — same shape. One
+  // committee (CategoryID / Id scope) per pasted URL.
+  const [knessetResult, setKnessetResult] = useState<GovIlValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -266,6 +273,10 @@ export default function HomePage() {
     return EDEN_PATTERN.test(input.trim());
   };
 
+  const detectKnessetUrl = (input: string): boolean => {
+    return KNESSET_PATTERN.test(input.trim());
+  };
+
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     return doc.body.textContent || "";
@@ -291,6 +302,7 @@ export default function HomePage() {
     setMankalResult(null);
     setJdaResult(null);
     setEdenResults([]);
+    setKnessetResult(null);
     setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
@@ -449,6 +461,23 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError("כתובת jeden.co.il לא תקינה");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2j. Check for a knesset.gov.il committee (KNS_Committee ODATA) URL —
+      // one committee (CategoryID / Id scope) per pasted URL. The backend
+      // probes the ODATA feed for the committee's real name.
+      if (detectKnessetUrl(query)) {
+        const validation = await knesset.validate(query.trim());
+        if (validation.valid) {
+          setKnessetResult(validation);
+          setRequestFormFor("knesset");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "כתובת knesset.gov.il לא תקינה");
         }
         setLoading(false);
         return;
@@ -1107,6 +1136,61 @@ export default function HomePage() {
                   </article>
                 );
               })}
+            </div>
+          </section>
+        )}
+
+        {/* knesset.gov.il committee-protocols scraper result — indigo "כנסת"
+            chip, distinct from the orange EDEN / rose JDA / sky AVODATA. */}
+        {!loading && knessetResult && (
+          <section aria-label="knesset.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{knessetResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#e0e7ff",
+                      color: "#3730a3",
+                    }}>
+                      כנסת
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>פרוטוקולי ועדות הכנסת</span>
+                  <span>knesset.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={knessetResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {knessetResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "knesset" ? (
+                    <RequestForm
+                      datasetTitle={knessetResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={knessetResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("knesset")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
             </div>
           </section>
         )}

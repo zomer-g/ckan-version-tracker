@@ -109,7 +109,8 @@
     "stats_organizations": "Organizations",
     "source_link_cbs": "Source on cbs.gov.il",
     "source_link_jda": "Source on jda.gov.il (Jerusalem Development Authority)",
-    "source_link_eden": "Source on jeden.co.il (Eden Company)"
+    "source_link_eden": "Source on jeden.co.il (Eden Company)",
+    "source_link_knesset": "Source on the Knesset ODATA feed (knesset.gov.il)"
   },
   "search": {
     "title": "Search Government Datasets",

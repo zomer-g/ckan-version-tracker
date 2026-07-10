@@ -42,7 +42,8 @@ export interface SourceBadge {
     | "home.source_link_mankal"
     | "home.source_link_cbs"
     | "home.source_link_jda"
-    | "home.source_link_eden";
+    | "home.source_link_eden"
+    | "home.source_link_knesset";
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -172,6 +173,20 @@ function looksLikeEden(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("eden-scraper-")) return true;
   if (organization && EDEN_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+// Same drift-immune rule for knesset.gov.il committee protocols. The org
+// hint is ONLY the exact "knesset.gov.il" stamp the backend writes at create
+// time; "knesset-scraper-" is the primary signal.
+const KNESSET_ORG_HINTS = ["knesset.gov.il"];
+
+function looksLikeKnesset(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("knesset-scraper-")) return true;
+  if (organization && KNESSET_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -318,6 +333,18 @@ export function sourceBadgeFor(
         label: "EDEN",
         accent: "#ea580c",
         sourceLinkKey: "home.source_link_eden",
+      };
+    }
+    if (looksLikeKnesset(organization, ckan_id)) {
+      // Indigo/blue pill for knesset.gov.il committee protocols, distinct
+      // from the govmap sky (#0ea5e9), jda rose and govil amber.
+      return {
+        bg: "#e0e7ff",
+        fg: "#3730a3",
+        id: "knesset",
+        label: "כנסת",
+        accent: "#4f46e5",
+        sourceLinkKey: "home.source_link_knesset",
       };
     }
     return {

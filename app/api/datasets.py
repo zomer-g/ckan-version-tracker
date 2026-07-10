@@ -351,6 +351,7 @@ async def track_dataset(
         from app.api.mankal import _parse_mankal_url
         from app.api.jda import _parse_jda_url
         from app.api.eden import _parse_eden_url
+        from app.api.knesset import _parse_knesset_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -404,6 +405,12 @@ async def track_dataset(
                 slug_prefix = "eden-scraper"
                 mirror_prefix = "gov-versions-eden"
         if not collector_name:
+            page_type, collector_name = _parse_knesset_url(body.source_url)
+            if collector_name:
+                origin = "knesset.gov.il"
+                slug_prefix = "knesset-scraper"
+                mirror_prefix = "gov-versions-knesset"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -412,7 +419,8 @@ async def track_dataset(
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
-                    "ירושלים), or jeden.co.il (חברת עדן) tenders portal"
+                    "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
+                    "or knesset.gov.il committee (KNS_Committee ODATA)"
                 ),
             )
 
@@ -598,6 +606,24 @@ async def track_dataset(
             sc.setdefault("max_docs", docs)
             sc.setdefault("archive", True)
             sc.setdefault("archive_type", "eden")
+        elif page_type and page_type.startswith("knesset_"):
+            # knesset.gov.il committee protocols — the open ODATA-v4 feed
+            # (KNS_Committee → KNS_CommitteeSession → protocol docs). Plain
+            # httpx + manual $skip paging in the worker; one row per protocol
+            # document, each protocol file (.doc/.pdf on fs.knesset.gov.il,
+            # plain host) mirrored. Each committee (grouped by CategoryID, or a
+            # single committee Id) is its own dataset; the scope is carried in
+            # config so the worker needn't re-parse the URL.
+            from app.api.knesset import get_knesset_limits, scope_of_page_type
+            depth, docs = get_knesset_limits(page_type)
+            sc["kind"] = "knesset"
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            scope = scope_of_page_type(page_type)
+            if scope:
+                sc.setdefault("committee_scope", scope[0])   # "category" | "single"
+                sc.setdefault("committee_scope_id", scope[1])
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -1246,6 +1272,7 @@ async def submit_tracking_request(
         from app.api.mankal import _parse_mankal_url
         from app.api.jda import _parse_jda_url
         from app.api.eden import _parse_eden_url
+        from app.api.knesset import _parse_knesset_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -1290,6 +1317,11 @@ async def submit_tracking_request(
                 origin = "jeden.co.il"
                 slug_prefix = "eden-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_knesset_url(body.source_url)
+            if collector_name:
+                origin = "knesset.gov.il"
+                slug_prefix = "knesset-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -1298,7 +1330,8 @@ async def submit_tracking_request(
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
-                    "ירושלים), or jeden.co.il (חברת עדן) tenders portal"
+                    "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
+                    "or knesset.gov.il committee (KNS_Committee ODATA)"
                 ),
             )
 
@@ -1400,6 +1433,20 @@ async def submit_tracking_request(
             sc["max_docs"] = docs
             sc["archive"] = True
             sc["archive_type"] = "eden"
+        elif page_type and page_type.startswith("knesset_"):
+            # Mirror of the admin-POST branch — keep in sync. knesset.gov.il
+            # committee protocols from the open ODATA-v4 feed; each committee
+            # its own dataset, protocol files on fs.knesset.gov.il mirrored.
+            from app.api.knesset import get_knesset_limits, scope_of_page_type
+            depth, docs = get_knesset_limits(page_type)
+            sc["kind"] = "knesset"
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            scope = scope_of_page_type(page_type)
+            if scope:
+                sc["committee_scope"] = scope[0]
+                sc["committee_scope_id"] = scope[1]
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
