@@ -22,7 +22,9 @@ import {
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
+import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
+import PageContentPanel from "../components/PageContentPanel";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
@@ -111,7 +113,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -123,6 +125,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "mcp",       label: "גישת MCP",          emoji: "🔌" },
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
+  { id: "content",   label: "טקסטים",            emoji: "📝" },
 ];
 
 function readTabFromHash(): AdminTab {
@@ -1009,8 +1012,26 @@ export default function AdminPage() {
             {/* Failed */}
             {queue.failed.length > 0 && (
               <div>
-                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#991b1b" }}>
-                  ⚠ כשלים אחרונים — 24 שעות ({queue.failed.length})
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
+                  <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#991b1b", flex: 1 }}>
+                    ⚠ כשלים אחרונים — 24 שעות ({queue.failed.length})
+                  </span>
+                  {/* Plain-text digest of every failure (title | phase | time +
+                      the FULL error) — built for pasting into a debugging chat. */}
+                  <CopyListButton
+                    label="העתק שגיאות"
+                    getText={() =>
+                      [
+                        `כשלים אחרונים — תור גירוד (${queue.failed.length}), הועתק ${new Date().toLocaleString("he-IL")}`,
+                        ...queue.failed.map((f, i) =>
+                          `${i + 1}. ${f.dataset_title}` +
+                          (f.phase ? ` | phase=${f.phase}` : "") +
+                          (f.completed_at ? ` | ${f.completed_at}` : "") +
+                          "\n   " + (f.error || "(אין הודעת שגיאה)").replace(/\n/g, "\n   ")
+                        ),
+                      ].join("\n\n")
+                    }
+                  />
                 </div>
                 <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                   {queue.failed.map((t) => (
@@ -1183,6 +1204,8 @@ export default function AdminPage() {
       {tab === "log" && <ActivityLogPanel />}
 
       {tab === "mcp" && <McpUsersPanel />}
+
+      {tab === "content" && <PageContentPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}

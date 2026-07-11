@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { admin as adminApi, ActivityLogEntry } from "../api/client";
+import CopyListButton from "./CopyListButton";
 
 // Append-only event stream of the dataset/scrape lifecycle: a row per
 // requested / approved / rejected / queued / started / completed / failed
@@ -82,8 +83,32 @@ export default function ActivityLogPanel() {
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.75rem", marginBottom: "0.75rem" }}>
         <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>📜 לוג משימות</h2>
-        <span className="text-muted" style={{ fontSize: "0.85rem" }}>
-          {total.toLocaleString()} אירועים{total > 0 ? ` · מציג ${pageFrom}–${pageTo}` : ""}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.6rem" }}>
+          {/* Copies the CURRENT view — the active event filter + search are
+              respected, so "כשלים" + a query yields exactly that error list,
+              ready to paste into a debugging chat. Full detail included. */}
+          <CopyListButton
+            label="העתק רשימה"
+            getText={() => {
+              const filt = [
+                event ? `אירוע=${(EVENT_FILTERS.find((f) => f.id === event) || { label: event }).label}` : "",
+                q ? `חיפוש="${q}"` : "",
+              ].filter(Boolean).join(", ");
+              return [
+                `לוג משימות${filt ? ` (סינון: ${filt})` : ""} — ${entries.length} מתוך ${total}, הועתק ${new Date().toLocaleString("he-IL")}`,
+                ...entries.map((e, i) => {
+                  const meta = EVENT_META[e.event] || { label: e.event };
+                  let line = `${i + 1}. ${fmtTimestamp(e.created_at)} [${meta.label}${e.status === "error" ? "/שגיאה" : ""}] ${e.dataset_title || "—"}`;
+                  if (e.message) line += ` — ${e.message}`;
+                  if (e.detail) line += `\n   ${e.detail.replace(/\n/g, "\n   ")}`;
+                  return line;
+                }),
+              ].join("\n\n");
+            }}
+          />
+          <span className="text-muted" style={{ fontSize: "0.85rem" }}>
+            {total.toLocaleString()} אירועים{total > 0 ? ` · מציג ${pageFrom}–${pageTo}` : ""}
+          </span>
         </span>
       </div>
 
