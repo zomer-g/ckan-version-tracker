@@ -149,6 +149,14 @@ from app.mcp.cbs_routes import cbs_mcp_router, cbs_mcp_wellknown_router
 app.include_router(cbs_mcp_wellknown_router)
 app.include_router(cbs_mcp_router)
 
+# Dedicated Knesset committee-protocols MCP at /knesset/mcp (same OAuth server +
+# api_users gate + service token; SQL-mirror tools only — no document content).
+# Registered before the SPA fallback so /knesset/mcp isn't swallowed by the
+# React /knesset route.
+from app.mcp.knesset_routes import knesset_mcp_router, knesset_mcp_wellknown_router
+app.include_router(knesset_mcp_wellknown_router)
+app.include_router(knesset_mcp_router)
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"

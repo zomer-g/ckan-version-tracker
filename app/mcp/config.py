@@ -17,6 +17,10 @@ MCP_PREFIX = "/mcp"
 # authorization server (the /mcp OAuth endpoints + api_users allow-list). Only
 # the resource identity differs; tokens (aud=over-mcp) authenticate on both.
 CBS_MCP_PREFIX = "/cbs/mcp"
+# Dedicated Knesset committee-protocols MCP — a THIRD protected resource on the
+# same authorization server (SQL mirror of the Knesset ODATA tables; metadata +
+# protocol links only, no document content).
+KNESSET_MCP_PREFIX = "/knesset/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -46,6 +50,17 @@ def cbs_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the CBS resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/cbs/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{CBS_MCP_PREFIX}"
+
+
+def knesset_mcp_url(request: Request, path: str = "") -> str:
+    """The Knesset protocols MCP resource URL, e.g. https://www.over.org.il/knesset/mcp."""
+    return f"{base_url(request)}{KNESSET_MCP_PREFIX}{path}"
+
+
+def knesset_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the Knesset resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/knesset/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{KNESSET_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:
