@@ -159,10 +159,6 @@ export default function KnessetDbPage() {
           מראה מלאה של כל טבלאות שירות ה-ODATA הפרלמנטרי של הכנסת — הצעות חוק, חוקים,
           ועדות, הצבעות במליאה, חברי כנסת, שאילתות ושדלנים — מסונכרנת אל מסד PostgreSQL
           וזמינה לתשאול SQL חופשי (קריאה בלבד).{" "}
-          <a href="https://knesset.gov.il/OdataV4/ParliamentInfo" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
-            הפיד המקורי
-          </a>
-          {" · "}
           <a href="https://main.knesset.gov.il/activity/info/pages/databases.aspx" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
             תיעוד הכנסת
           </a>
