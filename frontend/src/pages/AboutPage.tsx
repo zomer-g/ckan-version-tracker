@@ -1,5 +1,6 @@
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
 
 // Small helper for external links so the Trans <1> placeholder stays terse.
 function ExtLink({ href, children }: { href: string; children?: React.ReactNode }) {
@@ -12,6 +13,7 @@ function ExtLink({ href, children }: { href: string; children?: React.ReactNode 
 
 export default function AboutPage() {
   const { t } = useTranslation();
+  usePageContentOverrides("about");
 
   return (
     <div>

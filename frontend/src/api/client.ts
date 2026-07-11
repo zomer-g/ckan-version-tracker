@@ -931,6 +931,27 @@ export const admin = {
     }),
 };
 
+// Editable text overrides for the static About / Rationale pages.
+// `get` is public (merged over the bundled i18n defaults at runtime);
+// `save`/`revert` are admin-only.
+export type PageContentOverrides = Record<string, Record<string, string>>;
+
+export const pageContent = {
+  get: (page: string) => request<PageContentOverrides>(`/page-content/${page}`),
+  save: (page: string, lang: string, key: string, value: string) =>
+    request<{ ok: boolean }>(`/admin/page-content`, {
+      method: "PUT",
+      body: JSON.stringify({ page, lang, key, value }),
+    }),
+  revert: (page: string, lang: string, key: string) =>
+    request<{ ok: boolean }>(
+      `/admin/page-content?page=${encodeURIComponent(page)}&lang=${encodeURIComponent(
+        lang,
+      )}&key=${encodeURIComponent(key)}`,
+      { method: "DELETE" },
+    ),
+};
+
 // Tags API
 export const tagsApi = {
   list: () => request<TagWithCount[]>("/tags"),

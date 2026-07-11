@@ -1,5 +1,6 @@
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
 
 const DECISION_URL = "https://www.gov.il/he/pages/2016_dec1933";
 const REPORT_URL =
@@ -19,6 +20,7 @@ function ExtLink({ href, children }: { href: string; children?: React.ReactNode 
 
 export default function RationalePage() {
   const { t } = useTranslation();
+  usePageContentOverrides("rationale");
 
   return (
     <div>
@@ -102,14 +104,14 @@ export default function RationalePage() {
               <strong>
                 <Link to="/">{t("rationale.fix_over_name")}</Link>
               </strong>
-              {" — "}
+              {": "}
               {t("rationale.fix_over_desc")}
             </li>
             <li>
               <strong>
                 <ExtLink href={JESTER_URL}>{t("rationale.fix_jester_name")}</ExtLink>
               </strong>
-              {" — "}
+              {": "}
               {t("rationale.fix_jester_desc")}
             </li>
           </ul>
