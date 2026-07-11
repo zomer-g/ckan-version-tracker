@@ -170,7 +170,7 @@ export default function KnessetDbPage() {
         {status?.enabled && (
           <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)" }}>
             {status.loaded ?? 0}/{status.tables ?? 0} טבלאות נטענו במלואן ({loadedPct}%) ·{" "}
-            {(status.rows ?? 0).toLocaleString()} שורות · סנכרון אחרון: {fmtDate(status.last_sync) || "—"}
+            {(status.rows ?? 0).toLocaleString()} שורות · פעילות אחרונה: {fmtDate(status.last_activity ?? status.last_sync) || "—"}
             {user?.is_admin && (
               <>
                 {" · "}

@@ -576,6 +576,7 @@ export interface KnessetDbStatus {
   loaded?: number;
   rows?: number;
   last_sync?: string | null;
+  last_activity?: string | null;
 }
 
 export interface KnessetDbSqlResult {

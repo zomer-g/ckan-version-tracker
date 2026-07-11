@@ -345,8 +345,12 @@ async def _sync_one_pass(client: httpx.AsyncClient, es: EntitySet, state: dict,
             return
         async with pool.acquire() as conn:
             await _upsert(conn, es, pending)
+            # total_rows refreshed on every checkpoint (not just pass completion)
+            # so the UI shows live progress on a long table instead of 0 — a
+            # 200k-row table mid-load otherwise looks stuck for hours.
             await conn.execute(
                 f"UPDATE {_qtable('sync_state')} SET last_id=$2, source_count=$3, "
+                f"total_rows=(SELECT count(*) FROM {_qtable(es.table)}), "
                 f"status='syncing', error=NULL, updated_at=now() WHERE table_name=$1",
                 es.table, last_id, source_count,
             )
@@ -582,7 +586,8 @@ async def status_summary() -> dict:
                 SELECT count(*) AS tables,
                        count(*) FILTER (WHERE full_loaded) AS loaded,
                        coalesce(sum(total_rows), 0) AS rows,
-                       max(last_synced_at) AS last_sync
+                       max(last_synced_at) AS last_sync,
+                       max(updated_at) AS last_activity
                 FROM {_qtable('sync_state')}
             """)
         except Exception:  # schema not created yet (first boot)
@@ -593,4 +598,5 @@ async def status_summary() -> dict:
         "loaded": int(r["loaded"]),
         "rows": int(r["rows"]),
         "last_sync": r["last_sync"].isoformat() if r["last_sync"] else None,
+        "last_activity": r["last_activity"].isoformat() if r["last_activity"] else None,
     }
