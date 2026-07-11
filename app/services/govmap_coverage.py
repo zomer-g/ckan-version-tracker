@@ -50,11 +50,70 @@ def _catalog_headers() -> dict:
     }
 
 
+def _publisher_name(item: dict, groups: dict) -> str | None:
+    """Resolve a catalog item's publisher display name. ``publisherId`` indexes
+    into DIFFERENT lookup tables depending on ``publicPublishType``: 1 = a
+    local authority (``groups.settlements``), 0 = a government office
+    (``groups.offices``). The key spaces overlap, so the type is load-bearing.
+    Other types (e.g. 3) have no known lookup → None."""
+    pid = str(item.get("publisherId"))
+    ptype = item.get("publicPublishType")
+    if ptype == 1:
+        return (groups.get("settlements", {}).get(pid) or {}).get("name")
+    if ptype == 0:
+        return (groups.get("offices", {}).get(pid) or {}).get("name")
+    return None
+
+
 def _extract_layers(catalog: dict) -> list[dict]:
-    """Walk the catalog JSON, returning one dict per unique vector layer
-    (deduped by id): {layer_id, caption, layer_kind, complexity}."""
+    """Return one dict per unique vector layer (deduped by id):
+    {layer_id, caption, layer_kind, complexity}.
+
+    GovMap's catalog reuses the same caption across MANY distinct layers —
+    every municipality publishes its own "מקלטים"/"רחובות"/"גני ילדים" — so a
+    bare caption makes different layers look like duplicates on the site.
+    When a caption is shared by ≥2 layers, disambiguate it with the publisher
+    (city / ministry): "מקלטים — עיריית צפת". If caption+publisher still
+    collide (a publisher listing the same caption twice), append the layer id.
+    """
     found: dict[str, dict] = {}
 
+    items = catalog.get("catalog") if isinstance(catalog, dict) else None
+    groups = catalog.get("groups") if isinstance(catalog, dict) else None
+    if isinstance(items, list) and items and isinstance(groups, dict):
+        # Modern flat catalog: count caption reuse, then suffix the ambiguous.
+        caption_count: dict[str, int] = {}
+        for it in items:
+            if isinstance(it, dict) and "layerKind" in it and it.get("id") is not None:
+                cap = (it.get("caption") or "").strip()
+                if cap:
+                    caption_count[cap] = caption_count.get(cap, 0) + 1
+        seen_titles: set[str] = set()
+        for it in items:
+            if not (isinstance(it, dict) and "layerKind" in it and it.get("id") is not None):
+                continue
+            lid = str(it["id"])
+            if lid in found:
+                continue
+            cap = (it.get("caption") or "").strip()
+            title = cap or None
+            if cap and caption_count.get(cap, 0) > 1:
+                pub = _publisher_name(it, groups)
+                title = f"{cap} — {pub}" if pub else f"{cap} (שכבה {lid})"
+                if title in seen_titles:
+                    title = f"{title} (שכבה {lid})"
+            if title:
+                seen_titles.add(title)
+            found[lid] = {
+                "layer_id": lid,
+                "caption": (title or "")[:500] or None,
+                "layer_kind": it.get("layerKind"),
+                "complexity": it.get("complexity"),
+            }
+        if found:
+            return list(found.values())
+
+    # Fallback: generic walk for older/unknown catalog shapes.
     def walk(o):
         if isinstance(o, dict):
             if "layerKind" in o and "caption" in o and o.get("id") is not None:
@@ -93,6 +152,7 @@ async def populate_from_catalog(db) -> dict:
         for row in (await db.execute(select(GovmapCoverage))).scalars().all()
     }
     inserted = 0
+    retitled = 0
     for i, lay in enumerate(sorted(layers, key=lambda x: int(x["layer_id"]) if x["layer_id"].isdigit() else 0)):
         row = existing.get(lay["layer_id"])
         if row is None:
@@ -105,13 +165,26 @@ async def populate_from_catalog(db) -> dict:
             ))
             inserted += 1
         else:
+            # Propagate a caption change to the linked dataset's title, but
+            # only when the title still equals the OLD caption (i.e. it was
+            # auto-generated); a user-customized title is never overwritten.
+            if (lay["caption"] and row.tracked_dataset_id
+                    and lay["caption"] != row.caption):
+                ds = (await db.execute(
+                    select(TrackedDataset)
+                    .where(TrackedDataset.id == row.tracked_dataset_id)
+                )).scalar_one_or_none()
+                if ds and row.caption and ds.title == row.caption:
+                    ds.title = lay["caption"]
+                    retitled += 1
             row.caption = lay["caption"]
             row.layer_kind = lay["layer_kind"]
             row.complexity = lay["complexity"]
     await db.commit()
     total = (await db.execute(select(func.count()).select_from(GovmapCoverage))).scalar() or 0
     return {"fetched": len(layers), "inserted": inserted,
-            "updated": len(layers) - inserted, "total": int(total)}
+            "updated": len(layers) - inserted, "retitled": retitled,
+            "total": int(total)}
 
 
 def _active_coverage_tasks_q():
@@ -147,10 +220,29 @@ async def _ensure_dataset(db, row: GovmapCoverage) -> TrackedDataset:
     from app.api.utils import scraper_url_slug
 
     source_url = f"https://www.govmap.gov.il/?lay={row.layer_id}"
-    # An existing dataset may already track this layer (added manually) — reuse.
+    # An existing dataset may already track this layer (added manually) —
+    # ADOPT it instead of creating a duplicate. Manual URLs carry extra params
+    # ("?c=...&z=...&lay=N"), so match on the layer id itself: the config's
+    # layer_id, or lay=N appearing in the URL as a whole token. Prefer an
+    # active dataset, then the oldest (the one with the history).
+    lay_token = str(row.layer_id)
     ds = (await db.execute(
-        select(TrackedDataset).where(TrackedDataset.source_url == source_url)
-    )).scalar_one_or_none()
+        select(TrackedDataset)
+        .where(
+            TrackedDataset.source_type == "govmap",
+            (TrackedDataset.scraper_config["layer_id"].as_string() == lay_token)
+            | TrackedDataset.source_url.op("~")(f"[?&]lay={lay_token}($|[^0-9])"),
+        )
+        .order_by(TrackedDataset.is_active.desc(), TrackedDataset.created_at.asc())
+        .limit(1)
+    )).scalars().first()
+    if ds is not None:
+        # Mark adopted so the rollout (not the per-dataset scheduler) drives it.
+        cfg = dict(ds.scraper_config or {})
+        if not cfg.get("coverage_managed"):
+            cfg["coverage_managed"] = True
+            ds.scraper_config = cfg
+            ds.poll_interval = 7776000
     if ds is None:
         slug = scraper_url_slug(f"govmap-{row.layer_id}", source_url)
         ds = TrackedDataset(
