@@ -161,6 +161,16 @@ class Settings(BaseSettings):
     # datasets' tasks share the same queue and interleave.
     # Set GOVMAP_COVERAGE_CONCURRENCY=1 to restore the old one-at-a-time pace.
     govmap_coverage_concurrency: int = 6
+    # Maintenance-mode cadence (took effect once the initial 859-layer bulk
+    # import finished, 2026-07-11). Coverage datasets are skipped by the
+    # per-dataset scheduler — the rollout tick is their ONLY refresh driver —
+    # so these knobs, not deletion of the rollout, are how the "proactive
+    # scraping" is throttled. A layer is DUE when never triggered, when its
+    # last trigger is older than REFRESH_DAYS (routine re-scrape), or when its
+    # latest attempt FAILED and RETRY_HOURS passed (bounded retry). A fresh &
+    # healthy inventory makes every tick a no-op.
+    govmap_coverage_refresh_days: float = 90.0
+    govmap_coverage_retry_hours: float = 6.0
 
     cors_origins: str = ""
 

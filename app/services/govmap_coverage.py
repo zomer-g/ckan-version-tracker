@@ -20,7 +20,7 @@ storage plan, streaming/resume scrape path, etc. are all the existing pipeline.
 """
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import func, select
@@ -186,12 +186,26 @@ async def _ensure_dataset(db, row: GovmapCoverage) -> TrackedDataset:
 
 
 async def scrape_next_layer() -> dict:
-    """Scheduler tick: top up the rollout to ``GOVMAP_COVERAGE_CONCURRENCY``
-    active coverage tasks (never-triggered layers first, then stalest). With a
-    fleet of workers each new pending task is claimed by a free worker, so the
-    whole fleet stays busy; a single-worker deploy behaves like the old
-    one-at-a-time pace (target=1). Own session, independent of any request."""
+    """Scheduler tick: top up to ``GOVMAP_COVERAGE_CONCURRENCY`` active
+    coverage tasks — but only from layers that are actually DUE:
+
+      * never triggered (new inventory / newly discovered catalog layers), or
+      * last triggered ≥ ``GOVMAP_COVERAGE_REFRESH_DAYS`` ago (the ongoing
+        quarterly-style refresh — coverage datasets are skipped by the normal
+        per-dataset scheduler, this tick is their ONLY driver), or
+      * their LATEST attempt failed and ≥ ``GOVMAP_COVERAGE_RETRY_HOURS``
+        passed (bounded retry loop for flap victims / transient errors).
+
+    Without the DUE filter, the drain-mode behavior (always refill to
+    target) would keep re-scraping the stalest layers forever once the
+    initial 859-layer import finished — a permanent treadmill cycling the
+    whole catalog every ~2-3 days instead of quarterly. With it, a fully
+    fresh & healthy inventory makes this tick a cheap no-op."""
     target = max(1, int(settings.govmap_coverage_concurrency))
+    refresh_cutoff = datetime.now(timezone.utc) - timedelta(
+        days=float(settings.govmap_coverage_refresh_days))
+    retry_cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=float(settings.govmap_coverage_retry_hours))
     async with async_session() as db:
         active_ids = [
             r[0] for r in (await db.execute(_active_coverage_tasks_q())).all()
@@ -202,12 +216,41 @@ async def scrape_next_layer() -> dict:
                         len(active_ids), target)
             return {"skipped": "at_concurrency", "active": len(active_ids)}
 
-        # Next layers: NULL last_triggered_at first (never scraped), then the
-        # stalest, tie-broken by sort_order. Exclude layers whose dataset
+        # Datasets whose LATEST scrape attempt failed — eligible for the
+        # shorter retry cadence.
+        last_status = (
+            select(
+                ScrapeTask.tracked_dataset_id,
+                ScrapeTask.status,
+            )
+            .distinct(ScrapeTask.tracked_dataset_id)
+            .order_by(ScrapeTask.tracked_dataset_id, ScrapeTask.created_at.desc())
+            .subquery()
+        )
+        failed_ids = [
+            r[0] for r in (await db.execute(
+                select(last_status.c.tracked_dataset_id)
+                .where(last_status.c.status == "failed")
+            )).all()
+        ]
+
+        due = (
+            GovmapCoverage.last_triggered_at.is_(None)
+            | (GovmapCoverage.last_triggered_at < refresh_cutoff)
+        )
+        if failed_ids:
+            due = due | (
+                GovmapCoverage.tracked_dataset_id.in_(failed_ids)
+                & (GovmapCoverage.last_triggered_at < retry_cutoff)
+            )
+
+        # Next DUE layers: NULL last_triggered_at first (never scraped), then
+        # the stalest, tie-broken by sort_order. Exclude layers whose dataset
         # already has an active task (their last_triggered_at may be old —
         # e.g. a giant layer still scraping since yesterday's tick).
         q = (
             select(GovmapCoverage)
+            .where(due)
             .order_by(
                 GovmapCoverage.last_triggered_at.asc().nullsfirst(),
                 GovmapCoverage.sort_order.asc(),
@@ -221,8 +264,8 @@ async def scrape_next_layer() -> dict:
             )
         rows = (await db.execute(q)).scalars().all()
         if not rows:
-            logger.info("govmap coverage: inventory empty (run populate first)")
-            return {"skipped": "empty_inventory"}
+            logger.debug("govmap coverage: nothing due — inventory fresh")
+            return {"skipped": "nothing_due"}
 
         triggered = []
         for row in rows:
