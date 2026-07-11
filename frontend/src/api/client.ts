@@ -586,9 +586,36 @@ export interface KnessetDbSqlResult {
   row_count: number;
 }
 
+// Protocol batches (the "אצוות" tab): filter values + count + download URLs.
+export interface KnessetProtocolFacets {
+  knessets: Array<{ knesset_num: number; protocols: number }>;
+  committees: Array<{ id: number; name: string; knesset_num: number | null; protocols: number }>;
+}
+
+export interface KnessetBatchFilter {
+  knesset_num?: number;
+  committee_id?: number;
+  q?: string;
+}
+
+function knessetBatchQs(f: KnessetBatchFilter): string {
+  const p = new URLSearchParams();
+  if (f.knesset_num !== undefined) p.set("knesset_num", String(f.knesset_num));
+  if (f.committee_id !== undefined) p.set("committee_id", String(f.committee_id));
+  if (f.q) p.set("q", f.q);
+  return p.toString();
+}
+
 export const knessetDb = {
   status: () => request<KnessetDbStatus>("/knesset-db/status"),
   tables: () => request<{ tables: KnessetDbTable[] }>("/knesset-db/tables"),
+  protocolFacets: () => request<KnessetProtocolFacets>("/knesset-db/protocols/facets"),
+  protocolCount: (f: KnessetBatchFilter) =>
+    request<{ files: number; zip_max_files: number }>(
+      `/knesset-db/protocols/count?${knessetBatchQs(f)}`),
+  // Direct browser downloads (server streams); not fetches.
+  batchZipUrl: (f: KnessetBatchFilter) => `/api/knesset-db/protocols/batch.zip?${knessetBatchQs(f)}`,
+  batchLinksUrl: (f: KnessetBatchFilter) => `/api/knesset-db/protocols/links.csv?${knessetBatchQs(f)}`,
   sql: (sql: string) =>
     request<KnessetDbSqlResult>("/knesset-db/sql", {
       method: "POST",

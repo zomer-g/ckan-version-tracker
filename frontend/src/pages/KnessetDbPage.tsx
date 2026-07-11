@@ -8,8 +8,9 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import KnessetProtocolSearch from "../components/KnessetProtocolSearch";
+import KnessetBatchTab from "../components/KnessetBatchTab";
 
-type KnessetTab = "protocols" | "sql" | "mmm";
+type KnessetTab = "protocols" | "sql" | "mmm" | "batch";
 
 // DD.MM.YYYY HH:MM (Israel-style, like the other pages).
 function fmtDate(value: string | null | undefined): string {
@@ -190,6 +191,7 @@ export default function KnessetDbPage() {
       <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, #e2e8f0)", marginBottom: "1rem", flexWrap: "wrap" }}>
         {([
           ["protocols", "🔍 חיפוש פרוטוקולים"],
+          ["batch", "⬇ אצוות (Batch)"],
           ["mmm", "מסמכי ממ”מ"],
           ["sql", "</> ממשק SQL"],
         ] as [KnessetTab, string][]).map(([id, label]) => (
@@ -211,6 +213,8 @@ export default function KnessetDbPage() {
       </div>
 
       {tab === "protocols" && <KnessetProtocolSearch />}
+
+      {tab === "batch" && <KnessetBatchTab />}
 
       {tab === "mmm" && (
         <div className="card" style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", lineHeight: 1.7 }}>

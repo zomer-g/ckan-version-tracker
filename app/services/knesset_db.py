@@ -575,6 +575,81 @@ async def iter_sql_csv(sql: str, *, max_rows: int = 200_000, timeout_ms: int = 6
                 yield "﻿\r\n"
 
 
+# ── Committee-protocol batches (the /knesset "אצוות" tab) ────────────────────
+
+PROTOCOL_GROUP_TYPE = 23  # GroupTypeID of "פרוטוקול ועדה" in KNS_DocumentCommitteeSession
+
+
+def _protocol_conds(knesset_num: int | None, committee_id: int | None,
+                    q: str | None) -> tuple[str, list]:
+    """WHERE clause + params for protocol-batch queries (d=documents, s=sessions,
+    c=committees). At least one filter is enforced by the API layer."""
+    conds, params = ["d.grouptypeid = $1"], [PROTOCOL_GROUP_TYPE]
+    if knesset_num is not None:
+        params.append(int(knesset_num))
+        conds.append(f"s.knessetnum = ${len(params)}")
+    if committee_id is not None:
+        params.append(int(committee_id))
+        conds.append(f"s.committeeid = ${len(params)}")
+    if (q or "").strip():
+        params.append(f"%{q.strip()}%")
+        conds.append(f"c.name ILIKE ${len(params)}")
+    return "WHERE " + " AND ".join(conds), params
+
+
+_PROTOCOL_FROM = (
+    f"FROM {_qtable('kns_documentcommitteesession')} d "
+    f"JOIN {_qtable('kns_committeesession')} s ON s.id = d.committeesessionid "
+    f"LEFT JOIN {_qtable('kns_committee')} c ON c.id = s.committeeid "
+)
+
+
+async def protocol_facets() -> dict:
+    """Filter values for the batches tab: knesset numbers and committees, each
+    with its protocol-file count (committees are per-knesset rows upstream, so a
+    committee choice implies its knesset)."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        knessets = await conn.fetch(
+            f"SELECT s.knessetnum, count(*) AS protocols {_PROTOCOL_FROM} "
+            f"WHERE d.grouptypeid = $1 AND s.knessetnum IS NOT NULL "
+            f"GROUP BY s.knessetnum ORDER BY s.knessetnum DESC", PROTOCOL_GROUP_TYPE)
+        committees = await conn.fetch(
+            f"SELECT c.id, c.name, c.knessetnum, count(*) AS protocols {_PROTOCOL_FROM} "
+            f"WHERE d.grouptypeid = $1 AND c.id IS NOT NULL "
+            f"GROUP BY c.id, c.name, c.knessetnum "
+            f"ORDER BY c.knessetnum DESC NULLS LAST, count(*) DESC", PROTOCOL_GROUP_TYPE)
+    return {
+        "knessets": [{"knesset_num": r["knessetnum"], "protocols": int(r["protocols"])} for r in knessets],
+        "committees": [{"id": r["id"], "name": r["name"], "knesset_num": r["knessetnum"],
+                        "protocols": int(r["protocols"])} for r in committees],
+    }
+
+
+async def protocol_count(knesset_num: int | None, committee_id: int | None,
+                         q: str | None) -> int:
+    where, params = _protocol_conds(knesset_num, committee_id, q)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        return int(await conn.fetchval(
+            f"SELECT count(*) {_PROTOCOL_FROM} {where}", *params))
+
+
+async def protocol_batch_rows(knesset_num: int | None, committee_id: int | None,
+                              q: str | None, limit: int) -> list[dict]:
+    """The documents of a batch, newest sessions first."""
+    where, params = _protocol_conds(knesset_num, committee_id, q)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT d.id AS document_id, d.filepath, d.applicationdesc, "
+            f"s.id AS session_id, s.startdate, s.knessetnum, c.name AS committee_name "
+            f"{_PROTOCOL_FROM} {where} "
+            f"ORDER BY s.startdate DESC NULLS LAST, d.id DESC LIMIT {int(limit)}",
+            *params)
+    return [dict(r) for r in rows]
+
+
 async def status_summary() -> dict:
     """Compact stats for the page header / nav badge."""
     if not is_configured():
