@@ -629,10 +629,8 @@ export interface ProtocolSearchResult {
   rows: ProtocolRow[];
 }
 export interface ProtocolCommittee {
-  committee_id: number;
   name: string;
   committee_type?: string | null;
-  knesset: number;
   doc_count: number;
 }
 function _qs(params: Record<string, unknown>): string {

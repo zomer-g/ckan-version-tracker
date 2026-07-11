@@ -157,7 +157,7 @@ export default function KnessetProtocolSearch() {
           />
           <datalist id="knesset-committee-list">
             {committees.map((c) => (
-              <option key={c.committee_id} value={c.name}>
+              <option key={c.name} value={c.name}>
                 {c.doc_count.toLocaleString()} פרוטוקולים
               </option>
             ))}

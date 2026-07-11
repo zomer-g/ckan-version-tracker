@@ -159,21 +159,24 @@ async def committees(
         params.append(f"%{q.strip()}%")
         conds.append(f"c.name ILIKE ${len(params)}")
     params.append(limit)
+    # Group by NAME (not committee id): the same committee is re-created every
+    # Knesset with a new id, so grouping by id would list "ועדת החוקה" ~20
+    # times. Distinct names — with counts summed across the scope — give a clean
+    # autocomplete; the search filters by name (ILIKE) anyway.
     sql = f"""
-        SELECT c.id AS committee_id, c.name AS committee_name,
-               c.committeetypedesc AS committee_type, s.knessetnum AS knesset,
+        SELECT c.name AS committee_name,
+               max(c.committeetypedesc) AS committee_type,
                COUNT(DISTINCT {_DEDUP})::bigint AS doc_count
         {_JOIN}
         WHERE {' AND '.join(conds)}
-        GROUP BY c.id, c.name, c.committeetypedesc, s.knessetnum
+        GROUP BY c.name
         ORDER BY doc_count DESC, c.name ASC
         LIMIT ${len(params)}
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *params)
     return {"committees": [{
-        "committee_id": r["committee_id"], "name": r["committee_name"],
-        "committee_type": r["committee_type"], "knesset": r["knesset"],
+        "name": r["committee_name"], "committee_type": r["committee_type"],
         "doc_count": r["doc_count"],
     } for r in rows]}
 
