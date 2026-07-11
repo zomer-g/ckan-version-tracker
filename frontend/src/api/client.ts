@@ -605,6 +605,61 @@ export const knessetDb = {
     }),
 };
 
+// ---- Knesset committee-protocol search (over the Neon `knesset` schema) ----
+export interface ProtocolRow {
+  document_id: number;
+  document_name?: string | null;
+  application?: string | null;
+  file_url?: string | null;
+  last_updated?: string | null;
+  session_id?: number | null;
+  session_number?: number | null;
+  session_date?: string | null;
+  knesset_num?: number | null;
+  committee_id?: number | null;
+  committee_name?: string | null;
+  committee_type?: string | null;
+}
+export interface ProtocolSearchResult {
+  total: number;
+  limit: number;
+  offset: number;
+  rows: ProtocolRow[];
+}
+export interface ProtocolCommittee {
+  committee_id: number;
+  name: string;
+  committee_type?: string | null;
+  knesset: number;
+  doc_count: number;
+}
+function _qs(params: Record<string, unknown>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+export const knessetProtocols = {
+  knessets: () =>
+    request<{ knessets: { knesset: number; doc_count: number }[] }>(
+      "/knesset-protocols/knessets",
+    ),
+  committees: (params: { knesset?: number; q?: string; limit?: number } = {}) =>
+    request<{ committees: ProtocolCommittee[] }>(
+      `/knesset-protocols/committees${_qs(params)}`,
+    ),
+  search: (params: {
+    q?: string;
+    knesset?: number;
+    committee_id?: number;
+    committee?: string;
+    limit?: number;
+    offset?: number;
+  }) => request<ProtocolSearchResult>(`/knesset-protocols/search${_qs(params)}`),
+};
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),

@@ -31,6 +31,7 @@ from app.api.mankal import router as mankal_router
 from app.api.jda import router as jda_router
 from app.api.eden import router as eden_router
 from app.api.knesset import router as knesset_router
+from app.api.knesset_protocols import router as knesset_protocols_router
 from app.api.knesset_db import router as knesset_db_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
@@ -121,6 +122,7 @@ app.include_router(mankal_router)
 app.include_router(jda_router)
 app.include_router(eden_router)
 app.include_router(knesset_router)
+app.include_router(knesset_protocols_router)
 app.include_router(knesset_db_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)

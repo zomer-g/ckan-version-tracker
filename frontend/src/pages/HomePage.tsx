@@ -178,6 +178,28 @@ export default function HomePage() {
     });
   }, [submittedQuery, trackedDatasets]);
 
+  // Collapse the hundreds of Knesset-committee datasets (tag "ועדות כנסת")
+  // into ONE card on the default list, so they don't drown the main screen.
+  // The card links to /knesset (the protocol-search page). When the user is
+  // searching, individual committees still surface via matchedTracked.
+  const KNESSET_COMMITTEE_TAG = "ועדות כנסת";
+  const isCommitteeDataset = (ds: TrackedDataset) =>
+    (Array.isArray((ds as any).tags) ? (ds as any).tags : []).some(
+      (tg: any) => (typeof tg === "string" ? tg : tg?.name || "") === KNESSET_COMMITTEE_TAG,
+    );
+  const restTracked = useMemo(
+    () => trackedDatasets.filter((ds) => !isCommitteeDataset(ds)),
+    [trackedDatasets],
+  );
+  const committeeGroup = useMemo(() => {
+    const list = trackedDatasets.filter(isCommitteeDataset);
+    if (list.length === 0) return null;
+    return {
+      count: list.length,
+      versions: list.reduce((s, d) => s + (d.version_count || 0), 0),
+    };
+  }, [trackedDatasets]);
+
   // Request form state — which dataset has form open
   const [requestFormFor, setRequestFormFor] = useState<string | null>(null);
 
@@ -1346,13 +1368,37 @@ export default function HomePage() {
 
           {trackedLoading ? (
             <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>
-          ) : (submittedQuery ? matchedTracked : trackedDatasets).length === 0 ? (
+          ) : (submittedQuery ? matchedTracked.length === 0 : restTracked.length === 0 && !committeeGroup) ? (
             <div className="empty-state">
               {submittedQuery ? t("home.tracked_matches_empty") : t("home.no_tracked")}
             </div>
           ) : (
             <div className="grid grid-2">
-              {(submittedQuery ? matchedTracked : trackedDatasets).map((ds) => (
+              {!submittedQuery && committeeGroup && (
+                <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid #4f46e5" }}>
+                  <div className="flex-between mb-1">
+                    <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                      <Link to="/knesset">🏛️ פרוטוקולי ועדות הכנסת</Link>
+                    </h3>
+                    <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
+                      <span style={{ display: "inline-block", padding: "0.15rem 0.45rem", borderRadius: "9999px", fontSize: "0.65rem", fontWeight: 600, background: "#4f46e5", color: "white" }}>
+                        כנסת
+                      </span>
+                      <span className="badge badge-info">{committeeGroup.count.toLocaleString()} ועדות</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted mb-1" style={{ lineHeight: 1.6 }}>
+                    כל ועדות הכנסת במקום אחד — חיפוש פרוטוקולים לפי שם ועדה, מספר כנסת וטקסט חופשי.
+                    {committeeGroup.versions > 0 && <> · {committeeGroup.versions.toLocaleString()} גרסאות במעקב.</>}
+                  </p>
+                  <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
+                    <Link to="/knesset" className="btn-primary" style={{ textDecoration: "none", fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}>
+                      חיפוש פרוטוקולים ←
+                    </Link>
+                  </div>
+                </article>
+              )}
+              {(submittedQuery ? matchedTracked : restTracked).map((ds) => (
                 <article key={ds.id} className="card">
                   <div className="flex-between mb-1">
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>

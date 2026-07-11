@@ -7,6 +7,9 @@ import {
   KnessetDbSqlResult,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import KnessetProtocolSearch from "../components/KnessetProtocolSearch";
+
+type KnessetTab = "protocols" | "sql" | "mmm";
 
 // DD.MM.YYYY HH:MM (Israel-style, like the other pages).
 function fmtDate(value: string | null | undefined): string {
@@ -74,6 +77,7 @@ const GROUP_ORDER = [
 
 export default function KnessetDbPage() {
   const { user } = useAuth();
+  const [tab, setTab] = useState<KnessetTab>("protocols");
   const [status, setStatus] = useState<KnessetDbStatus | null>(null);
   const [tables, setTables] = useState<KnessetDbTable[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -186,6 +190,46 @@ export default function KnessetDbPage() {
         {loadError && <div className="text-sm" style={{ marginTop: "0.3rem", color: "var(--danger, #dc2626)" }}>{loadError}</div>}
       </div>
 
+      {/* Tabs */}
+      <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, #e2e8f0)", marginBottom: "1rem", flexWrap: "wrap" }}>
+        {([
+          ["protocols", "🔍 חיפוש פרוטוקולים"],
+          ["mmm", "מסמכי ממ”מ"],
+          ["sql", "</> ממשק SQL"],
+        ] as [KnessetTab, string][]).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            style={{
+              padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
+              fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
+              color: tab === id ? "var(--primary, #0f766e)" : "var(--text-muted)",
+              borderBottom: tab === id ? "3px solid var(--primary, #0f766e)" : "3px solid transparent",
+              marginBottom: -2,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "protocols" && <KnessetProtocolSearch />}
+
+      {tab === "mmm" && (
+        <div className="card" style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", lineHeight: 1.7 }}>
+          <p style={{ marginTop: 0, fontSize: "1.05rem" }}>חיפוש במסמכי מרכז המחקר והמידע (ממ״מ) — בקרוב.</p>
+          <p style={{ marginBottom: 0 }}>
+            בינתיים ניתן לצפות במסמכי הממ״מ דרך{" "}
+            <a href="https://main.knesset.gov.il/activity/info/research" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
+              אתר הכנסת
+            </a>.
+          </p>
+        </div>
+      )}
+
+      {tab === "sql" && (
+        <>
       {/* SQL console */}
       <div className="card" style={{ padding: "1rem", marginBottom: "1rem" }}>
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
@@ -408,6 +452,8 @@ export default function KnessetDbPage() {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
