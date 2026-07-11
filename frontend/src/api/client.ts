@@ -615,6 +615,8 @@ export interface ProtocolRow {
   session_id?: number | null;
   session_number?: number | null;
   session_date?: string | null;
+  session_location?: string | null;
+  session_note?: string | null;
   knesset_num?: number | null;
   committee_id?: number | null;
   committee_name?: string | null;
