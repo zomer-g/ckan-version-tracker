@@ -97,7 +97,7 @@ export default function AboutPage() {
                   {t("about.family_odata_name")}
                 </ExtLink>
               </strong>
-              {" — "}
+              {": "}
               {t("about.family_odata_desc")}
             </li>
             <li>
@@ -106,7 +106,7 @@ export default function AboutPage() {
                   {t("about.family_ocoi_name")}
                 </ExtLink>
               </strong>
-              {" — "}
+              {": "}
               {t("about.family_ocoi_desc")}
             </li>
             <li>
@@ -115,7 +115,7 @@ export default function AboutPage() {
                   {t("about.family_ocal_name")}
                 </ExtLink>
               </strong>
-              {" — "}
+              {": "}
               {t("about.family_ocal_desc")}
             </li>
           </ul>
