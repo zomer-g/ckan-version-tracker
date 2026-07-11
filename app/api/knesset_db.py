@@ -103,6 +103,35 @@ async def export_csv(request: Request, sql: str):
     )
 
 
+# ── MMM (מרכז המחקר והמידע) document-catalog search (the "מסמכי ממ״מ" tab) ──
+# Metadata mirrored from the MMM import into knesset.mmm_documents (see
+# app/services/knesset_mmm_db.py); also queryable directly in the SQL console.
+
+@router.get("/mmm/search")
+@limiter.limit("60/minute")
+async def mmm_search(request: Request, q: str | None = None, author: str | None = None,
+                     doc_type: str | None = None, year_from: int | None = None,
+                     year_to: int | None = None, limit: int = 20, offset: int = 0):
+    _require_enabled()
+    from app.services import knesset_mmm_db
+    try:
+        return await knesset_mmm_db.search(q, author, doc_type, year_from, year_to,
+                                           limit=limit, offset=offset)
+    except Exception as e:  # noqa: BLE001 — table may not be loaded yet
+        raise HTTPException(status_code=503, detail=f"קטלוג הממ\"מ עדיין לא נטען ({type(e).__name__})")
+
+
+@router.get("/mmm/facets")
+@limiter.limit("30/minute")
+async def mmm_facets(request: Request):
+    _require_enabled()
+    from app.services import knesset_mmm_db
+    try:
+        return await knesset_mmm_db.facets()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"קטלוג הממ\"מ עדיין לא נטען ({type(e).__name__})")
+
+
 # ── Committee-protocol batches (the /knesset "אצוות" tab) ────────────────────
 # Filter by committee / Knesset number and pull ALL matching protocol files as
 # one streamed ZIP (fetched live from fs.knesset.gov.il — OVER stores only the
@@ -284,6 +313,21 @@ async def sync(body: SyncBody, admin=Depends(get_admin_user)):
     """Kick a sync pass in the background right now (admin). With reset=true the
     named table is re-walked from scratch (rows re-upsert; nothing is lost)."""
     _require_enabled()
+    # The MMM catalog isn't an ODATA set — force-reload it from the dataset's
+    # latest version instead of walking the feed.
+    if body.table == "mmm_documents":
+        from app.services import knesset_mmm_db
+
+        async def _run_mmm():
+            try:
+                res = await knesset_mmm_db.sync_if_due(force=True)
+                logger.info("knesset-db manual MMM sync: %s", res)
+            except Exception:  # noqa: BLE001
+                logger.exception("knesset-db manual MMM sync failed")
+
+        asyncio.create_task(_run_mmm())
+        return {"started": True, "table": body.table, "reset": body.reset}
+
     if body.reset:
         if not body.table:
             raise HTTPException(status_code=400, detail="reset requires a table name")

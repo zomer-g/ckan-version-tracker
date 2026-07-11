@@ -9,6 +9,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import KnessetProtocolSearch from "../components/KnessetProtocolSearch";
 import KnessetBatchTab from "../components/KnessetBatchTab";
+import KnessetMmmSearch from "../components/KnessetMmmSearch";
 
 type KnessetTab = "protocols" | "sql" | "mmm" | "batch";
 
@@ -64,6 +65,10 @@ const EXAMPLES: { label: string; sql: string }[] = [
   {
     label: "שדלנים ולקוחותיהם",
     sql: "SELECT l.fullname, l.corporationname, c.name AS client\nFROM v_lobbyists l\nJOIN v_lobbyistsclients c ON c.lobbyistid = l.id\nORDER BY l.fullname\nLIMIT 100",
+  },
+  {
+    label: 'מסמכי ממ"מ אחרונים בנושא מסוים',
+    sql: "SELECT \"date\", title, author, doc_type, pdf_url\nFROM mmm_documents\nWHERE title ILIKE '%חינוך%' OR keywords ILIKE '%חינוך%'\nORDER BY \"date\" DESC NULLS LAST\nLIMIT 50",
   },
 ];
 
@@ -216,17 +221,7 @@ export default function KnessetDbPage() {
 
       {tab === "batch" && <KnessetBatchTab />}
 
-      {tab === "mmm" && (
-        <div className="card" style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", lineHeight: 1.7 }}>
-          <p style={{ marginTop: 0, fontSize: "1.05rem" }}>חיפוש במסמכי מרכז המחקר והמידע (ממ״מ) — בקרוב.</p>
-          <p style={{ marginBottom: 0 }}>
-            בינתיים ניתן לצפות במסמכי הממ״מ דרך{" "}
-            <a href="https://main.knesset.gov.il/activity/info/research" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
-              אתר הכנסת
-            </a>.
-          </p>
-        </div>
-      )}
+      {tab === "mmm" && <KnessetMmmSearch />}
 
       {tab === "sql" && (
         <>

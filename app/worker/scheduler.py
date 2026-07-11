@@ -198,6 +198,14 @@ async def init_scheduler() -> None:
             )
         except Exception:  # noqa: BLE001 — never let a feed flap kill the job
             logger.exception("knesset_db sync tick failed")
+        # MMM document catalog → knesset.mmm_documents. Version-gated: a no-op
+        # single SELECT until the MMM dataset publishes a new version.
+        try:
+            from app.services import knesset_mmm_db
+            if _settings.knesset_db_enabled and _settings.append_database_url:
+                await knesset_mmm_db.sync_if_due()
+        except Exception:  # noqa: BLE001
+            logger.exception("knesset_mmm_db sync failed")
 
     scheduler.add_job(
         knesset_db_sync_job,

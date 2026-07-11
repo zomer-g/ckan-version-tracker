@@ -606,9 +606,47 @@ function knessetBatchQs(f: KnessetBatchFilter): string {
   return p.toString();
 }
 
+// MMM (מרכז המחקר והמידע) document catalog — knesset.mmm_documents.
+export interface MmmDocument {
+  rid: number;
+  title: string | null;
+  doc_type: string | null;
+  date: string | null;
+  date_text: string | null;
+  author: string | null;
+  approver: string | null;
+  requested_by: string | null;
+  keywords: string | null;
+  abstract: string | null;
+  incident_url: string | null;
+  pdf_url: string | null;
+}
+
+export interface MmmSearchResult {
+  total: number;
+  items: MmmDocument[];
+  limit: number;
+  offset: number;
+}
+
+export interface MmmFacets {
+  doc_types: Array<{ doc_type: string; count: number }>;
+  year_min: number | null;
+  year_max: number | null;
+  total: number;
+}
+
 export const knessetDb = {
   status: () => request<KnessetDbStatus>("/knesset-db/status"),
   tables: () => request<{ tables: KnessetDbTable[] }>("/knesset-db/tables"),
+  mmmSearch: (p: { q?: string; author?: string; doc_type?: string; year_from?: number; year_to?: number; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(p)) {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    }
+    return request<MmmSearchResult>(`/knesset-db/mmm/search?${qs.toString()}`);
+  },
+  mmmFacets: () => request<MmmFacets>("/knesset-db/mmm/facets"),
   protocolFacets: () => request<KnessetProtocolFacets>("/knesset-db/protocols/facets"),
   protocolCount: (f: KnessetBatchFilter) =>
     request<{ files: number; zip_max_files: number }>(

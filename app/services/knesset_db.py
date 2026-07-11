@@ -491,15 +491,17 @@ async def list_tables() -> list[dict]:
         states = await conn.fetch(f"SELECT * FROM {_qtable('sync_state')} ORDER BY table_name")
     out = []
     for r in states:
-        if r["table_name"] not in sets:
-            continue
-        es = sets[r["table_name"]]
+        # ODATA sets come from the live $metadata; other rows (e.g. the MMM
+        # document catalog, registered by knesset_mmm_db) are still listed —
+        # their entity_set drives the Hebrew meta lookup.
+        es = sets.get(r["table_name"])
+        set_name = es.name if es else r["entity_set"]
         cols = json.loads(r["columns"]) if isinstance(r["columns"], str) else r["columns"]
         out.append({
             "table": r["table_name"],
-            "entity_set": es.name,
-            "group": group_of(es.name),
-            "description": description_of(es.name),
+            "entity_set": set_name,
+            "group": group_of(set_name),
+            "description": description_of(set_name),
             "columns": [{"name": p.lower(), "type": t} for p, t in cols],
             "total_rows": int(r["total_rows"] or 0),
             "source_count": int(r["source_count"]) if r["source_count"] is not None else None,
