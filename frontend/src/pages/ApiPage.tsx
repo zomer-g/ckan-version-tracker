@@ -244,8 +244,8 @@ const MCP_SERVERS: {
     key: "knesset",
     label: "כנסת — פרוטוקולי ועדות + ODATA",
     path: "/knesset/mcp",
-    purpose: "חיפוש ועדות/ישיבות/פרוטוקולים, שליפת ישיבה, ו-SQL חופשי על מראה ה-ODATA של הכנסת.",
-    tools: ["search_committees", "search_sessions", "search_protocols", "get_session", "run_sql", "list_tables", "get_stats"],
+    purpose: "חיפוש ועדות/ישיבות/פרוטוקולים, מסמכי ממ״מ, שליפת ישיבה, ו-SQL חופשי על מראה ה-ODATA של הכנסת.",
+    tools: ["search_committees", "search_sessions", "search_protocols", "get_session", "search_mmm", "run_sql", "list_tables", "get_stats"],
   },
 ];
 

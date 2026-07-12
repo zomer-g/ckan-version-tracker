@@ -44,7 +44,9 @@ SERVER_INSTRUCTIONS = (
     "הכנסת של גרסאות לעם; (2) צרף את file_url של הפרוטוקול ו/או את session_url "
     "לאימות; (3) זכור שמחיקות במקור אינן משתקפות במראה. לשאילתות חופשיות השתמש "
     "בכלי run_sql (סכימת knesset, שמות טבלאות באותיות קטנות — kns_committee, "
-    "kns_committeesession, kns_cmtsessionitem, kns_documentcommitteesession)."
+    "kns_committeesession, kns_cmtsessionitem, kns_documentcommitteesession). "
+    "מסמכי מרכז המחקר והמידע (ממ\"מ) זמינים בכלי הייעודי search_mmm (וגם בטבלת "
+    "mmm_documents דרך run_sql); pdf_url של כל מסמך מוביל לקובץ המלא בשרת הכנסת."
 )
 
 _SESSION_COLS = (
@@ -123,6 +125,27 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {"session_id": {"type": "integer", "description": "מזהה הישיבה"}},
             "required": ["session_id"],
+        },
+    },
+    {
+        "name": "search_mmm",
+        "description": (
+            "חיפוש במסמכי מרכז המחקר והמידע (ממ\"מ) של הכנסת — מחקרים, סקירות "
+            "ומסמכי רקע. סינון לפי טקסט חופשי (כותרת / מילות מפתח / תקציר), מחבר, "
+            "סוג מסמך וטווח שנות פרסום. מחזיר לכל מסמך מטא-דאטה מלאה + קישור "
+            "ל-PDF (pdf_url) בשרת הכנסת. התוכן עצמו אינו נשמר כאן."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "טקסט חופשי בכותרת / מילות מפתח / תקציר"},
+                "author": {"type": "string", "description": "שם מחבר או מאשר"},
+                "doc_type": {"type": "string", "description": "סוג מסמך (למשל 'מסמך רקע')"},
+                "year_from": {"type": "integer", "description": "משנת פרסום"},
+                "year_to": {"type": "integer", "description": "עד שנת פרסום"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+            },
         },
     },
     {
@@ -318,6 +341,23 @@ async def _tool_get_session(request, db, user, a) -> tuple[dict, int]:
     return out, 1
 
 
+async def _tool_search_mmm(request, db, user, a) -> tuple[dict, int]:
+    _require_configured()
+    from app.services import knesset_mmm_db
+    res = await knesset_mmm_db.search(
+        a.get("q"), a.get("author"), a.get("doc_type"),
+        a.get("year_from"), a.get("year_to"),
+        limit=_clamp(a, "limit", 20), offset=max(int(a.get("offset") or 0), 0),
+    )
+    items = res.get("items") or []
+    return {
+        "items": items, "count": len(items),
+        "total": res.get("total"), "offset": res.get("offset"),
+        "note": "pdf_url מוביל למסמך הממ\"מ המלא בשרת הכנסת; התוכן אינו נשמר בגרסאות לעם.",
+        "source": "over.org.il — מראה נתוני הכנסת (קטלוג ממ\"מ)",
+    }, len(items)
+
+
 async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
     _require_configured()
     res = await knesset_db.run_sql(a.get("sql") or "", max_rows=500)
@@ -356,6 +396,7 @@ _IMPL = {
     "search_sessions": _tool_search_sessions,
     "search_protocols": _tool_search_protocols,
     "get_session": _tool_get_session,
+    "search_mmm": _tool_search_mmm,
     "run_sql": _tool_run_sql,
     "list_tables": _tool_list_tables,
     "get_stats": _tool_get_stats,
