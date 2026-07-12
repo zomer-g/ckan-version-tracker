@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   knessetDb,
   KnessetDbTable,
@@ -81,16 +81,27 @@ const GROUP_ORDER = [
   "חברי הכנסת", "שאילתות", "הצעות לסדר היום", "שדלנים", "טבלאות עזר", "אחר",
 ];
 
+const TAB_IDS: KnessetTab[] = ["protocols", "batch", "mmm", "sql"];
+
 export default function KnessetDbPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<KnessetTab>("protocols");
+  // The active tab lives in the URL (?tab=batch / mmm / sql; default
+  // protocols) so every tab is deep-linkable; per-tab search params are
+  // written by each tab component (see useKnessetTabParams below).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlTab = searchParams.get("tab") as KnessetTab | null;
+  const tab: KnessetTab = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "protocols";
+  const setTab = (id: KnessetTab) => {
+    // Switching tabs drops the previous tab's search params (they're stale).
+    setSearchParams(id === "protocols" ? {} : { tab: id });
+  };
   const [status, setStatus] = useState<KnessetDbStatus | null>(null);
   const [tables, setTables] = useState<KnessetDbTable[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
-  const [sqlText, setSqlText] = useState(DEFAULT_SQL);
+  const [sqlText, setSqlText] = useState(() => searchParams.get("sql") || DEFAULT_SQL);
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
@@ -108,6 +119,10 @@ export default function KnessetDbPage() {
 
   const runSql = useCallback(() => {
     if (!sqlText.trim()) return;
+    // Deep-linkable query: the SQL rides in the URL (skipped when huge).
+    if (sqlText.length <= 1800) {
+      setSearchParams({ tab: "sql", sql: sqlText }, { replace: true });
+    }
     setSqlRunning(true);
     setSqlError(null);
     knessetDb
@@ -115,7 +130,17 @@ export default function KnessetDbPage() {
       .then((r) => { setSqlResult(r); setSqlError(null); })
       .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); })
       .finally(() => setSqlRunning(false));
-  }, [sqlText]);
+  }, [sqlText, setSearchParams]);
+
+  // Arriving with ?tab=sql&sql=… → run the linked query once automatically.
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    if (!autoRanRef.current && tab === "sql" && searchParams.get("sql")) {
+      autoRanRef.current = true;
+      runSql();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();

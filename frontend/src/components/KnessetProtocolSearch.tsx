@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   knessetProtocols,
   ProtocolRow,
@@ -32,11 +33,14 @@ function DetailRow({ label, value }: { label: string; value?: string | number | 
 }
 
 export default function KnessetProtocolSearch() {
+  // Search state is mirrored into the URL (?q=…&knesset=…&committee=…&offset=…)
+  // so a search is deep-linkable; arriving with params runs it automatically.
+  const [searchParams, setSearchParams] = useSearchParams();
   const [knessets, setKnessets] = useState<{ knesset: number; doc_count: number }[]>([]);
   const [committees, setCommittees] = useState<ProtocolCommittee[]>([]);
-  const [knesset, setKnesset] = useState<string>("");
-  const [committee, setCommittee] = useState<string>("");
-  const [q, setQ] = useState("");
+  const [knesset, setKnesset] = useState<string>(() => searchParams.get("knesset") || "");
+  const [committee, setCommittee] = useState<string>(() => searchParams.get("committee") || "");
+  const [q, setQ] = useState(() => searchParams.get("q") || "");
 
   const [rows, setRows] = useState<ProtocolRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -66,6 +70,13 @@ export default function KnessetProtocolSearch() {
       setLoading(true);
       setError(null);
       setExpanded(new Set());
+      // Mirror the executed search into the URL (replace — no history spam).
+      const p: Record<string, string> = {};
+      if (q.trim()) p.q = q.trim();
+      if (knesset) p.knesset = knesset;
+      if (committee.trim()) p.committee = committee.trim();
+      if (newOffset > 0) p.offset = String(newOffset);
+      setSearchParams(p, { replace: true });
       knessetProtocols
         .search({
           q: q.trim() || undefined,
@@ -83,8 +94,19 @@ export default function KnessetProtocolSearch() {
         .catch((e) => setError(e?.message || "שגיאה בחיפוש"))
         .finally(() => setLoading(false));
     },
-    [q, knesset, committee],
+    [q, knesset, committee, setSearchParams],
   );
+
+  // Deep link: arriving with search params runs the search once automatically.
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    if (autoRanRef.current) return;
+    autoRanRef.current = true;
+    if (searchParams.get("q") || searchParams.get("knesset") || searchParams.get("committee")) {
+      doSearch(Math.max(0, Number(searchParams.get("offset")) || 0));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();

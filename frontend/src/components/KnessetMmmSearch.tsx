@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { knessetDb, MmmSearchResult, MmmFacets } from "../api/client";
 
 // The "מסמכי ממ״מ" tab of /knesset: metadata search over the MMM document
@@ -9,12 +10,24 @@ import { knessetDb, MmmSearchResult, MmmFacets } from "../api/client";
 const PAGE = 20;
 
 export default function KnessetMmmSearch() {
-  const [q, setQ] = useState("");
-  const [author, setAuthor] = useState("");
-  const [docType, setDocType] = useState("");
+  // Search state is mirrored into the URL (?tab=mmm&q=…&author=…&type=…&offset=…)
+  // so every search is deep-linkable / shareable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [q, setQ] = useState(() => searchParams.get("q") || "");
+  const [author, setAuthor] = useState(() => searchParams.get("author") || "");
+  const [docType, setDocType] = useState(() => searchParams.get("type") || "");
   const [facets, setFacets] = useState<MmmFacets | null>(null);
   const [result, setResult] = useState<MmmSearchResult | null>(null);
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
+
+  const writeUrl = useCallback((off: number, qv: string, av: string, tv: string) => {
+    const p: Record<string, string> = { tab: "mmm" };
+    if (qv.trim()) p.q = qv.trim();
+    if (av.trim()) p.author = av.trim();
+    if (tv) p.type = tv;
+    if (off > 0) p.offset = String(off);
+    setSearchParams(p, { replace: true });
+  }, [setSearchParams]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openAbstract, setOpenAbstract] = useState<number | null>(null);
@@ -25,19 +38,25 @@ export default function KnessetMmmSearch() {
 
   const load = useCallback((off: number) => {
     setLoading(true);
+    writeUrl(off, q, author, docType);
     knessetDb
       .mmmSearch({ q, author, doc_type: docType, limit: PAGE, offset: off })
       .then((r) => { setResult(r); setError(null); })
       .catch((e) => { setResult(null); setError(e?.message || "שגיאה בחיפוש"); })
       .finally(() => setLoading(false));
-  }, [q, author, docType]);
+  }, [q, author, docType, writeUrl]);
 
-  // Debounced auto-search on filter change (and initial load).
+  // Debounced auto-search on filter change; the very first run keeps the
+  // offset that arrived in the URL (deep link into page N).
   const tRef = useRef<number | undefined>(undefined);
+  const firstRef = useRef(true);
   useEffect(() => {
     window.clearTimeout(tRef.current);
-    tRef.current = window.setTimeout(() => { setOffset(0); load(0); }, 350);
+    const off = firstRef.current ? offset : 0;
+    firstRef.current = false;
+    tRef.current = window.setTimeout(() => { setOffset(off); load(off); }, 350);
     return () => window.clearTimeout(tRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
   const total = result?.total ?? 0;

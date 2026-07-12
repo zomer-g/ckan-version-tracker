@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   knessetDb,
   KnessetProtocolFacets,
@@ -12,11 +13,16 @@ import {
 // app/api/knesset_db.py.
 
 export default function KnessetBatchTab() {
+  // The selection lives in the URL (?tab=batch&knesset=25&committee=4186&q=…)
+  // so a batch is deep-linkable / shareable.
+  const [searchParams, setSearchParams] = useSearchParams();
   const [facets, setFacets] = useState<KnessetProtocolFacets | null>(null);
   const [facetsError, setFacetsError] = useState<string | null>(null);
-  const [knesset, setKnesset] = useState<number | "">("");
-  const [committeeId, setCommitteeId] = useState<number | "">("");
-  const [committeeQuery, setCommitteeQuery] = useState("");
+  const [knesset, setKnesset] = useState<number | "">(
+    () => (searchParams.get("knesset") ? Number(searchParams.get("knesset")) : ""));
+  const [committeeId, setCommitteeId] = useState<number | "">(
+    () => (searchParams.get("committee") ? Number(searchParams.get("committee")) : ""));
+  const [committeeQuery, setCommitteeQuery] = useState(() => searchParams.get("q") || "");
   const [count, setCount] = useState<number | null>(null);
   const [zipMax, setZipMax] = useState(2000);
   const [counting, setCounting] = useState(false);
@@ -27,6 +33,15 @@ export default function KnessetBatchTab() {
       .then((f) => { setFacets(f); setFacetsError(null); })
       .catch((e) => setFacetsError(e?.message || "שגיאה בטעינת רשימת הוועדות"));
   }, []);
+
+  // Mirror the selection into the URL (replace — no history spam while typing).
+  useEffect(() => {
+    const p: Record<string, string> = { tab: "batch" };
+    if (knesset !== "") p.knesset = String(knesset);
+    if (committeeId !== "") p.committee = String(committeeId);
+    else if (committeeQuery.trim()) p.q = committeeQuery.trim();
+    setSearchParams(p, { replace: true });
+  }, [knesset, committeeId, committeeQuery, setSearchParams]);
 
   const filter: KnessetBatchFilter = useMemo(() => {
     const f: KnessetBatchFilter = {};
