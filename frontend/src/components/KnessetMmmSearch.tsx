@@ -39,12 +39,29 @@ export default function KnessetMmmSearch() {
   const load = useCallback((off: number) => {
     setLoading(true);
     writeUrl(off, q, author, docType);
-    knessetDb
-      .mmmSearch({ q, author, doc_type: docType, limit: PAGE, offset: off })
-      .then((r) => { setResult(r); setError(null); })
-      .catch((e) => { setResult(null); setError(e?.message || "שגיאה בחיפוש"); })
-      .finally(() => setLoading(false));
+    const attempt = async (retriesLeft: number): Promise<void> => {
+      try {
+        const r = await knessetDb.mmmSearch({ q, author, doc_type: docType, limit: PAGE, offset: off });
+        setResult(r);
+        setError(null);
+      } catch (e: unknown) {
+        // "Failed to fetch" is a transient network error (dyno restart mid-
+        // deploy, or a Neon cold-start). Retry a couple of times with backoff
+        // before surfacing it, so a blip doesn't strand the search.
+        const msg = e instanceof Error ? e.message : String(e);
+        const transient = /failed to fetch|networkerror|load failed/i.test(msg);
+        if (transient && retriesLeft > 0) {
+          await new Promise((res) => setTimeout(res, 700));
+          return attempt(retriesLeft - 1);
+        }
+        setResult(null);
+        setError(transient ? "התקשורת עם השרת נכשלה זמנית. נסו שוב." : (msg || "שגיאה בחיפוש"));
+      }
+    };
+    attempt(2).finally(() => setLoading(false));
   }, [q, author, docType, writeUrl]);
+
+  const retry = useCallback(() => load(offset), [load, offset]);
 
   // Debounced auto-search on filter change; the very first run keeps the
   // offset that arrived in the URL (deep link into page N).
@@ -101,7 +118,17 @@ export default function KnessetMmmSearch() {
         </div>
       </div>
 
-      {error && <div className="empty-state">{error}</div>}
+      {error && (
+        <div className="empty-state">
+          {error}
+          <div style={{ marginTop: "0.6rem" }}>
+            <button type="button" onClick={retry}
+              style={{ padding: "0.35rem 1rem", borderRadius: 4, border: "1px solid var(--primary, #0f766e)", background: "none", color: "var(--primary, #0f766e)", cursor: "pointer", fontWeight: 600 }}>
+              נסו שוב
+            </button>
+          </div>
+        </div>
+      )}
       {loading && !result && <div className="loading" role="status">מחפש…</div>}
 
       {result && (

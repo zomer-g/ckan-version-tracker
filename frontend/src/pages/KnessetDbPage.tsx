@@ -117,6 +117,16 @@ export default function KnessetDbPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Refresh the status line periodically so a long-open tab doesn't keep
+  // showing a stale "N/49 loaded" from an old page load (the sync advances in
+  // the background; the tab navigation is client-side and never re-fetches).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      knessetDb.status().then(setStatus).catch(() => {});
+    }, 60000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const runSql = useCallback(() => {
     if (!sqlText.trim()) return;
     // Deep-linkable query: the SQL rides in the URL (skipped when huge).
@@ -186,10 +196,15 @@ export default function KnessetDbPage() {
     <div className="container mt-3">
       <div className="page-header" style={{ marginBottom: "0.75rem" }}>
         <h1 style={{ margin: 0 }}>מסד הנתונים של הכנסת</h1>
-        <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.6 }}>
-          מראה מלאה של כל טבלאות שירות ה-ODATA הפרלמנטרי של הכנסת — הצעות חוק, חוקים,
-          ועדות, הצבעות במליאה, חברי כנסת, שאילתות ושדלנים — מסונכרנת אל מסד PostgreSQL
-          וזמינה לתשאול SQL חופשי (קריאה בלבד).{" "}
+        <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
+          עותק מלא ומתעדכן של המידע הפרלמנטרי של הכנסת, במקום אחד ובכמה דרכים:
+          <ul style={{ margin: "0.4rem 0 0.3rem", paddingInlineStart: "1.2rem" }}>
+            <li><strong>חיפוש פרוטוקולים</strong> — איתור פרוטוקולי ישיבות ועדה לפי ועדה, כנסת או נושא.</li>
+            <li><strong>אצוות (Batch)</strong> — הורדת כל הפרוטוקולים של ועדה או כנסת בקובץ ZIP אחד.</li>
+            <li><strong>מסמכי ממ״מ</strong> — חיפוש בקטלוג מסמכי מרכז המחקר והמידע של הכנסת.</li>
+            <li><strong>ממשק SQL</strong> — תשאול חופשי (קריאה בלבד) מעל כל טבלאות ה-ODATA: הצעות חוק, חוקים, ועדות, הצבעות במליאה, חברי כנסת, שאילתות ושדלנים.</li>
+          </ul>
+          הנתונים נשאבים ישירות מהמקורות הרשמיים של הכנסת ומסונכרנים אוטומטית.{" "}
           <a href="https://main.knesset.gov.il/activity/info/pages/databases.aspx" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
             תיעוד הכנסת
           </a>
