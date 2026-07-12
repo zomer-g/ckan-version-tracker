@@ -1201,6 +1201,26 @@ a.tag-chip:hover {
   margin: 0.5rem 0 0.9rem;
 }
 
+.api-endpoint-group {
+  margin-bottom: 1.6rem;
+}
+
+.api-endpoint-group-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--primary-700, #1d4ed8);
+  border-bottom: 2px solid var(--primary-100, #dbeafe);
+  padding-bottom: 0.35rem;
+  margin: 0 0 0.4rem;
+}
+
+.api-endpoint-group-note {
+  font-size: 0.85rem;
+  color: #4b5563;
+  margin: 0 0 0.8rem;
+  line-height: 1.5;
+}
+
 .api-endpoint-list {
   display: flex;
   flex-direction: column;

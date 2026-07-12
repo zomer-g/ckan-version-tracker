@@ -357,11 +357,12 @@
   },
   "api": {
     "title": "Public API",
-    "subtitle": "Open access to the data — datasets, versions, organizations and tags",
+    "subtitle": "Open access to three sources — government datasets (OVER), the CBS index, and Knesset protocols — over REST and MCP",
     "base_url": "Base URL:",
-    "intro": "All endpoints are public GETs. No auth, no API key required.",
+    "intro": "All endpoints are public (mostly GET) — no auth, no API key. Each source has its own path prefix: OVER under /api/v1 and /api/append, CBS under /api/cbs, and the Knesset under /api/knesset-db and /api/knesset-protocols.",
     "intro_2": "Open for researchers, journalists, transparency activists, and civic projects. If you are building a heavy integration, please avoid millions of parallel calls and keep a local cache.",
-    "endpoints": "Endpoints"
+    "endpoints": "Endpoints",
+    "intro_versions": "Full interactive documentation (OpenAPI) for every endpoint of all sources is available at "
   },
   "cbs": {
     "title": "Central Bureau of Statistics (CBS)",
