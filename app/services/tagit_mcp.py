@@ -91,37 +91,58 @@ def _tool_payload(result: dict) -> dict | list:
     return {}
 
 
-# Field-name candidates, checked in order, when mapping an opaque hit.
-_TITLE_KEYS = ("title", "document_title", "doc_title", "name", "filename",
-               "subject", "heading")
-_DATE_KEYS = ("document_date", "date", "doc_date", "published_at", "created_at")
-_TYPE_KEYS = ("doc_type", "document_type", "type", "category")
+# Field-name candidates, checked in order, against the FLATTENED hit. TAG-IT's
+# scope-14 (ממ״מ) hit carries an English ``meta.*`` block AND a Hebrew-keyed
+# ``ai.*`` block, so each list mixes both. ``meta.document_title`` etc. are the
+# stable primary; the Hebrew ``ai`` keys are the fallback.
+_TITLE_KEYS = ("document_title", "כותרת_המסמך", "title", "doc_title",
+               "case_name", "שם_התיק", "name", "subject", "heading", "filename")
+_DATE_KEYS = ("document_date", "תאריך_המסמך", "date", "doc_date", "published_at")
+_ABSTRACT_KEYS = ("תקציר", "abstract", "summary", "description")
+_TYPE_KEYS = ("doc_type", "document_type", "type", "category", "report_group")
 _LINK_KEYS = ("pdf_url", "source_url", "url", "link", "original_pdf_url",
-              "file_url", "document_url")
+              "file_url", "document_url", "incident_url")
 
 
-def _first(d: dict, keys: tuple[str, ...]) -> str | None:
+def _flatten(hit: dict) -> dict:
+    """TAG-IT groups a hit's fields as ``{id, rank, snippet, ai:{…}, sql:{…},
+    meta:{…}}``. Merge ONE level of nesting into a single flat lookup so field
+    resolution doesn't depend on which block a value lives in. Scalars and the
+    first-seen key win, so top-level values shadow the sub-blocks."""
+    flat: dict = {}
+    for k, v in hit.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                flat.setdefault(kk, vv)
+        else:
+            flat.setdefault(k, v)
+    return flat
+
+
+def _first(flat: dict, keys: tuple[str, ...]) -> str | None:
     for k in keys:
-        for cand in (k, f"meta.{k}", f"sql.{k}", f"ai.{k}"):
-            v = d.get(cand)
-            if v not in (None, "", []):
-                return str(v)
+        v = flat.get(k)
+        if v not in (None, "", [], {}):
+            return str(v)
     return None
 
 
 def _normalize(hit: dict) -> dict:
     """Best-effort projection of one opaque TAG-IT hit onto the shape the ממ״מ
-    deep-results table renders, preserving the raw fields."""
-    fields = hit.get("fields") if isinstance(hit.get("fields"), dict) else hit
+    deep-results cards render, preserving the raw grouped fields under
+    ``fields`` so the UI can fall back to anything we didn't map."""
+    raw = hit.get("fields") if isinstance(hit.get("fields"), dict) else hit
+    flat = _flatten(raw)
     return {
-        "doc_id": hit.get("doc_id") or hit.get("id") or fields.get("id"),
-        "title": _first(fields, _TITLE_KEYS),
-        "date": _first(fields, _DATE_KEYS),
-        "doc_type": _first(fields, _TYPE_KEYS),
-        "link": _first(fields, _LINK_KEYS),
-        "snippet": hit.get("snippet") or fields.get("snippet"),
-        "rank": hit.get("rank") or fields.get("rank"),
-        "fields": fields,
+        "doc_id": hit.get("doc_id") or flat.get("id"),
+        "title": _first(flat, _TITLE_KEYS),
+        "date": _first(flat, _DATE_KEYS),
+        "abstract": _first(flat, _ABSTRACT_KEYS),
+        "doc_type": _first(flat, _TYPE_KEYS),
+        "link": _first(flat, _LINK_KEYS),
+        "snippet": hit.get("snippet") or flat.get("snippet"),
+        "rank": hit.get("rank") or flat.get("rank"),
+        "fields": raw,
     }
 
 

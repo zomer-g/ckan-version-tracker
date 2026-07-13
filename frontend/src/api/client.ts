@@ -643,6 +643,7 @@ export interface MmmDeepHit {
   doc_id: number | string | null;
   title: string | null;
   date: string | null;
+  abstract: string | null;
   doc_type: string | null;
   link: string | null;
   snippet: string | null;

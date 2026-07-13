@@ -13,9 +13,15 @@ import { knessetDb, MmmSearchResult, MmmFacets, MmmDeepResult } from "../api/cli
 const PAGE = 20;
 type Mode = "fast" | "deep";
 
-// TAG-IT snippets may carry highlight markup; render as plain text (no HTML).
-function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, "");
+// TAG-IT snippets are highlighted MD fragments — they carry markup tags and
+// often markdown-table noise (| --- | …). Render as clean plain text (no HTML).
+function cleanSnippet(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, " ")   // highlight/markup tags
+    .replace(/\|/g, " ")        // markdown table pipes
+    .replace(/-{2,}/g, " ")     // table rule dashes
+    .replace(/\s+/g, " ")       // collapse whitespace/newlines
+    .trim();
 }
 
 export default function KnessetMmmSearch() {
@@ -271,9 +277,14 @@ export default function KnessetMmmSearch() {
                       {[d.doc_type, d.date].filter(Boolean).join(" · ")}
                     </div>
                   </div>
+                  {d.abstract && (
+                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text)", lineHeight: 1.6 }}>
+                      {d.abstract}
+                    </div>
+                  )}
                   {d.snippet && (
-                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
-                      …{stripTags(d.snippet)}…
+                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border, #cbd5e1)", paddingInlineStart: "0.6rem" }}>
+                      …{cleanSnippet(d.snippet)}…
                     </div>
                   )}
                 </div>
