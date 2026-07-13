@@ -18,14 +18,23 @@ dict through as ``fields`` so the caller can render whatever came back.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 
 import httpx
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# TAG-IT runs on a spin-down Render tier: a cold start returns transient
+# 502/503/504s (or a slow connect) for a while before the service is up. We
+# retry those within a wall-clock budget so a sleeping server self-heals
+# instead of surfacing an error the user has to re-trigger by hand.
+_RETRY_STATUS = {502, 503, 504}
+_WAKE_BUDGET_S = 100.0   # total time we'll keep retrying a cold TAG-IT
 
 
 class DeepSearchUnavailable(RuntimeError):
@@ -41,7 +50,9 @@ def is_configured() -> bool:
 
 
 async def _rpc(method: str, params: dict) -> dict:
-    """One stateless JSON-RPC 2.0 round-trip to the TAG-IT MCP endpoint."""
+    """One stateless JSON-RPC 2.0 call to the TAG-IT MCP endpoint, retrying a
+    cold/booting server (transient 5xx or connect failure) within a wall-clock
+    budget. A hard error (401, other 4xx, JSON-RPC error) is raised at once."""
     if not is_configured():
         raise DeepSearchUnavailable("TAGIT_MCP_TOKEN is not set")
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
@@ -50,21 +61,43 @@ async def _rpc(method: str, params: dict) -> dict:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0),
-                                 follow_redirects=True) as client:
-        resp = await client.post(settings.tagit_mcp_url, headers=headers,
-                                 json=payload)
-    if resp.status_code == 401:
-        raise DeepSearchError("TAG-IT rejected the service token (401)")
-    if resp.status_code >= 400:
-        raise DeepSearchError(f"TAG-IT MCP HTTP {resp.status_code}")
-    # Streamable-HTTP may answer as application/json or as an SSE frame; both
-    # carry a single JSON-RPC object. Pull the JSON out either way.
-    body = _extract_json(resp)
-    if "error" in body:
-        err = body["error"]
-        raise DeepSearchError(f"TAG-IT MCP error: {err.get('message') or err}")
-    return body.get("result") or {}
+
+    start = time.monotonic()
+    delay = 2.0
+    last_err = DeepSearchError("TAG-IT MCP unreachable")
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(100.0, connect=15.0),
+                                         follow_redirects=True) as client:
+                resp = await client.post(settings.tagit_mcp_url, headers=headers,
+                                         json=payload)
+        except (httpx.TransportError, httpx.TimeoutException) as e:
+            last_err = DeepSearchError(f"TAG-IT MCP unreachable: {type(e).__name__}")
+        else:
+            if resp.status_code == 401:
+                raise DeepSearchError("TAG-IT rejected the service token (401)")
+            if resp.status_code in _RETRY_STATUS:
+                last_err = DeepSearchError(f"TAG-IT MCP HTTP {resp.status_code} (מתעורר…)")
+            elif resp.status_code >= 400:
+                raise DeepSearchError(f"TAG-IT MCP HTTP {resp.status_code}")
+            else:
+                # Streamable-HTTP may answer as application/json or as an SSE
+                # frame; both carry a single JSON-RPC object. Pull the JSON out.
+                body = _extract_json(resp)
+                if "error" in body:
+                    err = body["error"]
+                    raise DeepSearchError(f"TAG-IT MCP error: {err.get('message') or err}")
+                return body.get("result") or {}
+
+        if time.monotonic() - start >= _WAKE_BUDGET_S:
+            break
+        logger.info("tagit_mcp: transient failure (attempt %d), retrying in %.1fs — %s",
+                    attempt, delay, last_err)
+        await asyncio.sleep(delay)
+        delay = min(delay * 1.6, 12.0)
+    raise last_err
 
 
 def _extract_json(resp: httpx.Response) -> dict:

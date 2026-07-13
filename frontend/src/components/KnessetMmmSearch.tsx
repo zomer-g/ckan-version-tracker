@@ -193,8 +193,15 @@ export default function KnessetMmmSearch() {
           </div>
         </div>
       )}
-      {loading && !result && !deepResult && (
-        <div className="loading" role="status">{mode === "deep" ? "מחפש בתוכן המסמכים…" : "מחפש…"}</div>
+      {/* Always surface an active-search indicator — even over stale results —
+          so it's never ambiguous whether a query is running or just returned
+          nothing. Deep search warns about the TAG-IT cold-start wait. */}
+      {loading && (
+        <div className="loading" role="status" style={{ marginBottom: "0.75rem" }}>
+          {mode === "deep"
+            ? "מחפש בתוך תוכן המסמכים… (החיפוש הראשון עשוי להימשך עד דקה בזמן שהשרת מתעורר)"
+            : "מחפש…"}
+        </div>
       )}
 
       {/* ── Fast metadata results ── */}
@@ -252,15 +259,20 @@ export default function KnessetMmmSearch() {
       )}
 
       {/* ── Deep full-text results (snippet cards) ── */}
-      {mode === "deep" && deepResult && (
+      {mode === "deep" && deepResult && !loading && (
         <>
           <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
             {deepExact ? `${total.toLocaleString()} תוצאות` : `${deepResult.items.length} תוצאות בעמוד זה`}
           </div>
           {deepResult.items.length === 0 ? (
-            <div className="empty-state">אין תוצאות בתוכן המסמכים</div>
+            <div className="empty-state">
+              {q.trim()
+                ? "לא נמצאו מסמכים שתוכנם כולל את הביטוי שחיפשת."
+                : "הקלד ביטוי כדי לחפש בתוך תוכן המסמכים."}
+            </div>
           ) : (
-            <div className="flex" style={{ flexDirection: "column", gap: "0.6rem" }}>
+            // Not `.flex` — that class centers items; we want cards stretched full-width.
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", alignItems: "stretch" }}>
               {deepResult.items.map((d, i) => (
                 <div key={d.doc_id ?? i} className="card" style={{ padding: "0.75rem 0.9rem" }}>
                   <div className="flex-between" style={{ gap: "0.5rem", alignItems: "baseline", flexWrap: "wrap" }}>
