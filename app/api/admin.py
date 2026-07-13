@@ -853,43 +853,17 @@ async def govmap_coverage_scrape_next(
     return await scrape_next_layer()
 
 
-_dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
+_dataset_sizes_cache: dict = {"at": 0.0, "payload": None, "refreshing": False}
 _DATASET_SIZES_TTL = 60.0  # seconds
 
 
-@router.get("/dataset-sizes")
-@limiter.limit("30/minute")
-async def dataset_sizes(
-    request: Request,
-    user: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Resource sizes per active dataset, plus per-version breakdown.
-
-    Used by the admin UI's Datasets tab to surface "this dataset's mirror
-    is now 4.2 GB across 7 versions" at a glance, and by the VersionsPage
-    (admin only) to show "this version: 312 MB".
-
-    Implementation: one CKAN package_show per dataset on the odata mirror
-    (the resource list it returns includes a 'size' field in bytes), then
-    sum sizes both globally and per-version via VersionIndex
-    .resource_mappings. Concurrency capped at 10 to avoid hammering the
-    odata API; whole result cached process-locally for 60s so repeated
-    admin renders don't re-fan-out.
-
-    Failure mode: if package_show fails for a dataset (network blip,
-    mirror gone), we report total_bytes=0 for it rather than 500-ing
-    the whole endpoint — partial data is more useful than none.
-    """
+async def _compute_dataset_sizes(db: AsyncSession) -> dict:
+    """Do the actual odata fan-out + size aggregation. Pulled out of the
+    route so it can run in a detached background task on a stale-cache hit
+    (see dataset_sizes) without holding up the request that triggered it."""
     import asyncio
-    import time
 
     from app.models.version_index import VersionIndex
-
-    now = time.time()
-    cached = _dataset_sizes_cache
-    if cached["payload"] is not None and (now - cached["at"]) < _DATASET_SIZES_TTL:
-        return cached["payload"]
 
     # All active datasets we'll size up
     ds_result = await db.execute(
@@ -996,9 +970,76 @@ async def dataset_sizes(
             "suggest_delta_archive": suggest_delta,
         })
 
-    payload = {"datasets": out_datasets}
-    _dataset_sizes_cache["at"] = now
+    return {"datasets": out_datasets}
+
+
+async def _refresh_dataset_sizes_cache(db: AsyncSession) -> None:
+    """Background refresh: recompute and update the cache, without an HTTP
+    request waiting on it. Guarded by "refreshing" so a burst of page loads
+    while the cache is stale triggers exactly one fan-out, not one per
+    request."""
+    import time
+
+    try:
+        payload = await _compute_dataset_sizes(db)
+        _dataset_sizes_cache["payload"] = payload
+        _dataset_sizes_cache["at"] = time.time()
+    except Exception:
+        logger.exception("Background dataset-sizes refresh failed")
+    finally:
+        _dataset_sizes_cache["refreshing"] = False
+        await db.close()
+
+
+@router.get("/dataset-sizes")
+@limiter.limit("30/minute")
+async def dataset_sizes(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resource sizes per active dataset, plus per-version breakdown.
+
+    Used by the admin UI's Datasets tab to surface "this dataset's mirror
+    is now 4.2 GB across 7 versions" at a glance, and by the VersionsPage
+    (admin only) to show "this version: 312 MB".
+
+    Implementation: one CKAN package_show per dataset on the odata mirror
+    (the resource list it returns includes a 'size' field in bytes), then
+    sum sizes both globally and per-version via VersionIndex
+    .resource_mappings. Concurrency capped at 10 to avoid hammering the
+    odata API.
+
+    Stale-while-revalidate: a fresh cache hit (< 60s) returns instantly.
+    A stale hit ALSO returns instantly (the last known payload) and kicks
+    off a background refresh — this used to fan out ~one package_show per
+    active dataset synchronously on every admin page load once the cache
+    aged out, which stalled the request (and the shared connection pool)
+    for as long as odata.org.il took to answer all of them. Only a genuine
+    cold start (no payload at all yet) blocks on the fan-out.
+
+    Failure mode: if package_show fails for a dataset (network blip,
+    mirror gone), we report total_bytes=0 for it rather than 500-ing
+    the whole endpoint — partial data is more useful than none.
+    """
+    import asyncio
+    import time
+
+    from app.database import async_session
+
+    now = time.time()
+    cached = _dataset_sizes_cache
+    is_stale = (now - cached["at"]) >= _DATASET_SIZES_TTL
+
+    if cached["payload"] is not None:
+        if is_stale and not cached["refreshing"]:
+            cached["refreshing"] = True
+            asyncio.create_task(_refresh_dataset_sizes_cache(async_session()))
+        return cached["payload"]
+
+    payload = await _compute_dataset_sizes(db)
     _dataset_sizes_cache["payload"] = payload
+    _dataset_sizes_cache["at"] = now
     return payload
 
 
