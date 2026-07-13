@@ -132,6 +132,29 @@ async def mmm_facets(request: Request):
         raise HTTPException(status_code=503, detail=f"קטלוג הממ\"מ עדיין לא נטען ({type(e).__name__})")
 
 
+# Deep/slow search: instead of our fast SQL metadata mirror, run a full-text
+# search INSIDE the document bodies on TAG-IT (scope 14) via its MCP. Slower
+# (a remote LLM-corpus round-trip) but reaches the actual text, not just the
+# catalog. Rate-limited harder than the SQL path since each call hits TAG-IT.
+@router.get("/mmm/deep-search")
+@limiter.limit("20/minute")
+async def mmm_deep_search(request: Request, q: str, page: int = 1, size: int = 20):
+    _require_enabled()
+    from app.services import tagit_mcp
+    if not tagit_mcp.is_configured():
+        raise HTTPException(status_code=503,
+                            detail="חיפוש עמוק אינו מוגדר בשרת (חסר TAGIT_MCP_TOKEN)")
+    try:
+        return await tagit_mcp.deep_search(q, page=page, size=size)
+    except tagit_mcp.DeepSearchUnavailable:
+        raise HTTPException(status_code=503, detail="חיפוש עמוק אינו מוגדר בשרת")
+    except tagit_mcp.DeepSearchError as e:
+        raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("mmm deep-search failed")
+        raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל ({type(e).__name__})")
+
+
 # ── Committee-protocol batches (the /knesset "אצוות" tab) ────────────────────
 # Filter by committee / Knesset number and pull ALL matching protocol files as
 # one streamed ZIP (fetched live from fs.knesset.gov.il — OVER stores only the

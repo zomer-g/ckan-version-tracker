@@ -112,6 +112,20 @@ class Settings(BaseSettings):
     # replacement. See docs (mcp-service-token) for the gateway side.
     mcp_service_token: str = ""
 
+    # ── TAG-IT (tag-it.biz) MCP — OUTBOUND, for the ממ״מ "deep search" ──
+    # The ממ״מ tab's default search runs against our fast SQL metadata mirror
+    # (knesset.mmm_documents). The optional "deep/slow" mode instead does a
+    # full-text search INSIDE the converted document bodies on TAG-IT, via its
+    # MCP service-token bypass (search_documents + text_query on a scope).
+    # tagit_mcp_token is the shared secret TAG-IT issued us (its MCP_SERVICE_TOKEN)
+    # — set the VALUE in Render; empty ⇒ deep search returns 503 (feature off).
+    # tagit_mmm_scope is the TAG-IT workspace/scope id holding the ממ״מ corpus.
+    # See docs/service-integration.md. NOT related to mcp_service_token above
+    # (that is our own INBOUND token).
+    tagit_mcp_url: str = "https://tag-it.biz/mcp"
+    tagit_mcp_token: str = ""
+    tagit_mmm_scope: int = 14
+
     # Worker version gate: refuse to dispatch tasks to a worker whose git
     # commit doesn't match what's on the upstream repo's master branch.
     # Prevents stale workers from picking up tasks and producing opaque

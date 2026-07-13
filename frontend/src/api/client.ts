@@ -636,6 +636,28 @@ export interface MmmFacets {
   total: number;
 }
 
+// Deep/slow search — full-text INSIDE document bodies via TAG-IT (scope 14).
+// Fields are best-effort (TAG-IT's schema is opaque); `fields` carries the raw
+// hit. See app/services/tagit_mcp.py.
+export interface MmmDeepHit {
+  doc_id: number | string | null;
+  title: string | null;
+  date: string | null;
+  doc_type: string | null;
+  link: string | null;
+  snippet: string | null;
+  rank: number | null;
+  fields: Record<string, unknown>;
+}
+
+export interface MmmDeepResult {
+  items: MmmDeepHit[];
+  total: number;
+  total_exact: boolean;
+  page: number;
+  size: number;
+}
+
 export const knessetDb = {
   status: () => request<KnessetDbStatus>("/knesset-db/status"),
   tables: () => request<{ tables: KnessetDbTable[] }>("/knesset-db/tables"),
@@ -647,6 +669,12 @@ export const knessetDb = {
     return request<MmmSearchResult>(`/knesset-db/mmm/search?${qs.toString()}`);
   },
   mmmFacets: () => request<MmmFacets>("/knesset-db/mmm/facets"),
+  mmmDeepSearch: (p: { q: string; page?: number; size?: number }) => {
+    const qs = new URLSearchParams({ q: p.q });
+    if (p.page) qs.set("page", String(p.page));
+    if (p.size) qs.set("size", String(p.size));
+    return request<MmmDeepResult>(`/knesset-db/mmm/deep-search?${qs.toString()}`);
+  },
   protocolFacets: () => request<KnessetProtocolFacets>("/knesset-db/protocols/facets"),
   protocolCount: (f: KnessetBatchFilter) =>
     request<{ files: number; zip_max_files: number }>(

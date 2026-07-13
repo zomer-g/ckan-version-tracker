@@ -43,4 +43,10 @@ services:
       # MCP_TOKEN_OVER). Empty ⇒ the service-token bypass is off. See app/mcp/auth.py.
       - key: MCP_SERVICE_TOKEN
         sync: false
+      # OUTBOUND shared secret for the ממ״מ "deep search" — TAG-IT's
+      # MCP_SERVICE_TOKEN, handed to us. Lets /api/knesset-db/mmm/deep-search
+      # full-text-search inside document bodies on tag-it.biz (scope 14). Set
+      # the VALUE in the dashboard; empty ⇒ deep search returns 503.
+      - key: TAGIT_MCP_TOKEN
+        sync: false
 # No databases section — using external Neon PostgreSQL (free tier)

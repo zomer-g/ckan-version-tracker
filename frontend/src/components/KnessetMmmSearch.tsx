@@ -1,30 +1,42 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { knessetDb, MmmSearchResult, MmmFacets } from "../api/client";
+import { knessetDb, MmmSearchResult, MmmFacets, MmmDeepResult } from "../api/client";
 
-// The "מסמכי ממ״מ" tab of /knesset: metadata search over the MMM document
-// catalog mirrored into knesset.mmm_documents (title/keywords/abstract,
-// author, doc type, years). Results link to the incident page and the PDF on
-// the Knesset servers; the same table is queryable in the SQL tab.
+// The "מסמכי ממ״מ" tab of /knesset. Two search modes:
+//   • fast (default) — metadata search over the MMM catalog mirrored into
+//     knesset.mmm_documents (title/keywords/abstract, author, doc type). Same
+//     table is queryable in the SQL tab.
+//   • deep/slow — full-text search INSIDE the document bodies, run remotely on
+//     TAG-IT (scope 14) via its MCP. Reaches the actual text, not just the
+//     catalog; a remote round-trip so it's slower and has no author/type filter.
 
 const PAGE = 20;
+type Mode = "fast" | "deep";
+
+// TAG-IT snippets may carry highlight markup; render as plain text (no HTML).
+function stripTags(s: string): string {
+  return s.replace(/<[^>]*>/g, "");
+}
 
 export default function KnessetMmmSearch() {
-  // Search state is mirrored into the URL (?tab=mmm&q=…&author=…&type=…&offset=…)
+  // Search state is mirrored into the URL (?tab=mmm&mode=&q=…&author=…&type=…&offset=…)
   // so every search is deep-linkable / shareable.
   const [searchParams, setSearchParams] = useSearchParams();
+  const [mode, setMode] = useState<Mode>(() => (searchParams.get("mode") === "deep" ? "deep" : "fast"));
   const [q, setQ] = useState(() => searchParams.get("q") || "");
   const [author, setAuthor] = useState(() => searchParams.get("author") || "");
   const [docType, setDocType] = useState(() => searchParams.get("type") || "");
   const [facets, setFacets] = useState<MmmFacets | null>(null);
   const [result, setResult] = useState<MmmSearchResult | null>(null);
+  const [deepResult, setDeepResult] = useState<MmmDeepResult | null>(null);
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
 
-  const writeUrl = useCallback((off: number, qv: string, av: string, tv: string) => {
+  const writeUrl = useCallback((m: Mode, off: number, qv: string, av: string, tv: string) => {
     const p: Record<string, string> = { tab: "mmm" };
+    if (m === "deep") p.mode = "deep";
     if (qv.trim()) p.q = qv.trim();
-    if (av.trim()) p.author = av.trim();
-    if (tv) p.type = tv;
+    if (m === "fast" && av.trim()) p.author = av.trim();
+    if (m === "fast" && tv) p.type = tv;
     if (off > 0) p.offset = String(off);
     setSearchParams(p, { replace: true });
   }, [setSearchParams]);
@@ -38,11 +50,18 @@ export default function KnessetMmmSearch() {
 
   const load = useCallback((off: number) => {
     setLoading(true);
-    writeUrl(off, q, author, docType);
+    writeUrl(mode, off, q, author, docType);
     const attempt = async (retriesLeft: number): Promise<void> => {
       try {
-        const r = await knessetDb.mmmSearch({ q, author, doc_type: docType, limit: PAGE, offset: off });
-        setResult(r);
+        if (mode === "deep") {
+          const r = await knessetDb.mmmDeepSearch({ q, page: Math.floor(off / PAGE) + 1, size: PAGE });
+          setDeepResult(r);
+          setResult(null);
+        } else {
+          const r = await knessetDb.mmmSearch({ q, author, doc_type: docType, limit: PAGE, offset: off });
+          setResult(r);
+          setDeepResult(null);
+        }
         setError(null);
       } catch (e: unknown) {
         // "Failed to fetch" is a transient network error (dyno restart mid-
@@ -55,15 +74,16 @@ export default function KnessetMmmSearch() {
           return attempt(retriesLeft - 1);
         }
         setResult(null);
+        setDeepResult(null);
         setError(transient ? "התקשורת עם השרת נכשלה זמנית. נסו שוב." : (msg || "שגיאה בחיפוש"));
       }
     };
     attempt(2).finally(() => setLoading(false));
-  }, [q, author, docType, writeUrl]);
+  }, [mode, q, author, docType, writeUrl]);
 
   const retry = useCallback(() => load(offset), [load, offset]);
 
-  // Debounced auto-search on filter change; the very first run keeps the
+  // Debounced auto-search on filter/mode change; the very first run keeps the
   // offset that arrived in the URL (deep link into page N).
   const tRef = useRef<number | undefined>(undefined);
   const firstRef = useRef(true);
@@ -76,45 +96,83 @@ export default function KnessetMmmSearch() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
-  const total = result?.total ?? 0;
+  // Deep mode: total may be inexact (TAG-IT doesn't always return a count), so
+  // "next" is enabled whenever the current page came back full.
+  const total = mode === "deep" ? (deepResult?.total ?? 0) : (result?.total ?? 0);
+  const deepExact = deepResult?.total_exact ?? false;
+  const hasNext = mode === "deep"
+    ? (deepExact ? offset + PAGE < total : (deepResult?.items.length ?? 0) === PAGE)
+    : offset + PAGE < total;
 
   return (
     <div>
       <div className="card" style={{ padding: "1rem", marginBottom: "1rem" }}>
+        {/* Mode toggle: fast metadata (SQL) vs deep full-text (TAG-IT). */}
+        <div className="flex" role="tablist" aria-label="מצב חיפוש" style={{ gap: "0.4rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+          {([["fast", "חיפוש מהיר (מטא-דאטה)"], ["deep", "חיפוש עמוק בתוכן (איטי)"]] as [Mode, string][]).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => { if (mode !== m) { setMode(m); setOffset(0); } }}
+              style={{
+                padding: "0.35rem 0.9rem", borderRadius: 999, cursor: "pointer",
+                fontSize: "0.85rem", fontWeight: 600,
+                border: `1px solid ${mode === m ? "var(--primary, #0f766e)" : "var(--border, #d1d5db)"}`,
+                background: mode === m ? "var(--primary, #0f766e)" : "none",
+                color: mode === m ? "#fff" : "var(--text)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
           <input
             type="search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="חיפוש בכותרת, במילות המפתח ובתמצית…"
+            placeholder={mode === "deep" ? "חיפוש בתוך תוכן המסמכים המלא…" : "חיפוש בכותרת, במילות המפתח ובתמצית…"}
             aria-label="חיפוש במסמכי ממ״מ"
             style={{ flex: "2 1 280px", padding: "0.5rem 0.75rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
           />
-          <input
-            type="search"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder="כותב/ת או מאשר/ת…"
-            aria-label="סינון לפי כותב"
-            style={{ flex: "1 1 170px", padding: "0.5rem 0.75rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
-          />
-          <select
-            value={docType}
-            onChange={(e) => setDocType(e.target.value)}
-            aria-label="סוג מסמך"
-            style={{ flex: "1 1 150px", padding: "0.5rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
-          >
-            <option value="">כל סוגי המסמכים</option>
-            {facets?.doc_types.map((t) => (
-              <option key={t.doc_type} value={t.doc_type}>
-                {t.doc_type} ({t.count.toLocaleString()})
-              </option>
-            ))}
-          </select>
+          {mode === "fast" && (
+            <>
+              <input
+                type="search"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="כותב/ת או מאשר/ת…"
+                aria-label="סינון לפי כותב"
+                style={{ flex: "1 1 170px", padding: "0.5rem 0.75rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+              />
+              <select
+                value={docType}
+                onChange={(e) => setDocType(e.target.value)}
+                aria-label="סוג מסמך"
+                style={{ flex: "1 1 150px", padding: "0.5rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+              >
+                <option value="">כל סוגי המסמכים</option>
+                {facets?.doc_types.map((t) => (
+                  <option key={t.doc_type} value={t.doc_type}>
+                    {t.doc_type} ({t.count.toLocaleString()})
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
         <div className="text-sm text-muted" style={{ marginTop: "0.5rem" }}>
-          {facets && <>קטלוג מלא של {facets.total.toLocaleString()} מסמכי מרכז המחקר והמידע (ממ״מ)</>}
-          {" · "}המטא-דאטה זמינה גם ב-SQL: טבלת <code>mmm_documents</code> בלשונית ממשק SQL.
+          {mode === "deep" ? (
+            <>חיפוש טקסט מלא בתוך גוף המסמכים דרך TAG-IT — איטי יותר, אך מגיע לתוכן עצמו ולא רק לקטלוג.</>
+          ) : (
+            <>
+              {facets && <>קטלוג מלא של {facets.total.toLocaleString()} מסמכי מרכז המחקר והמידע (ממ״מ)</>}
+              {" · "}המטא-דאטה זמינה גם ב-SQL: טבלת <code>mmm_documents</code> בלשונית ממשק SQL.
+            </>
+          )}
         </div>
       </div>
 
@@ -129,9 +187,12 @@ export default function KnessetMmmSearch() {
           </div>
         </div>
       )}
-      {loading && !result && <div className="loading" role="status">מחפש…</div>}
+      {loading && !result && !deepResult && (
+        <div className="loading" role="status">{mode === "deep" ? "מחפש בתוכן המסמכים…" : "מחפש…"}</div>
+      )}
 
-      {result && (
+      {/* ── Fast metadata results ── */}
+      {mode === "fast" && result && (
         <>
           <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
             {total.toLocaleString()} תוצאות
@@ -181,24 +242,68 @@ export default function KnessetMmmSearch() {
               </tbody>
             </table>
           </div>
-          <div className="flex-between" style={{ marginTop: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
-            <span className="text-sm text-muted">
-              {total === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE, total)} מתוך {total.toLocaleString()}
-            </span>
-            <div className="flex" style={{ gap: "0.5rem" }}>
-              <button type="button" disabled={offset === 0 || loading}
-                onClick={() => { const o = Math.max(0, offset - PAGE); setOffset(o); load(o); }}
-                style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
-                &rarr; הקודם
-              </button>
-              <button type="button" disabled={offset + PAGE >= total || loading}
-                onClick={() => { const o = offset + PAGE; setOffset(o); load(o); }}
-                style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: offset + PAGE >= total ? "not-allowed" : "pointer" }}>
-                הבא &larr;
-              </button>
-            </div>
-          </div>
         </>
+      )}
+
+      {/* ── Deep full-text results (snippet cards) ── */}
+      {mode === "deep" && deepResult && (
+        <>
+          <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
+            {deepExact ? `${total.toLocaleString()} תוצאות` : `${deepResult.items.length} תוצאות בעמוד זה`}
+          </div>
+          {deepResult.items.length === 0 ? (
+            <div className="empty-state">אין תוצאות בתוכן המסמכים</div>
+          ) : (
+            <div className="flex" style={{ flexDirection: "column", gap: "0.6rem" }}>
+              {deepResult.items.map((d, i) => (
+                <div key={d.doc_id ?? i} className="card" style={{ padding: "0.75rem 0.9rem" }}>
+                  <div className="flex-between" style={{ gap: "0.5rem", alignItems: "baseline", flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 600 }}>
+                      {d.link ? (
+                        <a href={d.link} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
+                          {d.title || `מסמך ${d.doc_id ?? ""}`}
+                        </a>
+                      ) : (
+                        d.title || `מסמך ${d.doc_id ?? ""}`
+                      )}
+                    </div>
+                    <div className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>
+                      {[d.doc_type, d.date].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  {d.snippet && (
+                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
+                      …{stripTags(d.snippet)}…
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Shared pagination ── */}
+      {((mode === "fast" && result) || (mode === "deep" && deepResult && deepResult.items.length > 0)) && (
+        <div className="flex-between" style={{ marginTop: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+          <span className="text-sm text-muted">
+            {mode === "deep" && !deepExact
+              ? `${offset + 1}–${offset + (deepResult?.items.length ?? 0)}`
+              : `${total === 0 ? 0 : offset + 1}–${Math.min(offset + PAGE, total)} מתוך ${total.toLocaleString()}`}
+          </span>
+          <div className="flex" style={{ gap: "0.5rem" }}>
+            <button type="button" disabled={offset === 0 || loading}
+              onClick={() => { const o = Math.max(0, offset - PAGE); setOffset(o); load(o); }}
+              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
+              &rarr; הקודם
+            </button>
+            <button type="button" disabled={!hasNext || loading}
+              onClick={() => { const o = offset + PAGE; setOffset(o); load(o); }}
+              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: !hasNext ? "not-allowed" : "pointer" }}>
+              הבא &larr;
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
