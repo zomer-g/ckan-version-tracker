@@ -519,16 +519,10 @@ async def enable_mmm_archive(
 
     from app.services import mmm_activate
 
-    rows = await mmm_activate.find_mmm_datasets(db)
-    if not rows:
-        raise HTTPException(404, "MMM dataset not found (ckan_name like 'knesset-mmm%')")
-    if len(rows) > 1:
+    ds = await mmm_activate.get_mmm_dataset(db)
+    if ds is None:
         raise HTTPException(
-            409,
-            f"expected one MMM dataset, found {len(rows)}: "
-            + ", ".join(d.ckan_name for d in rows),
-        )
-    ds = rows[0]
+            404, f"MMM dataset {mmm_activate.MMM_OVER_DATASET_ID} not found")
 
     known_rids = await mmm_activate.all_mmm_rids()
     was_archive = bool((ds.scraper_config or {}).get("archive"))

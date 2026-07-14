@@ -20,13 +20,20 @@ Guards (startup path):
 from __future__ import annotations
 
 import logging
+import uuid as _uuid
 
-from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 logger = logging.getLogger(__name__)
 
 MMM_DAILY_INTERVAL = 86_400  # seconds — poll once a day
+
+# The tracked-dataset UUID of the FULL ("מלא") MMM corpus — the same
+# ``over_dataset_id`` TAG-IT pulls from (smart-dms seeds it into scope 14). We
+# target this exact id rather than a ``knesset-mmm%`` name prefix because a
+# stray empty duplicate (``knesset-mmm-81570410``, 0 versions, the default.aspx
+# landing page) also matches that prefix — making the pattern ambiguous.
+MMM_OVER_DATASET_ID = "5541c4a2-0736-43c7-9392-e050081bcddc"
 
 
 async def all_mmm_rids() -> list[str]:
@@ -47,13 +54,15 @@ async def all_mmm_rids() -> list[str]:
     return [str(r["rid"]) for r in rows]
 
 
-async def find_mmm_datasets(db) -> list:
-    """The tracked MMM dataset(s) (``ckan_name`` like ``knesset-mmm%``)."""
+async def get_mmm_dataset(db):
+    """The tracked FULL MMM dataset (by its exact UUID), or None."""
     from app.models.tracked_dataset import TrackedDataset
 
-    return (await db.execute(
-        select(TrackedDataset).where(TrackedDataset.ckan_name.like("knesset-mmm%"))
-    )).scalars().all()
+    try:
+        return await db.get(TrackedDataset, _uuid.UUID(MMM_OVER_DATASET_ID))
+    except Exception as e:  # bad UUID / DB error
+        logger.warning("MMM activate: dataset lookup failed (%s)", e)
+        return None
 
 
 def apply_mmm_archive(ds, known_rids: list[str]) -> None:
@@ -80,17 +89,11 @@ async def activate_mmm_archive_if_needed() -> dict:
         from app.database import async_session
 
         async with async_session() as db:
-            rows = await find_mmm_datasets(db)
-            if not rows:
-                logger.info("MMM activate: no knesset-mmm%% dataset yet — skipping")
-                return {"skipped": "no dataset"}
-            if len(rows) > 1:
-                logger.warning(
-                    "MMM activate: %d MMM datasets found — skipping auto-activation",
-                    len(rows),
-                )
-                return {"skipped": "multiple datasets"}
-            ds = rows[0]
+            ds = await get_mmm_dataset(db)
+            if ds is None:
+                logger.info("MMM activate: dataset %s not found — skipping",
+                            MMM_OVER_DATASET_ID)
+                return {"skipped": "dataset not found"}
             cfg = ds.scraper_config or {}
             if cfg.get("archive") and cfg.get("archive_type") == "mmm":
                 logger.info("MMM activate: already in archive mode — no-op")
