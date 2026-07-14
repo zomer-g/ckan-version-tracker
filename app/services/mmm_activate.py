@@ -103,11 +103,22 @@ async def activate_mmm_archive_if_needed() -> dict:
                     "deferring activation to avoid a full re-scrape")
                 return {"skipped": "empty catalog"}
 
+            last_polled_at = ds.last_polled_at
             apply_mmm_archive(ds, known_rids)
             await db.commit()
+
+            # Register the poll job in the ALREADY-RUNNING scheduler. init_scheduler
+            # ran before this background task and (if the dataset was inactive)
+            # skipped it, so without this the daily poll wouldn't start until the
+            # next restart. add_poll_job replaces any existing job and, since the
+            # dataset is overdue (last polled 2026-07-11, now daily), fires on the
+            # next tick — kicking off the first incremental delta right away.
+            from app.worker.scheduler import add_poll_job
+            add_poll_job(str(ds.id), MMM_DAILY_INTERVAL, last_polled_at=last_polled_at)
+
             logger.info(
                 "MMM activate: enabled DAILY incremental archive on %s "
-                "(known_rids seeded=%d, interval=%ds)",
+                "(known_rids seeded=%d, interval=%ds) + poll job scheduled",
                 ds.id, len(known_rids), MMM_DAILY_INTERVAL,
             )
             return {"activated": True, "dataset_id": str(ds.id),
