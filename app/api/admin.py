@@ -854,7 +854,11 @@ async def govmap_coverage_scrape_next(
 
 
 _dataset_sizes_cache: dict = {"at": 0.0, "payload": None, "refreshing": False}
-_DATASET_SIZES_TTL = 60.0  # seconds
+# Dataset sizes change slowly (only on new versions/uploads) — no need to
+# re-fan-out every minute. A longer TTL means the background refresh (still
+# a ~dozens-of-package_show burst against a shared 512MB dyno) fires far
+# less often.
+_DATASET_SIZES_TTL = 600.0  # seconds
 
 
 async def _compute_dataset_sizes(db: AsyncSession) -> dict:
@@ -882,7 +886,9 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     for v in v_result.scalars().all():
         versions_by_ds.setdefault(str(v.tracked_dataset_id), []).append(v)
 
-    sem = asyncio.Semaphore(10)
+    # Capped low (not 10) — this fan-out shares a 512MB dyno with scheduled
+    # poll jobs; too much concurrency here was a contributor to OOM crashes.
+    sem = asyncio.Semaphore(4)
 
     async def _fetch_resource_sizes(ds: TrackedDataset) -> dict[str, int]:
         sizes: dict[str, int] = {}

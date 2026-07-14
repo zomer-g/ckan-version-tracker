@@ -14,6 +14,25 @@ DATASTORE_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=10
 # Large file uploads (ZIP parts up to 80MB) need much more time for slow links.
 UPLOAD_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=600.0, pool=10.0)
 
+# Shared connection-bounded client for the small JSON action calls (_get/_post
+# below). A fresh httpx.AsyncClient() per call (the old behavior) re-does a
+# TLS handshake and allocates a fresh connection pool every time — cheap in
+# isolation, but a fan-out of dozens of package_show calls (e.g. admin
+# dataset-sizes) used to spike RSS enough to tip a 512MB dyno into OOM.
+# max_connections caps how many of those can be in flight at once regardless
+# of how many coroutines call in concurrently.
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=TIMEOUT,
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+        )
+    return _shared_client
+
 
 def _remap_keys(record: dict, key_map: dict[str, str]) -> dict:
     """Rename keys in a record dict according to ``key_map``.
@@ -61,40 +80,40 @@ class ODataClient:
         return {"Authorization": self.api_key} if self.api_key else {}
 
     async def _post(self, action: str, data: dict | None = None, timeout: httpx.Timeout | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=timeout or TIMEOUT) as client:
-            url = f"{self.api_url}/{action}"
-            resp = await client.post(url, json=data or {}, headers=self._headers())
-            if resp.is_error:
-                # Surface CKAN's structured error body — the JSON shape is
-                # {"error": {"...": "..."}} and tells us things like the
-                # actual field-type mismatch behind a 409 Conflict. Without
-                # this the caller only ever sees "Client error '409 …'" and
-                # can't tell which column or value tripped the validator.
-                detail = ""
-                try:
-                    body = resp.json()
-                    err = body.get("error") if isinstance(body, dict) else None
-                    if err:
-                        detail = json.dumps(err, ensure_ascii=False)[:600]
-                except Exception:
-                    detail = (resp.text or "")[:300]
-                raise RuntimeError(
-                    f"odata {action} {resp.status_code}: {detail or resp.reason_phrase}"
-                )
-            result = resp.json()
-            if not result.get("success"):
-                raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
-            return result["result"]
+        client = _client()
+        url = f"{self.api_url}/{action}"
+        resp = await client.post(url, json=data or {}, headers=self._headers(), timeout=timeout or TIMEOUT)
+        if resp.is_error:
+            # Surface CKAN's structured error body — the JSON shape is
+            # {"error": {"...": "..."}} and tells us things like the
+            # actual field-type mismatch behind a 409 Conflict. Without
+            # this the caller only ever sees "Client error '409 …'" and
+            # can't tell which column or value tripped the validator.
+            detail = ""
+            try:
+                body = resp.json()
+                err = body.get("error") if isinstance(body, dict) else None
+                if err:
+                    detail = json.dumps(err, ensure_ascii=False)[:600]
+            except Exception:
+                detail = (resp.text or "")[:300]
+            raise RuntimeError(
+                f"odata {action} {resp.status_code}: {detail or resp.reason_phrase}"
+            )
+        result = resp.json()
+        if not result.get("success"):
+            raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
+        return result["result"]
 
     async def _get(self, action: str, params: dict | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            url = f"{self.api_url}/{action}"
-            resp = await client.get(url, params=params, headers=self._headers())
-            resp.raise_for_status()
-            result = resp.json()
-            if not result.get("success"):
-                raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
-            return result["result"]
+        client = _client()
+        url = f"{self.api_url}/{action}"
+        resp = await client.get(url, params=params, headers=self._headers(), timeout=TIMEOUT)
+        resp.raise_for_status()
+        result = resp.json()
+        if not result.get("success"):
+            raise RuntimeError(f"odata API error: {result.get('error', 'unknown')}")
+        return result["result"]
 
     # ── Dataset management ───────────────────────────────────────────────
 
