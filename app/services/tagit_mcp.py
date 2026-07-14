@@ -34,7 +34,18 @@ logger = logging.getLogger(__name__)
 # retry those within a wall-clock budget so a sleeping server self-heals
 # instead of surfacing an error the user has to re-trigger by hand.
 _RETRY_STATUS = {502, 503, 504}
-_WAKE_BUDGET_S = 100.0   # total time we'll keep retrying a cold TAG-IT
+# JSON-RPC error codes worth retrying: -32001 is MCP's "request timed out"
+# (TAG-IT's own internal search exceeded its timeout — usually a cold DB that
+# warms up on a second try), -32603 is a generic internal error.
+_RETRY_RPC_CODES = {-32001, -32603}
+_WAKE_BUDGET_S = 100.0   # total time we'll keep retrying a cold/slow TAG-IT
+
+
+def _is_retryable_rpc_error(err: dict) -> bool:
+    if err.get("code") in _RETRY_RPC_CODES:
+        return True
+    msg = str(err.get("message") or "").lower()
+    return "timed out" in msg or "timeout" in msg
 
 
 class DeepSearchUnavailable(RuntimeError):
@@ -87,9 +98,16 @@ async def _rpc(method: str, params: dict) -> dict:
                 # frame; both carry a single JSON-RPC object. Pull the JSON out.
                 body = _extract_json(resp)
                 if "error" in body:
-                    err = body["error"]
-                    raise DeepSearchError(f"TAG-IT MCP error: {err.get('message') or err}")
-                return body.get("result") or {}
+                    err = body.get("error") or {}
+                    if _is_retryable_rpc_error(err):
+                        # -32001 = MCP "request timed out": TAG-IT got the query
+                        # but its own search/DB took too long (often a cold DB).
+                        # Retry within the budget instead of failing outright.
+                        last_err = DeepSearchError("TAG-IT לא הספיק לענות בזמן (timeout)")
+                    else:
+                        raise DeepSearchError(f"TAG-IT MCP error: {err.get('message') or err}")
+                else:
+                    return body.get("result") or {}
 
         if time.monotonic() - start >= _WAKE_BUDGET_S:
             break
