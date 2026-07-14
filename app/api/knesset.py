@@ -472,3 +472,121 @@ async def bootstrap_knesset25(
         dry_run=dry_run,
         results=results,
     )
+
+
+# --------------------------------------------------------------------------
+# MMM (ממ״מ) incremental archive-mode enable.
+# --------------------------------------------------------------------------
+# The MMM corpus is ONE dataset of ~6,500 documents behind the Radware WAF; a
+# full re-scrape takes ~2.7h, so it can't be re-walked daily. This flips the
+# dataset to INCREMENTAL archive mode (archive_type "mmm"): each daily poll asks
+# the worker for a cheap delta (new rids only). We SEED the checkpoint from the
+# rids already mirrored into knesset.mmm_documents, so the first poll finds only
+# genuinely-new documents instead of re-downloading the whole corpus. Each new
+# delta version is then auto-pulled into TAG-IT (scope 14) for MD extraction.
+
+_MMM_DAILY_INTERVAL = 86_400  # seconds — poll once a day
+
+
+class MmmArchiveEnableResponse(BaseModel):
+    dataset_id: str
+    ckan_name: str
+    known_rids_seeded: int
+    poll_interval: int
+    is_active: bool
+    archive: bool
+    previous_poll_interval: int | None = None
+    was_archive: bool = False
+    dry_run: bool
+
+
+async def _all_mmm_rids() -> list[str]:
+    """Every rid already catalogued in ``knesset.mmm_documents`` — the seed for
+    the archive checkpoint so the first incremental poll re-fetches nothing."""
+    from app.services import append_store
+    from app.services.knesset_db import _qtable
+
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                f"SELECT rid FROM {_qtable('mmm_documents')} "
+                f"WHERE rid IS NOT NULL ORDER BY rid"
+            )
+        except Exception as e:  # table not created yet / schema missing
+            logger.warning("MMM enable: mmm_documents unreadable (%s) — empty seed", e)
+            return []
+    return [str(r["rid"]) for r in rows]
+
+
+@router.post("/enable-mmm-archive", response_model=MmmArchiveEnableResponse)
+@limiter.limit("6/hour")
+async def enable_mmm_archive(
+    request: Request,
+    dry_run: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch the tracked MMM dataset to daily INCREMENTAL archive mode.
+
+    Idempotent: seeds ``scraper_config.checkpoint.known_rids`` from the current
+    ``knesset.mmm_documents`` catalog, sets ``archive``/``archive_type='mmm'``,
+    a daily ``poll_interval`` and ``is_active=True`` — preserving all other
+    scraper_config keys. Re-running just refreshes the seed to the latest
+    catalogue. ⚠ the poll job is (re)built at scheduler init, so the new daily
+    interval takes effect on the next OVER restart/deploy.
+
+    ``?dry_run=true`` reports what would change without writing.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rows = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.ckan_name.like("knesset-mmm%"))
+    )).scalars().all()
+    if not rows:
+        raise HTTPException(404, "MMM dataset not found (ckan_name like 'knesset-mmm%')")
+    if len(rows) > 1:
+        raise HTTPException(
+            409,
+            f"expected one MMM dataset, found {len(rows)}: "
+            + ", ".join(d.ckan_name for d in rows),
+        )
+    ds = rows[0]
+
+    known_rids = await _all_mmm_rids()
+    cfg = dict(ds.scraper_config or {})
+    was_archive = bool(cfg.get("archive"))
+    prev_interval = ds.poll_interval
+
+    if dry_run:
+        return MmmArchiveEnableResponse(
+            dataset_id=str(ds.id), ckan_name=ds.ckan_name,
+            known_rids_seeded=len(known_rids),
+            poll_interval=_MMM_DAILY_INTERVAL, is_active=True, archive=True,
+            previous_poll_interval=prev_interval, was_archive=was_archive,
+            dry_run=True,
+        )
+
+    cfg["archive"] = True
+    cfg["archive_type"] = "mmm"
+    cfg["checkpoint"] = {"known_rids": known_rids, "total_docs": len(known_rids)}
+    cfg.pop("mmm_full_rescan", None)  # clear any stale one-shot flag
+    ds.scraper_config = cfg
+    flag_modified(ds, "scraper_config")
+    ds.poll_interval = _MMM_DAILY_INTERVAL
+    ds.is_active = True
+    ds.status = "active"
+    await db.commit()
+
+    logger.info(
+        "MMM archive enabled: ds=%s known_rids=%d interval=%ds (was archive=%s)",
+        ds.id, len(known_rids), _MMM_DAILY_INTERVAL, was_archive,
+    )
+    return MmmArchiveEnableResponse(
+        dataset_id=str(ds.id), ckan_name=ds.ckan_name,
+        known_rids_seeded=len(known_rids),
+        poll_interval=_MMM_DAILY_INTERVAL, is_active=True, archive=True,
+        previous_poll_interval=prev_interval, was_archive=was_archive,
+        dry_run=False,
+    )
