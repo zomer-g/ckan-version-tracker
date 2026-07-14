@@ -64,6 +64,11 @@ async def lifespan(app: FastAPI):
     import asyncio
     from app.services import cbs_neon
     asyncio.create_task(cbs_neon.backfill_if_empty())
+    # One-time auto-activation of the MMM dataset's daily incremental archive
+    # mode (guarded + idempotent — no-op once active or if the catalog isn't
+    # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
+    from app.services import mmm_activate
+    asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
     yield
     shutdown_scheduler()
     logger.info("Shutting down גרסאות לעם")
