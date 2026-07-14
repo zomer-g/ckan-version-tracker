@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     tagit_mcp_url: str = "https://tag-it.biz/mcp"
     tagit_mcp_token: str = ""
     tagit_mmm_scope: int = 14
+    # TAG-IT scope holding the Knesset committee-protocols corpus (indexed like
+    # the ממ״מ one). Currently only Knesset-25 protocols are loaded; the full
+    # corpus of all committees is being backfilled gradually.
+    tagit_protocols_scope: int = 15
 
     # Worker version gate: refuse to dispatch tasks to a worker whose git
     # commit doesn't match what's on the upstream repo's master branch.

@@ -133,26 +133,37 @@ async def mmm_facets(request: Request):
 
 
 # Deep/slow search: instead of our fast SQL metadata mirror, run a full-text
-# search INSIDE the document bodies on TAG-IT (scope 14) via its MCP. Slower
-# (a remote LLM-corpus round-trip) but reaches the actual text, not just the
-# catalog. Rate-limited harder than the SQL path since each call hits TAG-IT.
-@router.get("/mmm/deep-search")
-@limiter.limit("20/minute")
-async def mmm_deep_search(request: Request, q: str, page: int = 1, size: int = 20):
+# search INSIDE the document bodies on TAG-IT via its MCP. Slower (a remote
+# LLM-corpus round-trip) but reaches the actual text, not just the catalog.
+# ממ״מ = scope 14; Knesset committee protocols = scope 15. Rate-limited harder
+# than the SQL path since each call hits TAG-IT.
+async def _run_deep_search(q: str, scope: int, page: int, size: int):
     _require_enabled()
     from app.services import tagit_mcp
     if not tagit_mcp.is_configured():
         raise HTTPException(status_code=503,
                             detail="חיפוש עמוק אינו מוגדר בשרת (חסר TAGIT_MCP_TOKEN)")
     try:
-        return await tagit_mcp.deep_search(q, page=page, size=size)
+        return await tagit_mcp.deep_search(q, scope=scope, page=page, size=size)
     except tagit_mcp.DeepSearchUnavailable:
         raise HTTPException(status_code=503, detail="חיפוש עמוק אינו מוגדר בשרת")
     except tagit_mcp.DeepSearchError as e:
         raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל: {e}")
     except Exception as e:  # noqa: BLE001
-        logger.exception("mmm deep-search failed")
+        logger.exception("deep-search failed (scope=%s)", scope)
         raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל ({type(e).__name__})")
+
+
+@router.get("/mmm/deep-search")
+@limiter.limit("20/minute")
+async def mmm_deep_search(request: Request, q: str, page: int = 1, size: int = 20):
+    return await _run_deep_search(q, settings.tagit_mmm_scope, page, size)
+
+
+@router.get("/protocols/deep-search")
+@limiter.limit("20/minute")
+async def protocol_deep_search(request: Request, q: str, page: int = 1, size: int = 20):
+    return await _run_deep_search(q, settings.tagit_protocols_scope, page, size)
 
 
 # ── Committee-protocol batches (the /knesset "אצוות" tab) ────────────────────

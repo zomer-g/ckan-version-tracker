@@ -220,12 +220,16 @@ def _as_items_and_total(payload) -> tuple[list[dict], int | None]:
     return items, total
 
 
-async def deep_search(text_query: str, page: int = 1, size: int = 20) -> dict:
-    """Full-text search inside the ממ״מ document bodies on TAG-IT.
+async def deep_search(text_query: str, scope: int | None = None,
+                      page: int = 1, size: int = 20) -> dict:
+    """Full-text search inside a TAG-IT scope's document bodies (ממ״מ = 14,
+    Knesset committee protocols = 15). ``scope`` defaults to the ממ״מ scope.
 
     Returns ``{items, total, page, size}`` where each item is normalized by
     ``_normalize`` (title/date/doc_type/snippet/link + raw ``fields``).
     """
+    if scope is None:
+        scope = settings.tagit_mmm_scope
     text_query = (text_query or "").strip()
     if not text_query:
         return {"items": [], "total": 0, "page": 1, "size": size}
@@ -235,7 +239,7 @@ async def deep_search(text_query: str, page: int = 1, size: int = 20) -> dict:
     result = await _rpc("tools/call", {
         "name": "search_documents",
         "arguments": {
-            "scope": settings.tagit_mmm_scope,
+            "scope": scope,
             "text_query": text_query,
             "page": page,
             "size": size,

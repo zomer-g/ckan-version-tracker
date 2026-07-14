@@ -752,6 +752,14 @@ export const knessetProtocols = {
     limit?: number;
     offset?: number;
   }) => request<ProtocolSearchResult>(`/knesset-protocols/search${_qs(params)}`),
+  // Deep/slow full-text search inside protocol bodies via TAG-IT (scope 15).
+  // Reuses the shared MmmDeep* shape. Lives under /knesset-db (the TAG-IT path).
+  deepSearch: (p: { q: string; page?: number; size?: number }) => {
+    const qs = new URLSearchParams({ q: p.q });
+    if (p.page) qs.set("page", String(p.page));
+    if (p.size) qs.set("size", String(p.size));
+    return request<MmmDeepResult>(`/knesset-db/protocols/deep-search?${qs.toString()}`);
+  },
 };
 
 // Public API (no auth required)

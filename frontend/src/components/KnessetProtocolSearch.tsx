@@ -4,6 +4,7 @@ import {
   knessetProtocols,
   ProtocolRow,
   ProtocolCommittee,
+  MmmDeepResult,
 } from "../api/client";
 
 function fmtDate(value: string | null | undefined): string {
@@ -14,7 +15,20 @@ function fmtDate(value: string | null | undefined): string {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
+// TAG-IT snippets are highlighted MD fragments with markup + table noise;
+// render as clean plain text (mirrors KnessetMmmSearch).
+function cleanSnippet(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\|/g, " ")
+    .replace(/-{2,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type Mode = "fast" | "deep";
 const PAGE = 50;
+const DEEP_PAGE = 20;
 const inputStyle: React.CSSProperties = {
   padding: "0.4rem 0.6rem",
   border: "1px solid var(--border, #d1d5db)",
@@ -36,6 +50,7 @@ export default function KnessetProtocolSearch() {
   // Search state is mirrored into the URL (?q=…&knesset=…&committee=…&offset=…)
   // so a search is deep-linkable; arriving with params runs it automatically.
   const [searchParams, setSearchParams] = useSearchParams();
+  const [mode, setMode] = useState<Mode>(() => (searchParams.get("mode") === "deep" ? "deep" : "fast"));
   const [knessets, setKnessets] = useState<{ knesset: number; doc_count: number }[]>([]);
   const [committees, setCommittees] = useState<ProtocolCommittee[]>([]);
   const [knesset, setKnesset] = useState<string>(() => searchParams.get("knesset") || "");
@@ -45,6 +60,7 @@ export default function KnessetProtocolSearch() {
   const [rows, setRows] = useState<ProtocolRow[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [deepResult, setDeepResult] = useState<MmmDeepResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
@@ -72,11 +88,26 @@ export default function KnessetProtocolSearch() {
       setExpanded(new Set());
       // Mirror the executed search into the URL (replace — no history spam).
       const p: Record<string, string> = {};
+      if (mode === "deep") p.mode = "deep";
       if (q.trim()) p.q = q.trim();
-      if (knesset) p.knesset = knesset;
-      if (committee.trim()) p.committee = committee.trim();
+      if (mode === "fast" && knesset) p.knesset = knesset;
+      if (mode === "fast" && committee.trim()) p.committee = committee.trim();
       if (newOffset > 0) p.offset = String(newOffset);
       setSearchParams(p, { replace: true });
+
+      if (mode === "deep") {
+        knessetProtocols
+          .deepSearch({ q: q.trim(), page: Math.floor(newOffset / DEEP_PAGE) + 1, size: DEEP_PAGE })
+          .then((r) => {
+            setDeepResult(r);
+            setOffset(newOffset);
+            setSearched(true);
+          })
+          .catch((e) => setError(e?.message || "שגיאה בחיפוש"))
+          .finally(() => setLoading(false));
+        return;
+      }
+
       knessetProtocols
         .search({
           q: q.trim() || undefined,
@@ -94,7 +125,7 @@ export default function KnessetProtocolSearch() {
         .catch((e) => setError(e?.message || "שגיאה בחיפוש"))
         .finally(() => setLoading(false));
     },
-    [q, knesset, committee, setSearchParams],
+    [mode, q, knesset, committee, setSearchParams],
   );
 
   // Deep link: arriving with search params runs the search once automatically.
@@ -143,52 +174,94 @@ export default function KnessetProtocolSearch() {
 
   return (
     <div>
-      <p className="text-sm text-muted" style={{ marginTop: 0, lineHeight: 1.6 }}>
-        חיפוש בכל פרוטוקולי ועדות הכנסת (מסונכרן מפיד ה-ODATA). סננו לפי{" "}
-        <strong>מספר כנסת</strong> ו/או <strong>שם ועדה</strong>, והוסיפו טקסט חופשי — החיפוש
-        סורק את כותרת הפרוטוקול, שם הוועדה, ומיקום/הערות הישיבה. הרחיבו שורה להצגת
-        המטא-דאטה המלא (כולל היכן שהמונח מופיע). מוצגים מסמכים בלבד (מסמך אחד לכל
-        פרוטוקול); סריקות תמונה והקלטות וידאו אינן מוצגות.
-      </p>
+      {/* Mode toggle: fast metadata (SQL/ODATA) vs deep full-text (TAG-IT). */}
+      <div className="flex" role="tablist" aria-label="מצב חיפוש" style={{ gap: "0.4rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+        {([["fast", "חיפוש מהיר (מטא-דאטה)"], ["deep", "חיפוש עמוק בתוכן (איטי)"]] as [Mode, string][]).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={mode === m}
+            onClick={() => {
+              if (mode === m) return;
+              setMode(m);
+              setOffset(0);
+              setSearched(false);
+              setError(null);
+            }}
+            style={{
+              padding: "0.35rem 0.9rem", borderRadius: 999, cursor: "pointer",
+              fontSize: "0.85rem", fontWeight: 600,
+              border: `1px solid ${mode === m ? "var(--primary, #0f766e)" : "var(--border, #d1d5db)"}`,
+              background: mode === m ? "var(--primary, #0f766e)" : "none",
+              color: mode === m ? "#fff" : "var(--text)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "fast" ? (
+        <p className="text-sm text-muted" style={{ marginTop: 0, lineHeight: 1.6 }}>
+          חיפוש בכל פרוטוקולי ועדות הכנסת (מסונכרן מפיד ה-ODATA). סננו לפי{" "}
+          <strong>מספר כנסת</strong> ו/או <strong>שם ועדה</strong>, והוסיפו טקסט חופשי — החיפוש
+          סורק את כותרת הפרוטוקול, שם הוועדה, ומיקום/הערות הישיבה. הרחיבו שורה להצגת
+          המטא-דאטה המלא (כולל היכן שהמונח מופיע). מוצגים מסמכים בלבד (מסמך אחד לכל
+          פרוטוקול); סריקות תמונה והקלטות וידאו אינן מוצגות.
+        </p>
+      ) : (
+        <p className="text-sm text-muted" style={{ marginTop: 0, lineHeight: 1.6 }}>
+          חיפוש טקסט מלא <strong>בתוך גוף הפרוטוקולים</strong> דרך TAG-IT — איטי יותר, אך מגיע
+          לתוכן הדיונים עצמו ולא רק לכותרות ולמטא-דאטה.{" "}
+          <strong>כרגע נתמכים פרוטוקולי הכנסת ה-25</strong>; הקורפוס המלא של כל ועדות הכנסת
+          מתווסף בהדרגה.
+        </p>
+      )}
 
       <form
         onSubmit={onSubmit}
         className="card"
         style={{ padding: "0.85rem", marginBottom: "1rem", display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-end" }}
       >
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.82rem" }}>
-          <span className="text-muted">מספר כנסת</span>
-          <select value={knesset} onChange={(e) => setKnesset(e.target.value)} style={{ ...inputStyle, minWidth: 150 }}>
-            <option value="">כל הכנסות</option>
-            {knessets.map((k) => (
-              <option key={k.knesset} value={k.knesset}>
-                הכנסת ה-{k.knesset} ({k.doc_count.toLocaleString()})
-              </option>
-            ))}
-          </select>
-        </label>
+        {mode === "fast" && (
+          <>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.82rem" }}>
+              <span className="text-muted">מספר כנסת</span>
+              <select value={knesset} onChange={(e) => setKnesset(e.target.value)} style={{ ...inputStyle, minWidth: 150 }}>
+                <option value="">כל הכנסות</option>
+                {knessets.map((k) => (
+                  <option key={k.knesset} value={k.knesset}>
+                    הכנסת ה-{k.knesset} ({k.doc_count.toLocaleString()})
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.82rem", flex: "1 1 240px" }}>
-          <span className="text-muted">שם ועדה</span>
-          <input
-            list="knesset-committee-list"
-            value={committee}
-            onChange={(e) => setCommittee(e.target.value)}
-            placeholder="הקלד/י או בחר/י ועדה (חלקי מספיק)…"
-            style={inputStyle}
-          />
-          <datalist id="knesset-committee-list">
-            {committees.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.doc_count.toLocaleString()} פרוטוקולים
-              </option>
-            ))}
-          </datalist>
-        </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.82rem", flex: "1 1 240px" }}>
+              <span className="text-muted">שם ועדה</span>
+              <input
+                list="knesset-committee-list"
+                value={committee}
+                onChange={(e) => setCommittee(e.target.value)}
+                placeholder="הקלד/י או בחר/י ועדה (חלקי מספיק)…"
+                style={inputStyle}
+              />
+              <datalist id="knesset-committee-list">
+                {committees.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.doc_count.toLocaleString()} פרוטוקולים
+                  </option>
+                ))}
+              </datalist>
+            </label>
+          </>
+        )}
 
         <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.82rem", flex: "1 1 200px" }}>
           <span className="text-muted">טקסט חופשי</span>
-          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="לדוגמה: תקציב, יריחו…" style={inputStyle} />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder={mode === "deep" ? "חיפוש בתוך תוכן הדיונים…" : "לדוגמה: תקציב, יריחו…"} style={inputStyle} />
         </label>
 
         <button
@@ -202,7 +275,16 @@ export default function KnessetProtocolSearch() {
 
       {error && <div style={{ color: "var(--danger, #dc2626)", fontSize: "0.88rem", marginBottom: "0.6rem" }}>{error}</div>}
 
-      {searched && !error && (
+      {loading && (
+        <div className="loading" role="status" style={{ marginBottom: "0.6rem" }}>
+          {mode === "deep"
+            ? "מחפש בתוך תוכן הפרוטוקולים… (החיפוש הראשון עשוי להימשך עד דקה בזמן שהשרת מתעורר)"
+            : "מחפש…"}
+        </div>
+      )}
+
+      {/* ── Fast metadata results (ODATA table) ── */}
+      {mode === "fast" && searched && !error && (
         <>
           <div className="flex-between" style={{ flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.4rem" }}>
             <span className="text-sm text-muted">
@@ -278,6 +360,71 @@ export default function KnessetProtocolSearch() {
           )}
         </>
       )}
+
+      {/* ── Deep full-text results (snippet cards) ── */}
+      {mode === "deep" && searched && !error && !loading && deepResult && (() => {
+        const exact = deepResult.total_exact;
+        const hasNext = exact ? offset + DEEP_PAGE < deepResult.total : deepResult.items.length === DEEP_PAGE;
+        return (
+          <>
+            <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
+              {exact ? `${deepResult.total.toLocaleString()} תוצאות` : `${deepResult.items.length} תוצאות בעמוד זה`}
+            </div>
+            {deepResult.items.length === 0 ? (
+              <div className="empty-state">
+                {q.trim()
+                  ? "לא נמצאו פרוטוקולים שתוכנם כולל את הביטוי שחיפשת."
+                  : "הקלד ביטוי כדי לחפש בתוך תוכן הפרוטוקולים."}
+              </div>
+            ) : (
+              // Not `.flex` — that class centers items; cards must stretch full-width.
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", alignItems: "stretch" }}>
+                {deepResult.items.map((d, i) => (
+                  <div key={d.doc_id ?? i} className="card" style={{ padding: "0.75rem 0.9rem" }}>
+                    <div className="flex-between" style={{ gap: "0.5rem", alignItems: "baseline", flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 600 }}>
+                        {d.link ? (
+                          <a href={d.link} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
+                            {d.title || `פרוטוקול ${d.doc_id ?? ""}`}
+                          </a>
+                        ) : (
+                          d.title || `פרוטוקול ${d.doc_id ?? ""}`
+                        )}
+                      </div>
+                      <div className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>
+                        {[d.doc_type, d.date].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                    {d.abstract && (
+                      <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text)", lineHeight: 1.6 }}>
+                        {d.abstract}
+                      </div>
+                    )}
+                    {d.snippet && (
+                      <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border, #cbd5e1)", paddingInlineStart: "0.6rem" }}>
+                        …{cleanSnippet(d.snippet)}…
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {deepResult.items.length > 0 && (
+              <div className="flex" style={{ gap: "0.75rem", alignItems: "center", justifyContent: "center", marginTop: "0.75rem" }}>
+                <button type="button" disabled={offset === 0 || loading} onClick={() => doSearch(Math.max(0, offset - DEEP_PAGE))}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", background: "none", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.5 : 1 }}>
+                  ← הקודם
+                </button>
+                <span className="text-sm text-muted">עמוד {Math.floor(offset / DEEP_PAGE) + 1}</span>
+                <button type="button" disabled={!hasNext || loading} onClick={() => doSearch(offset + DEEP_PAGE)}
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", background: "none", cursor: !hasNext ? "default" : "pointer", opacity: !hasNext ? 0.5 : 1 }}>
+                  הבא →
+                </button>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }
