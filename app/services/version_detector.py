@@ -24,7 +24,8 @@ def has_metadata_changed(old_modified: str | None, new_modified: str) -> bool:
 
 
 async def detect_resource_changes(
-    old_mappings: dict | None, resources: list[dict]
+    old_mappings: dict | None, resources: list[dict],
+    max_bytes: int | None = None,
 ) -> tuple[list[dict], dict[str, str], list[str]]:
     """
     Download resources to disk and detect which ones changed.
@@ -60,7 +61,8 @@ async def detect_resource_changes(
             continue
 
         try:
-            file_path, sha256, byte_count = await ckan_client.download_resource(url, resource_id=rid)
+            file_path, sha256, byte_count = await ckan_client.download_resource(
+                url, resource_id=rid, max_bytes=max_bytes)
             hash_map[rid] = sha256
 
             old_hash = old_hashes.get(rid)

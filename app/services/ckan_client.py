@@ -84,7 +84,8 @@ class CKANClient:
     async def organization_list(self, all_fields: bool = False) -> list:
         return await self._get("organization_list", {"all_fields": all_fields})
 
-    async def download_resource(self, url: str, resource_id: str = "") -> tuple[str, str, int]:
+    async def download_resource(self, url: str, resource_id: str = "",
+                                max_bytes: int | None = None) -> tuple[str, str, int]:
         """
         Download a resource into a temporary file on disk.
 
@@ -95,6 +96,12 @@ class CKANClient:
         the resource size, so a 200MB ZIP no longer OOM-kills the 512MB
         Render dyno.
 
+        ``max_bytes`` overrides the global size cap
+        (``settings.max_resource_download_size``) for this call — used by
+        R2-file datasets whose resources exceed 200MB, where the bytes only
+        stream to disk and R2 (never parsed in memory), so the global cap
+        (which also guards the in-memory parse paths) is too conservative.
+
         Strategy:
         1. Try datastore_search API (works even when direct URL is
            blocked by IAP).
@@ -103,7 +110,7 @@ class CKANClient:
         # Strategy 1: Try datastore API (data.gov.il blocks direct downloads with Google IAP)
         if resource_id:
             try:
-                path, sha256, n = await self._download_via_datastore_to_file(resource_id)
+                path, sha256, n = await self._download_via_datastore_to_file(resource_id, max_bytes)
                 if n > 0:
                     logger.info(
                         "Downloaded %s via datastore API (%d bytes → %s)",
@@ -114,11 +121,12 @@ class CKANClient:
                 logger.debug("Datastore download failed for %s: %s, trying direct URL", resource_id, e)
 
         # Strategy 2: Direct URL download (may fail on data.gov.il due to IAP)
-        return await self._download_direct(url)
+        return await self._download_direct(url, max_bytes)
 
-    async def _download_via_datastore_to_file(self, resource_id: str) -> tuple[str, str, int]:
+    async def _download_via_datastore_to_file(self, resource_id: str,
+                                              max_bytes: int | None = None) -> tuple[str, str, int]:
         """Stream the datastore export to a temp CSV file, hashing as we go."""
-        max_size = settings.max_resource_download_size
+        max_size = max_bytes or settings.max_resource_download_size
 
         fd, path = tempfile.mkstemp(prefix="ckan-ds-", suffix=".csv")
         os.close(fd)
@@ -191,10 +199,11 @@ class CKANClient:
 
         return path, h.hexdigest(), total
 
-    async def _download_direct(self, url: str) -> tuple[str, str, int]:
+    async def _download_direct(self, url: str,
+                               max_bytes: int | None = None) -> tuple[str, str, int]:
         """Stream a direct file download to a temp file, with SSRF protection."""
         _validate_url(url)
-        max_size = settings.max_resource_download_size
+        max_size = max_bytes or settings.max_resource_download_size
 
         fd, path = tempfile.mkstemp(prefix="ckan-dl-")
         os.close(fd)

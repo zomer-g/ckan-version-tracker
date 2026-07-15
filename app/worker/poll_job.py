@@ -355,8 +355,15 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
 
+            # Per-dataset download-cap override. The global cap
+            # (max_resource_download_size, 200MB) also guards the in-memory
+            # CSV parse paths (append_only / ODATA datastore push), so it stays
+            # conservative. An R2-file dataset only streams bytes to disk→R2
+            # (never parsed), so it can opt into a larger cap via
+            # scraper_config.max_download_bytes to archive >200MB files.
+            dl_cap = (ds.scraper_config or {}).get("max_download_bytes")
             changed_resources, hash_map, detect_errors = await detect_resource_changes(
-                old_mappings, resources
+                old_mappings, resources, max_bytes=dl_cap
             )
 
             is_first_version = latest_version is None
