@@ -1725,23 +1725,29 @@ async def get_tracked_public(
     from sqlalchemy.orm import selectinload
 
     uid = parse_uuid(dataset_id, "dataset_id")
+    # Outerjoin Organization so the dataset page can render a clickable
+    # link to the owning organization (mirrors the list endpoint above).
     result = await db.execute(
-        select(TrackedDataset)
+        select(TrackedDataset, Organization)
         .options(selectinload(TrackedDataset.tags))
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(
             TrackedDataset.id == uid,
             TrackedDataset.status == "active",
         )
     )
-    ds = result.scalar_one_or_none()
-    if not ds:
+    row = result.unique().one_or_none()
+    if not row:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    ds, org = row
     return DatasetResponse(
         id=str(ds.id),
         ckan_id=ds.ckan_id,
         ckan_name=ds.ckan_name,
         title=ds.title,
         organization=ds.organization,
+        organization_id=str(ds.organization_id) if ds.organization_id else None,
+        organization_title=org.title if org else None,
         odata_dataset_id=ds.odata_dataset_id,
         poll_interval=ds.poll_interval,
         is_active=ds.is_active,

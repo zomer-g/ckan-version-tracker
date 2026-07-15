@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { publicApi, TrackedDataset } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import TagChips from "../components/TagChips";
+import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 
 export default function SourceDetailPage() {
@@ -82,30 +83,35 @@ export default function SourceDetailPage() {
       ) : (
         <div className="grid grid-2">
           {mine.map((d) => {
-            const palette = sourceBadgeFor(d.source_type, d.organization, d.ckan_id);
             return (
               <article key={d.id} className="card">
                 <div className="flex-between mb-1">
                   <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                     <Link to={`/versions/${d.id}`}>{d.title}</Link>
                   </h3>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      padding: "0.15rem 0.45rem",
-                      borderRadius: "9999px",
-                      fontSize: "0.65rem",
-                      fontWeight: 600,
-                      background: palette.bg,
-                      color: palette.fg,
-                    }}
-                  >
-                    {palette.label}
-                  </span>
+                  <SourceChip
+                    sourceType={d.source_type}
+                    organization={d.organization}
+                    ckanId={d.ckan_id}
+                  />
                 </div>
                 <div className="text-sm text-muted">
                   {d.version_count} {t("home.versions_count")}
-                  {d.organization_title && <> · {d.organization_title}</>}
+                  {d.organization_title && (
+                    <>
+                      {" · "}
+                      {d.organization_id ? (
+                        <Link
+                          to={`/organizations/${d.organization_id}`}
+                          style={{ color: "var(--text-muted)", textDecoration: "none" }}
+                        >
+                          {d.organization_title}
+                        </Link>
+                      ) : (
+                        d.organization_title
+                      )}
+                    </>
+                  )}
                 </div>
                 <TagChips tags={d.tags} />
                 <div

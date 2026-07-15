@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
+import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
 import { sourceBadgeFor } from "../utils/sourceBadge";
@@ -1487,22 +1488,11 @@ export default function HomePage() {
                       <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
                     </h3>
                     <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
-                      {(() => {
-                        const palette = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
-                        return (
-                          <span style={{
-                            display: "inline-block",
-                            padding: "0.15rem 0.45rem",
-                            borderRadius: "9999px",
-                            fontSize: "0.65rem",
-                            fontWeight: 600,
-                            background: palette.bg,
-                            color: palette.fg,
-                          }}>
-                            {palette.label}
-                          </span>
-                        );
-                      })()}
+                      <SourceChip
+                        sourceType={ds.source_type}
+                        organization={ds.organization}
+                        ckanId={ds.ckan_id}
+                      />
                       <span className="badge badge-info">
                         {ds.version_count} {t("home.versions_count")}
                       </span>

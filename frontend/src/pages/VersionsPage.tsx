@@ -11,6 +11,8 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+import SourceChip from "../components/SourceChip";
+import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
@@ -368,6 +370,36 @@ export default function VersionsPage() {
               {isAdmin && datasetTotalBytes !== null && (
                 <> · סך גודל הקבצים: {formatBytes(datasetTotalBytes)}</>
               )}
+            </div>
+          )}
+          {/* Belongs-to row: the collections this dataset is part of — its
+              source, its organization, and its tags — each a link back to
+              that collection, so the dataset page isn't a navigation
+              dead-end. Mirrors the clickable chips on the catalog cards. */}
+          {dataset && (
+            <div
+              className="flex"
+              style={{ marginTop: "0.5rem", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}
+            >
+              <SourceChip
+                sourceType={dataset.source_type}
+                organization={dataset.organization}
+                ckanId={dataset.ckan_id}
+              />
+              {dataset.organization_title && (
+                dataset.organization_id ? (
+                  <Link
+                    to={`/organizations/${dataset.organization_id}`}
+                    className="text-sm"
+                    style={{ color: "var(--primary)", textDecoration: "none" }}
+                  >
+                    {dataset.organization_title}
+                  </Link>
+                ) : (
+                  <span className="text-sm text-muted">{dataset.organization_title}</span>
+                )
+              )}
+              <TagChips tags={dataset.tags} />
             </div>
           )}
         </div>

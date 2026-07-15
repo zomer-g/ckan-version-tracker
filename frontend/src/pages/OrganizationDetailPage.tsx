@@ -3,8 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, OrganizationDetail } from "../api/client";
 import TagChips from "../components/TagChips";
+import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
-import { sourceBadgeFor } from "../utils/sourceBadge";
 
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
@@ -183,27 +183,11 @@ export default function OrganizationDetailPage() {
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
                 </h3>
-                {(() => {
-                  // Every dataset on this page belongs to `org`, so the
-                  // org slug (org.name) is the right "organization" hint
-                  // for the IDF-vs-gov.il split. The inner dataset shape
-                  // doesn't carry it, so we read it off the page-level
-                  // org instead.
-                  const palette = sourceBadgeFor(d.source_type, org.name);
-                  return (
-                    <span style={{
-                      display: "inline-block",
-                      padding: "0.15rem 0.45rem",
-                      borderRadius: "9999px",
-                      fontSize: "0.65rem",
-                      fontWeight: 600,
-                      background: palette.bg,
-                      color: palette.fg,
-                    }}>
-                      {palette.label}
-                    </span>
-                  );
-                })()}
+                {/* Every dataset on this page belongs to `org`, so the org
+                    slug (org.name) is the right "organization" hint for the
+                    IDF-vs-gov.il split. The inner dataset shape doesn't carry
+                    it, so we read it off the page-level org instead. */}
+                <SourceChip sourceType={d.source_type} organization={org.name} />
               </div>
               <div className="text-sm text-muted">
                 {d.version_count} {t("home.versions_count")}

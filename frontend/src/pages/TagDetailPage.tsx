@@ -3,8 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { tagsApi, type TagDetail } from "../api/client";
 import TagChips from "../components/TagChips";
+import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
-import { sourceBadgeFor } from "../utils/sourceBadge";
 
 export default function TagDetailPage() {
   const { t } = useTranslation();
@@ -109,24 +109,7 @@ export default function TagDetailPage() {
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
                 </h3>
-                {(() => {
-                  const palette = sourceBadgeFor(d.source_type, d.organization);
-                  return (
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "0.15rem 0.45rem",
-                        borderRadius: "9999px",
-                        fontSize: "0.65rem",
-                        fontWeight: 600,
-                        background: palette.bg,
-                        color: palette.fg,
-                      }}
-                    >
-                      {palette.label}
-                    </span>
-                  );
-                })()}
+                <SourceChip sourceType={d.source_type} organization={d.organization} />
               </div>
               {d.organization_title && (
                 <div className="text-sm text-muted" style={{ marginBottom: "0.25rem" }}>
