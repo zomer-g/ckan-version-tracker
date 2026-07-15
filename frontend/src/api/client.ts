@@ -765,6 +765,7 @@ export const knessetProtocols = {
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
+  dataset: (id: string) => request<TrackedDataset>(`/datasets/public/${id}`),
   request: (data: {
     ckan_id: string;
     resource_id?: string;

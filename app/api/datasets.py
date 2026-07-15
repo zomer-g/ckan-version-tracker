@@ -265,7 +265,18 @@ async def list_tracked(
         .options(selectinload(TrackedDataset.tags))
         .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
         .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
-        .where(TrackedDataset.status.in_(["active", "pending"]))
+        .where(
+            TrackedDataset.status.in_(["active", "pending"]),
+            # ~2,900 auto-generated one-per-Knesset-committee-meeting rows
+            # (app/api/knesset.py _parse_knesset_url) dwarf the rest of the
+            # catalog (a few thousand vs a few hundred). They're bulk-managed
+            # (their own poll schedule, no individual admin card), not part
+            # of the browsable/manageable catalog this endpoint serves — and
+            # returning all of them here (HomePage catalog, AdminPage, this
+            # response's join+serialize cost) was a major contributor to the
+            # 512MB-dyno OOM crashes on every admin page load.
+            TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
+        )
         .order_by(TrackedDataset.created_at.desc())
     )
     rows = result.unique().all()

@@ -864,11 +864,17 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
 
     from app.models.version_index import VersionIndex
 
-    # All active datasets we'll size up
+    # All active datasets we'll size up. Same committee-singles exclusion as
+    # list_tracked/list_scheduled_jobs — sizing ~2,900 auto-generated
+    # per-committee-meeting mirrors on top of everything else this job does
+    # (a package_show per dataset, plus a full version_index scan below) is
+    # unnecessary load even though this now only runs on its own 20-min
+    # schedule rather than per admin page load.
     ds_result = await db.execute(
         select(TrackedDataset).where(
             TrackedDataset.is_active.is_(True),
             TrackedDataset.status == "active",
+            TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
         )
     )
     datasets = ds_result.scalars().all()
@@ -1046,12 +1052,18 @@ async def list_scheduled_jobs(
     glance, every active dataset and any drift between its configured
     cadence and its actual schedule.
     """
-    # Pull DB rows for active datasets
+    # Pull DB rows for active datasets. Excludes the ~2,900 auto-generated
+    # one-per-Knesset-committee-meeting rows (see the same exclusion in
+    # app/api/datasets.py list_tracked) — they dwarf the rest of the catalog
+    # and this endpoint is polled every 5s while the admin Datasets tab is
+    # open, so scanning+serializing all of them repeatedly was a major
+    # contributor to the 512MB-dyno OOM crashes.
     db_result = await db.execute(
         select(TrackedDataset)
         .where(
             TrackedDataset.is_active.is_(True),
             TrackedDataset.status == "active",
+            TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
         )
         .order_by(TrackedDataset.title.asc())
     )

@@ -212,7 +212,7 @@ export default function VersionsPage() {
     if (!datasetId) return;
     Promise.all([
       versionsApi.list(datasetId),
-      publicApi.datasets().then((all) => all.find((d) => d.id === datasetId) || null),
+      publicApi.dataset(datasetId).catch(() => null),
     ])
       .then(([versions, ds]) => {
         setVersionsList(versions);
