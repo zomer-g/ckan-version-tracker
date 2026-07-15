@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -115,9 +115,14 @@ async def resume_interrupted_appends() -> None:
                 select(TrackedDataset.id)
                 .where(
                     TrackedDataset.is_active.is_(True),
-                    # JSONB ->> 'seed_offset' IS NOT NULL: key present with a
-                    # non-null value == interrupted mid-scan.
-                    TrackedDataset.scraper_config["seed_offset"].astext.isnot(None),
+                    # A non-null checkpoint == interrupted mid-scan. Two shapes:
+                    #  - seed_offset  → single-resource delta archive
+                    #  - neon_multi   → multi-resource NEON archive (per-resource
+                    #    table + combined {done,cur,offset} checkpoint)
+                    or_(
+                        TrackedDataset.scraper_config["seed_offset"].astext.isnot(None),
+                        TrackedDataset.scraper_config["neon_multi"].astext.isnot(None),
+                    ),
                 )
                 .order_by(TrackedDataset.id)
                 .limit(1)
@@ -354,6 +359,42 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                 ):
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
+
+            # MULTI-resource NEON archive. The single-resource block above only
+            # fires for len==1; a dataset flagged archive_neon with SEVERAL
+            # datastore resources otherwise falls through to the file-snapshot
+            # path — which can't reach these (their direct file URLs are
+            # Imperva-blocked) and crash-loops the dyno on large files. Stream
+            # each datastore-active resource to its own NEON table instead
+            # (resumable, so it converges instead of looping). Rows→NEON is the
+            # queryable archive; there is no per-version file for these.
+            if dataset_archives_neon(ds) and len(resources) > 1:
+                ds_resources: list[tuple[dict, dict]] = []
+                for r in resources:
+                    if not r.get("datastore_active"):
+                        continue
+                    try:
+                        info = await ckan_client.datastore_info(r["id"])
+                    except Exception as e:  # noqa: BLE001 — one bad resource mustn't sink the rest
+                        logger.warning("multi-neon: datastore_info failed for %s (%s): %s",
+                                       r.get("name") or r["id"], ds.ckan_name, e)
+                        continue
+                    if info is not None:
+                        ds_resources.append((r, info))
+                if ds_resources:
+                    from app.services.delta_archiver import (
+                        archive_multi_via_datastore_streaming,
+                    )
+                    handled = await archive_multi_via_datastore_streaming(
+                        ds=ds, resources_info=ds_resources,
+                        next_version=next_version, new_modified=new_modified, db=db,
+                    )
+                    if handled:
+                        return
+                    logger.info(
+                        "multi-neon declined for %s (no append DB?) — snapshot path",
+                        ds.ckan_name,
+                    )
 
             # Per-dataset download-cap override. The global cap
             # (max_resource_download_size, 200MB) also guards the in-memory

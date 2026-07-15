@@ -99,6 +99,19 @@ def table_name(ds) -> str:
     return f"append_{base}"[:54] + f"_{sid}"
 
 
+def table_name_for_resource(ds, resource_id: str) -> str:
+    """Per-RESOURCE NEON table for a multi-resource dataset archived to NEON
+    (e.g. one CSV per year → one queryable table per year).
+
+    ``append_<base>_<dsid8>_<rid8>`` — dsid8 keeps two datasets that share a
+    ckan_name apart, rid8 keeps the dataset's resources apart. Clamped to the
+    63-char identifier limit (reserve 18 = ``_<8>_<8>`` for the two suffixes)."""
+    base = re.sub(r"[^a-z0-9_]+", "_", (ds.ckan_name or "").lower()).strip("_") or "ds"
+    dsid = str(ds.id).replace("-", "")[:8]
+    rid = str(resource_id).replace("-", "")[:8]
+    return f"append_{base}"[:63 - 18].rstrip("_") + f"_{dsid}_{rid}"
+
+
 def _qi(name: str) -> str:
     """Quote a SQL identifier (supports Hebrew/Unicode column names)."""
     return '"' + str(name).replace('"', '""') + '"'

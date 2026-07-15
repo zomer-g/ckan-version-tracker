@@ -52,7 +52,7 @@ function versionFiles(
 ): Array<{ name: string; index: number; label: string }> {
   if (!mappings) return [];
   const names = (mappings._names as Record<string, string> | undefined) || {};
-  const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table"];
+  const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table", "_append_tables"];
   const include = (key: string) =>
     !skip.includes(key) && (!onlyKeys || onlyKeys.has(key));
   // Count how many DISPLAYED entries map to each friendly name, to decide when
@@ -156,7 +156,7 @@ function changedKeys(
   if (!curr) return out;
   const norm = (x: unknown) => (Array.isArray(x) ? JSON.stringify(x) : x);
   for (const [k, val] of Object.entries(curr)) {
-    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table"].includes(k)) continue;
+    if (["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table", "_append_tables"].includes(k)) continue;
     if (!prev || norm(prev[k]) !== norm(val)) out.add(k);
   }
   return out;
@@ -328,11 +328,16 @@ export default function VersionsPage() {
   // a "view & pull the accumulated rows" CTA → /archive/:id.
   const hasAppendArchive = useMemo<boolean>(
     () =>
-      versionsList.some(
-        (v) =>
-          (v.change_summary as Record<string, unknown> | null)?.type === "append_db" ||
-          !!(v.resource_mappings as Record<string, unknown> | null)?.append_table,
-      ),
+      versionsList.some((v) => {
+        const cs = v.change_summary as Record<string, unknown> | null;
+        const rm = v.resource_mappings as Record<string, unknown> | null;
+        return (
+          cs?.type === "append_db" ||
+          cs?.type === "append_db_multi" ||          // multi-resource NEON archive
+          !!rm?.append_table ||
+          !!rm?._append_tables                        // per-resource NEON tables
+        );
+      }),
     [versionsList],
   );
   // An append/NEON dataset: a completed append_db version exists, OR the dataset

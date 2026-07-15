@@ -55,6 +55,25 @@ def test_table_name_is_stable_unique_and_in_limit():
     assert A.table_name(ds) != A.table_name(_ds("private-and-commercial-vehicles", "ffffffff-0000-0000-0000-000000000000"))
 
 
+def test_table_name_for_resource_is_stable_unique_and_in_limit():
+    ds = _ds("bus_rishui_bitzua_2021", "4ab75f12-01a0-4f1a-b980-41572b6776bd")
+    rid_a = "d8b92642-bad4-43f4-b00f-ea24f0c0702b"
+    rid_b = "588dfec1-b95c-495b-a1f4-e1ca4278be5d"
+    ta = A.table_name_for_resource(ds, rid_a)
+    assert ta == A.table_name_for_resource(ds, rid_a)          # stable
+    assert ta.startswith("append_bus_rishui_bitzua_2021")
+    assert ta.endswith("_4ab75f12_d8b92642")                   # dsid8 + rid8
+    assert len(ta) <= 63                                       # PG identifier limit
+    # Different resources of the same dataset get distinct tables.
+    assert ta != A.table_name_for_resource(ds, rid_b)
+    # Different datasets sharing a ckan_name don't collide (dsid8 differs).
+    ds2 = _ds("bus_rishui_bitzua_2021", "ffffffff-0000-0000-0000-000000000000")
+    assert A.table_name_for_resource(ds2, rid_a) != ta
+    # Clamps a very long ckan_name and still fits.
+    long_ds = _ds("x" * 80, "4ab75f12-01a0-4f1a-b980-41572b6776bd")
+    assert len(A.table_name_for_resource(long_ds, rid_a)) <= 63
+
+
 def test_row_hash_is_order_independent_and_none_safe():
     a = A.row_hash({"b": "2", "a": "1", "c": None}, ["a", "b", "c"])
     b = A.row_hash({"a": "1", "b": "2", "c": None}, ["a", "b", "c"])

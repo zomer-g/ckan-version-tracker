@@ -378,6 +378,155 @@ async def _archive_streaming_to_db(
     return True
 
 
+async def archive_multi_via_datastore_streaming(
+    *,
+    ds: TrackedDataset,
+    resources_info: list[tuple[dict, dict]],
+    next_version: int,
+    new_modified: str,
+    db,
+) -> bool:
+    """Stream a MULTI-resource dataset's datastore rows to NEON — one table per
+    resource (e.g. one CSV per year → one queryable table per year).
+
+    The single-resource ``_archive_streaming_to_db`` only fires when a dataset
+    has exactly one datastore resource; a dataset flagged ``archive_neon`` with
+    several resources otherwise silently fell through to the file-snapshot path
+    (and, for large Imperva-blocked files, crash-looped the dyno). This handles
+    that case: every datastore-active resource is streamed keyless (full-row
+    hash dedup) into its own ``append_<…>_<rid8>`` table.
+
+    RESUMABLE across dyno recycles via a combined ``scraper_config.neon_multi``
+    checkpoint ``{done: [rid…], cur: rid, offset: n}`` persisted after every
+    durable flush — so a kill continues from the exact resource+offset instead
+    of restarting (the whole point: it makes forward progress each run and can
+    never crash-LOOP). Commits ONE ``VersionIndex`` only after ALL resources are
+    exhausted. ``resources_info`` is ``[(resource, ds_info), …]`` for the
+    datastore-active resources. Returns True on completion, False if it declined
+    (no append DB configured) so the caller can fall through.
+    """
+    if not append_store.is_configured():
+        return False
+
+    # Stable order so the checkpoint's "done"/"cur" refer to a deterministic
+    # sequence across resumes.
+    items = sorted(resources_info, key=lambda ri: str(ri[0].get("id")))
+    cp = dict((ds.scraper_config or {}).get("neon_multi") or {})
+    done: set[str] = set(cp.get("done") or [])
+    cur_rid = cp.get("cur")
+    cur_offset = int(cp.get("offset") or 0)
+
+    tables: dict[str, str] = {}
+    names: dict[str, str] = {}
+    counts: dict[str, int | None] = {}
+    added_total = 0
+
+    async def _save_cp(_done, _cur, _off) -> None:
+        ds.scraper_config = {
+            **(ds.scraper_config or {}),
+            "neon_multi": {"done": sorted(_done), "cur": _cur, "offset": _off},
+        }
+        await db.commit()
+
+    for resource, info in items:
+        rid = str(resource.get("id"))
+        table = append_store.table_name_for_resource(ds, rid)
+        tables[rid] = table
+        names[rid] = resource.get("name") or rid
+        if rid in done:
+            continue
+
+        fields = _fields_for_odata(info.get("fields") or [])
+        if not fields:
+            logger.info("multi-neon: %s resource %s has no usable fields — skipping",
+                        ds.ckan_name, rid)
+            done.add(rid)
+            await _save_cp(done, None, 0)
+            continue
+        source_cols = [f["id"] for f in fields]
+        try:
+            await append_store.ensure_table(table, source_cols, key_col=None, keyless=True)
+        except Exception as e:
+            logger.error("multi-neon: ensure_table failed for %s/%s: %s", ds.ckan_name, rid, e)
+            ds.last_error = f"multi-neon ensure_table ({names[rid]}): {type(e).__name__}: {e}"[:2000]
+            await db.commit()
+            return False
+
+        start = cur_offset if cur_rid == rid else 0
+        # Anchor the checkpoint on THIS resource before the first page, so a
+        # death mid-first-page resumes here rather than re-running a prior one.
+        await _save_cp(done, rid, start)
+        pending: list[dict] = []
+        last_offset = start
+        try:
+            async for next_offset, batch in _stream_datastore_pages(rid, start_offset=start):
+                last_offset = next_offset
+                pending.extend(batch)
+                if len(pending) >= PENDING_FLUSH_THRESHOLD:
+                    added_total += await append_store.append_rows(
+                        table, source_cols, pending, key_col=None, keyless=True)
+                    pending = []
+                    # Checkpoint ONLY after the rows are durably in NEON.
+                    await _save_cp(done, rid, last_offset)
+            if pending:
+                added_total += await append_store.append_rows(
+                    table, source_cols, pending, key_col=None, keyless=True)
+                pending = []
+        except Exception as e:
+            # scraper_config already holds the last durable checkpoint for this
+            # resource; keep it so the resume driver continues from there.
+            logger.error("multi-neon: streaming aborted for %s/%s at offset %d: %s",
+                         ds.ckan_name, rid, last_offset, e)
+            ds.last_error = (
+                f"multi-neon insert failed ({names[rid]}, offset {last_offset}): "
+                f"{type(e).__name__}: {e}")[:2000]
+            await db.commit()
+            return False
+
+        done.add(rid)
+        try:
+            counts[rid] = await append_store.table_count(table)
+        except Exception:
+            counts[rid] = None
+        await _save_cp(done, None, 0)
+
+    # Every resource streamed → clear the checkpoint and record one version.
+    ds.scraper_config = {
+        k: v for k, v in (ds.scraper_config or {}).items() if k != "neon_multi"
+    } or None
+    resource_mappings = {
+        "_resource_ids": [str(r.get("id")) for r, _ in items],
+        "_append_tables": tables,
+        "_names": names,
+    }
+    version = VersionIndex(
+        tracked_dataset_id=ds.id,
+        version_number=next_version,
+        metadata_modified=new_modified,
+        odata_metadata_resource_id=None,
+        change_summary={
+            "type": "append_db_multi",
+            "rows_added": added_total,
+            "tables": len(tables),
+            "rows_total": {rid: counts.get(rid) for rid in tables},
+            "resources_added": [],
+            "resources_removed": [],
+            "resources_modified": [],
+        },
+        resource_mappings=resource_mappings,
+    )
+    db.add(version)
+    ds.last_polled_at = datetime.now(timezone.utc)
+    ds.last_modified = new_modified
+    ds.last_error = None
+    await db.commit()
+    logger.info(
+        "multi-neon: %s v%d committed (%d new rows across %d NEON tables)",
+        ds.ckan_name, next_version, added_total, len(tables),
+    )
+    return True
+
+
 async def archive_via_datastore_streaming(
     *,
     ds: TrackedDataset,
