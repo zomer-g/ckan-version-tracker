@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import RequestForm from "../components/RequestForm";
 import GovmapRequestForm from "../components/GovmapRequestForm";
@@ -13,6 +13,9 @@ import { IDF_PATTERN } from "../utils/idfPattern";
 // practitioners.health.gov.il per-registry URL pattern. Mirror of
 // HEALTH_PRACTITIONERS_RE in app/api/health.py.
 import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
+// registries.health.gov.il per-registry URL pattern. Mirror of the
+// catalog in app/api/registries.py.
+import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
@@ -213,6 +216,8 @@ export default function HomePage() {
   // practitioners.health.gov.il per-registry scraper result — same
   // shape as GovIlValidation.
   const [healthResult, setHealthResult] = useState<GovIlValidation | null>(null);
+  // registries.health.gov.il per-registry scraper result — same shape.
+  const [registriesResult, setRegistriesResult] = useState<GovIlValidation | null>(null);
   // avodata.labor.gov.il per-scope scraper result — same shape.
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
   // mevaker.gov.il reports scraper result — same shape.
@@ -271,6 +276,10 @@ export default function HomePage() {
     return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
   };
 
+  const detectRegistriesUrl = (input: string): boolean => {
+    return REGISTRIES_PATTERN.test(input.trim());
+  };
+
   const detectAvodataUrl = (input: string): boolean => {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
@@ -318,6 +327,7 @@ export default function HomePage() {
     setGovMapResult(null);
     setIdfResult(null);
     setHealthResult(null);
+    setRegistriesResult(null);
     setAvodataResult(null);
     setMevakerResult(null);
     setHatzavResult(null);
@@ -385,6 +395,23 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid practitioners.health.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2c-registries. Check for registries.health.gov.il per-registry URL.
+      // Same auto-treat-as-scraper flow — /api/registries/validate returns
+      // the same shape so we render through the existing scraper card.
+      if (detectRegistriesUrl(query)) {
+        const validation = await registries.validate(query.trim());
+        if (validation.valid) {
+          setRegistriesResult(validation);
+          setRequestFormFor("registries");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid registries.health.gov.il URL");
         }
         setLoading(false);
         return;
@@ -816,6 +843,61 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("health")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* registries.health.gov.il scraper result — teal בריאות chip,
+            distinct from the purple practitioners.health.gov.il card. */}
+        {!loading && registriesResult && (
+          <section aria-label="registries.health.gov.il result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #14b8a6" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{registriesResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ccfbf1",
+                      color: "#115e59",
+                    }}>
+                      בריאות
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>מאגרי מידע — משרד הבריאות</span>
+                  <span>registries.health.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={registriesResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {registriesResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "registries" ? (
+                    <RequestForm
+                      datasetTitle={registriesResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={registriesResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("registries")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

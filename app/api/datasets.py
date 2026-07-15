@@ -160,16 +160,28 @@ def apply_storage_target(scraper_config: dict | None, target: str) -> dict | Non
     return sc or None
 
 
+# Scraper ``kind`` markers whose engine emits row-level tabular data (not
+# PDF/ZIP files or a catalog index) — these are NEON-eligible even though
+# they're ``source_type == "scraper"``. registries.health.gov.il registries
+# are one flat row per entity, so NEON gives SQL-queryable tables; the
+# rows are loaded at push time from the in-memory push payload (see
+# app/api/worker.py push_version) rather than the CKAN datastore stream.
+TABULAR_SCRAPER_KINDS = {"registries"}
+
+
 def dataset_is_neon_eligible(ds) -> bool:
     """Whether the NEON (tabular-rows) archive is meaningful for this dataset.
 
-    NEON stores queryable tabular rows, which only the CKAN/data.gov.il
-    datastore path produces. Scraper/govmap sources archive files
-    (PDF/ZIP) or a catalog index, not row-level tabular data, so the NEON
-    options are offered for CKAN datasets only — the admin UI greys them
-    out otherwise and the API rejects a NEON plan for a non-eligible source.
+    NEON stores queryable tabular rows. CKAN/data.gov.il datastore sources
+    always produce them; most scraper/govmap sources archive files
+    (PDF/ZIP) or a catalog index, not row-level data, so NEON is offered
+    for CKAN datasets only. The exception is scrapers whose ``kind`` is in
+    ``TABULAR_SCRAPER_KINDS`` (e.g. registries.health.gov.il) — those emit
+    tabular rows and get their NEON table populated from the push payload.
     """
-    return (getattr(ds, "source_type", None) or "ckan") == "ckan"
+    if (getattr(ds, "source_type", None) or "ckan") == "ckan":
+        return True
+    return (getattr(ds, "scraper_config", None) or {}).get("kind") in TABULAR_SCRAPER_KINDS
 
 
 def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
@@ -356,6 +368,7 @@ async def track_dataset(
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
+        from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
@@ -379,6 +392,12 @@ async def track_dataset(
                 origin = "practitioners.health.gov.il"
                 slug_prefix = "health-scraper"
                 mirror_prefix = "gov-versions-health"
+        if not collector_name:
+            page_type, collector_name = _parse_registries_url(body.source_url)
+            if collector_name:
+                origin = "registries.health.gov.il"
+                slug_prefix = "registries-scraper"
+                mirror_prefix = "gov-versions-registries"
         if not collector_name:
             page_type, collector_name = _parse_avodata_url(body.source_url)
             if collector_name:
@@ -427,6 +446,7 @@ async def track_dataset(
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
+                    "registries.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
@@ -525,6 +545,21 @@ async def track_dataset(
             sc.setdefault("max_docs", docs)
             if registry_id:
                 sc.setdefault("registry_id", registry_id)
+        elif page_type and page_type.startswith("registries_"):
+            # registries.health.gov.il — a module-federation SPA whose
+            # per-registry data lives on an open same-origin JSON API,
+            # scraped by the external worker (govscraper.scrapers.registries)
+            # with plain httpx. One dataset per registry, one flat row per
+            # entity. archive_neon=True makes each dataset a dual R2+NEON
+            # write so the tabular rows are SQL-queryable (see
+            # app/api/worker.py push_version + app/services/append_store).
+            from app.api.registries import get_registries_limits
+            depth, docs = get_registries_limits(page_type)
+            sc["kind"] = "registries"
+            sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            sc.setdefault("archive_neon", True)
         elif page_type and page_type.startswith("avodata_"):
             # avodata.labor.gov.il index page — fully server-rendered
             # HTML, scraped via plain httpx + bs4 (no Playwright, no
@@ -1290,6 +1325,7 @@ async def submit_tracking_request(
         from app.api.govil import _parse_govil_url
         from app.api.idf import _parse_idf_url
         from app.api.health import _parse_health_url
+        from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
@@ -1310,6 +1346,11 @@ async def submit_tracking_request(
             if collector_name:
                 origin = "practitioners.health.gov.il"
                 slug_prefix = "health-scraper"
+        if not collector_name:
+            page_type, collector_name = _parse_registries_url(body.source_url)
+            if collector_name:
+                origin = "registries.health.gov.il"
+                slug_prefix = "registries-scraper"
         if not collector_name:
             page_type, collector_name = _parse_avodata_url(body.source_url)
             if collector_name:
@@ -1351,6 +1392,7 @@ async def submit_tracking_request(
                 detail=(
                     "Invalid scraper URL — must be a gov.il collector, "
                     "idf.il page, practitioners.health.gov.il registry, "
+                    "registries.health.gov.il registry, "
                     "avodata.labor.gov.il scope, mevaker.gov.il reports, "
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
@@ -1391,6 +1433,16 @@ async def submit_tracking_request(
             sc["max_docs"] = docs
             if registry_id:
                 sc["registry_id"] = registry_id
+        elif page_type and page_type.startswith("registries_"):
+            # Mirror of the admin-POST branch — keep in sync. archive_neon
+            # makes each registry a dual R2+NEON write (SQL-queryable rows).
+            from app.api.registries import get_registries_limits
+            depth, docs = get_registries_limits(page_type)
+            sc["kind"] = "registries"
+            sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            sc["archive_neon"] = True
         elif page_type and page_type.startswith("avodata_"):
             # Mirror of the admin-POST branch — keep in sync.
             from app.api.avodata import get_avodata_limits, corpus_of_page_type

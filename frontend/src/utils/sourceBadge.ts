@@ -36,6 +36,7 @@ export interface SourceBadge {
     | "home.source_link_govmap"
     | "home.source_link_idf"
     | "home.source_link_health"
+    | "home.source_link_registries"
     | "home.source_link_avodata"
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
@@ -58,6 +59,13 @@ const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
 // backend stamps at create time in app/api/datasets.py for this
 // source and nothing else uses it.
 const HEALTH_ORG_HINTS = ["practitioners.health.gov.il"];
+
+// Same drift-immune rule for registries.health.gov.il (משרד הבריאות
+// "מאגרי מידע") — only the exact "registries.health.gov.il" stamp the
+// backend writes at create time, NOT a generic Ministry-of-Health slug
+// shared with regular gov.il collectors or the practitioners source. The
+// ckan_id prefix "registries-scraper-" is the primary signal.
+const REGISTRIES_ORG_HINTS = ["registries.health.gov.il"];
 
 // Same drift-immune rule for avodata. Only the exact "avodata.labor.gov.il"
 // stamp the backend writes at create time — NOT "ministry-labor" or
@@ -117,6 +125,18 @@ function looksLikeHealth(
   // signal that the dataset came from the practitioners portal.
   if (ckan_id && ckan_id.startsWith("health-scraper-")) return true;
   if (organization && HEALTH_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeRegistries(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  // Same drift-immune scheme as health: the ckan_id prefix is stamped at
+  // create time and never changes, so it's the authoritative signal that
+  // the dataset came from registries.health.gov.il.
+  if (ckan_id && ckan_id.startsWith("registries-scraper-")) return true;
+  if (organization && REGISTRIES_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -256,6 +276,19 @@ export function sourceBadgeFor(
         label: "PRACTITIONERS",
         accent: "#7c3aed",
         sourceLinkKey: "home.source_link_health",
+      };
+    }
+    if (looksLikeRegistries(organization, ckan_id)) {
+      // Teal pill for registries.health.gov.il, distinct from the purple
+      // practitioners.health.gov.il chip. bg/fg lands on WCAG AA on both
+      // light and dark themes; accent matches the card left-rail.
+      return {
+        bg: "#ccfbf1",
+        fg: "#115e59",
+        id: "registries",
+        label: "בריאות",
+        accent: "#14b8a6",
+        sourceLinkKey: "home.source_link_registries",
       };
     }
     if (looksLikeAvodata(organization, ckan_id)) {

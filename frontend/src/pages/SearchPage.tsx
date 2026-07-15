@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, avodata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -10,6 +10,9 @@ import { IDF_PATTERN } from "../utils/idfPattern";
 // practitioners.health.gov.il per-registry URL pattern. Mirror of
 // HEALTH_PRACTITIONERS_RE in app/api/health.py.
 import { HEALTH_PRACTITIONERS_PATTERN } from "../utils/healthPattern";
+// registries.health.gov.il per-registry URL pattern. Mirror of the
+// catalog in app/api/registries.py.
+import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
@@ -88,6 +91,11 @@ export default function SearchPage() {
   const [healthTracked, setHealthTracked] = useState<"tracked" | "pending" | null>(null);
   const [healthTracking, setHealthTracking] = useState(false);
   const [showHealthInterval, setShowHealthInterval] = useState(false);
+  // registries.health.gov.il scraper result — same flow.
+  const [registriesResult, setRegistriesResult] = useState<GovIlValidation | null>(null);
+  const [registriesTracked, setRegistriesTracked] = useState<"tracked" | "pending" | null>(null);
+  const [registriesTracking, setRegistriesTracking] = useState(false);
+  const [showRegistriesInterval, setShowRegistriesInterval] = useState(false);
 
   // avodata.labor.gov.il scraper result — same flow.
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
@@ -178,6 +186,10 @@ export default function SearchPage() {
     return HEALTH_PRACTITIONERS_PATTERN.test(input.trim());
   };
 
+  const detectRegistriesUrl = (input: string): boolean => {
+    return REGISTRIES_PATTERN.test(input.trim());
+  };
+
   const detectMevakerUrl = (input: string): boolean => {
     return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
   };
@@ -220,6 +232,9 @@ export default function SearchPage() {
     setHealthResult(null);
     setHealthTracked(null);
     setShowHealthInterval(false);
+    setRegistriesResult(null);
+    setRegistriesTracked(null);
+    setShowRegistriesInterval(false);
     setAvodataResult(null);
     setAvodataTracked(null);
     setShowAvodataInterval(false);
@@ -279,6 +294,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid practitioners.health.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1c-registries. Check for registries.health.gov.il per-registry URL.
+      if (detectRegistriesUrl(query)) {
+        const validation = await registries.validate(query.trim());
+        if (validation.valid) {
+          setRegistriesResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid registries.health.gov.il URL");
         }
         setLoading(false);
         return;
@@ -489,6 +518,24 @@ export default function SearchPage() {
       }
     }
     setHealthTracking(false);
+  };
+
+  // Same pattern — backend's /datasets endpoint dispatches by URL host.
+  const trackRegistriesDataset = async (interval: number) => {
+    if (!registriesResult?.url || !registriesResult?.title) return;
+    setShowRegistriesInterval(false);
+    setRegistriesTracking(true);
+    try {
+      await datasetsApi.trackScraper(registriesResult.url, registriesResult.title, interval);
+      setRegistriesTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setRegistriesTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setRegistriesTracking(false);
   };
 
   const trackAvodataDataset = async (interval: number) => {
@@ -1034,6 +1081,46 @@ export default function SearchPage() {
     );
   };
 
+  // Same shape as renderHealthTrackButton, bound to the registries state.
+  const renderRegistriesTrackButton = () => {
+    if (registriesTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (registriesTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showRegistriesInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackRegistriesDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowRegistriesInterval(!showRegistriesInterval)}
+          disabled={registriesTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {registriesTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
   // Same shape as renderGovIlTrackButton, just bound to the IDF state.
   // Could be DRY'd up with a factory, but keeping the two parallel is
   // easier to read while we have only two scraper origins.
@@ -1104,7 +1191,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1454,6 +1541,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={healthResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {healthResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* registries.health.gov.il scraper result */}
+      {registriesResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #14b8a6" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{registriesResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#ccfbf1",
+                  color: "#115e59",
+                }}>
+                  בריאות
+                </span>
+              </div>
+              {renderRegistriesTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>מאגרי מידע — משרד הבריאות</span>
+              <span>registries.health.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={registriesResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {registriesResult.url}
               </a>
             </p>
           </article>

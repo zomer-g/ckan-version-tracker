@@ -24,6 +24,7 @@ from app.api.govil import router as govil_router
 from app.api.govmap import router as govmap_router
 from app.api.idf import router as idf_router
 from app.api.health import router as health_router
+from app.api.registries import router as registries_router
 from app.api.avodata import router as avodata_router
 from app.api.mevaker import router as mevaker_router
 from app.api.hatzav import router as hatzav_router
@@ -120,6 +121,7 @@ app.include_router(govil_router)
 app.include_router(govmap_router)
 app.include_router(idf_router)
 app.include_router(health_router)
+app.include_router(registries_router)
 app.include_router(avodata_router)
 app.include_router(mevaker_router)
 app.include_router(hatzav_router)

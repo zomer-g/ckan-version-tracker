@@ -553,9 +553,44 @@ async def push_version(
         from app.services.csv_parser import (
             batch_records, records_to_csv_bytes, parse_csv,
         )
+        from app.services import append_store
         ts = _timestamp()
 
         csv_resource_ids = body.csv_resource_ids or {}
+
+        # NEON dual-write for tabular scraper sources (e.g.
+        # registries.health.gov.il): when the dataset opted into
+        # ``archive_neon``, load each resource's rows into its per-dataset
+        # NEON table so they're SQL-queryable — independent of the CKAN
+        # datastore-streaming path (which only CKAN sources have). We load
+        # from the stored CSV bytes (parse_csv) so the row_hash dedup is
+        # identical whether the rows arrived inline or as an out-of-band
+        # >50MB CSV. Best-effort: a NEON failure must never fail the version.
+        _archive_neon = bool(
+            append_store.is_configured()
+            and (ds.scraper_config or {}).get("archive_neon")
+        )
+
+        async def _neon_load_from_csv(res_name: str, csv_bytes: bytes | None) -> None:
+            if not (_archive_neon and csv_bytes):
+                return
+            try:
+                n_fields, n_records = parse_csv(csv_bytes)
+                cols = [f["id"] for f in n_fields if f.get("id") and f["id"] != "_id"]
+                if not (cols and n_records):
+                    return
+                table = append_store.table_name(ds)
+                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                n = await append_store.append_rows(
+                    table, cols, n_records, key_col=None, keyless=True,
+                )
+                logger.info(
+                    "NEON archive: +%d new rows into %s for %s", n, table, res_name,
+                )
+            except Exception as e:
+                logger.warning(
+                    "NEON archive failed for %s (non-fatal): %s", res_name, e,
+                )
 
         for res in body.resources:
             # Pre-uploaded CSV files bypass record-level handling. Append mode
@@ -570,6 +605,17 @@ async def push_version(
                 odata_resource_ids.append(pre_uploaded)
                 logger.info("Using pre-uploaded CSV for %s → resource %s (%d rows)",
                             res.name, pre_uploaded, res.row_count)
+                # >50MB path: the worker uploaded the CSV out-of-band and sent
+                # empty records. For NEON dual-write, read the CSV back from
+                # R2 and load it (mirrors seed_neon_from_versions). Best-effort.
+                if _archive_neon and storage.is_storage_value(pre_uploaded):
+                    try:
+                        pre_bytes = await storage_client.get_object_bytes(pre_uploaded)
+                        await _neon_load_from_csv(res.name, pre_bytes)
+                    except Exception as e:
+                        logger.warning(
+                            "NEON readback failed for %s (non-fatal): %s", res.name, e,
+                        )
                 # Worker called /upload-csv with version_number=1 (it can't
                 # know next_version yet — same constraint as the ZIP path).
                 # Now that we do, rewrite the resource's 'vN' marker so the
@@ -661,6 +707,8 @@ async def push_version(
                     odata_resource_ids.append(marked)
                     logger.info("Pushed %d rows for %s to R2 (%s)",
                                 len(res.records), res.name, key)
+                    # Dual-write the same rows to NEON when opted in.
+                    await _neon_load_from_csv(res.name, csv_bytes)
                 except Exception as e:
                     logger.error("Failed to push resource %s to R2: %s", res.name, e)
                     push_errors.append(f"r2 {res.name}: {e}")

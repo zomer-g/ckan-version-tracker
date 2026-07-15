@@ -371,6 +371,17 @@ export const health = {
     }),
 };
 
+// registries.health.gov.il validation — same response shape. Server
+// side at app/api/registries.py; only per-registry /<RegistryPath> URLs
+// (Ambulances, FoodImporters, MedicalDevices, ...) are accepted.
+export const registries = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/registries/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // avodata.labor.gov.il validation — same response shape. Server side
 // at app/api/avodata.py; only /search?scope=<known-slug> URLs accepted
 // (22 scopes; the backend enforces the allowlist).
