@@ -661,6 +661,11 @@ async def _stream_r2_csv_to_neon(
 
     from app.services import append_store
 
+    # Big text cells (gov-decisions bodies exceed 175K chars) blow past the csv
+    # default field cap of 131072; raise it (global to the csv module, capped
+    # below Windows' C-long ceiling).
+    _csv.field_size_limit(10**8)
+
     data = await storage_client.get_object_bytes(r2val)
     if not data:
         return 0, 0, "download failed"

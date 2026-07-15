@@ -9,6 +9,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Some sources carry very large text cells — e.g. the gov-decisions archive
+# stores each decision's full body (``תוכן ההחלטה`` / ``תוכן_html``), which can
+# exceed 175K chars. Python's csv default field cap is 131072 and raises
+# "field larger than field limit" mid-parse. Raise it process-wide (this setter
+# is global to the ``csv`` module). 10**8 stays under Windows' C-long ceiling
+# (sys.maxsize would OverflowError there).
+csv.field_size_limit(10**8)
+
 # Max records per datastore_create/upsert batch
 BATCH_SIZE = 5000
 

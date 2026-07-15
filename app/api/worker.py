@@ -35,6 +35,11 @@ from app.services.worker_version import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/worker", tags=["worker"])
 
+# Raise the csv field cap (default 131072) so _neon_stream_load_r2 can parse
+# rows with very large text cells — e.g. gov-decisions bodies (>175K chars).
+# Global to the csv module; 10**8 stays under Windows' C-long ceiling.
+_csv.field_size_limit(10**8)
+
 
 def _verify_worker_key(request: Request):
     """Verify the worker API key from Authorization header."""
