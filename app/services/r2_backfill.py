@@ -643,6 +643,70 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
 # poll. Older versions with a different column set (e.g. an age-bucket rename)
 # hash in their own space and are kept as distinct historical states.
 
+async def _stream_r2_csv_to_neon(
+    table: str, r2val: str, *, first_seen, batch: int = 5000,
+) -> tuple[int, int, str | None]:
+    """Stream one R2 CSV into ``table`` in memory-bounded batches.
+
+    Returns ``(rows_in_file, rows_inserted, error)``. Downloads the object to a
+    temp file, frees the bytes, then ``csv.DictReader``-streams it so peak memory
+    is a single batch — parsing a big cumulative CSV whole (``parse_csv``) OOMs
+    the 512MB dyno (e.g. the gov-decisions file: ~139MB / 26k rows carrying full
+    decision body text). Mirrors ``worker._neon_stream_load_r2`` but stamps the
+    historical ``first_seen`` on inserted rows. Dedups on row_hash (keyless ON
+    CONFLICT), so a re-run or an interrupted run is safe."""
+    import csv as _csv
+    import os as _os
+    import tempfile as _tempfile
+
+    from app.services import append_store
+
+    data = await storage_client.get_object_bytes(r2val)
+    if not data:
+        return 0, 0, "download failed"
+    fd, tmp = _tempfile.mkstemp(suffix=".csv", prefix="seed-neon-")
+    _os.close(fd)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        del data  # free the download before streaming the parse
+        seen_rows = 0
+        inserted = 0
+        buf: list[dict] = []
+        ensured = False
+        with open(tmp, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = _csv.DictReader(fh)
+            # Drop the synthetic CKAN `_id` (per-dump row id, not data) — keeping
+            # it would bloat the table and break forward dedup (the poll path
+            # strips it, so hashes would differ and every row re-inserts).
+            cols = [c for c in (reader.fieldnames or []) if c and c != "_id"]
+            if not cols:
+                return 0, 0, "no columns"
+            for row in reader:
+                seen_rows += 1
+                buf.append({c: (row.get(c) or "") for c in cols})
+                if len(buf) >= batch:
+                    if not ensured:
+                        await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                        ensured = True
+                    inserted += await append_store.append_rows(
+                        table, cols, buf, key_col=None, keyless=True, first_seen=first_seen,
+                    )
+                    buf = []
+        if buf:
+            if not ensured:
+                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+            inserted += await append_store.append_rows(
+                table, cols, buf, key_col=None, keyless=True, first_seen=first_seen,
+            )
+        return seen_rows, inserted, None
+    finally:
+        try:
+            _os.remove(tmp)
+        except OSError:
+            pass
+
+
 async def seed_neon_from_versions(
     db, ds_uuid: uuidlib.UUID, *, apply: bool, reset: bool = False
 ) -> dict:
@@ -650,9 +714,14 @@ async def seed_neon_from_versions(
     with historical ``first_seen``, then enable the r2+neon dual-write going
     forward. Idempotent (ON CONFLICT DO NOTHING). ``apply=False`` reports the plan
     without writing to NEON or changing config. ``reset=True`` drops the table
-    first (clean re-seed after a schema fix)."""
+    first (clean re-seed after a schema fix).
+
+    Each version's CSV is streamed in batches (memory-bounded) rather than parsed
+    whole, so this is safe for large cumulative files. Append-only datasets point
+    every version at the SAME cumulative object; it's streamed once (oldest
+    version first, so the earliest ``first_seen`` wins) and later versions that
+    reuse it are recorded as no-ops."""
     from app.services import append_store
-    from app.services.csv_parser import parse_csv
 
     if not append_store.is_configured():
         return {"error": "NEON append DB is not configured (APPEND_DATABASE_URL missing)"}
@@ -680,6 +749,7 @@ async def seed_neon_from_versions(
     if apply and reset:
         await append_store.drop_table(table)
 
+    seen_r2: set[str] = set()
     for v in versions:
         m = v.resource_mappings or {}
         # the single data file for this version (snapshot key → r2 value)
@@ -697,38 +767,40 @@ async def seed_neon_from_versions(
         # Pass a tz-aware datetime (NOT a string) — asyncpg binds it against the
         # timestamptz column and rejects a str.
         fs = v.detected_at.astimezone(timezone.utc)
-        data = await storage_client.get_object_bytes(r2val)
-        if not data:
-            summary["skipped"].append({"version": v.version_number, "reason": "download failed"})
+        # Append-only datasets repoint every version at the SAME cumulative
+        # object. Stream it once (versions are oldest-first, so the earliest
+        # first_seen wins); reuse by a later version is a recorded no-op.
+        if r2val in seen_r2:
+            summary["per_version"].append({
+                "version": v.version_number, "date": fs.date().isoformat(),
+                "rows_in_file": None, "inserted": 0, "note": "same file as an earlier version",
+            })
+            continue
+        if not apply:
+            # Plan mode: don't download/parse (a big cumulative CSV would OOM
+            # just to count rows) — report the version→file mapping only.
+            summary["per_version"].append({
+                "version": v.version_number, "date": fs.date().isoformat(),
+                "rows_in_file": None, "inserted": 0,
+            })
+            seen_r2.add(r2val)
             continue
         try:
-            fields, records = parse_csv(data)
+            seen_rows, n, err = await _stream_r2_csv_to_neon(table, r2val, first_seen=fs)
         except Exception as e:
-            summary["skipped"].append({"version": v.version_number, "reason": f"parse: {e}"})
+            logger.exception("seed_neon: version %d stream failed", v.version_number)
+            summary["skipped"].append(
+                {"version": v.version_number, "reason": f"insert: {type(e).__name__}: {e}"}
+            )
             continue
-        # Drop the synthetic CKAN `_id` column: it's per-dump row id, not data,
-        # and including it would (a) bloat the table with a meaningless column
-        # and (b) break dedup — the forward delta path strips `_id`, so a seed
-        # that kept it would hash differently and the next poll would re-insert
-        # every row. build_insert reads only `cols`, so filtering cols is enough.
-        cols = [f["id"] for f in fields if f["id"] != "_id"]
-        n = 0
-        if apply and records and cols:
-            try:
-                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
-                n = await append_store.append_rows(
-                    table, cols, records, key_col=None, keyless=True, first_seen=fs,
-                )
-                summary["rows_inserted"] += n
-            except Exception as e:
-                logger.exception("seed_neon: version %d insert failed", v.version_number)
-                summary["skipped"].append(
-                    {"version": v.version_number, "reason": f"insert: {type(e).__name__}: {e}"}
-                )
-                continue
+        if err:
+            summary["skipped"].append({"version": v.version_number, "reason": err})
+            continue
+        seen_r2.add(r2val)
+        summary["rows_inserted"] += n
         summary["per_version"].append({
             "version": v.version_number, "date": fs.date().isoformat(),
-            "rows_in_file": len(records), "inserted": n,
+            "rows_in_file": seen_rows, "inserted": n,
         })
 
     if apply:
