@@ -411,50 +411,34 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                 # opaque "no detail" — these files need the browser extension.
                 skipped_iap: list[str] = []
 
-                # For first version, download all resources. Each download
-                # streams to a temp file on disk (returned as ``file_path``)
-                # instead of accumulating bytes in memory — required for the
-                # 512MB Render dyno once a resource grows past ~50MB. The
-                # file paths get cleaned up after the snapshot is uploaded.
+                # Every resource to snapshot was ALREADY downloaded to a temp
+                # file by detect_resource_changes above — on the FIRST version
+                # old_mappings is None, so every resource hashes as "changed"
+                # and lands in changed_resources with its {file_path, byte_count,
+                # sha256}. So just reuse those; the temp files are cleaned up
+                # after the snapshot upload (snapshot_service's finally block).
+                #
+                # We must NOT re-download here. The old first-version branch
+                # re-fetched every resource a SECOND time, so a large multi-file
+                # dataset (e.g. תיקופי מסלקה: 8×~190MB CSVs) held ~2× its bytes
+                # on the dyno's ephemeral disk at once — detect's copies (kept,
+                # since "changed" files aren't dropped) PLUS the re-downloaded
+                # copies, ~3GB — which exhausted the disk and crash-looped the
+                # whole web dyno (init_scheduler re-fired the never-completed
+                # poll on every restart).
                 resources_to_upload = changed_resources
-                if is_first_version:
-                    resources_to_upload = []
-                    for r in resources:
-                        if not r.get("url"):
-                            continue
-                        try:
-                            file_path, sha256, byte_count = await ckan_client.download_resource(
-                                r["url"], resource_id=r["id"],
-                            )
-                            resources_to_upload.append({
-                                "resource": r,
-                                "file_path": file_path,
-                                "byte_count": byte_count,
-                                "sha256": sha256,
-                            })
-                            hash_map[r["id"]] = sha256
-                        except Exception as e:
-                            # data.gov.il IAP-blocks headless downloads of
-                            # non-tabular FILES (PDF instruction sheets, etc.).
-                            # Tabular resources come through the datastore API
-                            # fine, so an un-fetchable file attachment must NOT
-                            # flag the whole dataset as failed — its data is
-                            # collected; only the cosmetic attachment is missing
-                            # (and it's un-fetchable headlessly anyway). Skip it
-                            # quietly; surface only real download errors.
-                            blocked = "Got HTML" in str(e) or "IAP" in str(e)
-                            if blocked and not r.get("datastore_active"):
-                                skipped_iap.append(
-                                    f"{r.get('name', r['id'][:8])} ({r.get('format') or '?'})"
-                                )
-                                logger.info(
-                                    "Skipping IAP-blocked non-datastore resource "
-                                    "%s (%s) for %s — data collected via datastore API",
-                                    r.get("name"), r.get("format"), ds.ckan_name,
-                                )
-                            else:
-                                logger.warning("Failed to download resource %s: %s", r["id"], e)
-                                errors.append(f"download {r.get('name', r['id'][:8])}: {e}")
+                # Resources detect couldn't fetch (IAP-blocked non-datastore
+                # files) never made it into changed_resources — surface them so
+                # the version warning explains what's missing (data still comes
+                # via the datastore API for tabular resources).
+                got_ids = {c["resource"]["id"] for c in changed_resources}
+                for r in resources:
+                    if (r.get("url") and r["id"] not in got_ids
+                            and not r.get("datastore_active")
+                            and hash_map.get(r["id"]) != "download_failed"):
+                        skipped_iap.append(
+                            f"{r.get('name', r['id'][:8])} ({r.get('format') or '?'})"
+                        )
 
                 # Storage routing: a dataset pinned to R2 stores its files in
                 # the object store and never touches the ODATA mirror, so we
