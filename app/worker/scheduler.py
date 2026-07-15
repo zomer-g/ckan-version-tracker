@@ -216,6 +216,31 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # Admin "dataset sizes" cache: one package_show per active dataset on the
+    # odata mirror, fanned out with a small concurrency cap (see
+    # app/api/admin.py _compute_dataset_sizes). Used to run inline from the
+    # /admin/dataset-sizes route on a stale-cache hit — that let it land at
+    # an unpredictable moment (whenever an admin loaded the page), which
+    # sometimes coincided with other memory-heavy work already in flight and
+    # contributed to 512MB-dyno OOM crashes. Now it's just another scheduled
+    # job like the ones above: predictable cadence, max_instances=1, never
+    # triggered by request traffic.
+    from app.api.admin import refresh_dataset_sizes_job
+    scheduler.add_job(
+        refresh_dataset_sizes_job,
+        trigger=IntervalTrigger(
+            minutes=20,
+            # Populate the cache a couple minutes after boot rather than
+            # waiting the full 20 — but not immediately, so it doesn't
+            # compete with the poll-job registration burst just above.
+            start_date=datetime.now(timezone.utc) + timedelta(minutes=2),
+        ),
+        id="refresh_dataset_sizes",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

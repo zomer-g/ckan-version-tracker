@@ -853,12 +853,7 @@ async def govmap_coverage_scrape_next(
     return await scrape_next_layer()
 
 
-_dataset_sizes_cache: dict = {"at": 0.0, "payload": None, "refreshing": False}
-# Dataset sizes change slowly (only on new versions/uploads) — no need to
-# re-fan-out every minute. A longer TTL means the background refresh (still
-# a ~dozens-of-package_show burst against a shared 512MB dyno) fires far
-# less often.
-_DATASET_SIZES_TTL = 600.0  # seconds
+_dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
 
 
 async def _compute_dataset_sizes(db: AsyncSession) -> dict:
@@ -979,22 +974,31 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     return {"datasets": out_datasets}
 
 
-async def _refresh_dataset_sizes_cache(db: AsyncSession) -> None:
-    """Background refresh: recompute and update the cache, without an HTTP
-    request waiting on it. Guarded by "refreshing" so a burst of page loads
-    while the cache is stale triggers exactly one fan-out, not one per
-    request."""
+async def refresh_dataset_sizes_job() -> None:
+    """Scheduled job (see app/worker/scheduler.py) that recomputes the
+    dataset-sizes cache on a fixed cadence, independent of admin traffic.
+
+    This used to be triggered from the /dataset-sizes route itself on a
+    stale-cache hit (fire-and-forget asyncio.create_task per request). That
+    still let the odata package_show fan-out land at an unpredictable moment
+    — e.g. right when other memory-heavy work (a worker streaming a large
+    dataset, other scheduled jobs) was already running — and contributed to
+    a 512MB-dyno OOM crash even with concurrency capped. Running it as its
+    own APScheduler job (max_instances=1, like every other periodic job
+    here) makes it happen once, on a known cadence, never overlapping
+    itself and never piggybacking on a page load.
+    """
     import time
 
-    try:
-        payload = await _compute_dataset_sizes(db)
-        _dataset_sizes_cache["payload"] = payload
-        _dataset_sizes_cache["at"] = time.time()
-    except Exception:
-        logger.exception("Background dataset-sizes refresh failed")
-    finally:
-        _dataset_sizes_cache["refreshing"] = False
-        await db.close()
+    from app.database import async_session
+
+    async with async_session() as db:
+        try:
+            payload = await _compute_dataset_sizes(db)
+            _dataset_sizes_cache["payload"] = payload
+            _dataset_sizes_cache["at"] = time.time()
+        except Exception:
+            logger.exception("Scheduled dataset-sizes refresh failed")
 
 
 @router.get("/dataset-sizes")
@@ -1002,7 +1006,6 @@ async def _refresh_dataset_sizes_cache(db: AsyncSession) -> None:
 async def dataset_sizes(
     request: Request,
     user: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """Resource sizes per active dataset, plus per-version breakdown.
 
@@ -1010,43 +1013,18 @@ async def dataset_sizes(
     is now 4.2 GB across 7 versions" at a glance, and by the VersionsPage
     (admin only) to show "this version: 312 MB".
 
-    Implementation: one CKAN package_show per dataset on the odata mirror
-    (the resource list it returns includes a 'size' field in bytes), then
-    sum sizes both globally and per-version via VersionIndex
-    .resource_mappings. Concurrency capped at 10 to avoid hammering the
-    odata API.
-
-    Stale-while-revalidate: a fresh cache hit (< 60s) returns instantly.
-    A stale hit ALSO returns instantly (the last known payload) and kicks
-    off a background refresh — this used to fan out ~one package_show per
-    active dataset synchronously on every admin page load once the cache
-    aged out, which stalled the request (and the shared connection pool)
-    for as long as odata.org.il took to answer all of them. Only a genuine
-    cold start (no payload at all yet) blocks on the fan-out.
-
-    Failure mode: if package_show fails for a dataset (network blip,
-    mirror gone), we report total_bytes=0 for it rather than 500-ing
-    the whole endpoint — partial data is more useful than none.
+    Pure cache read — NEVER computes here. The odata package_show fan-out
+    (one call per active dataset) runs only from the scheduled
+    refresh_dataset_sizes_job (app/worker/scheduler.py), on its own
+    cadence. This endpoint used to fan out inline (first synchronously,
+    later via a fire-and-forget background task on a stale hit) — either
+    way that let the fan-out land at an unpredictable moment driven by
+    admin traffic, which coincided with other memory-heavy activity
+    (worker streams, other scheduled jobs) and helped tip a 512MB dyno
+    into OOM. Returns an empty list on a cold boot before the job's first
+    tick has run yet, rather than block the page.
     """
-    import asyncio
-    import time
-
-    from app.database import async_session
-
-    now = time.time()
-    cached = _dataset_sizes_cache
-    is_stale = (now - cached["at"]) >= _DATASET_SIZES_TTL
-
-    if cached["payload"] is not None:
-        if is_stale and not cached["refreshing"]:
-            cached["refreshing"] = True
-            asyncio.create_task(_refresh_dataset_sizes_cache(async_session()))
-        return cached["payload"]
-
-    payload = await _compute_dataset_sizes(db)
-    _dataset_sizes_cache["payload"] = payload
-    _dataset_sizes_cache["at"] = now
-    return payload
+    return _dataset_sizes_cache["payload"] or {"datasets": []}
 
 
 @router.get("/scheduled-jobs")
