@@ -290,24 +290,6 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                 ]
                 ds.new_resources_at_source = new_at_source or None
 
-            # Standing indication: tracked resources that are non-datastore
-            # FILES (SHP/KMZ/PDF…) can't be fetched server-side — data.gov.il
-            # gates their download behind Google-OAuth / an Imperva bot wall,
-            # which no headless worker passes. Surface them so the operator
-            # knows those files await the browser extension (they're NOT lost;
-            # they're just not server-archivable). Tabular/datastore resources
-            # come through the datastore API and are unaffected.
-            iap_pending = [
-                f"{r.get('name') or r['id'][:8]} ({(r.get('format') or '?').upper()})"
-                for r in resources
-                if r.get("url") and not r.get("datastore_active")
-            ]
-            pending_note = (
-                "ℹ ממתין לתוסף הדפדפן — "
-                f"{len(iap_pending)} קבצים חסומים להורדה שרתית ב-data.gov.il: "
-                + ", ".join(iap_pending)
-            ) if iap_pending else None
-
             # Check if this is a large dataset.
             # Lightweight path handles a single tracked resource at a
             # time. The legacy condition only checked ds.resource_id
@@ -403,9 +385,28 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
             # (never parsed), so it can opt into a larger cap via
             # scraper_config.max_download_bytes to archive >200MB files.
             dl_cap = (ds.scraper_config or {}).get("max_download_bytes")
-            changed_resources, hash_map, detect_errors = await detect_resource_changes(
+            changed_resources, hash_map, detect_errors, blocked_ids = await detect_resource_changes(
                 old_mappings, resources, max_bytes=dl_cap
             )
+
+            # Standing indication: non-datastore FILES (SHP/KMZ/ZIP…) that
+            # data.gov.il ACTUALLY gated behind its Imperva/OAuth wall this
+            # poll — the headless download came back as an HTML challenge, not
+            # the file. Only genuinely-blocked files are listed: a non-datastore
+            # file that downloads fine (e.g. a plain PDF attachment) is not
+            # flagged. These await the browser extension (they're NOT lost, just
+            # not server-archivable); tabular/datastore resources are unaffected.
+            res_by_id = {r["id"]: r for r in resources}
+            iap_pending = [
+                f"{r.get('name') or r['id'][:8]} ({(r.get('format') or '?').upper()})"
+                for rid in blocked_ids
+                if (r := res_by_id.get(rid))
+            ]
+            pending_note = (
+                "ℹ ממתין לתוסף הדפדפן — "
+                f"{len(iap_pending)} קבצים חסומים להורדה שרתית ב-data.gov.il: "
+                + ", ".join(iap_pending)
+            ) if iap_pending else None
 
             is_first_version = latest_version is None
 

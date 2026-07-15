@@ -26,10 +26,10 @@ def has_metadata_changed(old_modified: str | None, new_modified: str) -> bool:
 async def detect_resource_changes(
     old_mappings: dict | None, resources: list[dict],
     max_bytes: int | None = None,
-) -> tuple[list[dict], dict[str, str], list[str]]:
+) -> tuple[list[dict], dict[str, str], list[str], set[str]]:
     """
     Download resources to disk and detect which ones changed.
-    Returns (changed_resources, hash_map, errors) where:
+    Returns (changed_resources, hash_map, errors, blocked_ids) where:
       - changed_resources: list of {resource, file_path, byte_count, sha256}
       - hash_map: {ckan_resource_id: sha256}
       - errors: per-resource failure messages (empty if every download
@@ -37,6 +37,13 @@ async def detect_resource_changes(
         tracked_dataset.last_error rather than only logging — without
         this, a poll where every download fails (e.g. all 4 ZIPs of a
         IAP-blocked dataset) silently no-ops with no UI signal.
+      - blocked_ids: ids of non-datastore FILES that data.gov.il actually
+        gated behind its Imperva/OAuth wall this poll (the download came
+        back as an HTML challenge, not the file). Only genuinely-blocked
+        files land here — a non-datastore file that downloads fine (e.g. a
+        plain PDF attachment) does NOT. The caller uses this to render an
+        accurate "awaiting browser extension" note instead of assuming
+        every non-datastore resource is blocked.
 
     Caller owns the temp files at ``file_path`` — they MUST be deleted
     after upload (see snapshot_service which removes them in a finally
@@ -48,6 +55,7 @@ async def detect_resource_changes(
     changed = []
     hash_map = {}
     errors: list[str] = []
+    blocked_ids: set[str] = set()
     old_hashes = {}
 
     # Extract old hashes from mappings if available
@@ -103,6 +111,7 @@ async def detect_resource_changes(
                     "data collected via datastore API",
                     resource.get("name"), resource.get("format"),
                 )
+                blocked_ids.add(rid)
                 if rid in old_hashes:
                     hash_map[rid] = old_hashes[rid]
                 continue
@@ -110,7 +119,7 @@ async def detect_resource_changes(
             hash_map[rid] = "download_failed"
             errors.append(f"download {resource.get('name', rid[:8])}: {e}")
 
-    return changed, hash_map, errors
+    return changed, hash_map, errors, blocked_ids
 
 
 def compute_change_summary(
