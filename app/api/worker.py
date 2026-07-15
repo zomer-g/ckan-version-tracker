@@ -1,9 +1,13 @@
 """Worker API for govil-scraper integration."""
+import asyncio
 import base64
+import csv as _csv
 import hashlib
 import httpx
 import json
 import logging
+import os as _os
+import tempfile as _tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -390,6 +394,75 @@ async def poll_for_task(
     }
 
 
+# Keep references to fire-and-forget NEON-load tasks so the event loop
+# doesn't garbage-collect them mid-run.
+_NEON_BG_TASKS: set = set()
+
+
+async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
+    """Stream a version's R2 CSV into the dataset's NEON table in batches.
+
+    Used for the >50MB out-of-band CSV path (e.g. registries Cosmetics,
+    ~60k rows / ~58MB CSV). Parsing the whole file into rows at once
+    (parse_csv → 60k dicts) OOMs / times out the 512MB OVER dyno inside
+    the push-version request — which surfaced as a 502. Instead: download
+    the object to a temp file, free the bytes, then csv.DictReader-stream
+    it in fixed batches, inserting each batch and dropping it. Memory stays
+    bounded to one batch. append_store stores everything as text and dedups
+    on row_hash (ON CONFLICT DO NOTHING), so a partial run interrupted by a
+    dyno recycle is safely resumed by the next poll. Best-effort throughout.
+
+    Runs off the request path (scheduled via asyncio.create_task) so
+    push-version returns immediately and the version is created regardless.
+    """
+    from app.services import append_store
+    tmp = None
+    BATCH = 5000
+    try:
+        data = await storage_client.get_object_bytes(r2_key)
+        if not data:
+            return
+        fd, tmp = _tempfile.mkstemp(suffix=".csv", prefix="neon-load-")
+        _os.close(fd)
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        del data  # free the ~58MB download before streaming the parse
+        cols: list[str] = []
+        batch: list[dict] = []
+        ensured = False
+        total = 0
+        with open(tmp, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = _csv.DictReader(fh)
+            cols = [c for c in (reader.fieldnames or []) if c and c != "_id"]
+            if not cols:
+                return
+            for row in reader:
+                batch.append({c: (row.get(c) or "") for c in cols})
+                if len(batch) >= BATCH:
+                    if not ensured:
+                        await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                        ensured = True
+                    total += await append_store.append_rows(
+                        table, cols, batch, key_col=None, keyless=True,
+                    )
+                    batch = []
+        if batch:
+            if not ensured:
+                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+            total += await append_store.append_rows(
+                table, cols, batch, key_col=None, keyless=True,
+            )
+        logger.info("NEON stream-load: +%d rows into %s from %s", total, table, r2_key)
+    except Exception as e:
+        logger.warning("NEON stream-load failed for %s (non-fatal): %s", table, e)
+    finally:
+        if tmp:
+            try:
+                _os.remove(tmp)
+            except OSError:
+                pass
+
+
 @router.post("/push-version")
 @limiter.limit("30/minute")
 async def push_version(
@@ -606,16 +679,20 @@ async def push_version(
                 logger.info("Using pre-uploaded CSV for %s → resource %s (%d rows)",
                             res.name, pre_uploaded, res.row_count)
                 # >50MB path: the worker uploaded the CSV out-of-band and sent
-                # empty records. For NEON dual-write, read the CSV back from
-                # R2 and load it (mirrors seed_neon_from_versions). Best-effort.
+                # empty records. For NEON dual-write, stream the CSV back from
+                # R2 into NEON in the BACKGROUND (batched, memory-bounded) —
+                # doing it synchronously here OOMs/times-out the 512MB dyno for
+                # a ~60k-row file and 502s the whole push. Firing it off-request
+                # lets the version be created immediately; the load is
+                # idempotent (row_hash ON CONFLICT), so it's safe if a recycle
+                # interrupts it — the next poll resumes it.
                 if _archive_neon and storage.is_storage_value(pre_uploaded):
-                    try:
-                        pre_bytes = await storage_client.get_object_bytes(pre_uploaded)
-                        await _neon_load_from_csv(res.name, pre_bytes)
-                    except Exception as e:
-                        logger.warning(
-                            "NEON readback failed for %s (non-fatal): %s", res.name, e,
-                        )
+                    _table = append_store.table_name(ds)
+                    _t = asyncio.create_task(
+                        _neon_stream_load_r2(_table, pre_uploaded)
+                    )
+                    _NEON_BG_TASKS.add(_t)
+                    _t.add_done_callback(_NEON_BG_TASKS.discard)
                 # Worker called /upload-csv with version_number=1 (it can't
                 # know next_version yet — same constraint as the ZIP path).
                 # Now that we do, rewrite the resource's 'vN' marker so the
