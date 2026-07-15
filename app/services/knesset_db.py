@@ -46,6 +46,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import asyncpg
 import httpx
 
 from app.config import settings
@@ -513,11 +514,45 @@ async def list_tables() -> list[dict]:
     return out
 
 
+# ── Case-insensitive identifier help ─────────────────────────────────────────
+# Every Knesset table/column is stored lowercase (see ensure_infra). UNQUOTED
+# mixed-case works already — Postgres folds it (KNS_Bill → kns_bill). But a
+# DOUBLE-QUOTED identifier is case-sensitive, so `"KnessetNum"` or a reserved
+# word quoted with a capital (`"Desc"`) fails even though the column exists.
+# People hit this constantly. We fix it by normalizing quoted identifiers to the
+# real (lowercase) casing, reusing the shared helpers in append_store so every
+# Neon-backed SQL console behaves identically.
+
+_known_idents_cache: dict[str, str] | None = None
+
+
+async def _known_identifiers() -> dict[str, str]:
+    """Canonical map lower(name) -> real name for every table/column in the
+    knesset schema (all lowercase here), cached. Best-effort: a column added
+    after the first call isn't picked up until a restart — the query still
+    runs, it just won't be auto-normalized."""
+    global _known_idents_cache
+    if _known_idents_cache is not None:
+        return _known_idents_cache
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = $1", PG_SCHEMA)
+    canon: dict[str, str] = {}
+    for r in rows:
+        canon[r["table_name"].lower()] = r["table_name"]
+        canon[r["column_name"].lower()] = r["column_name"]
+    _known_idents_cache = canon
+    return canon
+
+
 async def run_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 20000) -> dict:
     """User-supplied read-only SELECT, executed with search_path=knesset so the
     manual's table names work unqualified (SELECT * FROM kns_bill). Same
     defense-in-depth as append_store.run_readonly_sql: single statement,
-    SELECT/WITH only, READ ONLY tx, statement_timeout, row cap."""
+    SELECT/WITH only, READ ONLY tx, statement_timeout, row cap. Double-quoted
+    identifiers are case-normalized so wrong-case column names still resolve."""
     s = (sql or "").strip().rstrip(";").strip()
     if not s:
         raise ValueError("השאילתה ריקה")
@@ -527,15 +562,25 @@ async def run_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 20000) ->
         raise ValueError("רק שאילתות SELECT / WITH מותרות")
     if append_store._SQL_DENY.search(s):
         raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
+    known: dict[str, str] = {}
+    try:
+        known = await _known_identifiers()
+        s = append_store.normalize_quoted_case(s, known)
+    except Exception:  # noqa: BLE001 — normalization is best-effort, never fatal
+        logger.debug("knesset_db: identifier normalization skipped", exc_info=True)
     wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
     pool = await append_store.get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction(readonly=True):
-            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
-            await conn.execute(f"SET LOCAL search_path = {_qi(PG_SCHEMA)}, public")
-            stmt = await conn.prepare(wrapped)
-            cols = [a.name for a in stmt.get_attributes()]
-            recs = await stmt.fetch()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction(readonly=True):
+                await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                await conn.execute(f"SET LOCAL search_path = {_qi(PG_SCHEMA)}, public")
+                stmt = await conn.prepare(wrapped)
+                cols = [a.name for a in stmt.get_attributes()]
+                recs = await stmt.fetch()
+    except asyncpg.PostgresError as e:
+        # A clean, actionable 400 (the API turns ValueError into 400 detail).
+        raise ValueError(append_store.sql_error_hint(e, known)) from e
     truncated = len(recs) > max_rows
     rows = [
         {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
@@ -552,6 +597,10 @@ async def iter_sql_csv(sql: str, *, max_rows: int = 200_000, timeout_ms: int = 6
     if not s or ";" in s or not append_store._SQL_STARTS_OK.match(s) \
             or append_store._SQL_DENY.search(s):
         raise ValueError("שאילתת ייצוא לא חוקית — SELECT יחיד בלבד")
+    try:  # same wrong-case tolerance as run_sql (best-effort)
+        s = append_store.normalize_quoted_case(s, await _known_identifiers())
+    except Exception:  # noqa: BLE001
+        logger.debug("knesset_db: export identifier normalization skipped", exc_info=True)
     wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}"
 
     def _csv_cell(v) -> str:

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { appendArchive, AppendSchema, AppendRows, AppendSqlResult } from "../api/client";
+import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable } from "../components/SqlEditor";
 
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
@@ -52,6 +53,7 @@ export default function AppendArchivePage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
 
   // SQL console
+  const sqlEditorRef = useRef<SqlEditorHandle>(null);
   const [sqlOpen, setSqlOpen] = useState(false);
   const [sqlText, setSqlText] = useState("");
   const [sqlResult, setSqlResult] = useState<AppendSqlResult | null>(null);
@@ -110,6 +112,24 @@ export default function AppendArchivePage() {
   }, [load]);
 
   const cols = schema?.columns || data?.columns || [];
+
+  // Autocomplete suggestions for the SQL editor: the table + each column.
+  const sqlSuggestions = useMemo<SqlSuggestion[]>(() => {
+    if (!schema) return [];
+    return [
+      { value: schema.table, kind: "table", hint: schema.dataset_title || "" },
+      ...schema.columns.map((c) => ({
+        value: c, kind: "column" as const,
+        hint: c === schema.first_seen_column ? "זמן הוספה לארכיון" : c === schema.key ? "מפתח" : "",
+      })),
+    ];
+  }, [schema]);
+
+  const sqlSchemaTables = useMemo<SchemaTable[]>(
+    () => (schema ? [{ table: schema.table, columns: schema.columns, description: schema.dataset_title }] : []),
+    [schema],
+  );
+
   const total = data?.total ?? schema?.total ?? 0;
   const pageStart = total === 0 ? 0 : offset + 1;
   const pageEnd = Math.min(offset + limit, total);
@@ -230,20 +250,21 @@ export default function AppendArchivePage() {
         <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
           <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
             שאילתת <code>SELECT</code> בלבד (קריאה בלבד, מוגבלת בזמן ובמספר שורות). הטבלה:{" "}
-            <code>{schema?.table}</code>
+            <code>{schema?.table}</code> · השלמה אוטומטית של שמות עמודות
           </div>
-          <textarea
+          <SqlHelpNote casing="preserve" />
+          <SchemaReference
+            tables={sqlSchemaTables}
+            onInsert={(n) => sqlEditorRef.current?.insertIdentifier(n)}
+            defaultOpen
+          />
+          <SqlEditor
+            ref={sqlEditorRef}
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runSql(); }}
-            spellCheck={false}
-            dir="ltr"
+            onChange={setSqlText}
+            onRun={runSql}
+            suggestions={sqlSuggestions}
             rows={5}
-            style={{
-              width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.6rem",
-              border: "1px solid var(--border, #d1d5db)", borderRadius: 4, resize: "vertical",
-            }}
-            aria-label="שאילתת SQL"
           />
           <div className="flex" style={{ gap: "0.75rem", alignItems: "center", marginTop: "0.5rem" }}>
             <button

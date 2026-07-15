@@ -388,6 +388,7 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
         return 0
 
 
+import difflib as _difflib
 import re as _re
 
 # Only single SELECT/WITH queries reach the DB; the READ ONLY transaction is the
@@ -400,12 +401,117 @@ _SQL_DENY = _re.compile(
 )
 
 
-async def run_readonly_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
+# ── Case-insensitive identifier help (shared by every Neon-backed SQL console) ─
+# A frequent complaint on all the SQL consoles is casing: a DOUBLE-QUOTED
+# identifier is case-sensitive in Postgres, so `"Desc"` / `"DecisionNum"` fail
+# even when the real column exists under a different case. (Unquoted names are
+# folded to lowercase by Postgres, so they only work when the real column IS
+# lowercase.) These helpers rewrite a quoted identifier to the schema's actual
+# casing and turn a raw "does not exist" error into an actionable hint. Callers
+# pass a `canonical` map: lower(real_name) -> real_name (see _canonical_idents).
+
+
+def normalize_quoted_case(sql: str, canonical: dict[str, str]) -> str:
+    """Rewrite each double-quoted identifier to the real stored casing when it
+    (case-insensitively) names a table/column but was written in the wrong case.
+    Single-quoted string literals, ``--`` / ``/* */`` comments and unknown quoted
+    names (genuine aliases) are copied verbatim. Best-effort: any surprise means
+    the input is returned unchanged — normalization must never break a valid
+    query. `canonical` maps lower(name) -> actual name."""
+    if not canonical:
+        return sql
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "'":                                   # string literal
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if j + 1 < n and sql[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(sql[i:j])
+            i = j
+        elif ch == '"':                                 # quoted identifier
+            j, buf, closed = i + 1, [], False
+            while j < n:
+                if sql[j] == '"':
+                    if j + 1 < n and sql[j + 1] == '"':
+                        buf.append('"')
+                        j += 2
+                        continue
+                    j += 1
+                    closed = True
+                    break
+                buf.append(sql[j])
+                j += 1
+            inner = "".join(buf)
+            real = canonical.get(inner.lower())
+            if closed and real is not None and real != inner:
+                out.append(_qi(real))
+            else:
+                out.append(sql[i:j])
+            i = j
+        elif ch == "-" and i + 1 < n and sql[i + 1] == "-":   # line comment
+            j = sql.find("\n", i)
+            j = n if j == -1 else j
+            out.append(sql[i:j])
+            i = j
+        elif ch == "/" and i + 1 < n and sql[i + 1] == "*":   # block comment
+            j = sql.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            out.append(sql[i:j])
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def sql_error_hint(exc: Exception, canonical: dict[str, str]) -> str:
+    """Append a Hebrew nudge to a Postgres 'does not exist' error — the common
+    cause is a wrong-case or reserved-word column name."""
+    msg = (getattr(exc, "message", None) or str(exc)).strip()
+    m = _re.search(r'(column|relation)\s+"([^"]+)"\s+does not exist', msg)
+    if not m:
+        return msg
+    raw = m.group(2).split(".")[-1]
+    names = list(dict.fromkeys(canonical.values()))
+    parts = ["שמות עמודות/טבלאות רגישים לאותיות גדולות/קטנות בתוך מרכאות כפולות."]
+    sugg = _difflib.get_close_matches(raw.lower(), [c.lower() for c in names], n=3, cutoff=0.5)
+    if sugg:
+        low = {c.lower(): c for c in names}
+        parts.append("האם התכוונת ל־" + ", ".join(low[s] for s in sugg) + "?")
+    parts.append('מילה שמורה או שם עם אות גדולה/עברית כשם עמודה דורשת מרכאות כפולות, למשל "desc".')
+    return msg + "\n" + "  ".join(parts)
+
+
+async def _canonical_idents(table: str) -> dict[str, str]:
+    """lower(name) -> actual name for a public-schema table and its columns.
+    Used to normalize wrong-case identifiers in that dataset's SQL console."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = $1", table)
+    canon = {r["column_name"].lower(): r["column_name"] for r in rows}
+    canon[table.lower()] = table
+    return canon
+
+
+async def run_readonly_sql(sql: str, *, table: str | None = None,
+                           max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
     """Run a user-supplied read-only SELECT against the append DB and return
     {columns, rows, truncated}. Defense in depth: single statement, must start
     with SELECT/WITH, write/DDL keywords rejected, executed inside a Postgres
     READ ONLY transaction with a statement_timeout, result hard-capped at
-    max_rows. The append DB holds only public data and no app secrets."""
+    max_rows. The append DB holds only public data and no app secrets. When
+    ``table`` is given, wrong-case quoted identifiers are corrected to that
+    table's real column casing and errors get a helpful hint."""
     s = (sql or "").strip().rstrip(";").strip()
     if not s:
         raise ValueError("השאילתה ריקה")
@@ -415,16 +521,26 @@ async def run_readonly_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 
         raise ValueError("רק שאילתות SELECT / WITH מותרות")
     if _SQL_DENY.search(s):
         raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
+    canonical: dict[str, str] = {}
+    if table:
+        try:
+            canonical = await _canonical_idents(table)
+            s = normalize_quoted_case(s, canonical)
+        except Exception:  # noqa: BLE001 — normalization is best-effort
+            logger.debug("append_store: identifier normalization skipped", exc_info=True)
     wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction(readonly=True):
-            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
-            stmt = await conn.prepare(wrapped)
-            attrs = stmt.get_attributes()
-            cols = [a.name for a in attrs]
-            fields = [{"id": a.name, "type": _ckan_type(getattr(a.type, "name", None))} for a in attrs]
-            recs = await stmt.fetch()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction(readonly=True):
+                await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                stmt = await conn.prepare(wrapped)
+                attrs = stmt.get_attributes()
+                cols = [a.name for a in attrs]
+                fields = [{"id": a.name, "type": _ckan_type(getattr(a.type, "name", None))} for a in attrs]
+                recs = await stmt.fetch()
+    except asyncpg.PostgresError as e:
+        raise ValueError(sql_error_hint(e, canonical)) from e
     truncated = len(recs) > max_rows
     rows = [
         {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))

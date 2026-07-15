@@ -10,6 +10,7 @@ import { useAuth } from "../auth/AuthContext";
 import KnessetProtocolSearch from "../components/KnessetProtocolSearch";
 import KnessetBatchTab from "../components/KnessetBatchTab";
 import KnessetMmmSearch from "../components/KnessetMmmSearch";
+import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable } from "../components/SqlEditor";
 
 type KnessetTab = "protocols" | "sql" | "mmm" | "batch";
 
@@ -106,6 +107,39 @@ export default function KnessetDbPage() {
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const sqlEditorRef = useRef<SqlEditorHandle>(null);
+
+  // Clickable tables→columns reference for the SQL console (insert on click).
+  const sqlSchemaTables = useMemo<SchemaTable[]>(
+    () => tables.map((t) => ({
+      table: t.table,
+      columns: t.columns.map((c) => c.name),
+      description: t.description || t.entity_set,
+    })),
+    [tables],
+  );
+
+  // Autocomplete suggestions for the SQL editor, built from the loaded schema:
+  // every table + every distinct column (with the tables it appears in).
+  const sqlSuggestions = useMemo<SqlSuggestion[]>(() => {
+    const out: SqlSuggestion[] = [];
+    const colTables = new Map<string, Set<string>>();
+    for (const t of tables) {
+      out.push({ value: t.table, kind: "table", hint: t.description || t.entity_set });
+      for (const c of t.columns) {
+        if (!colTables.has(c.name)) colTables.set(c.name, new Set());
+        colTables.get(c.name)!.add(t.table);
+      }
+    }
+    for (const [name, ts] of colTables) {
+      const arr = [...ts];
+      out.push({
+        value: name, kind: "column",
+        hint: arr.length <= 3 ? arr.join(", ") : `${arr.length} טבלאות`,
+      });
+    }
+    return out;
+  }, [tables]);
 
   const load = useCallback(() => {
     knessetDb.status().then(setStatus).catch(() => {});
@@ -269,7 +303,7 @@ export default function KnessetDbPage() {
       <div className="card" style={{ padding: "1rem", marginBottom: "1rem" }}>
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
           <strong style={{ fontSize: "0.95rem" }}>{"</>"} קונסולת SQL</strong>
-          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · שמות טבלאות ועמודות באותיות קטנות</span>
+          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · השלמה אוטומטית של שמות עמודות</span>
           <select
             aria-label="שאילתות לדוגמה"
             value=""
@@ -283,18 +317,18 @@ export default function KnessetDbPage() {
             {EXAMPLES.map((ex) => <option key={ex.label} value={ex.label}>{ex.label}</option>)}
           </select>
         </div>
-        <textarea
+        <SqlHelpNote casing="lower" />
+        <SchemaReference
+          tables={sqlSchemaTables}
+          onInsert={(n) => sqlEditorRef.current?.insertIdentifier(n)}
+        />
+        <SqlEditor
+          ref={sqlEditorRef}
           value={sqlText}
-          onChange={(e) => setSqlText(e.target.value)}
-          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runSql(); }}
-          spellCheck={false}
-          dir="ltr"
+          onChange={setSqlText}
+          onRun={runSql}
+          suggestions={sqlSuggestions}
           rows={6}
-          style={{
-            width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.6rem",
-            border: "1px solid var(--border, #d1d5db)", borderRadius: 4, resize: "vertical",
-          }}
-          aria-label="שאילתת SQL"
         />
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
           <button

@@ -161,9 +161,9 @@ async def archive_sql(
     append_store.run_readonly_sql). The dataset's table name is in /schema so
     the client can reference it. Errors (validation, SQL syntax, timeout) come
     back as 400 with the message."""
-    await _resolve(dataset_id, db)  # 404/409 if not an append dataset
+    _, table = await _resolve(dataset_id, db)  # 404/409 if not an append dataset
     try:
-        return await append_store.run_readonly_sql(body.sql)
+        return await append_store.run_readonly_sql(body.sql, table=table)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
@@ -234,9 +234,9 @@ async def datastore_search_sql(
     """CKAN ``datastore_search_sql``-style read-only SQL (single SELECT/WITH).
     Reference the dataset's table by the name in /schema. Returns the CKAN
     envelope ``{success, result:{records, fields:[{id,type}]}}``."""
-    await _resolve(dataset_id, db)
+    _, table = await _resolve(dataset_id, db)
     try:
-        r = await append_store.run_readonly_sql(sql)
+        r = await append_store.run_readonly_sql(sql, table=table)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
