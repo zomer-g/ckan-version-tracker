@@ -181,7 +181,14 @@ async def approve_request(
     if body and body.storage_target:
         target = body.storage_target
     elif ds.source_type in ("scraper", "govmap"):
-        target = "r2"
+        # Default scraper/govmap to R2 files — BUT preserve a dual-write
+        # opt-in the source's config branch set at creation (e.g.
+        # registries.health.gov.il sets archive_neon=True for R2+NEON), so
+        # approval doesn't silently drop the NEON half of the plan.
+        if (ds.scraper_config or {}).get("archive_neon") and dataset_is_neon_eligible(ds):
+            target = "r2+neon"
+        else:
+            target = "r2"
     else:
         target = storage_target_of(ds.scraper_config)
     if "neon" in target and not dataset_is_neon_eligible(ds):
