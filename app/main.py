@@ -55,9 +55,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _guard_db_separation() -> None:
+    """Refuse to let the public SQL consoles run against the DB that holds the
+    secrets.
+
+    The consoles at /api/append/{id}/sql and /api/knesset-db/sql execute
+    arbitrary read-only SELECTs against APPEND_DATABASE_URL. The api_users
+    (bearer tokens) and users tables live in DATABASE_URL. render.yaml only
+    defines DATABASE_URL — APPEND_DATABASE_URL is set by hand in the Render
+    dashboard, so a copy-paste mistake could point both at one Neon database and
+    silently expose every token through a public console.
+
+    Fail CLOSED: on collision we log CRITICAL and, because a public SQL console
+    is live whenever the append DB is configured, raise to abort startup rather
+    than boot into a token-leaking state. (knesset_db_enabled only gates the
+    /knesset console; the /api/append console leaks just the same, so the abort
+    is not conditioned on it.)
+    """
+    collides, details = settings.append_db_shares_main_db()
+    if not collides:
+        return
+    logger.critical(
+        "SECURITY: APPEND_DATABASE_URL and DATABASE_URL resolve to the SAME "
+        "Postgres database (%s) — the PUBLIC SQL consoles (/api/append/*/sql, "
+        "/api/knesset-db/sql) would expose api_users tokens and the users table. "
+        "Point APPEND_DATABASE_URL at a SEPARATE Neon database. Refusing to start.",
+        details["append"],
+    )
+    raise RuntimeError(
+        "APPEND_DATABASE_URL must be a different physical database from "
+        "DATABASE_URL (public SQL consoles run against the append DB, which must "
+        f"not contain the auth tables). Parsed targets: {details}"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
+    _guard_db_separation()
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See

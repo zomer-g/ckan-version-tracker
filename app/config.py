@@ -1,4 +1,35 @@
+from urllib.parse import urlsplit
+
 from pydantic_settings import BaseSettings
+
+
+def parse_pg_target(dsn: str) -> tuple[str, int, str] | None:
+    """Reduce a Postgres DSN to the (host, port, dbname) tuple that identifies
+    the physical database, for comparing two DSNs.
+
+    Normalizes the pieces that vary without changing WHICH database is addressed:
+    strips the SQLAlchemy dialect suffix (``postgresql+asyncpg`` → ``postgresql``),
+    lower-cases the host, defaults the port to 5432, and drops the leading slash
+    from the path. Credentials and query params (sslmode, channel_binding…) are
+    intentionally ignored — two URLs with different passwords but the same
+    host+port+dbname still point at the same data. Returns None for an empty/
+    unparseable DSN.
+
+    NOTE: this is an EXACT identity check. It reliably catches the dangerous
+    case (both env vars set to the literally-same endpoint) but cannot see that
+    two *different* Neon hostnames (e.g. a ``-pooler`` endpoint vs. the direct
+    one) resolve to the same underlying database — so a False here is "not
+    proven identical", not "proven separate".
+    """
+    if not dsn or not dsn.strip():
+        return None
+    u = urlsplit(dsn.strip())
+    host = (u.hostname or "").lower()
+    port = u.port or 5432
+    dbname = (u.path or "").lstrip("/")
+    if not host and not dbname:
+        return None
+    return (host, port, dbname)
 
 
 class Settings(BaseSettings):
@@ -222,6 +253,31 @@ class Settings(BaseSettings):
         if not self.cors_origins:
             return []
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def append_db_shares_main_db(self) -> tuple[bool, dict]:
+        """True if APPEND_DATABASE_URL and DATABASE_URL address the SAME physical
+        Postgres (host+port+dbname).
+
+        This is a security invariant: the PUBLIC SQL consoles
+        (/api/append/{id}/sql, /api/knesset-db/sql) run against the append DB,
+        while the sensitive tables (api_users with bearer tokens, users) live in
+        the operational DB. If both env vars point at one Neon database, those
+        consoles can read the tokens. The two URLs MUST resolve to two separate
+        databases. See app/main.py startup guard.
+
+        Returns (collides, details) where details carries the parsed targets for
+        logging. collides is False when the append DB is not configured (feature
+        off — nothing exposed) or the two targets differ.
+        """
+        main = parse_pg_target(self.database_url)
+        append = parse_pg_target(self.append_database_url)
+        details = {
+            "main": None if main is None else {"host": main[0], "port": main[1], "dbname": main[2]},
+            "append": None if append is None else {"host": append[0], "port": append[1], "dbname": append[2]},
+        }
+        if main is None or append is None:
+            return False, details
+        return (main == append), details
 
 
 settings = Settings()
