@@ -80,7 +80,25 @@ class Settings(BaseSettings):
     # row stamped with first_seen DEFAULT now(). Decoupled from the app's
     # operational DB (and from the broken ODATA write path). Empty = feature
     # off (falls back to the legacy/metadata path). See app/services/append_store.py.
+    #
+    # This URL is the READ/WRITE connection the sync/poll pipeline uses (it runs
+    # the CREATE SCHEMA / ALTER TABLE / INSERT DDL+DML), so its role has full
+    # privileges on the append DB.
     append_database_url: str = ""
+
+    # ── Least-privilege read-only role for the PUBLIC SQL consoles ──
+    # The three public SQL consoles (append run_readonly_sql, knesset run_sql /
+    # iter_sql_csv) must NOT run on the read/write role above — that role can
+    # write, and the READ ONLY transaction is then the ONLY thing stopping a
+    # write. This URL points at the SAME physical append DB but authenticates as
+    # a dedicated role that has been GRANTed SELECT only (no INSERT/UPDATE/DDL,
+    # not a superuser, not a member of pg_read_server_files) — so a write is
+    # refused by Postgres itself, defense-in-depth beneath the app-layer guards.
+    # Provision the role with scripts/create_append_readonly_role.sql. Empty ⇒
+    # the consoles fall back to the read/write pool with a one-time log warning
+    # (keeps dev/prod working until the role is created). See
+    # app/services/append_store.get_readonly_pool.
+    append_readonly_database_url: str = ""
 
     # ── Knesset ODATA mirror ("מסד הנתונים של הכנסת") ──
     # Syncs all ~48 Knesset ODATA-v4 entity sets into a `knesset` schema in the

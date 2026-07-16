@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
 _pool_lock = asyncio.Lock()
 
+# Second, least-privilege pool for the PUBLIC SQL consoles only (see
+# get_readonly_pool). None until first use; falls back to _pool when the
+# read-only role isn't configured.
+_ro_pool: asyncpg.Pool | None = None
+_ro_pool_lock = asyncio.Lock()
+_ro_fallback_warned = False
+
 # Postgres bind-parameter ceiling is 32767; stay well under it.
 _MAX_PARAMS = 30000
 
@@ -54,21 +61,25 @@ def is_configured() -> bool:
     return bool(settings.append_database_url)
 
 
-def _dsn() -> str:
-    """Normalize the configured URL into a DSN asyncpg accepts.
+def _dsn_from(raw: str) -> str:
+    """Normalize a Postgres URL into a DSN asyncpg accepts.
 
     Neon hands out ``postgresql://…?sslmode=require&channel_binding=require``
     (and the SQLAlchemy ``+asyncpg`` suffix may be present). asyncpg takes the
     plain ``postgresql://`` scheme and gets SSL via the ``ssl`` kwarg, not query
     params — so strip the libpq-only params and the dialect suffix."""
-    raw = settings.append_database_url.strip()
-    u = urlsplit(raw)
+    u = urlsplit((raw or "").strip())
     scheme = u.scheme.split("+", 1)[0] or "postgresql"
     q = [
         (k, v) for k, v in parse_qsl(u.query)
         if k.lower() not in ("sslmode", "channel_binding", "options")
     ]
     return urlunsplit((scheme, u.netloc, u.path, urlencode(q), ""))
+
+
+def _dsn() -> str:
+    """DSN for the read/write append pool (the sync/poll pipeline)."""
+    return _dsn_from(settings.append_database_url)
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -86,6 +97,50 @@ async def get_pool() -> asyncpg.Pool:
                 )
                 logger.info("append_store: connection pool created")
     return _pool
+
+
+async def get_readonly_pool() -> asyncpg.Pool:
+    """Pool for the PUBLIC SQL consoles ONLY (append run_readonly_sql, knesset
+    run_sql / iter_sql_csv).
+
+    Connects to the SAME append DB as get_pool() but authenticates as a dedicated
+    least-privilege role (APPEND_READONLY_DATABASE_URL) that has been GRANTed
+    SELECT only — so a write attempted through a console is refused by Postgres
+    itself (permission denied), not merely by the app's READ ONLY transaction and
+    keyword denylist. That DB-level denial is the point: it removes the single
+    point of failure where the app-layer guard was the only thing between an
+    arbitrary user SELECT and a full-privilege role.
+
+    Falls back to the read/write pool (with a ONE-TIME warning) when the env var
+    isn't set, so dev/prod keep working until the role is provisioned. The
+    app-layer guards (single statement, SELECT/WITH only, READ ONLY tx,
+    statement_timeout, row caps) still apply in both cases — this is
+    defense-in-depth, not a replacement for them."""
+    global _ro_pool, _ro_fallback_warned
+    raw = (settings.append_readonly_database_url or "").strip()
+    if not raw:
+        if not _ro_fallback_warned:
+            logger.warning(
+                "append_store: APPEND_READONLY_DATABASE_URL not set — the public "
+                "SQL consoles fall back to the read/write append pool, so the READ "
+                "ONLY transaction is the only write guard. Provision the read-only "
+                "role (scripts/create_append_readonly_role.sql) and set the env var."
+            )
+            _ro_fallback_warned = True
+        return await get_pool()
+    if _ro_pool is None:
+        async with _ro_pool_lock:
+            if _ro_pool is None:
+                ctx = ssl.create_default_context()
+                _ro_pool = await asyncpg.create_pool(
+                    dsn=_dsn_from(raw),
+                    ssl=ctx,
+                    min_size=0,      # let Neon scale to zero between queries
+                    max_size=5,
+                    command_timeout=180,
+                )
+                logger.info("append_store: read-only connection pool created")
+    return _ro_pool
 
 
 def table_name(ds) -> str:
@@ -529,7 +584,7 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
         except Exception:  # noqa: BLE001 — normalization is best-effort
             logger.debug("append_store: identifier normalization skipped", exc_info=True)
     wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
-    pool = await get_pool()
+    pool = await get_readonly_pool()  # least-privilege role: writes denied by the DB
     try:
         async with pool.acquire() as conn:
             async with conn.transaction(readonly=True):

@@ -569,7 +569,7 @@ async def run_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 20000) ->
     except Exception:  # noqa: BLE001 — normalization is best-effort, never fatal
         logger.debug("knesset_db: identifier normalization skipped", exc_info=True)
     wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
-    pool = await append_store.get_pool()
+    pool = await append_store.get_readonly_pool()  # least-privilege role: writes denied by the DB
     try:
         async with pool.acquire() as conn:
             async with conn.transaction(readonly=True):
@@ -611,7 +611,7 @@ async def iter_sql_csv(sql: str, *, max_rows: int = 200_000, timeout_ms: int = 6
             sv = '"' + sv.replace('"', '""') + '"'
         return sv
 
-    pool = await append_store.get_pool()
+    pool = await append_store.get_readonly_pool()  # least-privilege role: writes denied by the DB
     async with pool.acquire() as conn:
         async with conn.transaction(readonly=True):
             await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
