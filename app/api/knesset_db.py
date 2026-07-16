@@ -16,7 +16,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_admin_user
@@ -56,6 +56,19 @@ async def tables(request: Request):
         return {"tables": await knesset_db.list_tables()}
     except Exception as e:  # noqa: BLE001 — surface init errors readably
         logger.exception("knesset-db /tables failed")
+        raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
+
+
+@router.get("/schema.txt", response_class=PlainTextResponse)
+@limiter.limit("20/minute")
+async def schema_txt(request: Request, group: str | None = None):
+    """DESCRIBE-style DDL of the whole knesset schema as plain text — for
+    pasting into an LLM ('copy schema for AI'). Optional ?group= filter."""
+    _require_enabled()
+    try:
+        return await knesset_db.schema_text(group)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("knesset-db /schema.txt failed")
         raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
 
 

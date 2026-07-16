@@ -18,7 +18,7 @@ import json as _json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,6 +105,17 @@ async def archive_schema(dataset_id: str, db: AsyncSession = Depends(get_db)):
         "capture_changes": bool((ds.scraper_config or {}).get("capture_changes")),
         "first_seen_column": "first_seen",
     }
+
+
+@router.get("/{dataset_id}/schema.txt", response_class=PlainTextResponse)
+@limiter.limit("20/minute")
+async def archive_schema_txt(dataset_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """DESCRIBE-style DDL of this dataset's archive table as plain text — for
+    pasting into an LLM ('copy schema for AI')."""
+    ds, table = await _resolve(dataset_id, db)
+    if await append_store.table_count(table) == 0 and not await append_store.user_columns(table):
+        raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
+    return await append_store.schema_text(table, title=ds.title)
 
 
 @router.get("/{dataset_id}/rows")

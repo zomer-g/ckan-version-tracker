@@ -558,6 +558,69 @@ async def _canonical_idents(table: str) -> dict[str, str]:
     return canon
 
 
+# ── Schema-as-text (for feeding an LLM / copy-to-AI button) ──────────────────
+# A DESCRIBE-style dump — CREATE TABLE DDL, the form LLMs are most fluent in —
+# so a model can generate correct SQL (right names, right case, right quoting)
+# instead of guessing. Generated live from the real schema, never hand-kept.
+
+_PG_RESERVED = {
+    "select", "from", "where", "group", "order", "by", "having", "limit",
+    "offset", "join", "on", "as", "and", "or", "not", "null", "is", "in",
+    "like", "asc", "desc", "distinct", "union", "all", "case", "when", "then",
+    "else", "end", "date", "time", "timestamp", "user", "table", "column",
+    "with", "values", "default", "primary", "key", "using", "into", "over",
+    "window", "returning", "and", "any", "check", "unique",
+}
+
+
+def _ident_ref(name: str) -> str:
+    """How a column/table must be written in SQL: bare if a plain lowercase
+    identifier, otherwise double-quoted (mixed-case, Hebrew, reserved word)."""
+    if _re.fullmatch(r"[a-z_][a-z0-9_]*", name or "") and name.lower() not in _PG_RESERVED:
+        return name
+    return _qi(name)
+
+
+def format_schema_ddl(tables: list[dict], notes: str = "") -> str:
+    """Render tables as CREATE TABLE DDL text. Each table dict:
+    ``{"table": str, "description": str|None, "columns": [{"name","type"}]}``.
+    Column names are shown in the exact form SQL requires (quoted when needed)."""
+    out: list[str] = []
+    if notes:
+        out.append(notes.rstrip() + "\n")
+    for t in tables:
+        desc = (t.get("description") or "").strip()
+        head = f"CREATE TABLE {_ident_ref(t['table'])} ("
+        out.append(f"{head}  -- {desc}" if desc else head)
+        cols = t.get("columns") or []
+        for i, c in enumerate(cols):
+            tail = "," if i < len(cols) - 1 else ""
+            out.append(f"  {_ident_ref(c['name'])} {c.get('type') or 'text'}{tail}")
+        out.append(");")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+async def schema_text(table: str, *, title: str | None = None) -> str:
+    """DESCRIBE-style DDL text for one append table (for the copy-to-AI button
+    and the MCP). Hidden bookkeeping columns (row_hash) are omitted."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = $1 "
+            "ORDER BY ordinal_position", table)
+    cols = [{"name": r["column_name"], "type": r["data_type"]}
+            for r in rows if r["column_name"] not in _HIDDEN_COLS]
+    notes = (
+        "-- ארכיון מצטבר ב-OVER (over.org.il) — סכימה לכתיבת SQL\n"
+        "-- קריאה בלבד: SELECT / WITH יחיד. שמות עמודות נשמרים כפי שהם במקור;\n"
+        "-- עמודה עם אות גדולה / עברית / מילה שמורה חייבת מרכאות כפולות (כפי שמופיע למטה).\n"
+        "-- first_seen = הזמן שבו השורה נוספה לארכיון."
+    )
+    return format_schema_ddl([{"table": table, "description": title, "columns": cols}], notes)
+
+
 async def run_readonly_sql(sql: str, *, table: str | None = None,
                            max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
     """Run a user-supplied read-only SELECT against the append DB and return

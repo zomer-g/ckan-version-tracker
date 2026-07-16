@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { appendArchive, AppendSchema, AppendRows, AppendSqlResult } from "../api/client";
-import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable } from "../components/SqlEditor";
+import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable, CopySchemaButton } from "../components/SqlEditor";
 
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
@@ -248,9 +248,16 @@ export default function AppendArchivePage() {
 
       {sqlOpen && (
         <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
-          <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
-            שאילתת <code>SELECT</code> בלבד (קריאה בלבד, מוגבלת בזמן ובמספר שורות). הטבלה:{" "}
-            <code>{schema?.table}</code> · השלמה אוטומטית של שמות עמודות
+          <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+            <span className="text-sm text-muted">
+              שאילתת <code>SELECT</code> בלבד (קריאה בלבד, מוגבלת בזמן ובמספר שורות). הטבלה:{" "}
+              <code>{schema?.table}</code> · השלמה אוטומטית של שמות עמודות
+            </span>
+            {datasetId && (
+              <span style={{ marginInlineStart: "auto" }}>
+                <CopySchemaButton url={`/api/append/${datasetId}/schema.txt`} />
+              </span>
+            )}
           </div>
           <SqlHelpNote casing="preserve" />
           <SchemaReference

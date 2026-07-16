@@ -332,6 +332,40 @@ export function SchemaReference({
   );
 }
 
+// "Copy schema for AI" — fetches the DESCRIBE-style DDL text from `url` and
+// puts it on the clipboard, so it can be pasted into ChatGPT/Claude to ground
+// text-to-SQL. Same text the MCP describe_schema tool returns.
+export function CopySchemaButton({ url, label = "העתק סכימה ל-AI" }: { url: string; label?: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
+  const copy = async () => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(String(res.status));
+      await navigator.clipboard.writeText(await res.text());
+      setState("copied");
+      window.setTimeout(() => setState("idle"), 2000);
+    } catch {
+      setState("error");
+      window.setTimeout(() => setState("idle"), 2500);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="העתקת מבנה הטבלאות (DDL) כדי להדביק ל-ChatGPT / Claude שיכתבו SQL מדויק"
+      style={{
+        fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4, cursor: "pointer",
+        border: "1px solid var(--primary, #0f766e)", background: "none",
+        color: state === "error" ? "var(--danger, #dc2626)" : "var(--primary, #0f766e)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {state === "copied" ? "✓ הועתק" : state === "error" ? "שגיאה בהעתקה" : `📋 ${label}`}
+    </button>
+  );
+}
+
 // Collapsible "how casing works + autocomplete" help. `casing` tailors the
 // wording: "lower" for the Knesset schema (everything stored lowercase),
 // "preserve" for append archives (columns keep their source casing / Hebrew).
