@@ -153,8 +153,8 @@ TOOLS: list[dict] = [
         "description": (
             "שאילתת SQL חופשית (SELECT יחיד, קריאה בלבד) מעל כל 48 טבלאות מראה "
             "הכנסת בסכימת knesset — לא רק ועדות. שמות טבלאות ועמודות באותיות "
-            "קטנות (KNS_Bill ← kns_bill). עד 500 שורות. השתמש ב-list_tables "
-            "לקטלוג המלא."
+            "קטנות (KNS_Bill ← kns_bill). עד 500 שורות. הרץ describe_schema פעם "
+            "אחת לפני כן כדי לקבל את מבנה הטבלאות המדויק (DDL)."
         ),
         "inputSchema": {
             "type": "object",
@@ -169,6 +169,21 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "group": {"type": "string", "description": "סינון לקבוצת נושא, למשל 'ועדות הכנסת'"},
+            },
+        },
+    },
+    {
+        "name": "describe_schema",
+        "description": (
+            "הסכימה המלאה כטקסט DDL (CREATE TABLE) לכתיבת שאילתות run_sql נכונות — "
+            "כל טבלה, עמודותיה וטיפוסיהן, בצורת הכתיבה המדויקת (שמות באותיות קטנות, "
+            "מרכאות למילים שמורות). הרץ זאת פעם אחת לפני כתיבת SQL. ניתן לסנן "
+            "לקבוצת נושא אחת (group) כדי לחסוך טוקנים."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "description": "סינון לקבוצת נושא, למשל 'הצעות חוק'"},
             },
         },
     },
@@ -379,6 +394,14 @@ async def _tool_list_tables(request, db, user, a) -> tuple[dict, int]:
     return {"tables": items, "count": len(items)}, len(items)
 
 
+async def _tool_describe_schema(request, db, user, a) -> tuple[dict, int]:
+    _require_configured()
+    group = (a.get("group") or "").strip() or None
+    ddl = await knesset_db.schema_text(group)
+    return {"schema_ddl": ddl, "dialect": "postgresql",
+            "source": "over.org.il — מראה נתוני הכנסת (סכימת knesset)"}, 0
+
+
 async def _tool_get_stats(request, db, user, a) -> tuple[dict, int]:
     _require_configured()
     summary = await knesset_db.status_summary()
@@ -399,6 +422,7 @@ _IMPL = {
     "search_mmm": _tool_search_mmm,
     "run_sql": _tool_run_sql,
     "list_tables": _tool_list_tables,
+    "describe_schema": _tool_describe_schema,
     "get_stats": _tool_get_stats,
 }
 

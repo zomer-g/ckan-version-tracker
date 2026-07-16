@@ -51,7 +51,7 @@ import httpx
 
 from app.config import settings
 from app.services import append_store
-from app.services.knesset_tables_meta import description_of, group_of
+from app.services.knesset_tables_meta import GROUP_ORDER, description_of, group_of
 
 logger = logging.getLogger(__name__)
 
@@ -512,6 +512,39 @@ async def list_tables() -> list[dict]:
             "last_synced_at": r["last_synced_at"].isoformat() if r["last_synced_at"] else None,
         })
     return out
+
+
+async def schema_text(group: str | None = None) -> str:
+    """DESCRIBE-style DDL text for the whole knesset schema (for the copy-to-AI
+    button and the MCP describe_schema tool). One CREATE TABLE per table, with
+    the Hebrew description as a comment and grouped by topic. Optionally limited
+    to one topic group."""
+    tables = await list_tables()
+    if group:
+        tables = [t for t in tables if t["group"] == group]
+    # Group headers in the manual's topic order, tables alphabetical within.
+    order = {g: i for i, g in enumerate(GROUP_ORDER)}
+    tables.sort(key=lambda t: (order.get(t["group"], len(order)), t["table"]))
+    notes = (
+        "-- מסד הנתונים של הכנסת (over.org.il, סכימת knesset) — סכימה לכתיבת SQL\n"
+        "-- קריאה בלבד: SELECT / WITH יחיד. כל שמות הטבלאות והעמודות באותיות קטנות\n"
+        "-- (KNS_Bill ← kns_bill). מילה שמורה כשם עמודה (desc/date/order) חייבת\n"
+        '-- מרכאות כפולות: s."desc".'
+    )
+    parts, last_group = [notes.rstrip() + "\n"], None
+    ddl_tables = []
+    for t in tables:
+        if t["group"] != last_group:
+            if ddl_tables:
+                parts.append(append_store.format_schema_ddl(ddl_tables))
+                ddl_tables = []
+            parts.append(f"\n-- ═══ {t['group']} ═══")
+            last_group = t["group"]
+        ddl_tables.append({"table": t["table"], "description": t["description"],
+                           "columns": t["columns"]})
+    if ddl_tables:
+        parts.append(append_store.format_schema_ddl(ddl_tables))
+    return "\n".join(parts).strip() + "\n"
 
 
 # ── Case-insensitive identifier help ─────────────────────────────────────────

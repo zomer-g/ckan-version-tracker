@@ -10,7 +10,7 @@ import { useAuth } from "../auth/AuthContext";
 import KnessetProtocolSearch from "../components/KnessetProtocolSearch";
 import KnessetBatchTab from "../components/KnessetBatchTab";
 import KnessetMmmSearch from "../components/KnessetMmmSearch";
-import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable } from "../components/SqlEditor";
+import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable, CopySchemaButton } from "../components/SqlEditor";
 
 type KnessetTab = "protocols" | "sql" | "mmm" | "batch";
 
@@ -304,6 +304,7 @@ export default function KnessetDbPage() {
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
           <strong style={{ fontSize: "0.95rem" }}>{"</>"} קונסולת SQL</strong>
           <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · השלמה אוטומטית של שמות עמודות</span>
+          <CopySchemaButton url="/api/knesset-db/schema.txt" />
           <select
             aria-label="שאילתות לדוגמה"
             value=""
