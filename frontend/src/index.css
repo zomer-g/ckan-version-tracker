@@ -55,6 +55,13 @@ body {
   min-height: 100vh;
 }
 
+/* The routed page area. A bottom pad keeps the last content element from
+   sitting flush against the footer when the page is scrolled all the way
+   down (the footer has margin-top: auto and no gap of its own). */
+#main-content {
+  padding-bottom: 2.5rem;
+}
+
 a {
   color: var(--primary);
   text-decoration: none;
