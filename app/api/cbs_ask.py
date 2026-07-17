@@ -314,9 +314,17 @@ def _classify(top: dict | None, total: int) -> str:
     if total == 0 or top is None:
         return "no_results"
     extra = top.get("extra") or {}
-    if (top.get("item_type") or "") == "intent":
-        return "not_available" if extra.get("negative") else "guidance"
-    if (top.get("item_type") or "") == "tool" or top.get("section") == "tools":
+    item_type = top.get("item_type") or ""
+    # ``intent_negative`` rows record that CBS does NOT hold something — knowledge
+    # that exists only in the community's answers, never in a crawl. They carry a
+    # distinct item_type on purpose: build_search() boosts only 'intent', so a
+    # negative can never float above real results on a weak lexical match. A
+    # wrong "CBS doesn't have this" is worse than no answer at all.
+    if item_type == "intent_negative" or extra.get("negative"):
+        return "not_available"
+    if item_type == "intent":
+        return "guidance"
+    if item_type == "tool" or top.get("section") == "tools":
         return "generator"
     if any(ft in ("xlsx", "xls", "csv") for ft in (top.get("file_types") or [])):
         return "data_file"
