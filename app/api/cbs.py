@@ -23,7 +23,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.cbs_search_util import RESULT_COLS, build_search
+from app.api.cbs_search_util import or_tsquery
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
@@ -193,24 +193,75 @@ async def search(
     db: AsyncSession = Depends(get_db),
 ):
     """Full-text + faceted search over the CBS index."""
-    where, order, params = build_search(
-        {
-            "q": q, "subject": subject, "geo": geo, "file_type": file_type,
-            "section": section, "item_type": item_type, "lang": lang,
-            "year_from": year_from, "year_to": year_to,
-        },
-        sort=sort,
-    )
+    conds = []
+    params: dict = {}
+
+    tsq = or_tsquery(q) if q else ""
+    if q:
+        if tsq:
+            conds.append(
+                "(search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike)"
+            )
+            params["tsq"] = tsq
+        else:
+            conds.append("title ILIKE :qlike")
+        params["qlike"] = f"%{q}%"
+    if subject:
+        conds.append("subject_tags @> :subject")
+        params["subject"] = f'["{subject}"]'
+    if geo:
+        conds.append("geo_levels @> :geo")
+        params["geo"] = f'["{geo}"]'
+    if file_type:
+        conds.append("file_types @> :ftype")
+        params["ftype"] = f'["{file_type}"]'
+    if section:
+        conds.append("section = :section")
+        params["section"] = section
+    if item_type:
+        conds.append("item_type = :item_type")
+        params["item_type"] = item_type
+    if lang:
+        conds.append("lang = :lang")
+        params["lang"] = lang
+    if year_from is not None:
+        conds.append("(year_end IS NULL OR year_end >= :yfrom)")
+        params["yfrom"] = year_from
+    if year_to is not None:
+        conds.append("(year_start IS NULL OR year_start <= :yto)")
+        params["yto"] = year_to
+
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
 
     total = (
         await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)
     ).scalar_one()
 
+    # Ordering:
+    # * chrono    → newest data year first (year_end, then year_start), then
+    #   most-recently crawled. The user's "chronological" toggle.
+    # * relevance → text rank when a query is present, else newest-crawled first
+    #   (the default). ``ts_rank`` needs :q, so only use it when q is set.
+    if sort == "chrono":
+        order = (
+            "coalesce(year_end, year_start) DESC NULLS LAST, "
+            "last_crawled DESC NULLS LAST, id DESC"
+        )
+    elif tsq:
+        order = "ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, last_crawled DESC NULLS LAST"
+    else:
+        order = "last_crawled DESC NULLS LAST, id DESC"
+
+    cols = (
+        "url, lang, section, series, item_type, title, title_en, summary, "
+        "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
+        "extra, last_crawled"
+    )
     params["limit"] = limit
     params["offset"] = offset
     result = await db.execute(
         text(
-            f"SELECT {RESULT_COLS} FROM cbs_index{where} "
+            f"SELECT {cols} FROM cbs_index{where} "
             f"ORDER BY {order} LIMIT :limit OFFSET :offset"
         ),
         params,
