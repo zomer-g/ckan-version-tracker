@@ -226,10 +226,14 @@ class Settings(BaseSettings):
     # PRIVATE repo and this server has no GitHub token, so the commits API
     # returns 404 and the fail-closed gate would refuse every worker. So the
     # pin must stay explicit and GitHub-independent.
-    # ⚠ UPDATE THIS whenever the govil-scraper worker code changes — set it
-    #   to the new `git rev-parse HEAD` of that repo, or the new worker is
-    #   refused. (OVER-only commits don't change it.)
-    worker_required_version: str = "83cc2c7ffc221b1006856e0e9921111ebee4f98b"
+    # ⚠ This pin is the worker DEPLOY LEVER: bumping it (and deploying) is
+    #   what rolls new govil-scraper code into production. Since worker
+    #   commit c406ed4d the worker self-syncs to this exact SHA on every
+    #   refusal (sync-to-pin), so forgetting to bump no longer strands the
+    #   worker — it just keeps running the pinned version until you bump.
+    #   Never pin to a pre-c406ed4d commit: those lack sync-to-pin and a
+    #   worker landed on one can't follow later bumps by itself.
+    worker_required_version: str = "c406ed4dd0af840ae8836645418c37d77e3c1d52"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
