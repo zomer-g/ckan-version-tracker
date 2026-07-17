@@ -87,6 +87,25 @@ async def authenticate(
     # needs a Google login. Timing-safe compare (hmac.compare_digest also
     # tolerates unequal lengths). OFF entirely unless MCP_SERVICE_TOKEN is set —
     # an empty configured secret can never match a presented token here.
+    #
+    # SECURITY — MCP_SERVICE_TOKEN is a crown-jewel secret. Invariants:
+    #   * NEVER log it. Do not log the raw Authorization header, `token`, or
+    #     `svc` here or in any request/response middleware. There is no
+    #     header-logging middleware today — keep it that way, or scrub Bearer
+    #     tokens if one is ever added.
+    #   * Store it in the secrets manager only (never the repo). Rotate by
+    #     changing MCP_SERVICE_TOKEN in Render AND in the gateway together
+    #     (see app/config.py::mcp_service_token and docs mcp-service-token).
+    #   * UNSCOPED, accepted risk: this single token authenticates as the
+    #     `service` principal for EVERY MCP resource — the main /mcp
+    #     (routes.py), the CBS MCP (cbs_routes.py) and the Knesset MCP
+    #     (knesset_routes.py) all call this same authenticate() and none gate
+    #     on tier. So one leaked token grants full access to all three. Per-
+    #     resource scoping isn't implementable with a bare shared secret (it
+    #     carries no claims); doing it properly means either issuing a signed
+    #     service JWT with an `aud`/scope claim checked per resource, or minting
+    #     one token per resource. Deferred — revisit if a gateway ever needs
+    #     access to only a subset of resources.
     svc = mcp_service_token()
     if svc and hmac.compare_digest(token, svc):
         return _service_user()

@@ -3,6 +3,7 @@ import asyncio
 import base64
 import csv as _csv
 import hashlib
+import hmac
 import httpx
 import json
 import logging
@@ -47,7 +48,10 @@ def _verify_worker_key(request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing worker key")
     key = auth[7:].strip()
-    if not settings.worker_api_key or key != settings.worker_api_key:
+    # Constant-time compare: `!=` on a static secret leaks length/prefix via
+    # timing. Fail closed when no key is configured (empty secret never matches,
+    # and we never even reach compare_digest for it).
+    if not settings.worker_api_key or not hmac.compare_digest(key, settings.worker_api_key):
         raise HTTPException(status_code=403, detail="Invalid worker key")
 
 
