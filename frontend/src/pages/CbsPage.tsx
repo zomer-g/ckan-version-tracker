@@ -362,6 +362,24 @@ export default function CbsPage() {
   // in the box doesn't hide them, submitting does.
   const showFeatured = !hasFilters && !searchParams.get("q");
 
+  // Quick feedback by email: a mailto prefilled with the current question /
+  // filters + the shareable URL, so a report arrives with its full context.
+  const feedbackHref = (() => {
+    const lines = [
+      mode === "ask"
+        ? `שאלה: ${askQuery.trim() || "—"}`
+        : `חיפוש: ${query.trim() || "—"}${locality ? ` | יישוב: ${locality}` : ""}`,
+      answer && mode === "ask" ? `סוג תשובה: ${answer.answer_type}` : "",
+      `קישור: ${typeof window !== "undefined" ? window.location.href : ""}`,
+      "",
+      "הפידבק שלי:",
+      "",
+    ].filter((l) => l !== "");
+    const subject = encodeURIComponent('פידבק על חיפוש הלמ"ס ב-OVER');
+    const body = encodeURIComponent(lines.join("\n"));
+    return `mailto:zomerg@gmail.com?subject=${subject}&body=${body}`;
+  })();
+
   return (
     <div className="container mt-3">
       <div className="page-header">
@@ -397,6 +415,21 @@ export default function CbsPage() {
             {label}
           </button>
         ))}
+        {/* Quick feedback — opens the user's mail client with the current
+            question/filters + shareable URL prefilled. */}
+        <a
+          href={feedbackHref}
+          className="btn-secondary"
+          style={{
+            fontSize: "0.8rem",
+            padding: "0.35rem 0.7rem",
+            marginInlineStart: "auto",
+            textDecoration: "none",
+          }}
+          title={t("cbs.feedback_title", "שלחו לנו במייל מה עבד ומה לא — הקשר החיפוש יצורף אוטומטית")}
+        >
+          📧 {t("cbs.feedback", "פידבק")}
+        </a>
       </div>
 
       {mode === "ask" && (
