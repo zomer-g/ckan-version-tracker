@@ -16,3 +16,15 @@ build/
 # regenerated on every run, never meaningful in history.
 *.log
 frontend/tsconfig.tsbuildinfo
+
+# One-off analysis scripts and their data dumps under scripts/ — local scratch,
+# not part of the tracked tooling (e.g. scripts/create_append_readonly_role.sql).
+scripts/empty_ds_ids.json
+scripts/find_empty.py
+scripts/k24_committees.json
+scripts/k25_committees.json
+scripts/protocol_counts.json
+scripts/r2_coverage.py
+scripts/scan_giants.py
+scripts/status_map.py
+scripts/verify_r2_batch.py
