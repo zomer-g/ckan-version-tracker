@@ -106,14 +106,20 @@ async def ingest(request: Request, body: IngestRequest, db: AsyncSession = Depen
         return IngestResponse(upserted=0)
 
     now = datetime.now(timezone.utc)
-    rows = []
+    # Deduplicate by url, last-one-wins. ``url`` is the ON CONFLICT target, and
+    # Postgres refuses a statement that would update the same row twice ("ON
+    # CONFLICT DO UPDATE command cannot affect row a second time") — so a batch
+    # that happens to repeat a url used to fail the whole ingest with a 500.
+    # A crawler re-listing the same page in one batch is normal, not an error.
+    by_url: dict[str, dict] = {}
     for p in body.pages:
         d = p.model_dump()
         # file_links are nested models → plain dicts for JSONB
         if d.get("file_links") is not None:
             d["file_links"] = [fl for fl in d["file_links"]]
         d["last_crawled"] = now
-        rows.append(d)
+        by_url[d["url"]] = d
+    rows = list(by_url.values())
 
     stmt = pg_insert(CbsIndex).values(rows)
     update_set = {c: getattr(stmt.excluded, c) for c in _INGEST_FIELDS}
