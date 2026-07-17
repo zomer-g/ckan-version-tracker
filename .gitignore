@@ -28,3 +28,7 @@ scripts/r2_coverage.py
 scripts/scan_giants.py
 scripts/status_map.py
 scripts/verify_r2_batch.py
+
+# Local dev-only API proxy target for the vite dev server (see vite.config.ts).
+.env.local
+frontend/.env.local

@@ -6,8 +6,10 @@ import {
   CbsResult,
   CbsFacets,
   CbsSearchParams,
+  CbsResolveResponse,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import CbsAnswerCard from "../components/CbsAnswerCard";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
 import { geoLabel, sectionLabel } from "../utils/cbsLabels";
@@ -18,6 +20,18 @@ import {
 } from "../utils/cbsSeries";
 
 const PAGE_SIZE = 30;
+
+// The two search surfaces. "ask" is the natural-language mode (a question →
+// POST /api/cbs/resolve → one actionable answer card + supporting results);
+// "advanced" is the original keyword+facets interface, kept verbatim.
+type Mode = "ask" | "advanced";
+
+// Params that only the advanced (keyword/facet) interface produces. Any link
+// carrying one of them predates the NL mode — or was shared from the advanced
+// tab — so it must open in advanced mode and behave exactly as it always did.
+const ADVANCED_PARAMS = [
+  "q", "subject", "geo", "section", "file_type", "year_from", "year_to", "sort",
+];
 
 export default function CbsPage() {
   const { t } = useTranslation();
@@ -32,6 +46,23 @@ export default function CbsPage() {
   // controlled inputs).
   const [searchParams, setSearchParams] = useSearchParams();
   const initial = new URLSearchParams(searchParams);
+
+  // Mode selection, in priority order:
+  //   1. an explicit ?mode= (shared link from either tab),
+  //   2. any legacy keyword/facet param ⇒ advanced, so every link that worked
+  //      before the NL mode existed still opens on the exact same interface,
+  //   3. otherwise the new NL mode for a fresh visitor.
+  const [mode, setMode] = useState<Mode>(() => {
+    const m = initial.get("mode");
+    if (m === "ask" || m === "advanced") return m;
+    return ADVANCED_PARAMS.some((p) => initial.get(p)) ? "advanced" : "ask";
+  });
+
+  // ── natural-language mode state ──
+  const [askQuery, setAskQuery] = useState(() => initial.get("ask") || "");
+  const [answer, setAnswer] = useState<CbsResolveResponse | null>(null);
+  const [askLoading, setAskLoading] = useState(false);
+  const [askError, setAskError] = useState("");
 
   const [query, setQuery] = useState(() => initial.get("q") || "");
   const [facets, setFacets] = useState<CbsFacets | null>(null);
@@ -176,15 +207,66 @@ export default function CbsPage() {
 
   // Load an initial (unfiltered, newest-first) page on mount, and re-run
   // whenever a facet filter or the sort order changes so the results stay in
-  // sync with the UI.
+  // sync with the UI. Only in advanced mode — the NL tab drives its own fetch,
+  // and firing a blank keyword search behind it would be wasted work.
   useEffect(() => {
+    if (mode !== "advanced") return;
     runSearch(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, geo, section, fileType, yearFrom, yearTo, sort]);
+  }, [mode, subject, geo, section, fileType, yearFrom, yearTo, sort]);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     runSearch(0);
+  };
+
+  // ── natural-language mode ──
+  // POST /api/cbs/resolve returns the answer card + its supporting results in
+  // one shot. Retrieval there runs on the raw question (no LLM) — measured
+  // better than LLM-cleaned keywords on the WhatsApp benchmark — so this is a
+  // plain, fast index call.
+  const runAsk = useCallback(
+    async (question: string) => {
+      const qq = question.trim();
+      if (!qq) return;
+      setAskLoading(true);
+      setAskError("");
+      setAnswer(null);
+      const sp = new URLSearchParams();
+      sp.set("mode", "ask");
+      sp.set("ask", qq);
+      setSearchParams(sp, { replace: true });
+      try {
+        setAnswer(await cbs.resolve(qq, 10));
+      } catch (err: any) {
+        setAskError(err?.message || "שגיאה בפתרון השאלה");
+      }
+      setAskLoading(false);
+    },
+    [setSearchParams]
+  );
+
+  // Answer a question that arrived in the URL (a shared /cbs?mode=ask&ask=… link).
+  useEffect(() => {
+    if (mode === "ask" && askQuery.trim() && !answer && !askLoading && !askError) {
+      runAsk(askQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  const onAskSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    runAsk(askQuery);
+  };
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    const sp = new URLSearchParams();
+    sp.set("mode", next);
+    // Carry the typed text across tabs so switching doesn't lose the user's work.
+    if (next === "advanced" && askQuery.trim() && !query.trim()) setQuery(askQuery);
+    if (next === "ask" && query.trim() && !askQuery.trim()) setAskQuery(query);
+    setSearchParams(sp, { replace: true });
   };
 
   const clearFilters = () => {
@@ -215,6 +297,97 @@ export default function CbsPage() {
         </p>
       </div>
 
+      {/* Mode tabs. The advanced tab is the original interface, untouched. */}
+      <div
+        className="flex mb-2"
+        style={{ gap: "0.4rem" }}
+        role="tablist"
+        aria-label={t("cbs.mode", "מצב חיפוש")}
+      >
+        {([
+          ["ask", t("cbs.mode_ask", "שאלה בשפה טבעית")],
+          ["advanced", t("cbs.mode_advanced", "חיפוש מתקדם")],
+        ] as [Mode, string][]).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={mode === m}
+            className={mode === m ? "btn-primary" : "btn-secondary"}
+            onClick={() => switchMode(m)}
+            style={{ fontSize: "0.85rem", padding: "0.35rem 0.8rem" }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "ask" && (
+        <>
+          <form onSubmit={onAskSubmit} className="flex mb-2" role="search">
+            <label
+              htmlFor="cbs-ask"
+              className="sr-only"
+              style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
+            >
+              {t("cbs.ask_placeholder", 'שאלה על נתוני הלמ"ס')}
+            </label>
+            <input
+              id="cbs-ask"
+              type="search"
+              value={askQuery}
+              onChange={(e) => setAskQuery(e.target.value)}
+              placeholder={t(
+                "cbs.ask_placeholder",
+                'שאלו בשפה חופשית — למשל "איפה אפשר למצוא אחוז חרדים לפי אזור סטטיסטי?"'
+              )}
+              style={{ flex: 1 }}
+            />
+            <button type="submit" className="btn-primary" disabled={askLoading}>
+              {askLoading ? t("common.loading", "טוען…") : t("cbs.ask_btn", "מצא לי")}
+            </button>
+          </form>
+
+          {askError && <div role="alert" className="badge badge-danger mb-2">{askError}</div>}
+
+          <div aria-live="polite">
+            {answer && <CbsAnswerCard data={answer} />}
+          </div>
+
+          {answer && answer.results.length > 0 && (
+            <>
+              <p className="text-sm text-muted" style={{ margin: "0 0 0.5rem" }}>
+                {t("cbs.supporting", "מקורות נוספים שנמצאו")}:
+              </p>
+              <div className="grid grid-2">
+                {answer.results.map((r) => (
+                  <CbsResultCard
+                    key={r.url}
+                    record={r}
+                    canPin={canPin}
+                    pinned={pinnedUrls.has(r.url)}
+                    busy={pinBusy === r.url}
+                    onTogglePin={togglePin}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {!answer && !askLoading && (
+            <CbsFeatured
+              records={featured}
+              canPin={canPin}
+              pinBusy={pinBusy}
+              onTogglePin={togglePin}
+              history={featuredHistory}
+            />
+          )}
+        </>
+      )}
+
+      {mode === "advanced" && (
+        <>
       <form onSubmit={onSubmit} className="flex mb-2" role="search">
         <label
           htmlFor="cbs-search"
@@ -395,6 +568,8 @@ export default function CbsPage() {
             {loading ? t("common.loading", "טוען…") : t("cbs.load_more", "טען עוד")}
           </button>
         </div>
+      )}
+        </>
       )}
     </div>
   );

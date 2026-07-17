@@ -331,33 +331,49 @@ def _primary_link(top: dict) -> str:
 
 
 async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
-    """Structured resolution of a free-text question to a CBS location."""
-    provider, parsed = await _parse_question(db, q)
-    total, results, used = await _search_relaxed(db, parsed, limit)
+    """Structured resolution of a free-text question to a CBS location.
+
+    Retrieval runs on the RAW question, deliberately WITHOUT the LLM parse that
+    /ask uses. Measured on the WhatsApp benchmark (171 ground-truth queries,
+    Lamas/eval/cbs_search_eval.py):
+
+        raw question  → hit@10 15.8%, MRR 0.117
+        LLM-cleaned   → hit@10 12.9%, MRR 0.096
+
+    The LLM extracts keywords and drops the phrasing — but the intent layer's
+    full_text is written in the user's own words, so that phrasing is exactly
+    what matches it. Retrieving raw also makes this endpoint free, instant, and
+    independent of any LLM key (``/ask`` keeps the LLM path for callers that
+    want structured filters). The answer text comes from the matched intent's
+    curated guidance, else a per-type fallback — no model needed.
+    """
+    where, order, params = build_search({"q": q}, sort="relevance")
+    total = (await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)).scalar_one()
+    params["limit"] = max(1, min(int(limit), 30))
+    rows = (await db.execute(
+        text(f"SELECT {RESULT_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit"), params
+    )).mappings().all()
+    results = [dict(r) for r in rows]
+
     top = results[0] if results else None
-    atype = _classify(top, total)
+    atype = _classify(top, int(total))
 
     caveats: list[str] = []
-    relaxed = [k for k in _FILTER_KEYS if parsed.get(k) and not used.get(k)]
-    if relaxed:
-        caveats.append("חלק מהמסננים הורפו כדי להחזיר תוצאות: " + ", ".join(relaxed))
-    req_geo = parsed.get("geo")
     geo_available = None
     if top:
         extra = top.get("extra") or {}
         geo_available = extra.get("geo_max")
-        geos = top.get("geo_levels") or []
-        if req_geo and geos and req_geo not in geos:
+        # An intent that documents a coarser ceiling than the finest level people
+        # ask for is worth calling out — it is the single most common frustration
+        # in the source chat ("the finest I found is נפה").
+        if geo_available in ("נפה", "מחוז"):
             caveats.append(
-                f"הרזולוציה שביקשת ({req_geo}) לא בהכרח זמינה במקור זה; המקור מציין: "
-                + ", ".join(geos)
+                f"הרזולוציה הזמינה במקור זה היא {geo_available} — ייתכן שאין פילוח עדין יותר."
             )
 
     intent_answer = (top.get("extra") or {}).get("answer") if top else None
-    if atype in ("guidance", "not_available") and intent_answer:
-        answer = intent_answer
-    else:
-        answer = _ANSWER_TEXT.get(atype) or parsed.get("answer") or ""
+    answer = (intent_answer if atype in ("guidance", "not_available") and intent_answer
+              else _ANSWER_TEXT.get(atype, ""))
 
     primary = None
     if top:
@@ -372,12 +388,12 @@ async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
     return {
         "answer": answer,
         "answer_type": atype,
-        "provider": provider,
+        "provider": "index",  # no LLM in this path — retrieval is the index itself
         "primary": primary,
         "geo_available": geo_available,
         "caveats": caveats,
-        "filters": {k: used.get(k) for k in _FILTER_KEYS},
-        "total": total,
+        "filters": {"query": q},
+        "total": int(total),
         "results": results,
         "source": "over.org.il — אינדקס הלמ\"ס (cbs.gov.il)",
     }
