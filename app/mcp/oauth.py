@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import logging
 import secrets
 import time
@@ -327,7 +328,10 @@ async def token(request: Request, db: AsyncSession) -> Response:
         return _oauth_error(401, "invalid_client", "unknown client_id")
     if client.token_endpoint_auth_method != "none":
         provided = body.get("client_secret") or ""
-        if not provided or hashlib.sha256(provided.encode()).hexdigest() != client.client_secret_hash:
+        # Constant-time compare of the hashed secret (the digest is already
+        # length-fixed, but avoid leaking a match-prefix via `!=` timing).
+        provided_hash = hashlib.sha256(provided.encode()).hexdigest() if provided else ""
+        if not provided or not hmac.compare_digest(provided_hash, client.client_secret_hash or ""):
             return _oauth_error(401, "invalid_client", "invalid client_secret")
 
     if grant_type == "authorization_code":
