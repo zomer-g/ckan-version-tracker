@@ -82,7 +82,11 @@ def test_blocked_response_has_contact_message():
     assert "guy@z-g.co.il" in body["message_en"]   # English too
 
 
-def test_client_ip_prefers_forwarded_for():
+def test_client_ip_uses_rightmost_public_hop_not_spoofable_left():
+    # The budget helper delegates to the central spoof-resistant derivation
+    # (app/client_ip.py). It takes the RIGHTMOST public hop our infra appended,
+    # skipping Render's private internal IPs — NOT the client-controllable left
+    # entry. Full trust-model coverage lives in tests/test_client_ip.py.
     from app.api_budget_middleware import _client_ip
 
     class _Req:
@@ -90,7 +94,9 @@ def test_client_ip_prefers_forwarded_for():
             self.headers = {"x-forwarded-for": xff} if xff else {}
             self.client = type("C", (), {"host": host})()
 
-    assert _client_ip(_Req(xff="203.0.113.7, 10.0.0.1")) == "203.0.113.7"
+    # forged left entry (1.1.1.1) is ignored; the real appended public hop wins.
+    # (8.8.8.8 is a global IP; RFC5737 doc ranges read as private, so aren't used.)
+    assert _client_ip(_Req(xff="1.1.1.1, 8.8.8.8, 10.0.0.1")) == "8.8.8.8"
     assert _client_ip(_Req(xff=None, host="9.9.9.9")) == "9.9.9.9"
 
 

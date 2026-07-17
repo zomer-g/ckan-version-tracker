@@ -4,6 +4,15 @@ import uuid
 
 from fastapi import HTTPException
 
+# Hard ceiling on the ``offset`` a public paginated endpoint will accept. Deep
+# OFFSET in Postgres is O(offset) — it still walks and discards every skipped
+# row — so an unbounded offset lets a client make the DB do arbitrarily
+# expensive work with a trivial request. Past this, callers should narrow their
+# filters or use the bulk CSV / SQL endpoints instead of paging. Enforced as an
+# ``le=`` bound on the Query param, so an over-limit value is a clean 422 (never
+# a silent clamp that would quietly return the wrong page).
+MAX_API_OFFSET = 100_000
+
 
 def parse_uuid(value: str, label: str = "ID") -> uuid.UUID:
     """Parse a UUID string, raising 400 if invalid."""

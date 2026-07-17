@@ -11,3 +11,8 @@ frontend/dist/
 dist/
 build/
 .claude/
+
+# Dev-server logs and the Vite/TS incremental build cache — local artifacts,
+# regenerated on every run, never meaningful in history.
+*.log
+frontend/tsconfig.tsbuildinfo

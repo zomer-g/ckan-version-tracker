@@ -48,11 +48,19 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
     }
   };
 
-  const connect = () => {
-    // Return to this exact page so the admin can resume after consent.
-    window.location.href = drive.connectUrl(
-      window.location.pathname + window.location.search
-    );
+  const connect = async () => {
+    // Return to this exact page so the admin can resume after consent. The
+    // authorize URL is minted server-side from an authenticated POST, so no
+    // token rides in the URL.
+    setError(null);
+    try {
+      const { authorize_url } = await drive.connect(
+        window.location.pathname + window.location.search
+      );
+      window.location.href = authorize_url;
+    } catch (e: any) {
+      setError(e?.message || "לא ניתן להתחיל את חיבור ה-Drive");
+    }
   };
 
   const startPolling = (jobId: string) => {
@@ -159,6 +167,11 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                     ביטול
                   </button>
                 </div>
+                {error && (
+                  <p style={{ color: "#b91c1c", fontSize: "0.8rem", margin: "0.6rem 0 0" }}>
+                    {error}
+                  </p>
+                )}
               </>
             )}
 

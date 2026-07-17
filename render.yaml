@@ -7,7 +7,18 @@ services:
       pip install -r requirements.txt
       cd frontend && npm install && npm run build && cd ..
       PYTHONPATH=/opt/render/project/src alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # --proxy-headers makes uvicorn honor X-Forwarded-* so request.client.host is
+    # the forwarded client, not the local socket. --forwarded-allow-ips lists the
+    # TRUSTED peers whose forwarding headers uvicorn will act on: on Render the
+    # process is reached only over the platform's PRIVATE network (the ingress
+    # proxy connects from an RFC1918 address — 10.x on Render today), so we trust
+    # exactly those private ranges + loopback, and NOT "*". "*" would make uvicorn
+    # trust the LEFTMOST (client-spoofable) X-Forwarded-For entry — the very
+    # spoofing this change closes. The authoritative, spoof-resistant client IP
+    # used for rate-limiting and the data budget is derived separately and more
+    # strictly in app/client_ip.py (Cloudflare-validated); this flag just keeps
+    # request.client.host sane for logging and other consumers.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     envVars:
       - key: DATABASE_URL
         sync: false

@@ -17,13 +17,13 @@ params: limit, offset, sort, order, q.
 import json as _json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.utils import parse_uuid
+from app.api.utils import MAX_API_OFFSET, parse_uuid
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
@@ -89,7 +89,11 @@ def _filters_from(request: Request, exclude: set[str]) -> dict[str, str]:
 
 
 @router.get("/{dataset_id}/schema")
-async def archive_schema(dataset_id: str, db: AsyncSession = Depends(get_db)):
+# Public + heavy: table_count is a COUNT(*) over the whole archive table, which
+# on the giant append datasets (e.g. the 4.1M-row vehicle registry) is a real
+# scan. Matches its /schema.txt sibling's ceiling.
+@limiter.limit("20/minute")
+async def archive_schema(dataset_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     ds, table = await _resolve(dataset_id, db)
     cols = await append_store.user_columns(table)
     if not cols:
@@ -124,7 +128,7 @@ async def archive_rows(
     dataset_id: str,
     request: Request,
     limit: int = 50,
-    offset: int = 0,
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
     sort: str | None = None,
     order: str = "desc",
     q: str | None = None,
@@ -192,7 +196,7 @@ async def datastore_search(
     dataset_id: str,
     request: Request,
     limit: int = 100,
-    offset: int = 0,
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
     q: str | None = None,
     fields: str | None = None,
     sort: str | None = None,

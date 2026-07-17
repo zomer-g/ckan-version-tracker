@@ -27,6 +27,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.api.utils import MAX_API_OFFSET
 from app.rate_limit import limiter
 from app.services import append_store
 
@@ -190,7 +191,7 @@ async def search(
     committee_id: int | None = Query(None, description="exact committee id"),
     committee: str | None = Query(None, description="committee name (ILIKE)"),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
 ):
     """Search committee protocols (documents only, one row per protocol) with
     the required committee-name + Knesset filters plus free text. Each row links

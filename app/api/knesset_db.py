@@ -44,7 +44,8 @@ def _require_enabled() -> None:
 
 
 @router.get("/status")
-async def status():
+@limiter.limit("60/minute")
+async def status(request: Request):
     return await knesset_db.status_summary()
 
 
@@ -184,9 +185,39 @@ async def protocol_deep_search(request: Request, q: str, page: int = 1, size: in
 # one streamed ZIP (fetched live from fs.knesset.gov.il — OVER stores only the
 # links). A links-CSV manifest is offered as the cheap alternative.
 
-BATCH_MAX_FILES = 2000          # per-ZIP cap; the UI says to narrow the filter
+# Per-ZIP file-count cap for the anonymous path. Kept low on purpose — a broad
+# filter otherwise turns one unauthenticated request into a multi-hundred-MB
+# live fetch-and-repack. Larger selections are steered to links.csv, which
+# streams the manifest row-by-row without touching any file bytes.
+BATCH_MAX_FILES = settings.knesset_zip_max_files
 BATCH_MAX_FILE_BYTES = 100 * 1024 * 1024  # skip pathological single files
+BATCH_MAX_TOTAL_BYTES = settings.knesset_zip_max_total_bytes  # whole-ZIP egress cap
 CSV_MAX_ROWS = 50_000
+
+# Hard, process-wide cap on how many batch ZIPs are being built at once. The
+# 2/minute rate limit is a shared global bucket (keyed per-IP but the limit is
+# small), and a single build already pins a worker for minutes while pulling
+# files into memory; letting several run concurrently multiplies the RSS/egress
+# and can OOM the 512MB dyno. We reserve a slot synchronously in the endpoint
+# (so an over-limit request gets an immediate 429 instead of queueing) and
+# release it in the streaming generator's finally. A module-level int is safe
+# here: check-and-increment runs without an intervening await on the single
+# event loop, so there is no race.
+_MAX_CONCURRENT_ZIP_BUILDS = max(1, settings.knesset_zip_max_concurrency)
+_active_zip_builds = 0
+
+
+def _reserve_zip_slot() -> bool:
+    global _active_zip_builds
+    if _active_zip_builds >= _MAX_CONCURRENT_ZIP_BUILDS:
+        return False
+    _active_zip_builds += 1
+    return True
+
+
+def _release_zip_slot() -> None:
+    global _active_zip_builds
+    _active_zip_builds = max(0, _active_zip_builds - 1)
 
 
 def _batch_filters(knesset_num: int | None, committee_id: int | None, q: str | None):
@@ -247,7 +278,10 @@ class _ZipBuf:
 async def _zip_stream(rows: list[dict]):
     """Fetch each protocol from the Knesset file server and stream a ZIP.
     Sequential (one file in memory at a time); failures are collected into
-    _errors.txt instead of aborting a half-sent download."""
+    _errors.txt instead of aborting a half-sent download. Stops early once the
+    cumulative downloaded size crosses BATCH_MAX_TOTAL_BYTES so one request
+    can't stream unbounded egress. Always releases its concurrency slot on the
+    way out (including client disconnect → GeneratorExit)."""
     import io
     import zipfile
 
@@ -259,46 +293,63 @@ async def _zip_stream(rows: list[dict]):
     manifest.write("date,knesset,committee,session_id,document_id,filename,url\r\n")
     errors: list[str] = []
     seen_names: set[str] = set()
+    total_bytes = 0
+    truncated = False
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=20.0), follow_redirects=True,
-        headers={"User-Agent": "over.org.il protocol batches (+https://over.org.il/knesset)"},
-    ) as client:
-        for r in rows:
-            url = (r.get("filepath") or "").strip()
-            if not url:
-                continue
-            base = url.rsplit("/", 1)[-1] or f"{r['document_id']}.bin"
-            date = str(r.get("startdate") or "")[:10]
-            folder = _safe_name(r.get("committee_name") or "", "committee")
-            name = f"{folder}/{date}_{_safe_name(base, str(r['document_id']))}"
-            if name in seen_names:
-                name = f"{folder}/{date}_{r['document_id']}_{_safe_name(base, 'doc')}"
-            seen_names.add(name)
-            try:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data = resp.content
-                if len(data) > BATCH_MAX_FILE_BYTES:
-                    raise ValueError(f"file too large ({len(data)} bytes)")
-                zf.writestr(name, data)
-                manifest.write(
-                    f"{date},{r.get('knessetnum') or ''},"
-                    f"\"{(r.get('committee_name') or '').replace(chr(34), chr(34)*2)}\","
-                    f"{r['session_id']},{r['document_id']},\"{name}\",{url}\r\n")
-            except Exception as e:  # noqa: BLE001 — keep the batch going
-                errors.append(f"{url}\t{type(e).__name__}: {e}")
-            chunk = buf.drain()
-            if chunk:
-                yield chunk
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=20.0), follow_redirects=True,
+            headers={"User-Agent": "over.org.il protocol batches (+https://over.org.il/knesset)"},
+        ) as client:
+            for r in rows:
+                url = (r.get("filepath") or "").strip()
+                if not url:
+                    continue
+                base = url.rsplit("/", 1)[-1] or f"{r['document_id']}.bin"
+                date = str(r.get("startdate") or "")[:10]
+                folder = _safe_name(r.get("committee_name") or "", "committee")
+                name = f"{folder}/{date}_{_safe_name(base, str(r['document_id']))}"
+                if name in seen_names:
+                    name = f"{folder}/{date}_{r['document_id']}_{_safe_name(base, 'doc')}"
+                seen_names.add(name)
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    data = resp.content
+                    if len(data) > BATCH_MAX_FILE_BYTES:
+                        raise ValueError(f"file too large ({len(data)} bytes)")
+                    zf.writestr(name, data)
+                    total_bytes += len(data)
+                    manifest.write(
+                        f"{date},{r.get('knessetnum') or ''},"
+                        f"\"{(r.get('committee_name') or '').replace(chr(34), chr(34)*2)}\","
+                        f"{r['session_id']},{r['document_id']},\"{name}\",{url}\r\n")
+                except Exception as e:  # noqa: BLE001 — keep the batch going
+                    errors.append(f"{url}\t{type(e).__name__}: {e}")
+                chunk = buf.drain()
+                if chunk:
+                    yield chunk
+                # Stop after emitting the file that tipped us over the ceiling:
+                # the ZIP stays valid and the user gets a clear note in _errors.
+                if total_bytes >= BATCH_MAX_TOTAL_BYTES:
+                    truncated = True
+                    errors.append(
+                        f"[TRUNCATED]\tהאצווה נקטעה לאחר {total_bytes:,} בתים "
+                        f"(תקרת {BATCH_MAX_TOTAL_BYTES:,}). צמצמו את הסינון או "
+                        f"השתמשו ברשימת הקישורים (CSV) כדי למשוך את השאר.")
+                    break
 
-    zf.writestr("_index.csv", "﻿" + manifest.getvalue())
-    if errors:
-        zf.writestr("_errors.txt", "\n".join(errors))
-    zf.close()
-    tail = buf.drain()
-    if tail:
-        yield tail
+        if truncated:
+            manifest.write("# הרשימה נקטעה עקב חריגה מתקרת הנפח; ראו _errors.txt\r\n")
+        zf.writestr("_index.csv", "﻿" + manifest.getvalue())
+        if errors:
+            zf.writestr("_errors.txt", "\n".join(errors))
+        zf.close()
+        tail = buf.drain()
+        if tail:
+            yield tail
+    finally:
+        _release_zip_slot()
 
 
 @router.get("/protocols/batch.zip")
@@ -307,17 +358,39 @@ async def protocol_batch_zip(request: Request, knesset_num: int | None = None,
                              committee_id: int | None = None, q: str | None = None):
     """Stream a ZIP of all protocol files matching the filter (newest first,
     capped at BATCH_MAX_FILES). The files come live from fs.knesset.gov.il —
-    a large batch takes minutes; the browser shows a progressing download."""
+    a large batch takes minutes; the browser shows a progressing download.
+
+    This path is public and expensive (live fetch + repack, held in memory), so
+    it is bounded three ways: a hard process-wide concurrency slot (immediate
+    429 when full), a low file-count cap (oversized selections use links.csv),
+    and a cumulative byte ceiling enforced mid-stream in _zip_stream."""
     _require_enabled()
     kn, cid, qq = _batch_filters(knesset_num, committee_id, q)
-    n = await knesset_db.protocol_count(kn, cid, qq)
-    if n == 0:
-        raise HTTPException(status_code=404, detail="אין פרוטוקולים בסינון הזה")
-    if n > BATCH_MAX_FILES:
-        raise HTTPException(status_code=400, detail=(
-            f"האצווה גדולה מדי ({n:,} קבצים; המקסימום {BATCH_MAX_FILES:,}). "
-            f"צמצמו לפי ועדה או כנסת, או הורידו את רשימת הקישורים (CSV)."))
-    rows = await knesset_db.protocol_batch_rows(kn, cid, qq, limit=BATCH_MAX_FILES)
+
+    # Reserve a build slot up front so an over-capacity request is rejected
+    # immediately, before any DB or file work. Everything from here until the
+    # StreamingResponse is handed off must release the slot on any exit; once
+    # the generator owns it, its finally releases it.
+    if not _reserve_zip_slot():
+        raise HTTPException(status_code=429, detail=(
+            "יותר מדי הורדות אצווה מתבצעות במקביל כרגע. נסו שוב בעוד רגע, "
+            "או הורידו את רשימת הקישורים (CSV) שאינה מוגבלת כך."))
+    try:
+        n = await knesset_db.protocol_count(kn, cid, qq)
+        if n == 0:
+            raise HTTPException(status_code=404, detail="אין פרוטוקולים בסינון הזה")
+        if n > BATCH_MAX_FILES:
+            raise HTTPException(status_code=400, detail=(
+                f"האצווה גדולה מדי ({n:,} קבצים; המקסימום להורדת ZIP הוא "
+                f"{BATCH_MAX_FILES:,}). צמצמו לפי ועדה או כנסת, או הורידו את "
+                f"רשימת הקישורים המלאה (CSV)."))
+        rows = await knesset_db.protocol_batch_rows(kn, cid, qq, limit=BATCH_MAX_FILES)
+    except BaseException:
+        # Filter/count/DB error (or client cancel) before the generator took
+        # ownership — free the slot ourselves.
+        _release_zip_slot()
+        raise
+
     parts = ["protocols"]
     if kn is not None:
         parts.append(f"knesset{kn}")

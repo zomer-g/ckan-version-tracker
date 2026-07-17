@@ -13,13 +13,14 @@ from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.utils import parse_uuid
+from app.api.utils import MAX_API_OFFSET, parse_uuid
 from app.config import settings
 from app.database import get_db
 from app.models.organization import Organization
 from app.models.tag import Tag, dataset_tags
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.rate_limit import limiter
 from app.services import storage_client as storage
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,7 @@ def _version_detail(ds: TrackedDataset, v: VersionIndex) -> VersionDetail:
 
 
 @router.get("/datasets", response_model=DatasetListResponse)
+@limiter.limit("30/minute")  # heavy: count + join + selectinload(tags) + version-count subquery
 async def list_datasets(
     request: Request,
     organization_id: str | None = Query(
@@ -354,7 +356,7 @@ async def list_datasets(
         ),
     ),
     limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
     db: AsyncSession = Depends(get_db),
 ):
     """List datasets, optionally filtered by organization and/or tags.
@@ -463,6 +465,7 @@ async def list_datasets(
 
 
 @router.get("/datasets/{dataset_id}", response_model=DatasetSummary)
+@limiter.limit("60/minute")
 async def get_dataset(
     dataset_id: str,
     request: Request,
@@ -507,8 +510,10 @@ async def _get_dataset_or_404(dataset_id: str, db: AsyncSession) -> TrackedDatas
     response_model=list[VersionDetail],
     summary="List all versions of a dataset (newest first)",
 )
+@limiter.limit("60/minute")
 async def list_dataset_versions(
     dataset_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Full version history of a dataset, ordered newest-first. Each entry
@@ -530,8 +535,10 @@ async def list_dataset_versions(
     response_model=VersionDetail,
     summary="Get the most recent version of a dataset",
 )
+@limiter.limit("60/minute")
 async def get_latest_version(
     dataset_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """The newest version of a dataset (highest `version_number`). Returns
@@ -556,8 +563,10 @@ async def get_latest_version(
     response_model=VersionDetail,
     summary="Get a specific version of a dataset by its number",
 )
+@limiter.limit("60/minute")
 async def get_version_by_number(
     dataset_id: str,
+    request: Request,
     version_number: int = Path(..., ge=1, description="1-based version number"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -586,6 +595,7 @@ async def get_version_by_number(
 
 
 @router.get("/tags", response_model=list[TagWithCount])
+@limiter.limit("60/minute")
 async def list_tags(request: Request, db: AsyncSession = Depends(get_db)):
     """Every tag with the count of active+pending datasets carrying it."""
     count_subq = (
@@ -618,6 +628,7 @@ async def list_tags(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/tags/{tag_id}", response_model=TagDetailResponse)
+@limiter.limit("30/minute")  # heavy: tag join + per-dataset version-count subquery
 async def get_tag(
     tag_id: str,
     request: Request,
@@ -682,6 +693,7 @@ async def get_tag(
 
 
 @router.get("/organizations", response_model=list[OrganizationWithCount])
+@limiter.limit("60/minute")
 async def list_organizations(request: Request, db: AsyncSession = Depends(get_db)):
     count_subq = (
         select(
@@ -714,6 +726,7 @@ async def list_organizations(request: Request, db: AsyncSession = Depends(get_db
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationWithCount)
+@limiter.limit("60/minute")
 async def get_organization(
     org_id: str,
     request: Request,

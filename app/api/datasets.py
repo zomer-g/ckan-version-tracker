@@ -263,7 +263,13 @@ def _build_source_url(ds: TrackedDataset) -> str:
 
 
 @router.get("", response_model=list[DatasetResponse])
+# Heavy AND anonymous: a 3-way join + selectinload(tags) + a catalog-wide
+# VersionIndex count, with no pagination — the very cost that contributed to the
+# 512MB-dyno OOMs noted below. 30/minute is far above what browsing the SPA
+# needs while stopping a single client from replaying it in a loop.
+@limiter.limit("30/minute")
 async def list_tracked(
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Public endpoint — lists all active/pending tracked datasets."""
@@ -1717,8 +1723,10 @@ async def submit_tracking_request(
 
 
 @router.get("/public/{dataset_id}")
+@limiter.limit("60/minute")
 async def get_tracked_public(
     dataset_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Public endpoint -- get a single active tracked dataset."""

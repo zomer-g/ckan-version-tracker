@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.utils import parse_uuid
 from app.auth.dependencies import get_admin_user
 from app.database import get_db
+from app.rate_limit import limiter
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.models.version_index import VersionIndex
@@ -99,8 +100,10 @@ def _extract_storage_keys(mappings: dict | None) -> list[str]:
 
 
 @router.get("/datasets/{dataset_id}/versions", response_model=list[VersionResponse])
+@limiter.limit("60/minute")
 async def list_versions(
     dataset_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     uid = parse_uuid(dataset_id, "dataset_id")
@@ -135,8 +138,10 @@ async def list_versions(
 
 
 @router.get("/versions/{version_id}", response_model=VersionResponse)
+@limiter.limit("60/minute")
 async def get_version(
     version_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     vid = parse_uuid(version_id, "version_id")
@@ -169,8 +174,10 @@ async def get_version(
 
 
 @router.delete("/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("10/minute")
 async def delete_version(
     version_id: str,
+    request: Request,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -245,9 +252,11 @@ async def delete_version(
 
 
 @router.get("/versions/{version_id}/download/{resource_id}")
+@limiter.limit("60/minute")
 async def download_resource(
     version_id: str,
     resource_id: str,
+    request: Request,
     index: int = Query(
         0, ge=0,
         description="For list-valued resources (e.g. multi-part ZIP "
@@ -303,7 +312,9 @@ async def download_resource(
 
 
 @router.get("/diff")
+@limiter.limit("20/minute")  # heavy: fetches two ODATA metadata snapshots + computes a diff
 async def diff_versions(
+    request: Request,
     from_version: str = Query(..., alias="from"),
     to_version: str = Query(..., alias="to"),
     db: AsyncSession = Depends(get_db),

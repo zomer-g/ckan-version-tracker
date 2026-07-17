@@ -76,7 +76,8 @@ def _tag_brief(t: Tag) -> TagBrief:
 
 
 @router.get("", response_model=list[TagWithCount])
-async def list_tags(db: AsyncSession = Depends(get_db)):
+@limiter.limit("60/minute")
+async def list_tags(request: Request, db: AsyncSession = Depends(get_db)):
     """List every tag with the count of datasets it's assigned to."""
     count_subq = (
         select(
@@ -105,7 +106,8 @@ async def list_tags(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{tag_id}", response_model=TagDetailResponse)
-async def get_tag(tag_id: str, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")  # heavy: tag join + catalog-wide version-count group-by
+async def get_tag(tag_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     uid = parse_uuid(tag_id, "tag_id")
     tag = (await db.execute(select(Tag).where(Tag.id == uid))).scalar_one_or_none()
     if not tag:

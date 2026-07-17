@@ -37,7 +37,11 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
-    jwt_expiry_minutes: int = 1440
+    # Admin session lifetime. Kept SHORT (2h) so a token that somehow leaks is
+    # useless within hours, not a full day. The SPA slides the session forward
+    # via POST /api/auth/refresh (on load + on a timer), so an active admin is
+    # never logged out mid-work. Was 1440 (24h). See app/api/auth.refresh.
+    jwt_expiry_minutes: int = 120
 
     data_gov_il_url: str = "https://data.gov.il"
     odata_url: str = "https://www.odata.org.il"
@@ -111,6 +115,28 @@ class Settings(BaseSettings):
     # Per scheduler tick, how long the sync may work before yielding (the
     # initial ~3M-row load spans many ticks; each tick checkpoints).
     knesset_db_tick_budget_seconds: float = 240.0
+
+    # ── Committee-protocol batch ZIP guards (the /knesset "אצוות" tab) ──
+    # /api/knesset-db/protocols/batch.zip is public and unauthenticated: for
+    # each matching row it fetches a file live from fs.knesset.gov.il, holds it
+    # whole in memory, deflates it, and streams it. Without hard caps a single
+    # broad filter turns one anonymous request into hundreds of MB–GB of egress,
+    # memory pressure on the 512MB dyno, and a worker pinned for minutes. These
+    # bound the anonymous ZIP path; oversized selections are pushed to the cheap
+    # links.csv manifest (which streams row-by-row, no file bytes).
+    # Max protocol files packed into one anonymous ZIP. Kept low deliberately;
+    # larger selections must use links.csv or narrow the filter.
+    knesset_zip_max_files: int = 200
+    # How many ZIP builds may run CONCURRENTLY across ALL clients. Extra
+    # requests get an immediate 429 rather than piling coroutines (each pulling
+    # files into memory) onto the dyno. 1–2 keeps a single build's footprint.
+    knesset_zip_max_concurrency: int = 2
+    # Cumulative downloaded-bytes ceiling for one ZIP. When the running total of
+    # fetched file bodies crosses this, the build stops early, notes it in
+    # _errors.txt, and closes the archive with whatever it has. Bounds total
+    # egress/RSS per request independent of the file COUNT (a few giant files
+    # can blow past a small count). 400MB fits under the 512MB dyno.
+    knesset_zip_max_total_bytes: int = 400 * 1024 * 1024
 
     large_dataset_threshold: int = 50000  # rows — datasets above this use lightweight versioning
 
@@ -252,6 +278,20 @@ class Settings(BaseSettings):
     api_daily_byte_budget: int = 2 * 1024 ** 3   # 2 GB per IP per window
     api_budget_window_seconds: int = 86400        # rolling 24h
     api_contact_email: str = "guy@z-g.co.il"
+
+    # ── Global daily hard cap on paid-LLM calls (anti-abuse) ──
+    # The public natural-language endpoints (/api/cbs/ask + /api/cbs/resolve)
+    # invoke a paid LLM on EVERY request. The per-IP request limiter throttles a
+    # single client, but an attacker rotating IPs could still drive unbounded
+    # spend. This is a SINGLE global counter, persisted per calendar day in
+    # Postgres (table llm_daily_usage) and keyed ONLY by the day — never by IP —
+    # so it caps total spend across ALL callers and cannot be reset by rotating
+    # X-Forwarded-For or by a process restart/deploy. Enforced BEFORE the LLM
+    # call, so a blocked request costs nothing. Authenticated MCP callers are
+    # exempt. Set the budget to 0 (or llm_budget_enabled=False) to disable.
+    # See app/services/llm_budget.py.
+    llm_budget_enabled: bool = True
+    cbs_ask_daily_budget: int = 2000   # max LLM parses/day, summed over everyone
 
     # SSO
     app_base_url: str = "http://localhost:8000"

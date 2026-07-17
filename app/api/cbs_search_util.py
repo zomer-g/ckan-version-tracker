@@ -64,3 +64,101 @@ def or_tsquery(q: str) -> str:
     # than match everything; last resort, keep whatever there was.
     terms = kept or [w for w in words if len(w) > 1] or words
     return " | ".join(f"{w}:*" for w in terms)
+
+
+# ── Shared search SQL builder ───────────────────────────────────────────────
+# One place that turns a filter dict into (WHERE, ORDER BY, params) so the three
+# read paths — REST /search, /ask, and the MCP search tool — behave identically.
+# Before this, the MCP used plainto_tsquery (AND-of-words) and lacked a ``lang``
+# filter, so the same Hebrew question ranked differently through MCP than through
+# REST. See app/api/cbs.py, app/api/cbs_ask.py, app/mcp/cbs_server.py.
+
+# High-volume navigational index pages: "פעולות ופרסומים סטטיסטיים חדשים בישראל
+# <חודש> <שנה>" summarize every new publication, so their full_text matches (and
+# out-ranks) almost any query. They are a table of contents, not a data page —
+# demoted below real content in relevance ranking. LIKE prefix, so title starting
+# with the phrase is caught regardless of the trailing month/year.
+_CATCHALL_TITLE_PREFIXES = ("פעולות ופרסומים סטטיסטיים",)
+
+# Columns every read path returns — keep in one place so projections can't drift.
+RESULT_COLS = (
+    "url, lang, section, series, item_type, title, title_en, summary, "
+    "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
+    "extra, last_crawled"
+)
+
+# Which filter keys build_search understands. ``q`` is free text; the rest are
+# exact-match facets. ``item_type``/``lang`` are honored by every caller now
+# (the MCP previously ignored ``lang``).
+_FACET_JSONB = {"subject": ("subject_tags", None), "geo": ("geo_levels", None),
+                "file_type": ("file_types", None)}
+
+
+def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict]:
+    """Return (where_sql, order_sql, params) for a cbs_index search.
+
+    ``filters`` keys (all optional): q, subject, geo, file_type, section,
+    item_type, lang, year_from, year_to. ``sort`` is "relevance" or "chrono".
+
+    Relevance ordering, in priority order:
+      1. intent guidance rows first (the curated question→source layer),
+      2. navigational catch-all index pages last,
+      3. ts_rank of the OR-of-words query,
+      4. newest data year, then most-recently crawled.
+    The recency tie-breakers (3→4) fix the "old publication out-ranks the current
+    one" failure — e.g. 'הבינוי בישראל 2004' floating above the 2024 release.
+    """
+    conds: list[str] = []
+    params: dict = {}
+
+    q = (filters.get("q") or "").strip()
+    tsq = or_tsquery(q) if q else ""
+    if q:
+        if tsq:
+            conds.append("(search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike)")
+            params["tsq"] = tsq
+        else:
+            conds.append("title ILIKE :qlike")
+        params["qlike"] = f"%{q}%"
+
+    for key, (col, _) in _FACET_JSONB.items():
+        val = filters.get(key)
+        if val:
+            conds.append(f"{col} @> :{key}")
+            params[key] = f'["{val}"]'
+    if filters.get("section"):
+        conds.append("section = :section"); params["section"] = filters["section"]
+    if filters.get("item_type"):
+        conds.append("item_type = :item_type"); params["item_type"] = filters["item_type"]
+    if filters.get("lang"):
+        conds.append("lang = :lang"); params["lang"] = filters["lang"]
+    if filters.get("year_from"):
+        conds.append("(year_end IS NULL OR year_end >= :yfrom)"); params["yfrom"] = int(filters["year_from"])
+    if filters.get("year_to"):
+        conds.append("(year_start IS NULL OR year_start <= :yto)"); params["yto"] = int(filters["year_to"])
+
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+
+    if sort == "chrono":
+        order = ("coalesce(year_end, year_start) DESC NULLS LAST, "
+                 "last_crawled DESC NULLS LAST, id DESC")
+        return where, order, params
+
+    # relevance
+    catch_terms = []
+    for i, pfx in enumerate(_CATCHALL_TITLE_PREFIXES):
+        pk = f"catch{i}"
+        catch_terms.append(f"title LIKE :{pk}")
+        params[pk] = f"{pfx}%"
+    catchall = " OR ".join(catch_terms) if catch_terms else "false"
+
+    rank = (f"ts_rank(search_vector, to_tsquery('simple', :tsq))"
+            if tsq else "0")
+    order = (
+        "(item_type = 'intent') DESC, "        # curated guidance rows first
+        f"({catchall}) ASC, "                  # navigational index pages last
+        f"{rank} DESC, "
+        "coalesce(year_end, year_start) DESC NULLS LAST, "
+        "last_crawled DESC NULLS LAST, id DESC"
+    )
+    return where, order, params

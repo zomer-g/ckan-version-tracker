@@ -90,7 +90,9 @@ class OrganizationDetailResponse(BaseModel):
 
 
 @router.get("", response_model=list[OrganizationResponse])
+@limiter.limit("60/minute")
 async def list_organizations(
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Public — list all organizations with their active/pending dataset counts."""
@@ -143,8 +145,10 @@ async def list_organizations(
 
 
 @router.get("/{org_id}", response_model=OrganizationDetailResponse)
+@limiter.limit("60/minute")
 async def get_organization(
     org_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Public — organization details with its datasets.

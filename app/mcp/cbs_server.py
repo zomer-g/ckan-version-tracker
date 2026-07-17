@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
+from app.api.cbs_search_util import RESULT_COLS, build_search
 from app.mcp.auth import McpUser
 from app.mcp.config import base_url
 from app.mcp.usage import log_usage
@@ -69,7 +70,8 @@ TOOLS: list[dict] = [
                 "geo": {"type": "string", "description": "רמה גאוגרפית (מתוך facets.geo_levels)"},
                 "file_type": {"type": "string", "description": "סיומת קובץ, למשל xlsx / pdf"},
                 "section": {"type": "string", "description": "סוג עמוד: mediarelease / publications / subjects / databank ..."},
-                "item_type": {"type": "string"},
+                "item_type": {"type": "string", "description": "publication / media_release / table / tool / subject / page / intent"},
+                "lang": {"type": "string", "description": "שפת העמוד: he / en"},
                 "year_from": {"type": "integer"},
                 "year_to": {"type": "integer"},
                 "sort": {"type": "string", "enum": ["relevance", "chrono"], "default": "relevance",
@@ -77,6 +79,24 @@ TOOLS: list[dict] = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
+        },
+    },
+    {
+        "name": "resolve",
+        "description": (
+            "פתרון שאלה בשפה טבעית למיקום המדויק בלמ\"ס. מקבל שאלה חופשית ומחזיר "
+            "תשובה מובנית: answer_type (guidance=הפניה מומלצת / generator=מחולל / "
+            "data_file=קובץ להורדה / publication=פרסום / not_available=אין בלמ\"ס / "
+            "no_results), הקישור הראשי (primary), הרזולוציה הגאוגרפית הזמינה, "
+            "הסתייגויות, ותוצאות מגובות. עדיף על search לשאלות ניסוח-אנושי."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "השאלה בשפה טבעית (עברית/אנגלית)"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
+            },
+            "required": ["q"],
         },
     },
     {
@@ -124,49 +144,48 @@ def _row_to_item(r: dict, b: str) -> dict:
 # ── tool implementations ────────────────────────────────────────────────────
 
 async def _tool_search(request, db, user, a) -> tuple[dict, int]:
-    conds, params = [], {}
-    q = (a.get("q") or "").strip()
-    if q:
-        conds.append("(search_vector @@ plainto_tsquery('simple', :q) OR title ILIKE :qlike)")
-        params["q"] = q
-        params["qlike"] = f"%{q}%"
-    if a.get("subject"):
-        conds.append("subject_tags @> :subject"); params["subject"] = f'["{a["subject"]}"]'
-    if a.get("geo"):
-        conds.append("geo_levels @> :geo"); params["geo"] = f'["{a["geo"]}"]'
-    if a.get("file_type"):
-        conds.append("file_types @> :ftype"); params["ftype"] = f'["{a["file_type"]}"]'
-    if a.get("section"):
-        conds.append("section = :section"); params["section"] = a["section"]
-    if a.get("item_type"):
-        conds.append("item_type = :item_type"); params["item_type"] = a["item_type"]
-    if a.get("year_from") is not None:
-        conds.append("(year_end IS NULL OR year_end >= :yfrom)"); params["yfrom"] = int(a["year_from"])
-    if a.get("year_to") is not None:
-        conds.append("(year_start IS NULL OR year_start <= :yto)"); params["yto"] = int(a["year_to"])
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
-
+    # Use the shared builder so an MCP client gets the SAME retrieval + ranking
+    # as the website: OR-of-words tsquery (was plainto_tsquery — AND-of-words,
+    # strictly worse for Hebrew NL), the ``lang`` filter (previously ignored),
+    # intent boosting, catch-all demotion and recency tie-breakers.
+    where, order, params = build_search(
+        {
+            "q": a.get("q"), "subject": a.get("subject"), "geo": a.get("geo"),
+            "file_type": a.get("file_type"), "section": a.get("section"),
+            "item_type": a.get("item_type"), "lang": a.get("lang"),
+            "year_from": a.get("year_from"), "year_to": a.get("year_to"),
+        },
+        sort=("chrono" if a.get("sort") == "chrono" else "relevance"),
+    )
     total = (await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)).scalar_one()
-
-    if a.get("sort") == "chrono":
-        order = "coalesce(year_end, year_start) DESC NULLS LAST, last_crawled DESC NULLS LAST, id DESC"
-    elif q:
-        order = "ts_rank(search_vector, plainto_tsquery('simple', :q)) DESC, last_crawled DESC NULLS LAST"
-    else:
-        order = "last_crawled DESC NULLS LAST, id DESC"
 
     limit = min(int(a.get("limit") or 20), 50)
     offset = max(int(a.get("offset") or 0), 0)
     params["limit"] = limit
     params["offset"] = offset
     rows = (await db.execute(
-        text(f"SELECT {_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit OFFSET :offset"),
+        text(f"SELECT {RESULT_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit OFFSET :offset"),
         params,
     )).mappings().all()
     b = base_url(request)
     items = [_row_to_item(dict(r), b) for r in rows]
     return {"total": int(total), "limit": limit, "offset": offset, "items": items,
             "source": "over.org.il — אינדקס הלמ\"ס (cbs.gov.il)"}, len(items)
+
+
+async def _tool_resolve(request, db, user, a) -> tuple[dict, int]:
+    # Delegate to the same resolver the REST /api/cbs/resolve uses, so the MCP
+    # client gets the identical LLM-parse + intent-aware ranking + answer_type
+    # classification. Needs an LLM key (DeepSeek/Anthropic) — errors surface as a
+    # normal tool error if unconfigured.
+    from app.api.cbs_ask import resolve_question
+
+    q = (a.get("q") or "").strip()
+    if not q:
+        raise ValueError("q נדרש")
+    limit = min(int(a.get("limit") or 10), 30)
+    data = await resolve_question(db, q, limit)
+    return data, len(data.get("results") or [])
 
 
 async def _tool_get_page(request, db, user, a) -> tuple[dict, int]:
@@ -231,6 +250,7 @@ async def _tool_get_stats(request, db, user, a) -> tuple[dict, int]:
 
 _IMPL = {
     "search": _tool_search,
+    "resolve": _tool_resolve,
     "get_page": _tool_get_page,
     "facets": _tool_facets,
     "list_featured": _tool_list_featured,

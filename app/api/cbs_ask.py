@@ -23,10 +23,11 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.cbs_search_util import or_tsquery
+from app.api.cbs_search_util import RESULT_COLS, build_search
 from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
+from app.services.llm_budget import reserve_llm_call
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cbs", tags=["cbs"])
@@ -34,13 +35,6 @@ router = APIRouter(prefix="/api/cbs", tags=["cbs"])
 ANTHROPIC_MODEL = "claude-opus-4-8"
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# Same projection the /api/cbs/search + MCP search return.
-_COLS = (
-    "url, lang, section, series, item_type, title, title_en, summary, "
-    "subject_tags, year_start, year_end, geo_levels, file_types, extra, "
-    "file_links, last_crawled"
-)
 
 # The structured shape both providers must return. Empty string / 0 mean "no
 # constraint". Anthropic gets it as a forced-tool input_schema; DeepSeek gets it
@@ -181,34 +175,21 @@ async def _parse_deepseek(q: str, facets: dict) -> dict | None:
 
 
 async def _run_search(db: AsyncSession, p: dict, limit: int) -> tuple[int, list[dict]]:
-    conds, params = [], {}
-    q = (p.get("query") or "").strip()
-    tsq = or_tsquery(q) if q else ""
-    if q:
-        if tsq:
-            conds.append("(search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike)")
-            params["tsq"] = tsq
-        else:
-            conds.append("title ILIKE :qlike")
-        params["qlike"] = f"%{q}%"
-    if p.get("geo"):
-        conds.append("geo_levels @> :geo"); params["geo"] = f'["{p["geo"]}"]'
-    if p.get("file_type"):
-        conds.append("file_types @> :ftype"); params["ftype"] = f'["{p["file_type"]}"]'
-    if p.get("section"):
-        conds.append("section = :section"); params["section"] = p["section"]
-    if p.get("year_from"):
-        conds.append("(year_end IS NULL OR year_end >= :yfrom)"); params["yfrom"] = int(p["year_from"])
-    if p.get("year_to"):
-        conds.append("(year_start IS NULL OR year_start <= :yto)"); params["yto"] = int(p["year_to"])
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
-
+    # Map the LLM's parsed shape (query/geo/file_type/section/year_*) onto the
+    # shared builder so /ask ranks identically to /search and the MCP tool —
+    # same intent-boost, catch-all demotion and recency tie-breakers.
+    where, order, params = build_search(
+        {
+            "q": p.get("query"), "geo": p.get("geo"), "file_type": p.get("file_type"),
+            "section": p.get("section"), "year_from": p.get("year_from"),
+            "year_to": p.get("year_to"),
+        },
+        sort="relevance",
+    )
     total = (await db.execute(text(f"SELECT count(*) FROM cbs_index{where}"), params)).scalar_one()
-    order = ("ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, last_crawled DESC NULLS LAST"
-             if tsq else "last_crawled DESC NULLS LAST, id DESC")
     params["limit"] = max(1, min(int(limit), 60))
     rows = (await db.execute(
-        text(f"SELECT {_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit"), params
+        text(f"SELECT {RESULT_COLS} FROM cbs_index{where} ORDER BY {order} LIMIT :limit"), params
     )).mappings().all()
     return int(total), [dict(r) for r in rows]
 
@@ -238,39 +219,176 @@ async def _search_relaxed(db: AsyncSession, parsed: dict, limit: int) -> tuple[i
     return total, results, active
 
 
+async def _parse_question(db: AsyncSession, q: str) -> tuple[str, dict]:
+    """Shared LLM parse: free-text question → (provider, structured filters).
+
+    Raises HTTPException on the same conditions as before so /ask and /resolve
+    behave identically. Grounds the model in the live facets so it only emits
+    real geo/file_type/section values."""
+    provider = _provider()
+    if not provider:
+        raise HTTPException(status_code=503, detail="natural-language search is not configured")
+    facets = await _facets(db)
+    try:
+        parsed = await (_parse_deepseek(q, facets) if provider == "deepseek"
+                        else _parse_anthropic(q, facets))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("cbs/ask LLM error (%s): %s", provider, e)
+        raise HTTPException(status_code=502, detail="language model error")
+    if not parsed:
+        raise HTTPException(status_code=502, detail="could not parse the question")
+    return provider, parsed
+
+
+_FILTER_KEYS = ("query", "geo", "file_type", "section", "year_from", "year_to")
+
+
+async def _enforce_llm_budget(db: AsyncSession) -> None:
+    """Reserve one call against the GLOBAL daily LLM budget, or 429.
+
+    Runs before any LLM call on the public (unauthenticated) endpoints so a
+    blocked request never spends money. The budget is global + day-keyed, so it
+    can't be sidestepped by rotating IPs the way the per-IP limiter can. See
+    app/services/llm_budget.py."""
+    if not _provider():
+        # No provider configured ⇒ _parse_question will 503 and no LLM is ever
+        # called. Don't spend budget on a request that can't cost anything.
+        return
+    if not await reserve_llm_call(db):
+        email = getattr(settings, "api_contact_email", "guy@z-g.co.il")
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": "3600"},
+            detail=(
+                "החיפוש בשפה חופשית עמוס כרגע — נוצלה מכסת השאילתות היומית של "
+                "התכונה. אפשר להשתמש בחיפוש הרגיל, או לנסות שוב מאוחר יותר. "
+                f"לשימוש מוגבר בהיקף גדול — נא ליצור קשר בכתובת {email}. "
+                "The free natural-language search has reached its daily quota; "
+                "use the regular search or try again later."
+            ),
+        )
+
+
 @router.post("/ask")
 @limiter.limit("20/minute")
 async def ask(request: Request, body: AskRequest, db: AsyncSession = Depends(get_db)):
     """LLM-parsed natural-language search over the CBS index."""
-    provider = _provider()
-    if not provider:
-        raise HTTPException(status_code=503, detail="natural-language search is not configured")
     q = (body.q or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="q is required")
 
-    facets = await _facets(db)
-    try:
-        if provider == "deepseek":
-            parsed = await _parse_deepseek(q, facets)
-        else:
-            parsed = await _parse_anthropic(q, facets)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("cbs/ask LLM error (%s): %s", provider, e)
-        raise HTTPException(status_code=502, detail="language model error")
-
-    if not parsed:
-        raise HTTPException(status_code=502, detail="could not parse the question")
-
+    await _enforce_llm_budget(db)
+    provider, parsed = await _parse_question(db, q)
     total, results, used = await _search_relaxed(db, parsed, body.limit)
-    keys = ("query", "geo", "file_type", "section", "year_from", "year_to")
-    relaxed = [k for k in keys if parsed.get(k) and not used.get(k)]
+    relaxed = [k for k in _FILTER_KEYS if parsed.get(k) and not used.get(k)]
     return {
         "answer": parsed.get("answer") or "",
         "provider": provider,
-        "filters": {k: used.get(k) for k in keys},
-        "requested_filters": {k: parsed.get(k) for k in keys},
+        "filters": {k: used.get(k) for k in _FILTER_KEYS},
+        "requested_filters": {k: parsed.get(k) for k in _FILTER_KEYS},
         "relaxed": relaxed,
         "total": total,
         "results": results,
     }
+
+
+# ── resolve: structured "where is this at CBS?" answer ─────────────────────
+# Same LLM-parse + relaxed search as /ask, but classifies the top hit into an
+# actionable answer_type and surfaces caveats, so a client (website card, MCP,
+# extension) can render "here's the file" vs "run this generator" vs "not held by
+# CBS — try special processing" instead of a raw result list. Reused by the MCP
+# ``resolve`` tool (app/mcp/cbs_server.py) so every surface answers identically.
+
+# Fallback answer text per type; intents/negatives override with their own
+# curated guidance (extra.answer).
+_ANSWER_TEXT = {
+    "no_results": ("לא נמצא מקור מתאים באינדקס הלמ\"ס. ייתכן שהנתון אינו פומבי — "
+                   "שקול פנייה לעיבוד מיוחד: info@cbs.gov.il / ibudim@cbs.gov.il."),
+    "generator": "המקור הוא מחולל/דשבורד של הלמ\"ס — הפעל אותו ובחר את החתך הרצוי.",
+    "data_file": "נמצא קובץ נתונים ישיר להורדה בעמוד המקור בלמ\"ס.",
+    "publication": "נמצא פרסום/עמוד רלוונטי באתר הלמ\"ס.",
+}
+
+
+def _classify(top: dict | None, total: int) -> str:
+    if total == 0 or top is None:
+        return "no_results"
+    extra = top.get("extra") or {}
+    if (top.get("item_type") or "") == "intent":
+        return "not_available" if extra.get("negative") else "guidance"
+    if (top.get("item_type") or "") == "tool" or top.get("section") == "tools":
+        return "generator"
+    if any(ft in ("xlsx", "xls", "csv") for ft in (top.get("file_types") or [])):
+        return "data_file"
+    return "publication"
+
+
+def _primary_link(top: dict) -> str:
+    # Intent rows keep the clean navigational target in extra.link (their own
+    # ``url`` carries a #intent-… fragment for key-uniqueness); everything else
+    # uses its page URL.
+    return (top.get("extra") or {}).get("link") or top.get("url") or ""
+
+
+async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
+    """Structured resolution of a free-text question to a CBS location."""
+    provider, parsed = await _parse_question(db, q)
+    total, results, used = await _search_relaxed(db, parsed, limit)
+    top = results[0] if results else None
+    atype = _classify(top, total)
+
+    caveats: list[str] = []
+    relaxed = [k for k in _FILTER_KEYS if parsed.get(k) and not used.get(k)]
+    if relaxed:
+        caveats.append("חלק מהמסננים הורפו כדי להחזיר תוצאות: " + ", ".join(relaxed))
+    req_geo = parsed.get("geo")
+    geo_available = None
+    if top:
+        extra = top.get("extra") or {}
+        geo_available = extra.get("geo_max")
+        geos = top.get("geo_levels") or []
+        if req_geo and geos and req_geo not in geos:
+            caveats.append(
+                f"הרזולוציה שביקשת ({req_geo}) לא בהכרח זמינה במקור זה; המקור מציין: "
+                + ", ".join(geos)
+            )
+
+    intent_answer = (top.get("extra") or {}).get("answer") if top else None
+    if atype in ("guidance", "not_available") and intent_answer:
+        answer = intent_answer
+    else:
+        answer = _ANSWER_TEXT.get(atype) or parsed.get("answer") or ""
+
+    primary = None
+    if top:
+        primary = {
+            "title": top.get("title"),
+            "url": top.get("url"),
+            "link": _primary_link(top),
+            "item_type": top.get("item_type"),
+            "section": top.get("section"),
+        }
+
+    return {
+        "answer": answer,
+        "answer_type": atype,
+        "provider": provider,
+        "primary": primary,
+        "geo_available": geo_available,
+        "caveats": caveats,
+        "filters": {k: used.get(k) for k in _FILTER_KEYS},
+        "total": total,
+        "results": results,
+        "source": "over.org.il — אינדקס הלמ\"ס (cbs.gov.il)",
+    }
+
+
+@router.post("/resolve")
+@limiter.limit("20/minute")
+async def resolve(request: Request, body: AskRequest, db: AsyncSession = Depends(get_db)):
+    """Free-text question → a structured, actionable CBS location."""
+    q = (body.q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="q is required")
+    await _enforce_llm_budget(db)
+    return await resolve_question(db, q, body.limit)

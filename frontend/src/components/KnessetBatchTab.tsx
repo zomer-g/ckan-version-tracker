@@ -24,7 +24,9 @@ export default function KnessetBatchTab() {
     () => (searchParams.get("committee") ? Number(searchParams.get("committee")) : ""));
   const [committeeQuery, setCommitteeQuery] = useState(() => searchParams.get("q") || "");
   const [count, setCount] = useState<number | null>(null);
-  const [zipMax, setZipMax] = useState(2000);
+  // Real cap comes from /protocols/count (zip_max_files); this is only the
+  // pre-fetch placeholder. Keep it in step with the server default.
+  const [zipMax, setZipMax] = useState(200);
   const [counting, setCounting] = useState(false);
 
   useEffect(() => {
@@ -216,7 +218,7 @@ export default function KnessetBatchTab() {
             <ul className="text-sm text-muted" style={{ margin: "1rem 0 0", paddingInlineStart: "1.1rem", lineHeight: 1.7 }}>
               <li>ה-ZIP נבנה תוך כדי ההורדה — הקבצים נמשכים אחד-אחד משרת הכנסת (fs.knesset.gov.il); אצווה גדולה עשויה להימשך מספר דקות. אל תסגרו את החלון.</li>
               <li>בתוך ה-ZIP: תיקייה לכל ועדה, שם קובץ = תאריך הישיבה + שם הקובץ המקורי, ‏<code>_index.csv</code> עם פירוט מלא, ו-<code>_errors.txt</code> אם קבצים בודדים נכשלו.</li>
-              <li>ההורדות נספרות במכסת התעבורה היומית (2GB לכתובת IP).</li>
+              <li>ההורדות נספרות במכסת התעבורה היומית (2GB לכתובת IP), ומספר הורדות ZIP במקביל מוגבל — אם קיבלתם שגיאה נסו שוב בעוד רגע או השתמשו ברשימת הקישורים (CSV).</li>
             </ul>
           </>
         )}

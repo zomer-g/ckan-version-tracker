@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.client_ip import get_client_ip
 from app.config import settings
 from app.services.api_budget import budget
 
@@ -25,12 +26,12 @@ _METERED_PREFIXES = ("/api/v1", "/api/append", "/api/knesset-db")
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP behind Render's proxy: first hop of X-Forwarded-For,
-    else the direct peer."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Real client IP behind the Cloudflare→Render proxy chain.
+
+    Delegates to the single source of truth in app/client_ip.py — the SAME
+    derivation the rate limiter uses — so a forged X-Forwarded-For can neither
+    escape the rate-limit bucket nor reset this IP's data-budget tally."""
+    return get_client_ip(request)
 
 
 def _blocked_response() -> JSONResponse:

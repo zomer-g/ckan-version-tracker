@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.cbs_search_util import RESULT_COLS, build_search
+from app.api.utils import MAX_API_OFFSET
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
@@ -189,7 +190,7 @@ async def search(
         description="'relevance' (text rank, default) or 'chrono' (newest data year first)",
     ),
     limit: int = Query(30, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
     db: AsyncSession = Depends(get_db),
 ):
     """Full-text + faceted search over the CBS index."""

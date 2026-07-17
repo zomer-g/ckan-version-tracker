@@ -43,6 +43,15 @@ export const auth = {
   me: () => request<{ id: string; email: string; display_name: string; is_admin: boolean }>("/auth/me"),
   ssoProviders: () =>
     request<{ google: boolean }>("/auth/sso/providers"),
+  // Swap the one-time login code (delivered by the SSO callback as ?code=) for
+  // a JWT. The token comes back in the POST body — never in a URL.
+  exchange: (code: string) =>
+    request<{ token: string }>("/auth/sso/exchange", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  // Slide the (short-lived) session forward. Called on load + on a timer.
+  refresh: () => request<{ token: string }>("/auth/refresh", { method: "POST" }),
 };
 
 // CKAN Proxy
@@ -294,14 +303,15 @@ export interface DriveExportJob {
 
 export const drive = {
   status: () => request<{ connected: boolean }>("/drive/status"),
-  // Top-level navigation (can't carry an auth header), so the JWT rides in
-  // the query string — same pattern as the SSO callback's ?sso_token=.
-  connectUrl: (next: string) => {
-    const token = getToken() || "";
-    return `/api/auth/sso/google/drive/connect?token=${encodeURIComponent(
-      token
-    )}&next=${encodeURIComponent(next)}`;
-  },
+  // Begin the Drive-consent flow. Authenticated POST (JWT in the header, not
+  // the URL); the server mints a one-time code, puts only that opaque code in
+  // Google's `state`, and returns the authorize URL to navigate to. No token
+  // ever rides in a query string.
+  connect: (next: string) =>
+    request<{ authorize_url: string }>("/auth/sso/google/drive/connect", {
+      method: "POST",
+      body: JSON.stringify({ next }),
+    }),
   exportVersion: (versionId: string, folderUrl: string) =>
     request<DriveExportJob>(`/versions/${versionId}/export-to-drive`, {
       method: "POST",
@@ -536,6 +546,46 @@ export interface CbsFeaturedResponse {
   results: CbsResult[];
 }
 
+// Natural-language resolution (POST /api/cbs/resolve): an LLM parses the free
+// text into filters, runs the shared intent-aware search, and classifies the top
+// hit so the UI can render an actionable card instead of a raw list. Measured on
+// the WhatsApp benchmark, this NL path finds the right page far more often than
+// keyword /search (which barely bridges Hebrew surface-form gaps). answer_type:
+//   guidance      — a curated intent points straight at the source
+//   generator     — the source is a מחולל/dashboard to run
+//   data_file     — a direct xlsx/csv download exists on the page
+//   publication   — a relevant publication/page
+//   not_available — CBS does not hold this (community-confirmed); see `answer`
+//   no_results    — nothing matched; consider special processing
+export type CbsAnswerType =
+  | "guidance"
+  | "generator"
+  | "data_file"
+  | "publication"
+  | "not_available"
+  | "no_results";
+
+export interface CbsResolvePrimary {
+  title: string | null;
+  url: string | null;
+  link: string; // clean navigational target (intents keep it here, not in url)
+  item_type: string | null;
+  section: string | null;
+}
+
+export interface CbsResolveResponse {
+  answer: string;
+  answer_type: CbsAnswerType;
+  provider: string;
+  primary: CbsResolvePrimary | null;
+  geo_available: string | null;
+  caveats: string[];
+  filters: Record<string, string | number | null>;
+  total: number;
+  results: CbsResult[];
+  source: string;
+}
+
 export const cbs = {
   search: (params: CbsSearchParams = {}) => {
     const p = new URLSearchParams();
@@ -545,6 +595,12 @@ export const cbs = {
     const qs = p.toString();
     return request<CbsSearchResponse>(`/cbs/search${qs ? `?${qs}` : ""}`);
   },
+  // Natural-language search — the recommended path for human-worded questions.
+  resolve: (q: string, limit = 10) =>
+    request<CbsResolveResponse>("/cbs/resolve", {
+      method: "POST",
+      body: JSON.stringify({ q, limit }),
+    }),
   facets: () => request<CbsFacets>("/cbs/facets"),
   stats: () => request<CbsStats>("/cbs/stats"),
   // Admin-pinned quick-access pages (public read; pin/unpin are admin-only and

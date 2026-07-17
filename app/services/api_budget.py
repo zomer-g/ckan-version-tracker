@@ -9,7 +9,12 @@ is blocked (HTTP 429) and told to make contact to arrange higher access.
 In-memory + per-process (no Redis dependency): fine for OVER's single Render
 instance. State resets on restart/deploy — acceptable for abuse mitigation, and
 the budget is sized so a determined scraper is blocked long before the cost is
-material, while normal browsing/research never comes close.
+material, while normal browsing/research never comes close. A deploy/restart is
+the ONLY thing that resets a tally: the per-IP key comes from the spoof-resistant
+derivation in app/client_ip.py (Cloudflare-validated), so a client can no longer
+zero its own tally by rotating X-Forwarded-For. If OVER ever scales past one
+instance, move this counter to a shared store (Postgres/Redis) keyed by the same
+IP — until then per-process is both correct (one process) and sufficient.
 
 Sizing: Render bandwidth overage is ~$0.3/GB, so "tens of shekels" of cost is
 ~25-80 GB of egress. The per-IP budget defaults to 2 GB / 24h — generous for a
