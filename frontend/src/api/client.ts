@@ -43,6 +43,15 @@ export const auth = {
   me: () => request<{ id: string; email: string; display_name: string; is_admin: boolean }>("/auth/me"),
   ssoProviders: () =>
     request<{ google: boolean }>("/auth/sso/providers"),
+  // Swap the one-time login code (delivered by the SSO callback as ?code=) for
+  // a JWT. The token comes back in the POST body — never in a URL.
+  exchange: (code: string) =>
+    request<{ token: string }>("/auth/sso/exchange", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  // Slide the (short-lived) session forward. Called on load + on a timer.
+  refresh: () => request<{ token: string }>("/auth/refresh", { method: "POST" }),
 };
 
 // CKAN Proxy
@@ -294,14 +303,15 @@ export interface DriveExportJob {
 
 export const drive = {
   status: () => request<{ connected: boolean }>("/drive/status"),
-  // Top-level navigation (can't carry an auth header), so the JWT rides in
-  // the query string — same pattern as the SSO callback's ?sso_token=.
-  connectUrl: (next: string) => {
-    const token = getToken() || "";
-    return `/api/auth/sso/google/drive/connect?token=${encodeURIComponent(
-      token
-    )}&next=${encodeURIComponent(next)}`;
-  },
+  // Begin the Drive-consent flow. Authenticated POST (JWT in the header, not
+  // the URL); the server mints a one-time code, puts only that opaque code in
+  // Google's `state`, and returns the authorize URL to navigate to. No token
+  // ever rides in a query string.
+  connect: (next: string) =>
+    request<{ authorize_url: string }>("/auth/sso/google/drive/connect", {
+      method: "POST",
+      body: JSON.stringify({ next }),
+    }),
   exportVersion: (versionId: string, folderUrl: string) =>
     request<DriveExportJob>(`/versions/${versionId}/export-to-drive`, {
       method: "POST",

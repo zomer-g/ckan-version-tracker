@@ -37,7 +37,11 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
-    jwt_expiry_minutes: int = 1440
+    # Admin session lifetime. Kept SHORT (2h) so a token that somehow leaks is
+    # useless within hours, not a full day. The SPA slides the session forward
+    # via POST /api/auth/refresh (on load + on a timer), so an active admin is
+    # never logged out mid-work. Was 1440 (24h). See app/api/auth.refresh.
+    jwt_expiry_minutes: int = 120
 
     data_gov_il_url: str = "https://data.gov.il"
     odata_url: str = "https://www.odata.org.il"

@@ -1,21 +1,24 @@
 """OAuth2 SSO endpoints for Google."""
 
-import base64
 import logging
 import secrets
+import uuid
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.security import create_access_token, decode_access_token
+from app.auth.dependencies import get_admin_user
+from app.auth.security import create_access_token
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.rate_limit import limiter
+from app.services import auth_codes
 from app.services.drive_client import DRIVE_SCOPE
 
 logger = logging.getLogger(__name__)
@@ -91,13 +94,56 @@ async def google_callback(
         if not email:
             return RedirectResponse(url="/admin/login?error=no_email")
 
-        # Find or create user
-        jwt_token = await _find_or_create_user(db, email, name, "google")
-        return RedirectResponse(url=f"/admin/login?sso_token={jwt_token}")
+        # Find or create user, then hand the SPA a ONE-TIME CODE (not the JWT)
+        # in the redirect URL. The JWT never touches the query string / Referer /
+        # logs; the SPA swaps the code for a fresh token via POST /exchange.
+        user = await _find_or_create_user(db, email, name, "google")
+        login_code = await auth_codes.issue_code(
+            db, user.id, auth_codes.PURPOSE_LOGIN, ttl_seconds=auth_codes.LOGIN_TTL_SECONDS
+        )
+        return RedirectResponse(url=f"/admin/login?code={login_code}")
 
     except Exception:
         logger.exception("Google OAuth callback failed")
         return RedirectResponse(url="/admin/login?error=google_failed")
+
+
+class ExchangeRequest(BaseModel):
+    code: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+
+
+@router.post("/exchange", response_model=TokenResponse)
+@limiter.limit("20/minute")
+async def exchange_code(
+    request: Request,
+    body: ExchangeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Swap a one-time login code (minted by the SSO callback) for a JWT.
+
+    This is the only place the login JWT is handed to the browser, and it
+    travels in a POST response body — never a URL. The code is single-use and
+    expires within seconds."""
+    consumed = await auth_codes.consume_code(db, body.code, auth_codes.PURPOSE_LOGIN)
+    if consumed is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired login code")
+
+    # Confirm the account is still valid before issuing a session.
+    try:
+        uid = uuid.UUID(consumed.user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid login code")
+    user = (
+        await db.execute(select(User).where(User.id == uid, User.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Account not found or disabled")
+
+    return TokenResponse(token=create_access_token(str(user.id)))
 
 
 # -- Google Drive connect (admin) ---------------------------------------------
@@ -107,39 +153,39 @@ async def google_callback(
 # for the "export a version's files to Drive" runner.
 
 
-def _b64u(s: str) -> str:
-    return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii").rstrip("=")
+class DriveConnectRequest(BaseModel):
+    next: str = "/"
 
 
-def _b64u_dec(s: str) -> str:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode((s + pad).encode("ascii")).decode("utf-8")
+class DriveConnectResponse(BaseModel):
+    authorize_url: str
 
 
-@router.get("/google/drive/connect")
+@router.post("/google/drive/connect", response_model=DriveConnectResponse)
 @limiter.limit("20/minute")
 async def google_drive_connect(
     request: Request,
-    token: str = "",
-    next: str = "/",
+    body: DriveConnectRequest,
     db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
-    """Start the Drive-authorization flow for the logged-in admin. ``token``
-    is the caller's JWT (passed by the SPA, which can't set an auth header on a
-    top-level navigation); ``next`` is the path to return to afterwards."""
+    """Begin the Drive-authorization flow for the logged-in admin.
+
+    The SPA calls this as an authenticated POST (JWT in the Authorization
+    header, not the URL). We mint a one-time DRIVE code that maps to this admin
+    + the return path, put ONLY that opaque code in Google's ``state``, and hand
+    back the authorize URL for the SPA to navigate to. No JWT ever rides in a
+    query string or through Google."""
     if not settings.google_client_id:
         raise HTTPException(status_code=501, detail="Google SSO not configured")
 
-    uid = decode_access_token(token)
-    user = None
-    if uid:
-        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
-    if not user or not user.is_admin:
-        return RedirectResponse(url="/admin/login?error=drive_unauthorized")
-
-    # state carries identity + return path so the callback can attribute the
-    # refresh token and bounce back. The JWT inside is self-validating.
-    state = f"{token}.{_b64u(next or '/')}"
+    state = await auth_codes.issue_code(
+        db,
+        admin.id,
+        auth_codes.PURPOSE_DRIVE,
+        next_path=body.next or "/",
+        ttl_seconds=auth_codes.DRIVE_TTL_SECONDS,
+    )
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": f"{settings.app_base_url}/api/auth/sso/google/drive/callback",
@@ -150,7 +196,7 @@ async def google_drive_connect(
         "prompt": "consent",  # force a refresh_token even on re-auth
         "include_granted_scopes": "true",
     }
-    return RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+    return DriveConnectResponse(authorize_url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
 
 
 @router.get("/google/drive/callback")
@@ -163,24 +209,27 @@ async def google_drive_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle the Drive consent callback: store the refresh token on the
-    admin and redirect back to ``next``."""
-    # state = "<JWT>.<base64url(next)>". The JWT itself contains two dots
-    # (header.payload.signature), and base64url has no dots — so split on the
-    # LAST dot to recover the full JWT and the encoded return path.
-    token, _, next_b64 = state.rpartition(".")
-    try:
-        next_path = _b64u_dec(next_b64) if next_b64 else "/"
-    except Exception:
-        next_path = "/"
+    admin and redirect back to ``next``.
+
+    ``state`` is the one-time DRIVE code minted by /connect — it carries no
+    secret, just an opaque handle to the admin + return path stored server-side.
+    """
+    consumed = await auth_codes.consume_code(db, state, auth_codes.PURPOSE_DRIVE)
+    if consumed is None:
+        # Unknown / expired / replayed code — we can't trust the return path.
+        return RedirectResponse(url="/admin/login?error=drive_unauthorized")
+
+    next_path = consumed.next_path or "/"
     sep = "&" if "?" in next_path else "?"
 
     if error or not code:
         return RedirectResponse(url=f"{next_path}{sep}drive=denied")
 
-    uid = decode_access_token(token)
-    user = None
-    if uid:
-        user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    try:
+        uid = uuid.UUID(consumed.user_id)
+    except ValueError:
+        return RedirectResponse(url="/admin/login?error=drive_unauthorized")
+    user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not user or not user.is_admin:
         return RedirectResponse(url="/admin/login?error=drive_unauthorized")
 
@@ -217,8 +266,8 @@ async def google_drive_callback(
 # -- Shared helpers ------------------------------------------------------------
 
 
-async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider: str) -> str:
-    """Find existing user by email, or create a new one. Returns JWT token."""
+async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider: str) -> User:
+    """Find existing user by email, or create a new one. Returns the User."""
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
@@ -249,7 +298,7 @@ async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider
         await db.commit()
         await db.refresh(user)
 
-    return create_access_token(str(user.id))
+    return user
 
 
 # -- SSO availability check ---------------------------------------------------
