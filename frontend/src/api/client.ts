@@ -502,6 +502,18 @@ export interface CbsResult {
   file_links: CbsFileLink[] | null;
   file_types: string[] | null;
   last_crawled: string | null;
+  // Enrichment layer (server-derived, migration 038) — null before backfill.
+  product_form: string | null;
+  freq: string | null;
+  source_op: string | null;
+  data_vintage: number | null;
+  geo_vintage: string | null;
+  geo_coverage: string | null;
+  series_key: string | null;
+  edition_year: number | null;
+  is_latest_edition: boolean | null;
+  metrics: string[] | null;
+  cuts: string[] | null;
 }
 
 export interface CbsSearchResponse {
@@ -517,6 +529,10 @@ export interface CbsFacets {
   item_types: string[];
   year_min: number | null;
   year_max: number | null;
+  // Enrichment facets — empty until the server-side enrich backfill has run.
+  product_forms: string[];
+  freqs: string[];
+  source_ops: string[];
 }
 
 export interface CbsStats {
@@ -537,6 +553,10 @@ export interface CbsSearchParams {
   lang?: string;
   year_from?: number;
   year_to?: number;
+  product_form?: string;
+  freq?: string;
+  source_op?: string;
+  latest_only?: boolean;
   sort?: "relevance" | "chrono";
   limit?: number;
   offset?: number;
@@ -575,6 +595,37 @@ export interface CbsResolvePrimary {
   link: string; // clean navigational target (intents keep it here, not in url)
   item_type: string | null;
   section: string | null;
+  product_form: string | null;
+  data_vintage: number | null;
+  series_key: string | null;
+}
+
+// The deterministic parse of the question — what the "הבנתי:" chips render.
+// geo_entity comes from the locality gazetteer; the rest is regex over the
+// question itself (no LLM). See app/api/cbs_parse.py.
+export interface CbsUnderstood {
+  geo_level: string | null;
+  years: number[];
+  latest: boolean;
+  series: boolean;
+  product_form: string | null;
+  metrics: string[];
+  cuts: string[];
+  source_op: string | null;
+  geo_entity: {
+    code: number;
+    name: string;
+    district: string | null;
+    subdistrict: string | null;
+    population: number | null;
+  } | null;
+}
+
+export interface CbsEdition {
+  title: string | null;
+  url: string;
+  edition_year: number | null;
+  is_latest_edition: boolean | null;
 }
 
 export interface CbsResolveResponse {
@@ -582,12 +633,28 @@ export interface CbsResolveResponse {
   answer_type: CbsAnswerType;
   provider: string;
   primary: CbsResolvePrimary | null;
+  understood: CbsUnderstood;
+  // Availability by resolution over the found sources (ladder-ordered server
+  // side): level → available? Includes the requested level even when false.
+  geo_matrix: Record<string, boolean>;
+  editions: CbsEdition[];
   geo_available: string | null;
   caveats: string[];
   filters: Record<string, string | number | null>;
   total: number;
   results: CbsResult[];
   source: string;
+}
+
+export interface CbsGazetteerEntry {
+  code: number;
+  name: string;
+  name_en: string | null;
+  district: string | null;
+  subdistrict: string | null;
+  municipal_status: string | null;
+  regional_council: string | null;
+  population: number | null;
 }
 
 export const cbs = {
@@ -607,6 +674,15 @@ export const cbs = {
     }),
   facets: () => request<CbsFacets>("/cbs/facets"),
   stats: () => request<CbsStats>("/cbs/stats"),
+  // Locality autocomplete (name/alias/English), biggest-first within prefix
+  // matches. Backed by the CBS bycode gazetteer.
+  gazetteer: (q: string, limit = 8) =>
+    request<{ results: CbsGazetteerEntry[] }>(
+      `/cbs/gazetteer?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  // Edition history of one series ("מהדורות קודמות").
+  series: (key: string) =>
+    request<{ results: CbsResult[] }>(`/cbs/series?key=${encodeURIComponent(key)}`),
   // Admin-pinned quick-access pages (public read; pin/unpin are admin-only and
   // return the updated list). See app/api/cbs.py.
   featured: () => request<CbsFeaturedResponse>("/cbs/featured"),

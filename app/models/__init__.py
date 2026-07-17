@@ -8,6 +8,7 @@ from app.models.datastore_push_job import DatastorePushJob
 from app.models.drive_export_job import DriveExportJob
 from app.models.cbs_index import CbsIndex
 from app.models.cbs_featured import CbsFeatured
+from app.models.cbs_gazetteer import CbsGazetteer
 from app.models.auth_code import AuthCode
 from app.models.llm_budget import LlmDailyUsage
 
@@ -25,4 +26,5 @@ __all__ = [
     "DriveExportJob",
     "CbsIndex",
     "CbsFeatured",
+    "CbsGazetteer",
 ]

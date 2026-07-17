@@ -41,12 +41,9 @@ SERVER_INSTRUCTIONS = (
     "בגרסאות לעם — האינדקס מקטלג מה קיים, לא את הקבצים עצמם."
 )
 
-# Columns returned for a page (qualified-free — single table in these queries).
-_COLS = (
-    "url, lang, section, series, item_type, title, title_en, summary, "
-    "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
-    "extra, last_crawled"
-)
+# Columns returned for a page — the shared projection, so get_page/list_featured
+# carry the enrichment layer exactly like search results.
+_COLS = RESULT_COLS
 # Same list aliased to cbs_index (used where cbs_featured is joined — both tables
 # carry a ``url`` column so an unqualified SELECT would be ambiguous).
 _COLS_I = ", ".join(f"i.{c.strip()}" for c in _COLS.split(","))
@@ -74,6 +71,12 @@ TOOLS: list[dict] = [
                 "lang": {"type": "string", "description": "שפת העמוד: he / en"},
                 "year_from": {"type": "integer"},
                 "year_to": {"type": "integer"},
+                "product_form": {"type": "string",
+                                  "description": "צורת התוצר: data_file / gis_layer / puf / generator / dashboard / api / database / publication / methodology"},
+                "freq": {"type": "string", "description": "תדירות: שנתי / רבעוני / חודשי / דו-שנתי / חד-פעמי"},
+                "source_op": {"type": "string", "description": "מקור האיסוף: מפקד אוכלוסין / סקר כוח אדם / הסקר החברתי / מרשם דירות ומבנים ..."},
+                "latest_only": {"type": "boolean", "default": False,
+                                 "description": "רק המהדורה העדכנית ביותר של כל סדרה (מסנן מהדורות ישנות)"},
                 "sort": {"type": "string", "enum": ["relevance", "chrono"], "default": "relevance",
                           "description": "relevance (ברירת מחדל) או chrono (שנה יורדת)"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
@@ -135,6 +138,10 @@ def _row_to_item(r: dict, b: str) -> dict:
         "url", "lang", "section", "series", "item_type", "title", "title_en",
         "summary", "subject_tags", "year_start", "year_end", "geo_levels",
         "file_links", "file_types",
+        # enrichment layer (present on search results; None before backfill)
+        "product_form", "freq", "source_op", "data_vintage", "geo_vintage",
+        "geo_coverage", "series_key", "edition_year", "is_latest_edition",
+        "metrics", "cuts",
     )}
     item["page_url"] = url  # the source page on cbs.gov.il
     item["over_url"] = f"{b}/cbs?q={quote((r.get('title') or '').strip())}" if r.get("title") else f"{b}/cbs"
@@ -154,6 +161,8 @@ async def _tool_search(request, db, user, a) -> tuple[dict, int]:
             "file_type": a.get("file_type"), "section": a.get("section"),
             "item_type": a.get("item_type"), "lang": a.get("lang"),
             "year_from": a.get("year_from"), "year_to": a.get("year_to"),
+            "product_form": a.get("product_form"), "freq": a.get("freq"),
+            "source_op": a.get("source_op"), "latest_only": a.get("latest_only"),
         },
         sort=("chrono" if a.get("sort") == "chrono" else "relevance"),
     )
@@ -225,6 +234,9 @@ async def _tool_facets(request, db, user, a) -> tuple[dict, int]:
         "file_types": await distinct_jsonb("file_types"),
         "sections": await distinct_col("section"),
         "item_types": await distinct_col("item_type"),
+        "product_forms": await distinct_col("product_form"),
+        "freqs": await distinct_col("freq"),
+        "source_ops": await distinct_col("source_op"),
         "year_min": years[0], "year_max": years[1],
     }, 0
 

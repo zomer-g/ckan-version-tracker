@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cbs_parse import GEO_LADDER, geo_matrix, parse_question
 from app.api.cbs_search_util import RESULT_COLS, build_search
 from app.config import settings
 from app.database import get_db
@@ -346,6 +347,61 @@ def _primary_link(top: dict) -> str:
     return (top.get("extra") or {}).get("link") or top.get("url") or ""
 
 
+# ── locality entity detection (gazetteer scan) ─────────────────────────────
+# 22 benchmark questions name a place ("כמה עולים יש בבית שמש"). The gazetteer
+# (≈1,500 localities + aliases) is scanned in-process against the question —
+# cheap, and avoids fragile SQL substring matching over Hebrew word boundaries.
+# Cached per-process; the table changes ~once a year.
+
+_gazetteer_cache: list[tuple[str, dict]] | None = None
+
+# A one-letter Hebrew prefix (ב/ל/מ/ו/ש/כ/ה) glued to the name is how places
+# actually appear in questions: "בבית שמש", "מנהריה".
+_HEB_PREFIXES = "בלמושכה"
+
+
+async def _load_gazetteer(db: AsyncSession) -> list[tuple[str, dict]]:
+    global _gazetteer_cache
+    if _gazetteer_cache is not None:
+        return _gazetteer_cache
+    try:
+        rows = (await db.execute(text(
+            "SELECT code, name, name_en, aliases, district, subdistrict, population "
+            "FROM cbs_gazetteer"
+        ))).mappings().all()
+    except Exception:  # noqa: BLE001 — table absent (pre-migration) ⇒ no entity chips
+        return []
+    entries: list[tuple[str, dict]] = []
+    for r in rows:
+        info = {"code": r["code"], "name": r["name"], "district": r["district"],
+                "subdistrict": r["subdistrict"], "population": r["population"]}
+        for n in [r["name"], *(r["aliases"] or [])]:
+            if n and len(n) >= 3:
+                entries.append((n, info))
+    # Longest names first so "תל אביב -יפו" wins over an alias "תל אביב"
+    # contained in it, and big places break exact-length ties.
+    entries.sort(key=lambda e: (-len(e[0]), -(e[1]["population"] or 0)))
+    _gazetteer_cache = entries
+    return entries
+
+
+def _find_locality(q: str, entries: list[tuple[str, dict]]) -> dict | None:
+    for name, info in entries:
+        i = q.find(name)
+        if i < 0:
+            continue
+        # Word-boundary check: the char before must be a space/punct or a
+        # single-letter Hebrew prefix; the char after must not be a letter.
+        before = q[i - 1] if i > 0 else " "
+        after = q[i + len(name)] if i + len(name) < len(q) else " "
+        before_ok = not before.isalpha() or (
+            before in _HEB_PREFIXES and (i < 2 or not q[i - 2].isalpha())
+        )
+        if before_ok and not after.isalpha():
+            return info
+    return None
+
+
 async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
     """Structured resolution of a free-text question to a CBS location.
 
@@ -374,6 +430,16 @@ async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
     top = results[0] if results else None
     atype = _classify(top, int(total))
 
+    # The "understood" chips: the question's dimensions, parsed without an LLM,
+    # + the locality entity from the gazetteer. Presentation-layer only — the
+    # retrieval above runs on the raw question (measured better; see docstring).
+    understood = parse_question(q)
+    understood["geo_entity"] = _find_locality(q, await _load_gazetteer(db))
+
+    # Availability-by-resolution over what was actually found — the community's
+    # own answer format ("יש עד נפה, אין א"ס").
+    matrix = geo_matrix(results, understood.get("geo_level"))
+
     caveats: list[str] = []
     geo_available = None
     if top:
@@ -386,6 +452,37 @@ async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
             caveats.append(
                 f"הרזולוציה הזמינה במקור זה היא {geo_available} — ייתכן שאין פילוח עדין יותר."
             )
+        # Enrichment-derived caveats (migration 038): inclusion threshold and
+        # boundary vintage — the two silent traps the benchmark surfaces.
+        if top.get("geo_coverage"):
+            caveats.append(f"שימו לב לכיסוי: {top['geo_coverage']}.")
+        if top.get("geo_vintage"):
+            caveats.append(f"היחידות הגאוגרפיות במקור זה לפי {top['geo_vintage']}.")
+    req_lvl = understood.get("geo_level")
+    if req_lvl and matrix and matrix.get(req_lvl) is False:
+        finest = next((l for l in reversed(GEO_LADDER) if matrix.get(l)), None)
+        if finest:
+            caveats.append(
+                f"התבקשה רמת {req_lvl}, אך במקורות שנמצאו הרזולוציה העדינה ביותר היא {finest}."
+            )
+
+    # Edition history: if the top result belongs to a yearly series, surface its
+    # other editions ("מהדורות קודמות: 2021 · 2019 …") + flag a stale top hit.
+    editions: list[dict] = []
+    if top and top.get("series_key"):
+        ed_rows = (await db.execute(text(
+            f"SELECT title, url, edition_year, is_latest_edition FROM cbs_index "
+            "WHERE series_key = :k AND url != :u "
+            "ORDER BY edition_year DESC NULLS LAST, id DESC LIMIT 6"),
+            {"k": top["series_key"], "u": top["url"]},
+        )).mappings().all()
+        editions = [dict(r) for r in ed_rows]
+        if top.get("is_latest_edition") is False:
+            newer = next((e for e in editions if e.get("is_latest_edition")), None)
+            if newer:
+                caveats.append(
+                    f"קיימת מהדורה עדכנית יותר ({newer.get('edition_year')}): {newer.get('title')}."
+                )
 
     intent_answer = (top.get("extra") or {}).get("answer") if top else None
     answer = (intent_answer if atype in ("guidance", "not_available") and intent_answer
@@ -399,6 +496,9 @@ async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
             "link": _primary_link(top),
             "item_type": top.get("item_type"),
             "section": top.get("section"),
+            "product_form": top.get("product_form"),
+            "data_vintage": top.get("data_vintage") or top.get("edition_year"),
+            "series_key": top.get("series_key"),
         }
 
     return {
@@ -406,6 +506,9 @@ async def resolve_question(db: AsyncSession, q: str, limit: int = 10) -> dict:
         "answer_type": atype,
         "provider": "index",  # no LLM in this path — retrieval is the index itself
         "primary": primary,
+        "understood": understood,
+        "geo_matrix": matrix,
+        "editions": editions,
         "geo_available": geo_available,
         "caveats": caveats,
         "filters": {"query": q},

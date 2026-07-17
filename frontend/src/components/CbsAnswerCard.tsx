@@ -1,6 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { CbsResolveResponse, CbsAnswerType } from "../api/client";
-import { geoLabel } from "../utils/cbsLabels";
+import { CbsResolveResponse, CbsAnswerType, CbsUnderstood } from "../api/client";
+import {
+  cutLabel,
+  geoLabel,
+  metricLabel,
+  productFormLabel,
+  PRODUCT_FORM_ICONS,
+} from "../utils/cbsLabels";
 
 // The answer card for natural-language mode: turns POST /api/cbs/resolve into a
 // single actionable statement ("here's the file" / "run this generator" / "CBS
@@ -59,11 +65,36 @@ const TYPE_META: Record<
   },
 };
 
-interface Props {
-  data: CbsResolveResponse;
+// The "הבנתי:" chips — every dimension the deterministic parser extracted from
+// the question. Transparency of understanding: the user sees exactly what the
+// engine thinks they asked, and can carry it into the advanced tab to adjust.
+function understoodChips(u: CbsUnderstood): string[] {
+  const chips: string[] = [];
+  if (u.geo_entity) {
+    chips.push(
+      `📍 ${u.geo_entity.name}${u.geo_entity.subdistrict ? ` (נפת ${u.geo_entity.subdistrict})` : ""}`,
+    );
+  }
+  if (u.geo_level) chips.push(`🗺️ רזולוציה: ${geoLabel(u.geo_level)}`);
+  if (u.years.length === 1) chips.push(`📅 ${u.years[0]}`);
+  if (u.years.length > 1) chips.push(`📅 ${u.years[0]}–${u.years[u.years.length - 1]}`);
+  if (u.latest) chips.push("🕐 העדכני ביותר");
+  if (u.series) chips.push("📈 סדרה לאורך זמן");
+  if (u.product_form) chips.push(`${PRODUCT_FORM_ICONS[u.product_form] || ""} ${productFormLabel(u.product_form)}`);
+  for (const m of u.metrics) chips.push(`Σ ${metricLabel(m)}`);
+  for (const c of u.cuts) chips.push(`👥 לפי ${cutLabel(c)}`);
+  if (u.source_op) chips.push(`🗃️ מקור: ${u.source_op}`);
+  return chips;
 }
 
-export default function CbsAnswerCard({ data }: Props) {
+interface Props {
+  data: CbsResolveResponse;
+  // "עריכה בחיפוש מתקדם" — the page maps the understood dimensions onto the
+  // advanced tab's filters and switches mode.
+  onEditInAdvanced?: () => void;
+}
+
+export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
   const { t } = useTranslation();
   const meta = TYPE_META[data.answer_type] ?? TYPE_META.publication;
   const primary = data.primary;
@@ -71,6 +102,8 @@ export default function CbsAnswerCard({ data }: Props) {
   // its page url. Never link to an intent's own `url` — it has a #intent-N
   // fragment that exists only to keep the index key unique.
   const href = primary?.link || primary?.url || "";
+  const chips = understoodChips(data.understood ?? ({} as CbsUnderstood));
+  const matrixEntries = Object.entries(data.geo_matrix ?? {});
 
   return (
     <div
@@ -88,12 +121,49 @@ export default function CbsAnswerCard({ data }: Props) {
         >
           {meta.label}
         </span>
+        {primary?.data_vintage && (
+          <span className="badge" style={{ fontSize: "0.72rem", background: "#ecfdf5", color: "#065f46" }}>
+            {t("cbs.data_year", "שנת נתונים")}: {primary.data_vintage}
+          </span>
+        )}
         {data.geo_available && (
           <span className="badge" style={{ fontSize: "0.72rem" }}>
             {t("cbs.geo_available", "רזולוציה זמינה")}: {geoLabel(data.geo_available)}
           </span>
         )}
       </div>
+
+      {/* "הבנתי:" — the parsed dimensions, the transparency layer between the
+          free question and the structured search. */}
+      {chips.length > 0 && (
+        <div
+          className="flex"
+          style={{ gap: "0.3rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.55rem" }}
+        >
+          <span className="text-sm text-muted" style={{ fontWeight: 600 }}>
+            {t("cbs.understood", "הבנתי")}:
+          </span>
+          {chips.map((c) => (
+            <span
+              key={c}
+              className="badge"
+              style={{ fontSize: "0.72rem", background: "#f1f5f9", color: "#334155" }}
+            >
+              {c}
+            </span>
+          ))}
+          {onEditInAdvanced && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={onEditInAdvanced}
+              style={{ fontSize: "0.7rem", padding: "0.15rem 0.5rem" }}
+            >
+              {t("cbs.edit_advanced", "עריכה בחיפוש מתקדם")}
+            </button>
+          )}
+        </div>
+      )}
 
       {data.answer && (
         <p style={{ margin: "0 0 0.6rem", lineHeight: 1.5 }}>{data.answer}</p>
@@ -107,9 +177,67 @@ export default function CbsAnswerCard({ data }: Props) {
           className="btn-primary"
           style={{ display: "inline-block", textDecoration: "none", fontSize: "0.88rem" }}
         >
+          {primary.product_form ? `${PRODUCT_FORM_ICONS[primary.product_form] || ""} ` : ""}
           {meta.cta}
           {primary.title ? ` — ${primary.title}` : ""} ↗
         </a>
+      )}
+
+      {/* Availability by resolution — the community's own answer format
+          ("יש עד נפה, אין א"ס"), computed over the found sources. */}
+      {matrixEntries.length > 1 && (
+        <div
+          className="flex text-sm"
+          style={{ gap: "0.45rem", flexWrap: "wrap", marginTop: "0.6rem", alignItems: "center" }}
+        >
+          <span className="text-muted" style={{ fontWeight: 600 }}>
+            {t("cbs.geo_matrix", "זמינות לפי רזולוציה")}:
+          </span>
+          {matrixEntries.map(([lvl, ok]) => (
+            <span
+              key={lvl}
+              className="badge"
+              style={{
+                fontSize: "0.72rem",
+                background: ok ? "#ecfdf5" : "#fef2f2",
+                color: ok ? "#065f46" : "#991b1b",
+              }}
+            >
+              {geoLabel(lvl)} {ok ? "✓" : "✗"}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Edition history of the primary source ("מהדורות קודמות"). */}
+      {data.editions && data.editions.length > 0 && (
+        <div
+          className="flex text-sm"
+          style={{ gap: "0.35rem", flexWrap: "wrap", marginTop: "0.55rem", alignItems: "center" }}
+        >
+          <span className="text-muted" style={{ fontWeight: 600 }}>
+            {t("cbs.editions", "מהדורות נוספות")}:
+          </span>
+          {data.editions.map((e) => (
+            <a
+              key={e.url}
+              href={e.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={e.title || undefined}
+              className="badge"
+              style={{
+                fontSize: "0.72rem",
+                background: "#fffbeb",
+                color: "#92400e",
+                border: "1px solid #fde68a",
+                textDecoration: "none",
+              }}
+            >
+              {e.edition_year ?? "—"}
+            </a>
+          ))}
+        </div>
       )}
 
       {data.caveats.length > 0 && (

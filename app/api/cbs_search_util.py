@@ -81,10 +81,13 @@ def or_tsquery(q: str) -> str:
 _CATCHALL_TITLE_PREFIXES = ("פעולות ופרסומים סטטיסטיים",)
 
 # Columns every read path returns — keep in one place so projections can't drift.
+# The second line is the enrichment layer (migration 038 / cbs_enrich.py).
 RESULT_COLS = (
     "url, lang, section, series, item_type, title, title_en, summary, "
     "subject_tags, year_start, year_end, geo_levels, file_links, file_types, "
-    "extra, last_crawled"
+    "extra, last_crawled, "
+    "product_form, freq, source_op, data_vintage, geo_vintage, geo_coverage, "
+    "series_key, edition_year, is_latest_edition, metrics, cuts"
 )
 
 # Which filter keys build_search understands. ``q`` is free text; the rest are
@@ -98,7 +101,8 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
     """Return (where_sql, order_sql, params) for a cbs_index search.
 
     ``filters`` keys (all optional): q, subject, geo, file_type, section,
-    item_type, lang, year_from, year_to. ``sort`` is "relevance" or "chrono".
+    item_type, lang, year_from, year_to, product_form, freq, source_op,
+    latest_only. ``sort`` is "relevance" or "chrono".
 
     Relevance ordering, in priority order:
       1. intent guidance rows first (the curated question→source layer),
@@ -132,6 +136,20 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
         conds.append("item_type = :item_type"); params["item_type"] = filters["item_type"]
     if filters.get("lang"):
         conds.append("lang = :lang"); params["lang"] = filters["lang"]
+    # Enrichment facets (migration 038) — user-vocabulary filters the benchmark
+    # shows people express directly: product form ("שכבה להורדה"), frequency
+    # ("נתונים חודשיים") and the named collection operation ("מסקר כוח אדם").
+    if filters.get("product_form"):
+        conds.append("product_form = :product_form")
+        params["product_form"] = filters["product_form"]
+    if filters.get("freq"):
+        conds.append("freq = :freq"); params["freq"] = filters["freq"]
+    if filters.get("source_op"):
+        conds.append("source_op = :source_op"); params["source_op"] = filters["source_op"]
+    # "רק העדכני ביותר": keep one edition per series. Rows outside any series
+    # (series_key NULL) default to true, so unique pages always survive.
+    if filters.get("latest_only"):
+        conds.append("is_latest_edition")
     if filters.get("year_from"):
         conds.append("(year_end IS NULL OR year_end >= :yfrom)"); params["yfrom"] = int(filters["year_from"])
     if filters.get("year_to"):

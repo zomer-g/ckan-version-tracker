@@ -14,8 +14,10 @@ The same table backs a future dedicated MCP (app/mcp) — keep the query logic i
 helpers so it can be shared. See app/models/cbs_index.py.
 """
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -29,10 +31,12 @@ from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
 from app.models.cbs_featured import CbsFeatured
+from app.models.cbs_gazetteer import CbsGazetteer
 from app.models.cbs_index import CbsIndex
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import cbs_neon
+from app.services.cbs_enrich import enrich as enrich_row
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,40 @@ _INGEST_FIELDS = (
     "subject_tags", "year_start", "year_end", "geo_levels", "file_links",
     "file_types", "extra", "full_text", "content_hash", "crawl_status", "crawl_error",
 )
+
+# Server-derived columns (app/services/cbs_enrich.py) — computed on ingest so
+# fresh crawls arrive enriched, and re-computable in bulk via POST /enrich.
+_ENRICH_FIELDS = (
+    "product_form", "freq", "source_op", "data_vintage", "geo_vintage",
+    "geo_coverage", "series_key", "edition_year", "metrics", "cuts",
+)
+
+# Marks the newest edition per series (ties broken by id). Rows outside any
+# series keep TRUE. Optionally scoped to a set of series keys (:keys) so the
+# per-ingest refresh doesn't rescan the whole table.
+_LATEST_SQL = """
+UPDATE cbs_index i SET is_latest_edition = t.is_max
+FROM (
+    SELECT id,
+           (rank() OVER (PARTITION BY series_key
+                         ORDER BY edition_year DESC NULLS LAST, id DESC) = 1) AS is_max
+    FROM cbs_index
+    WHERE series_key IS NOT NULL {scope}
+) t
+WHERE i.id = t.id AND i.is_latest_edition IS DISTINCT FROM t.is_max
+"""
+
+
+async def _refresh_latest(db: AsyncSession, keys: list[str] | None = None) -> None:
+    if keys is not None:
+        if not keys:
+            return
+        await db.execute(
+            text(_LATEST_SQL.format(scope="AND series_key = ANY(:keys)")),
+            {"keys": keys},
+        )
+    else:
+        await db.execute(text(_LATEST_SQL.format(scope="")))
 
 
 def _verify_worker_key(request: Request) -> None:
@@ -118,14 +156,21 @@ async def ingest(request: Request, body: IngestRequest, db: AsyncSession = Depen
         if d.get("file_links") is not None:
             d["file_links"] = [fl for fl in d["file_links"]]
         d["last_crawled"] = now
+        # Derived metadata (product form, series identity, vintage…) — computed
+        # here so a fresh crawl arrives enriched; enrich() also completes
+        # geo_levels from title evidence.
+        d.update(enrich_row(d))
         by_url[d["url"]] = d
     rows = list(by_url.values())
 
     stmt = pg_insert(CbsIndex).values(rows)
-    update_set = {c: getattr(stmt.excluded, c) for c in _INGEST_FIELDS}
+    update_set = {c: getattr(stmt.excluded, c) for c in _INGEST_FIELDS + _ENRICH_FIELDS}
     update_set["last_crawled"] = stmt.excluded.last_crawled
     stmt = stmt.on_conflict_do_update(index_elements=["url"], set_=update_set)
     await db.execute(stmt)
+    # A new edition may dethrone last year's: refresh the flag for the series
+    # this batch touched (scoped — not a full-table rescan).
+    await _refresh_latest(db, sorted({r["series_key"] for r in rows if r.get("series_key")}))
     await db.commit()
 
     # Dual-write the same batch into the NEON append archive so CBS behaves like
@@ -170,6 +215,18 @@ class CbsResult(BaseModel):
     file_types: list | None
     extra: dict | None
     last_crawled: datetime | None
+    # Enrichment layer (migration 038 / app/services/cbs_enrich.py).
+    product_form: str | None = None
+    freq: str | None = None
+    source_op: str | None = None
+    data_vintage: int | None = None
+    geo_vintage: str | None = None
+    geo_coverage: str | None = None
+    series_key: str | None = None
+    edition_year: int | None = None
+    is_latest_edition: bool | None = None
+    metrics: list | None = None
+    cuts: list | None = None
 
 
 class SearchResponse(BaseModel):
@@ -190,6 +247,10 @@ async def search(
     lang: str | None = Query(None),
     year_from: int | None = Query(None),
     year_to: int | None = Query(None),
+    product_form: str | None = Query(None, description="Product taxonomy: data_file/gis_layer/puf/generator/dashboard/api/database/publication/methodology"),
+    freq: str | None = Query(None, description="Time-axis unit (שנתי/רבעוני/חודשי…)"),
+    source_op: str | None = Query(None, description="Collection operation (מפקד אוכלוסין, סקר כוח אדם…)"),
+    latest_only: bool = Query(False, description="Keep only the newest edition of each series"),
     sort: str = Query(
         "relevance",
         pattern="^(relevance|chrono)$",
@@ -205,6 +266,8 @@ async def search(
             "q": q, "subject": subject, "geo": geo, "file_type": file_type,
             "section": section, "item_type": item_type, "lang": lang,
             "year_from": year_from, "year_to": year_to,
+            "product_form": product_form, "freq": freq, "source_op": source_op,
+            "latest_only": latest_only,
         },
         sort=sort,
     )
@@ -235,6 +298,10 @@ class FacetsResponse(BaseModel):
     item_types: list[str]
     year_min: int | None
     year_max: int | None
+    # Enrichment facets — empty lists until the enrich backfill has run.
+    product_forms: list[str] = []
+    freqs: list[str] = []
+    source_ops: list[str] = []
 
 
 @router.get("/facets", response_model=FacetsResponse)
@@ -275,6 +342,9 @@ async def facets(request: Request, db: AsyncSession = Depends(get_db)):
         item_types=await distinct_col("item_type"),
         year_min=years[0],
         year_max=years[1],
+        product_forms=await distinct_col("product_form"),
+        freqs=await distinct_col("freq"),
+        source_ops=await distinct_col("source_op"),
     )
 
 
@@ -312,6 +382,159 @@ async def stats(request: Request, db: AsyncSession = Depends(get_db)):
         errored=by_status.get("error", 0),
         by_section={s: c for s, c in by_section_rows},
     )
+
+
+# ── Enrichment backfill (worker) ───────────────────────────────────────────
+# Recomputes the derived columns for existing rows in id-ordered batches, so
+# the whole 53K-row index can be enriched without a re-crawl. The caller loops
+# on next_after until done=true; the final call refreshes is_latest_edition
+# table-wide. Idempotent — safe to re-run after tweaking cbs_enrich rules.
+
+_ENRICH_SRC_COLS = (
+    "id, title, summary, section, series, item_type, subject_tags, year_start, "
+    "year_end, geo_levels, file_links, file_types, extra"
+)
+_ENRICH_JSONB = {"metrics", "cuts", "geo_levels"}
+
+_ENRICH_UPDATE_SQL = text(
+    "UPDATE cbs_index SET "
+    + ", ".join(
+        f"{c} = CAST(:{c} AS jsonb)" if c in ("metrics", "cuts", "geo_levels")
+        else f"{c} = :{c}"
+        for c in _ENRICH_FIELDS + ("geo_levels",)
+    )
+    + " WHERE id = :b_id"
+)
+
+
+class EnrichRequest(BaseModel):
+    start_after: int = 0
+    batch_size: int = Field(2000, ge=100, le=5000)
+    max_batches: int = Field(5, ge=1, le=20)
+
+
+@router.post("/enrich")
+async def enrich_backfill(request: Request, body: EnrichRequest, db: AsyncSession = Depends(get_db)):
+    """Batch-recompute derived columns over existing rows (worker-key auth)."""
+    _verify_worker_key(request)
+    cursor = body.start_after
+    processed = 0
+    done = False
+    for _ in range(body.max_batches):
+        rows = (await db.execute(
+            text(f"SELECT {_ENRICH_SRC_COLS} FROM cbs_index "
+                 "WHERE id > :cursor ORDER BY id LIMIT :lim"),
+            {"cursor": cursor, "lim": body.batch_size},
+        )).mappings().all()
+        if not rows:
+            done = True
+            break
+        updates = []
+        for r in rows:
+            e = enrich_row(dict(r))
+            u = {"b_id": r["id"]}
+            for k, v in e.items():
+                u[k] = json.dumps(v, ensure_ascii=False) if k in _ENRICH_JSONB and v is not None else v
+            updates.append(u)
+        await db.execute(_ENRICH_UPDATE_SQL, updates)
+        cursor = rows[-1]["id"]
+        processed += len(rows)
+        if len(rows) < body.batch_size:
+            done = True
+            break
+    if done:
+        await _refresh_latest(db)  # table-wide, once, at the end
+    await db.commit()
+    return {"processed": processed, "next_after": cursor, "done": done}
+
+
+# ── Gazetteer (locality registry) ──────────────────────────────────────────
+
+_GAZETTEER_SEED = Path(__file__).resolve().parents[1] / "data" / "cbs_gazetteer.json"
+_GAZ_FIELDS = ("name", "name_en", "aliases", "district", "subdistrict",
+               "municipal_status", "regional_council", "population", "ses_cluster")
+
+
+@router.post("/gazetteer/load")
+async def gazetteer_load(request: Request, db: AsyncSession = Depends(get_db)):
+    """Load/refresh the locality gazetteer from the packaged seed (worker-key).
+
+    The seed is generated from the CBS bycode file by cbs_gazetteer_build.py in
+    the govil-scraper repo and committed under app/data/. Upsert by code."""
+    _verify_worker_key(request)
+    if not _GAZETTEER_SEED.exists():
+        raise HTTPException(status_code=409, detail="gazetteer seed not packaged")
+    entries = json.loads(_GAZETTEER_SEED.read_text(encoding="utf-8"))
+    now = datetime.now(timezone.utc)
+    rows = [{"code": e["code"], **{f: e.get(f) for f in _GAZ_FIELDS}, "updated_at": now}
+            for e in entries if e.get("code")]
+    stmt = pg_insert(CbsGazetteer).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["code"],
+        set_={f: getattr(stmt.excluded, f) for f in _GAZ_FIELDS + ("updated_at",)},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"loaded": len(rows)}
+
+
+class GazetteerEntry(BaseModel):
+    code: int
+    name: str
+    name_en: str | None
+    district: str | None
+    subdistrict: str | None
+    municipal_status: str | None
+    regional_council: str | None
+    population: int | None
+
+
+@router.get("/gazetteer")
+@limiter.limit("120/minute")
+async def gazetteer_search(
+    request: Request,
+    q: str = Query(..., min_length=2, description="Locality name prefix/substring (Hebrew or English)"),
+    limit: int = Query(10, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+):
+    """Locality autocomplete: matches name, English name and known aliases.
+
+    Prefix matches rank first, then substring; bigger localities first within
+    each group — so typing "בית ש" puts בית שמש above the small moshavim."""
+    like_prefix = f"{q}%"
+    like_sub = f"%{q}%"
+    rows = (await db.execute(text(
+        "SELECT code, name, name_en, district, subdistrict, municipal_status, "
+        "       regional_council, population "
+        "FROM cbs_gazetteer "
+        "WHERE name ILIKE :sub OR name_en ILIKE :sub OR EXISTS ("
+        "  SELECT 1 FROM jsonb_array_elements_text(coalesce(aliases,'[]'::jsonb)) a"
+        "  WHERE a ILIKE :sub) "
+        "ORDER BY (name ILIKE :pfx OR name_en ILIKE :pfx) DESC, "
+        "         population DESC NULLS LAST, name "
+        "LIMIT :lim"),
+        {"sub": like_sub, "pfx": like_prefix, "lim": limit},
+    )).mappings().all()
+    return {"results": [GazetteerEntry(**dict(r)).model_dump() for r in rows]}
+
+
+# ── Series (edition history of one product) ────────────────────────────────
+
+@router.get("/series")
+@limiter.limit("60/minute")
+async def series_editions(
+    request: Request,
+    key: str = Query(..., min_length=4, description="series_key of any edition"),
+    db: AsyncSession = Depends(get_db),
+):
+    """All editions sharing a series_key, newest first — powers the 'מהדורות
+    קודמות' timeline on both tabs."""
+    rows = (await db.execute(
+        text(f"SELECT {RESULT_COLS} FROM cbs_index WHERE series_key = :k "
+             "ORDER BY edition_year DESC NULLS LAST, id DESC LIMIT 50"),
+        {"k": key},
+    )).mappings().all()
+    return {"results": [CbsResult(**dict(r)) for r in rows]}
 
 
 # ── Featured (admin-pinned quick-access pages) ─────────────────────────────

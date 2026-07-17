@@ -25,7 +25,7 @@ ORM column. See app/api/cbs.py and the ``cbs`` engine in the govil-scraper repo.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,6 +79,33 @@ class CbsIndex(Base):
     # the schema. Filterable first-class facets (subject/geo/year/file_type)
     # stay as their own columns.
     extra: Mapped[dict | None] = mapped_column(JSONB)
+
+    # ── Derived (enriched) columns — computed by app/services/cbs_enrich.py
+    # from the crawled fields above, on ingest and via POST /api/cbs/enrich.
+    # See migration 038 + Lamas/cbs-ultimate-search-interface.md.
+    # User-facing product taxonomy: data_file | gis_layer | puf | generator |
+    # dashboard | api | database | publication | methodology.
+    product_form: Mapped[str | None] = mapped_column(String(24))
+    # Time-axis unit (Hebrew, matching the site vocabulary): שנתי/רבעוני/חודשי…
+    freq: Mapped[str | None] = mapped_column(String(16))
+    # Named collection operation: מפקד אוכלוסין / סקר כוח אדם / מרשם דירות…
+    source_op: Mapped[str | None] = mapped_column(String(64))
+    # Year of the DATA (title-parsed) — vs year_end which mixes in pub years.
+    data_vintage: Mapped[int | None] = mapped_column(Integer)
+    # Boundary vintage the geo units use: א"ס 2011 / א"ס 2022 / אזורי סקר.
+    geo_vintage: Mapped[str | None] = mapped_column(String(32))
+    # Inclusion threshold, human-readable ("יישובים 5,000+ תושבים בלבד").
+    geo_coverage: Mapped[str | None] = mapped_column(String(120))
+    # Yearly editions of one product share a series_key (title minus volatile
+    # tokens); is_latest_edition marks the newest edition_year per key.
+    series_key: Mapped[str | None] = mapped_column(Text)
+    edition_year: Mapped[int | None] = mapped_column(Integer)
+    is_latest_edition: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Measure types on the page (list[str]): avg/median/pct/index/distribution/count.
+    metrics: Mapped[list | None] = mapped_column(JSONB)
+    # Population breakdowns (list[str]): age/gender/sector_religion/immigration/
+    # education/industry/ses.
+    cuts: Mapped[list | None] = mapped_column(JSONB)
 
     # Extracted plain text of the rendered page (feeds search_vector).
     full_text: Mapped[str | None] = mapped_column(Text)

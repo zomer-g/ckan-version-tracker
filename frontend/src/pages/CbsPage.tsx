@@ -7,12 +7,13 @@ import {
   CbsFacets,
   CbsSearchParams,
   CbsResolveResponse,
+  CbsGazetteerEntry,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import CbsAnswerCard from "../components/CbsAnswerCard";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
-import { geoLabel, sectionLabel } from "../utils/cbsLabels";
+import { geoLabel, productFormLabel, sectionLabel } from "../utils/cbsLabels";
 import {
   seriesQuery,
   historicalVersions,
@@ -31,6 +32,8 @@ type Mode = "ask" | "advanced";
 // tab — so it must open in advanced mode and behave exactly as it always did.
 const ADVANCED_PARAMS = [
   "q", "subject", "geo", "section", "file_type", "year_from", "year_to", "sort",
+  // Enrichment-layer filters (the ultimate-search-interface plan).
+  "product_form", "freq", "source_op", "latest_only", "locality",
 ];
 
 export default function CbsPage() {
@@ -146,6 +149,36 @@ export default function CbsPage() {
   const [fileType, setFileType] = useState(() => initial.get("file_type") || "");
   const [yearFrom, setYearFrom] = useState(() => initial.get("year_from") || "");
   const [yearTo, setYearTo] = useState(() => initial.get("year_to") || "");
+  // Enrichment-layer filters — the user-vocabulary dimensions the benchmark
+  // shows people actually express: product form ("שכבה להורדה"), frequency,
+  // named source operation, latest-edition-only, and a locality entity.
+  const [productForm, setProductForm] = useState(() => initial.get("product_form") || "");
+  const [freq, setFreq] = useState(() => initial.get("freq") || "");
+  const [sourceOp, setSourceOp] = useState(() => initial.get("source_op") || "");
+  const [latestOnly, setLatestOnly] = useState(() => initial.get("latest_only") === "1");
+  // Locality (יישוב/רשות) — resolved via the gazetteer autocomplete. There is
+  // no per-locality tag on index rows, so the chosen name joins the free-text
+  // query (that is how the community itself finds locality data).
+  const [locality, setLocality] = useState(() => initial.get("locality") || "");
+  const [localitySuggestions, setLocalitySuggestions] = useState<CbsGazetteerEntry[]>([]);
+
+  // Populate the locality datalist as the user types (2+ chars).
+  useEffect(() => {
+    let cancelled = false;
+    const v = locality.trim();
+    if (v.length < 2) {
+      setLocalitySuggestions([]);
+      return;
+    }
+    cbs.gazetteer(v).then((res) => {
+      if (!cancelled) setLocalitySuggestions(res.results);
+    }).catch(() => {
+      // Non-fatal — the field still works as plain text.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [locality]);
   // Result ordering: relevance (default) or chronological (newest data year).
   const [sort, setSort] = useState<"relevance" | "chrono">(
     () => (initial.get("sort") === "chrono" ? "chrono" : "relevance")
@@ -174,18 +207,31 @@ export default function CbsPage() {
         if (fileType) sp.set("file_type", fileType);
         if (yearFrom) sp.set("year_from", yearFrom);
         if (yearTo) sp.set("year_to", yearTo);
+        if (productForm) sp.set("product_form", productForm);
+        if (freq) sp.set("freq", freq);
+        if (sourceOp) sp.set("source_op", sourceOp);
+        if (latestOnly) sp.set("latest_only", "1");
+        if (locality.trim()) sp.set("locality", locality.trim());
         if (sort !== "relevance") sp.set("sort", sort);
         setSearchParams(sp, { replace: true });
       }
       try {
+        // The locality entity joins the free text — index rows carry no
+        // per-locality tag, and lexical match on the name is how locality data
+        // is actually found.
+        const qText = [query.trim(), locality.trim()].filter(Boolean).join(" ");
         const params: CbsSearchParams = {
-          q: query.trim() || undefined,
+          q: qText || undefined,
           subject: subject || undefined,
           geo: geo || undefined,
           section: section || undefined,
           file_type: fileType || undefined,
           year_from: yearFrom ? Number(yearFrom) : undefined,
           year_to: yearTo ? Number(yearTo) : undefined,
+          product_form: productForm || undefined,
+          freq: freq || undefined,
+          source_op: sourceOp || undefined,
+          latest_only: latestOnly || undefined,
           sort,
           limit: PAGE_SIZE,
           offset: nextOffset,
@@ -202,7 +248,8 @@ export default function CbsPage() {
       }
       setLoading(false);
     },
-    [query, subject, geo, section, fileType, yearFrom, yearTo, sort, setSearchParams]
+    [query, subject, geo, section, fileType, yearFrom, yearTo, productForm,
+     freq, sourceOp, latestOnly, locality, sort, setSearchParams]
   );
 
   // Load an initial (unfiltered, newest-first) page on mount, and re-run
@@ -213,7 +260,8 @@ export default function CbsPage() {
     if (mode !== "advanced") return;
     runSearch(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, subject, geo, section, fileType, yearFrom, yearTo, sort]);
+  }, [mode, subject, geo, section, fileType, yearFrom, yearTo, productForm,
+      freq, sourceOp, latestOnly, sort]);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -276,9 +324,38 @@ export default function CbsPage() {
     setFileType("");
     setYearFrom("");
     setYearTo("");
+    setProductForm("");
+    setFreq("");
+    setSourceOp("");
+    setLatestOnly(false);
+    setLocality("");
   };
 
-  const hasFilters = !!(subject || geo || section || fileType || yearFrom || yearTo);
+  const hasFilters = !!(subject || geo || section || fileType || yearFrom ||
+    yearTo || productForm || freq || sourceOp || latestOnly || locality);
+
+  // "עריכה בחיפוש מתקדם" from the NL answer card: map the deterministic parse
+  // of the question (the chips) onto the advanced filters, then switch tabs —
+  // the bridge that makes the two surfaces one interface.
+  const editInAdvanced = useCallback(() => {
+    const u = answer?.understood;
+    if (u) {
+      if (u.geo_level) setGeo(u.geo_level);
+      if (u.product_form) setProductForm(u.product_form);
+      if (u.source_op) setSourceOp(u.source_op);
+      if (u.latest) setLatestOnly(true);
+      if (u.years.length > 0) {
+        setYearFrom(String(u.years[0]));
+        setYearTo(String(u.years[u.years.length - 1]));
+      }
+      if (u.geo_entity) setLocality(u.geo_entity.name);
+    }
+    if (askQuery.trim()) setQuery(askQuery);
+    setMode("advanced");
+    const sp = new URLSearchParams();
+    sp.set("mode", "advanced");
+    setSearchParams(sp, { replace: true });
+  }, [answer, askQuery, setSearchParams]);
 
   // Featured quick-access cards are shown only on the default (unsearched,
   // unfiltered) view — the URL reflects the last SUBMITTED search, so typing
@@ -351,7 +428,7 @@ export default function CbsPage() {
           {askError && <div role="alert" className="badge badge-danger mb-2">{askError}</div>}
 
           <div aria-live="polite">
-            {answer && <CbsAnswerCard data={answer} />}
+            {answer && <CbsAnswerCard data={answer} onEditInAdvanced={editInAdvanced} />}
           </div>
 
           {answer && answer.results.length > 0 && (
@@ -483,6 +560,83 @@ export default function CbsPage() {
             max={facets.year_max ?? undefined}
             style={{ width: "6rem", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
           />
+
+          {/* Enrichment-layer filters — rendered only once the backfill has
+              populated the facet values, so an empty select never shows. */}
+          {facets.product_forms.length > 0 && (
+            <select
+              value={productForm}
+              onChange={(e) => setProductForm(e.target.value)}
+              aria-label={t("cbs.product_form", "צורת התוצר")}
+              style={{ width: "auto", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
+            >
+              <option value="">{t("cbs.all_product_forms", "כל צורות התוצר")}</option>
+              {facets.product_forms.map((p) => (
+                <option key={p} value={p}>{productFormLabel(p)}</option>
+              ))}
+            </select>
+          )}
+
+          {facets.freqs.length > 0 && (
+            <select
+              value={freq}
+              onChange={(e) => setFreq(e.target.value)}
+              aria-label={t("cbs.freq", "תדירות")}
+              style={{ width: "auto", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
+            >
+              <option value="">{t("cbs.all_freqs", "כל התדירויות")}</option>
+              {facets.freqs.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          )}
+
+          {facets.source_ops.length > 0 && (
+            <select
+              value={sourceOp}
+              onChange={(e) => setSourceOp(e.target.value)}
+              aria-label={t("cbs.source_op", "מקור האיסוף")}
+              style={{ width: "auto", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
+            >
+              <option value="">{t("cbs.all_sources", "כל מקורות האיסוף")}</option>
+              {facets.source_ops.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Locality entity (gazetteer autocomplete) — joins the free text. */}
+          <input
+            type="text"
+            value={locality}
+            onChange={(e) => setLocality(e.target.value)}
+            list="cbs-locality-list"
+            placeholder={t("cbs.locality", "יישוב / רשות")}
+            aria-label={t("cbs.locality", "יישוב / רשות")}
+            style={{ width: "9rem", padding: "0.3rem 0.5rem", fontSize: "0.85rem" }}
+          />
+          <datalist id="cbs-locality-list">
+            {localitySuggestions.map((s) => (
+              <option key={s.code} value={s.name}>
+                {[s.municipal_status, s.subdistrict && `נפת ${s.subdistrict}`]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </option>
+            ))}
+          </datalist>
+
+          <label
+            className="flex"
+            style={{ gap: "0.3rem", alignItems: "center", fontSize: "0.82rem", margin: 0 }}
+          >
+            <input
+              type="checkbox"
+              checked={latestOnly}
+              onChange={(e) => setLatestOnly(e.target.checked)}
+              style={{ width: "auto", margin: 0 }}
+            />
+            {t("cbs.latest_only", "רק המהדורה העדכנית")}
+          </label>
 
           {hasFilters && (
             <button

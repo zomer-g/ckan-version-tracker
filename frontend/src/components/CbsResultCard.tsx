@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatBytes, CbsResult } from "../api/client";
-import { geoLabel, sectionLabel } from "../utils/cbsLabels";
+import {
+  geoLabel,
+  productFormLabel,
+  PRODUCT_FORM_ICONS,
+  sectionLabel,
+} from "../utils/cbsLabels";
 import { YearVersion } from "../utils/cbsSeries";
 
 // One emoji per file family, shown on the compact file-type chips.
@@ -151,10 +156,26 @@ export default function CbsResultCard({
         className="flex text-sm text-muted"
         style={{ gap: "0.75rem", flexWrap: "wrap" }}
       >
+        {/* Enrichment tags first — the user-vocabulary dimensions. */}
+        {r.product_form && (
+          <span>
+            {PRODUCT_FORM_ICONS[r.product_form] || ""} {productFormLabel(r.product_form)}
+          </span>
+        )}
         {r.section && <span>{sectionLabel(r.section)}</span>}
-        {span && <span>{span}</span>}
+        {(r.data_vintage || span) && <span>{r.data_vintage ?? span}</span>}
+        {r.freq && <span>{r.freq}</span>}
+        {r.source_op && <span>{r.source_op}</span>}
         {r.geo_levels && r.geo_levels.length > 0 && (
           <span>{r.geo_levels.map(geoLabel).join(", ")}</span>
+        )}
+        {r.series_key && r.is_latest_edition === false && (
+          <span style={{ color: "#b45309" }}>
+            {t("cbs.old_edition", "מהדורה ישנה")}
+          </span>
+        )}
+        {r.geo_coverage && (
+          <span title={r.geo_coverage}>⚠️ {r.geo_coverage}</span>
         )}
       </div>
 

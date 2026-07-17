@@ -30,3 +30,56 @@ export const GEO_LABELS: Record<string, string> = {
 };
 
 export const geoLabel = (g: string): string => GEO_LABELS[g] || g;
+
+// User-facing product taxonomy (the enrichment layer's product_form column):
+// "what do I get" — replaces site-speak section/item_type in the primary UI.
+export const PRODUCT_FORM_LABELS: Record<string, string> = {
+  data_file: "קובץ נתונים",
+  gis_layer: "שכבה גאוגרפית",
+  puf: "קובץ פרט (PUF)",
+  generator: "מחולל",
+  dashboard: "דשבורד",
+  api: "API",
+  database: "בנק נתונים",
+  publication: "פרסום",
+  methodology: "מתודולוגיה והגדרות",
+};
+
+export const productFormLabel = (p: string): string => PRODUCT_FORM_LABELS[p] || p;
+
+export const PRODUCT_FORM_ICONS: Record<string, string> = {
+  data_file: "📊",
+  gis_layer: "🗺️",
+  puf: "🔐",
+  generator: "⚙️",
+  dashboard: "📈",
+  api: "🔌",
+  database: "🗄️",
+  publication: "📄",
+  methodology: "📖",
+};
+
+// Measure types (enrichment `metrics`) and population cuts (`cuts`) are stored
+// as English codes; the UI is Hebrew.
+export const METRIC_LABELS: Record<string, string> = {
+  count: "ספירה",
+  pct: "אחוז/שיעור",
+  avg: "ממוצע",
+  median: "חציון",
+  distribution: "התפלגות",
+  index: "מדד",
+};
+
+export const metricLabel = (m: string): string => METRIC_LABELS[m] || m;
+
+export const CUT_LABELS: Record<string, string> = {
+  age: "גיל",
+  gender: "מגדר",
+  sector_religion: "מגזר/דתיות",
+  immigration: "עולים/הגירה",
+  education: "השכלה",
+  industry: "ענף כלכלי",
+  ses: "סוציו-אקונומי",
+};
+
+export const cutLabel = (c: string): string => CUT_LABELS[c] || c;

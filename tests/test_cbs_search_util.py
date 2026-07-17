@@ -74,3 +74,20 @@ def test_empty_query_has_no_tsquery_param():
     assert "to_tsquery" not in where
     # relevance order without a query falls back to a literal rank of 0.
     assert " 0 DESC" in order
+
+
+def test_enrichment_filters():
+    where, order, params = build_search({
+        "product_form": "gis_layer", "freq": "שנתי",
+        "source_op": "מפקד אוכלוסין", "latest_only": True,
+    })
+    assert "product_form = :product_form" in where
+    assert "freq = :freq" in where
+    assert "source_op = :source_op" in where
+    assert "is_latest_edition" in where
+    assert params["product_form"] == "gis_layer"
+
+
+def test_latest_only_absent_by_default():
+    where, _, _ = build_search({"q": "שכר"})
+    assert "is_latest_edition" not in where
