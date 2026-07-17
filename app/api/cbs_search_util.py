@@ -145,18 +145,25 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
         return where, order, params
 
     # relevance
+    #
+    # NOTE on the COALESCE wrappers below — this is a three-valued-logic trap that
+    # caused a real regression: many rows have item_type/title NULL, and in SQL
+    # ``NULL = 'intent'`` is NULL (not false). ``ORDER BY <expr> DESC`` puts NULLs
+    # FIRST by default, so a bare ``(item_type = 'intent') DESC`` floated every
+    # untyped row above every real hit and hit@10 collapsed from 2.3% to 0.6%.
+    # COALESCE makes both keys total booleans, never NULL.
     catch_terms = []
     for i, pfx in enumerate(_CATCHALL_TITLE_PREFIXES):
         pk = f"catch{i}"
-        catch_terms.append(f"title LIKE :{pk}")
+        catch_terms.append(f"coalesce(title, '') LIKE :{pk}")
         params[pk] = f"{pfx}%"
     catchall = " OR ".join(catch_terms) if catch_terms else "false"
 
     rank = (f"ts_rank(search_vector, to_tsquery('simple', :tsq))"
             if tsq else "0")
     order = (
-        "(item_type = 'intent') DESC, "        # curated guidance rows first
-        f"({catchall}) ASC, "                  # navigational index pages last
+        "(coalesce(item_type, '') = 'intent') DESC, "  # curated guidance rows first
+        f"({catchall}) ASC, "                          # navigational index pages last
         f"{rank} DESC, "
         "coalesce(year_end, year_start) DESC NULLS LAST, "
         "last_crawled DESC NULLS LAST, id DESC"

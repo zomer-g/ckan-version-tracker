@@ -42,10 +42,23 @@ def test_facets_and_year_window():
 def test_relevance_order_boosts_intents_and_demotes_catchall():
     _, order, params = build_search({"q": "שכר"}, sort="relevance")
     # intent rows first, catch-all navigational pages last, then rank, then recency.
-    assert order.index("item_type = 'intent'") < order.index("catch0")
+    assert order.index("item_type") < order.index("catch0")
     assert order.index("catch0") < order.index("ts_rank")
     assert "coalesce(year_end, year_start) DESC" in order  # recency tie-breaker
     assert params["catch0"].startswith("פעולות ופרסומים סטטיסטיים")
+
+
+def test_nullable_order_keys_are_null_safe():
+    """Regression: item_type/title are nullable, and in SQL ``NULL = 'intent'``
+    is NULL — which ``ORDER BY ... DESC`` sorts FIRST. A bare comparison floated
+    every untyped row above every real hit (hit@10 fell 2.3% → 0.6% in prod).
+    Both boolean sort keys must be COALESCE-wrapped so they can never be NULL."""
+    _, order, _ = build_search({"q": "שכר"}, sort="relevance")
+    assert "coalesce(item_type, '') = 'intent'" in order
+    assert "coalesce(title, '') LIKE" in order
+    # and never the bare, NULL-producing forms
+    assert "(item_type = 'intent')" not in order
+    assert "(title LIKE" not in order
 
 
 def test_chrono_order_is_year_then_crawl():
