@@ -551,17 +551,21 @@ export interface CbsFeaturedResponse {
 // hit so the UI can render an actionable card instead of a raw list. Measured on
 // the WhatsApp benchmark, this NL path finds the right page far more often than
 // keyword /search (which barely bridges Hebrew surface-form gaps). answer_type:
-//   guidance      — a curated intent points straight at the source
-//   generator     — the source is a מחולל/dashboard to run
-//   data_file     — a direct xlsx/csv download exists on the page
-//   publication   — a relevant publication/page
-//   not_available — CBS does not hold this (community-confirmed); see `answer`
-//   no_results    — nothing matched; consider special processing
+//   guidance           — a curated intent points straight at the source
+//   generator          — the source is a מחולל/dashboard to run
+//   data_file          — a direct xlsx/csv download exists on the page
+//   publication        — a relevant publication/page
+//   special_processing — CBS HAS it, but only via a request / the research room
+//   not_available      — CBS does not hold this (community-confirmed); see `answer`
+//   no_results         — nothing matched
+// The last two are opposite answers and must stay visually distinct: one is a
+// dead end, the other is "you can get this — here's who to ask".
 export type CbsAnswerType =
   | "guidance"
   | "generator"
   | "data_file"
   | "publication"
+  | "special_processing"
   | "not_available"
   | "no_results";
 

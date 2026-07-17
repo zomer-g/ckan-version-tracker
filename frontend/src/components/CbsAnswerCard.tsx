@@ -39,6 +39,12 @@ const TYPE_META: Record<
     accent: "#0891b2",
     cta: "לפרסום",
   },
+  special_processing: {
+    icon: "✉️",
+    label: 'קיים — בעיבוד מיוחד',
+    accent: "#c2410c",
+    cta: "לפנייה ללמ\"ס",
+  },
   not_available: {
     icon: "🚫",
     label: 'אין בלמ"ס',

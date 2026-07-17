@@ -307,6 +307,8 @@ _ANSWER_TEXT = {
     "generator": "המקור הוא מחולל/דשבורד של הלמ\"ס — הפעל אותו ובחר את החתך הרצוי.",
     "data_file": "נמצא קובץ נתונים ישיר להורדה בעמוד המקור בלמ\"ס.",
     "publication": "נמצא פרסום/עמוד רלוונטי באתר הלמ\"ס.",
+    "special_processing": ('הנתון קיים בלמ"ס אך אינו מוצר מדף — נדרש עיבוד מיוחד או '
+                           'גישה לחדר המחקר: info@cbs.gov.il / ibudim@cbs.gov.il.'),
 }
 
 
@@ -315,11 +317,17 @@ def _classify(top: dict | None, total: int) -> str:
         return "no_results"
     extra = top.get("extra") or {}
     item_type = top.get("item_type") or ""
-    # ``intent_negative`` rows record that CBS does NOT hold something — knowledge
-    # that exists only in the community's answers, never in a crawl. They carry a
-    # distinct item_type on purpose: build_search() boosts only 'intent', so a
-    # negative can never float above real results on a weak lexical match. A
-    # wrong "CBS doesn't have this" is worse than no answer at all.
+    # Two hand-reviewed families record what a crawl can never learn — whether CBS
+    # holds something at all. They are OPPOSITE answers and must not be conflated:
+    #   intent_negative → CBS does not hold it (or not at that resolution).
+    #   intent_special  → CBS DOES hold it, but only via a request / the research
+    #                     room. "Ask ibudim@" is a real answer, not a dead end.
+    # Both carry an item_type other than 'intent' on purpose: build_search() boosts
+    # only 'intent', so neither can float above real results on a weak lexical
+    # match — a wrong "CBS doesn't have this" is worse than no answer at all.
+    # See CURATION in GOV scraper/cbs_intents_benchmark.py for the review.
+    if item_type == "intent_special" or extra.get("verdict") == "special_processing":
+        return "special_processing"
     if item_type == "intent_negative" or extra.get("negative"):
         return "not_available"
     if item_type == "intent":
