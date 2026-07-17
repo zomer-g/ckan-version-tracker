@@ -371,6 +371,10 @@ async def _load_gazetteer(db: AsyncSession) -> list[tuple[str, dict]]:
         ))).mappings().all()
     except Exception:  # noqa: BLE001 — table absent (pre-migration) ⇒ no entity chips
         return []
+    if not rows:
+        # Not loaded yet — do NOT cache emptiness, or the process would stay
+        # entity-blind until restart even after /gazetteer/load runs.
+        return []
     entries: list[tuple[str, dict]] = []
     for r in rows:
         info = {"code": r["code"], "name": r["name"], "district": r["district"],

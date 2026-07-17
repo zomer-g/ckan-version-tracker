@@ -510,7 +510,10 @@ async def gazetteer_search(
         "WHERE name ILIKE :sub OR name_en ILIKE :sub OR EXISTS ("
         "  SELECT 1 FROM jsonb_array_elements_text(coalesce(aliases,'[]'::jsonb)) a"
         "  WHERE a ILIKE :sub) "
-        "ORDER BY (name ILIKE :pfx OR name_en ILIKE :pfx) DESC, "
+        # coalesce: NULL name_en would make the OR NULL (not false), and DESC
+        # sorts NULLs FIRST — floating non-prefix rows above real prefix hits.
+        # (Same three-valued-logic trap as the 2b244ab ranking regression.)
+        "ORDER BY (name ILIKE :pfx OR coalesce(name_en,'') ILIKE :pfx) DESC, "
         "         population DESC NULLS LAST, name "
         "LIMIT :lim"),
         {"sub": like_sub, "pfx": like_prefix, "lim": limit},
