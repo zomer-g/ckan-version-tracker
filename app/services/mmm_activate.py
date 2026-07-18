@@ -72,6 +72,12 @@ def apply_mmm_archive(ds, known_rids: list[str]) -> None:
     cfg["archive"] = True
     cfg["archive_type"] = "mmm"
     cfg["checkpoint"] = {"known_rids": known_rids, "total_docs": len(known_rids)}
+    # Each incremental poll pushes a SMALL delta (only the new docs) against the
+    # full ~6,500-row baseline version, which would otherwise trip the
+    # push-version shrink guard (app/api/worker.py: rejects <50% of the previous
+    # row count). MMM is append-only + delta-versioned, so the guard doesn't
+    # apply — allow_shrink lets each delta through.
+    cfg["allow_shrink"] = True
     cfg.pop("mmm_full_rescan", None)  # clear any stale one-shot flag
     ds.scraper_config = cfg
     flag_modified(ds, "scraper_config")
@@ -96,6 +102,21 @@ async def activate_mmm_archive_if_needed() -> dict:
                 return {"skipped": "dataset not found"}
             cfg = ds.scraper_config or {}
             if cfg.get("archive") and cfg.get("archive_type") == "mmm":
+                # Already in archive mode: don't re-seed the checkpoint (the
+                # worker grows it), but HEAL a missing allow_shrink so the small
+                # delta pushes stop tripping the push-version shrink guard
+                # against the full baseline version. Idempotent.
+                if not cfg.get("allow_shrink"):
+                    cfg = dict(cfg)
+                    cfg["allow_shrink"] = True
+                    ds.scraper_config = cfg
+                    flag_modified(ds, "scraper_config")
+                    await db.commit()
+                    logger.info(
+                        "MMM activate: healed allow_shrink=True on already-active %s",
+                        ds.id,
+                    )
+                    return {"patched": "allow_shrink", "dataset_id": str(ds.id)}
                 logger.info("MMM activate: already in archive mode — no-op")
                 return {"skipped": "already archive mode"}
 
