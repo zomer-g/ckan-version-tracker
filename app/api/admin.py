@@ -679,6 +679,7 @@ async def list_scrape_tasks(
             "phase": t.phase,
             "progress": t.progress,
             "message": t.message,
+            "worker_ip": t.worker_ip,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t, ds in running_result.all()
@@ -696,6 +697,7 @@ async def list_scrape_tasks(
             "task_id": str(t.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
+            "worker_ip": t.worker_ip,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t, ds in pending_result.all()
@@ -720,6 +722,7 @@ async def list_scrape_tasks(
             "dataset_title": ds.title,
             "phase": t.phase,
             "error": t.error,
+            "worker_ip": t.worker_ip,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
         }
         for t, ds in failed_result.all()
@@ -808,6 +811,7 @@ async def all_scrape_tasks_for_dataset(
                 "message": t.message,
                 "error": t.error,
                 "progress": t.progress,
+                "worker_ip": t.worker_ip,
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "updated_at": t.updated_at.isoformat() if t.updated_at else None,
                 "completed_at": t.completed_at.isoformat() if t.completed_at else None,

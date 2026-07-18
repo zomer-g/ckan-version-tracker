@@ -351,16 +351,19 @@ async def poll_for_task(
     task, ds = row
     task.status = "running"
     task.phase = "assigned"
-    # Attribute the assignment to a specific worker machine (client IP via
-    # Cloudflare/Render forwarding headers). With several workers on several
-    # machines this is what lets monitoring show WHICH worker holds each task
-    # — the worker itself sends no identity beyond its version headers.
-    worker_ip = (
-        (request.headers.get("cf-connecting-ip")
-         or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-         or (request.client.host if request.client else ""))
-    )
-    task.message = f"Assigned to worker {worker_ip}" if worker_ip else "Assigned to worker"
+    # Attribute the assignment to a specific worker machine (real client IP,
+    # derived through the Cloudflare/Render proxy chain — see app/client_ip.py).
+    # With several workers on several machines this is what lets the admin queue
+    # show WHICH machine holds each task; the worker sends no identity beyond
+    # its version headers. Persisted in a dedicated column (refreshed on every
+    # progress report) so it survives the message being overwritten mid-run.
+    from app.client_ip import get_client_ip
+    worker_ip = get_client_ip(request)
+    if worker_ip and worker_ip != "unknown":
+        task.worker_ip = worker_ip
+        task.message = f"Assigned to worker {worker_ip}"
+    else:
+        task.message = "Assigned to worker"
     await db.commit()
 
     from app.services.activity_log import log_event
@@ -1951,6 +1954,13 @@ async def update_progress(
     task.phase = (body.phase or "")[:50]
     task.progress = body.percentage
     task.message = (body.message or "")[:500]
+    # Keep the running machine's identity current — the worker posting progress
+    # IS the machine doing the work, and this backfills tasks assigned before
+    # worker_ip existed.
+    from app.client_ip import get_client_ip
+    worker_ip = get_client_ip(request)
+    if worker_ip and worker_ip != "unknown":
+        task.worker_ip = worker_ip[:64]
     await db.commit()
 
     return {"status": "ok"}

@@ -919,6 +919,7 @@ export default function AdminPage() {
                       </div>
                       <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
                         שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
+                        {" · "}מכונה: <strong>{t.worker_ip || "—"}</strong>
                       </div>
                       {t.message && (
                         <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
@@ -1026,6 +1027,7 @@ export default function AdminPage() {
                         ...queue.failed.map((f, i) =>
                           `${i + 1}. ${f.dataset_title}` +
                           (f.phase ? ` | phase=${f.phase}` : "") +
+                          (f.worker_ip ? ` | worker=${f.worker_ip}` : "") +
                           (f.completed_at ? ` | ${f.completed_at}` : "") +
                           "\n   " + (f.error || "(אין הודעת שגיאה)").replace(/\n/g, "\n   ")
                         ),
@@ -1081,6 +1083,11 @@ export default function AdminPage() {
                           ✕ מחק
                         </button>
                       </div>
+                      {t.worker_ip && (
+                        <div className="text-muted" style={{ marginTop: "0.2rem", fontSize: "0.75rem" }}>
+                          מכונה: <strong>{t.worker_ip}</strong>
+                        </div>
+                      )}
                       {t.error && (
                         <div style={{
                           marginTop: "0.2rem",

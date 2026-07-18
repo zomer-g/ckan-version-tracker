@@ -990,6 +990,7 @@ export interface ScrapeQueueRunning {
   phase: string | null;
   progress: number;
   message: string | null;
+  worker_ip: string | null;
   created_at: string | null;
 }
 
@@ -997,6 +998,7 @@ export interface ScrapeQueuePending {
   task_id: string;
   dataset_id: string;
   dataset_title: string;
+  worker_ip: string | null;
   created_at: string | null;
 }
 
@@ -1006,6 +1008,7 @@ export interface ScrapeQueueFailed {
   dataset_title: string;
   phase: string | null;
   error: string | null;
+  worker_ip: string | null;
   completed_at: string | null;
 }
 
