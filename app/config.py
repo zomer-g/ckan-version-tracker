@@ -233,7 +233,10 @@ class Settings(BaseSettings):
     #   worker — it just keeps running the pinned version until you bump.
     #   Never pin to a pre-c406ed4d commit: those lack sync-to-pin and a
     #   worker landed on one can't follow later bumps by itself.
-    worker_required_version: str = "f242895cbcf128191b133a0d1f3cf1aaa3569047"
+    #   (Additional constraint since fa0ab757: pin only commits carrying the
+    #   "sync-to-pin-escape-v2" marker — c406ed4..f709acb have an inert,
+    #   cwd-broken guard and workers refuse to land on them.)
+    worker_required_version: str = "fa0ab757df0c3c0d0449d6afb260fcfde1bd4794"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
