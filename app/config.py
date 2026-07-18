@@ -236,7 +236,7 @@ class Settings(BaseSettings):
     #   (Additional constraint since fa0ab757: pin only commits carrying the
     #   "sync-to-pin-escape-v2" marker — c406ed4..f709acb have an inert,
     #   cwd-broken guard and workers refuse to land on them.)
-    worker_required_version: str = "fe1f4b8dacb02506ec5928ae6be6ee64d535951a"
+    worker_required_version: str = "e1d08b06992b24339f8422dd5e665eea23ee523c"
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running
