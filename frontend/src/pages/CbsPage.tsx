@@ -10,6 +10,7 @@ import {
   CbsGazetteerEntry,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import CbsAbout from "../components/CbsAbout";
 import CbsAnswerCard from "../components/CbsAnswerCard";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
@@ -22,10 +23,11 @@ import {
 
 const PAGE_SIZE = 30;
 
-// The two search surfaces. "ask" is the natural-language mode (a question →
-// POST /api/cbs/resolve → one actionable answer card + supporting results);
-// "advanced" is the original keyword+facets interface, kept verbatim.
-type Mode = "ask" | "advanced";
+// The two search surfaces + the explainer. "ask" is the natural-language mode
+// (a question → POST /api/cbs/resolve → one actionable answer card +
+// supporting results); "advanced" is the original keyword+facets interface,
+// kept verbatim; "about" is a static how-it-works page (CbsAbout).
+type Mode = "ask" | "advanced" | "about";
 
 // Params that only the advanced (keyword/facet) interface produces. Any link
 // carrying one of them predates the NL mode — or was shared from the advanced
@@ -57,7 +59,7 @@ export default function CbsPage() {
   //   3. otherwise the new NL mode for a fresh visitor.
   const [mode, setMode] = useState<Mode>(() => {
     const m = initial.get("mode");
-    if (m === "ask" || m === "advanced") return m;
+    if (m === "ask" || m === "advanced" || m === "about") return m;
     return ADVANCED_PARAMS.some((p) => initial.get(p)) ? "advanced" : "ask";
   });
 
@@ -402,6 +404,7 @@ export default function CbsPage() {
         {([
           ["ask", t("cbs.mode_ask", "שאלה בשפה טבעית")],
           ["advanced", t("cbs.mode_advanced", "חיפוש מתקדם")],
+          ["about", t("cbs.mode_about", "איך זה עובד")],
         ] as [Mode, string][]).map(([m, label]) => (
           <button
             key={m}
@@ -495,6 +498,8 @@ export default function CbsPage() {
           )}
         </>
       )}
+
+      {mode === "about" && <CbsAbout />}
 
       {mode === "advanced" && (
         <>
