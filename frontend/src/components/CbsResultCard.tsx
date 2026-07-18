@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { formatBytes, CbsResult } from "../api/client";
+import { cbs, formatBytes, CbsResult } from "../api/client";
 import {
   geoLabel,
   productFormLabel,
@@ -81,6 +81,31 @@ export default function CbsResultCard({
   const [filesOpen, setFilesOpen] = useState(false);
   const fileCount = r.file_links?.length ?? 0;
   const types = distinctTypes(r);
+
+  // Edition history of this item's series, fetched lazily on first expand from
+  // GET /api/cbs/series?key= — so a card with a series_key can list ALL its
+  // editions (not only the prior-year strip the featured cards precompute) and
+  // jump straight to any one. Rows outside a series (series_key null) show no
+  // button. Featured cards already render `history`, so skip the button there.
+  const [editionsOpen, setEditionsOpen] = useState(false);
+  const [editions, setEditions] = useState<CbsResult[] | null>(null);
+  const [editionsLoading, setEditionsLoading] = useState(false);
+  const showEditionsBtn = !!r.series_key && !(history && history.length > 0);
+
+  const toggleEditions = async () => {
+    const next = !editionsOpen;
+    setEditionsOpen(next);
+    if (next && editions === null && r.series_key) {
+      setEditionsLoading(true);
+      try {
+        const res = await cbs.series(r.series_key);
+        setEditions(res.results);
+      } catch {
+        setEditions([]); // failed → show "none", not a spinner forever
+      }
+      setEditionsLoading(false);
+    }
+  };
 
   return (
     <article
@@ -178,6 +203,62 @@ export default function CbsResultCard({
           <span title={r.geo_coverage}>⚠️ {r.geo_coverage}</span>
         )}
       </div>
+
+      {showEditionsBtn && (
+        <div style={{ marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            onClick={toggleEditions}
+            aria-expanded={editionsOpen}
+            className="btn-secondary"
+            style={{ fontSize: "0.72rem", padding: "0.2rem 0.55rem" }}
+          >
+            📚 {t("cbs.all_editions", "כל המהדורות")}
+            {editions ? ` (${editions.length})` : ""} {editionsOpen ? "▴" : "▾"}
+          </button>
+
+          {editionsOpen && (
+            <div style={{ marginTop: "0.45rem" }}>
+              {editionsLoading && (
+                <span className="text-sm text-muted">{t("common.loading", "טוען…")}</span>
+              )}
+              {!editionsLoading && editions && editions.length === 0 && (
+                <span className="text-sm text-muted">
+                  {t("cbs.no_editions", "לא נמצאו מהדורות נוספות.")}
+                </span>
+              )}
+              {!editionsLoading && editions && editions.length > 0 && (
+                <div className="flex" style={{ gap: "0.3rem", flexWrap: "wrap" }}>
+                  {editions.map((e) => {
+                    const current = e.url === r.url;
+                    return (
+                      <a
+                        key={e.url}
+                        href={e.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={e.title || undefined}
+                        className="badge"
+                        style={{
+                          fontSize: "0.72rem",
+                          textDecoration: "none",
+                          background: current ? "#0ea5e9" : "#fffbeb",
+                          color: current ? "#fff" : "#92400e",
+                          border: current ? "1px solid #0ea5e9" : "1px solid #fde68a",
+                          fontWeight: current ? 700 : 400,
+                        }}
+                      >
+                        {e.edition_year ?? "—"}
+                        {e.is_latest_edition ? " ★" : ""}
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {history && history.length > 0 && (
         <div style={{ marginTop: "0.55rem" }}>
