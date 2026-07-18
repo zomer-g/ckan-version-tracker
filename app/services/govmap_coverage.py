@@ -284,9 +284,17 @@ async def scrape_next_layer() -> dict:
       * never triggered (new inventory / newly discovered catalog layers), or
       * last triggered ≥ ``GOVMAP_COVERAGE_REFRESH_DAYS`` ago (the ongoing
         quarterly-style refresh — coverage datasets are skipped by the normal
-        per-dataset scheduler, this tick is their ONLY driver), or
-      * their LATEST attempt failed and ≥ ``GOVMAP_COVERAGE_RETRY_HOURS``
-        passed (bounded retry loop for flap victims / transient errors).
+        per-dataset scheduler, this tick is their ONLY driver).
+
+    A FAILED layer is NOT auto-retried on a short cadence (used to be every
+    ``GOVMAP_COVERAGE_RETRY_HOURS``). GovMap's public WFS is permanently gone,
+    so the heavy line/polygon layers fail on every attempt — a 6-hourly retry
+    just re-floods the failures list 4×/day with the same dead layers. Now a
+    failure is recorded once and left in the failures list; the layer is only
+    re-attempted by the routine 90-day refresh (its ``last_triggered_at`` was
+    stamped on the failed attempt, so it won't be due before then) or a manual
+    "דגום". Transient flap victims that genuinely want a retry get it at the
+    quarterly refresh or by re-triggering by hand.
 
     Without the DUE filter, the drain-mode behavior (always refill to
     target) would keep re-scraping the stalest layers forever once the
@@ -296,8 +304,6 @@ async def scrape_next_layer() -> dict:
     target = max(1, int(settings.govmap_coverage_concurrency))
     refresh_cutoff = datetime.now(timezone.utc) - timedelta(
         days=float(settings.govmap_coverage_refresh_days))
-    retry_cutoff = datetime.now(timezone.utc) - timedelta(
-        hours=float(settings.govmap_coverage_retry_hours))
     async with async_session() as db:
         active_ids = [
             r[0] for r in (await db.execute(_active_coverage_tasks_q())).all()
@@ -308,33 +314,10 @@ async def scrape_next_layer() -> dict:
                         len(active_ids), target)
             return {"skipped": "at_concurrency", "active": len(active_ids)}
 
-        # Datasets whose LATEST scrape attempt failed — eligible for the
-        # shorter retry cadence.
-        last_status = (
-            select(
-                ScrapeTask.tracked_dataset_id,
-                ScrapeTask.status,
-            )
-            .distinct(ScrapeTask.tracked_dataset_id)
-            .order_by(ScrapeTask.tracked_dataset_id, ScrapeTask.created_at.desc())
-            .subquery()
-        )
-        failed_ids = [
-            r[0] for r in (await db.execute(
-                select(last_status.c.tracked_dataset_id)
-                .where(last_status.c.status == "failed")
-            )).all()
-        ]
-
         due = (
             GovmapCoverage.last_triggered_at.is_(None)
             | (GovmapCoverage.last_triggered_at < refresh_cutoff)
         )
-        if failed_ids:
-            due = due | (
-                GovmapCoverage.tracked_dataset_id.in_(failed_ids)
-                & (GovmapCoverage.last_triggered_at < retry_cutoff)
-            )
 
         # Next DUE layers: NULL last_triggered_at first (never scraped), then
         # the stalest, tie-broken by sort_order. Exclude layers whose dataset
