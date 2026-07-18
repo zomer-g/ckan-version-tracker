@@ -296,11 +296,13 @@ async def search(
 @router.get("/_explain")
 @limiter.limit("30/minute")
 async def explain(request: Request, q: str = Query(...), limit: int = Query(20, ge=1, le=60),
+                  title_like: str | None = Query(None),
                   db: AsyncSession = Depends(get_db)):
     from app.api.cbs_search_util import or_tsquery
     tsq = or_tsquery(q)
     if not tsq:
         return {"tsq": tsq, "rows": []}
+    extra = " AND title ILIKE :tlike " if title_like else ""
     sql = text(
         "SELECT title, data_vintage, year_end, is_latest_edition, series_key, "
         "length(coalesce(full_text,'')) AS ftlen, "
@@ -308,11 +310,14 @@ async def explain(request: Request, q: str = Query(...), limit: int = Query(20, 
         "ts_rank(search_vector, to_tsquery('simple', :tsq), 2) AS rank2 "
         "FROM cbs_index "
         "WHERE (search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike) "
-        "AND coalesce(item_type,'') <> 'intent' "
+        "AND coalesce(item_type,'') <> 'intent' " + extra +
         "ORDER BY ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, "
         "coalesce(year_end, year_start) DESC NULLS LAST LIMIT :lim"
     )
-    rows = (await db.execute(sql, {"tsq": tsq, "qlike": f"%{q}%", "lim": limit})).mappings().all()
+    p = {"tsq": tsq, "qlike": f"%{q}%", "lim": limit}
+    if title_like:
+        p["tlike"] = f"%{title_like}%"
+    rows = (await db.execute(sql, p)).mappings().all()
     return {"tsq": tsq, "rows": [dict(r) for r in rows]}
 
 
