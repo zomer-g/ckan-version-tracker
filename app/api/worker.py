@@ -359,11 +359,15 @@ async def poll_for_task(
     # progress report) so it survives the message being overwritten mid-run.
     from app.client_ip import get_client_ip
     worker_ip = get_client_ip(request)
+    worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
     if worker_ip and worker_ip != "unknown":
         task.worker_ip = worker_ip
-        task.message = f"Assigned to worker {worker_ip}"
-    else:
-        task.message = "Assigned to worker"
+    if worker_id:
+        task.worker_id = worker_id
+    # Prefer the explicit machine id (distinguishes workers behind a shared IP);
+    # fall back to the IP for older workers that don't send X-Worker-Id.
+    who = worker_id or (worker_ip if worker_ip and worker_ip != "unknown" else "")
+    task.message = f"Assigned to worker {who}" if who else "Assigned to worker"
     await db.commit()
 
     from app.services.activity_log import log_event
@@ -1956,11 +1960,14 @@ async def update_progress(
     task.message = (body.message or "")[:500]
     # Keep the running machine's identity current — the worker posting progress
     # IS the machine doing the work, and this backfills tasks assigned before
-    # worker_ip existed.
+    # these fields existed.
     from app.client_ip import get_client_ip
     worker_ip = get_client_ip(request)
     if worker_ip and worker_ip != "unknown":
         task.worker_ip = worker_ip[:64]
+    worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
+    if worker_id:
+        task.worker_id = worker_id
     await db.commit()
 
     return {"status": "ok"}

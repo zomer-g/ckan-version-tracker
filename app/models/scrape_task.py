@@ -31,12 +31,16 @@ class ScrapeTask(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(Text)
-    # Which worker machine is running (or ran) this task — the client IP the
-    # worker polled from, derived via Cloudflare/Render forwarding headers.
-    # Set on assignment and refreshed on every progress report. Lets the admin
-    # queue show WHICH machine holds each task when several workers run in
-    # parallel; the worker sends no identity beyond its version headers.
+    # Which worker machine is running (or ran) this task.
+    #   worker_ip — client IP the worker polled from (Cloudflare/Render
+    #     forwarding headers). Can't tell two workers apart behind a shared NAT.
+    #   worker_id — explicit identity the worker sends in X-Worker-Id
+    #     (``hostname#short`` or the OVER_WORKER_ID override), which DOES
+    #     distinguish co-located workers. Preferred for display; IP kept as a
+    #     fallback for older workers that don't send the header.
+    # Both are set on assignment and refreshed on every progress report.
     worker_ip: Mapped[str | None] = mapped_column(String(64))
+    worker_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     # updated_at is bumped on every progress report — used to detect crashed
     # workers (no heartbeat for >10 min means the worker died).

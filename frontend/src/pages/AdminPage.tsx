@@ -71,6 +71,17 @@ function formatRelative(iso: string | null): string {
   return `לפני ${days} ימים`;
 }
 
+// Human label for the machine running a scrape task. Prefers the explicit
+// worker id (hostname#short — distinguishes workers behind a shared IP) and
+// appends the IP when both are known; falls back to the IP for older workers
+// that don't report an id. Empty string when neither is known.
+function workerLabel(t: { worker_id?: string | null; worker_ip?: string | null }): string {
+  const id = (t.worker_id || "").trim();
+  const ip = (t.worker_ip || "").trim();
+  if (id && ip && id !== ip) return `${id} (${ip})`;
+  return id || ip || "";
+}
+
 const INTERVAL_OPTIONS = [
   { value: 900, label: "כל 15 דקות" },
   { value: 3600, label: "כל שעה" },
@@ -919,7 +930,7 @@ export default function AdminPage() {
                       </div>
                       <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
                         שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
-                        {" · "}מכונה: <strong>{t.worker_ip || "—"}</strong>
+                        {" · "}מכונה: <strong>{workerLabel(t) || "—"}</strong>
                       </div>
                       {t.message && (
                         <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
@@ -1027,7 +1038,7 @@ export default function AdminPage() {
                         ...queue.failed.map((f, i) =>
                           `${i + 1}. ${f.dataset_title}` +
                           (f.phase ? ` | phase=${f.phase}` : "") +
-                          (f.worker_ip ? ` | worker=${f.worker_ip}` : "") +
+                          (workerLabel(f) ? ` | worker=${workerLabel(f)}` : "") +
                           (f.completed_at ? ` | ${f.completed_at}` : "") +
                           "\n   " + (f.error || "(אין הודעת שגיאה)").replace(/\n/g, "\n   ")
                         ),
@@ -1083,9 +1094,9 @@ export default function AdminPage() {
                           ✕ מחק
                         </button>
                       </div>
-                      {t.worker_ip && (
+                      {workerLabel(t) && (
                         <div className="text-muted" style={{ marginTop: "0.2rem", fontSize: "0.75rem" }}>
-                          מכונה: <strong>{t.worker_ip}</strong>
+                          מכונה: <strong>{workerLabel(t)}</strong>
                         </div>
                       )}
                       {t.error && (
