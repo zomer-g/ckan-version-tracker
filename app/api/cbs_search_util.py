@@ -179,18 +179,22 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
 
     rank = (f"ts_rank(search_vector, to_tsquery('simple', :tsq))"
             if tsq else "0")
-    # BUCKET the text rank into 0.01-wide tiers before ordering. ts_rank is
+    # BUCKET the text rank into 0.001-wide tiers before ordering. ts_rank is
     # mildly length-sensitive (normalization 0), so two pages with the SAME
     # title pattern but different full_text length get fractionally different
     # scores — e.g. "מדד המחירים לצרכן מאי 2026" (short page → 0.13008) sorts
     # BELOW ~100 identical-titled 2010–2018 editions (0.13022) purely on a
     # 0.00014 gap, and recency (a lower key) never gets to lift the current
-    # one across that boundary. Rounding collapses that noise so pages of
-    # comparable relevance are ordered by DATA RECENCY — which is what a user
-    # typing a series name ("give me the CPI") actually wants. Genuinely
-    # different relevances (0.13 vs 0.14) stay in separate buckets, so this
-    # doesn't let a recent-but-irrelevant page outrank a strong match.
-    rank_bucket = f"round(({rank})::numeric, 2)" if tsq else "0"
+    # one across that boundary. Rounding collapses that sub-0.001 noise so
+    # pages of comparable relevance are ordered by DATA RECENCY — what a user
+    # typing a series name ("give me the CPI") actually wants.
+    #
+    # Granularity is deliberately fine (3 decimals). A coarser 0.01 bucket was
+    # measured on the 171-query benchmark and REGRESSED it (hit@10 16.4%→15.8%,
+    # hit@1 9.4%→7.0%): it merged genuinely different relevances (0.13 vs 0.14)
+    # and let recency override real precision. 0.001 still merges the CPI
+    # editions (both → 0.130) while preserving finer distinctions elsewhere.
+    rank_bucket = f"round(({rank})::numeric, 3)" if tsq else "0"
     order = (
         "(coalesce(item_type, '') = 'intent') DESC, "  # curated guidance rows first
         f"({catchall}) ASC, "                          # navigational index pages last
