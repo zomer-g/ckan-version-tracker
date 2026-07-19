@@ -637,6 +637,31 @@ async def feedback_report(
     )
 
 
+@router.delete("/feedback")
+async def delete_feedback(
+    request: Request,
+    source: str | None = Query(None, description="Delete only votes from this source (e.g. a test/spam tag)"),
+    query: str | None = Query(None, description="Delete only votes for this exact query"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Prune feedback rows (worker-key auth). Scope by ``source`` and/or
+    ``query``; at least one is required so this can never wipe the table
+    wholesale by accident. Used to clear test/spam votes."""
+    _verify_worker_key(request)
+    conds, params = [], {}
+    if source:
+        conds.append("source = :source"); params["source"] = source
+    if query:
+        conds.append("query = :query"); params["query"] = query
+    if not conds:
+        raise HTTPException(status_code=400, detail="source or query is required")
+    res = await db.execute(
+        text(f"DELETE FROM cbs_feedback WHERE {' AND '.join(conds)}"), params
+    )
+    await db.commit()
+    return {"deleted": res.rowcount}
+
+
 # ── Featured (admin-pinned quick-access pages) ─────────────────────────────
 # Columns returned by /search — reused verbatim so a featured card renders
 # exactly like a search-result card on the frontend.
