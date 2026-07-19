@@ -12,6 +12,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import CbsAbout from "../components/CbsAbout";
 import CbsAnswerCard from "../components/CbsAnswerCard";
+import CbsFeedbackButtons from "../components/CbsFeedbackButtons";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
 import { geoLabel, productFormLabel, sectionLabel } from "../utils/cbsLabels";
@@ -467,6 +468,17 @@ export default function CbsPage() {
             {answer && <CbsAnswerCard data={answer} onEditInAdvanced={editInAdvanced} />}
           </div>
 
+          {answer && (
+            <div className="mb-2" style={{ display: "flex", justifyContent: "flex-end" }}>
+              <CbsFeedbackButtons
+                query={askQuery}
+                mode="ask"
+                answerType={answer.answer_type}
+                topUrl={answer.primary?.link || answer.primary?.url || null}
+              />
+            </div>
+          )}
+
           {answer && answer.results.length > 0 && (
             <>
               <p className="text-sm text-muted" style={{ margin: "0 0 0.5rem" }}>
@@ -720,6 +732,15 @@ export default function CbsPage() {
             </span>
           )}
         </div>
+
+        {/* Feedback on this keyword search (shown once there are results). */}
+        {!loading && total > 0 && (query.trim() || locality.trim()) && (
+          <CbsFeedbackButtons
+            query={[query.trim(), locality.trim()].filter(Boolean).join(" ")}
+            mode="advanced"
+            topUrl={results[0]?.url || null}
+          />
+        )}
 
         <label className="flex" style={{ gap: "0.35rem", fontSize: "0.82rem", margin: 0 }}>
           <span className="text-muted" style={{ fontWeight: 400 }}>

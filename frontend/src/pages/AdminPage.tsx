@@ -808,6 +808,12 @@ export default function AdminPage() {
         boxShadow: "var(--shadow-sm)",
       }}>
         <h1 style={{ margin: "0 0 0.75rem 0", fontSize: "1.2rem" }}>{t("admin.title")}</h1>
+        <Link
+          to="/cbs/feedback"
+          style={{ display: "block", marginBottom: "0.6rem", fontSize: "0.85rem" }}
+        >
+          {t("admin.cbs_feedback", '📊 משוב חיפוש הלמ"ס')}
+        </Link>
         <nav style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
           {ADMIN_TABS.map((tt) => {
             const isActive = tt.id === tab;

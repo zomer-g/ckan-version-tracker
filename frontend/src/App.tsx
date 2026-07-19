@@ -20,6 +20,7 @@ import TagDetailPage from "./pages/TagDetailPage";
 import SourcesPage from "./pages/SourcesPage";
 import SourceDetailPage from "./pages/SourceDetailPage";
 import CbsPage from "./pages/CbsPage";
+import CbsFeedbackPage from "./pages/CbsFeedbackPage";
 import KnessetDbPage from "./pages/KnessetDbPage";
 // Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
 // gzipped. Other pages should not pay that cost.
@@ -63,6 +64,14 @@ export default function App() {
           <Route path="/sources" element={<SourcesPage />} />
           <Route path="/sources/:sourceId" element={<SourceDetailPage />} />
           <Route path="/cbs" element={<CbsPage />} />
+          <Route
+            path="/cbs/feedback"
+            element={
+              <ProtectedRoute>
+                <CbsFeedbackPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/knesset" element={<KnessetDbPage />} />
           <Route
             path="/knesset/guide"

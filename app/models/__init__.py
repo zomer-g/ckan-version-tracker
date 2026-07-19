@@ -9,6 +9,7 @@ from app.models.drive_export_job import DriveExportJob
 from app.models.cbs_index import CbsIndex
 from app.models.cbs_featured import CbsFeatured
 from app.models.cbs_gazetteer import CbsGazetteer
+from app.models.cbs_feedback import CbsFeedback
 from app.models.auth_code import AuthCode
 from app.models.llm_budget import LlmDailyUsage
 
@@ -27,4 +28,5 @@ __all__ = [
     "CbsIndex",
     "CbsFeatured",
     "CbsGazetteer",
+    "CbsFeedback",
 ]

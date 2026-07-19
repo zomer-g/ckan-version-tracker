@@ -646,6 +646,34 @@ export interface CbsResolveResponse {
   source: string;
 }
 
+// Like/dislike feedback on a search (POST /api/cbs/feedback).
+export interface CbsFeedbackBody {
+  query: string;
+  vote: 1 | -1;
+  mode: "ask" | "advanced";
+  answer_type?: string | null;
+  top_url?: string | null;
+  source?: string; // "web" | "extension"
+}
+
+export type CbsFeedbackOrder = "dislikes" | "likes" | "total" | "recent";
+
+export interface CbsFeedbackQueryRow {
+  query: string;
+  likes: number;
+  dislikes: number;
+  total: number;
+  score: number;
+  last_at: string | null;
+}
+
+export interface CbsFeedbackReport {
+  total_votes: number;
+  likes: number;
+  dislikes: number;
+  queries: CbsFeedbackQueryRow[];
+}
+
 export interface CbsGazetteerEntry {
   code: number;
   name: string;
@@ -683,6 +711,15 @@ export const cbs = {
   // Edition history of one series ("מהדורות קודמות").
   series: (key: string) =>
     request<{ results: CbsResult[] }>(`/cbs/series?key=${encodeURIComponent(key)}`),
+  // Record one like (+1) / dislike (-1) on a search. Public, fire-and-forget.
+  feedback: (body: CbsFeedbackBody) =>
+    request<{ ok: boolean }>("/cbs/feedback", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // Admin-only aggregated report, grouped by query (default: most-disliked first).
+  feedbackReport: (order: CbsFeedbackOrder = "dislikes", limit = 200) =>
+    request<CbsFeedbackReport>(`/cbs/feedback/report?order=${order}&limit=${limit}`),
   // Admin-pinned quick-access pages (public read; pin/unpin are admin-only and
   // return the updated list). See app/api/cbs.py.
   featured: () => request<CbsFeaturedResponse>("/cbs/featured"),

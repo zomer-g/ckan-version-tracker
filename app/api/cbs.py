@@ -31,6 +31,7 @@ from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
 from app.models.cbs_featured import CbsFeatured
+from app.models.cbs_feedback import CbsFeedback
 from app.models.cbs_gazetteer import CbsGazetteer
 from app.models.cbs_index import CbsIndex
 from app.models.user import User
@@ -538,6 +539,102 @@ async def series_editions(
         {"k": key},
     )).mappings().all()
     return {"results": [CbsResult(**dict(r)) for r in rows]}
+
+
+# ── Feedback (like / dislike on a search) ──────────────────────────────────
+# A lightweight quality signal: each search can be thumbed up or down. Public
+# (unauthenticated, rate-limited) like /search itself. The admin report ranks
+# queries by dislikes so improvement effort goes where it hurts most.
+
+class FeedbackRequest(BaseModel):
+    query: str
+    vote: int = Field(..., description="+1 like, -1 dislike")
+    mode: str = "ask"                       # ask | advanced
+    answer_type: str | None = None
+    top_url: str | None = None
+    source: str | None = None               # web | extension
+
+
+@router.post("/feedback")
+@limiter.limit("60/minute")
+async def submit_feedback(request: Request, body: FeedbackRequest, db: AsyncSession = Depends(get_db)):
+    """Record one like/dislike on a search. Vote is coerced to ±1."""
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    vote = 1 if body.vote > 0 else -1
+    mode = body.mode if body.mode in ("ask", "advanced") else "ask"
+    db.add(CbsFeedback(
+        query=query[:2000], mode=mode, vote=vote,
+        answer_type=(body.answer_type or None), top_url=(body.top_url or None),
+        source=(body.source or None),
+    ))
+    await db.commit()
+    return {"ok": True}
+
+
+class FeedbackQueryRow(BaseModel):
+    query: str
+    likes: int
+    dislikes: int
+    total: int
+    score: int          # likes - dislikes
+    last_at: datetime | None
+
+
+class FeedbackReport(BaseModel):
+    total_votes: int
+    likes: int
+    dislikes: int
+    queries: list[FeedbackQueryRow]
+
+
+@router.get("/feedback/report", response_model=FeedbackReport)
+async def feedback_report(
+    request: Request,
+    order: str = Query("dislikes", pattern="^(dislikes|likes|total|recent)$",
+                       description="Ranking: dislikes (improvement targets, default) / likes / total / recent"),
+    limit: int = Query(200, ge=1, le=1000),
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Aggregated like/dislike report, grouped by query (admin only).
+
+    Default order surfaces the most-disliked queries first — the ones whose
+    search results most need fixing."""
+    totals = (await db.execute(text(
+        "SELECT count(*) AS n, "
+        "coalesce(sum(case when vote>0 then 1 else 0 end),0) AS likes, "
+        "coalesce(sum(case when vote<0 then 1 else 0 end),0) AS dislikes "
+        "FROM cbs_feedback"
+    ))).one()
+
+    order_sql = {
+        "dislikes": "dislikes DESC, total DESC, last_at DESC",
+        "likes": "likes DESC, total DESC, last_at DESC",
+        "total": "total DESC, last_at DESC",
+        "recent": "last_at DESC",
+    }[order]
+    rows = (await db.execute(text(
+        "SELECT query, "
+        "sum(case when vote>0 then 1 else 0 end) AS likes, "
+        "sum(case when vote<0 then 1 else 0 end) AS dislikes, "
+        "count(*) AS total, "
+        "sum(vote) AS score, "
+        "max(created_at) AS last_at "
+        "FROM cbs_feedback GROUP BY query "
+        f"ORDER BY {order_sql} LIMIT :lim"
+    ), {"lim": limit})).mappings().all()
+
+    return FeedbackReport(
+        total_votes=int(totals.n),
+        likes=int(totals.likes),
+        dislikes=int(totals.dislikes),
+        queries=[FeedbackQueryRow(
+            query=r["query"], likes=int(r["likes"]), dislikes=int(r["dislikes"]),
+            total=int(r["total"]), score=int(r["score"]), last_at=r["last_at"],
+        ) for r in rows],
+    )
 
 
 # ── Featured (admin-pinned quick-access pages) ─────────────────────────────
