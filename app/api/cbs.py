@@ -289,38 +289,6 @@ async def search(
     return SearchResponse(total=total, results=rows)
 
 
-# ── TEMP diagnostic: expose ranking internals for one query ───────────────
-# Returns ts_rank at normalization 0 (current) vs 2 (length-normalized) plus
-# full_text length + recency, ordered as production orders. Used to calibrate
-# the series-recency ranking fix. TODO: remove after the fix ships.
-@router.get("/_explain")
-@limiter.limit("30/minute")
-async def explain(request: Request, q: str = Query(...), limit: int = Query(20, ge=1, le=60),
-                  title_like: str | None = Query(None),
-                  db: AsyncSession = Depends(get_db)):
-    from app.api.cbs_search_util import or_tsquery
-    tsq = or_tsquery(q)
-    if not tsq:
-        return {"tsq": tsq, "rows": []}
-    extra = " AND title ILIKE :tlike " if title_like else ""
-    sql = text(
-        "SELECT title, data_vintage, year_end, is_latest_edition, series_key, "
-        "length(coalesce(full_text,'')) AS ftlen, "
-        "ts_rank(search_vector, to_tsquery('simple', :tsq)) AS rank0, "
-        "ts_rank(search_vector, to_tsquery('simple', :tsq), 2) AS rank2 "
-        "FROM cbs_index "
-        "WHERE (search_vector @@ to_tsquery('simple', :tsq) OR title ILIKE :qlike) "
-        "AND coalesce(item_type,'') <> 'intent' " + extra +
-        "ORDER BY ts_rank(search_vector, to_tsquery('simple', :tsq)) DESC, "
-        "coalesce(year_end, year_start) DESC NULLS LAST LIMIT :lim"
-    )
-    p = {"tsq": tsq, "qlike": f"%{q}%", "lim": limit}
-    if title_like:
-        p["tlike"] = f"%{title_like}%"
-    rows = (await db.execute(sql, p)).mappings().all()
-    return {"tsq": tsq, "rows": [dict(r) for r in rows]}
-
-
 # ── Facets ───────────────────────────────────────────────────────────────
 class FacetsResponse(BaseModel):
     subjects: list[str]
