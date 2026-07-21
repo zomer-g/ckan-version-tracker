@@ -30,6 +30,11 @@ services:
         generateValue: true
       - key: DATA_GOV_IL_URL
         value: "https://data.gov.il"
+      # Auto-discovery: every 6h, map the full data.gov.il catalog and onboard
+      # one random untracked dataset (NEON-archived, SQL-queryable in /data).
+      # See app/services/auto_discovery.py.
+      - key: AUTO_DISCOVER_ENABLED
+        value: "true"
       - key: ODATA_URL
         value: "https://www.odata.org.il"
       - key: ODATA_API_KEY

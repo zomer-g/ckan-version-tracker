@@ -868,6 +868,35 @@ async def govmap_coverage_scrape_next(
     return await scrape_next_layer()
 
 
+@router.get("/discovery/coverage")
+@limiter.limit("6/minute")
+async def discovery_coverage(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Live data.gov.il catalog-coverage map: how many datasets exist, how many
+    are already tracked here, and a sample of untracked slugs. Computed on the
+    fly (no persistence) — a fresh package_list each call, so rate-limited."""
+    from app.services.auto_discovery import coverage_summary
+    return await coverage_summary()
+
+
+@router.post("/discovery/run-once")
+@limiter.limit("3/minute")
+async def discovery_run_once(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Run one auto-discovery pass NOW (map the catalog + onboard one random
+    untracked dataset), regardless of the 6-hourly schedule. Returns the
+    onboarded dataset summary, or {"onboarded": null} when nothing was added.
+    Ignores AUTO_DISCOVER_ENABLED so an admin can trigger it manually even
+    while the scheduled job is off."""
+    from app.services import auto_discovery
+    result = await auto_discovery.discover_and_onboard_one(force=True)
+    return {"onboarded": result}
+
+
 _dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
 
 

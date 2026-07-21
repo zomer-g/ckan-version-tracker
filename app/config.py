@@ -158,6 +158,27 @@ class Settings(BaseSettings):
 
     default_poll_interval: int = 604800  # 1 week
     min_poll_interval: int = 300
+
+    # ── Auto-discovery of new data.gov.il datasets ──
+    # A scheduled job that maps the FULL data.gov.il CKAN catalog, diffs it
+    # against the CKAN datasets already tracked here, and onboards ONE random
+    # untracked dataset per run — steadily growing coverage of the catalog
+    # without manual curation. Onboarded datasets are archived NEON-only
+    # (SQL-queryable rows into the /data console, no file/ODATA mirror) and
+    # polled weekly. Off by default — set AUTO_DISCOVER_ENABLED=true to run it.
+    # See app/services/auto_discovery.py.
+    auto_discover_enabled: bool = False
+    auto_discover_interval_hours: float = 6.0
+    # Skip any candidate whose largest datastore resource exceeds this many
+    # rows — random selection would otherwise occasionally pick a multi-million
+    # -row registry and spike the dyno's memory / the NEON archive. Oversized
+    # candidates are passed over and another is drawn.
+    auto_discover_max_rows: int = 2_000_000
+    # Poll cadence assigned to each auto-onboarded dataset (weekly by default).
+    auto_discover_poll_interval: int = 604800
+    # How many random candidates to evaluate per run before giving up (each
+    # evaluation is a package_show + a datastore probe per resource).
+    auto_discover_max_attempts: int = 30
     # Hard cap per resource. Even with stream-to-disk downloads we still
     # have to PARSE every CSV in memory (csv_parser.parse_csv loads the
     # whole record set), so the cap has to fit comfortably below the

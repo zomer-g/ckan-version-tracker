@@ -6,6 +6,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import async_session
 from app.models.scrape_task import ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
@@ -240,6 +241,25 @@ async def init_scheduler() -> None:
         max_instances=1,
         misfire_grace_time=300,
     )
+
+    # Auto-discovery: every N hours, map the full data.gov.il catalog and
+    # onboard ONE random untracked dataset as a NEON-archived tracked dataset.
+    # Off unless AUTO_DISCOVER_ENABLED is set. max_instances=1 + the job's own
+    # duplicate guard keep it single-flight. See app/services/auto_discovery.py.
+    if settings.auto_discover_enabled:
+        from app.services.auto_discovery import discover_and_onboard_one
+        scheduler.add_job(
+            discover_and_onboard_one,
+            trigger=IntervalTrigger(hours=settings.auto_discover_interval_hours),
+            id="auto_discover",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=600,
+        )
+        logger.info(
+            "Auto-discovery enabled — onboarding one dataset every %.1fh",
+            settings.auto_discover_interval_hours,
+        )
 
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
