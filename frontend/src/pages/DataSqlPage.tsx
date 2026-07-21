@@ -8,6 +8,7 @@ import {
 } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
+import SqlChartPanel from "../components/SqlChartPanel";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -334,6 +335,11 @@ export default function DataSqlPage() {
           </div>
         )}
       </div>
+
+      {/* Charts over the current result */}
+      {sqlResult && !sqlError && sqlResult.rows.length > 0 && (
+        <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} />
+      )}
 
       {/* Table browser + detail cube */}
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
