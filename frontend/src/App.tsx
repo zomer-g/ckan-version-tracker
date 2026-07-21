@@ -22,6 +22,7 @@ import SourceDetailPage from "./pages/SourceDetailPage";
 import CbsPage from "./pages/CbsPage";
 import CbsFeedbackPage from "./pages/CbsFeedbackPage";
 import KnessetDbPage from "./pages/KnessetDbPage";
+import DataSqlPage from "./pages/DataSqlPage";
 // Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
 // gzipped. Other pages should not pay that cost.
 const GrowthPage = lazy(() => import("./pages/GrowthPage"));
@@ -72,6 +73,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/data" element={<DataSqlPage />} />
           <Route path="/knesset" element={<KnessetDbPage />} />
           <Route
             path="/knesset/guide"

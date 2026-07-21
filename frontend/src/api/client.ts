@@ -905,6 +905,65 @@ export const knessetDb = {
     }),
 };
 
+// ---- Central data catalog + SQL console (/data page) ----
+// One entry per queryable table on the site: every NEON dataset table (public
+// schema) plus the 48 Knesset schema tables. `columns` powers autocomplete +
+// the schema reference; `est_rows` is a planner estimate (exact count lives in
+// the detail cube).
+export interface CatalogColumn {
+  name: string;
+  type: string;
+}
+export interface CatalogTable {
+  table: string;
+  schema: "public" | "knesset";
+  kind: "dataset" | "knesset";
+  title: string;
+  description?: string;
+  group?: string | null;
+  // dataset-only linkage + source signals (drive the source badge)
+  dataset_id?: string;
+  version_id?: string | null;
+  organization?: string | null;
+  ckan_id?: string | null;
+  source_type: string;
+  source_url: string;
+  archive_url?: string;
+  versions_url?: string;
+  page_url?: string;
+  tags: string[];
+  columns: CatalogColumn[];
+  est_rows: number | null;
+}
+export interface CatalogFile {
+  name: string;
+  url: string;
+}
+export interface CatalogTableDetail extends CatalogTable {
+  row_count: number | null;
+  files: CatalogFile[];
+  sample: { columns: string[]; rows: Array<Record<string, unknown>> };
+  csv_url?: string;
+  csv_export?: boolean;
+}
+
+export const dataCatalog = {
+  tables: () => request<{ tables: CatalogTable[] }>("/tables"),
+  tableDetail: (table: string) =>
+    request<CatalogTableDetail>(`/tables/${encodeURIComponent(table)}/detail`),
+  // Read-only SQL over public + knesset (single SELECT/WITH, READ ONLY tx).
+  sql: (sql: string) =>
+    request<KnessetDbSqlResult>("/tables/sql", {
+      method: "POST",
+      body: JSON.stringify({ sql }),
+    }),
+  // Direct browser download (server streams); not a fetch.
+  exportUrl: (sql: string) =>
+    `/api/tables/export.csv?sql=${encodeURIComponent(sql)}`,
+  schemaTxtUrl: (table?: string) =>
+    `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
+};
+
 // ---- Knesset committee-protocol search (over the Neon `knesset` schema) ----
 export interface ProtocolRow {
   document_id: number;

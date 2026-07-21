@@ -621,15 +621,12 @@ async def schema_text(table: str, *, title: str | None = None) -> str:
     return format_schema_ddl([{"table": table, "description": title, "columns": cols}], notes)
 
 
-async def run_readonly_sql(sql: str, *, table: str | None = None,
-                           max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
-    """Run a user-supplied read-only SELECT against the append DB and return
-    {columns, rows, truncated}. Defense in depth: single statement, must start
-    with SELECT/WITH, write/DDL keywords rejected, executed inside a Postgres
-    READ ONLY transaction with a statement_timeout, result hard-capped at
-    max_rows. The append DB holds only public data and no app secrets. When
-    ``table`` is given, wrong-case quoted identifiers are corrected to that
-    table's real column casing and errors get a helpful hint."""
+def validate_readonly_sql(sql: str) -> str:
+    """Normalize + validate a user SQL string for the read-only consoles.
+
+    Returns the cleaned single statement, or raises ValueError with a Hebrew
+    message. Shared by run_readonly_sql and iter_sql_csv so both apply the exact
+    same guards (single statement, SELECT/WITH only, no write/DDL keywords)."""
     s = (sql or "").strip().rstrip(";").strip()
     if not s:
         raise ValueError("השאילתה ריקה")
@@ -639,6 +636,22 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
         raise ValueError("רק שאילתות SELECT / WITH מותרות")
     if _SQL_DENY.search(s):
         raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
+    return s
+
+
+async def run_readonly_sql(sql: str, *, table: str | None = None,
+                           search_path: str | None = None,
+                           max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
+    """Run a user-supplied read-only SELECT against the append DB and return
+    {columns, rows, truncated}. Defense in depth: single statement, must start
+    with SELECT/WITH, write/DDL keywords rejected, executed inside a Postgres
+    READ ONLY transaction with a statement_timeout, result hard-capped at
+    max_rows. The append DB holds only public data and no app secrets. When
+    ``table`` is given, wrong-case quoted identifiers are corrected to that
+    table's real column casing and errors get a helpful hint. ``search_path``
+    (e.g. "public, knesset") makes tables of extra schemas resolvable unqualified
+    — used by the central /data console that spans both schemas."""
+    s = validate_readonly_sql(sql)
     canonical: dict[str, str] = {}
     if table:
         try:
@@ -652,6 +665,8 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
         async with pool.acquire() as conn:
             async with conn.transaction(readonly=True):
                 await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                if search_path:
+                    await conn.execute(f"SET LOCAL search_path = {_safe_search_path(search_path)}")
                 stmt = await conn.prepare(wrapped)
                 attrs = stmt.get_attributes()
                 cols = [a.name for a in attrs]
@@ -677,6 +692,140 @@ async def table_count(table: str) -> int:
             return int(await conn.fetchval(f'SELECT count(*) FROM {_qi(table)}'))
         except asyncpg.UndefinedTableError:
             return 0
+
+
+def _safe_search_path(search_path: str) -> str:
+    """Whitelist a comma-separated schema list before interpolating it into
+    ``SET LOCAL search_path``. The value is always a server-side constant (never
+    user input), but validate anyway so a future caller can't smuggle SQL in.
+    Each name must be a plain identifier; the list is re-emitted quoted."""
+    parts = [p.strip() for p in str(search_path or "").split(",") if p.strip()]
+    for p in parts:
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", p):
+            raise ValueError(f"invalid schema name in search_path: {p!r}")
+    if not parts:
+        raise ValueError("empty search_path")
+    return ", ".join(_qi(p) for p in parts)
+
+
+# ── Central /data catalog helpers (the whole-site SQL console) ────────────────
+# These enumerate every queryable NEON dataset table (public schema, ``append_*``)
+# cheaply — one round-trip each, estimates over exact COUNTs — so the /data page
+# can list ~hundreds of tables without scanning the giant ones (e.g. the 4.1M-row
+# vehicle registry). Public data only; served through the read/write pool because
+# they read information_schema/pg_catalog, which the least-privilege console role
+# is intentionally not granted broad access to.
+
+_APPEND_TABLE_LIKE = "append\\_%"  # ESCAPE '\' — literal underscore, not wildcard
+
+
+async def list_public_tables() -> dict[str, int]:
+    """{table: estimated_row_count} for every ``append_*`` table in ``public``.
+
+    Uses ``pg_class.reltuples`` (planner estimate, refreshed by ANALYZE/autovacuum)
+    so listing the whole catalog is one cheap query rather than N ``COUNT(*)``
+    scans. A freshly-created table reports -1/0 until first analyzed; clamp to 0."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.relname AS table, c.reltuples::bigint AS est "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relkind = 'r' "
+            "AND c.relname LIKE $1 ESCAPE '\\'",
+            _APPEND_TABLE_LIKE,
+        )
+    return {r["table"]: max(0, int(r["est"] or 0)) for r in rows}
+
+
+async def public_table_columns() -> dict[str, list[dict]]:
+    """{table: [{name,type}, …]} for every ``append_*`` table in ``public``, in
+    one information_schema query. Bookkeeping columns (row_hash) are hidden.
+    Powers the /data console autocomplete + schema reference."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT table_name, column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name LIKE $1 ESCAPE '\\' "
+            "ORDER BY table_name, ordinal_position",
+            _APPEND_TABLE_LIKE,
+        )
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["column_name"] in _HIDDEN_COLS:
+            continue
+        out.setdefault(r["table_name"], []).append(
+            {"name": r["column_name"], "type": _ckan_type(r["data_type"])}
+        )
+    return out
+
+
+async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) -> dict:
+    """{columns, rows} — the first ``limit`` rows of a table, for the /data detail
+    cube. Read through the least-privilege console role (SELECT-only). ``schema``
+    is a plain identifier chosen by our code (public|knesset), never user input."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
+        raise ValueError(f"invalid schema: {schema!r}")
+    pool = await get_readonly_pool()
+    ref = f"{_qi(schema)}.{_qi(table)}"
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute("SET LOCAL statement_timeout = 8000")
+            try:
+                stmt = await conn.prepare(f"SELECT * FROM {ref} LIMIT {int(limit)}")
+            except asyncpg.UndefinedTableError:
+                return {"columns": [], "rows": []}
+            cols = [a.name for a in stmt.get_attributes() if a.name not in _HIDDEN_COLS]
+            recs = await stmt.fetch()
+    rows = [
+        {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
+         for k, v in dict(r).items() if k not in _HIDDEN_COLS}
+        for r in recs
+    ]
+    return {"columns": cols, "rows": rows}
+
+
+async def iter_sql_csv(sql: str, *, search_path: str | None = None,
+                       max_rows: int = 200_000, timeout_ms: int = 60_000):
+    """Async generator streaming a user SELECT's full result as CSV (utf-8-sig)
+    over the least-privilege read-only role, server-side cursor so large exports
+    stay memory-bounded. Same validation guards as run_readonly_sql; row-capped at
+    ``max_rows``. ``search_path`` spans extra schemas for the /data console."""
+    import csv as _csv
+    import io as _io
+
+    s = validate_readonly_sql(sql)
+    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}"
+    pool = await get_readonly_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+            if search_path:
+                await conn.execute(f"SET LOCAL search_path = {_safe_search_path(search_path)}")
+            cur = await conn.cursor(wrapped)
+            first = await cur.fetch(1)
+            if not first:
+                yield "﻿".encode("utf-8")
+                return
+            cols = list(first[0].keys())
+
+            def _row_to_csv(rec) -> bytes:
+                buf = _io.StringIO()
+                _csv.writer(buf).writerow(
+                    ["" if rec[c] is None else str(rec[c]) for c in cols]
+                )
+                return buf.getvalue().encode("utf-8")
+
+            head = _io.StringIO()
+            _csv.writer(head).writerow(cols)
+            yield ("﻿" + head.getvalue()).encode("utf-8")
+            yield _row_to_csv(first[0])
+            while True:
+                batch = await cur.fetch(500)
+                if not batch:
+                    break
+                for rec in batch:
+                    yield _row_to_csv(rec)
 
 
 # ── Read side: powering the OVER "view & pull the archive" UI ────────────────

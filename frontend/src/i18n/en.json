@@ -15,6 +15,7 @@
     "api": "API",
     "menu": "Navigation menu",
     "cbs": "CBS",
+    "data_sql": "SQL",
     "knesset_db": "Knesset DB"
   },
   "tags": {

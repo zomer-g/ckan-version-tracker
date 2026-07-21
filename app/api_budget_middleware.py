@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Only the bulk DATA endpoints are metered — metadata listings, auth, admin,
 # worker and the gov.il proxy are not (they're either trivial or trusted).
-_METERED_PREFIXES = ("/api/v1", "/api/append", "/api/knesset-db")
+_METERED_PREFIXES = ("/api/v1", "/api/append", "/api/knesset-db", "/api/tables")
 
 
 def _client_ip(request: Request) -> str:
