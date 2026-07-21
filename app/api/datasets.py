@@ -162,11 +162,15 @@ def apply_storage_target(scraper_config: dict | None, target: str) -> dict | Non
 
 # Scraper ``kind`` markers whose engine emits row-level tabular data (not
 # PDF/ZIP files or a catalog index) — these are NEON-eligible even though
-# they're ``source_type == "scraper"``. registries.health.gov.il registries
-# are one flat row per entity, so NEON gives SQL-queryable tables; the
-# rows are loaded at push time from the in-memory push payload (see
+# they're ``source_type == "scraper"``. registries.health.gov.il (one flat
+# row per entity), municipal-data.org, and gov.il/apps/servicescompass (one
+# row per government service) all give SQL-queryable tables; the rows are
+# loaded at push time from the in-memory push payload (see
 # app/api/worker.py push_version) rather than the CKAN datastore stream.
-TABULAR_SCRAPER_KINDS = {"registries", "munidata"}
+# Without this, approval downgrades the storage plan to r2 and drops the
+# archive_neon opt-in (see admin.approve_request), so the SQL console never
+# appears for the dataset.
+TABULAR_SCRAPER_KINDS = {"registries", "munidata", "servicescompass"}
 
 
 def dataset_is_neon_eligible(ds) -> bool:
