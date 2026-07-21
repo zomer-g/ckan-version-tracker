@@ -38,6 +38,7 @@ export interface SourceBadge {
     | "home.source_link_health"
     | "home.source_link_registries"
     | "home.source_link_avodata"
+    | "home.source_link_munidata"
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
     | "home.source_link_mankal"
@@ -73,6 +74,12 @@ const REGISTRIES_ORG_HINTS = ["registries.health.gov.il"];
 // the Ministry of Labor. The ckan_id prefix "avodata-scraper-" is the
 // primary signal; this org hint is only a safety net for the same source.
 const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
+
+// Same drift-immune rule for municipal-data.org ("מצב השלטון המקומי", the
+// Ministry of Interior local-government dashboard) — only the exact
+// "municipal-data.org" stamp the backend writes at create time. The ckan_id
+// prefix "munidata-scraper-" is the primary signal.
+const MUNIDATA_ORG_HINTS = ["municipal-data.org"];
 
 // Same drift-immune rule for mevaker — only the exact "mevaker.gov.il"
 // stamp the backend writes at create time. The ckan_id prefix
@@ -148,6 +155,15 @@ function looksLikeAvodata(
   // primary signal and never changes after creation.
   if (ckan_id && ckan_id.startsWith("avodata-scraper-")) return true;
   if (organization && AVODATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeMunidata(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("munidata-scraper-")) return true;
+  if (organization && MUNIDATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -302,6 +318,19 @@ export function sourceBadgeFor(
         label: "AVODATA",
         accent: "#2563eb",
         sourceLinkKey: "home.source_link_avodata",
+      };
+    }
+    if (looksLikeMunidata(organization, ckan_id)) {
+      // Lime/olive pill for municipal-data.org ("מצב השלטון המקומי", Ministry
+      // of Interior local-government dashboard), distinct from the emerald
+      // mankal (#059669), teal registries (#14b8a6) and avodata sky-blue.
+      return {
+        bg: "#ecfccb",
+        fg: "#3f6212",
+        id: "munidata",
+        label: "מצב השלטון המקומי",
+        accent: "#65a30d",
+        sourceLinkKey: "home.source_link_munidata",
       };
     }
     if (looksLikeMevaker(organization, ckan_id)) {

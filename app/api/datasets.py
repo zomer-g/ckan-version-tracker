@@ -166,7 +166,7 @@ def apply_storage_target(scraper_config: dict | None, target: str) -> dict | Non
 # are one flat row per entity, so NEON gives SQL-queryable tables; the
 # rows are loaded at push time from the in-memory push payload (see
 # app/api/worker.py push_version) rather than the CKAN datastore stream.
-TABULAR_SCRAPER_KINDS = {"registries"}
+TABULAR_SCRAPER_KINDS = {"registries", "munidata"}
 
 
 def dataset_is_neon_eligible(ds) -> bool:
@@ -376,6 +376,7 @@ async def track_dataset(
         from app.api.health import _parse_health_url
         from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
+        from app.api.munidata import _parse_munidata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
@@ -410,6 +411,12 @@ async def track_dataset(
                 origin = "avodata.labor.gov.il"
                 slug_prefix = "avodata-scraper"
                 mirror_prefix = "gov-versions-avodata"
+        if not collector_name:
+            page_type, collector_name = _parse_munidata_url(body.source_url)
+            if collector_name:
+                origin = "municipal-data.org"
+                slug_prefix = "munidata-scraper"
+                mirror_prefix = "gov-versions-munidata"
         if not collector_name:
             page_type, collector_name = _parse_mevaker_url(body.source_url)
             if collector_name:
@@ -457,7 +464,8 @@ async def track_dataset(
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
                     "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
-                    "or knesset.gov.il committee (KNS_Committee ODATA)"
+                    "knesset.gov.il committee (KNS_Committee ODATA), "
+                    "or municipal-data.org (מצב השלטון המקומי) metric"
                 ),
             )
 
@@ -578,6 +586,28 @@ async def track_dataset(
             sc.setdefault("download_files", False)
             sc.setdefault("max_depth", depth)
             sc.setdefault("max_docs", docs)
+        elif page_type and page_type.startswith("munidata_"):
+            # municipal-data.org ("מצב השלטון המקומי", משרד הפנים) — a static
+            # Azure dashboard whose data lives in open, content-hash-versioned
+            # per-screen JSON files. One dataset per metric, scraped by the
+            # external worker (govscraper.scrapers.munidata) with plain httpx
+            # (no browser, no files). The (screen, metric) is stamped so the
+            # worker doesn't have to re-parse the URL.
+            from app.api.munidata import get_munidata_limits, target_of_page_type
+            depth, docs = get_munidata_limits(page_type)
+            screen_id, metric_id = target_of_page_type(page_type)
+            sc["kind"] = "munidata"
+            sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            # One flat per-authority table per metric — archive_neon=True makes
+            # each dataset a dual R2+NEON write so the rows are SQL-queryable and
+            # exposed row-level via the append/data API (like registries).
+            sc.setdefault("archive_neon", True)
+            if screen_id:
+                sc.setdefault("screen_id", screen_id)
+            if metric_id:
+                sc.setdefault("metric_id", metric_id)
         elif page_type and page_type.startswith("mevaker_"):
             # mevaker.gov.il — State Comptroller reports from the
             # SharePoint Digital Library's anonymous JSON REST service.
@@ -1333,6 +1363,7 @@ async def submit_tracking_request(
         from app.api.health import _parse_health_url
         from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
+        from app.api.munidata import _parse_munidata_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
@@ -1362,6 +1393,11 @@ async def submit_tracking_request(
             if collector_name:
                 origin = "avodata.labor.gov.il"
                 slug_prefix = "avodata-scraper"
+        if not collector_name:
+            page_type, collector_name = _parse_munidata_url(body.source_url)
+            if collector_name:
+                origin = "municipal-data.org"
+                slug_prefix = "munidata-scraper"
         if not collector_name:
             page_type, collector_name = _parse_mevaker_url(body.source_url)
             if collector_name:
@@ -1403,7 +1439,8 @@ async def submit_tracking_request(
                     "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
                     "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
-                    "or knesset.gov.il committee (KNS_Committee ODATA)"
+                    "knesset.gov.il committee (KNS_Committee ODATA), "
+                    "or municipal-data.org (מצב השלטון המקומי) metric"
                 ),
             )
 
@@ -1458,6 +1495,20 @@ async def submit_tracking_request(
             sc["download_files"] = False
             sc["max_depth"] = depth
             sc["max_docs"] = docs
+        elif page_type and page_type.startswith("munidata_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.munidata import get_munidata_limits, target_of_page_type
+            depth, docs = get_munidata_limits(page_type)
+            screen_id, metric_id = target_of_page_type(page_type)
+            sc["kind"] = "munidata"
+            sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            sc["archive_neon"] = True
+            if screen_id:
+                sc["screen_id"] = screen_id
+            if metric_id:
+                sc["metric_id"] = metric_id
         elif page_type and page_type.startswith("mevaker_"):
             # Mirror of the admin-POST branch — keep in sync.
             from app.api.mevaker import get_mevaker_limits, type_hebrew_of

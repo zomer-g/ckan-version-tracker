@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
@@ -20,6 +20,9 @@ import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
+// in app/api/munidata.py.
+import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
@@ -221,6 +224,8 @@ export default function HomePage() {
   const [registriesResult, setRegistriesResult] = useState<GovIlValidation | null>(null);
   // avodata.labor.gov.il per-scope scraper result — same shape.
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
+  // municipal-data.org per-metric scraper result — same shape.
+  const [munidataResult, setMunidataResult] = useState<GovIlValidation | null>(null);
   // mevaker.gov.il reports scraper result — same shape.
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
   // geo.mot.gov.il (חצב) catalog scraper result — same shape.
@@ -285,6 +290,10 @@ export default function HomePage() {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
+  const detectMunidataUrl = (input: string): boolean => {
+    return MUNIDATA_METRIC_PATTERN.test(input.trim());
+  };
+
   const detectMevakerUrl = (input: string): boolean => {
     return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
   };
@@ -330,6 +339,7 @@ export default function HomePage() {
     setHealthResult(null);
     setRegistriesResult(null);
     setAvodataResult(null);
+    setMunidataResult(null);
     setMevakerResult(null);
     setHatzavResult(null);
     setMankalResult(null);
@@ -428,6 +438,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2d-2. Check for municipal-data.org per-metric URL.
+      if (detectMunidataUrl(query)) {
+        const validation = await munidata.validate(query.trim());
+        if (validation.valid) {
+          setMunidataResult(validation);
+          setRequestFormFor("munidata");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid municipal-data.org URL");
         }
         setLoading(false);
         return;
@@ -955,6 +980,60 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("avodata")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* municipal-data.org scraper result — lime "מצב השלטון המקומי" chip. */}
+        {!loading && munidataResult && (
+          <section aria-label="municipal-data.org result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #65a30d" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{munidataResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ecfccb",
+                      color: "#3f6212",
+                    }}>
+                      מצב השלטון המקומי
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>מצב השלטון המקומי — משרד הפנים</span>
+                  <span>municipal-data.org</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={munidataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {munidataResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "munidata" ? (
+                    <RequestForm
+                      datasetTitle={munidataResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={munidataResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("munidata")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

@@ -403,6 +403,17 @@ export const avodata = {
     }),
 };
 
+// municipal-data.org validation — same response shape. Server side at
+// app/api/munidata.py; only per-metric URLs (/<slug>?metric=<id>) accepted,
+// one dataset per metric ("מצב השלטון המקומי", Ministry of Interior).
+export const munidata = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/munidata/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // mevaker.gov.il validation — same response shape. Server side at
 // app/api/mevaker.py; only the /subjects reports index is accepted (the
 // whole State Comptroller corpus, tracked as one dataset).

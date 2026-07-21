@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -16,6 +16,9 @@ import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
+// in app/api/munidata.py.
+import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
@@ -102,6 +105,11 @@ export default function SearchPage() {
   const [avodataTracked, setAvodataTracked] = useState<"tracked" | "pending" | null>(null);
   const [avodataTracking, setAvodataTracking] = useState(false);
   const [showAvodataInterval, setShowAvodataInterval] = useState(false);
+  // municipal-data.org scraper result — same flow.
+  const [munidataResult, setMunidataResult] = useState<GovIlValidation | null>(null);
+  const [munidataTracked, setMunidataTracked] = useState<"tracked" | "pending" | null>(null);
+  const [munidataTracking, setMunidataTracking] = useState(false);
+  const [showMunidataInterval, setShowMunidataInterval] = useState(false);
   // mevaker.gov.il scraper result — same flow.
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
   const [mevakerTracked, setMevakerTracked] = useState<"tracked" | "pending" | null>(null);
@@ -202,6 +210,10 @@ export default function SearchPage() {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
+  const detectMunidataUrl = (input: string): boolean => {
+    return MUNIDATA_METRIC_PATTERN.test(input.trim());
+  };
+
   const detectMankalUrl = (input: string): boolean => {
     return MANKAL_PATTERN.test(input.trim());
   };
@@ -238,6 +250,9 @@ export default function SearchPage() {
     setAvodataResult(null);
     setAvodataTracked(null);
     setShowAvodataInterval(false);
+    setMunidataResult(null);
+    setMunidataTracked(null);
+    setShowMunidataInterval(false);
     setMevakerResult(null);
     setMevakerTracked(null);
     setShowMevakerInterval(false);
@@ -322,6 +337,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1d-2. Check for municipal-data.org per-metric URL.
+      if (detectMunidataUrl(query)) {
+        const validation = await munidata.validate(query.trim());
+        if (validation.valid) {
+          setMunidataResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid municipal-data.org URL");
         }
         setLoading(false);
         return;
@@ -555,6 +584,23 @@ export default function SearchPage() {
     setAvodataTracking(false);
   };
 
+  const trackMunidataDataset = async (interval: number) => {
+    if (!munidataResult?.url || !munidataResult?.title) return;
+    setShowMunidataInterval(false);
+    setMunidataTracking(true);
+    try {
+      await datasetsApi.trackScraper(munidataResult.url, munidataResult.title, interval);
+      setMunidataTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setMunidataTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setMunidataTracking(false);
+  };
+
   const trackKnessetDataset = async (interval: number) => {
     if (!knessetResult?.url || !knessetResult?.title) return;
     setShowKnessetInterval(false);
@@ -707,6 +753,48 @@ export default function SearchPage() {
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
           {avodataTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
+  // Same shape as renderAvodataTrackButton, bound to the munidata state.
+  // Defaults the interval to monthly (2592000s) — municipal-data.org
+  // refreshes its dashboard infrequently.
+  const renderMunidataTrackButton = () => {
+    if (munidataTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (munidataTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showMunidataInterval && (
+          <select
+            defaultValue={2592000}
+            onChange={(e) => trackMunidataDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowMunidataInterval(!showMunidataInterval)}
+          disabled={munidataTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {munidataTracking ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1191,7 +1279,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !munidataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1300,6 +1388,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {avodataResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* municipal-data.org scraper result */}
+      {munidataResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #65a30d" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{munidataResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#ecfccb",
+                  color: "#3f6212",
+                }}>
+                  מצב השלטון המקומי
+                </span>
+              </div>
+              {renderMunidataTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>מצב השלטון המקומי — משרד הפנים</span>
+              <span>municipal-data.org</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={munidataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {munidataResult.url}
               </a>
             </p>
           </article>
