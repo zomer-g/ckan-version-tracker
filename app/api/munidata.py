@@ -202,10 +202,11 @@ def canonical_url(screen_id: str, metric_id: str) -> str:
     return f"https://municipal-data.org/{slug}?metric={quote(metric_id, safe='')}"
 
 
-# (max_depth, max_docs). No recursion — one screen JSON per metric. A
-# segmented metric is at most ~260 authorities × ~9 segments (≈2,400 rows);
-# cap generously.
-MUNIDATA_DEFAULT_LIMITS: tuple[int, int] = (1, 20000)
+# (max_depth, max_docs). No recursion — one screen JSON per metric. Each
+# metric is a long-format fact table (authority × year × internal dims); the
+# largest today is kolot_korim (~59k rows). Cap well above that so nothing
+# truncates (rows are only a few columns, so 200k is cheap).
+MUNIDATA_DEFAULT_LIMITS: tuple[int, int] = (1, 200000)
 
 
 def get_munidata_limits(page_type: str) -> tuple[int, int]:
