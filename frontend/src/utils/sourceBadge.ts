@@ -39,6 +39,7 @@ export interface SourceBadge {
     | "home.source_link_registries"
     | "home.source_link_avodata"
     | "home.source_link_munidata"
+    | "home.source_link_servicescompass"
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
     | "home.source_link_mankal"
@@ -80,6 +81,13 @@ const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
 // "municipal-data.org" stamp the backend writes at create time. The ckan_id
 // prefix "munidata-scraper-" is the primary signal.
 const MUNIDATA_ORG_HINTS = ["municipal-data.org"];
+
+// gov.il/apps/servicescompass ("מצפן השירותים הממשלתיים", National Digital
+// Agency). Detection keys ONLY on the drift-immune ckan_id prefix
+// "servicescompass-scraper-": the host it lives on (www.gov.il) is shared
+// with the generic gov.il scraper, so using it as an org hint would leak
+// this badge onto every gov.il dataset (lessons #2). Hence no org hints.
+const SERVICESCOMPASS_ORG_HINTS: string[] = [];
 
 // Same drift-immune rule for mevaker — only the exact "mevaker.gov.il"
 // stamp the backend writes at create time. The ckan_id prefix
@@ -164,6 +172,18 @@ function looksLikeMunidata(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("munidata-scraper-")) return true;
   if (organization && MUNIDATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeServicescompass(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  // ckan_id prefix only — the host is shared with the gov.il scraper, so
+  // there is no org hint safe to match on (SERVICESCOMPASS_ORG_HINTS is
+  // intentionally empty; kept for symmetry with the other detectors).
+  if (ckan_id && ckan_id.startsWith("servicescompass-scraper-")) return true;
+  if (organization && SERVICESCOMPASS_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -331,6 +351,19 @@ export function sourceBadgeFor(
         label: "מצב השלטון המקומי",
         accent: "#65a30d",
         sourceLinkKey: "home.source_link_munidata",
+      };
+    }
+    if (looksLikeServicescompass(organization, ckan_id)) {
+      // Amber pill for gov.il/apps/servicescompass ("מצפן השירותים
+      // הממשלתיים", National Digital Agency), distinct from avodata sky-blue,
+      // munidata lime and mankal emerald.
+      return {
+        bg: "#ffedd5",
+        fg: "#9a3412",
+        id: "servicescompass",
+        label: "מצפן השירותים",
+        accent: "#ea580c",
+        sourceLinkKey: "home.source_link_servicescompass",
       };
     }
     if (looksLikeMevaker(organization, ckan_id)) {

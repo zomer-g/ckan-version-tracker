@@ -383,6 +383,7 @@ async def track_dataset(
         from app.api.jda import _parse_jda_url
         from app.api.eden import _parse_eden_url
         from app.api.knesset import _parse_knesset_url
+        from app.api.servicescompass import _parse_servicescompass_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -454,6 +455,12 @@ async def track_dataset(
                 slug_prefix = "knesset-scraper"
                 mirror_prefix = "gov-versions-knesset"
         if not collector_name:
+            page_type, collector_name = _parse_servicescompass_url(body.source_url)
+            if collector_name:
+                origin = "www.gov.il"
+                slug_prefix = "servicescompass-scraper"
+                mirror_prefix = "gov-versions-servicescompass"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -465,7 +472,8 @@ async def track_dataset(
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
                     "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
                     "knesset.gov.il committee (KNS_Committee ODATA), "
-                    "or municipal-data.org (מצב השלטון המקומי) metric"
+                    "municipal-data.org (מצב השלטון המקומי) metric, "
+                    "or gov.il/apps/servicescompass (מצפן השירותים הממשלתיים)"
                 ),
             )
 
@@ -608,6 +616,21 @@ async def track_dataset(
                 sc.setdefault("screen_id", screen_id)
             if metric_id:
                 sc.setdefault("metric_id", metric_id)
+        elif page_type and page_type.startswith("servicescompass_"):
+            # gov.il/apps/servicescompass ("מצפן השירותים הממשלתיים", מערך
+            # הדיגיטל הלאומי) — the whole weekly services table AND the
+            # finished Excel export are baked into one page. The external
+            # worker (govscraper.scrapers.servicescompass) warms GovILSession
+            # (Cloudflare), attaches the embedded .xlsx unchanged (→ R2) and
+            # parses its sheet into rows. archive_neon=True mirrors those rows
+            # into NEON so the weekly snapshot is SQL-queryable and diffable.
+            from app.api.servicescompass import get_servicescompass_limits
+            depth, docs = get_servicescompass_limits(page_type)
+            sc["kind"] = "servicescompass"
+            sc.setdefault("download_files", True)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            sc.setdefault("archive_neon", True)
         elif page_type and page_type.startswith("mevaker_"):
             # mevaker.gov.il — State Comptroller reports from the
             # SharePoint Digital Library's anonymous JSON REST service.
@@ -1370,6 +1393,7 @@ async def submit_tracking_request(
         from app.api.jda import _parse_jda_url
         from app.api.eden import _parse_eden_url
         from app.api.knesset import _parse_knesset_url
+        from app.api.servicescompass import _parse_servicescompass_url
         page_type, collector_name = _parse_govil_url(body.source_url)
         origin = "gov.il"
         slug_prefix = "govil-scraper"
@@ -1429,6 +1453,11 @@ async def submit_tracking_request(
                 origin = "knesset.gov.il"
                 slug_prefix = "knesset-scraper"
         if not collector_name:
+            page_type, collector_name = _parse_servicescompass_url(body.source_url)
+            if collector_name:
+                origin = "www.gov.il"
+                slug_prefix = "servicescompass-scraper"
+        if not collector_name:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -1440,7 +1469,8 @@ async def submit_tracking_request(
                     "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
                     "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
                     "knesset.gov.il committee (KNS_Committee ODATA), "
-                    "or municipal-data.org (מצב השלטון המקומי) metric"
+                    "municipal-data.org (מצב השלטון המקומי) metric, "
+                    "or gov.il/apps/servicescompass (מצפן השירותים הממשלתיים)"
                 ),
             )
 
@@ -1509,6 +1539,15 @@ async def submit_tracking_request(
                 sc["screen_id"] = screen_id
             if metric_id:
                 sc["metric_id"] = metric_id
+        elif page_type and page_type.startswith("servicescompass_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.servicescompass import get_servicescompass_limits
+            depth, docs = get_servicescompass_limits(page_type)
+            sc["kind"] = "servicescompass"
+            sc["download_files"] = True
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            sc["archive_neon"] = True
         elif page_type and page_type.startswith("mevaker_"):
             # Mirror of the admin-POST branch — keep in sync.
             from app.api.mevaker import get_mevaker_limits, type_hebrew_of

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
@@ -20,6 +20,9 @@ import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// gov.il/apps/servicescompass URL pattern. Mirror of
+// SERVICESCOMPASS_PATH_RE in app/api/servicescompass.py.
+import { SERVICESCOMPASS_PATTERN } from "../utils/servicescompassPattern";
 // municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
 // in app/api/munidata.py.
 import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
@@ -224,6 +227,8 @@ export default function HomePage() {
   const [registriesResult, setRegistriesResult] = useState<GovIlValidation | null>(null);
   // avodata.labor.gov.il per-scope scraper result — same shape.
   const [avodataResult, setAvodataResult] = useState<GovIlValidation | null>(null);
+  // gov.il/apps/servicescompass scraper result — same shape.
+  const [servicescompassResult, setServicescompassResult] = useState<GovIlValidation | null>(null);
   // municipal-data.org per-metric scraper result — same shape.
   const [munidataResult, setMunidataResult] = useState<GovIlValidation | null>(null);
   // mevaker.gov.il reports scraper result — same shape.
@@ -290,6 +295,10 @@ export default function HomePage() {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
+  const detectServicescompassUrl = (input: string): boolean => {
+    return SERVICESCOMPASS_PATTERN.test(input.trim());
+  };
+
   const detectMunidataUrl = (input: string): boolean => {
     return MUNIDATA_METRIC_PATTERN.test(input.trim());
   };
@@ -339,6 +348,7 @@ export default function HomePage() {
     setHealthResult(null);
     setRegistriesResult(null);
     setAvodataResult(null);
+    setServicescompassResult(null);
     setMunidataResult(null);
     setMevakerResult(null);
     setHatzavResult(null);
@@ -438,6 +448,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2d-1. Check for gov.il/apps/servicescompass URL.
+      if (detectServicescompassUrl(query)) {
+        const validation = await servicescompass.validate(query.trim());
+        if (validation.valid) {
+          setServicescompassResult(validation);
+          setRequestFormFor("servicescompass");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid gov.il/apps/servicescompass URL");
         }
         setLoading(false);
         return;
@@ -980,6 +1005,62 @@ export default function HomePage() {
                     <button
                       className="btn-primary"
                       onClick={() => setRequestFormFor("avodata")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {/* gov.il/apps/servicescompass scraper result — amber "מצפן
+            השירותים" chip, distinct from the sky-blue AVODATA and lime
+            municipal-data badges. */}
+        {!loading && servicescompassResult && (
+          <section aria-label="gov.il services compass result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{servicescompassResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#ffedd5",
+                      color: "#9a3412",
+                    }}>
+                      מצפן השירותים
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>מערך הדיגיטל הלאומי</span>
+                  <span>gov.il/apps/servicescompass</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={servicescompassResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {servicescompassResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "servicescompass" ? (
+                    <RequestForm
+                      datasetTitle={servicescompassResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={servicescompassResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("servicescompass")}
                       style={{ fontSize: "0.85rem" }}
                     >
                       {t("home.request_btn")}

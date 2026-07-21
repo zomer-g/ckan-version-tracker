@@ -27,6 +27,7 @@ from app.api.health import router as health_router
 from app.api.registries import router as registries_router
 from app.api.avodata import router as avodata_router
 from app.api.munidata import router as munidata_router
+from app.api.servicescompass import router as servicescompass_router
 from app.api.mevaker import router as mevaker_router
 from app.api.hatzav import router as hatzav_router
 from app.api.mankal import router as mankal_router
@@ -160,6 +161,7 @@ app.include_router(health_router)
 app.include_router(registries_router)
 app.include_router(avodata_router)
 app.include_router(munidata_router)
+app.include_router(servicescompass_router)
 app.include_router(mevaker_router)
 app.include_router(hatzav_router)
 app.include_router(mankal_router)

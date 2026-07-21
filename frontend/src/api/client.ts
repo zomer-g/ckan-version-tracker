@@ -414,6 +414,17 @@ export const munidata = {
     }),
 };
 
+// gov.il/apps/servicescompass validation — same response shape. Server side
+// at app/api/servicescompass.py; only the single app page is accepted
+// ("מצפן השירותים הממשלתיים", National Digital Agency), one dataset.
+export const servicescompass = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/servicescompass/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // mevaker.gov.il validation — same response shape. Server side at
 // app/api/mevaker.py; only the /subjects reports index is accepted (the
 // whole State Comptroller corpus, tracked as one dataset).

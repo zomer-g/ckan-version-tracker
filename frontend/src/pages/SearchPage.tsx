@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -16,6 +16,9 @@ import { REGISTRIES_PATTERN } from "../utils/registriesPattern";
 // avodata.labor.gov.il occupations-index URL pattern. Mirror of
 // AVODATA_OCCUPATIONS_RE in app/api/avodata.py.
 import { AVODATA_OCCUPATIONS_PATTERN } from "../utils/avodataPattern";
+// gov.il/apps/servicescompass URL pattern. Mirror of
+// SERVICESCOMPASS_PATH_RE in app/api/servicescompass.py.
+import { SERVICESCOMPASS_PATTERN } from "../utils/servicescompassPattern";
 // municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
 // in app/api/munidata.py.
 import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
@@ -105,6 +108,11 @@ export default function SearchPage() {
   const [avodataTracked, setAvodataTracked] = useState<"tracked" | "pending" | null>(null);
   const [avodataTracking, setAvodataTracking] = useState(false);
   const [showAvodataInterval, setShowAvodataInterval] = useState(false);
+  // gov.il/apps/servicescompass scraper result — same flow.
+  const [servicescompassResult, setServicescompassResult] = useState<GovIlValidation | null>(null);
+  const [servicescompassTracked, setServicescompassTracked] = useState<"tracked" | "pending" | null>(null);
+  const [servicescompassTracking, setServicescompassTracking] = useState(false);
+  const [showServicescompassInterval, setShowServicescompassInterval] = useState(false);
   // municipal-data.org scraper result — same flow.
   const [munidataResult, setMunidataResult] = useState<GovIlValidation | null>(null);
   const [munidataTracked, setMunidataTracked] = useState<"tracked" | "pending" | null>(null);
@@ -210,6 +218,10 @@ export default function SearchPage() {
     return AVODATA_OCCUPATIONS_PATTERN.test(input.trim());
   };
 
+  const detectServicescompassUrl = (input: string): boolean => {
+    return SERVICESCOMPASS_PATTERN.test(input.trim());
+  };
+
   const detectMunidataUrl = (input: string): boolean => {
     return MUNIDATA_METRIC_PATTERN.test(input.trim());
   };
@@ -250,6 +262,9 @@ export default function SearchPage() {
     setAvodataResult(null);
     setAvodataTracked(null);
     setShowAvodataInterval(false);
+    setServicescompassResult(null);
+    setServicescompassTracked(null);
+    setShowServicescompassInterval(false);
     setMunidataResult(null);
     setMunidataTracked(null);
     setShowMunidataInterval(false);
@@ -337,6 +352,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid avodata.labor.gov.il URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1d-1. Check for gov.il/apps/servicescompass URL.
+      if (detectServicescompassUrl(query)) {
+        const validation = await servicescompass.validate(query.trim());
+        if (validation.valid) {
+          setServicescompassResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid gov.il/apps/servicescompass URL");
         }
         setLoading(false);
         return;
@@ -584,6 +613,23 @@ export default function SearchPage() {
     setAvodataTracking(false);
   };
 
+  const trackServicescompassDataset = async (interval: number) => {
+    if (!servicescompassResult?.url || !servicescompassResult?.title) return;
+    setShowServicescompassInterval(false);
+    setServicescompassTracking(true);
+    try {
+      await datasetsApi.trackScraper(servicescompassResult.url, servicescompassResult.title, interval);
+      setServicescompassTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setServicescompassTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setServicescompassTracking(false);
+  };
+
   const trackMunidataDataset = async (interval: number) => {
     if (!munidataResult?.url || !munidataResult?.title) return;
     setShowMunidataInterval(false);
@@ -753,6 +799,46 @@ export default function SearchPage() {
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
           {avodataTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
+  // Same shape as renderAvodataTrackButton, bound to the servicescompass state.
+  const renderServicescompassTrackButton = () => {
+    if (servicescompassTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (servicescompassTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showServicescompassInterval && (
+          <select
+            defaultValue={604800}
+            onChange={(e) => trackServicescompassDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowServicescompassInterval(!showServicescompassInterval)}
+          disabled={servicescompassTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {servicescompassTracking ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1279,7 +1365,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !munidataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !servicescompassResult && !munidataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1388,6 +1474,40 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {avodataResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* gov.il/apps/servicescompass scraper result */}
+      {servicescompassResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{servicescompassResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#ffedd5",
+                  color: "#9a3412",
+                }}>
+                  מצפן השירותים
+                </span>
+              </div>
+              {renderServicescompassTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>מערך הדיגיטל הלאומי</span>
+              <span>gov.il/apps/servicescompass</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={servicescompassResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {servicescompassResult.url}
               </a>
             </p>
           </article>
