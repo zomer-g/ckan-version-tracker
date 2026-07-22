@@ -8,7 +8,8 @@ import {
 } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
-import SqlChartPanel from "../components/SqlChartPanel";
+import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
+import QuickChartBuilder from "../components/QuickChartBuilder";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -158,7 +159,7 @@ LIMIT 50`,
   {
     group: "סינון, חיפוש וקיבוץ",
     label: "ספירה וקיבוץ (GROUP BY)",
-    sql: `-- GROUP BY מקבץ שורות; count(*) סופר כמה יש בכל קבוצה.
+    sql: `-- GROUP BY מקבץ שורות, ו-count(*) סופר כמה יש בכל קבוצה.
 SELECT knessetnum, count(*) AS bills
 FROM kns_bill
 GROUP BY knessetnum
@@ -273,6 +274,7 @@ export default function DataSqlPage() {
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
+  const [runId, setRunId] = useState(0);
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
   const placeholderRef = useRef(!searchParams.get("sql"));
 
@@ -397,21 +399,47 @@ export default function DataSqlPage() {
     }
   };
 
-  const runSql = useCallback(() => {
-    if (!sqlText.trim()) return;
-    if (sqlText.length <= 1800) {
-      const next = new URLSearchParams(searchParams);
-      next.set("sql", sqlText);
-      setSearchParams(next, { replace: true });
-    }
+  // The fetch half of "run" — no URL writes (callers own the searchParams
+  // update; two setSearchParams in one tick clobber each other in react-router).
+  const runFetch = useCallback((sql: string) => {
     setSqlRunning(true);
     setSqlError(null);
     dataCatalog
-      .sql(sqlText)
-      .then((r) => { setSqlResult(r); setSqlError(null); })
+      .sql(sql)
+      .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); })
       .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); })
       .finally(() => setSqlRunning(false));
-  }, [sqlText, searchParams, setSearchParams]);
+  }, []);
+
+  const runSql = useCallback((sqlArg?: string) => {
+    const sql = (typeof sqlArg === "string" ? sqlArg : sqlText).trim();
+    if (!sql) return;
+    if (sql.length <= 1800) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("sql", sql);
+        return next;
+      }, { replace: true });
+    }
+    runFetch(sql);
+  }, [sqlText, setSearchParams, runFetch]);
+
+  // "גרף מהיר" from the table cube: load the generated SQL into the editor, put
+  // the chart config + sql in the URL in ONE write (SqlChartPanel opens the
+  // chart when the result lands), run, and bring the console into view.
+  const quickChart = useCallback((sql: string, chartParams: Record<string, string>) => {
+    setSqlText(sql);
+    placeholderRef.current = false;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const k of CHART_PARAM_KEYS) next.delete(k);
+      for (const [k, v] of Object.entries(chartParams)) next.set(k, v);
+      if (sql.length <= 1800) next.set("sql", sql);
+      return next;
+    }, { replace: true });
+    runFetch(sql);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [runFetch, setSearchParams]);
 
   const selectedTable = selected ? byName.get(selected) || null : null;
 
@@ -467,7 +495,7 @@ export default function DataSqlPage() {
         />
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
           <button
-            type="button" onClick={runSql} disabled={sqlRunning}
+            type="button" onClick={() => runSql()} disabled={sqlRunning}
             style={{
               padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
               background: "var(--primary, #0f766e)", color: "white",
@@ -537,7 +565,7 @@ export default function DataSqlPage() {
 
       {/* Charts over the current result */}
       {sqlResult && !sqlError && sqlResult.rows.length > 0 && (
-        <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} />
+        <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
       )}
 
       {/* Table browser + detail cube */}
@@ -751,6 +779,9 @@ export default function DataSqlPage() {
                   </Link>
                 )}
               </div>
+
+              {/* No-SQL chart tool over the selected table */}
+              <QuickChartBuilder key={selectedTable.table} table={selectedTable} onCreate={quickChart} />
 
               {/* Raw source files */}
               {detail && detail.files.length > 0 && (
