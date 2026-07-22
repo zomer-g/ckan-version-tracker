@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     # untracked dataset per run — steadily growing coverage of the catalog
     # without manual curation. Onboarded datasets are archived NEON-only
     # (SQL-queryable rows into the /data console, no file/ODATA mirror) and
-    # polled weekly. Off by default — set AUTO_DISCOVER_ENABLED=true to run it.
+    # polled quarterly. Off by default — set AUTO_DISCOVER_ENABLED=true to run it.
     # See app/services/auto_discovery.py.
     auto_discover_enabled: bool = False
     auto_discover_interval_hours: float = 6.0
@@ -174,8 +174,13 @@ class Settings(BaseSettings):
     # -row registry and spike the dyno's memory / the NEON archive. Oversized
     # candidates are passed over and another is drawn.
     auto_discover_max_rows: int = 2_000_000
-    # Poll cadence assigned to each auto-onboarded dataset (weekly by default).
-    auto_discover_poll_interval: int = 604800
+    # Poll cadence assigned to each auto-onboarded dataset. QUARTERLY (90d):
+    # these are bulk-onboarded at 4/day with no human curating them, so a
+    # weekly re-poll of an ever-growing set would keep re-streaming hundreds of
+    # datastores into NEON for little gain — most of this long tail changes
+    # rarely. Manually-tracked datasets keep their own (default_poll_interval)
+    # cadence; this only applies to auto-discovered ones.
+    auto_discover_poll_interval: int = 7_776_000  # 90 days
     # How many random candidates to evaluate per run before giving up (each
     # evaluation is a package_show + a datastore probe per resource).
     auto_discover_max_attempts: int = 30
