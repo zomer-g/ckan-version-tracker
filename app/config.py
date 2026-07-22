@@ -173,7 +173,15 @@ class Settings(BaseSettings):
     # collections instead of only over their metadata. LATEST VERSION ONLY —
     # history stays in R2. Sized from a 310-dataset pilot: ~7.9 GB and ~$2.8/mo
     # for the whole corpus (docs/neon-index-pilot/).
-    index_mirror_enabled: bool = True
+    # OFF BY DEFAULT — see docs/neon-index-pilot/README.md §10.9. Running this
+    # in-process on the 512MB web dyno OOM-killed it three times: RSS sawtoothed
+    # 220→487MB and the instance was evicted, even with a 3-dataset chunk and a
+    # 16MB COPY batch. The loader itself is memory-bounded (verified at a 202MB
+    # peak streaming a 3.5GB CSV standalone), but it has to share the dyno with
+    # FastAPI, the poll pipeline and the Knesset sync, and that sum does not fit.
+    # Re-enabling needs a different execution home (the separate worker service,
+    # a one-off job, or a larger instance) — not just a smaller chunk.
+    index_mirror_enabled: bool = False
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.
