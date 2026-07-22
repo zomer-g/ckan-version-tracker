@@ -62,7 +62,11 @@ STATE_TABLE = "_sync_state"
 # and the dyno has 512 MB. Wide geometry rows therefore flush on the byte limit
 # and narrow rows on the row limit.
 COPY_BATCH_ROWS = 20_000
-COPY_BATCH_BYTES = 32 * 1024 * 1024
+# 16 MB, not 32: measured on the production dyno, a mirror tick pushed RSS to
+# 427 MB against a 512 MB limit and a <400 MB acceptance target. Python str
+# overhead plus asyncpg's encoding buffer make the real cost several times the
+# nominal text size, so the batch budget has to be well under the headroom.
+COPY_BATCH_BYTES = 16 * 1024 * 1024
 
 # A single CSV cell can be enormous: one real dataset ("אינטרסים של מקורות") is
 # 4 rows / 34 MB because each cell is a whole polygon. Python's default cap is
@@ -324,8 +328,11 @@ async def pending(db, *, limit: int | None = None,
     nothing changed" property the plan asks for: no object storage is touched
     and no table is written until something actually moved.
 
-    Returns dicts ordered smallest-CSV-first so a batch makes visible progress
-    before it reaches the multi-GB layers."""
+    Ordered by title — deliberately NOT by CSV size, which would cost a HEAD
+    request per dataset and defeat the "cheap when nothing changed" property.
+    Size is handled where it actually matters instead: load_index_csv streams
+    and batches by bytes, so a multi-GB layer costs the same peak memory as a
+    small one."""
     from sqlalchemy import select
 
     from app.models.tracked_dataset import TrackedDataset

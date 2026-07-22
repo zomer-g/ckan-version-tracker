@@ -175,8 +175,9 @@ class Settings(BaseSettings):
     # for the whole corpus (docs/neon-index-pilot/).
     index_mirror_enabled: bool = True
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
-    # a tick runs, not how much memory it uses.
-    index_mirror_chunk: int = 5
+    # a tick runs, not how much memory it uses. Kept small because the tick
+    # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.
+    index_mirror_chunk: int = 3
     index_mirror_interval_minutes: int = 10
 
     auto_discover_enabled: bool = False
