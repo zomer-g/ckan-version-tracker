@@ -1,0 +1,239 @@
+"""Stage-1 sync engine for the index → NEON mirror
+(docs/neon-index-pilot/README.md §10.3).
+"""
+import asyncio
+
+from app.services import append_store, index_mirror
+
+
+class _DS:
+    def __init__(self, source_type="govmap", status="active", ckan_name="x",
+                 id="304e43d5-c419-43bd-8b46-f31a4da0c075", title="T"):
+        self.source_type, self.status = source_type, status
+        self.ckan_name, self.id, self.title = ckan_name, id, title
+
+
+# ── eligibility ──────────────────────────────────────────────────────────────
+
+def test_scraper_and_govmap_are_eligible():
+    assert index_mirror.dataset_is_index_mirror_eligible(_DS(source_type="govmap"))
+    assert index_mirror.dataset_is_index_mirror_eligible(_DS(source_type="scraper"))
+
+
+def test_ckan_is_not_eligible():
+    """CKAN datasets already stream their rows into public.append_* via
+    archive_neon — mirroring them again would duplicate the data."""
+    assert not index_mirror.dataset_is_index_mirror_eligible(_DS(source_type="ckan"))
+    assert not index_mirror.dataset_is_index_mirror_eligible(_DS(source_type="cbs"))
+
+
+def test_inactive_datasets_are_not_eligible():
+    assert not index_mirror.dataset_is_index_mirror_eligible(_DS(status="paused"))
+    assert not index_mirror.dataset_is_index_mirror_eligible(_DS(status="deleted"))
+
+
+# ── the index CSV is found only when it is a real stored object ──────────────
+
+def test_index_csv_value_requires_a_storage_marked_value():
+    assert index_mirror.index_csv_value(
+        {"נתוני הסורק": "r2:datasets/a/v1/x_csv"}) == "r2:datasets/a/v1/x_csv"
+    # An ODATA resource id (not an r2: value) is not a mirrorable object.
+    assert index_mirror.index_csv_value({"נתוני הסורק": "abc-123-not-r2"}) is None
+    assert index_mirror.index_csv_value({"_zip": "r2:x"}) is None
+    assert index_mirror.index_csv_value({}) is None
+    assert index_mirror.index_csv_value(None) is None
+
+
+# ── the read-only role wiring (without it /data cannot see idx at all) ───────
+
+def test_readonly_role_is_parsed_from_the_url(monkeypatch):
+    monkeypatch.setattr(append_store.settings, "append_readonly_database_url",
+                        "postgresql://over_readonly:pw@ep-x.aws.neon.tech/neondb")
+    assert index_mirror._readonly_role() == "over_readonly"
+
+
+def test_readonly_role_is_none_when_unset(monkeypatch):
+    monkeypatch.setattr(append_store.settings, "append_readonly_database_url", "")
+    assert index_mirror._readonly_role() is None
+
+
+def test_ensure_schema_grants_to_the_console_role(monkeypatch):
+    """The schema is created at runtime, so create_append_readonly_role.sql
+    cannot have covered it — the GRANTs have to happen here or the console sees
+    no idx tables."""
+    executed = []
+
+    class _Conn:
+        async def execute(self, sql, *a):
+            executed.append(sql)
+
+    monkeypatch.setattr(append_store.settings, "append_readonly_database_url",
+                        "postgresql://over_readonly:pw@h/db")
+    asyncio.run(index_mirror.ensure_schema(_Conn()))
+    joined = " | ".join(executed)
+    assert 'CREATE SCHEMA IF NOT EXISTS "idx"' in joined
+    assert 'GRANT USAGE ON SCHEMA "idx" TO "over_readonly"' in joined
+    assert 'GRANT SELECT ON ALL TABLES IN SCHEMA "idx"' in joined
+    assert "ALTER DEFAULT PRIVILEGES" in joined
+
+
+def test_ensure_schema_survives_a_failing_grant(monkeypatch):
+    """A missing/renamed role must not break the sync itself."""
+    class _Conn:
+        def __init__(self):
+            self.n = 0
+
+        async def execute(self, sql, *a):
+            self.n += 1
+            if "GRANT" in sql:
+                raise RuntimeError("role does not exist")
+
+    monkeypatch.setattr(append_store.settings, "append_readonly_database_url",
+                        "postgresql://ghost:pw@h/db")
+    asyncio.run(index_mirror.ensure_schema(_Conn()))  # must not raise
+
+
+# ── the version-landed trigger ───────────────────────────────────────────────
+
+def _fake_pending_env(monkeypatch, *, mirrored: dict):
+    monkeypatch.setattr(index_mirror, "loaded_versions",
+                        lambda: _coro(mirrored))
+
+
+def _coro(v):
+    async def _f(*a, **k):
+        return v
+    return _f()
+
+
+def test_sync_one_records_failure_and_does_not_raise(monkeypatch):
+    """A dataset whose CSV is unreachable must be recorded (so it is retried)
+    and must not abort the rest of the chunk."""
+    recorded = {}
+
+    async def fake_load(value, table):
+        raise RuntimeError("object missing")
+
+    async def fake_record(dsid, table, vnum, rows, error):
+        recorded.update(dataset_id=dsid, table=table, version=vnum,
+                        rows=rows, error=error)
+
+    monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+
+    item = {"dataset_id": "d1", "title": "T", "table": "t",
+            "version_number": 4, "r2_value": "r2:k"}
+    out = asyncio.run(index_mirror.sync_one(item))
+    assert out["ok"] is False and "object missing" in out["error"]
+    assert recorded["error"] and recorded["rows"] is None
+
+
+def test_sync_one_records_success(monkeypatch):
+    recorded = {}
+
+    async def fake_load(value, table):
+        return {"table": table, "rows": 42, "columns": 3}
+
+    async def fake_record(dsid, table, vnum, rows, error):
+        recorded.update(rows=rows, error=error, version=vnum)
+
+    monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+
+    out = asyncio.run(index_mirror.sync_one(
+        {"dataset_id": "d1", "title": "T", "table": "t",
+         "version_number": 7, "r2_value": "r2:k"}))
+    assert out["ok"] and out["rows"] == 42
+    assert recorded == {"rows": 42, "error": None, "version": 7}
+
+
+def test_sync_due_is_a_noop_without_the_append_db(monkeypatch):
+    monkeypatch.setattr(append_store.settings, "append_database_url", "")
+    out = asyncio.run(index_mirror.sync_due(db=None))
+    assert out == {"skipped": "append DB not configured"}
+
+
+def test_sync_due_invalidates_the_catalog_cache(monkeypatch):
+    """A swapped-in table changes the queryable table list, so a stale /data
+    catalog would hide the freshly mirrored dataset for up to the TTL."""
+    from app.services import data_catalog
+
+    monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
+
+    async def fake_pending(db, limit=None, dataset_id=None):
+        return [{"dataset_id": "d1", "title": "T", "table": "t",
+                 "version_number": 1, "r2_value": "r2:k"}]
+
+    async def fake_sync_one(item):
+        return {**item, "ok": True, "rows": 5, "columns": 2}
+
+    monkeypatch.setattr(index_mirror, "pending", fake_pending)
+    monkeypatch.setattr(index_mirror, "sync_one", fake_sync_one)
+
+    calls = {"n": 0}
+    monkeypatch.setattr(data_catalog, "invalidate_catalog_cache",
+                        lambda: calls.__setitem__("n", calls["n"] + 1))
+
+    out = asyncio.run(index_mirror.sync_due(db=None, limit=5))
+    assert out["synced"] == 1 and out["failed"] == 0 and out["rows"] == 5
+    assert calls["n"] == 1
+
+
+def test_sync_due_reports_failures_without_invalidating(monkeypatch):
+    from app.services import data_catalog
+
+    monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
+
+    async def fake_pending(db, limit=None, dataset_id=None):
+        return [{"dataset_id": "d1", "title": "T", "table": "t",
+                 "version_number": 1, "r2_value": "r2:k"}]
+
+    async def fake_sync_one(item):
+        return {**item, "ok": False, "error": "boom"}
+
+    monkeypatch.setattr(index_mirror, "pending", fake_pending)
+    monkeypatch.setattr(index_mirror, "sync_one", fake_sync_one)
+    calls = {"n": 0}
+    monkeypatch.setattr(data_catalog, "invalidate_catalog_cache",
+                        lambda: calls.__setitem__("n", calls["n"] + 1))
+
+    out = asyncio.run(index_mirror.sync_due(db=None, limit=5))
+    assert out["failed"] == 1 and out["synced"] == 0
+    assert calls["n"] == 0
+
+
+def test_results_never_leak_the_storage_key(monkeypatch):
+    """The summary is returned to an admin endpoint; the r2 key is internal."""
+    monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
+
+    async def fake_pending(db, limit=None, dataset_id=None):
+        return [{"dataset_id": "d1", "title": "T", "table": "t",
+                 "version_number": 1, "r2_value": "r2:secret/key"}]
+
+    async def fake_sync_one(item):
+        return {**item, "ok": True, "rows": 1, "columns": 1}
+
+    monkeypatch.setattr(index_mirror, "pending", fake_pending)
+    monkeypatch.setattr(index_mirror, "sync_one", fake_sync_one)
+    from app.services import data_catalog
+    monkeypatch.setattr(data_catalog, "invalidate_catalog_cache", lambda: None)
+
+    out = asyncio.run(index_mirror.sync_due(db=None, limit=5))
+    assert all("r2_value" not in r for r in out["results"])
+
+
+# ── the /data console must reach the new schema ──────────────────────────────
+
+def test_console_search_path_includes_idx():
+    from app.services.data_catalog import CONSOLE_SEARCH_PATH
+    assert "idx" in [s.strip() for s in CONSOLE_SEARCH_PATH.split(",")]
+    # and the guard still accepts it
+    assert append_store._safe_search_path(CONSOLE_SEARCH_PATH)
+
+
+# ── geometry is listed but never previewed (the 46-second finding) ───────────
+
+def test_bulk_geometry_columns_are_recognised():
+    assert "geometry_wkt" in append_store._BULK_COLS
+    for c in ("geometry", "geom", "wkt"):
+        assert c in append_store._BULK_COLS

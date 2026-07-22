@@ -217,6 +217,33 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # Index-CSV mirror → the `idx` schema, so /data can search inside the
+    # collections. Version-gated: `pending` is three SELECTs and an in-memory
+    # diff, so a tick where nothing new landed costs almost nothing — which is
+    # the normal case (GovMap polls every 90 days). A small per-tick chunk keeps
+    # each run's memory to ONE streaming CSV at a time and lets a large backfill
+    # advance steadily in the background instead of in one long blocking job.
+    async def index_mirror_sync_job() -> None:
+        if not _settings.append_database_url:
+            return
+        from app.database import async_session
+        from app.services import index_mirror
+        try:
+            async with async_session() as db:
+                await index_mirror.sync_due(db, limit=_settings.index_mirror_chunk)
+        except Exception:  # noqa: BLE001 — never let one bad CSV kill the job
+            logger.exception("index_mirror sync tick failed")
+
+    if settings.index_mirror_enabled:
+        scheduler.add_job(
+            index_mirror_sync_job,
+            trigger=IntervalTrigger(minutes=_settings.index_mirror_interval_minutes),
+            id="index_mirror_sync",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the

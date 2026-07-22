@@ -33,8 +33,8 @@ from app.services.storage_client import dataset_archives_neon
 
 logger = logging.getLogger(__name__)
 
-# search_path handed to the read-only console so both schemas resolve unqualified.
-CONSOLE_SEARCH_PATH = "public, knesset"
+# search_path handed to the read-only console so every schema resolves unqualified.
+CONSOLE_SEARCH_PATH = "public, knesset, idx"
 
 # ── catalog cache ────────────────────────────────────────────────────────────
 # build_catalog() is called on EVERY /data page load *and* on every detail-cube
@@ -202,8 +202,55 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
             out.append(_ds_record(ds, tbl, t["resource_name"], version_id,
                                    est.get(tbl), columns))
 
+    out.extend(await _index_records(db, datasets))
     out.extend(await _knesset_records())
     return out
+
+
+async def _index_records(db: AsyncSession, datasets: list[TrackedDataset]) -> list[dict]:
+    """Catalog rows for the ``idx`` schema — the mirrored index CSVs of
+    scraper/govmap datasets (kind='index').
+
+    These are the tables that let /data search INSIDE a collection: a GovMap
+    layer's feature attributes, an FOI dataset's item + file index. One table per
+    dataset, holding its LATEST version only (history stays in R2)."""
+    from app.services import index_mirror
+    try:
+        mirrored = await index_mirror.list_tables()
+    except Exception:  # noqa: BLE001 — never let this break the whole catalog
+        logger.debug("data_catalog: idx list_tables failed", exc_info=True)
+        return []
+    if not mirrored:
+        return []
+
+    by_id = {str(d.id): d for d in datasets}
+    cols_by_table = await append_store.schema_table_columns(index_mirror.SCHEMA)
+    recs: list[dict] = []
+    for m in mirrored:
+        ds = by_id.get(m["dataset_id"])
+        if ds is None:
+            continue                      # dataset deleted/paused since the sync
+        columns = cols_by_table.get(m["table"])
+        if not columns:
+            continue                      # table gone (dropped out of band)
+        recs.append({
+            "table": m["table"],
+            "schema": index_mirror.SCHEMA,
+            "kind": "index",
+            "title": ds.title or ds.ckan_name or m["table"],
+            "dataset_id": m["dataset_id"],
+            "version_id": None,
+            "organization": ds.organization,
+            "ckan_id": ds.ckan_id,
+            "source_type": ds.source_type or "scraper",
+            "source_url": _source_url(ds),
+            "archive_url": f"/archive/{ds.id}",
+            "versions_url": f"/versions/{ds.id}",
+            "tags": [t.name for t in (ds.tags or [])],
+            "columns": columns,
+            "est_rows": m.get("rows"),
+        })
+    return recs
 
 
 async def _knesset_records() -> list[dict]:
@@ -276,6 +323,16 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
         rec = {**rec, "row_count": rec.get("est_rows"), "files": [],
                "sample": sample, "csv_export": True}
         return rec
+
+    if rec["kind"] == "index":
+        # Mirrored index CSV: the raw file lives on R2 and is reachable from the
+        # dataset's versions page, so no per-version download links here.
+        try:
+            count = await append_store.table_count(table, schema=schema)
+        except Exception:  # noqa: BLE001
+            count = rec.get("est_rows")
+        return {**rec, "row_count": count, "files": [], "sample": sample,
+                "csv_export": True}
 
     # Dataset table — exact count + raw-file links from the latest version.
     try:

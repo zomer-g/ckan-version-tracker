@@ -765,14 +765,41 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
             "truncated": truncated, "row_count": len(rows)}
 
 
-async def table_count(table: str) -> int:
-    """Total rows currently in the dataset's archive table (0 if absent)."""
+async def table_count(table: str, *, schema: str = "public") -> int:
+    """Total rows currently in the table (0 if absent). ``schema`` is a plain
+    identifier chosen by our code (public|knesset|idx), never user input."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
+        raise ValueError(f"invalid schema: {schema!r}")
+    ref = f"{_qi(schema)}.{_qi(table)}"
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
-            return int(await conn.fetchval(f'SELECT count(*) FROM {_qi(table)}'))
+            return int(await conn.fetchval(f"SELECT count(*) FROM {ref}"))
         except asyncpg.UndefinedTableError:
             return 0
+
+
+async def schema_table_columns(schema: str) -> dict[str, list[dict]]:
+    """{table: [{name,type}, …]} for every table in ``schema``, in one query.
+
+    The generic sibling of public_table_columns (which filters to ``append_*``
+    in public). Used for the ``idx`` mirror schema, where every table belongs to
+    the catalog and there is no name prefix to filter on."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
+        raise ValueError(f"invalid schema: {schema!r}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT table_name, column_name, data_type "
+            "FROM information_schema.columns WHERE table_schema = $1 "
+            "ORDER BY table_name, ordinal_position", schema)
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["column_name"] in _HIDDEN_COLS:
+            continue
+        out.setdefault(r["table_name"], []).append(
+            {"name": r["column_name"], "type": _ckan_type(r["data_type"])})
+    return out
 
 
 def _safe_search_path(search_path: str) -> str:
@@ -844,7 +871,13 @@ async def public_table_columns() -> dict[str, list[dict]]:
 async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) -> dict:
     """{columns, rows} — the first ``limit`` rows of a table, for the /data detail
     cube. Read through the least-privilege console role (SELECT-only). ``schema``
-    is a plain identifier chosen by our code (public|knesset), never user input."""
+    is a plain identifier chosen by our code (public|knesset|idx), never user input.
+
+    Bulk geometry columns are listed but NOT fetched (see _BULK_COLS): on a large
+    mirrored layer the WKT lives in TOAST, and pulling it was measured at 46
+    SECONDS for a query that is otherwise sub-second. The cube only needs to show
+    that the column exists; a user who actually wants the geometry can select it
+    explicitly in the console, where the statement_timeout protects the endpoint."""
     if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
         raise ValueError(f"invalid schema: {schema!r}")
     pool = await get_readonly_pool()
@@ -853,17 +886,26 @@ async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) ->
         async with conn.transaction(readonly=True):
             await conn.execute("SET LOCAL statement_timeout = 8000")
             try:
-                stmt = await conn.prepare(f"SELECT * FROM {ref} LIMIT {int(limit)}")
+                probe = await conn.prepare(f"SELECT * FROM {ref} LIMIT 0")
             except asyncpg.UndefinedTableError:
                 return {"columns": [], "rows": []}
-            cols = [a.name for a in stmt.get_attributes() if a.name not in _HIDDEN_COLS]
-            recs = await stmt.fetch()
+            all_cols = [a.name for a in probe.get_attributes()
+                        if a.name not in _HIDDEN_COLS]
+            heavy = [c for c in all_cols if c.lower() in _BULK_COLS]
+            light = [c for c in all_cols if c.lower() not in _BULK_COLS]
+            if not light:
+                return {"columns": all_cols, "rows": [], "omitted_columns": heavy}
+            sel = ", ".join(_qi(c) for c in light)
+            recs = await conn.fetch(f"SELECT {sel} FROM {ref} LIMIT {int(limit)}")
     rows = [
         {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
-         for k, v in dict(r).items() if k not in _HIDDEN_COLS}
+         for k, v in dict(r).items()}
         for r in recs
     ]
-    return {"columns": cols, "rows": rows}
+    out = {"columns": light, "rows": rows}
+    if heavy:
+        out["omitted_columns"] = heavy
+    return out
 
 
 async def iter_sql_csv(sql: str, *, search_path: str | None = None,
@@ -918,6 +960,12 @@ async def iter_sql_csv(sql: str, *, search_path: str | None = None,
 
 # Internal columns hidden from the UI (dedup bookkeeping, not data).
 _HIDDEN_COLS = {"row_hash"}
+
+# Columns whose values are bulk payloads, not something a 20-row preview should
+# ever pull. They are TOASTed, so touching them turns a sub-second scan into a
+# 46-second one on a large mirrored GovMap layer. Listed in the schema, skipped
+# in the sample (see sample_rows).
+_BULK_COLS = {"geometry_wkt", "geometry", "geom", "wkt"}
 
 # Hard ceiling on a single rows page, regardless of what the client asks.
 MAX_PAGE = 500

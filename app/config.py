@@ -167,6 +167,18 @@ class Settings(BaseSettings):
     # (SQL-queryable rows into the /data console, no file/ODATA mirror) and
     # polled quarterly. Off by default — set AUTO_DISCOVER_ENABLED=true to run it.
     # See app/services/auto_discovery.py.
+    # Index-CSV mirror: every scraper/govmap version carries a "נתוני הסורק"
+    # CSV (a GovMap layer's feature table, an FOI dataset's item + file index).
+    # Mirroring it into the `idx` schema is what lets /data search INSIDE the
+    # collections instead of only over their metadata. LATEST VERSION ONLY —
+    # history stays in R2. Sized from a 310-dataset pilot: ~7.9 GB and ~$2.8/mo
+    # for the whole corpus (docs/neon-index-pilot/).
+    index_mirror_enabled: bool = True
+    # Datasets per tick. Each is streamed one at a time, so this bounds how long
+    # a tick runs, not how much memory it uses.
+    index_mirror_chunk: int = 5
+    index_mirror_interval_minutes: int = 10
+
     auto_discover_enabled: bool = False
     auto_discover_interval_hours: float = 6.0
     # Skip any candidate whose largest datastore resource exceeds this many

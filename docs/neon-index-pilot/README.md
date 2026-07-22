@@ -405,6 +405,14 @@ Postgres חותך מזהים ל-63 **בתים** בשקט; אות עברית = 2 
 
 ### 10.3 שלב 1 — מנוע הסנכרון
 
+> **בוצע 22.7.2026.** `app/services/index_mirror.py` (זכאות, checkpoint, טריגר,
+> דרייבר), חיבור `idx` לקטלוג ול-`search_path`, הסתרת `geometry_wkt` מה-preview,
+> ג'וב scheduler + שני endpoints לאדמין. 226 טסטים עוברים.
+> **פער שהתגלה: `APPEND_READONLY_DATABASE_URL` אינו מוגדר בפרודקשן** — הקונסולות
+> רצות על ה-pool לקריאה-כתיבה דרך ה-fallback המתועד. לכן ה-backstop של 10.2.3
+> אינו פעיל בפועל (ה-`SET LOCAL` ברמת האפליקציה כן פעיל ונבדק), וה-GRANTs על
+> `idx` הם no-op עד שהתפקיד יוקצה.
+
 מודול חדש (מוצע: `app/services/index_mirror.py`), באחריותו:
 
 1. **זכאות:** הרחבת `dataset_is_neon_eligible`

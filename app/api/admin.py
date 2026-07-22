@@ -1542,3 +1542,80 @@ async def backfill_ckan_uuids(
     logger.info("Admin %s backfilled %d ckan_dataset_uuid (%d skipped, %d failed)",
                 user.email, updated, skipped, len(failed))
     return {"total_ckan": len(rows), "updated": updated, "skipped": skipped, "failed": failed}
+
+
+# ── index mirror (idx schema) ────────────────────────────────────────────────
+
+_IDX_BG: set = set()
+
+
+async def _run_index_sync_bg(limit: int, who: str) -> None:
+    """Background runner for a backfill chunk. Opens its own DB session — a
+    multi-GB layer can stream for far longer than an HTTP request may live."""
+    from app.database import async_session
+    from app.services import index_mirror
+    async with async_session() as db:
+        try:
+            s = await index_mirror.sync_due(db, limit=limit)
+            logger.info("Index mirror sync by %s: synced=%s failed=%s rows=%s",
+                        who, s.get("synced"), s.get("failed"), s.get("rows"))
+        except Exception:
+            logger.exception("Index mirror background sync failed")
+
+
+@router.get("/index-mirror/status")
+@limiter.limit("30/minute")
+async def index_mirror_status(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What the ``idx`` mirror holds vs what is still pending.
+
+    Read-only and cheap: three SELECTs and an in-memory diff, no object storage."""
+    from app.services import index_mirror
+    mirrored = await index_mirror.list_tables()
+    todo = await index_mirror.pending(db)
+    return {
+        "mirrored": len(mirrored),
+        "mirrored_rows": sum(m.get("rows") or 0 for m in mirrored),
+        "pending": len(todo),
+        "pending_sample": [
+            {"title": t["title"], "table": t["table"], "version": t["version_number"]}
+            for t in todo[:20]
+        ],
+    }
+
+
+@router.post("/index-mirror/sync")
+@limiter.limit("6/minute")
+async def index_mirror_sync(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    limit: int = 20,
+    dataset_id: str | None = None,
+    wait: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mirror the next ``limit`` datasets whose index CSV moved (§10.4 rollout).
+
+    Idempotent and resumable — the checkpoint means a re-run skips whatever is
+    already at the current version, so this is safe to call repeatedly until
+    ``pending`` reaches 0. ``wait=true`` runs inline (small chunks only);
+    otherwise it returns immediately and streams in the background.
+    """
+    from app.services import append_store, index_mirror
+    if not append_store.is_configured():
+        raise HTTPException(status_code=409, detail="Append archive DB is not configured")
+    limit = max(1, min(int(limit), 200))
+    uid = parse_uuid(dataset_id, "dataset_id") if dataset_id else None
+    if wait:
+        s = await index_mirror.sync_due(db, limit=limit, dataset_id=uid)
+        logger.info("Index mirror sync (inline) by %s: %s", user.email,
+                    {k: v for k, v in s.items() if k != "results"})
+        return s
+    todo = await index_mirror.pending(db, limit=limit, dataset_id=uid)
+    background_tasks.add_task(_run_index_sync_bg, limit, user.email)
+    return {"started": True, "queued": len(todo),
+            "note": "running in the background — poll /index-mirror/status"}
