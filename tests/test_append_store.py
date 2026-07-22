@@ -137,3 +137,22 @@ def test_chunk_size_keeps_params_under_ceiling():
     # 18-col keyless flights rows (+1 hash param/row)
     n2 = A.chunk_size_for(18, keyless=True)
     assert n2 * (18 + 1) <= 30000
+
+
+def test_validate_readonly_sql_allows_leading_comments():
+    # The SQL consoles lead with explanatory "-- ..." lines (the dropdown
+    # examples, the page placeholder), so a commented query is still a SELECT.
+    assert A.validate_readonly_sql("-- מה יש בטבלה\nSELECT 1")
+    assert A.validate_readonly_sql("-- a\n-- b\nWITH x AS (SELECT 1) SELECT * FROM x")
+    assert A.validate_readonly_sql("/* block */ SELECT 1")
+
+
+def test_validate_readonly_sql_comments_cannot_smuggle_writes():
+    # Skipping comments must not weaken the guard: what follows them still has
+    # to be a SELECT/WITH, and the denylist still scans the whole statement.
+    import pytest
+    for bad in ("-- hi\nINSERT INTO t VALUES (1)",
+                "/* x */ DROP TABLE t",
+                "-- only a comment\n"):
+        with pytest.raises(ValueError):
+            A.validate_readonly_sql(bad)

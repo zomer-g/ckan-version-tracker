@@ -454,6 +454,20 @@ _SQL_DENY = _re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|merge|call|do|vacuum|reindex)\b",
     _re.IGNORECASE,
 )
+# Leading SQL comments — a commented query is still a SELECT, and the consoles
+# lead with explanatory "-- ..." lines (the examples, the page placeholder), so
+# the START check must look past them. Only the check skips comments; the
+# statement is executed verbatim and the denylist still scans the whole text.
+_SQL_LEADING_COMMENT = _re.compile(r"^\s*(--[^\n]*\n|/\*.*?\*/)", _re.DOTALL)
+
+
+def _strip_leading_comments(s: str) -> str:
+    """Drop leading line/block comments so SELECT/WITH detection sees the SQL."""
+    prev = None
+    while prev != s:
+        prev = s
+        s = _SQL_LEADING_COMMENT.sub("", s, count=1)
+    return s
 
 
 # ── Case-insensitive identifier help (shared by every Neon-backed SQL console) ─
@@ -632,7 +646,7 @@ def validate_readonly_sql(sql: str) -> str:
         raise ValueError("השאילתה ריקה")
     if ";" in s:
         raise ValueError("רק משפט יחיד מותר (ללא ';')")
-    if not _SQL_STARTS_OK.match(s):
+    if not _SQL_STARTS_OK.match(_strip_leading_comments(s)):
         raise ValueError("רק שאילתות SELECT / WITH מותרות")
     if _SQL_DENY.search(s):
         raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
