@@ -1,0 +1,36 @@
+[
+ {
+  "dataset": "מגרשים",
+  "rows": 15568,
+  "cols": 27,
+  "csv_mb": 29.17,
+  "append_path": {
+   "hash_secs": 0.19,
+   "insert_secs": 17.1,
+   "total_secs": 17.29,
+   "table_mb": 26.23,
+   "index_mb": 1.91
+  },
+  "copy_path": {
+   "total_secs": 3.64,
+   "table_mb": 23.46
+  }
+ },
+ {
+  "dataset": "החלטות הממשלה",
+  "rows": 26133,
+  "cols": 21,
+  "csv_mb": 133.48,
+  "append_path": {
+   "hash_secs": 1.04,
+   "insert_secs": 89.78,
+   "total_secs": 90.82,
+   "table_mb": 75.09,
+   "index_mb": 3.09
+  },
+  "copy_path": {
+   "total_secs": 16.62,
+   "table_mb": 71.97
+  }
+ }
+]

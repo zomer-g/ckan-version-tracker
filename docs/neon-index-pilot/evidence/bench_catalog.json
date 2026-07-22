@@ -1,0 +1,25 @@
+{
+ "public": {
+  "tables": 114,
+  "est_ms": 161.7,
+  "cols_ms": 642.7,
+  "col_rows": 1562
+ },
+ "pilot_idx": {
+  "tables": 310,
+  "est_ms": 321.5,
+  "cols_ms": 1182.5,
+  "col_rows": 3719
+ },
+ "knesset": {
+  "tables": 50,
+  "est_ms": 146.3,
+  "cols_ms": 310.4,
+  "col_rows": 529
+ },
+ "whole_db": {
+  "tables": 542,
+  "col_rows": 7929,
+  "ms": 2213.0
+ }
+}

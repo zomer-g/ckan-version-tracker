@@ -1,0 +1,110 @@
+[
+ {
+  "table": "idx_govmap_213346_3724c999_319becd1",
+  "title": "שכבת בתי דת",
+  "rows": 46,
+  "mb": 0.02,
+  "count_ms": 138.5,
+  "limit20_ms": 147.9,
+  "ilike_ms": 133.8,
+  "ilike_hits": 0,
+  "ilike_col": "objectID_1",
+  "groupby_ms": 136.1
+ },
+ {
+  "table": "idx_knesset_committee_single_2967_b84ee933_71eb5bde",
+  "title": "ועדת משנה ד' — פרוטוקולי ועדה (כנסת 7)",
+  "rows": 61,
+  "mb": 0.05,
+  "count_ms": 133.8,
+  "limit20_ms": 142.1,
+  "ilike_ms": 137.3,
+  "ilike_hits": 0,
+  "ilike_col": "committee_category_id",
+  "groupby_ms": 135.9
+ },
+ {
+  "table": "idx_govmap_234719_267b7676_6e756458",
+  "title": "נחלים_שדרות",
+  "rows": 909,
+  "mb": 0.52,
+  "count_ms": 137.0,
+  "limit20_ms": 137.7,
+  "ilike_ms": 136.2,
+  "ilike_hits": 0,
+  "ilike_col": "uniq_id",
+  "groupby_ms": 134.9
+ },
+ {
+  "table": "idx_govmap_224990_5aec2baf_304e43d5",
+  "title": "נפות משרד הפנים",
+  "rows": 15,
+  "mb": 1.66,
+  "count_ms": 135.7,
+  "limit20_ms": 471.9,
+  "ilike_ms": 134.3,
+  "ilike_hits": 4,
+  "ilike_col": "נפה",
+  "groupby_ms": 144.5
+ },
+ {
+  "table": "idx_repository_of_answers_6c4638db_82db2f91",
+  "title": "Repository Of Answers",
+  "rows": 15344,
+  "mb": 22.49,
+  "count_ms": 140.7,
+  "limit20_ms": 141.3,
+  "ilike_ms": 160.5,
+  "ilike_hits": 9339,
+  "ilike_col": "Data.Title",
+  "groupby_ms": 149.8
+ },
+ {
+  "table": "idx_govmap_221390_c322abd1_29b97437",
+  "title": "מגרשים",
+  "rows": 15568,
+  "mb": 23.46,
+  "count_ms": 142.1,
+  "limit20_ms": 138.6,
+  "ilike_ms": 139.9,
+  "ilike_hits": 0,
+  "ilike_col": "area",
+  "groupby_ms": 138.0
+ },
+ {
+  "table": "idx_govmap_212461_845a9b86_381f619e",
+  "title": "יעודי קרקע באר שבע",
+  "rows": 29854,
+  "mb": 49.87,
+  "count_ms": 143.5,
+  "limit20_ms": 140.6,
+  "ilike_ms": 144.7,
+  "ilike_hits": 0,
+  "ilike_col": "גוש",
+  "groupby_ms": 145.1
+ },
+ {
+  "table": "idx_policies_96dcbeac_03c59ca7",
+  "title": "החלטות הממשלה",
+  "rows": 26133,
+  "mb": 71.97,
+  "count_ms": 141.6,
+  "limit20_ms": 139.6,
+  "ilike_ms": 150.0,
+  "ilike_hits": 0,
+  "ilike_col": "סוג",
+  "groupby_ms": 149.6
+ },
+ {
+  "table": "idx_govmap_21_eaaa2c29_2ea30aae",
+  "title": "שכבת גושים",
+  "rows": 18680,
+  "mb": 158.24,
+  "count_ms": 141.7,
+  "limit20_ms": 141.4,
+  "ilike_ms": 148.3,
+  "ilike_hits": 0,
+  "ilike_col": "מספר גוש",
+  "groupby_ms": 148.7
+ }
+]

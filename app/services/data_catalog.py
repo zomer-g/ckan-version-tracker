@@ -18,7 +18,9 @@ cube computes the exact count for the single opened table.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,35 @@ logger = logging.getLogger(__name__)
 
 # search_path handed to the read-only console so both schemas resolve unqualified.
 CONSOLE_SEARCH_PATH = "public, knesset"
+
+# ── catalog cache ────────────────────────────────────────────────────────────
+# build_catalog() is called on EVERY /data page load *and* on every detail-cube
+# open (table_detail re-derives the whole catalog just to look up one row). Each
+# call costs one full scan of tracked_datasets + its tags, a DISTINCT ON over
+# version_index that materialises every dataset's resource_mappings JSONB, and
+# two catalog queries against the append DB.
+#
+# Measured against a rollout-scale corpus (~2,900 index tables): ~3 s of DB work
+# and ~2.6 MB of JSONB pulled into memory PER REQUEST — on a 512 MB dyno with a
+# documented OOM history. Nothing here changes between polls, so a short
+# process-local TTL cache removes essentially all of it. One process, so a plain
+# dict beats Redis; the lock keeps a cold cache from being rebuilt N times
+# concurrently.
+_CACHE_TTL_SECONDS = 300.0
+_catalog_cache: list[dict] | None = None
+_catalog_cache_at: float = 0.0
+_catalog_lock = asyncio.Lock()
+
+
+def invalidate_catalog_cache() -> None:
+    """Drop the cached catalog so the next read rebuilds it.
+
+    Call after anything that adds/removes/renames a queryable table (a sync that
+    swapped a table in, a dataset activation/deletion). Cheap and idempotent —
+    when in doubt, call it; the TTL is the backstop for whatever forgets to."""
+    global _catalog_cache, _catalog_cache_at
+    _catalog_cache = None
+    _catalog_cache_at = 0.0
 
 
 def _source_url(ds: TrackedDataset) -> str:
@@ -115,12 +146,33 @@ def _ds_record(ds: TrackedDataset, tbl: str, resource_name: str | None,
     }
 
 
-async def build_catalog(db: AsyncSession) -> list[dict]:
+async def build_catalog(db: AsyncSession, *, use_cache: bool = True) -> list[dict]:
     """The unified, source-grouped table list for the /data browser.
 
-    Dataset (public) tables first, then the Knesset schema tables. Row counts are
-    planner estimates; a table with no physical rows yet (est is None) is still
-    listed so a freshly-tracked dataset appears immediately."""
+    Served from a short-lived process-local cache (see _CACHE_TTL_SECONDS) since
+    the underlying data only changes when a poll lands. Pass ``use_cache=False``
+    to force a rebuild. Callers must treat the result as READ-ONLY — it is the
+    cached list itself, not a copy."""
+    global _catalog_cache, _catalog_cache_at
+    if use_cache:
+        cached, age = _catalog_cache, time.monotonic() - _catalog_cache_at
+        if cached is not None and age < _CACHE_TTL_SECONDS:
+            return cached
+        async with _catalog_lock:
+            # Another waiter may have rebuilt it while we queued for the lock.
+            cached, age = _catalog_cache, time.monotonic() - _catalog_cache_at
+            if cached is not None and age < _CACHE_TTL_SECONDS:
+                return cached
+            built = await _build_catalog_uncached(db)
+            _catalog_cache, _catalog_cache_at = built, time.monotonic()
+            return built
+    return await _build_catalog_uncached(db)
+
+
+async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
+    """Dataset (public) tables first, then the Knesset schema tables. Row counts
+    are planner estimates; a table with no physical rows yet (est is None) is
+    still listed so a freshly-tracked dataset appears immediately."""
     datasets = (await db.execute(
         select(TrackedDataset)
         .where(TrackedDataset.status.in_(["active", "pending"]))

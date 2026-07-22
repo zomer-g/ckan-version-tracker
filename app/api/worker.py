@@ -435,25 +435,40 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
     tmp = None
     BATCH = 5000
     try:
-        data = await storage_client.get_object_bytes(r2_key)
-        if not data:
-            return
         fd, tmp = _tempfile.mkstemp(suffix=".csv", prefix="neon-load-")
         _os.close(fd)
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        del data  # free the ~58MB download before streaming the parse
+        # Stream straight to disk (boto3 managed transfer, constant memory).
+        # get_object_bytes() would materialise the WHOLE object in RAM first —
+        # survivable for the ~58MB case this was written for, fatal on the
+        # multi-GB index CSVs (the largest in the corpus is 3.58 GB) on a 512MB
+        # dyno.
+        if not await storage_client.download_to_file(r2_key, tmp):
+            return
         cols: list[str] = []
         batch: list[dict] = []
         ensured = False
         total = 0
         with open(tmp, "r", encoding="utf-8-sig", newline="") as fh:
-            reader = _csv.DictReader(fh)
-            cols = [c for c in (reader.fieldnames or []) if c and c != "_id"]
+            reader = _csv.reader(fh)
+            try:
+                header = next(reader)
+            except StopIteration:
+                return
+            # Clip + dedup on BYTE length: Postgres truncates identifiers at 63
+            # bytes, so two long Hebrew headers sharing a prefix would otherwise
+            # collapse into one column and fail the CREATE TABLE.
+            safe = append_store.safe_column_names(header)
+            # Blank-headed columns stay dropped (they were before this change);
+            # materialising them as col_N would try to insert into a column that
+            # existing tables don't have.
+            keep = [i for i, raw in enumerate(header)
+                    if (raw or "").strip() and safe[i] != "_id"]
+            cols = [safe[i] for i in keep]
             if not cols:
                 return
             for row in reader:
-                batch.append({c: (row.get(c) or "") for c in cols})
+                batch.append({safe[i]: (row[i] if i < len(row) else "") or ""
+                              for i in keep})
                 if len(batch) >= BATCH:
                     if not ensured:
                         await append_store.ensure_table(table, cols, key_col=None, keyless=True)
@@ -665,9 +680,20 @@ async def push_version(
                 return
             try:
                 n_fields, n_records = parse_csv(csv_bytes)
-                cols = [f["id"] for f in n_fields if f.get("id") and f["id"] != "_id"]
+                raw_ids = [f["id"] for f in n_fields if f.get("id")]
+                # Same 63-BYTE identifier clip Postgres applies server-side, so
+                # colliding long Hebrew headers get disambiguated here instead of
+                # failing the CREATE TABLE (see append_store.safe_column_names).
+                safe_ids = append_store.safe_column_names(raw_ids)
+                renamed = {r: s for r, s in zip(raw_ids, safe_ids) if r != s}
+                cols = [s for r, s in zip(raw_ids, safe_ids) if r != "_id"]
                 if not (cols and n_records):
                     return
+                if renamed:
+                    n_records = [
+                        {renamed.get(k, k): v for k, v in rec.items()}
+                        for rec in n_records
+                    ]
                 table = append_store.table_name(ds)
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
                 n = await append_store.append_rows(

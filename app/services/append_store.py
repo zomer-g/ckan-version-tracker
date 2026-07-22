@@ -56,6 +56,12 @@ _ro_fallback_warned = False
 # Postgres bind-parameter ceiling is 32767; stay well under it.
 _MAX_PARAMS = 30000
 
+# Postgres identifier limit: NAMEDATALEN (64) - 1, counted in BYTES.
+_MAX_IDENT_BYTES = 63
+
+# Backstop statement timeout for the PUBLIC console role (see get_readonly_pool).
+_READONLY_STATEMENT_TIMEOUT = "30s"
+
 
 def is_configured() -> bool:
     return bool(settings.append_database_url)
@@ -115,7 +121,20 @@ async def get_readonly_pool() -> asyncpg.Pool:
     isn't set, so dev/prod keep working until the role is provisioned. The
     app-layer guards (single statement, SELECT/WITH only, READ ONLY tx,
     statement_timeout, row caps) still apply in both cases — this is
-    defense-in-depth, not a replacement for them."""
+    defense-in-depth, not a replacement for them.
+
+    The pool also carries a CONNECTION-LEVEL statement_timeout backstop. Every
+    console path today sets its own ``SET LOCAL statement_timeout`` (10s for
+    run_readonly_sql, 20s for knesset run_sql, 8s for sample_rows, 60s for the
+    CSV exports) and those still win inside their transaction — but a path that
+    forgets to set one would otherwise inherit "no limit". That matters now that
+    index tables hold TOASTed geometry: a query touching a large geometry column
+    was measured at 46 SECONDS of compute, and an unbounded one pins the Neon
+    endpoint for as long as it runs. The backstop applies to the console role
+    only — never to get_pool(), whose COPY/backfill work legitimately runs long.
+
+    Caveat: the fallback above returns the read/write pool, which has NO such
+    backstop. That path is already a warned, degraded mode."""
     global _ro_pool, _ro_fallback_warned
     raw = (settings.append_readonly_database_url or "").strip()
     if not raw:
@@ -138,6 +157,9 @@ async def get_readonly_pool() -> asyncpg.Pool:
                     min_size=0,      # let Neon scale to zero between queries
                     max_size=5,
                     command_timeout=180,
+                    server_settings={
+                        "statement_timeout": _READONLY_STATEMENT_TIMEOUT,
+                    },
                 )
                 logger.info("append_store: read-only connection pool created")
     return _ro_pool
@@ -170,6 +192,51 @@ def table_name_for_resource(ds, resource_id: str) -> str:
 def _qi(name: str) -> str:
     """Quote a SQL identifier (supports Hebrew/Unicode column names)."""
     return '"' + str(name).replace('"', '""') + '"'
+
+
+def clip_ident_bytes(name: str, limit: int = _MAX_IDENT_BYTES) -> str:
+    """Truncate an identifier to ``limit`` UTF-8 BYTES on a character boundary.
+
+    Postgres caps identifiers at NAMEDATALEN-1 = 63 **bytes**, not characters,
+    and truncates anything longer SILENTLY. A Hebrew letter is 2 bytes, so a
+    55-character Hebrew header is 94 bytes and the server stores it as ~38
+    characters. Callers must therefore reason about the CLIPPED name, never the
+    raw one (see safe_column_names)."""
+    raw = str(name).encode("utf-8")
+    if len(raw) <= limit:
+        return str(name)
+    # errors="ignore" drops a partial trailing character rather than raising.
+    return raw[:limit].decode("utf-8", "ignore")
+
+
+def safe_column_names(headers: list[str]) -> list[str]:
+    """CSV headers → column names that are unique, non-empty and ≤63 bytes.
+
+    Returned in the SAME order as ``headers`` so callers can zip them back to
+    the CSV's positional values.
+
+    Why this is not just ``name[:63]``: the 63-byte clip is what Postgres itself
+    applies, so two *distinct* long Hebrew headers sharing a prefix collapse to
+    the SAME identifier — e.g. "…שעבדו בשנת 2008 בעלי השכלה על תיכונית" and
+    "…שעבדו בשנת 2008 בעלי תואר אקדמי" both clip to "…בעלי", and the CREATE TABLE
+    fails with DuplicateColumnError. Dedup therefore has to run on the clipped
+    names, and the "_2"/"_3" disambiguating suffix has to fit INSIDE the same
+    63-byte budget (mirrors the reasoning in _index_name)."""
+    out: list[str] = []
+    seen: dict[str, int] = {}
+    for i, raw in enumerate(headers):
+        name = clip_ident_bytes((str(raw) if raw is not None else "").strip()
+                                .replace("\x00", "")) or f"col_{i + 1}"
+        key = name.lower()
+        if key in seen:
+            seen[key] += 1
+            suffix = f"_{seen[key]}"
+            name = clip_ident_bytes(
+                name, _MAX_IDENT_BYTES - len(suffix.encode("utf-8"))) + suffix
+        else:
+            seen[key] = 0
+        out.append(name)
+    return out
 
 
 def _index_name(table: str, suffix: str) -> str:
