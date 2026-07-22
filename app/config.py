@@ -173,15 +173,22 @@ class Settings(BaseSettings):
     # collections instead of only over their metadata. LATEST VERSION ONLY —
     # history stays in R2. Sized from a 310-dataset pilot: ~7.9 GB and ~$2.8/mo
     # for the whole corpus (docs/neon-index-pilot/).
-    # OFF BY DEFAULT — see docs/neon-index-pilot/README.md §10.9. Running this
-    # in-process on the 512MB web dyno OOM-killed it three times: RSS sawtoothed
-    # 220→487MB and the instance was evicted, even with a 3-dataset chunk and a
-    # 16MB COPY batch. The loader itself is memory-bounded (verified at a 202MB
-    # peak streaming a 3.5GB CSV standalone), but it has to share the dyno with
-    # FastAPI, the poll pipeline and the Knesset sync, and that sum does not fit.
-    # Re-enabling needs a different execution home (the separate worker service,
-    # a one-off job, or a larger instance) — not just a smaller chunk.
-    index_mirror_enabled: bool = False
+    # See docs/neon-index-pilot/README.md §10.9. Running this unbounded on the
+    # 512MB web dyno OOM-killed it three times: the loader is memory-bounded on
+    # its own (202MB peak streaming a 3.5GB CSV), but it shares the dyno with
+    # FastAPI, the poll pipeline and the Knesset sync, whose baseline is already
+    # ~280MB — and a large CSV's peak does not fit in what is left.
+    #
+    # The fix is a SIZE GATE rather than an off switch: the crash correlated
+    # with size (a 395MB CSV took RSS to 427MB; everything ≤24.67MB loaded fine),
+    # and size is extremely skewed — a 25MB cap still covers 2,854 of the 2,910
+    # datasets (98.1%). The 56 oversized ones are deferred, not lost: they are
+    # recorded as such and wait for a run with real memory headroom (the
+    # over-worker service, a one-off job, or an out-of-Render backfill).
+    index_mirror_enabled: bool = True
+    # Skip (and record as deferred) any index CSV larger than this. Checked with
+    # a HEAD before a byte is downloaded.
+    index_mirror_max_csv_mb: int = 25
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.

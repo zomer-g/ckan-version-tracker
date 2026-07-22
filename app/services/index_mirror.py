@@ -55,6 +55,13 @@ ELIGIBLE_SOURCE_TYPES = ("scraper", "govmap")
 
 STATE_TABLE = "_sync_state"
 
+# How many times a dataset may be attempted before it is deferred instead of
+# retried. The point is not transient-error tolerance — it is that an OOM kills
+# the process before any error can be recorded, so without a counter claimed
+# BEFORE the load the same dataset is picked again every tick, forever. That is
+# precisely the crash loop of §10.9.
+MAX_ATTEMPTS = 3
+
 # A COPY batch is bounded by BOTH row count and payload bytes, whichever trips
 # first. Rows alone are not a memory bound: the pilot used 20k rows/batch on an
 # unconstrained machine, but the largest layer in the corpus averages ~11 KB per
@@ -151,6 +158,16 @@ async def _ensure_state_table(conn) -> None:
             error           text
         )
     """)
+    # Added after the first deploy: `deferred` marks a dataset we deliberately
+    # are NOT mirroring here (too large for this dyno, or it failed repeatedly),
+    # and `attempts` is what stops a crash loop. Both are treated as "settled"
+    # by loaded_versions so the driver stops re-offering them.
+    for ddl in (
+        f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS deferred text",
+        f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS csv_bytes bigint",
+        f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0",
+    ):
+        await conn.execute(ddl)
 
 
 def index_csv_value(mappings: dict | None) -> str | None:
@@ -285,10 +302,14 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
 # ── sync driver ──────────────────────────────────────────────────────────────
 
 async def loaded_versions() -> dict[str, int]:
-    """{dataset_id: mirrored version_number} — one cheap read of the checkpoint.
+    """{dataset_id: settled version_number} — one cheap read of the checkpoint.
 
-    Datasets whose last sync ERRORED are reported at version -1 so the driver
-    retries them rather than treating them as up to date."""
+    "Settled" means the driver should not offer it again: either it mirrored
+    cleanly, or it is DEFERRED (too large for this environment / too many failed
+    attempts). A transient error reports -1 so it gets retried — but only until
+    ``MAX_ATTEMPTS``, after which it is deferred instead. That cap is what makes
+    a crash loop impossible: a dataset that kills the process mid-load leaves an
+    incremented attempt counter behind, so it cannot be retried forever."""
     if not append_store.is_configured():
         return {}
     pool = await append_store.get_pool()
@@ -296,27 +317,42 @@ async def loaded_versions() -> dict[str, int]:
         await ensure_schema(conn)
         await _ensure_state_table(conn)
         rows = await conn.fetch(
-            f"SELECT dataset_id, version_number, error FROM {_qt(STATE_TABLE)}")
-    return {str(r["dataset_id"]): (-1 if r["error"] else int(r["version_number"]))
-            for r in rows}
+            f"SELECT dataset_id, version_number, error, deferred, attempts "
+            f"FROM {_qt(STATE_TABLE)}")
+    out: dict[str, int] = {}
+    for r in rows:
+        settled = (r["deferred"] is not None
+                   or (not r["error"] and r["attempts"] is not None)
+                   or (r["attempts"] or 0) >= MAX_ATTEMPTS)
+        out[str(r["dataset_id"])] = int(r["version_number"]) if settled else -1
+        if r["error"] and (r["attempts"] or 0) < MAX_ATTEMPTS:
+            out[str(r["dataset_id"])] = -1
+    return out
 
 
 async def _record(dataset_id, table: str, version_number: int,
-                  rows: int | None, error: str | None) -> None:
+                  rows: int | None, error: str | None, *,
+                  deferred: str | None = None, csv_bytes: int | None = None,
+                  bump_attempt: bool = False) -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await _ensure_state_table(conn)
         await conn.execute(f"""
             INSERT INTO {_qt(STATE_TABLE)}
-                (dataset_id, table_name, version_number, rows, synced_at, error)
-            VALUES ($1, $2, $3, $4, now(), $5)
+                (dataset_id, table_name, version_number, rows, synced_at,
+                 error, deferred, csv_bytes, attempts)
+            VALUES ($1, $2, $3, $4, now(), $5, $6, $7, $8)
             ON CONFLICT (dataset_id) DO UPDATE SET
                 table_name = EXCLUDED.table_name,
                 version_number = EXCLUDED.version_number,
                 rows = EXCLUDED.rows,
                 synced_at = now(),
-                error = EXCLUDED.error
-        """, dataset_id, table, int(version_number), rows, error)
+                error = EXCLUDED.error,
+                deferred = EXCLUDED.deferred,
+                csv_bytes = COALESCE(EXCLUDED.csv_bytes, {_qt(STATE_TABLE)}.csv_bytes),
+                attempts = CASE WHEN $9 THEN {_qt(STATE_TABLE)}.attempts + 1 ELSE 0 END
+        """, dataset_id, table, int(version_number), rows, error, deferred,
+             csv_bytes, 1 if bump_attempt else 0, bump_attempt)
 
 
 async def pending(db, *, limit: int | None = None,
@@ -338,36 +374,53 @@ async def pending(db, *, limit: int | None = None,
     from app.models.tracked_dataset import TrackedDataset
     from app.models.version_index import VersionIndex
 
-    q = select(TrackedDataset).where(
+    # COLUMNS, not ORM entities. Materialising ~2,900 TrackedDataset objects
+    # (each with its scraper_config JSONB) cost ~40MB per tick on a dyno that
+    # only has ~200MB of headroom — for five fields we actually use.
+    q = select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.ckan_name,
+               TrackedDataset.source_type, TrackedDataset.status).where(
         TrackedDataset.source_type.in_(ELIGIBLE_SOURCE_TYPES),
         TrackedDataset.status.in_(["active", "pending"]),
     )
     if dataset_id is not None:
         q = q.where(TrackedDataset.id == dataset_id)
-    datasets = [d for d in (await db.execute(q)).scalars().all()
-                if dataset_is_index_mirror_eligible(d)]
+    datasets = [r for r in (await db.execute(q)).all()
+                if dataset_is_index_mirror_eligible(r)]
     if not datasets:
         return []
 
-    rows = (await db.execute(
-        select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
-               VersionIndex.resource_mappings)
-        .where(VersionIndex.tracked_dataset_id.in_([d.id for d in datasets]))
-        .distinct(VersionIndex.tracked_dataset_id)
-        .order_by(VersionIndex.tracked_dataset_id, VersionIndex.version_number.desc())
-    )).all()
-    latest = {r[0]: (int(r[1]), r[2] or {}) for r in rows}
     done = await loaded_versions()
+    # Only ask the DB for versions of datasets that are not already settled —
+    # in steady state that is a handful of ids instead of ~2,900 rows of JSONB.
+    candidates = [r.id for r in datasets if done.get(str(r.id), -1) < 0
+                  or str(r.id) not in done]
+    if not candidates:
+        candidates = [r.id for r in datasets]
+
+    latest: dict = {}
+    CHUNK = 500
+    for i in range(0, len(candidates), CHUNK):
+        rows = (await db.execute(
+            select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
+                   VersionIndex.resource_mappings)
+            .where(VersionIndex.tracked_dataset_id.in_(candidates[i:i + CHUNK]))
+            .distinct(VersionIndex.tracked_dataset_id)
+            .order_by(VersionIndex.tracked_dataset_id,
+                      VersionIndex.version_number.desc())
+        )).all()
+        for r in rows:
+            v = index_csv_value(r[2] or {})
+            if v:                          # keep only the value, drop the JSONB
+                latest[r[0]] = (int(r[1]), v)
+        if limit and len(latest) >= limit * 4:
+            break                          # enough candidates for this chunk
 
     out: list[dict] = []
     for ds in datasets:
         got = latest.get(ds.id)
         if not got:
-            continue                      # no version yet — nothing to mirror
-        vnum, mappings = got
-        value = index_csv_value(mappings)
-        if not value:
-            continue                      # this version carries no index CSV
+            continue          # no version yet, or it carries no index CSV
+        vnum, value = got
         if done.get(str(ds.id), -1) >= vnum:
             continue                      # already mirrored at this version
         out.append({
@@ -381,9 +434,39 @@ async def pending(db, *, limit: int | None = None,
     return out[:limit] if limit else out
 
 
-async def sync_one(item: dict) -> dict:
-    """Mirror one pending dataset. Never raises — a failure is recorded on the
-    checkpoint (which makes the driver retry it next round) and returned."""
+async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
+    """Mirror one pending dataset. Never raises.
+
+    Two guards stand in front of the load, both learned from OOM-killing the web
+    dyno (§10.9):
+
+    * **Size gate** — a HEAD before a single byte is downloaded. Anything over
+      ``max_bytes`` is recorded as DEFERRED and skipped. Peak memory tracks CSV
+      size, and size in this corpus is wildly skewed, so a modest cap keeps
+      98% of the datasets while excluding every one that could threaten the dyno.
+    * **Attempt counter** — bumped BEFORE the load, so a dataset that kills the
+      process mid-load still leaves evidence behind. After ``MAX_ATTEMPTS`` it is
+      deferred rather than retried, which is what turns a crash *loop* into a
+      single crash at worst.
+    """
+    if max_bytes:
+        try:
+            size = await storage_client.object_size(item["r2_value"])
+        except Exception:  # noqa: BLE001 — unknown size ⇒ treat as too big
+            size = None
+        if size is None or size > max_bytes:
+            reason = (f"csv {size/2**20:.1f} MB > {max_bytes/2**20:.0f} MB cap"
+                      if size else "csv size unknown")
+            await _record(item["dataset_id"], item["table"],
+                          item["version_number"], None, None,
+                          deferred=reason, csv_bytes=size)
+            logger.info("idx: deferring %s — %s", item.get("title"), reason)
+            return {**item, "ok": False, "deferred": reason}
+
+    # Claim the attempt first: if the load takes the process down with it, the
+    # counter survives and the next tick will not repeat it indefinitely.
+    await _record(item["dataset_id"], item["table"], item["version_number"],
+                  None, "in progress", bump_attempt=True)
     try:
         res = await load_index_csv(item["r2_value"], item["table"])
         await _record(item["dataset_id"], item["table"], item["version_number"],
@@ -393,11 +476,12 @@ async def sync_one(item: dict) -> dict:
         logger.warning("idx: sync failed for %s (%s): %s",
                        item.get("title"), item.get("table"), e)
         await _record(item["dataset_id"], item["table"], item["version_number"],
-                      None, str(e)[:500])
+                      None, str(e)[:500], bump_attempt=True)
         return {**item, "ok": False, "error": str(e)[:300]}
 
 
-async def sync_due(db, *, limit: int = 20, dataset_id=None) -> dict:
+async def sync_due(db, *, limit: int = 20, dataset_id=None,
+                   max_csv_mb: int | None = None) -> dict:
     """Mirror up to ``limit`` datasets whose index CSV moved. Sequential on
     purpose: each load already streams a whole CSV through the dyno, and running
     several at once is what would put memory back at risk.
@@ -410,18 +494,22 @@ async def sync_due(db, *, limit: int = 20, dataset_id=None) -> dict:
     if not todo:
         return {"pending": 0, "synced": 0, "failed": 0, "results": []}
 
-    results = [await sync_one(item) for item in todo]
+    cap_mb = settings.index_mirror_max_csv_mb if max_csv_mb is None else max_csv_mb
+    max_bytes = int(cap_mb) * 1024 * 1024 if cap_mb else None
+    results = [await sync_one(item, max_bytes=max_bytes) for item in todo]
     ok = [r for r in results if r.get("ok")]
-    bad = [r for r in results if not r.get("ok")]
+    deferred = [r for r in results if r.get("deferred")]
+    bad = [r for r in results if not r.get("ok") and not r.get("deferred")]
     if ok:
         # New/replaced tables ⇒ the /data catalog must not serve a stale list.
         from app.services.data_catalog import invalidate_catalog_cache
         invalidate_catalog_cache()
-    logger.info("idx sync: %d ok, %d failed, %d rows",
-                len(ok), len(bad), sum(r.get("rows") or 0 for r in ok))
+    logger.info("idx sync: %d ok, %d deferred, %d failed, %d rows",
+                len(ok), len(deferred), len(bad),
+                sum(r.get("rows") or 0 for r in ok))
     return {
-        "pending": len(todo), "synced": len(ok), "failed": len(bad),
-        "rows": sum(r.get("rows") or 0 for r in ok),
+        "pending": len(todo), "synced": len(ok), "deferred": len(deferred),
+        "failed": len(bad), "rows": sum(r.get("rows") or 0 for r in ok),
         "results": [{k: (str(v) if k == "dataset_id" else v)
                      for k, v in r.items() if k != "r2_value"} for r in results],
     }
@@ -450,3 +538,39 @@ async def list_tables() -> list[dict]:
     return [{"dataset_id": str(r["dataset_id"]), "table": r["table_name"],
              "version_number": r["version_number"], "rows": r["rows"],
              "synced_at": r["synced_at"]} for r in rows]
+
+
+async def list_deferred() -> list[dict]:
+    """Datasets deliberately skipped here — too large for this dyno, or failed
+    repeatedly. They are not lost: a run with real memory headroom (the worker
+    service or an out-of-Render backfill) picks them up via ``retry_deferred``."""
+    if not append_store.is_configured():
+        return []
+    pool = await append_store.get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT dataset_id, table_name, deferred, csv_bytes, attempts "
+                f"FROM {_qt(STATE_TABLE)} WHERE deferred IS NOT NULL "
+                f"ORDER BY csv_bytes DESC NULLS LAST")
+    except Exception:  # noqa: BLE001
+        return []
+    return [{"dataset_id": str(r["dataset_id"]), "table": r["table_name"],
+             "reason": r["deferred"], "csv_bytes": r["csv_bytes"],
+             "attempts": r["attempts"]} for r in rows]
+
+
+async def retry_deferred() -> int:
+    """Clear the deferred marks so the next run re-offers them. Use after moving
+    the backfill somewhere with more memory (or raising the cap)."""
+    if not append_store.is_configured():
+        return 0
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await _ensure_state_table(conn)
+        res = await conn.execute(
+            f"DELETE FROM {_qt(STATE_TABLE)} "
+            f"WHERE deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS}")
+    n = int(str(res).rsplit(" ", 1)[-1] or 0)
+    logger.info("idx: cleared %d deferred checkpoint rows", n)
+    return n

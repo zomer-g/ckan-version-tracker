@@ -114,7 +114,7 @@ def test_sync_one_records_failure_and_does_not_raise(monkeypatch):
     async def fake_load(value, table):
         raise RuntimeError("object missing")
 
-    async def fake_record(dsid, table, vnum, rows, error):
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
         recorded.update(dataset_id=dsid, table=table, version=vnum,
                         rows=rows, error=error)
 
@@ -134,7 +134,7 @@ def test_sync_one_records_success(monkeypatch):
     async def fake_load(value, table):
         return {"table": table, "rows": 42, "columns": 3}
 
-    async def fake_record(dsid, table, vnum, rows, error):
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
         recorded.update(rows=rows, error=error, version=vnum)
 
     monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
@@ -164,7 +164,7 @@ def test_sync_due_invalidates_the_catalog_cache(monkeypatch):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:k"}]
 
-    async def fake_sync_one(item):
+    async def fake_sync_one(item, **kw):
         return {**item, "ok": True, "rows": 5, "columns": 2}
 
     monkeypatch.setattr(index_mirror, "pending", fake_pending)
@@ -188,7 +188,7 @@ def test_sync_due_reports_failures_without_invalidating(monkeypatch):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:k"}]
 
-    async def fake_sync_one(item):
+    async def fake_sync_one(item, **kw):
         return {**item, "ok": False, "error": "boom"}
 
     monkeypatch.setattr(index_mirror, "pending", fake_pending)
@@ -210,7 +210,7 @@ def test_results_never_leak_the_storage_key(monkeypatch):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:secret/key"}]
 
-    async def fake_sync_one(item):
+    async def fake_sync_one(item, **kw):
         return {**item, "ok": True, "rows": 1, "columns": 1}
 
     monkeypatch.setattr(index_mirror, "pending", fake_pending)
@@ -237,3 +237,99 @@ def test_bulk_geometry_columns_are_recognised():
     assert "geometry_wkt" in append_store._BULK_COLS
     for c in ("geometry", "geom", "wkt"):
         assert c in append_store._BULK_COLS
+
+
+# ── the size gate and the crash-loop guard (§10.9) ───────────────────────────
+
+def test_oversized_csv_is_deferred_before_any_download(monkeypatch):
+    """The gate must fire on a HEAD — downloading first is exactly what took the
+    dyno down."""
+    from app.services import storage_client as sc
+    downloaded = {"n": 0}
+    recorded = {}
+
+    async def fake_size(v):
+        return 400 * 2**20
+
+    async def fake_load(v, t):
+        downloaded["n"] += 1
+        return {"rows": 1, "columns": 1}
+
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
+        recorded.update(error=error, **kw)
+
+    monkeypatch.setattr(sc.storage_client, "object_size", fake_size)
+    monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+
+    out = asyncio.run(index_mirror.sync_one(
+        {"dataset_id": "d", "title": "big", "table": "t",
+         "version_number": 1, "r2_value": "r2:k"},
+        max_bytes=25 * 2**20))
+    assert out["ok"] is False and "cap" in out["deferred"]
+    assert downloaded["n"] == 0, "must not download an oversized CSV"
+    assert recorded["deferred"] and recorded["csv_bytes"] == 400 * 2**20
+
+
+def test_unknown_size_is_treated_as_too_big(monkeypatch):
+    from app.services import storage_client as sc
+
+    async def fake_size(v):
+        raise RuntimeError("HEAD failed")
+
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
+        pass
+
+    monkeypatch.setattr(sc.storage_client, "object_size", fake_size)
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+    out = asyncio.run(index_mirror.sync_one(
+        {"dataset_id": "d", "title": "x", "table": "t",
+         "version_number": 1, "r2_value": "r2:k"}, max_bytes=25 * 2**20))
+    assert out["ok"] is False and "unknown" in out["deferred"]
+
+
+def test_within_the_cap_loads_normally(monkeypatch):
+    from app.services import storage_client as sc
+
+    async def fake_size(v):
+        return 5 * 2**20
+
+    async def fake_load(v, t):
+        return {"rows": 7, "columns": 2}
+
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
+        pass
+
+    monkeypatch.setattr(sc.storage_client, "object_size", fake_size)
+    monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+    out = asyncio.run(index_mirror.sync_one(
+        {"dataset_id": "d", "title": "x", "table": "t",
+         "version_number": 1, "r2_value": "r2:k"}, max_bytes=25 * 2**20))
+    assert out["ok"] and out["rows"] == 7
+
+
+def test_attempt_is_claimed_before_the_load(monkeypatch):
+    """An OOM kills the process before any result can be written, so the attempt
+    counter has to be persisted BEFORE the load — otherwise the same dataset is
+    picked again every tick and the crash loop never ends."""
+    order = []
+
+    async def fake_record(dsid, table, vnum, rows, error, **kw):
+        order.append(("record", error, kw.get("bump_attempt")))
+
+    async def fake_load(v, t):
+        order.append(("load", None, None))
+        return {"rows": 1, "columns": 1}
+
+    monkeypatch.setattr(index_mirror, "_record", fake_record)
+    monkeypatch.setattr(index_mirror, "load_index_csv", fake_load)
+    asyncio.run(index_mirror.sync_one(
+        {"dataset_id": "d", "title": "x", "table": "t",
+         "version_number": 1, "r2_value": "r2:k"}))
+    assert order[0][0] == "record" and order[0][2] is True, "attempt not claimed first"
+    assert order[1][0] == "load"
+
+
+def test_max_attempts_is_small_enough_to_bound_a_crash_loop():
+    assert 1 <= index_mirror.MAX_ATTEMPTS <= 5

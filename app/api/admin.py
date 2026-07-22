@@ -1576,15 +1576,36 @@ async def index_mirror_status(
     from app.services import index_mirror
     mirrored = await index_mirror.list_tables()
     todo = await index_mirror.pending(db)
+    deferred = await index_mirror.list_deferred()
     return {
         "mirrored": len(mirrored),
         "mirrored_rows": sum(m.get("rows") or 0 for m in mirrored),
         "pending": len(todo),
+        "deferred": len(deferred),
+        "deferred_bytes": sum(d.get("csv_bytes") or 0 for d in deferred),
+        "max_csv_mb": settings.index_mirror_max_csv_mb,
         "pending_sample": [
             {"title": t["title"], "table": t["table"], "version": t["version_number"]}
             for t in todo[:20]
         ],
+        "deferred_sample": deferred[:20],
     }
+
+
+@router.post("/index-mirror/retry-deferred")
+@limiter.limit("3/minute")
+async def index_mirror_retry_deferred(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Re-queue everything that was deferred (oversized / repeatedly failed).
+
+    Only meaningful once the sync has somewhere with more memory to run — on the
+    web dyno the size gate would simply defer them again."""
+    from app.services import index_mirror
+    n = await index_mirror.retry_deferred()
+    logger.info("Index mirror retry-deferred by %s: cleared %d", user.email, n)
+    return {"cleared": n}
 
 
 @router.post("/index-mirror/sync")
