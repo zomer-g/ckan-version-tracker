@@ -54,12 +54,47 @@ function downloadRowsCsv(
 // source of truth (sourceBadgeFor); Knesset schema tables get a fixed pill
 // (source_type "knesset" isn't a scraper badge, so synthesize it here).
 interface Badge { id: string; label: string; bg: string; fg: string; accent: string }
+
+// The Knesset ODATA mirror is its own group — NOT the "כנסת" scraper source
+// (committee-protocol datasets), which is a different thing with the same name.
+const KNESSET_DB_BADGE: Badge = {
+  id: "knesset-db", label: "מסד הנתונים של הכנסת",
+  bg: "#e0e7ff", fg: "#3730a3", accent: "#4f46e5",
+};
+
 function badgeOf(t: CatalogTable): Badge {
-  if (t.kind === "knesset") {
-    return { id: "knesset", label: "כנסת", bg: "#e0e7ff", fg: "#3730a3", accent: "#4f46e5" };
-  }
+  if (t.kind === "knesset") return KNESSET_DB_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
   return { id: b.id, label: b.label, bg: b.bg, fg: b.fg, accent: b.accent };
+}
+
+// Where a group's header links to: the source page for tracked sources (the
+// same /sources/:id hierarchy), the Knesset page for the ODATA mirror.
+function groupLink(b: Badge): string {
+  return b.id === "knesset-db" ? "/knesset?tab=sql" : `/sources/${b.id}`;
+}
+
+// Human-readable table name. Knesset tables carry a Hebrew description that is
+// far more useful than the entity-set name (KNS_Agenda) — and it's usually
+// written as "שם — הסבר", so the part before the dash is the natural short
+// name. Datasets use their title.
+function displayName(t: CatalogTable): string {
+  if (t.kind === "knesset") {
+    const d = (t.description || "").trim();
+    if (d) {
+      const head = d.split(/\s+[—–-]\s+/)[0].trim();
+      return head && head.length <= 40 ? head : d;
+    }
+    return t.title || t.table;
+  }
+  return t.title || t.table;
+}
+
+// Full text for the row tooltip: name, physical table, and the long description.
+function rowTooltip(t: CatalogTable): string {
+  const parts = [displayName(t), t.table];
+  if (t.description && t.description !== displayName(t)) parts.push(t.description);
+  return parts.join("\n");
 }
 
 const PLACEHOLDER_SQL =
@@ -67,16 +102,159 @@ const PLACEHOLDER_SQL =
   "SELECT table_schema, table_name\nFROM information_schema.tables\n" +
   "WHERE table_schema IN ('public', 'knesset')\nORDER BY 1, 2\nLIMIT 100";
 
-const EXAMPLES: { label: string; sql: string }[] = [
+// Example queries for the dropdown, ordered as a learning path: first how to
+// find your way around (what tables/columns exist), then filtering and typing,
+// and finally the point of this page — JOINs ACROSS sources that no single
+// dataset can answer. Every one of these is verified to return rows live.
+// The dataset tables are all-text with Hebrew column names (quoted, and note
+// the gershayim ״ U+05F4 in "סה״כ"); the knesset tables are lower-case + typed.
+const EXAMPLES: { label: string; group: string; sql: string }[] = [
+  // ── צעדים ראשונים ────────────────────────────────────────────────────────
   {
-    label: "כל הטבלאות במאגר",
-    sql: "SELECT table_schema, table_name\nFROM information_schema.tables\nWHERE table_schema IN ('public', 'knesset')\nORDER BY 1, 2",
+    group: "צעדים ראשונים",
+    label: "אילו טבלאות יש במאגר?",
+    sql: `-- רשימת כל הטבלאות: public = מאגרי האתר, knesset = מסד הכנסת.
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE table_schema IN ('public', 'knesset')
+ORDER BY 1, 2`,
   },
   {
-    label: "הצעות חוק לפי כנסת (טבלת כנסת)",
-    sql: "SELECT knessetnum, count(*) AS bills\nFROM kns_bill\nGROUP BY knessetnum\nORDER BY knessetnum DESC",
+    group: "צעדים ראשונים",
+    label: "הצצה לטבלה — 20 השורות הראשונות",
+    sql: `-- הדרך המהירה להבין מה יש בטבלה: * = כל העמודות, LIMIT = כמה שורות.
+SELECT *
+FROM kns_faction
+LIMIT 20`,
+  },
+  {
+    group: "צעדים ראשונים",
+    label: "אילו עמודות יש בטבלה?",
+    sql: `-- החליפו את שם הטבלה כדי לראות את העמודות והטיפוסים שלה.
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'kns_bill'
+ORDER BY ordinal_position`,
+  },
+  {
+    group: "צעדים ראשונים",
+    label: "כמה שורות יש בטבלה?",
+    sql: `-- count(*) סופר שורות. AS נותן לתוצאה שם קריא.
+SELECT count(*) AS bills
+FROM kns_bill`,
+  },
+
+  // ── סינון, חיפוש וקיבוץ ──────────────────────────────────────────────────
+  {
+    group: "סינון, חיפוש וקיבוץ",
+    label: "חיפוש טקסט חופשי (ILIKE)",
+    sql: `-- ILIKE = חיפוש ללא תלות ברישיות. % = "כל טקסט כאן".
+SELECT knessetnum, name
+FROM kns_bill
+WHERE name ILIKE '%חופש המידע%'
+ORDER BY knessetnum DESC
+LIMIT 50`,
+  },
+  {
+    group: "סינון, חיפוש וקיבוץ",
+    label: "ספירה וקיבוץ (GROUP BY)",
+    sql: `-- GROUP BY מקבץ שורות; count(*) סופר כמה יש בכל קבוצה.
+SELECT knessetnum, count(*) AS bills
+FROM kns_bill
+GROUP BY knessetnum
+ORDER BY knessetnum DESC`,
+  },
+  {
+    group: "סינון, חיפוש וקיבוץ",
+    label: "עמודות בעברית — שימו לב לגרשיים",
+    sql: `-- בטבלאות המאגרים שמות העמודות בעברית, ולכן חייבים גרשיים כפולים "כך".
+SELECT "משרד", "שם השירות", "רמת דיגיטליות"
+FROM append_servicescompass_services_fcfad5ad_4f92c758
+WHERE "משרד" = 'משרד הבריאות'
+LIMIT 50`,
+  },
+  {
+    group: "סינון, חיפוש וקיבוץ",
+    label: "טקסט למספר (::numeric) ומיון",
+    sql: `-- במאגרים המגורדים הכל נשמר כטקסט, אז ממירים ל-numeric כדי למיין נכון.
+SELECT "רשות", "סה״כ הכנסות"::numeric AS income
+FROM append_munidata_budget_economy_total_income_6af4bfbf_757f42fe
+WHERE "שנה" = '2024'
+ORDER BY income DESC
+LIMIT 20`,
+  },
+
+  // ── JOIN בין מאגרים שונים ────────────────────────────────────────────────
+  {
+    group: "JOIN בין מאגרים שונים",
+    label: "משרדים: שירותים דיגיטליים מול שאילתות בכנסת",
+    sql: `-- שני מקורות שונים לגמרי — "מצפן השירותים" של gov.il מול פיד ה-ODATA
+-- של הכנסת — מחוברים לפי שם המשרד. היחס מראה כמה פיקוח פרלמנטרי סופג
+-- כל משרד ביחס לגודל מערך השירותים שלו.
+WITH services AS (
+  SELECT "משרד" AS ministry, count(*) AS services
+  FROM append_servicescompass_services_fcfad5ad_4f92c758
+  GROUP BY "משרד"
+),
+queries AS (
+  SELECT m.name AS ministry, count(*) AS queries
+  FROM kns_query q
+  JOIN kns_govministry m ON m.id = q.govministryid
+  GROUP BY m.name
+)
+SELECT s.ministry, s.services, q.queries,
+       round(q.queries::numeric / s.services, 2) AS queries_per_service
+FROM services s
+JOIN queries q USING (ministry)
+ORDER BY queries_per_service DESC`,
+  },
+  {
+    group: "JOIN בין מאגרים שונים",
+    label: "רשויות מקומיות: הכנסות, ליקויי ביקורת וגרעון",
+    sql: `-- שלושה מאגרים נפרדים של "מצב השלטון המקומי", מחוברים לפי רשות ושנה.
+-- שימו לב: שם עמודת הגרעון נחתך ע"י Postgres (מגבלת אורך מזהה) — העתיקו כמו שהוא.
+SELECT i."רשות" AS authority,
+       i."סה״כ הכנסות"::numeric                       AS income,
+       d.deficiencies,
+       f."גרעון מצטבר נטו (גרעון מצטבר בניכו"::numeric AS net_deficit
+FROM append_munidata_budget_economy_total_income_6af4bfbf_757f42fe i
+JOIN (
+  SELECT "רשות", sum("סה״כ מספר ליקויים"::numeric) AS deficiencies
+  FROM append_munidata_budget_economy_audit_deficiencies_coun_f46b83a6
+  GROUP BY "רשות"
+) d ON d."רשות" = i."רשות"
+JOIN append_munidata_budget_economy_net_accum_deficit_4aebd_48dad0c1 f
+  ON f."רשות" = i."רשות" AND f."שנה" = i."שנה"
+WHERE i."שנה" = '2024'
+ORDER BY net_deficit DESC`,
+  },
+  {
+    group: "JOIN בין מאגרים שונים",
+    label: "מחוקק מול מבצע: הצבעות מליאה מול החלטות ממשלה",
+    sql: `-- הכנסת שומרת תאריך אמיתי (timestamptz), והחלטות הממשלה נשמרות כטקסט
+-- בפורמט DD.MM.YYYY — כאן מפרקים את שניהם לשנה ומחברים.
+WITH votes AS (
+  SELECT extract(year FROM votedatetime)::int AS yr, count(*) AS plenum_votes
+  FROM kns_plenumvote
+  GROUP BY 1
+),
+decisions AS (
+  SELECT split_part("תאריך פרסום", '.', 3)::int AS yr, count(*) AS gov_decisions
+  FROM append_policies_96dcbeac_03c59ca7
+  WHERE "תאריך פרסום" ~ '^[0-9]{2}\\.[0-9]{2}\\.[0-9]{4}$'
+  GROUP BY 1
+)
+SELECT v.yr, v.plenum_votes, d.gov_decisions,
+       round(v.plenum_votes::numeric / d.gov_decisions, 2) AS votes_per_decision
+FROM votes v
+JOIN decisions d USING (yr)
+WHERE v.yr BETWEEN 2010 AND 2026
+ORDER BY v.yr`,
   },
 ];
+
+// Dropdown groups, in the learning order above.
+const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש וקיבוץ", "JOIN בין מאגרים שונים"];
 
 export default function DataSqlPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -88,6 +266,8 @@ export default function DataSqlPage() {
   const [selected, setSelected] = useState<string | null>(searchParams.get("table"));
   const [detail, setDetail] = useState<CatalogTableDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Explicit per-source expand/collapse overrides (see isOpen below).
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   const [sqlText, setSqlText] = useState(() => searchParams.get("sql") || PLACEHOLDER_SQL);
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
@@ -115,7 +295,7 @@ export default function DataSqlPage() {
     const out: SqlSuggestion[] = [];
     const colTables = new Map<string, Set<string>>();
     for (const t of tables) {
-      out.push({ value: t.table, kind: "table", hint: t.title });
+      out.push({ value: t.table, kind: "table", hint: displayName(t) });
       for (const c of t.columns) {
         if (!colTables.has(c.name)) colTables.set(c.name, new Set());
         colTables.get(c.name)!.add(t.table);
@@ -128,8 +308,10 @@ export default function DataSqlPage() {
     return out;
   }, [tables]);
 
-  // Grouped + filtered table browser. Search matches table name, dataset title,
-  // source label, and tag names.
+  // Grouped + filtered table browser, mirroring the /sources hierarchy: one
+  // collapsible group per source (by the same sourceBadgeFor id), sorted by size
+  // like the Sources page. Search matches table name, title/description, source
+  // label and tag names.
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const shown = tables.filter((t) => {
@@ -146,28 +328,39 @@ export default function DataSqlPage() {
     const m = new Map<string, { badge: Badge; list: CatalogTable[] }>();
     for (const t of shown) {
       const badge = badgeOf(t);
-      if (!m.has(badge.label)) m.set(badge.label, { badge, list: [] });
-      m.get(badge.label)!.list.push(t);
+      if (!m.has(badge.id)) m.set(badge.id, { badge, list: [] });
+      m.get(badge.id)!.list.push(t);
     }
-    // Sort groups by size desc (Knesset — one big group — sinks naturally); keep
-    // tables alphabetical within a group.
-    return new Map(
-      [...m.entries()]
-        .sort((a, b) => b[1].list.length - a[1].list.length)
-        .map(([k, v]) => [k, { badge: v.badge, list: v.list.sort((x, y) => x.title.localeCompare(y.title, "he")) }]),
-    );
+    for (const g of m.values()) {
+      g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
+    }
+    return [...m.values()].sort((a, b) => b.list.length - a.list.length);
   }, [filter, tables]);
 
-  const shownTables = useMemo(
-    () => [...groups.values()].flatMap((g) => g.list),
-    [groups],
-  );
+  const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
+
+  // Which source group the currently-selected table lives in (kept open).
+  const selectedGroupId = useMemo(() => {
+    const t = selected ? tables.find((x) => x.table === selected) : null;
+    return t ? badgeOf(t).id : null;
+  }, [selected, tables]);
+
+  const filterActive = filter.trim().length > 0;
+  // Collapsed by default so the page opens as a readable list of SOURCES; a
+  // search (or the selected table's group) auto-opens, and an explicit toggle
+  // always wins.
+  const isOpen = (id: string) =>
+    openGroups[id] !== undefined ? openGroups[id] : (filterActive || id === selectedGroupId);
+  const toggleGroup = (id: string) =>
+    setOpenGroups((p) => ({ ...p, [id]: !isOpen(id) }));
+  const setAllGroups = (open: boolean) =>
+    setOpenGroups(Object.fromEntries(groups.map((g) => [g.badge.id, open])));
 
   const sqlSchemaTables = useMemo<SchemaTable[]>(
     () => shownTables.slice(0, 80).map((t) => ({
       table: t.table,
       columns: t.columns.map((c) => c.name),
-      description: t.title,
+      description: displayName(t),
     })),
     [shownTables],
   );
@@ -250,7 +443,13 @@ export default function DataSqlPage() {
             style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
           >
             <option value="">דוגמאות…</option>
-            {EXAMPLES.map((ex) => <option key={ex.label} value={ex.label}>{ex.label}</option>)}
+            {EXAMPLE_GROUPS.map((g) => (
+              <optgroup key={g} label={g}>
+                {EXAMPLES.filter((ex) => ex.group === g).map((ex) => (
+                  <option key={ex.label} value={ex.label}>{ex.label}</option>
+                ))}
+              </optgroup>
+            ))}
           </select>
         </div>
         <SqlHelpNote casing="preserve" />
@@ -352,42 +551,118 @@ export default function DataSqlPage() {
             aria-label="חיפוש טבלאות"
             style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, marginBottom: "0.5rem" }}
           />
+          {/* Expand/collapse all + total count */}
+          {!loading && groups.length > 0 && (
+            <div className="flex" style={{ gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+              <span className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
+                {groups.length === 1 ? "מקור אחד" : `${groups.length} מקורות`}
+                {" · "}
+                {shownTables.length === 1 ? "טבלה אחת" : `${shownTables.length.toLocaleString()} טבלאות`}
+              </span>
+              <button type="button" onClick={() => setAllGroups(true)}
+                style={{ marginInlineStart: "auto", fontSize: "0.72rem", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline" }}>
+                הרחב הכל
+              </button>
+              <button type="button" onClick={() => setAllGroups(false)}
+                style={{ fontSize: "0.72rem", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", textDecoration: "underline" }}>
+                כווץ הכל
+              </button>
+            </div>
+          )}
+
           {loading && <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>טוען את רשימת הטבלאות…</div>}
           {loadError && <div className="text-sm" style={{ padding: "0.5rem", color: "var(--danger, #dc2626)" }}>{loadError}</div>}
           {!loading && shownTables.length === 0 && !loadError && (
             <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>אין טבלאות תואמות.</div>
           )}
-          {[...groups.entries()].map(([label, { badge, list }]) => (
-            <div key={label} style={{ marginBottom: "0.6rem" }}>
-              <div className="flex" style={{ gap: "0.4rem", alignItems: "center", padding: "0.25rem 0.2rem" }}>
-                <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: badge.accent, flex: "0 0 auto" }} />
-                <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "var(--text-muted)" }}>{label}</span>
-                <span className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>({list.length})</span>
+
+          {groups.map(({ badge, list }) => {
+            const open = isOpen(badge.id);
+            return (
+              <div key={badge.id} style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: "var(--bg-muted, #f8fafc)" }}>
+                {/* Source header — click to expand/collapse; ↗ opens the source page */}
+                <div className="flex" style={{ gap: "0.4rem", alignItems: "center", padding: "0.35rem 0.5rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(badge.id)}
+                    aria-expanded={open}
+                    style={{
+                      display: "flex", gap: "0.45rem", alignItems: "center", flex: "1 1 auto", minWidth: 0,
+                      background: "none", border: "none", cursor: "pointer", textAlign: "start", padding: 0,
+                    }}
+                  >
+                    <span aria-hidden style={{ color: "var(--text-muted)", fontSize: "0.7rem", width: 10, flex: "0 0 auto" }}>
+                      {open ? "▼" : "◀"}
+                    </span>
+                    <span style={{
+                      display: "inline-block", padding: "0.1rem 0.45rem", borderRadius: 9999,
+                      background: badge.bg, color: badge.fg, fontWeight: 700, fontSize: "0.7rem",
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "70%",
+                    }}>
+                      {badge.label}
+                    </span>
+                    <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }}>
+                      {list.length === 1 ? "טבלה אחת" : `${list.length} טבלאות`}
+                    </span>
+                  </button>
+                  <Link
+                    to={groupLink(badge)}
+                    title={`לעמוד המקור: ${badge.label}`}
+                    style={{ fontSize: "0.72rem", color: "var(--text-muted)", textDecoration: "none", flex: "0 0 auto" }}
+                  >
+                    ↗
+                  </Link>
+                </div>
+
+                {open && (
+                  <div style={{ padding: "0 0.25rem 0.3rem" }}>
+                    {list.map((t) => {
+                      const active = selected === t.table;
+                      return (
+                        <button
+                          key={t.table}
+                          type="button"
+                          onClick={() => pickTable(t)}
+                          title={rowTooltip(t)}
+                          style={{
+                            display: "flex", width: "100%", gap: "0.5rem", alignItems: "center",
+                            textAlign: "start", padding: "0.3rem 0.45rem", borderRadius: 4, cursor: "pointer",
+                            border: "none", marginBottom: 1,
+                            background: active ? "var(--bg, #fff)" : "transparent",
+                            boxShadow: active ? `inset 2px 0 0 ${badge.accent}` : "none",
+                          }}
+                        >
+                          <span style={{ flex: "1 1 auto", minWidth: 0 }}>
+                            {/* Human name leads; the physical table name is the
+                                secondary, LTR-isolated monospace line. */}
+                            <span style={{
+                              display: "block", fontSize: "0.8rem", color: "var(--text)",
+                              fontWeight: active ? 700 : 500,
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            }}>
+                              {displayName(t)}
+                            </span>
+                            <code dir="ltr" style={{
+                              display: "block", fontSize: "0.7rem", color: "var(--text-muted)",
+                              unicodeBidi: "isolate", textAlign: "start",
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            }}>
+                              {t.table}
+                            </code>
+                          </span>
+                          <span className="text-muted" style={{
+                            fontSize: "0.7rem", flex: "0 0 auto", fontVariantNumeric: "tabular-nums",
+                          }}>
+                            {t.est_rows != null && t.est_rows > 0 ? `~${t.est_rows.toLocaleString()}` : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              {list.map((t) => (
-                <button
-                  key={t.table}
-                  type="button"
-                  onClick={() => pickTable(t)}
-                  title={t.title}
-                  style={{
-                    display: "flex", width: "100%", gap: "0.5rem", alignItems: "center",
-                    textAlign: "start", padding: "0.35rem 0.5rem", borderRadius: 4, cursor: "pointer",
-                    border: "none",
-                    background: selected === t.table ? "var(--bg-muted, #eef2f5)" : "none",
-                  }}
-                >
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "1 1 auto" }}>
-                    <code style={{ fontSize: "0.78rem" }}>{t.table}</code>
-                    <span className="text-sm text-muted" style={{ fontSize: "0.72rem", display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{t.title}</span>
-                  </span>
-                  <span className="text-sm text-muted" style={{ marginInlineStart: "auto", fontSize: "0.72rem", flex: "0 0 auto" }}>
-                    {t.est_rows != null && t.est_rows > 0 ? `~${t.est_rows.toLocaleString()}` : ""}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Detail cube */}
@@ -402,9 +677,12 @@ export default function DataSqlPage() {
             <>
               <div className="flex-between" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "flex-start" }}>
                 <div>
-                  <h2 style={{ margin: 0, fontSize: "1.05rem" }}>{selectedTable.title}</h2>
+                  <h2 style={{ margin: 0, fontSize: "1.05rem" }}>{displayName(selectedTable)}</h2>
                   <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
-                    <code>{selectedTable.table}</code>
+                    <code dir="ltr" style={{ unicodeBidi: "isolate" }}>{selectedTable.table}</code>
+                    {selectedTable.kind === "knesset" && selectedTable.title && (
+                      <> · <code dir="ltr" style={{ unicodeBidi: "isolate" }}>{selectedTable.title}</code></>
+                    )}
                     {" · "}
                     {(detail?.row_count ?? selectedTable.est_rows) != null
                       ? `${(detail?.row_count ?? selectedTable.est_rows)!.toLocaleString()} שורות`
@@ -415,12 +693,15 @@ export default function DataSqlPage() {
                   {selectedTable.kind === "dataset" ? (
                     <SourceChip sourceType={selectedTable.source_type} organization={selectedTable.organization} ckanId={selectedTable.ckan_id} size="md" />
                   ) : (
-                    <span style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: 9999, fontSize: "0.8rem", fontWeight: 700, background: "#e0e7ff", color: "#3730a3" }}>כנסת</span>
+                    <span style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: 9999, fontSize: "0.8rem", fontWeight: 700, background: KNESSET_DB_BADGE.bg, color: KNESSET_DB_BADGE.fg }}>
+                      {KNESSET_DB_BADGE.label}
+                    </span>
                   )}
                 </div>
               </div>
 
-              {selectedTable.description && (
+              {/* Skip when the description is already the heading (Knesset tables). */}
+              {selectedTable.description && selectedTable.description !== displayName(selectedTable) && (
                 <p className="text-sm" style={{ margin: "0.5rem 0 0.5rem", lineHeight: 1.6 }}>{selectedTable.description}</p>
               )}
 
