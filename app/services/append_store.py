@@ -856,7 +856,7 @@ async def schema_table_columns(schema: str) -> dict[str, list[dict]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT table_name, column_name, data_type "
+            "SELECT table_name, column_name, data_type, udt_name "
             "FROM information_schema.columns WHERE table_schema = $1 "
             "ORDER BY table_name, ordinal_position", schema)
     out: dict[str, list[dict]] = {}
@@ -864,7 +864,7 @@ async def schema_table_columns(schema: str) -> dict[str, list[dict]]:
         if r["column_name"] in _HIDDEN_COLS:
             continue
         out.setdefault(r["table_name"], []).append(
-            {"name": r["column_name"], "type": _ckan_type(r["data_type"])})
+            {"name": r["column_name"], "type": _ckan_type(r["data_type"], r["udt_name"])})
     return out
 
 
@@ -929,7 +929,7 @@ async def public_table_columns() -> dict[str, list[dict]]:
         if r["column_name"] in _HIDDEN_COLS:
             continue
         out.setdefault(r["table_name"], []).append(
-            {"name": r["column_name"], "type": _ckan_type(r["data_type"])}
+            {"name": r["column_name"], "type": _ckan_type(r["data_type"], r["udt_name"])}
         )
     return out
 
@@ -1125,10 +1125,20 @@ async def query(
     }
 
 
-def _ckan_type(pg_type: str | None) -> str:
+def _ckan_type(pg_type: str | None, udt_name: str | None = None) -> str:
     """Map a Postgres type (information_schema data_type OR asyncpg type name)
-    to a CKAN-datastore-ish field type name."""
+    to a CKAN-datastore-ish field type name.
+
+    ``udt_name`` disambiguates information_schema's ``USER-DEFINED``, which is
+    what it reports for EVERY custom type — enums and composites as much as
+    PostGIS geometry. Judging by data_type alone would label an enum spatial, and
+    the /data list would then put a map marker on a table holding no geometry at
+    all. Absent a udt_name, an unrecognised type falls through to "text" rather
+    than claiming to be something it may not be."""
     t = (pg_type or "").lower()
+    u = (udt_name or "").lower()
+    if u in ("geometry", "geography") or t in ("geometry", "geography"):
+        return "geometry"
     if "timestamp" in t or t == "date":
         return "timestamp"
     if t in ("integer", "bigint", "smallint", "int2", "int4", "int8"):
@@ -1137,12 +1147,6 @@ def _ckan_type(pg_type: str | None) -> str:
         return "numeric"
     if t in ("boolean", "bool"):
         return "bool"
-    # PostGIS geometry surfaces as "USER-DEFINED" via information_schema and as
-    # "geometry" via asyncpg. Labelled distinctly so the catalog does not present
-    # a spatial column as ordinary text — the two behave nothing alike in the
-    # console (see the ST_AsText note in the SQL help).
-    if t in ("geometry", "geography", "user-defined"):
-        return "geometry"
     return "text"
 
 

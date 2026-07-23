@@ -63,6 +63,14 @@ const KNESSET_DB_BADGE: Badge = {
   bg: "#e0e7ff", fg: "#3730a3", accent: "#4f46e5",
 };
 
+// Does this table carry a queryable PostGIS column? Keyed on the column TYPE,
+// not the name: append_store._ckan_type labels geometry distinctly, so this
+// stays true if the column is ever renamed, and false for a layer that only has
+// the plain-text geometry_wkt (no PostGIS, nothing spatial to ask).
+function hasGeometry(t: CatalogTable): boolean {
+  return t.columns.some((c) => c.type === "geometry");
+}
+
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
@@ -95,6 +103,7 @@ function displayName(t: CatalogTable): string {
 function rowTooltip(t: CatalogTable): string {
   const parts = [displayName(t), t.table];
   if (t.description && t.description !== displayName(t)) parts.push(t.description);
+  if (hasGeometry(t)) parts.push("🗺 שכבה מרחבית — עמודת geom (EPSG:4326)");
   return parts.join("\n");
 }
 
@@ -673,6 +682,18 @@ export default function DataSqlPage() {
                               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             }}>
                               {displayName(t)}
+                              {/* Spatial marker. Deliberately a glyph and not a
+                                  pill: the row is already tight and the name
+                                  must keep its ellipsis. The title carries the
+                                  explanation for anyone who hovers. */}
+                              {hasGeometry(t) && (
+                                <span
+                                  title="שכבה מרחבית — כוללת עמודת geom לשאילתות גיאוגרפיות"
+                                  style={{ marginInlineStart: "0.3rem", fontSize: "0.75rem" }}
+                                >
+                                  🗺
+                                </span>
+                              )}
                             </span>
                             <code dir="ltr" style={{
                               display: "block", fontSize: "0.7rem", color: "var(--text-muted)",
@@ -722,11 +743,22 @@ export default function DataSqlPage() {
                   </div>
                 </div>
                 <div className="flex" style={{ gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
-                  {selectedTable.kind === "dataset" ? (
-                    <SourceChip sourceType={selectedTable.source_type} organization={selectedTable.organization} ckanId={selectedTable.ckan_id} size="md" />
-                  ) : (
+                  {/* Knesset is the ONE special case; everything else — datasets
+                      and mirrored idx layers alike — carries a real source chip.
+                      Written the other way round before, so when kind "index"
+                      appeared it fell into the else branch and every GovMap
+                      layer was labelled "מסד הנתונים של הכנסת". */}
+                  {selectedTable.kind === "knesset" ? (
                     <span style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: 9999, fontSize: "0.8rem", fontWeight: 700, background: KNESSET_DB_BADGE.bg, color: KNESSET_DB_BADGE.fg }}>
                       {KNESSET_DB_BADGE.label}
+                    </span>
+                  ) : (
+                    <SourceChip sourceType={selectedTable.source_type} organization={selectedTable.organization} ckanId={selectedTable.ckan_id} size="md" />
+                  )}
+                  {hasGeometry(selectedTable) && (
+                    <span title="שכבה מרחבית — ניתן לשאול שאלות גיאוגרפיות (ST_Intersects, ST_DWithin)"
+                          style={{ display: "inline-block", padding: "0.3rem 0.6rem", borderRadius: 9999, fontSize: "0.75rem", fontWeight: 700, background: "#dcfce7", color: "#166534" }}>
+                      🗺 מרחבי
                     </span>
                   )}
                 </div>

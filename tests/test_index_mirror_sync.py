@@ -383,6 +383,21 @@ def test_bulk_geometry_columns_are_recognised():
         assert c in append_store._BULK_COLS
 
 
+def test_geometry_is_typed_from_udt_name_not_from_user_defined():
+    """information_schema reports USER-DEFINED for EVERY custom type, so
+    data_type alone cannot tell geometry from an enum. The /data list puts a map
+    marker on any column typed "geometry", so guessing here would mark tables
+    that hold no geometry at all."""
+    t = append_store._ckan_type
+    assert t("USER-DEFINED", "geometry") == "geometry"
+    assert t("USER-DEFINED", "geography") == "geometry"
+    assert t("geometry") == "geometry"          # asyncpg reports the name directly
+    # An enum must NOT be mistaken for geometry, and an unknown user type with no
+    # udt_name falls back to text rather than claiming to be spatial.
+    assert t("USER-DEFINED", "my_enum") == "text"
+    assert t("USER-DEFINED") == "text"
+
+
 def test_sample_rows_reports_skipped_geometry_instead_of_hiding_it(monkeypatch):
     """Not previewing geometry is correct (46 seconds); dropping it from the
     response entirely is not. Until 2026-07-23 the /data cube did exactly that,
