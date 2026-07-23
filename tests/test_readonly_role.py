@@ -16,6 +16,7 @@ Two layers:
 """
 import asyncio
 import os
+import re
 import ssl
 import sys
 
@@ -29,6 +30,80 @@ import pytest  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.services import append_store as A  # noqa: E402
+
+
+# ── Provisioning scripts stay in sync (no DB) ────────────────────────────────
+
+_SCRIPTS = os.path.join(_ROOT, "scripts")
+_PSQL_SQL = os.path.join(_SCRIPTS, "create_append_readonly_role.sql")
+_NEON_SQL = os.path.join(_SCRIPTS, "create_append_readonly_role_neon_console.sql")
+
+# Every schema the central /data console puts on its search_path must get all
+# four grant kinds. CONSOLE_SEARCH_PATH is the source of truth for the list.
+_CONSOLE_SCHEMAS = {"public", "knesset", "idx"}
+
+
+def _grant_map(path: str) -> dict[str, set[str]]:
+    """{schema: {grant kinds applied to it}} for a provisioning script.
+
+    Role-name-agnostic: the psql script writes :"ro_role", the Neon variant
+    hardcodes over_readonly, and the grant *shape* is what must match."""
+    with open(path, encoding="utf-8") as fh:
+        sql = "\n".join(ln for ln in fh if not ln.lstrip().startswith("--"))
+    sql = " ".join(sql.split())  # collapse whitespace so patterns span lines
+
+    kinds = {
+        "usage": r"GRANT USAGE ON SCHEMA (\w+)",
+        "select": r"GRANT SELECT ON ALL TABLES IN SCHEMA (\w+)",
+        "default": r"ALTER DEFAULT PRIVILEGES IN SCHEMA (\w+)",
+        "revoke_writes": r"REVOKE INSERT,[^;]*?IN SCHEMA (\w+)",
+    }
+    out: dict[str, set[str]] = {}
+    for kind, pattern in kinds.items():
+        for schema in re.findall(pattern, sql, re.IGNORECASE):
+            out.setdefault(schema, set()).add(kind)
+    return out
+
+
+def test_console_search_path_matches_the_schemas_we_grant():
+    """If a schema is added to the console's search_path but not to the
+    provisioning scripts, every query against it fails with 'permission denied
+    for schema X' the moment the read-only role goes live."""
+    from app.services.data_catalog import CONSOLE_SEARCH_PATH
+
+    on_path = {s.strip() for s in CONSOLE_SEARCH_PATH.split(",") if s.strip()}
+    assert on_path == _CONSOLE_SCHEMAS, (
+        f"CONSOLE_SEARCH_PATH is {sorted(on_path)} but the provisioning scripts "
+        f"grant {sorted(_CONSOLE_SCHEMAS)} — update both, or the console breaks "
+        f"on the schemas that were missed.")
+
+
+@pytest.mark.parametrize("path", [_PSQL_SQL, _NEON_SQL])
+def test_provisioning_script_grants_every_console_schema(path):
+    grants = _grant_map(path)
+    for schema in _CONSOLE_SCHEMAS:
+        got = grants.get(schema, set())
+        # public gets USAGE via its own lockdown block; all others identical.
+        expected = {"usage", "select", "default", "revoke_writes"}
+        assert got == expected, (
+            f"{os.path.basename(path)}: schema {schema!r} has {sorted(got)}, "
+            f"expected {sorted(expected)}")
+
+
+def test_psql_and_neon_provisioning_scripts_agree():
+    """The Neon-console variant is a transcription of the psql script. They must
+    grant the same things, or whichever one the operator happens to run
+    determines the security posture."""
+    assert _grant_map(_PSQL_SQL) == _grant_map(_NEON_SQL)
+
+
+def test_neon_variant_refuses_to_run_with_the_placeholder_password():
+    """A pasted-and-forgotten placeholder must fail loudly, not create a role
+    with a publicly-known password."""
+    with open(_NEON_SQL, encoding="utf-8") as fh:
+        sql = fh.read()
+    assert "RAISE EXCEPTION" in sql
+    assert sql.count("CHANGE_ME_TO_A_GENERATED_PASSWORD") >= 2  # assign + guard
 
 
 # ── Pure unit tests (no DB) ──────────────────────────────────────────────────

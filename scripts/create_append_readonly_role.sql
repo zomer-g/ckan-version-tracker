@@ -22,6 +22,11 @@
 -- IDEMPOTENT: safe to re-run. Re-running rotates the password and re-asserts the
 -- grants (including for tables the sync created since the last run).
 --
+-- NO psql? Use scripts/create_append_readonly_role_neon_console.sql — the same
+-- grants without the psql meta-commands below (\set, \if, \gset), paste-ready
+-- for the Neon SQL Editor. THIS file is canonical; a test asserts the two agree
+-- on which schemas get which grants (tests/test_readonly_role.py).
+--
 -- HOW TO RUN — as the SAME role the worker uses (i.e. with APPEND_DATABASE_URL),
 -- because ALTER DEFAULT PRIVILEGES below only auto-grants future tables created
 -- by the role that runs this script:
