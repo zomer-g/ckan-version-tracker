@@ -1640,3 +1640,25 @@ async def index_mirror_sync(
     background_tasks.add_task(_run_index_sync_bg, limit, user.email)
     return {"started": True, "queued": len(todo),
             "note": "running in the background — poll /index-mirror/status"}
+
+
+@router.post("/index-mirror/purge-ineligible")
+@limiter.limit("3/minute")
+async def index_mirror_purge(
+    request: Request,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Drop mirrored ``idx`` tables whose dataset is no longer eligible.
+
+    Run after tightening eligibility (see index_mirror.EXCLUDED_SCRAPER_KINDS) so
+    stale duplicates stop showing up in /data. ``apply=false`` (default) reports
+    the plan without dropping anything."""
+    from app.services import index_mirror
+    s = await index_mirror.purge_ineligible(db, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=409, detail=s["error"])
+    logger.info("Index mirror purge by %s: purged=%s apply=%s",
+                user.email, s.get("purged"), apply)
+    return s

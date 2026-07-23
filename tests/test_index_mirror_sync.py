@@ -333,3 +333,35 @@ def test_attempt_is_claimed_before_the_load(monkeypatch):
 
 def test_max_attempts_is_small_enough_to_bound_a_crash_loop():
     assert 1 <= index_mirror.MAX_ATTEMPTS <= 5
+
+
+# ── kinds whose index duplicates a better copy elsewhere ─────────────────────
+
+class _KDS(_DS):
+    def __init__(self, kind=None, **kw):
+        super().__init__(**kw)
+        self.kind = kind
+
+
+def test_knesset_committee_protocols_are_excluded():
+    """Their index is protocol metadata, which the `knesset` schema already
+    holds in 48 ODATA tables synced from the Knesset's own API — a richer and
+    fresher copy. Mirroring it again would put two versions of the same facts in
+    /data."""
+    assert not index_mirror.dataset_is_index_mirror_eligible(
+        _KDS(kind="knesset", source_type="scraper"))
+
+
+def test_knesset_mmm_stays_eligible():
+    """MMM is a separate source (research papers), not part of the ODATA feed."""
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _KDS(kind="knesset_mmm", source_type="scraper"))
+
+
+def test_other_kinds_and_missing_kind_stay_eligible():
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _KDS(kind="govmap", source_type="govmap"))
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _KDS(kind=None, source_type="scraper"))
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _KDS(kind="mevaker", source_type="scraper"))

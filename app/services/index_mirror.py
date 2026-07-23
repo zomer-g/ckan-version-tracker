@@ -53,6 +53,18 @@ CSV_RESOURCE_KEY = "נתוני הסורק"
 # Source types whose versions carry an index CSV worth mirroring.
 ELIGIBLE_SOURCE_TYPES = ("scraper", "govmap")
 
+# Scraper kinds excluded because their index CSV DUPLICATES a table we already
+# mirror properly elsewhere — mirroring it again would put two copies of the
+# same facts in the /data console and make them disagree as one goes stale.
+#
+#   "knesset" = the per-committee protocol datasets (knesset-committee-single-*,
+#   1,921 of them). Their index is protocol metadata, which the `knesset` schema
+#   already holds in its 48 ODATA tables (KNS_CommitteeSession & friends) —
+#   synced directly from the Knesset's own API, so that copy is both richer and
+#   fresher. NOTE the MMM datasets (kind "knesset_mmm") are a separate source and
+#   stay eligible.
+EXCLUDED_SCRAPER_KINDS = frozenset({"knesset"})
+
 STATE_TABLE = "_sync_state"
 
 # How many times a dataset may be attempted before it is deferred instead of
@@ -182,12 +194,17 @@ def dataset_is_index_mirror_eligible(ds) -> bool:
     Scraper/govmap sources only: they are the ones whose versions carry a
     "נתוני הסורק" CSV. CKAN datasets already stream their rows into the append
     tables in ``public`` via archive_neon, so mirroring them here would just
-    duplicate data. Whether a given VERSION actually has the CSV is checked
-    separately (index_csv_value) — a dataset can be eligible but not yet have a
-    version to mirror."""
+    duplicate data — and so would the kinds in EXCLUDED_SCRAPER_KINDS, which
+    have a better copy in another schema.
+
+    Whether a given VERSION actually has the CSV is checked separately
+    (index_csv_value) — a dataset can be eligible but not yet have a version to
+    mirror."""
     if (getattr(ds, "status", None) or "") not in ("active", "pending"):
         return False
-    return (getattr(ds, "source_type", None) or "") in ELIGIBLE_SOURCE_TYPES
+    if (getattr(ds, "source_type", None) or "") not in ELIGIBLE_SOURCE_TYPES:
+        return False
+    return (getattr(ds, "kind", None) or "") not in EXCLUDED_SCRAPER_KINDS
 
 
 def _iter_batches(path: str, columns: list[str], keep: list[int]):
@@ -369,7 +386,7 @@ async def pending(db, *, limit: int | None = None,
     Size is handled where it actually matters instead: load_index_csv streams
     and batches by bytes, so a multi-GB layer costs the same peak memory as a
     small one."""
-    from sqlalchemy import select
+    from sqlalchemy import or_ as sa_or, select
 
     from app.models.tracked_dataset import TrackedDataset
     from app.models.version_index import VersionIndex
@@ -377,10 +394,15 @@ async def pending(db, *, limit: int | None = None,
     # COLUMNS, not ORM entities. Materialising ~2,900 TrackedDataset objects
     # (each with its scraper_config JSONB) cost ~40MB per tick on a dyno that
     # only has ~200MB of headroom — for five fields we actually use.
+    # `kind` is pulled as a single text field, not the whole scraper_config
+    # JSONB — the filter below needs it, the memory budget does not need the rest.
+    kind_col = TrackedDataset.scraper_config["kind"].astext.label("kind")
     q = select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.ckan_name,
-               TrackedDataset.source_type, TrackedDataset.status).where(
+               TrackedDataset.source_type, TrackedDataset.status, kind_col).where(
         TrackedDataset.source_type.in_(ELIGIBLE_SOURCE_TYPES),
         TrackedDataset.status.in_(["active", "pending"]),
+        sa_or(kind_col.is_(None),
+              kind_col.notin_(tuple(EXCLUDED_SCRAPER_KINDS))),
     )
     if dataset_id is not None:
         q = q.where(TrackedDataset.id == dataset_id)
@@ -558,6 +580,50 @@ async def list_deferred() -> list[dict]:
     return [{"dataset_id": str(r["dataset_id"]), "table": r["table_name"],
              "reason": r["deferred"], "csv_bytes": r["csv_bytes"],
              "attempts": r["attempts"]} for r in rows]
+
+
+async def purge_ineligible(db, *, apply: bool = False) -> dict:
+    """Drop ``idx`` tables belonging to datasets that are no longer eligible.
+
+    Needed because eligibility can TIGHTEN after rows are already mirrored — the
+    per-committee Knesset protocol datasets were mirrored before we recognised
+    their index duplicates the `knesset` ODATA schema. Without this the stale
+    copies would sit in /data forever, drifting out of date and contradicting the
+    authoritative tables.
+
+    ``apply=False`` reports what it would drop."""
+    from sqlalchemy import select
+
+    from app.models.tracked_dataset import TrackedDataset
+
+    if not append_store.is_configured():
+        return {"error": "append DB not configured"}
+
+    kind_col = TrackedDataset.scraper_config["kind"].astext.label("kind")
+    rows = (await db.execute(
+        select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.source_type,
+               TrackedDataset.status, kind_col)
+    )).all()
+    eligible = {str(r.id) for r in rows if dataset_is_index_mirror_eligible(r)}
+
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await _ensure_state_table(conn)
+        state = await conn.fetch(
+            f"SELECT dataset_id, table_name FROM {_qt(STATE_TABLE)}")
+        victims = [(r["dataset_id"], r["table_name"]) for r in state
+                   if str(r["dataset_id"]) not in eligible]
+        if apply and victims:
+            for dsid, table in victims:
+                await conn.execute(f"DROP TABLE IF EXISTS {_qt(table)}")
+                await conn.execute(
+                    f"DELETE FROM {_qt(STATE_TABLE)} WHERE dataset_id = $1", dsid)
+    if apply and victims:
+        from app.services.data_catalog import invalidate_catalog_cache
+        invalidate_catalog_cache()
+        logger.info("idx: purged %d ineligible mirrored tables", len(victims))
+    return {"apply": apply, "purged": len(victims),
+            "tables": [t for _, t in victims[:50]]}
 
 
 async def retry_deferred() -> int:
