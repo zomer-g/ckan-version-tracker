@@ -306,30 +306,32 @@ class Settings(BaseSettings):
     # WORKER_REQUIRED_VERSION pins to a specific SHA, skipping the GitHub
     # fetch entirely.
     worker_version_check_enabled: bool = True
-    # Fail CLOSED when the required SHA can't be determined? Safe ONLY
-    # because worker_required_version below is pinned (so it's never
-    # undetermined). The engine-hash axis stays fail-open in worker.py, so
-    # a GitHub blip can't block the correct worker — the pinned SHA is the
-    # sole gate.
+    # Only meaningful alongside an explicit worker_required_version pin (see
+    # below). Without a pin there is no server-side SHA to be undetermined.
     worker_version_fail_closed: bool = True
     worker_repo: str = "zomer-g/govil-scraper"
     worker_branch: str = "master"
-    # PINNED to the worker's full git SHA. NOTE: auto-tracking (empty →
-    # follow GitHub master HEAD) is NOT usable here — govil-scraper is a
-    # PRIVATE repo and this server has no GitHub token, so the commits API
-    # returns 404 and the fail-closed gate would refuse every worker. So the
-    # pin must stay explicit and GitHub-independent.
-    # ⚠ This pin is the worker DEPLOY LEVER: bumping it (and deploying) is
-    #   what rolls new govil-scraper code into production. Since worker
-    #   commit c406ed4d the worker self-syncs to this exact SHA on every
-    #   refusal (sync-to-pin), so forgetting to bump no longer strands the
-    #   worker — it just keeps running the pinned version until you bump.
-    #   Never pin to a pre-c406ed4d commit: those lack sync-to-pin and a
-    #   worker landed on one can't follow later bumps by itself.
-    #   (Additional constraint since fa0ab757: pin only commits carrying the
-    #   "sync-to-pin-escape-v2" marker — c406ed4..f709acb have an inert,
-    #   cwd-broken guard and workers refuse to land on them.)
-    worker_required_version: str = "e2c1a9aaa60eda10d8b99914ce67edea9c9b7a46"
+    # EMPTY BY DEFAULT — and that is the point.
+    #
+    # This used to hold the worker's full git SHA, hardcoded here, and
+    # bumping it was the worker deploy lever: push govil-scraper, then edit
+    # this line and deploy OVER, or the fleet was refused. That coupling made
+    # sense when a new source needed matching code in both repos. It doesn't
+    # any more — sources ship as manifests from the worker repo alone (see
+    # app/services/source_registry.py) — and in practice the pin was simply
+    # forgotten, stranding every worker behind a SHA nobody had bumped.
+    #
+    # Freshness is now self-reported: the worker compares its HEAD against
+    # origin/master (which it already fetches to self-update) and sends
+    # X-Worker-Upstream: current | behind | unknown. Only an explicit
+    # "behind" is refused. The worker knows this better than we can — the
+    # repo is PRIVATE, so the GitHub commits API answers 404 here and the
+    # server cannot discover the upstream SHA at all.
+    #
+    # Set this to a full SHA only as an emergency override — to freeze the
+    # fleet on a known-good commit while a bad one is reverted. Remember to
+    # clear it afterwards, or you are back to the manual lever.
+    worker_required_version: str = ""
     # SHA-256 of legacy_engine.py the worker's loaded module must match.
     # Defends against WORKER_VERSION env spoofing and the "pulled but
     # didn't restart" failure mode where git HEAD moved but the running

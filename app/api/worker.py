@@ -247,12 +247,15 @@ async def poll_for_task(
     healthy scrapes (e.g. tens of thousands of attachments behind a slow
     upstream) are not killed by an arbitrary task-age cap.
 
-    Also gates dispatch on a worker-version check: the worker reports its
-    git commit SHA via X-Worker-Version, and we refuse to hand out a task
-    if it doesn't match the upstream repo's tracked branch (avoids stale
-    workers producing opaque errors that newer code surfaces clearly).
-    A worker reporting no version, or a server that can't determine the
-    required SHA (e.g. GitHub unreachable), fails open.
+    Also gates dispatch on worker freshness, to keep a stale worker from
+    producing opaque errors that newer code would surface clearly. The worker
+    decides that itself — it compares HEAD to origin/<branch> and sends the
+    verdict in X-Worker-Upstream — because the worker repo is private and this
+    server has no token to look upstream up. Only an explicit "behind" is
+    refused; anything else dispatches.
+
+    Setting worker_required_version re-enables the older pinned-SHA gate as an
+    emergency override (see config.py).
     """
     _verify_worker_key(request)
 
@@ -262,40 +265,55 @@ async def poll_for_task(
     # matching worker shows up — never burned on a worker we know is
     # stale.
     #
-    # Three branches:
-    #   match           → fall through, dispatch normally
-    #   different SHA   → re-fetch GitHub once (rate-limited; covers the
-    #                     "cache warmed seconds before push" case), then
-    #                     refuse if still mismatched
-    #   no SHA at all   → refuse. A worker that doesn't send
-    #                     X-Worker-Version is pre-`a3e300c` and missing
-    #                     the version-reporting feature itself, so it's
-    #                     stale by definition. The previous logic
-    #                     fail-opened on missing header, which let zombie
-    #                     workers (older deploys still polling, processes
-    #                     that survived a botched restart) keep grabbing
-    #                     tasks and failing them.
-    if settings.worker_version_check_enabled:
-        worker_version = (request.headers.get("x-worker-version") or "").strip()
-        worker_engine_hash = (request.headers.get("x-worker-engine-hash") or "").strip().lower()
-        required_version = await get_required_worker_sha()
-        required_engine_hash = await get_required_engine_hash()
+    # Freshness is SELF-REPORTED. The worker compares its HEAD against
+    # origin/<branch> — which it already fetches in order to self-update — and
+    # sends the verdict in X-Worker-Upstream. Only an explicit "behind" is
+    # refused; "current", "unknown" and a worker too old to send the header all
+    # dispatch normally.
+    #
+    # The server can't check this itself: the worker repo is private and there
+    # is no GitHub token here, so the commits API answers 404. It used to be
+    # papered over with a SHA hardcoded in config.py that had to be bumped by
+    # hand on every worker deploy — which is precisely how the whole fleet
+    # ended up refused behind a pin nobody had touched.
+    worker_version = (request.headers.get("x-worker-version") or "").strip()
+    worker_engine_hash = (request.headers.get("x-worker-engine-hash") or "").strip().lower()
+    worker_upstream = (request.headers.get("x-worker-upstream") or "").strip().lower()
+    required_version = (
+        await get_required_worker_sha() if settings.worker_version_check_enabled else None
+    )
 
+    if settings.worker_version_check_enabled and not required_version:
+        if worker_upstream == "behind":
+            logger.warning(
+                "Refusing to dispatch task: worker %s reports it is behind "
+                "origin/%s (self-update pending)",
+                worker_version[:12] or "(none)", settings.worker_branch,
+            )
+            return {
+                "outdated": True,
+                "worker_version": worker_version or "(none)",
+                "expected_version": "",
+                "worker_engine_hash": worker_engine_hash or "(none)",
+                "expected_engine_hash": "",
+                "message": (
+                    f"Worker reports it is behind origin/{settings.worker_branch}. "
+                    "It self-updates between tasks; no action needed unless this "
+                    "persists."
+                ),
+            }
+
+    # The pinned-SHA gate below runs ONLY while an emergency override is set in
+    # worker_required_version (empty by default) — e.g. to freeze the fleet on
+    # a known-good commit while a bad one is reverted.
+    if settings.worker_version_check_enabled and required_version:
+        required_engine_hash = await get_required_engine_hash()
         # Two-axis identity check. Either failed axis refuses dispatch.
         # The git-SHA axis is the cheap "did the operator pull?" check;
         # the engine-hash axis is the "did the operator restart after
         # pulling?" check (and also defends against WORKER_VERSION env
         # spoofing). Both must match.
-        # When the required value is undetermined (None), fail CLOSED if
-        # configured — refuse rather than let a possibly-stale worker
-        # through. The sticky cache (worker_version.py) keeps a known-good
-        # value across GitHub blips, so None here means a genuine cold
-        # outage, where blocking is safer than crashing a task on old code.
-        fail_open = not settings.worker_version_fail_closed
-        sha_match = (
-            (required_version is None and fail_open)
-            or (bool(worker_version) and worker_version == required_version)
-        )
+        sha_match = bool(worker_version) and worker_version == required_version
         # The engine-hash axis ALWAYS fails open when undetermined: it can
         # only be sourced from GitHub (no env pin), so failing it closed on
         # a GitHub blip would block the correct worker. The pinned
@@ -309,7 +327,7 @@ async def poll_for_task(
         # Refresh-on-mismatch covers the "cache warmed seconds before
         # push reached upstream" case — only one re-fetch per axis,
         # rate-limited globally inside worker_version.py.
-        if required_version is not None and bool(worker_version) and not sha_match:
+        if bool(worker_version) and not sha_match:
             required_version = (
                 await get_required_worker_sha(refresh=True) or required_version
             )
