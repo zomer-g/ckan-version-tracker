@@ -506,7 +506,7 @@ export default function VersionsPage() {
           OVER's own Postgres (queryable at /archive/:id), NOT ODATA — so this
           replaces the ODATA explanation card below. */}
       {isAppend && datasetId && (
-        <NeonArchiveExplanation datasetId={datasetId} />
+        <NeonArchiveExplanation datasetId={datasetId} dataset={dataset} />
       )}
 
       {/* Archive explanation card. Visible only when the dataset has
@@ -750,8 +750,24 @@ export default function VersionsPage() {
  * "What's in the archive" card for append/NEON datasets — the row-level append
  * archive lives inside OVER on a NEON Postgres, browsable and pullable at
  * /archive/:id (filter, sort, search, CSV). Replaces the ODATA card.
+ *
+ * The row source is named from sourceBadgeFor — the same single source of truth
+ * that paints the chip — because this card is NOT CKAN-only: every scraper in
+ * TABULAR_SCRAPER_KINDS (registries, munidata, servicescompass, emun) also
+ * archives row-level data here, and hardcoding "data.gov.il" told those
+ * datasets' readers their rows came from a portal they never touch.
  */
-function NeonArchiveExplanation({ datasetId }: { datasetId: string }) {
+function NeonArchiveExplanation({
+  datasetId,
+  dataset,
+}: {
+  datasetId: string;
+  dataset: TrackedDataset | null;
+}) {
+  const rowSource =
+    !dataset || dataset.source_type === "ckan"
+      ? "ה-datastore של data.gov.il"
+      : sourceBadgeFor(dataset.source_type, dataset.organization, dataset.ckan_id).label;
   return (
     <section
       className="card"
@@ -782,7 +798,7 @@ function NeonArchiveExplanation({ datasetId }: { datasetId: string }) {
         </Link>
       </div>
       <p style={{ margin: "0 0 0.6rem 0", fontSize: "0.9rem", lineHeight: 1.5, color: "var(--text)" }}>
-        בכל סריקה נשמרות השורות החדשות מתוך ה-datastore של data.gov.il לטבלה מצטברת
+        בכל סריקה נשמרות השורות החדשות מתוך {rowSource} לטבלה מצטברת
         שיושבת <strong>בתוך OVER</strong> (מסד נתונים PostgreSQL ייעודי). כל שורה נושאת
         חותמת <code>first_seen</code> — מתי נקלטה לראשונה — כך שנשמרת ההיסטוריה גם אחרי
         שהמקור החי מתעדכן.
