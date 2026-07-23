@@ -127,7 +127,7 @@ def test_readonly_role_cannot_insert_into_granted_table():
             target = await conn.fetchval(
                 "SELECT quote_ident(table_schema) || '.' || quote_ident(table_name) "
                 "FROM information_schema.tables "
-                "WHERE table_schema IN ('public', 'knesset') AND table_type = 'BASE TABLE' "
+                "WHERE table_schema IN ('public', 'knesset', 'idx') AND table_type = 'BASE TABLE' "
                 "  AND has_table_privilege(current_user, "
                 "        quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') "
                 "ORDER BY table_schema, table_name LIMIT 1"
@@ -137,6 +137,37 @@ def test_readonly_role_cannot_insert_into_granted_table():
             with pytest.raises(asyncpg.InsufficientPrivilegeError):
                 # No VALUES needed: permission is checked before row construction.
                 await conn.execute(f"INSERT INTO {target} DEFAULT VALUES")
+        finally:
+            await conn.close()
+
+    asyncio.run(go())
+
+
+@_needs_ro
+def test_readonly_role_can_read_every_console_schema():
+    """The role must be able to USE all three schemas the central /data console
+    puts on its search_path (data_catalog.CONSOLE_SEARCH_PATH). ``idx`` is the
+    one that post-dates the provisioning script's first version: it is created
+    at RUNTIME by the mirror, so a role provisioned before that commit — or a DB
+    where INDEX_MIRROR_ENABLED is false, so ensure_schema() never runs — would
+    fail every /data query against a mirrored index table with
+    "permission denied for schema idx"."""
+    async def go():
+        conn = await _connect(_RO_URL)
+        try:
+            for schema in ("public", "knesset", "idx"):
+                assert await conn.fetchval(
+                    "SELECT has_schema_privilege(current_user, $1, 'USAGE')",
+                    schema), f"role lacks USAGE on schema {schema}"
+
+            # USAGE alone is not enough — prove an actual mirrored table reads.
+            target = await conn.fetchval(
+                "SELECT quote_ident(table_name) FROM information_schema.tables "
+                "WHERE table_schema = 'idx' AND table_type = 'BASE TABLE' "
+                "ORDER BY table_name LIMIT 1")
+            if target is None:
+                pytest.skip("no mirrored idx table in this DB yet")
+            await conn.fetchval(f"SELECT count(*) FROM idx.{target} LIMIT 1")
         finally:
             await conn.close()
 

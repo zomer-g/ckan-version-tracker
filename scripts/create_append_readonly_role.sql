@@ -15,7 +15,7 @@
 -- This script provisions a dedicated role that Postgres itself will refuse to
 -- let write (no INSERT/UPDATE/DELETE/DDL grants, not a superuser, not a member
 -- of pg_read_server_files) and that can read ONLY the console-relevant schemas
--- (public + knesset). Point APPEND_READONLY_DATABASE_URL at the append DB with
+-- (public + knesset + idx). Point APPEND_READONLY_DATABASE_URL at the append DB with
 -- THIS role's credentials; the app routes the consoles to it (get_readonly_pool)
 -- while the rest of the system stays on the read/write role.
 --
@@ -81,17 +81,32 @@ GRANT USAGE ON SCHEMA public TO :"ro_role";
 CREATE SCHEMA IF NOT EXISTS knesset;
 GRANT USAGE ON SCHEMA knesset TO :"ro_role";
 
--- 4) SELECT on every existing table/view in the two console schemas — and ONLY
+-- 3b) Same for idx — the index-CSV mirror's schema, which the central /data
+--     console reads (CONSOLE_SEARCH_PATH = "public, knesset, idx").
+--     index_mirror.ensure_schema() re-asserts these same grants on every sync
+--     tick, but ONLY when APPEND_READONLY_DATABASE_URL is already set AND the
+--     mirror job is enabled. Granting here removes both preconditions: the
+--     console can read idx from the moment the role is provisioned, even if
+--     INDEX_MIRROR_ENABLED is false (as it was after the OOM of 2026-07-22).
+CREATE SCHEMA IF NOT EXISTS idx;
+GRANT USAGE ON SCHEMA idx TO :"ro_role";
+
+-- 4) SELECT on every existing table/view in the three console schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
 GRANT SELECT ON ALL TABLES IN SCHEMA public  TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA knesset TO :"ro_role";
+GRANT SELECT ON ALL TABLES IN SCHEMA idx     TO :"ro_role";
 
 -- 5) Auto-grant SELECT on FUTURE tables the sync pipeline creates, so a newly
 --    tracked dataset / new Knesset entity set is immediately queryable by the
 --    console without re-running this script. Applies to tables created by the
 --    role running this script (= the worker's role — see the run instructions).
+--    This matters MOST for idx: every mirror sync builds a fresh staging table
+--    and swaps it in (DROP + RENAME), so each synced dataset is a NEW table that
+--    would otherwise lose the grant from step 4 on its next refresh.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public  GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA knesset GRANT SELECT ON TABLES TO :"ro_role";
+ALTER DEFAULT PRIVILEGES IN SCHEMA idx     GRANT SELECT ON TABLES TO :"ro_role";
 
 -- 6) Belt-and-braces: make sure no stray write privileges linger on existing
 --    objects (e.g. from a previous over-broad grant). SELECT stays (re-granted
@@ -100,6 +115,8 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA public  FROM :"ro_role";
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA knesset FROM :"ro_role";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON ALL TABLES IN SCHEMA idx     FROM :"ro_role";
 
 -- ── Verification (printed; the script does not fail on these, they are FYI) ──
 \echo ''
@@ -111,7 +128,7 @@ SELECT rolname,
        pg_has_role(rolname, 'pg_read_all_data', 'MEMBER')             AS reads_all_data
 FROM pg_roles WHERE rolname = :'ro_role';
 
-\echo 'Verification — schemas the role may USE (expect only public + knesset):'
+\echo 'Verification — schemas the role may USE (expect only public + knesset + idx):'
 SELECT nspname AS schema
 FROM pg_namespace
 WHERE has_schema_privilege(:'ro_role', nspname, 'USAGE')
