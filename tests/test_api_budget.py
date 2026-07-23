@@ -104,7 +104,79 @@ def test_metered_prefixes_only():
     from app.api_budget_middleware import _METERED_PREFIXES
     assert "/api/v1/datasets".startswith(_METERED_PREFIXES)
     assert "/api/append/x/schema".startswith(_METERED_PREFIXES)
+    assert "/api/connector/sql".startswith(_METERED_PREFIXES)
     # Admin / worker / metadata listings are NOT metered.
     assert not "/api/admin/pending".startswith(_METERED_PREFIXES)
     assert not "/api/datasets".startswith(_METERED_PREFIXES)
     assert not "/api/worker/poll".startswith(_METERED_PREFIXES)
+
+
+def test_is_over_limit_override_beats_settings():
+    # The shared connector bucket carries its own cap, independent of the
+    # per-IP default.
+    b = _fresh(limit=1000)
+    b.record("connector", 500)
+    assert b.is_over("connector", limit=100) is True     # over its own cap
+    assert b.is_over("connector", limit=10_000) is False  # under its own cap
+    assert b.is_over("connector") is False                # default (1000) regression
+    b.record("connector", 600)
+    assert b.is_over("connector") is True                 # limit=None → settings default
+
+
+class _Req:
+    """Minimal request stand-in for _budget_bucket / _client_ip."""
+
+    def __init__(self, headers=None, host="9.9.9.9"):
+        self.headers = headers or {}
+        self.client = type("C", (), {"host": host})()
+
+
+def test_budget_bucket_routes_valid_connector_key_to_shared_bucket():
+    from app.api_budget_middleware import _budget_bucket
+    settings.connector_api_key = "sekret"
+    settings.connector_daily_byte_budget = 10 * 1024 ** 3
+    try:
+        bucket, limit = _budget_bucket(
+            _Req({"x-connector-key": "sekret"}), "/api/connector/sql")
+        assert bucket == "connector"
+        assert limit == 10 * 1024 ** 3
+    finally:
+        settings.connector_api_key = ""
+
+
+def test_budget_bucket_wrong_or_absent_key_stays_per_ip():
+    from app.api_budget_middleware import _budget_bucket
+    settings.connector_api_key = "sekret"
+    try:
+        assert _budget_bucket(
+            _Req({"x-connector-key": "nope"}, host="9.9.9.9"),
+            "/api/connector/sql") == ("9.9.9.9", None)
+        assert _budget_bucket(
+            _Req(host="9.9.9.9"), "/api/connector/sql") == ("9.9.9.9", None)
+        # Key unset entirely → per-IP even with a matching-looking header.
+        settings.connector_api_key = ""
+        assert _budget_bucket(
+            _Req({"x-connector-key": ""}, host="9.9.9.9"),
+            "/api/connector/sql") == ("9.9.9.9", None)
+    finally:
+        settings.connector_api_key = ""
+
+
+def test_budget_bucket_header_on_other_paths_is_ignored():
+    from app.api_budget_middleware import _budget_bucket
+    settings.connector_api_key = "sekret"
+    try:
+        assert _budget_bucket(
+            _Req({"x-connector-key": "sekret"}, host="9.9.9.9"),
+            "/api/tables/sql") == ("9.9.9.9", None)
+    finally:
+        settings.connector_api_key = ""
+
+
+def test_blocked_response_reports_effective_limit():
+    from app.api_budget_middleware import _blocked_response
+    settings.api_daily_byte_budget = 2 * 1024 ** 3
+    body = json.loads(bytes(_blocked_response(10 * 1024 ** 3).body))
+    assert body["daily_quota_gb"] == 10.0
+    body = json.loads(bytes(_blocked_response().body))
+    assert body["daily_quota_gb"] == 2.0

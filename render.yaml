@@ -65,4 +65,10 @@ services:
       # the VALUE in the dashboard; empty ⇒ deep search returns 503.
       - key: TAGIT_MCP_TOKEN
         sync: false
+      # Shared secret gating /api/connector (the Looker Studio community
+      # connector's backend). Set the VALUE in the Render dashboard — the same
+      # value goes into the Apps Script project's OVER_CONNECTOR_KEY script
+      # property. Empty ⇒ the connector API answers 503. See app/api/connector.py.
+      - key: CONNECTOR_API_KEY
+        sync: false
 # No databases section — using external Neon PostgreSQL (free tier)

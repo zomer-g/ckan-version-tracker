@@ -15,6 +15,11 @@ import { useTranslation } from "react-i18next";
  * endpoint cards).
  */
 
+// Versioned deployment ID of the Looker Studio community connector
+// (looker-connector/README.md § פריסה). Empty until the first release
+// deployment — the card then shows a "coming soon" note instead of the link.
+const LOOKER_CONNECTOR_ID = "";
+
 interface ApiParam {
   name: string;
   desc: string;
@@ -334,6 +339,66 @@ function McpCard() {
   );
 }
 
+function LookerCard() {
+  const connectorUrl = LOOKER_CONNECTOR_ID
+    ? `https://lookerstudio.google.com/datasources/create?connectorId=${LOOKER_CONNECTOR_ID}`
+    : null;
+
+  return (
+    <section id="looker" className="api-mcp-card" aria-labelledby="api-looker-title">
+      <div className="api-mcp-header">
+        <h2 id="api-looker-title" className="api-mcp-title">
+          Looker Studio — דשבורדים ישירות על ה-SQL
+        </h2>
+        <span className="api-mcp-badge">ביתא</span>
+      </div>
+
+      <p className="api-mcp-lead">
+        מחבר (Community Connector) רשמי של גרסאות לעם ל-Looker Studio של גוגל:
+        בוחרים טבלה מהקטלוג או כותבים שאילתת SQL חופשית — כולל JOIN בין מאגרי
+        data.gov.il לטבלאות הכנסת — ובונים עליה דשבורד ציבורי, בלי שום פרטי
+        התחברות למסד הנתונים. שמות עמודות בעברית מוצגים כמו שהם.
+      </p>
+
+      <div className="api-mcp-subcard">
+        <h3 className="api-mcp-subtitle">איך מתחילים</h3>
+        {connectorUrl ? (
+          <ol className="api-mcp-steps">
+            <li>
+              פתחו את{" "}
+              <a href={connectorUrl} target="_blank" rel="noopener noreferrer">
+                קישור ההוספה של המחבר
+              </a>{" "}
+              והתחברו עם חשבון Google.
+            </li>
+            <li>
+              במסך ההרשאות יופיע "Google hasn't verified this app" — זה צפוי
+              במחברים קהילתיים: לחצו <strong>Advanced → Go to OVER</strong>. ההרשאה
+              היחידה שהמחבר מבקש היא פנייה לכתובת חיצונית (over.org.il) — הוא לא
+              ניגש לקבצים או למייל שלכם.
+            </li>
+            <li>בחרו טבלה מהרשימה או הדביקו SQL חופשי, ולחצו Connect.</li>
+            <li>Create Report — ומכאן זה Looker Studio רגיל: גרפים, פילטרים ושיתוף.</li>
+          </ol>
+        ) : (
+          <p style={{ margin: 0 }}>קישור ההוספה יתפרסם כאן בקרוב, עם שחרור המחבר.</p>
+        )}
+      </div>
+
+      <div className="api-mcp-subcard" style={{ marginTop: "1rem" }}>
+        <h3 className="api-mcp-subtitle">מגבלות</h3>
+        <p style={{ margin: 0 }}>
+          עד 10,000 שורות לשאילתה כברירת מחדל (ניתן להגדיל עד 50,000 בהגדרות
+          המחבר), 30 שניות לשאילתה, קריאה בלבד. מומלץ להשאיר את רענון הנתונים
+          (Data freshness) על ברירת המחדל של 12 שעות. נקודות הקצה{" "}
+          <code dir="ltr">/api/connector/*</code> הן תשתית המחבר ומוגנות במפתח —
+          לשימוש ישיר ב-SQL יש את <a href="/data">/data</a> ואת ה-API הפתוח שמתועד כאן.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function EndpointCard({ ep }: { ep: ApiEndpoint }) {
   const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
   const method = ep.method ?? "GET";
@@ -423,6 +488,7 @@ export default function ApiPage() {
         </div>
 
         <McpCard />
+        <LookerCard />
 
         <h2 className="api-endpoints-heading">{t("api.endpoints", "נקודות קצה")}</h2>
         {ENDPOINT_GROUPS.map((group) => (

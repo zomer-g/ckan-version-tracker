@@ -9,6 +9,7 @@ the bytes actually sent and add them to the IP's tally.
 from __future__ import annotations
 
 import logging
+import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Only the bulk DATA endpoints are metered — metadata listings, auth, admin,
 # worker and the gov.il proxy are not (they're either trivial or trusted).
-_METERED_PREFIXES = ("/api/v1", "/api/append", "/api/knesset-db", "/api/tables")
+_METERED_PREFIXES = ("/api/v1", "/api/append", "/api/knesset-db", "/api/tables",
+                     "/api/connector")
 
 
 def _client_ip(request: Request) -> str:
@@ -34,9 +36,28 @@ def _client_ip(request: Request) -> str:
     return get_client_ip(request)
 
 
-def _blocked_response() -> JSONResponse:
+def _budget_bucket(request: Request, path: str) -> tuple[str, int | None]:
+    """(bucket_key, limit_override) for this request.
+
+    A valid ``X-Connector-Key`` on the Looker-connector API routes the request
+    to one shared "connector" bucket with its own cap — all Looker Studio
+    traffic comes from the same few Google IPs, so per-IP metering would both
+    starve legitimate dashboards and let the connector eat bystanders' quota.
+    Anything else (including a wrong/absent key, which the router 401s) stays
+    on the spoof-resistant per-IP bucket."""
+    if path.startswith("/api/connector"):
+        key = getattr(settings, "connector_api_key", "") or ""
+        supplied = request.headers.get("x-connector-key", "")
+        if key and secrets.compare_digest(supplied, key):
+            return "connector", int(getattr(settings, "connector_daily_byte_budget", 0) or 0)
+    return _client_ip(request), None
+
+
+def _blocked_response(limit_bytes: int | None = None) -> JSONResponse:
     email = getattr(settings, "api_contact_email", "guy@z-g.co.il")
-    limit_gb = round(int(getattr(settings, "api_daily_byte_budget", 0) or 0) / (1024 ** 3), 1)
+    if limit_bytes is None:
+        limit_bytes = int(getattr(settings, "api_daily_byte_budget", 0) or 0)
+    limit_gb = round(limit_bytes / (1024 ** 3), 1)
     return JSONResponse(
         status_code=429,
         headers={"Retry-After": "3600"},
@@ -66,10 +87,10 @@ class ApiBudgetMiddleware(BaseHTTPMiddleware):
         if not path.startswith(_METERED_PREFIXES):
             return await call_next(request)
 
-        ip = _client_ip(request)
-        if budget.is_over(ip):
-            logger.info("API budget block for %s on %s", ip, path)
-            return _blocked_response()
+        bucket, limit = _budget_bucket(request, path)
+        if budget.is_over(bucket, limit=limit):
+            logger.info("API budget block for %s on %s", bucket, path)
+            return _blocked_response(limit)
 
         response: Response = await call_next(request)
 
@@ -84,7 +105,7 @@ class ApiBudgetMiddleware(BaseHTTPMiddleware):
                     total += len(chunk)
                     yield chunk
             finally:
-                budget.record(ip, total)
+                budget.record(bucket, total)
 
         response.body_iterator = _counting()
         return response

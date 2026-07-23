@@ -1,0 +1,16 @@
+{
+  "timeZone": "Asia/Jerusalem",
+  "runtimeVersion": "V8",
+  "exceptionLogging": "STACKDRIVER",
+  "oauthScopes": ["https://www.googleapis.com/auth/script.external_request"],
+  "urlFetchWhitelist": ["https://over.org.il/"],
+  "dataStudio": {
+    "name": "גרסאות לעם — OVER",
+    "company": "OVER — גרסאות לעם",
+    "companyUrl": "https://over.org.il",
+    "logoUrl": "https://over.org.il/connector-logo.png",
+    "addOnUrl": "https://over.org.il/api",
+    "supportUrl": "https://over.org.il/api",
+    "description": "חיבור ישיר למסד הנתונים הציבורי של גרסאות לעם — מאגרי data.gov.il, מאגר הכנסת ועוד, ב-SQL קריאה בלבד."
+  }
+}

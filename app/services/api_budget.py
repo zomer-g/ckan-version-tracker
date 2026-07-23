@@ -74,11 +74,14 @@ class _RollingByteBudget:
                 return 0
             return self._prune_locked(entry[1], now)
 
-    def is_over(self, ip: str) -> bool:
-        """True if this IP has already exhausted its budget (block further calls)."""
+    def is_over(self, ip: str, limit: int | None = None) -> bool:
+        """True if this key has already exhausted its budget (block further calls).
+
+        ``limit`` overrides the default per-IP budget for buckets with their own
+        cap (e.g. the shared Looker-connector bucket)."""
         if not getattr(settings, "api_budget_enabled", True):
             return False
-        limit = self._limit()
+        limit = self._limit() if limit is None else int(limit)
         if limit <= 0:
             return False
         return self.used(ip) >= limit
