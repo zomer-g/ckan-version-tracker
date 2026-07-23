@@ -43,7 +43,7 @@ bbox — ואפילו החזרת המחרוזת כמו-שהיא על שכבת ע
 | מאז 8.7.2026 `geometry_wkt` נכתב **WGS84 (4326)**; קודם — ITM 6991. ה-mirror מחזיק "גרסה אחרונה בלבד" ⇒ שכבה שלא נסרקה מאז נושאת **מטרים** | skill `govscraper-spatial`, invariant #1 |
 | ה-pools על `min_size=0` (scale-to-zero של Neon) | [append_store.py:100](../../app/services/append_store.py) |
 | NEON תומך רשמית ב-PostGIS | docs.neon — extensions/postgis |
-| **`APPEND_READONLY_DATABASE_URL` אינו מוגדר בפרודקשן** ⇒ הקונסולות רצות על ה-pool לקריאה-כתיבה דרך fallback מתועד, **בלי ה-`statement_timeout` ברמת החיבור** | [append_store.py:136–149](../../app/services/append_store.py), neon-index-pilot §10.3 |
+| ✅ `APPEND_READONLY_DATABASE_URL` מוגדר ומאומת בפרודקשן (23.7) ⇒ הקונסולות רצות על התפקיד המצומצם, **וה-`statement_timeout` ברמת החיבור פעיל** | [append_store.py:136–149](../../app/services/append_store.py) |
 
 ---
 
@@ -144,19 +144,20 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 
 ## 5. הפריסה — חמישה שלבים, נקודת בקרה ודרך נסיגה בכל אחד
 
-### תנאי מקדים תפעולי — הפעלת התפקיד הקריא-בלבד בפרודקשן
+### תנאי מקדים תפעולי — ✅ **הושלם 23.7.2026**
 
-**לא חלק מ-PostGIS, אבל חוסם את שלב 4.** מיטיגציית R4 (ה-`statement_timeout`
-ברמת החיבור) קיימת **רק** על ה-pool הקריא-בלבד, שאינו פעיל היום. אין לפתוח
-`ST_*` לציבור לפני שזה נסגר:
+**לא חלק מ-PostGIS, אבל חסם את שלב 4.** מיטיגציית R4 (ה-`statement_timeout`
+ברמת החיבור) קיימת **רק** על ה-pool הקריא-בלבד. הוא פעיל עכשיו:
 
-- [x] הסקריפט עודכן לכסות את סכימת `idx` (סעיף 3b) + טסט אינטגרציה
-      `test_readonly_role_can_read_every_console_schema` — 23.7.2026.
-- [ ] הרצת `scripts/create_append_readonly_role.sql` מול ה-append DB (בעל
-      המערכת — כרוך בבחירת סיסמה).
-- [ ] הגדרת `APPEND_READONLY_DATABASE_URL` ב-Render.
-- [ ] אימות: הרצת `pytest tests/test_readonly_role.py` עם המשתנה מוגדר — חמשת
-      טסטי האינטגרציה עוברים במקום להידלג; והאזהרה נעלמת מהלוג.
+- [x] הסקריפט עודכן לכסות את `idx` (סעיף 3b) ואת `extensions` (3c) + טסטים.
+- [x] התפקיד `over_readonly` הוקם על ה-append DB, עם הרשאות SELECT בלבד על
+      `public`+`knesset`+`idx` (250/50/117 טבלאות קריאות) ו-USAGE על
+      `extensions`; `is_super`/`bypass_rls`/`reads_all_data` כולם false.
+- [x] `APPEND_READONLY_DATABASE_URL` מוגדר ב-Render.
+- [x] **אומת בפרודקשן:** ‏`pg_stat_activity` מראה חיבור פעיל של `over_readonly`.
+      השיטה שווה שימור — ה-pool הוא `min_size=0`, ולכן צריך קודם להשתמש
+      ב-`/data` ורק אז לשאול; אם רואים רק את משתמש הבעלים, הערך שגוי
+      והאפליקציה נפלה בשקט חזרה ל-pool לקריאה-כתיבה.
 
 ### שלב 0 — אימות ✅ **בוצע חלקית 23.7.2026 — שער C0 עבר**
 
@@ -331,7 +332,7 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 | R1 | **SRID מעורב** — שכבות ITM ישנות מומרות כ-4326 = גיאומטריה שגויה שנראית תקינה | ~~גבוהה~~ → **נמוכה (נמדד)** | הסקר מ-23.7 מצא **3 טבלאות בלבד** מתוך 235; ה-sniff (הכרעה 3.7) נשאר כהגנה מפני רגרסיה + בדיקת bbox בגבולות ישראל אחרי המרה |
 | R2 | **hex בקונסולה/CSV** — asyncpg בלי codec | גבוהה | §4.1; בדיקות קבלה C4 |
 | R3 | WKT פגום מפיל טעינה או, גרוע מזה, חוסם עדכוני תוכן | בינונית | הכרעה 3.5: קשיח + fallback ללא geom + רישום |
-| R4 | שאילתת `ST_*` יקרה מהקונסולה הציבורית מחזיקה את ה-compute ער (הכסף האמיתי, לא האחסון) | בינונית | timeout קיים (10 שנ' + backstop), `geom` מוסתר, C4 מאמת קטיעה — **אבל ה-backstop קיים רק על ה-pool הקריא-בלבד; ראו התנאי המקדים התפעולי** |
+| R4 | שאילתת `ST_*` יקרה מהקונסולה הציבורית מחזיקה את ה-compute ער (הכסף האמיתי, לא האחסון) | בינונית | timeout של 10 שנ' + **backstop ברמת החיבור שפעיל מ-23.7** (התנאי המקדים נסגר), `geom` מוסתר מה-preview, C4 מאמת קטיעה נקייה |
 | R5 | שחיקה שקטה — דגל כבוי אחרי backfill מוחק geom בכל sync | בינונית | state + coverage (הכרעה 3.6) |
 | R6 | זליגת אובייקטי ההרחבה לקטלוג/autocomplete | ~~בינונית~~ → **נמוכה (נבדק בקוד 23.7)** | הקטלוג **אינו מונה את ה-`search_path`** — הוא נבנה מרשימות סכימות מפורשות (`_index_records` עובר דרך `list_tables()` + `schema_table_columns('idx')` + join מול `TrackedDataset`, שלושה מסננים בלתי-תלויים). לכן הוספת `extensions` ל-`CONSOLE_SEARCH_PATH` תפתור `ST_*` לא-מוסמך **בלי** להוסיף שום דבר ל-SchemaReference. נותר רק `data_catalog.py:316`, שמדפיס את ה-search_path בטקסט העזרה — קוסמטי |
 | R7 | התארכות sync (המרה + GiST בכל swap, כי הטבלה נבנית מחדש) | נמוכה-בינונית | נמדד ב-C2; רוב הטבלאות זעירות |
