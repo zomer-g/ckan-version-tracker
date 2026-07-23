@@ -939,11 +939,17 @@ async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) ->
     cube. Read through the least-privilege console role (SELECT-only). ``schema``
     is a plain identifier chosen by our code (public|knesset|idx), never user input.
 
-    Bulk geometry columns are listed but NOT fetched (see _BULK_COLS): on a large
-    mirrored layer the WKT lives in TOAST, and pulling it was measured at 46
-    SECONDS for a query that is otherwise sub-second. The cube only needs to show
-    that the column exists; a user who actually wants the geometry can select it
-    explicitly in the console, where the statement_timeout protects the endpoint."""
+    Bulk geometry columns are NOT fetched (see _BULK_COLS): on a large mirrored
+    layer the WKT lives in TOAST, and pulling it was measured at 46 SECONDS for a
+    query that is otherwise sub-second.
+
+    They are reported separately in ``omitted_columns`` — NOT in ``columns``,
+    which lists only what was actually selected, so a caller can render the rows
+    without special-casing. Callers MUST surface ``omitted_columns``: skipping it
+    makes a layer's geometry look like it does not exist, which is exactly what
+    the /data cube did until 2026-07-23. A user who wants the geometry selects it
+    explicitly in the console (``ST_AsText(geom)``), where the statement_timeout
+    protects the endpoint."""
     if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
         raise ValueError(f"invalid schema: {schema!r}")
     pool = await get_readonly_pool()

@@ -170,7 +170,7 @@ def apply_storage_target(scraper_config: dict | None, target: str) -> dict | Non
 # Without this, approval downgrades the storage plan to r2 and drops the
 # archive_neon opt-in (see admin.approve_request), so the SQL console never
 # appears for the dataset.
-TABULAR_SCRAPER_KINDS = {"registries", "munidata", "servicescompass"}
+TABULAR_SCRAPER_KINDS = {"registries", "munidata", "servicescompass", "emun"}
 
 
 def dataset_is_neon_eligible(ds) -> bool:
@@ -381,6 +381,7 @@ async def track_dataset(
         from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
         from app.api.munidata import _parse_munidata_url
+        from app.api.emun import _parse_emun_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
@@ -422,6 +423,12 @@ async def track_dataset(
                 origin = "municipal-data.org"
                 slug_prefix = "munidata-scraper"
                 mirror_prefix = "gov-versions-munidata"
+        if not collector_name:
+            page_type, collector_name = _parse_emun_url(body.source_url)
+            if collector_name:
+                origin = "govextra.gov.il"
+                slug_prefix = "emun-scraper"
+                mirror_prefix = "gov-versions-emun"
         if not collector_name:
             page_type, collector_name = _parse_mevaker_url(body.source_url)
             if collector_name:
@@ -620,6 +627,24 @@ async def track_dataset(
                 sc.setdefault("screen_id", screen_id)
             if metric_id:
                 sc.setdefault("metric_id", metric_id)
+        elif page_type and page_type.startswith("emun_"):
+            # govextra.gov.il/pmo/emun ("מערכת אמו״ן", משרד ראש הממשלה) — the
+            # public dashboard for follow-up on government-decision
+            # implementation. The mini-site is one embedded Looker Studio
+            # report over BigQuery; the external worker
+            # (govscraper.scrapers.emun) reads the published report config and
+            # pulls every data component over Looker's embed RPCs with plain
+            # httpx (no browser, no files). One dataset for the whole
+            # dashboard. archive_neon=True mirrors the tidy per-cell table into
+            # NEON so the dashboard's numbers are SQL-queryable and diffable
+            # month over month (like munidata / registries).
+            from app.api.emun import get_emun_limits
+            depth, docs = get_emun_limits(page_type)
+            sc["kind"] = "emun"
+            sc.setdefault("download_files", False)
+            sc.setdefault("max_depth", depth)
+            sc.setdefault("max_docs", docs)
+            sc.setdefault("archive_neon", True)
         elif page_type and page_type.startswith("servicescompass_"):
             # gov.il/apps/servicescompass ("מצפן השירותים הממשלתיים", מערך
             # הדיגיטל הלאומי) — the whole weekly services table AND the
@@ -1391,6 +1416,7 @@ async def submit_tracking_request(
         from app.api.registries import _parse_registries_url
         from app.api.avodata import _parse_avodata_url
         from app.api.munidata import _parse_munidata_url
+        from app.api.emun import _parse_emun_url
         from app.api.mevaker import _parse_mevaker_url
         from app.api.hatzav import _parse_hatzav_url
         from app.api.mankal import _parse_mankal_url
@@ -1426,6 +1452,11 @@ async def submit_tracking_request(
             if collector_name:
                 origin = "municipal-data.org"
                 slug_prefix = "munidata-scraper"
+        if not collector_name:
+            page_type, collector_name = _parse_emun_url(body.source_url)
+            if collector_name:
+                origin = "govextra.gov.il"
+                slug_prefix = "emun-scraper"
         if not collector_name:
             page_type, collector_name = _parse_mevaker_url(body.source_url)
             if collector_name:
@@ -1543,6 +1574,15 @@ async def submit_tracking_request(
                 sc["screen_id"] = screen_id
             if metric_id:
                 sc["metric_id"] = metric_id
+        elif page_type and page_type.startswith("emun_"):
+            # Mirror of the admin-POST branch — keep in sync.
+            from app.api.emun import get_emun_limits
+            depth, docs = get_emun_limits(page_type)
+            sc["kind"] = "emun"
+            sc["download_files"] = False
+            sc["max_depth"] = depth
+            sc["max_docs"] = docs
+            sc["archive_neon"] = True
         elif page_type and page_type.startswith("servicescompass_"):
             # Mirror of the admin-POST branch — keep in sync.
             from app.api.servicescompass import get_servicescompass_limits

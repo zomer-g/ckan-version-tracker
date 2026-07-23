@@ -383,6 +383,49 @@ def test_bulk_geometry_columns_are_recognised():
         assert c in append_store._BULK_COLS
 
 
+def test_sample_rows_reports_skipped_geometry_instead_of_hiding_it(monkeypatch):
+    """Not previewing geometry is correct (46 seconds); dropping it from the
+    response entirely is not. Until 2026-07-23 the /data cube did exactly that,
+    so a GovMap layer looked like it had no spatial column at all."""
+    class _Attr:
+        def __init__(self, name): self.name = name
+
+    class _Prepared:
+        def get_attributes(self):
+            return [_Attr("objectId"), _Attr("שם האתר"),
+                    _Attr("geometry_wkt"), _Attr("geom")]
+
+    class _Conn:
+        async def execute(self, *a, **k): return "SET"
+
+        async def prepare(self, sql): return _Prepared()
+
+        async def fetch(self, sql, *a):
+            assert "geom" not in sql, "geometry must not be SELECTed for a preview"
+            return []
+
+        def transaction(self, **k):
+            class _Tx:
+                async def __aenter__(s): return s
+                async def __aexit__(s, *e): return False
+            return _Tx()
+
+    class _Pool:
+        def acquire(self):
+            class _Acq:
+                async def __aenter__(s): return _Conn()
+                async def __aexit__(s, *e): return False
+            return _Acq()
+
+    async def fake_ro_pool(): return _Pool()
+
+    monkeypatch.setattr(append_store, "get_readonly_pool", fake_ro_pool)
+    out = asyncio.run(append_store.sample_rows("govmap_1_a_b", schema="idx"))
+
+    assert out["columns"] == ["objectId", "שם האתר"]
+    assert set(out["omitted_columns"]) == {"geometry_wkt", "geom"}
+
+
 # ── the size gate and the crash-loop guard (§10.9) ───────────────────────────
 
 def test_oversized_csv_is_deferred_before_any_download(monkeypatch):

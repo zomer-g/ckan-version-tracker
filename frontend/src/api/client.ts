@@ -916,8 +916,11 @@ export interface CatalogColumn {
 }
 export interface CatalogTable {
   table: string;
-  schema: "public" | "knesset";
-  kind: "dataset" | "knesset";
+  // Kept in step with data_catalog: `idx` (the mirrored index CSVs, kind
+  // "index") joined public and knesset and this union was never widened, so
+  // TypeScript has been quietly wrong about every GovMap layer since.
+  schema: "public" | "knesset" | "idx";
+  kind: "dataset" | "knesset" | "index";
   title: string;
   description?: string;
   group?: string | null;
@@ -942,7 +945,15 @@ export interface CatalogFile {
 export interface CatalogTableDetail extends CatalogTable {
   row_count: number | null;
   files: CatalogFile[];
-  sample: { columns: string[]; rows: Array<Record<string, unknown>> };
+  // `omitted_columns` are real columns deliberately NOT fetched for the preview
+  // (geometry/WKT — see append_store._BULK_COLS): they live in TOAST and pulling
+  // them turned a sub-second sample into a 46-second one. They must still be
+  // SHOWN, or a layer's spatial column looks like it does not exist at all.
+  sample: {
+    columns: string[];
+    rows: Array<Record<string, unknown>>;
+    omitted_columns?: string[];
+  };
   csv_url?: string;
   csv_export?: boolean;
 }

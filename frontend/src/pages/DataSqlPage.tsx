@@ -840,6 +840,23 @@ export default function DataSqlPage() {
                     </table>
                   </div>
                 )}
+                {/* Columns the preview deliberately skips (geometry — TOASTed,
+                    and fetching it cost 46s on a large layer). Without this the
+                    column is invisible here and users conclude the table has no
+                    geometry at all. */}
+                {detail && (detail.sample.omitted_columns?.length ?? 0) > 0 && (
+                  <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>
+                    עמודות שלא נשלפו לדוגמה (כבדות מדי לתצוגה):{" "}
+                    {detail.sample.omitted_columns!.map((c) => (
+                      <code key={c} style={{ marginInlineEnd: "0.4rem" }}>{c}</code>
+                    ))}
+                    {detail.sample.omitted_columns!.includes("geom") && (
+                      <> — עמודה מרחבית. לשליפה בקונסולה:{" "}
+                        <code>SELECT ST_AsText(geom) FROM {detail.schema}.{detail.table} LIMIT 5</code>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
