@@ -101,12 +101,17 @@ class _GeomConn:
     ``fail_on`` makes a statement raise, so the savepoint path can be exercised.
     """
 
-    def __init__(self, sample="POLYGON((34.78 32.08, 34.79 32.09))", fail_on=None):
+    def __init__(self, sample="POLYGON((34.78 32.08, 34.79 32.09))", fail_on=None,
+                 bad_rows=0):
         self.executed: list[str] = []
         self.sample, self.fail_on = sample, fail_on
+        self.bad_rows = bad_rows
 
     async def fetchval(self, sql, *a):
         self.executed.append(sql)
+        # The second fetchval in _add_geometry counts unparseable rows.
+        if "IS NULL" in sql and "count(*)" in sql:
+            return self.bad_rows
         return self.sample
 
     async def execute(self, sql, *a):
@@ -169,8 +174,29 @@ def test_geometry_step_builds_the_column_and_a_gist_index(monkeypatch):
     assert got == {"rows": 1234}          # parsed from the "UPDATE 1234" tag
     joined = " | ".join(conn.executed)
     assert 'ADD COLUMN "geom" "extensions".geometry(Geometry, 4326)' in joined
-    assert '"extensions".ST_GeomFromText' in joined
+    assert '"idx"."try_geom"' in joined    # row-tolerant, not bare ST_GeomFromText
     assert "USING GIST" in joined
+
+
+def test_one_unparseable_row_does_not_cost_the_layer_its_geometry(monkeypatch):
+    """Measured in production: GovMap emitted rings of three points whose first
+    and last are identical — a line wearing a polygon's name. ST_GeomFromText
+    aborts the whole statement on the first such value, which cost a
+    12,309-feature layer ALL of its geometry. Bad rows become NULL and are
+    counted; the rest convert."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(bad_rows=3)
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert got["rows"] == 1231                    # 1234 attempted − 3 refused
+    assert "3 of 1234" in got["skipped"]          # the gap is reported, not silent
+    assert any("try_geom" in s for s in conn.executed), \
+        "must use the row-tolerant parser, not bare ST_GeomFromText"
+
+
+def test_a_clean_layer_reports_no_skipped_note(monkeypatch):
+    _enable_postgis(monkeypatch)
+    got = asyncio.run(index_mirror._add_geometry(_GeomConn(), "t__stg", ["geometry_wkt"]))
+    assert got == {"rows": 1234}
 
 
 def test_geometry_step_qualifies_every_postgis_reference(monkeypatch):
@@ -204,10 +230,12 @@ def test_geometry_step_skips_a_table_with_no_geometry_rows(monkeypatch):
 
 
 def test_geometry_failure_is_reported_not_raised(monkeypatch):
-    """Geometry is an enhancement: a layer whose WKT will not convert must still
-    get its content refreshed, so the caller can swap in a geom-less table."""
+    """Geometry is an enhancement: a layer whose geometry step blows up must
+    still get its content refreshed, so the caller can swap in a geom-less
+    table. (Individual unparseable ROWS no longer reach here — try_geom NULLs
+    them; this is the path for a failure of the step itself, e.g. the index.)"""
     _enable_postgis(monkeypatch)
-    conn = _GeomConn(fail_on="ST_GeomFromText")
+    conn = _GeomConn(fail_on="CREATE INDEX")
     got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
     assert "RuntimeError" in got["error"]
     assert "rows" not in got

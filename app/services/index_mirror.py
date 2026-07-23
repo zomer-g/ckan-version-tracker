@@ -188,6 +188,26 @@ async def ensure_schema(conn) -> None:
     non-existent. ALTER DEFAULT PRIVILEGES covers every table a later sync
     creates, so a newly mirrored dataset is queryable immediately."""
     await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(SCHEMA)}")
+    # Row-tolerant WKT parser. ST_GeomFromText aborts the whole statement on the
+    # first unparseable value, which cost a 12,309-feature layer its entire
+    # geometry because GovMap emitted a handful of degenerate rings (three
+    # points, first == last — a line wearing a polygon's name). Source data
+    # quality is not something we can fix, and losing a whole layer to it is the
+    # wrong trade. Bad rows become NULL and are COUNTED by the caller, so the
+    # gap is reported rather than silent.
+    try:
+        await conn.execute(f"""
+            CREATE OR REPLACE FUNCTION {_qt('try_geom')}(w text, srid int)
+            RETURNS {_qi(PG_EXT_SCHEMA)}.geometry
+            LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
+            BEGIN
+                RETURN {_qi(PG_EXT_SCHEMA)}.ST_GeomFromText(w, srid);
+            EXCEPTION WHEN others THEN
+                RETURN NULL;
+            END $fn$
+        """)
+    except Exception:  # noqa: BLE001 — PostGIS absent ⇒ the geom step is off anyway
+        logger.debug("idx: try_geom not created (PostGIS missing?)", exc_info=True)
     role = _readonly_role()
     if not role:
         return
@@ -349,8 +369,14 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
                 f"{_qi(PG_EXT_SCHEMA)}.geometry(Geometry, {GEOM_SRID})")
             status = await conn.execute(
                 f"UPDATE {_qt(staging)} SET {geom} = "
-                f"{_qi(PG_EXT_SCHEMA)}.ST_GeomFromText({wkt}, {GEOM_SRID}) "
+                f"{_qt('try_geom')}({wkt}, {GEOM_SRID}) "
                 f"WHERE {wkt} IS NOT NULL AND {wkt} <> ''")
+            # Rows whose WKT the parser refused. Counted INSIDE the transaction,
+            # while the numbers are still true, so a layer that half-converted
+            # reports the gap instead of looking complete.
+            bad = await conn.fetchval(
+                f"SELECT count(*) FROM {_qt(staging)} "
+                f"WHERE {wkt} IS NOT NULL AND {wkt} <> '' AND {geom} IS NULL")
             await conn.execute(
                 f"CREATE INDEX {_qi(_geom_index_name(staging))} ON {_qt(staging)} "
                 f"USING GIST ({geom})")
@@ -361,10 +387,17 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
 
     # asyncpg returns the command tag, e.g. "UPDATE 5840".
     try:
-        converted = int(str(status).rsplit(" ", 1)[-1])
+        attempted = int(str(status).rsplit(" ", 1)[-1])
     except (ValueError, AttributeError):
-        converted = 0
-    return {"rows": converted}
+        attempted = 0
+    bad = int(bad or 0)
+    out: dict = {"rows": attempted - bad}
+    if bad:
+        out["skipped"] = (f"{bad} of {attempted} rows had WKT PostGIS could not "
+                          f"parse (kept as NULL geom)")
+        logger.warning("idx mirror: %s — %d/%d rows had unparseable WKT",
+                       staging, bad, attempted)
+    return out
 
 
 async def geometry_backfill_candidates(conn, limit: int) -> list[str]:
