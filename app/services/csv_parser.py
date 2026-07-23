@@ -91,13 +91,38 @@ def _decode(content: bytes) -> str:
     return content.decode("utf-8", errors="replace")
 
 
-def _detect_dialect(text: str) -> csv.Dialect:
-    """Detect CSV dialect (comma vs tab vs semicolon)."""
+def _detect_dialect(text: str) -> type[csv.Dialect]:
+    """Detect the DELIMITER (comma vs tab vs semicolon); pin everything else.
+
+    ``csv.Sniffer`` also *guesses* the quoting rules, and it guesses them from
+    an 8 KB sample — so the same writer's output can be read two different ways
+    depending on what happens to sit in the first few hundred rows. When it
+    infers ``doublequote=False``, an RFC-4180 field like ``"א""ב"`` parses as
+    ``א"ב"`` — the escaped inner quote survives but a stray quote is appended.
+
+    That is not hypothetical: two consecutive versions of the same dataset,
+    written by the same code, parsed differently — one clean, one with 17
+    corrupted values. Hebrew makes this expensive, because ``"`` is ordinary
+    orthography (ע"י, חוו"ד, מנכ"ל, בע"מ), so the damage lands on real content
+    and is easy to mistake for a source change.
+
+    There is no CSV convention in which ``""`` inside a quoted field means
+    anything other than a literal quote, so only the delimiter is worth
+    sniffing. Everything else follows ``csv.excel`` (RFC 4180), which is also
+    exactly what ``records_to_csv_bytes`` writes.
+    """
+    delimiter = ","
     try:
-        sample = text[:8192]
-        return csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        sniffed = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
+        delimiter = sniffed.delimiter
     except csv.Error:
-        return csv.excel
+        pass
+
+    class _Dialect(csv.excel):
+        pass
+
+    _Dialect.delimiter = delimiter
+    return _Dialect
 
 
 def _clean_value(value: str | None) -> str | None:
