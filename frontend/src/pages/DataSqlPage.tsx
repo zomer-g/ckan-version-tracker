@@ -459,7 +459,11 @@ export default function DataSqlPage() {
       <div className="card" style={{ padding: "1rem", marginBottom: "1rem" }}>
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
           <strong style={{ fontSize: "0.95rem" }}>{"</>"} קונסולת SQL</strong>
-          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · search_path: public, knesset</span>
+          {/* Mirrors data_catalog.CONSOLE_SEARCH_PATH. It drifted once already:
+              this line still said "public, knesset" long after idx joined the
+              path, so the console was telling users they had to qualify tables
+              that in fact resolved bare. */}
+          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · search_path: public, knesset, idx, extensions</span>
           <CopySchemaButton url={dataCatalog.schemaTxtUrl(selectedTable?.table)} />
           <select
             aria-label="שאילתות לדוגמה"
