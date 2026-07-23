@@ -608,6 +608,48 @@ def test_knesset_mmm_stays_eligible():
         _KDS(kind="knesset_mmm", source_type="scraper"))
 
 
+class _NeonDS(_DS):
+    def __init__(self, kind=None, archive_neon=None, **kw):
+        super().__init__(**kw)
+        self.kind = kind
+        self.archive_neon = archive_neon
+
+
+def test_archive_neon_scrapers_are_excluded():
+    """registries / munidata / servicescompass / emun already dual-write every
+    row into public.append_* — an idx mirror would be a second, diverging copy
+    (it holds only the latest version while the append table accumulates all of
+    them). This was a real double-count: emun 989 in idx vs 1006 in append."""
+    for kind in ("registries", "munidata", "servicescompass", "emun"):
+        assert not index_mirror.dataset_is_index_mirror_eligible(
+            _NeonDS(kind=kind, source_type="scraper", archive_neon="true")), kind
+
+
+def test_archive_neon_flag_is_read_as_text_or_bool():
+    """The flag reaches the eligibility check as JSONB-astext ('true') from the
+    sync/purge queries, but a real bool must also count."""
+    assert not index_mirror.dataset_is_index_mirror_eligible(
+        _NeonDS(kind="emun", source_type="scraper", archive_neon=True))
+    assert not index_mirror.dataset_is_index_mirror_eligible(
+        _NeonDS(kind="emun", source_type="scraper", archive_neon="true"))
+
+
+def test_non_archive_neon_scrapers_stay_eligible():
+    """A plain document scraper (jda) has no public.append_ twin, so its index
+    CSV is still worth mirroring. archive_neon absent or explicitly false."""
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _NeonDS(kind="jda", source_type="scraper", archive_neon=None))
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _NeonDS(kind="jda", source_type="scraper", archive_neon="false"))
+
+
+def test_govmap_stays_eligible_despite_being_tabular():
+    """GovMap layers are NOT archive_neon — they need the idx mirror for the
+    geometry column and PostGIS. The flag, not 'has rows', is the gate."""
+    assert index_mirror.dataset_is_index_mirror_eligible(
+        _NeonDS(source_type="govmap", archive_neon=None))
+
+
 def test_other_kinds_and_missing_kind_stay_eligible():
     assert index_mirror.dataset_is_index_mirror_eligible(
         _KDS(kind="govmap", source_type="govmap"))

@@ -271,14 +271,35 @@ def index_csv_value(mappings: dict | None) -> str | None:
     return v if (v and is_storage_value(v)) else None
 
 
+def _is_truthy_flag(value) -> bool:
+    """True for a JSONB-``astext`` boolean that reads true ('true'), and for a
+    real ``bool`` — so this works whether ``archive_neon`` arrives as a labelled
+    text column or off an ORM object's dict."""
+    if value is True:
+        return True
+    return str(value).strip().lower() == "true"
+
+
 def dataset_is_index_mirror_eligible(ds) -> bool:
     """Whether this dataset's index CSV should be mirrored into ``idx``.
 
     Scraper/govmap sources only: they are the ones whose versions carry a
-    "נתוני הסורק" CSV. CKAN datasets already stream their rows into the append
-    tables in ``public`` via archive_neon, so mirroring them here would just
-    duplicate data — and so would the kinds in EXCLUDED_SCRAPER_KINDS, which
-    have a better copy in another schema.
+    "נתוני הסורק" CSV.
+
+    A dataset is EXCLUDED when its rows already land in a proper NEON table
+    somewhere else — mirroring the same facts into ``idx`` would put two copies
+    in the /data console that drift apart as one goes stale:
+
+    * **CKAN** and any **archive_neon scraper** stream every row into the
+      ``public.append_…`` table via the dual-write. The archive_neon scrapers
+      (registries / munidata / servicescompass / emun) are the trap: they pass
+      the scraper source-type check, so before this they were mirrored too — an
+      idx copy that held only the latest version while the append table
+      accumulated all of them (emun: 989 vs 1006). Keying on the flag itself,
+      not a hand-maintained kind list, means a future archive_neon source is
+      excluded automatically.
+    * **EXCLUDED_SCRAPER_KINDS** have a richer copy in another schema (knesset →
+      the ``knesset`` ODATA tables).
 
     Whether a given VERSION actually has the CSV is checked separately
     (index_csv_value) — a dataset can be eligible but not yet have a version to
@@ -287,7 +308,11 @@ def dataset_is_index_mirror_eligible(ds) -> bool:
         return False
     if (getattr(ds, "source_type", None) or "") not in ELIGIBLE_SOURCE_TYPES:
         return False
-    return (getattr(ds, "kind", None) or "") not in EXCLUDED_SCRAPER_KINDS
+    if (getattr(ds, "kind", None) or "") in EXCLUDED_SCRAPER_KINDS:
+        return False
+    if _is_truthy_flag(getattr(ds, "archive_neon", None)):
+        return False
+    return True
 
 
 def _iter_batches(path: str, columns: list[str], keep: list[int]):
@@ -701,12 +726,18 @@ async def pending(db, *, limit: int | None = None,
     # `kind` is pulled as a single text field, not the whole scraper_config
     # JSONB — the filter below needs it, the memory budget does not need the rest.
     kind_col = TrackedDataset.scraper_config["kind"].astext.label("kind")
+    archive_neon_col = TrackedDataset.scraper_config["archive_neon"].astext.label("archive_neon")
     q = select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.ckan_name,
-               TrackedDataset.source_type, TrackedDataset.status, kind_col).where(
+               TrackedDataset.source_type, TrackedDataset.status,
+               kind_col, archive_neon_col).where(
         TrackedDataset.source_type.in_(ELIGIBLE_SOURCE_TYPES),
         TrackedDataset.status.in_(["active", "pending"]),
         sa_or(kind_col.is_(None),
               kind_col.notin_(tuple(EXCLUDED_SCRAPER_KINDS))),
+        # archive_neon scrapers already have a public.append_ twin — skip them
+        # SQL-side too, not only in dataset_is_index_mirror_eligible below, so
+        # they never even reach the loader.
+        sa_or(archive_neon_col.is_(None), archive_neon_col != "true"),
     )
     if dataset_id is not None:
         q = q.where(TrackedDataset.id == dataset_id)
@@ -939,9 +970,10 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
         return {"error": "append DB not configured"}
 
     kind_col = TrackedDataset.scraper_config["kind"].astext.label("kind")
+    archive_neon_col = TrackedDataset.scraper_config["archive_neon"].astext.label("archive_neon")
     rows = (await db.execute(
         select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.source_type,
-               TrackedDataset.status, kind_col)
+               TrackedDataset.status, kind_col, archive_neon_col)
     )).all()
     eligible = {str(r.id) for r in rows if dataset_is_index_mirror_eligible(r)}
 
