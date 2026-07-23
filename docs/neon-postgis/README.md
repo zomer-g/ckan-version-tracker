@@ -248,7 +248,27 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 > עתיד `geometry_wkt` (הכרעה 3.4). **אם C1 נכשל — יורדים לחלופה הזולה (§8)
 > במקום לזנוח את הנושא.**
 
-### שלב 2 — קוד פרודקשן מאחורי דגל
+### שלב 2 — ✅ **נכתב 23.7.2026 (קומיטים `8a0af52`, `b4e2bf3`). ממתין ל-C2.**
+
+> **מה נכנס:**
+> - דגל `INDEX_MIRROR_POSTGIS_ENABLED` (`app/config.py`), **כבוי כברירת מחדל**.
+> - `index_mirror._add_geometry()` — שלב בין ה-COPY ל-swap: `ADD COLUMN geom`,
+>   `ST_GeomFromText`, ‏`CREATE INDEX ... USING GIST`, הכול בטרנזקציה אחת.
+>   **לעולם לא זורק** — כישלון מגלגל אחורה את העמודה והטבלה מוחלפת בלי `geom`.
+> - `classify_wkt_crs()` — sniff שמסרב להמיר WKT שנראה ITM.
+> - שם האינדקס משתנה בתוך טרנזקציית ההחלפה, כי אינדקס חולק namespace עם טבלאות
+>   והשם משתחרר רק אחרי `DROP TABLE` של הגרסה הקודמת.
+> - `postgis_rows` / `postgis_note` ב-`_sync_state`.
+> - codec ל-`geometry` על שני ה-pools + תווית `geometry` ב-`_ckan_type`.
+> - `extensions` נוספה ל-`CONSOLE_SEARCH_PATH` ולשני סקריפטי ההקמה.
+> - **9 טסטים** (262 עוברים בסך הכול).
+>
+> **הערה על ה-codec:** הוא מונע שגיאה, אבל הערך שמוצג הוא **hex EWKB ולא WKT** —
+> פונקציית הפלט הטקסטואלית של הטיפוס מחזירה hex, ו-decoder מקבל בתים בלי חיבור
+> שדרכו יוכל לקרוא ל-`ST_AsText`. הפתרון הוא במקום שבו הוא שייך: `geom` מוסתרת
+> מה-preview דרך `_BULK_COLS`, והעזרה בקונסולה מפנה ל-`ST_AsText(geom)`.
+
+### שלב 2 (המקורי) — קוד פרודקשן מאחורי דגל
 
 - [ ] מיגרציה: ההרחבה ב-`extensions` + `GRANT USAGE` לתפקיד ה-read-only +
       עדכון `CONSOLE_SEARCH_PATH`.
