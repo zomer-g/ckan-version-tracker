@@ -279,8 +279,14 @@ async def poll_for_task(
     worker_version = (request.headers.get("x-worker-version") or "").strip()
     worker_engine_hash = (request.headers.get("x-worker-engine-hash") or "").strip().lower()
     worker_upstream = (request.headers.get("x-worker-upstream") or "").strip().lower()
+    # Resolved only when an override is actually configured. Calling it
+    # unconditionally would hit the GitHub commits API on every poll for a
+    # private repo — a guaranteed 404 that burns the unauthenticated rate
+    # limit (60/hour) at roughly the polling rate.
     required_version = (
-        await get_required_worker_sha() if settings.worker_version_check_enabled else None
+        await get_required_worker_sha()
+        if settings.worker_version_check_enabled and settings.worker_required_version
+        else None
     )
 
     if settings.worker_version_check_enabled and not required_version:

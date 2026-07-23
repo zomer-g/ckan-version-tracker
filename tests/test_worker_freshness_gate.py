@@ -101,14 +101,15 @@ def test_a_worker_too_old_to_report_is_dispatched_to(client):
 
 
 def test_no_github_lookup_is_attempted_without_a_pin(client, monkeypatch):
-    """The repo is private: any lookup 404s. The gate must not depend on one."""
+    """The repo is private, so every lookup 404s — and doing one per poll
+    would burn the unauthenticated 60/hour rate limit for nothing."""
     async def _boom(*a, **kw):
         raise AssertionError("the gate must not query GitHub without a pin")
 
     monkeypatch.setattr(worker_api, "get_required_worker_sha", _boom)
     monkeypatch.setattr(worker_api, "get_required_engine_hash", _boom)
-    monkeypatch.setattr(settings, "worker_version_check_enabled", False)
     assert not _refused(_poll(client, **{"X-Worker-Upstream": "current"}))
+    assert not _refused(_poll(client))  # header-less worker too
 
 
 # --- the emergency override -------------------------------------------------
