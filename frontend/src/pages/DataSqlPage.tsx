@@ -9,6 +9,7 @@ import {
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
+import SqlMapPanel from "../components/SqlMapPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import SqlEditor, {
   SqlEditorHandle,
@@ -290,10 +291,45 @@ JOIN decisions d USING (yr)
 WHERE v.yr BETWEEN 2010 AND 2026
 ORDER BY v.yr`,
   },
+
+  // ── שאילתות מרחביות (PostGIS) ─────────────────────────────────────────────
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "מפה: אתרי מורשת לאומיים",
+    sql: `-- שכבות ה-ממ"ג נושאות עמודת geom. כשהתוצאה כוללת גיאומטריה,
+-- מופיע כפתור "הצג על מפה" מתחת לתוצאה. כאן: כל אתרי המורשת.
+SELECT "שם האתר", "ישוב", geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "מרחב: אתרים במרחק 20 ק\"מ מתל אביב",
+    sql: `-- ST_DWithin על ::geography מקבל מטרים. התוצאה כוללת geometry_wkt
+-- ולכן ניתן להציג אותה על מפה.
+SELECT "שם האתר", "ישוב", geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664
+WHERE ST_DWithin(
+        geom::geography,
+        ST_SetSRID(ST_MakePoint(34.7818, 32.0853), 4326)::geography,
+        20000)`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "חיתוך: אתרי מורשת בתוך אזורים סטטיסטיים",
+    sql: `-- JOIN מרחבי: כל אתר מורשת + האזור הסטטיסטי (למ"ס) שהוא נופל בתוכו,
+-- בלי שאף עמודה תקשר ביניהם — הקישור גיאומטרי בלבד (ST_Intersects).
+SELECT h."שם האתר" AS אתר, s."ישוב",
+       NULLIF(s."אוכלוסיה",'')::numeric AS אוכלוסיה,
+       h.geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664 h
+JOIN idx.govmap_23_d882fbdb_493df16d  s
+     ON ST_Intersects(s.geom, h.geom)
+ORDER BY 3 DESC NULLS LAST`,
+  },
 ];
 
 // Dropdown groups, in the learning order above.
-const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש וקיבוץ", "JOIN בין מאגרים שונים"];
+const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש וקיבוץ", "JOIN בין מאגרים שונים", "שאילתות מרחביות (מפה)"];
 
 export default function DataSqlPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -621,6 +657,13 @@ export default function DataSqlPage() {
         <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
       )}
 
+      {/* Map over the current result — appears only when it carries geometry
+          (SqlMapPanel returns null otherwise), so it never intrudes on a
+          non-spatial query. */}
+      {sqlResult && !sqlError && sqlResult.rows.length > 0 && (
+        <SqlMapPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
+      )}
+
       {/* Table browser + detail cube */}
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div className="card" style={{ flex: "1 1 340px", minWidth: 300, padding: "0.75rem", maxHeight: 620, overflowY: "auto" }}>
@@ -781,6 +824,7 @@ export default function DataSqlPage() {
             <div className="text-sm text-muted" style={{ lineHeight: 1.7 }}>
               <p style={{ marginTop: 0 }}>בחרו טבלה מהרשימה כדי לראות דוגמה מהתוכן, פרטי המקור, קישור למקור והורדת הקבצים הגולמיים.</p>
               <p>הרשימה כוללת כל מאגר שנשמר כטבלה ניתנת-לתשאול, מקובצת לפי המקור. אפשר גם לכתוב SQL חופשי מעל הכל, כולל JOIN בין מאגרים ומעל טבלאות הכנסת.</p>
+              <p>רוצים דשבורד קבוע על שאילתה כזו? אפשר לחבר את הנתונים ישירות ל-Looker Studio — פרטים ב<a href="/api#looker">עמוד ה-API</a>.</p>
               {/* Legend for the list marker. Without it the icon is a mystery:
                   a tooltip only helps someone who already suspects it means
                   something and bothers to hover. */}
