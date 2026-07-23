@@ -197,6 +197,11 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 
 - [ ] מיגרציה: ההרחבה ב-`extensions` + `GRANT USAGE` לתפקיד ה-read-only +
       עדכון `CONSOLE_SEARCH_PATH`.
+      ⚠ **הוספת `extensions` ל-`CONSOLE_SEARCH_PATH` תפיל בכוונה את
+      `test_console_search_path_matches_the_schemas_we_grant`** — זה ה-tripwire
+      שנועד לוודא שלא מוסיפים סכימה לנתיב בלי להעניק עליה הרשאות. התיקון הנכון
+      הוא לעדכן גם את `_CONSOLE_SCHEMAS` בטסט **וגם** את שני סקריפטי ההקמה
+      (`scripts/create_append_readonly_role*.sql`), לא להחליש את הטסט.
 - [ ] `index_mirror.py`: שלב ה-geom בין ה-COPY ל-swap, מותנה בדגל + בקיום
       עמודת גיאומטריה + ב-sniff; מנגנון ה-fallback של הכרעה 3.5; רישום
       ב-`idx_sync_state`.
@@ -253,7 +258,7 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 | R3 | WKT פגום מפיל טעינה או, גרוע מזה, חוסם עדכוני תוכן | בינונית | הכרעה 3.5: קשיח + fallback ללא geom + רישום |
 | R4 | שאילתת `ST_*` יקרה מהקונסולה הציבורית מחזיקה את ה-compute ער (הכסף האמיתי, לא האחסון) | בינונית | timeout קיים (10 שנ' + backstop), `geom` מוסתר, C4 מאמת קטיעה — **אבל ה-backstop קיים רק על ה-pool הקריא-בלבד; ראו התנאי המקדים התפעולי** |
 | R5 | שחיקה שקטה — דגל כבוי אחרי backfill מוחק geom בכל sync | בינונית | state + coverage (הכרעה 3.6) |
-| R6 | זליגת אובייקטי ההרחבה לקטלוג/autocomplete | בינונית | סכימת `extensions` (הכרעה 3.2) + טסט |
+| R6 | זליגת אובייקטי ההרחבה לקטלוג/autocomplete | ~~בינונית~~ → **נמוכה (נבדק בקוד 23.7)** | הקטלוג **אינו מונה את ה-`search_path`** — הוא נבנה מרשימות סכימות מפורשות (`_index_records` עובר דרך `list_tables()` + `schema_table_columns('idx')` + join מול `TrackedDataset`, שלושה מסננים בלתי-תלויים). לכן הוספת `extensions` ל-`CONSOLE_SEARCH_PATH` תפתור `ST_*` לא-מוסמך **בלי** להוסיף שום דבר ל-SchemaReference. נותר רק `data_catalog.py:316`, שמדפיס את ה-search_path בטקסט העזרה — קוסמטי |
 | R7 | התארכות sync (המרה + GiST בכל swap, כי הטבלה נבנית מחדש) | נמוכה-בינונית | נמדד ב-C2; רוב הטבלאות זעירות |
 | R8 | קוד שמניח שכל עמודות `idx` הן `text` | נמוכה | `geom` מוסתר; סריקת שימושי `schema_table_columns` בשלב 2 |
 | R9 | שדרוגי גרסה (PostGIS צמוד ל-PG של Neon; major = `ALTER EXTENSION ... UPDATE`) | נמוכה | מנוהל ע"י Neon; חיכוך תפעולי מתועד, לא חוסם |
