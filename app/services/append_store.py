@@ -918,7 +918,7 @@ async def public_table_columns() -> dict[str, list[dict]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT table_name, column_name, data_type "
+            "SELECT table_name, column_name, data_type, udt_name "
             "FROM information_schema.columns "
             "WHERE table_schema = 'public' AND table_name LIKE $1 ESCAPE '\\' "
             "ORDER BY table_name, ordinal_position",
@@ -1155,12 +1155,12 @@ async def column_meta(table: str) -> list[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT column_name, data_type FROM information_schema.columns "
+            "SELECT column_name, data_type, udt_name FROM information_schema.columns "
             "WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position",
             table,
         )
     return [
-        {"id": r["column_name"], "type": _ckan_type(r["data_type"])}
+        {"id": r["column_name"], "type": _ckan_type(r["data_type"], r["udt_name"])}
         for r in rows if r["column_name"] not in _HIDDEN_COLS
     ]
 

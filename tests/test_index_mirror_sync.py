@@ -383,6 +383,26 @@ def test_bulk_geometry_columns_are_recognised():
         assert c in append_store._BULK_COLS
 
 
+def test_every_udt_name_read_has_a_query_that_selects_it():
+    """Source-level guard for a class of bug the mocked tests cannot see.
+
+    Reading r["udt_name"] from an information_schema query that does not SELECT
+    it raises KeyError only against a REAL database — every unit test here fakes
+    the rows, so it passes locally and takes out /data in production. That is
+    exactly what happened on 2026-07-23: two of the three column queries were
+    updated together with their reads, the third was not, and the catalog
+    endpoint started 500ing.
+
+    So: count the reads and count the SELECTs. They must match."""
+    import re as _re
+    src = open(append_store.__file__, encoding="utf-8").read()
+    reads = len(_re.findall(r'\["udt_name"\]', src))
+    selects = len(_re.findall(r"SELECT[^\"]*udt_name", src))
+    assert reads == selects, (
+        f"{reads} reads of udt_name but {selects} queries select it — a read "
+        f"without a matching SELECT is a KeyError that only fires in production")
+
+
 def test_geometry_is_typed_from_udt_name_not_from_user_defined():
     """information_schema reports USER-DEFINED for EVERY custom type, so
     data_type alone cannot tell geometry from an enum. The /data list puts a map
