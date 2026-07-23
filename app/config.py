@@ -194,6 +194,21 @@ class Settings(BaseSettings):
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.
     index_mirror_chunk: int = 3
     index_mirror_interval_minutes: int = 10
+    # Build a PostGIS `geom` column + GiST index on mirrored GovMap layers, so
+    # /data can run spatial SQL instead of only matching geometry_wkt as text.
+    # Off by default: it needs `CREATE EXTENSION postgis SCHEMA extensions` to
+    # have been run on the append DB, and a deploy with this still false must
+    # behave exactly as before. Measured on the append DB 2026-07-23 (see
+    # docs/neon-postgis/README.md §5 stage 1): conversion is ~21µs per geometry
+    # and the GiST index ~40 bytes per row, so the cost is storage — about +80%
+    # on a geometry table, ~$0.20/month across the whole corpus.
+    #
+    # NOTE the asymmetry: turning this ON adds geom to each table as it next
+    # syncs, and turning it OFF removes it the same way, because every sync
+    # rebuilds the table from scratch (COPY to staging, then swap). Neither
+    # direction is retroactive, so `postgis_rows` in the checkpoint is what
+    # tells you which tables actually have it.
+    index_mirror_postgis_enabled: bool = False
 
     auto_discover_enabled: bool = False
     auto_discover_interval_hours: float = 6.0

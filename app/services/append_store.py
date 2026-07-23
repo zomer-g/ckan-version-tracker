@@ -67,6 +67,37 @@ def is_configured() -> bool:
     return bool(settings.append_database_url)
 
 
+async def _register_geometry_codec(conn) -> None:
+    """Let asyncpg decode PostGIS ``geometry`` instead of failing on it.
+
+    asyncpg ships no codec for the type, and an unknown type is not something it
+    shrugs off — a plain ``SELECT geom FROM …`` raises before the console can
+    render anything. Every read path is exposed: ``run_readonly_sql`` (the /data
+    grid), ``sample_rows``, and ``iter_sql_csv``, which does ``str(rec[c])``
+    straight into an exported file.
+
+    Registered per connection rather than per pool because ``geometry`` is not a
+    built-in: its OID is handed out when the extension is created, so it differs
+    between databases. If PostGIS is absent the type lookup finds nothing and we
+    move on — this must never be a reason a connection fails to open.
+
+    **What the user actually sees is hex EWKB, not WKT.** Postgres' text output
+    function for geometry emits hex, and a codec decoder is handed bytes with no
+    connection to call ST_AsText on, so it cannot do better. That is a
+    presentation problem, solved where presentation belongs: ``geom`` is in
+    ``_BULK_COLS`` (hidden from the preview) and the console help points at
+    ``ST_AsText(geom)``, which returns real WKT. This codec's job is narrower —
+    make the raw column survive a SELECT instead of raising.
+    """
+    try:
+        await conn.set_type_codec(
+            "geometry", schema="extensions",
+            encoder=str, decoder=str, format="text",
+        )
+    except Exception:  # noqa: BLE001 — PostGIS absent, or installed elsewhere
+        logger.debug("append_store: no geometry codec registered", exc_info=True)
+
+
 def _dsn_from(raw: str) -> str:
     """Normalize a Postgres URL into a DSN asyncpg accepts.
 
@@ -100,6 +131,7 @@ async def get_pool() -> asyncpg.Pool:
                     min_size=0,      # let Neon scale to zero between polls
                     max_size=5,
                     command_timeout=180,
+                    init=_register_geometry_codec,
                 )
                 logger.info("append_store: connection pool created")
     return _pool
@@ -160,6 +192,7 @@ async def get_readonly_pool() -> asyncpg.Pool:
                     server_settings={
                         "statement_timeout": _READONLY_STATEMENT_TIMEOUT,
                     },
+                    init=_register_geometry_codec,
                 )
                 logger.info("append_store: read-only connection pool created")
     return _ro_pool
@@ -1098,6 +1131,12 @@ def _ckan_type(pg_type: str | None) -> str:
         return "numeric"
     if t in ("boolean", "bool"):
         return "bool"
+    # PostGIS geometry surfaces as "USER-DEFINED" via information_schema and as
+    # "geometry" via asyncpg. Labelled distinctly so the catalog does not present
+    # a spatial column as ordinary text — the two behave nothing alike in the
+    # console (see the ST_AsText note in the SQL help).
+    if t in ("geometry", "geography", "user-defined"):
+        return "geometry"
     return "text"
 
 

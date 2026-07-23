@@ -67,6 +67,56 @@ EXCLUDED_SCRAPER_KINDS = frozenset({"knesset"})
 
 STATE_TABLE = "_sync_state"
 
+# ── PostGIS geometry column ──────────────────────────────────────────────────
+# Optional, behind settings.index_mirror_postgis_enabled. GovMap index CSVs carry
+# the feature geometry as WKT text in `geometry_wkt`; with the extension present
+# we also materialise it as a real geometry plus a GiST index, which is what lets
+# /data run ST_Intersects / ST_DWithin instead of only matching the text.
+#
+# The extension lives in its OWN schema so its ~1,000 functions and
+# spatial_ref_sys stay out of the console's autocomplete. That isolation is
+# exactly why every reference below is schema-qualified: the worker's connection
+# carries no search_path at all (it addresses everything as idx."table"), so a
+# bare `geometry` or `ST_GeomFromText` raises 42704 — measured, not assumed.
+PG_EXT_SCHEMA = "extensions"
+WKT_COLUMN = "geometry_wkt"
+GEOM_COLUMN = "geom"
+# Everything the scraper has written since 2026-07-08 is WGS84 lon/lat. Layers
+# last scraped before that still hold ITM 6991 metres, and converting those as
+# 4326 would produce geometry that is wrong but looks valid — hence the sniff.
+GEOM_SRID = 4326
+
+_WKT_FIRST_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def classify_wkt_crs(sample: str | None) -> str:
+    """Classify one WKT sample as ``"degrees"``, ``"itm"`` or ``"unknown"``.
+
+    Reads the first coordinate — for ``POLYGON((34.78 32.08, …))`` that is the
+    X, i.e. the longitude — and decides by magnitude. Israel spans roughly
+    34.2–35.9°E in WGS84 and 120,000–320,000 m easting in ITM, so the two ranges
+    are three orders of magnitude apart and cannot be confused.
+
+    Deliberately conservative: anything that is neither is ``"unknown"``, and
+    the caller skips the geometry column rather than guessing. A census of all
+    235 mirrored geometry tables on 2026-07-23 found 232 degrees, 3 itm, 0
+    unknown (docs/neon-postgis/README.md §5 stage 0).
+    """
+    if not sample:
+        return "unknown"
+    m = _WKT_FIRST_NUMBER.search(sample)
+    if not m:
+        return "unknown"
+    try:
+        x = float(m.group(0))
+    except ValueError:  # pragma: no cover — the regex cannot produce this
+        return "unknown"
+    if 33.0 <= x <= 37.0:
+        return "degrees"
+    if 100_000.0 <= x <= 400_000.0:
+        return "itm"
+    return "unknown"
+
 # How many times a dataset may be attempted before it is deferred instead of
 # retried. The point is not transient-error tolerance — it is that an OOM kills
 # the process before any error can be recorded, so without a counter claimed
@@ -178,6 +228,13 @@ async def _ensure_state_table(conn) -> None:
         f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS deferred text",
         f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS csv_bytes bigint",
         f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0",
+        # Geometry coverage. Without these two, a corpus where PostGIS was on
+        # for some syncs and off for others looks identical to one where it is
+        # on everywhere — every sync rebuilds its table, so the column comes and
+        # goes silently. `postgis_rows` is how many geometries the LAST sync
+        # converted (NULL = none built); `postgis_note` is why, when it did not.
+        f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS postgis_rows bigint",
+        f"ALTER TABLE {_qt(STATE_TABLE)} ADD COLUMN IF NOT EXISTS postgis_note text",
     ):
         await conn.execute(ddl)
 
@@ -236,6 +293,76 @@ def _iter_batches(path: str, columns: list[str], keep: list[int]):
             yield batch
 
 
+def _geom_index_name(table: str) -> str:
+    """GiST index name for ``table``, inside the 63-byte identifier budget."""
+    suffix = "_geom_gix"
+    return append_store.clip_ident_bytes(table, 63 - len(suffix)) + suffix
+
+
+async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
+    """Materialise ``geom`` + a GiST index on the STAGING table, before the swap.
+
+    Building it here rather than on the live table is not a preference: every
+    sync rebuilds the table and swaps it in, so a column added to the live table
+    would be destroyed by the next sync — and an UPDATE on a live table would
+    burst WAL across the whole corpus for nothing.
+
+    **Never raises.** Geometry is an enhancement; a layer whose WKT we cannot
+    convert must still get its content refreshed. All three statements run in one
+    transaction, and DDL is transactional in Postgres, so a failure takes the
+    column with it and leaves staging exactly as the COPY left it — the caller
+    then swaps in a geom-less table, with the reason recorded so the admin
+    coverage view shows the gap instead of the corpus silently drifting.
+
+    Returns ``{"rows": n}`` on success, ``{"skipped": why}`` when there is
+    nothing to do, or ``{"error": msg}`` when the conversion itself failed.
+    """
+    if not settings.index_mirror_postgis_enabled:
+        return {"skipped": "postgis disabled"}
+    if WKT_COLUMN not in columns:
+        return {"skipped": "no geometry column"}
+
+    # One truncated row: enough to classify the CRS, and it never expands the
+    # whole TOASTed geometry (which is what made a naive scan cost 46 seconds).
+    sample = await conn.fetchval(
+        f"SELECT substring({_qi(WKT_COLUMN)} from 1 for 120) FROM {_qt(staging)} "
+        f"WHERE {_qi(WKT_COLUMN)} IS NOT NULL AND {_qi(WKT_COLUMN)} <> '' LIMIT 1")
+    if sample is None:
+        return {"skipped": "no geometry rows"}
+    crs = classify_wkt_crs(sample)
+    if crs != "degrees":
+        # ITM layers are not transformed here on purpose: re-scraping the source
+        # rewrites the CSV as 4326, which keeps "every geom is 4326" true
+        # everywhere instead of introducing a second, silent conversion path.
+        return {"skipped": f"wkt looks like {crs}, expected degrees "
+                           f"(EPSG:{GEOM_SRID}) — re-scrape the dataset"}
+
+    geom, wkt = _qi(GEOM_COLUMN), _qi(WKT_COLUMN)
+    try:
+        async with conn.transaction():  # all-or-nothing: no half-built column
+            await conn.execute(
+                f"ALTER TABLE {_qt(staging)} ADD COLUMN {geom} "
+                f"{_qi(PG_EXT_SCHEMA)}.geometry(Geometry, {GEOM_SRID})")
+            status = await conn.execute(
+                f"UPDATE {_qt(staging)} SET {geom} = "
+                f"{_qi(PG_EXT_SCHEMA)}.ST_GeomFromText({wkt}, {GEOM_SRID}) "
+                f"WHERE {wkt} IS NOT NULL AND {wkt} <> ''")
+            await conn.execute(
+                f"CREATE INDEX {_qi(_geom_index_name(staging))} ON {_qt(staging)} "
+                f"USING GIST ({geom})")
+    except Exception as exc:  # noqa: BLE001 — the load must survive this
+        logger.warning("idx mirror: geometry step failed for %s — loading "
+                       "without it", staging, exc_info=True)
+        return {"error": f"{type(exc).__name__}: {exc}"[:500]}
+
+    # asyncpg returns the command tag, e.g. "UPDATE 5840".
+    try:
+        converted = int(str(status).rsplit(" ", 1)[-1])
+    except (ValueError, AttributeError):
+        converted = 0
+    return {"rows": converted}
+
+
 async def load_index_csv(r2_value: str, table: str) -> dict:
     """Load one index CSV from R2 into ``idx.<table>``, replacing it atomically.
 
@@ -286,11 +413,21 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
                     )
                     rows += len(batch)
 
+                geom = await _add_geometry(conn, staging, columns)
+
                 # Atomic cutover: readers see the old table or the new one.
                 async with conn.transaction():
                     await conn.execute(f"DROP TABLE IF EXISTS {_qt(table)}")
                     await conn.execute(
                         f"ALTER TABLE {_qt(staging)} RENAME TO {_qi(table)}")
+                    if geom.get("rows") is not None:
+                        # Only now is the name free: an index shares the relation
+                        # namespace with tables, so the previous version's index
+                        # had to be dropped (with its table, a line above) before
+                        # this one can take the final name.
+                        await conn.execute(
+                            f"ALTER INDEX {_qt(_geom_index_name(staging))} "
+                            f"RENAME TO {_qi(_geom_index_name(table))}")
             except BaseException:
                 # Never leave a half-filled staging table behind to confuse the
                 # next run or the catalog.
@@ -305,9 +442,14 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
             # row estimates read reltuples).
             await conn.execute(f"ANALYZE {_qt(table)}")
 
-        logger.info("idx mirror: loaded %s — %d rows, %d columns",
-                    table, rows, len(columns))
-        return {"table": table, "rows": rows, "columns": len(columns)}
+        logger.info("idx mirror: loaded %s — %d rows, %d columns%s",
+                    table, rows, len(columns),
+                    f", geom {geom['rows']}" if geom.get("rows") is not None
+                    else f" (geom: {geom.get('skipped') or geom.get('error')})")
+        return {"table": table, "rows": rows, "columns": len(columns),
+                "geom_rows": geom.get("rows"),
+                "geom_error": geom.get("error"),
+                "geom_skipped": geom.get("skipped")}
     finally:
         if tmp:
             try:
@@ -350,15 +492,17 @@ async def loaded_versions() -> dict[str, int]:
 async def _record(dataset_id, table: str, version_number: int,
                   rows: int | None, error: str | None, *,
                   deferred: str | None = None, csv_bytes: int | None = None,
-                  bump_attempt: bool = False) -> None:
+                  bump_attempt: bool = False,
+                  postgis_rows: int | None = None,
+                  postgis_note: str | None = None) -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await _ensure_state_table(conn)
         await conn.execute(f"""
             INSERT INTO {_qt(STATE_TABLE)}
                 (dataset_id, table_name, version_number, rows, synced_at,
-                 error, deferred, csv_bytes, attempts)
-            VALUES ($1, $2, $3, $4, now(), $5, $6, $7, $8)
+                 error, deferred, csv_bytes, attempts, postgis_rows, postgis_note)
+            VALUES ($1, $2, $3, $4, now(), $5, $6, $7, $8, $10, $11)
             ON CONFLICT (dataset_id) DO UPDATE SET
                 table_name = EXCLUDED.table_name,
                 version_number = EXCLUDED.version_number,
@@ -367,9 +511,15 @@ async def _record(dataset_id, table: str, version_number: int,
                 error = EXCLUDED.error,
                 deferred = EXCLUDED.deferred,
                 csv_bytes = COALESCE(EXCLUDED.csv_bytes, {_qt(STATE_TABLE)}.csv_bytes),
-                attempts = CASE WHEN $9 THEN {_qt(STATE_TABLE)}.attempts + 1 ELSE 0 END
+                attempts = CASE WHEN $9 THEN {_qt(STATE_TABLE)}.attempts + 1 ELSE 0 END,
+                -- Overwritten unconditionally, including back to NULL: the
+                -- geometry column really is gone when a sync runs with the flag
+                -- off, so a stale "yes it has geom" here would be a lie.
+                postgis_rows = EXCLUDED.postgis_rows,
+                postgis_note = EXCLUDED.postgis_note
         """, dataset_id, table, int(version_number), rows, error, deferred,
-             csv_bytes, 1 if bump_attempt else 0, bump_attempt)
+             csv_bytes, 1 if bump_attempt else 0, bump_attempt,
+             postgis_rows, postgis_note)
 
 
 async def pending(db, *, limit: int | None = None,
@@ -492,8 +642,12 @@ async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
     try:
         res = await load_index_csv(item["r2_value"], item["table"])
         await _record(item["dataset_id"], item["table"], item["version_number"],
-                      res["rows"], None)
-        return {**item, "rows": res["rows"], "columns": res["columns"], "ok": True}
+                      res["rows"], None,
+                      postgis_rows=res.get("geom_rows"),
+                      postgis_note=res.get("geom_error") or res.get("geom_skipped"))
+        return {**item, "rows": res["rows"], "columns": res["columns"], "ok": True,
+                "geom_rows": res.get("geom_rows"),
+                "geom_note": res.get("geom_error") or res.get("geom_skipped")}
     except Exception as e:  # noqa: BLE001 — one bad dataset must not stop a run
         logger.warning("idx: sync failed for %s (%s): %s",
                        item.get("title"), item.get("table"), e)

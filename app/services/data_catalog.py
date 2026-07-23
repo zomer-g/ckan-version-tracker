@@ -319,6 +319,12 @@ async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str
         "-- למטה בדיוק בצורה שבה יש לכתוב אותו.",
         "-- טבלאות knesset: הכול באותיות קטנות (KNS_Bill ← kns_bill).",
         "-- כל העמודות בסכימת idx הן text; המירו לפי הצורך (col::numeric, col::date).",
+        "-- שכבות ממ\"ג: geometry_wkt היא טקסט. אם קיימת גם עמודת geom (טיפוס",
+        "--   geometry, EPSG:4326) אפשר לשאול שאלות מרחביות:",
+        "--   ST_AsText(geom) לקריאת הגיאומטריה — בחירת geom עצמה מחזירה hex.",
+        "--   geom && ST_MakeEnvelope(34.7,31.9,35.0,32.2,4326) לסינון לפי מלבן.",
+        "--   ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(34.78,32.08),4326)::geography, 500)",
+        "--   למרחק במטרים (בלי ::geography המרחק יוצא במעלות וחסר משמעות).",
     ]
     by_schema: dict[str, list[dict]] = {}
     for rec in catalog:

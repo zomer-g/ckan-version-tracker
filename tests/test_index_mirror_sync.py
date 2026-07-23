@@ -93,6 +93,133 @@ def test_ensure_schema_survives_a_failing_grant(monkeypatch):
     asyncio.run(index_mirror.ensure_schema(_Conn()))  # must not raise
 
 
+# ── PostGIS geometry column (docs/neon-postgis/README.md) ────────────────────
+
+class _GeomConn:
+    """Records SQL and fakes the one value _add_geometry reads (the WKT sample).
+
+    ``fail_on`` makes a statement raise, so the savepoint path can be exercised.
+    """
+
+    def __init__(self, sample="POLYGON((34.78 32.08, 34.79 32.09))", fail_on=None):
+        self.executed: list[str] = []
+        self.sample, self.fail_on = sample, fail_on
+
+    async def fetchval(self, sql, *a):
+        self.executed.append(sql)
+        return self.sample
+
+    async def execute(self, sql, *a):
+        self.executed.append(sql)
+        if self.fail_on and self.fail_on in sql:
+            raise RuntimeError("boom")
+        return "UPDATE 1234"
+
+    def transaction(self):
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self_inner):
+                conn.executed.append("-- SAVEPOINT")
+                return self_inner
+
+            async def __aexit__(self_inner, *exc):
+                return False
+        return _Tx()
+
+
+def _enable_postgis(monkeypatch, on=True):
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", on)
+
+
+def test_classify_wkt_crs_separates_degrees_from_itm():
+    """The two ranges are three orders of magnitude apart, which is the whole
+    reason a first-coordinate sniff is safe enough to gate on."""
+    assert index_mirror.classify_wkt_crs("POINT(34.78 32.08)") == "degrees"
+    assert index_mirror.classify_wkt_crs(
+        "MULTIPOLYGON(((245134.2 698829.0, 245135.0 698830.0)))") == "itm"
+    assert index_mirror.classify_wkt_crs("POINT(-118.24 34.05)") == "unknown"
+    assert index_mirror.classify_wkt_crs("") == "unknown"
+    assert index_mirror.classify_wkt_crs(None) == "unknown"
+    assert index_mirror.classify_wkt_crs("GEOMETRYCOLLECTION EMPTY") == "unknown"
+
+
+def test_geometry_step_is_a_no_op_while_the_flag_is_off(monkeypatch):
+    """A deploy with the flag still false must behave exactly as before —
+    no sample read, no DDL."""
+    _enable_postgis(monkeypatch, False)
+    conn = _GeomConn()
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert got == {"skipped": "postgis disabled"}
+    assert conn.executed == []
+
+
+def test_geometry_step_skips_tables_without_a_wkt_column(monkeypatch):
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn()
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["a", "b"]))
+    assert got == {"skipped": "no geometry column"}
+    assert conn.executed == []
+
+
+def test_geometry_step_builds_the_column_and_a_gist_index(monkeypatch):
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn()
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert got == {"rows": 1234}          # parsed from the "UPDATE 1234" tag
+    joined = " | ".join(conn.executed)
+    assert 'ADD COLUMN "geom" "extensions".geometry(Geometry, 4326)' in joined
+    assert '"extensions".ST_GeomFromText' in joined
+    assert "USING GIST" in joined
+
+
+def test_geometry_step_qualifies_every_postgis_reference(monkeypatch):
+    """The worker's connection carries NO search_path, so a bare `geometry` or
+    `ST_GeomFromText` raises 42704. This is the regression guard for that —
+    it was caught in the pilot, not in production."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn()
+    asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    for sql in conn.executed:
+        if "geometry(" in sql or "ST_GeomFromText" in sql:
+            assert '"extensions".' in sql, f"unqualified PostGIS use: {sql}"
+
+
+def test_geometry_step_refuses_itm_wkt_instead_of_converting_it(monkeypatch):
+    """Converting ITM metres as 4326 yields geometry that is wrong but looks
+    valid — the worst possible failure. Skip and say why."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(sample="MULTIPOLYGON(((245134.2 698829.0, 1 2)))")
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert "itm" in got["skipped"]
+    assert not any("ADD COLUMN" in s for s in conn.executed)
+
+
+def test_geometry_step_skips_a_table_with_no_geometry_rows(monkeypatch):
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(sample=None)
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert got == {"skipped": "no geometry rows"}
+    assert not any("ADD COLUMN" in s for s in conn.executed)
+
+
+def test_geometry_failure_is_reported_not_raised(monkeypatch):
+    """Geometry is an enhancement: a layer whose WKT will not convert must still
+    get its content refreshed, so the caller can swap in a geom-less table."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(fail_on="ST_GeomFromText")
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert "RuntimeError" in got["error"]
+    assert "rows" not in got
+
+
+def test_geom_index_name_stays_inside_the_identifier_budget():
+    long_table = "govmap_" + "א" * 40          # Hebrew: 2 bytes per char
+    name = index_mirror._geom_index_name(long_table)
+    assert len(name.encode("utf-8")) <= 63
+    assert name.endswith("_geom_gix")
+
+
 # ── the version-landed trigger ───────────────────────────────────────────────
 
 def _fake_pending_env(monkeypatch, *, mirrored: dict):
