@@ -9,7 +9,6 @@ import {
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
-import SqlMapPanel from "../components/SqlMapPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import SqlEditor, {
   SqlEditorHandle,
@@ -688,12 +687,6 @@ export default function DataSqlPage() {
         <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
       )}
 
-      {/* Map over the current result — appears only when it carries geometry
-          (SqlMapPanel returns null otherwise), so it never intrudes on a
-          non-spatial query. */}
-      {sqlResult && !sqlError && sqlResult.rows.length > 0 && (
-        <SqlMapPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
-      )}
 
       {/* Table browser + detail cube */}
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>

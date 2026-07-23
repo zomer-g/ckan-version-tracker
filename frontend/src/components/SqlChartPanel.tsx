@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import {
+  findGeomColumn, categoryColumns, categoryValues, buildFeatures, SIMPLIFY_ABOVE,
+} from "../utils/mapFeatures";
+import { simplifyFeatureCollection } from "../utils/geoSimplify";
+import type { Basemap } from "./SqlMapLeaflet";
+
+// Leaflet is heavy; it loads only when the map view is actually opened.
+const SqlMapLeaflet = lazy(() => import("./SqlMapLeaflet"));
 
 /**
  * Charts for an in-memory SQL result (the /data console).
@@ -32,7 +40,7 @@ const PALETTE = [
 ];
 const MAX_SERIES = PALETTE.length;
 
-export type ChartType = "bar" | "barh" | "line" | "area" | "pie" | "scatter" | "stat";
+export type ChartType = "bar" | "barh" | "line" | "area" | "pie" | "scatter" | "stat" | "map";
 type BarMode = "group" | "stack" | "stack100";
 type SortMode = "result" | "value_desc" | "value_asc" | "label";
 type AggMode = "sum" | "avg" | "count" | "min" | "max" | "none";
@@ -201,11 +209,20 @@ const REQS: { type: ChartType; label: string; icon: string; req: string }[] = [
     req: "שתי עמודות מספריות (X ו-Y) — כל שורה נקודה. לבדיקת קשר בין שני מדדים." },
   { type: "stat", label: "מספר", icon: "🔢",
     req: "תוצאה של שורה אחת — הערכים המספריים מוצגים כמספרים גדולים." },
+  { type: "map", label: "מפה", icon: "🗺",
+    req: "עמודת גיאומטריה — geometry_wkt, ST_AsText(geom) או ST_AsGeoJSON(geom). כל שורה מצטיירת כצורה על המפה." },
 ];
 
-function applicableType(t: ChartType, cols: ColInfo[], rowCount: number): boolean {
+/** Whether the current result can be drawn as `t`.
+ *
+ *  `hasGeom` comes from the caller because the map's requirement is unlike the
+ *  others: it is not about column KINDS but about cell CONTENT — a text column
+ *  that happens to hold WKT. */
+function applicableType(t: ChartType, cols: ColInfo[], rowCount: number,
+                        hasGeom: boolean): boolean {
   const nNum = cols.filter((c) => c.kind === "number").length;
   switch (t) {
+    case "map": return hasGeom;
     case "stat": return rowCount === 1 && nNum >= 1;
     case "scatter": return nNum >= 2;
     default: return cols.length >= 2 && nNum >= 1;
@@ -297,6 +314,22 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   const [axisOf, setAxisOf] = useState<Record<string, Axis>>({});
   const chartWrapRef = useRef<HTMLDivElement>(null);
 
+  // ── map view state ────────────────────────────────────────────────────────
+  const [mapCat, setMapCat] = useState<string>("");        // "" = single colour
+  const [basemap, setBasemap] = useState<Basemap>("streets");
+  const [fillOpacity, setFillOpacity] = useState(0.2);
+  const [pointRadius, setPointRadius] = useState(6);
+
+  const geomCol = useMemo(() => findGeomColumn(columns, rows), [columns, rows]);
+  const mapCatOptions = useMemo(
+    () => (geomCol ? categoryColumns(columns, rows, geomCol) : []),
+    [columns, rows, geomCol],
+  );
+  const mapCatValues = useMemo(
+    () => (mapCat ? categoryValues(rows, mapCat) : []),
+    [rows, mapCat],
+  );
+
   const xKind: ColKind = cols.find((c) => c.name === xCol)?.kind || "text";
 
   function applyDefaults(t: ChartType) {
@@ -311,6 +344,15 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     setColorOverrides({});
     setDualY(false);
     setAxisOf({});
+    if (t === "map") {
+      // Default to colouring by the most selective category column, since a
+      // mixed result (areas + the points inside them) is the case the map is
+      // most often opened for and is unreadable in one colour.
+      setMapCat(mapCatOptions[0] || "");
+      setBasemap("streets");
+      setFillOpacity(0.2);
+      setPointRadius(6);
+    }
   }
 
   function defaultMapping(t: ChartType): { x: string; y: string[] } {
@@ -373,7 +415,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     if (prevSig.current === sig) return;
     prevSig.current = sig;
     const t = searchParams.get("chart") as ChartType | null;
-    if (!t || !REQS.some((r) => r.type === t) || !applicableType(t, cols, rows.length)) {
+    if (!t || !REQS.some((r) => r.type === t) || !applicableType(t, cols, rows.length, !!geomCol)) {
       setType(null);
       return;
     }
@@ -431,7 +473,9 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
 
   if (!rows.length) return null;
 
-  const suggestions = REQS.filter((r) => applicableType(r.type, cols, rows.length)).map((r) => r.type);
+  const suggestions = REQS
+    .filter((r) => applicableType(r.type, cols, rows.length, !!geomCol))
+    .map((r) => r.type);
   const singleValue = type === "pie";
   const yOptions = (type === "scatter" ? numCols : numCols).filter((n) => n !== xCol);
   const activeY = (singleValue ? yCols.slice(0, 1) : yCols)
@@ -447,7 +491,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   const effAgg: AggMode = type === "scatter" || type === "stat" ? "none" : agg;
 
   const prep = useMemo<Prepared | null>(() => {
-    if (!type || type === "scatter" || type === "stat" || !hasSeries) return null;
+    if (!type || type === "scatter" || type === "stat" || type === "map" || !hasSeries) return null;
     return prepare(rows, xCol, activeY, {
       agg: effAgg, sort, topN: effTopN, fold, xKind, sortByX: isXSorted,
     });
@@ -455,6 +499,26 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   }, [type, rows, xCol, activeY.join("|"), effAgg, sort, effTopN, fold, xKind, isXSorted]);
 
   const colorFor = (name: string, i: number) => colorOverrides[name] || PALETTE[i % MAX_SERIES];
+
+  // Map features. Colours come from the SAME colorOverrides the series pickers
+  // write to, so "colour by category" on the map and per-series colours on a
+  // chart are one mechanism with one settings UI.
+  const mapData = useMemo(() => {
+    if (type !== "map" || !geomCol) return null;
+    const idxOf = new Map(mapCatValues.map((v, i) => [v, i]));
+    const pick = (cat: string | null) => {
+      if (cat === null) return colorOverrides.__map || PALETTE[1];
+      const i = idxOf.get(cat) ?? idxOf.size;
+      return colorOverrides[cat] || PALETTE[i % MAX_SERIES];
+    };
+    const built = buildFeatures(columns, rows, geomCol, mapCat || null, pick);
+    if (built.fc && built.drawn > SIMPLIFY_ABOVE) {
+      // No-op on point-only sets and on very large ones — safe above the bar.
+      built.fc = simplifyFeatureCollection(built.fc as never) as unknown as typeof built.fc;
+    }
+    return built;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, geomCol, columns, rows, mapCat, mapCatValues, colorOverrides]);
   const setColor = (name: string, hex: string) => setColorOverrides((p) => ({ ...p, [name]: hex }));
   const resetColor = (name: string) => setColorOverrides((p) => { const n = { ...p }; delete n[name]; return n; });
 
@@ -539,15 +603,131 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
         {activeReq || "כל כפתור מציג בריחוף את מבנה הנתונים שהוא צריך; כפתור אפור = התוצאה הנוכחית לא מתאימה לסוג הזה."}
       </div>
 
-      {type && !hasSeries && type !== "stat" && (
+      {type && !hasSeries && type !== "stat" && type !== "map" && (
         <div className="text-sm text-muted">אין עמודה מספרית מתאימה להצגה בתרשים.</div>
+      )}
+
+      {type === "map" && mapData?.fc && (
+        <>
+          {/* Map settings — the same shape as the chart controls above: a row of
+              inline pickers, with colours behind the ⚙ toggle. */}
+          <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", margin: "0.4rem 0 0.6rem" }}>
+            <label className="text-sm text-muted">
+              צבע לפי:{" "}
+              <select
+                value={mapCat}
+                onChange={(e) => { setMapCat(e.target.value); setColorOverrides({}); }}
+                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+              >
+                <option value="">צבע אחיד</option>
+                {mapCatOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-muted">
+              רקע:{" "}
+              <select
+                value={basemap}
+                onChange={(e) => setBasemap(e.target.value as Basemap)}
+                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+              >
+                <option value="streets">מפת רחובות</option>
+                <option value="satellite">תצלום לוויין</option>
+                <option value="none">ללא רקע</option>
+              </select>
+            </label>
+            <span className="text-sm text-muted">
+              {mapData.drawn.toLocaleString()} צורות
+              {mapData.total > mapData.drawn ? ` (מתוך ${mapData.total.toLocaleString()})` : ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSettings((v) => !v)}
+              style={{
+                fontSize: "0.78rem", padding: "0.25rem 0.6rem", borderRadius: 4, cursor: "pointer",
+                border: "1px solid var(--border, #d1d5db)",
+                background: showSettings ? "var(--bg-muted, #eef2f5)" : "none", color: "var(--text)",
+              }}
+            >
+              ⚙ הגדרות {showSettings ? "▲" : "▼"}
+            </button>
+          </div>
+
+          {showSettings && (
+            <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem", marginBottom: "0.7rem" }}>
+              <div className="flex" style={{ gap: "1.2rem", flexWrap: "wrap", alignItems: "center" }}>
+                <label className="text-sm text-muted">
+                  אטימות מילוי: {Math.round(fillOpacity * 100)}%{" "}
+                  <input type="range" min={0} max={0.8} step={0.05} value={fillOpacity}
+                         onChange={(e) => setFillOpacity(Number(e.target.value))}
+                         style={{ verticalAlign: "middle" }} />
+                </label>
+                <label className="text-sm text-muted">
+                  גודל נקודה: {pointRadius}{" "}
+                  <input type="range" min={2} max={14} step={1} value={pointRadius}
+                         onChange={(e) => setPointRadius(Number(e.target.value))}
+                         style={{ verticalAlign: "middle" }} />
+                </label>
+              </div>
+
+              <div style={{ marginTop: "0.6rem" }}>
+                <div className="text-sm text-muted" style={{ marginBottom: "0.35rem" }}>
+                  {mapCat ? "צבע לכל ערך:" : "צבע הצורות:"}
+                </div>
+                <div className="flex" style={{ gap: "0.9rem", flexWrap: "wrap" }}>
+                  {(mapCat ? mapCatValues : ["__map"]).map((name, i) => {
+                    const current = colorOverrides[name] || PALETTE[(mapCat ? i : 1) % MAX_SERIES];
+                    return (
+                      <span key={name} className="flex text-sm" style={{ gap: "0.35rem", alignItems: "center" }}>
+                        <input
+                          type="color"
+                          value={current}
+                          onChange={(e) => setColorOverrides((p) => ({ ...p, [name]: e.target.value }))}
+                          style={{ width: 30, height: 24, padding: 0, border: "1px solid var(--border,#d1d5db)", borderRadius: 4, cursor: "pointer" }}
+                          aria-label={`צבע ל-${name === "__map" ? "כל הצורות" : name}`}
+                        />
+                        {name === "__map" ? "כל הצורות" : name}
+                        {colorOverrides[name] && (
+                          <button type="button" onClick={() => setColorOverrides((p) => {
+                            const n = { ...p }; delete n[name]; return n;
+                          })} title="חזרה לצבע ברירת המחדל"
+                            style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "0.75rem" }}>↺</button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {mapCat && (
+            <div className="flex" style={{ gap: "0.8rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+              {mapCatValues.map((v, i) => (
+                <span key={v} className="text-sm" style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center" }}>
+                  <span aria-hidden style={{ width: 11, height: 11, borderRadius: 3, flex: "0 0 auto",
+                                             background: colorOverrides[v] || PALETTE[i % MAX_SERIES] }} />
+                  {v}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <Suspense fallback={<div className="text-sm text-muted" style={{ padding: "1rem" }}>טוען מפה…</div>}>
+            <SqlMapLeaflet fc={mapData.fc} basemap={basemap}
+                           fillOpacity={fillOpacity} pointRadius={pointRadius} />
+          </Suspense>
+        </>
+      )}
+
+      {type === "map" && !mapData?.fc && (
+        <div className="text-sm text-muted">לא נמצאה גיאומטריה קריאה בתוצאה.</div>
       )}
 
       {type === "stat" && (
         <StatTiles row={rows[0]} numCols={numCols} title={title} />
       )}
 
-      {type && type !== "stat" && (
+      {type && type !== "stat" && type !== "map" && (
         <>
           {/* Column mapping controls */}
           <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", margin: "0.4rem 0 0.6rem" }}>
