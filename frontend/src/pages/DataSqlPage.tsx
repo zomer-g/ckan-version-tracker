@@ -303,15 +303,46 @@ FROM idx.govmap_286_0f8ac82b_796b6664`,
   },
   {
     group: "שאילתות מרחביות (מפה)",
-    label: "מרחב: אתרים במרחק 20 ק\"מ מתל אביב",
-    sql: `-- ST_DWithin על ::geography מקבל מטרים. התוצאה כוללת geometry_wkt
--- ולכן ניתן להציג אותה על מפה.
-SELECT "שם האתר", "ישוב", geometry_wkt
-FROM idx.govmap_286_0f8ac82b_796b6664
-WHERE ST_DWithin(
-        geom::geography,
-        ST_SetSRID(ST_MakePoint(34.7818, 32.0853), 4326)::geography,
-        20000)`,
+    label: "פוליגונים: תחומי רשויות + אתרי המורשת שבתוכם",
+    sql: `-- בוחרים את הפוליגונים של כמה רשויות, ומוצאים אילו אתרי מורשת נופלים
+-- בתוכם. אין עמודה שמקשרת בין שני המאגרים — הקישור גיאומטרי בלבד.
+-- ה-UNION מחזיר גם את הפוליגונים וגם את הנקודות, ולכן המפה מציירת את שניהם.
+WITH areas AS (
+  SELECT "ישוב" AS muni, geom
+  FROM idx.govmap_23_d882fbdb_493df16d
+  WHERE "ישוב" IN ('ירושלים','באר שבע','חדרה','רחובות','לוד','מזכרת בתיה')
+)
+SELECT 'תחום הרשות' AS סוג, a.muni AS שם, ST_AsText(a.geom) AS geometry_wkt
+FROM areas a
+UNION ALL
+SELECT 'אתר מורשת', h."שם האתר" || ' (' || a.muni || ')', h.geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664 h
+JOIN areas a ON ST_Intersects(a.geom, h.geom)`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "טבעת מרחק: אתרים 15–45 ק\"מ מת\"א + שני מעגלי הטווח",
+    sql: `-- טבעת: רק מה שרחוק לפחות 15 ק"מ אבל לא יותר מ-45 — DWithin החיצוני
+-- פחות הפנימי. ST_Buffer על ::geography מקבל מטרים, ו-ST_Boundary הופך
+-- כל עיגון לקו — כך שני מעגלי הטווח נכנסים לתוצאה ומצטיירים על המפה.
+WITH tlv AS (
+  SELECT ST_SetSRID(ST_MakePoint(34.7818, 32.0853), 4326)::geography AS p
+)
+SELECT 'טווח 15 ק"מ' AS סוג, NULL AS שם, NULL::numeric AS מרחק_קמ,
+       ST_AsText(ST_Boundary(ST_Buffer(p, 15000)::geometry)) AS geometry_wkt
+FROM tlv
+UNION ALL
+SELECT 'טווח 45 ק"מ', NULL, NULL,
+       ST_AsText(ST_Boundary(ST_Buffer(p, 45000)::geometry))
+FROM tlv
+UNION ALL
+SELECT 'אתר מורשת', h."שם האתר",
+       round((ST_Distance(h.geom::geography, p) / 1000)::numeric, 1),
+       h.geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664 h, tlv
+WHERE ST_DWithin(h.geom::geography, p, 45000)
+  AND NOT ST_DWithin(h.geom::geography, p, 15000)
+ORDER BY 3 NULLS FIRST`,
   },
   {
     group: "שאילתות מרחביות (מפה)",

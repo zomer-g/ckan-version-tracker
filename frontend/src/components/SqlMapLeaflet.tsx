@@ -28,6 +28,15 @@ export interface MapFeatureCollection {
 const STROKE = "#15803d";
 const FILL = "#22c55e";
 
+// SqlMapPanel stamps a per-feature colour when the result has a category column
+// (e.g. "תחום הרשות" vs "אתר מורשת"), which is what makes a mixed result
+// readable instead of one undifferentiated smear. Absent that, everything falls
+// back to the panel's green.
+function colorOf(props: Record<string, unknown> | undefined): string {
+  const c = props?.__color;
+  return typeof c === "string" ? c : STROKE;
+}
+
 function FitBounds({ fc }: { fc: MapFeatureCollection }) {
   const map = useMap();
   useEffect(() => {
@@ -44,7 +53,7 @@ function FitBounds({ fc }: { fc: MapFeatureCollection }) {
 
 function popupHtml(props: Record<string, unknown>): string {
   const rows = Object.entries(props)
-    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .filter(([k, v]) => k !== "__color" && v !== null && v !== undefined && v !== "")
     .slice(0, 20)
     .map(([k, v]) => {
       const key = String(k).replace(/</g, "&lt;");
@@ -64,19 +73,32 @@ export default function SqlMapLeaflet({ fc }: { fc: MapFeatureCollection }) {
       style={{ height: 460, width: "100%", borderRadius: 6 }}
       scrollWheelZoom
     >
+      {/* Same tile endpoint as GovmapView and GrowthPage. NOT the {s}
+          subdomain form (a./b./c.) — OSM retired it, and it silently returns
+          broken tiles: the shapes draw fine over a blank grey background, which
+          looks like a styling bug rather than a dead tile host. */}
       <TileLayer
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; OpenStreetMap'
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        maxZoom={19}
       />
       <GeoJSON
         key={fc.features.length + "-" + JSON.stringify(fc.features[0]?.geometry ?? {}).length}
         data={fc as unknown as GeoJSON.GeoJsonObject}
-        style={() => ({ color: STROKE, weight: 1.5, fillColor: FILL, fillOpacity: 0.25 })}
-        pointToLayer={(_f, latlng) =>
-          L.circleMarker(latlng, {
-            radius: 5, color: STROKE, weight: 1.5, fillColor: FILL, fillOpacity: 0.7,
-          })
-        }
+        style={(f) => {
+          const c = colorOf(f?.properties as Record<string, unknown>);
+          return { color: c, weight: 1.6, fillColor: c === STROKE ? FILL : c, fillOpacity: 0.2 };
+        }}
+        pointToLayer={(f, latlng) => {
+          const c = colorOf(f?.properties as Record<string, unknown>);
+          return L.circleMarker(latlng, {
+            // Points sit ON TOP of the polygons they fall inside, so they get a
+            // white halo and a larger radius — otherwise a site inside a filled
+            // municipality is invisible against it.
+            radius: 6, color: "#fff", weight: 2,
+            fillColor: c === STROKE ? FILL : c, fillOpacity: 1,
+          });
+        }}
         onEachFeature={(f, layer) => {
           const props = (f.properties || {}) as Record<string, unknown>;
           layer.bindPopup(() => popupHtml(props), { maxWidth: 320 });

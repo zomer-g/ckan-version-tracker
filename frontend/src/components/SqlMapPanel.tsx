@@ -28,6 +28,42 @@ const SIMPLIFY_ABOVE = 400;
 // rows, so this only bites on a pathological result; it keeps the DOM sane.
 const MAX_FEATURES = 2000;
 
+// Categorical colours — the same validated order the charts use, so a category
+// keeps one identity across both panels.
+const PALETTE = [
+  "#2a78d6", "#008300", "#e87ba4", "#eda100",
+  "#1baf7a", "#eb6834", "#4a3aa7", "#e34948",
+];
+const MAX_CATEGORIES = PALETTE.length;
+
+/** A low-cardinality text column to colour by, if the result has one.
+ *
+ *  This is what makes a mixed result readable: a query returning municipality
+ *  polygons AND the sites inside them is a green smear when everything shares a
+ *  colour, and immediately legible when the two kinds differ. Picked by shape,
+ *  not by name — any column with 2..8 distinct values over a result that has
+ *  more rows than values qualifies. */
+function findCategoryColumn(columns: string[], rows: Row[], geomCol: string): string | null {
+  let best: { col: string; n: number } | null = null;
+  for (const c of columns) {
+    if (c === geomCol) continue;
+    const seen = new Set<string>();
+    let nonEmpty = 0;
+    for (const r of rows) {
+      const v = r[c];
+      if (v === null || v === undefined || v === "") continue;
+      if (typeof v === "object") { seen.clear(); break; }
+      nonEmpty++;
+      seen.add(String(v));
+      if (seen.size > MAX_CATEGORIES) break;
+    }
+    if (seen.size < 2 || seen.size > MAX_CATEGORIES) continue;
+    if (nonEmpty < seen.size * 2) continue;      // needs repeats to be a grouping
+    if (!best || seen.size < best.n) best = { col: c, n: seen.size };
+  }
+  return best?.col ?? null;
+}
+
 /** Pick the column holding geometry: the one whose sampled values look like WKT
  *  or GeoJSON. Name is a tiebreaker only — content is what decides, so this
  *  works for `ST_AsText(geom)`, a bare `geometry_wkt`, or an aliased column. */
@@ -58,8 +94,12 @@ export default function SqlMapPanel({
 
   const geomCol = useMemo(() => findGeomColumn(columns, rows), [columns, rows]);
 
-  const { fc, drawn, total } = useMemo(() => {
-    if (!geomCol) return { fc: null as MapFeatureCollection | null, drawn: 0, total: 0 };
+  const { fc, drawn, total, legend } = useMemo(() => {
+    const none = { fc: null as MapFeatureCollection | null, drawn: 0, total: 0,
+                   legend: [] as Array<{ label: string; color: string }> };
+    if (!geomCol) return none;
+    const catCol = findCategoryColumn(columns, rows, geomCol);
+    const colorOf = new Map<string, string>();
     const propCols = columns.filter((c) => c !== geomCol);
     const features: MapFeatureCollection["features"] = [];
     let total = 0;
@@ -70,16 +110,24 @@ export default function SqlMapPanel({
       if (features.length >= MAX_FEATURES) continue;
       const properties: Record<string, unknown> = {};
       for (const c of propCols) properties[c] = r[c];
+      if (catCol) {
+        const key = String(r[catCol] ?? "—");
+        if (!colorOf.has(key) && colorOf.size < MAX_CATEGORIES) {
+          colorOf.set(key, PALETTE[colorOf.size]);
+        }
+        properties.__color = colorOf.get(key) ?? PALETTE[PALETTE.length - 1];
+      }
       features.push({ type: "Feature", geometry: g as Record<string, unknown>, properties });
     }
-    if (features.length === 0) return { fc: null, drawn: 0, total: 0 };
+    if (features.length === 0) return none;
     let fc: MapFeatureCollection = { type: "FeatureCollection", features };
     if (features.length > SIMPLIFY_ABOVE) {
       // simplifyFeatureCollection is a no-op on point-only sets and on very
       // large ones, so this is safe to call unconditionally above the threshold.
       fc = simplifyFeatureCollection(fc as never) as unknown as MapFeatureCollection;
     }
-    return { fc, drawn: features.length, total };
+    const legend = [...colorOf.entries()].map(([label, color]) => ({ label, color }));
+    return { fc, drawn: features.length, total, legend };
   }, [geomCol, columns, rows]);
 
   if (!fc) return null; // no geometry in this result → no panel
@@ -110,6 +158,16 @@ export default function SqlMapPanel({
           {drawn.toLocaleString()} צורות על המפה
           {total > drawn ? ` (מתוך ${total.toLocaleString()} — הוגבל)` : ""}
         </span>
+        {open && legend.length > 0 && (
+          <span className="flex" style={{ gap: "0.6rem", flexWrap: "wrap", marginInlineStart: "auto" }}>
+            {legend.map((l) => (
+              <span key={l.label} className="text-sm" style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center" }}>
+                <span aria-hidden style={{ width: 11, height: 11, borderRadius: 3, background: l.color, flex: "0 0 auto" }} />
+                {l.label}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
 
       {open && (
