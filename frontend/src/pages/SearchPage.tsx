@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -22,6 +22,9 @@ import { SERVICESCOMPASS_PATTERN } from "../utils/servicescompassPattern";
 // municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
 // in app/api/munidata.py.
 import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
+// govextra.gov.il/pmo/emun dashboard URL pattern. Mirror of _parse_emun_url
+// in app/api/emun.py.
+import { EMUN_DASHBOARD_PATTERN } from "../utils/emunPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
@@ -118,6 +121,10 @@ export default function SearchPage() {
   const [munidataTracked, setMunidataTracked] = useState<"tracked" | "pending" | null>(null);
   const [munidataTracking, setMunidataTracking] = useState(false);
   const [showMunidataInterval, setShowMunidataInterval] = useState(false);
+  const [emunResult, setEmunResult] = useState<GovIlValidation | null>(null);
+  const [emunTracked, setEmunTracked] = useState<"tracked" | "pending" | null>(null);
+  const [emunTracking, setEmunTracking] = useState(false);
+  const [showEmunInterval, setShowEmunInterval] = useState(false);
   // mevaker.gov.il scraper result — same flow.
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
   const [mevakerTracked, setMevakerTracked] = useState<"tracked" | "pending" | null>(null);
@@ -226,6 +233,10 @@ export default function SearchPage() {
     return MUNIDATA_METRIC_PATTERN.test(input.trim());
   };
 
+  const detectEmunUrl = (input: string): boolean => {
+    return EMUN_DASHBOARD_PATTERN.test(input.trim());
+  };
+
   const detectMankalUrl = (input: string): boolean => {
     return MANKAL_PATTERN.test(input.trim());
   };
@@ -268,6 +279,9 @@ export default function SearchPage() {
     setMunidataResult(null);
     setMunidataTracked(null);
     setShowMunidataInterval(false);
+    setEmunResult(null);
+    setEmunTracked(null);
+    setShowEmunInterval(false);
     setMevakerResult(null);
     setMevakerTracked(null);
     setShowMevakerInterval(false);
@@ -380,6 +394,20 @@ export default function SearchPage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid municipal-data.org URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 1d-3. Check for the govextra.gov.il/pmo/emun dashboard URL.
+      if (detectEmunUrl(query)) {
+        const validation = await emun.validate(query.trim());
+        if (validation.valid) {
+          setEmunResult(validation);
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid govextra.gov.il/pmo/emun URL");
         }
         setLoading(false);
         return;
@@ -647,6 +675,23 @@ export default function SearchPage() {
     setMunidataTracking(false);
   };
 
+  const trackEmunDataset = async (interval: number) => {
+    if (!emunResult?.url || !emunResult?.title) return;
+    setShowEmunInterval(false);
+    setEmunTracking(true);
+    try {
+      await datasetsApi.trackScraper(emunResult.url, emunResult.title, interval);
+      setEmunTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setEmunTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setEmunTracking(false);
+  };
+
   const trackKnessetDataset = async (interval: number) => {
     if (!knessetResult?.url || !knessetResult?.title) return;
     setShowKnessetInterval(false);
@@ -881,6 +926,49 @@ export default function SearchPage() {
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
           {munidataTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
+  // Same shape as renderAvodataTrackButton, bound to the emun state.
+  // Defaults the interval to monthly (2592000s): אמו"ן is refreshed from the
+  // ministries' annual reporting cycle, so anything more frequent would just
+  // re-publish an identical version.
+  const renderEmunTrackButton = () => {
+    if (emunTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (emunTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showEmunInterval && (
+          <select
+            defaultValue={2592000}
+            onChange={(e) => trackEmunDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowEmunInterval(!showEmunInterval)}
+          disabled={emunTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {emunTracking ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1365,7 +1453,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !servicescompassResult && !munidataResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !servicescompassResult && !munidataResult && !emunResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1548,7 +1636,41 @@ export default function SearchPage() {
         </div>
       )}
 
-      {/* mevaker.gov.il scraper result */}
+{/* govextra.gov.il/pmo/emun scraper result */}
+      {emunResult && (
+        <div className="grid grid-2">
+          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{emunResult.title}</h2>
+                <span style={{
+                  display: "inline-block",
+                  padding: "0.15rem 0.5rem",
+                  borderRadius: "9999px",
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  background: "#e0e7ff",
+                  color: "#3730a3",
+                }}>
+                  מערכת אמו"ן
+                </span>
+              </div>
+              {renderEmunTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>מעקב יישום החלטות הממשלה — משרד ראש הממשלה</span>
+              <span>govextra.gov.il</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={emunResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {emunResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+            {/* mevaker.gov.il scraper result */}
       {mevakerResult && (
         <div className="grid grid-2">
           <article className="card" style={{ borderRight: "4px solid #dc2626" }}>

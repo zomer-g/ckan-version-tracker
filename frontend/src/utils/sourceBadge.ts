@@ -39,6 +39,7 @@ export interface SourceBadge {
     | "home.source_link_registries"
     | "home.source_link_avodata"
     | "home.source_link_munidata"
+    | "home.source_link_emun"
     | "home.source_link_servicescompass"
     | "home.source_link_mevaker"
     | "home.source_link_hatzav"
@@ -81,6 +82,13 @@ const AVODATA_ORG_HINTS = ["avodata.labor.gov.il"];
 // "municipal-data.org" stamp the backend writes at create time. The ckan_id
 // prefix "munidata-scraper-" is the primary signal.
 const MUNIDATA_ORG_HINTS = ["municipal-data.org"];
+
+// Same drift-immune rule for מערכת אמו"ן (govextra.gov.il/pmo/emun, the PMO
+// government-decision follow-up dashboard). The ckan_id prefix
+// "emun-scraper-" is the primary signal; "govextra.gov.il" is a safe org
+// hint because that host serves only PMO mini-sites and no other OVER source
+// is stamped with it — unlike a ministry slug, which would leak (lessons #2).
+const EMUN_ORG_HINTS = ["govextra.gov.il"];
 
 // gov.il/apps/servicescompass ("מצפן השירותים הממשלתיים", National Digital
 // Agency). Detection keys ONLY on the drift-immune ckan_id prefix
@@ -172,6 +180,15 @@ function looksLikeMunidata(
 ): boolean {
   if (ckan_id && ckan_id.startsWith("munidata-scraper-")) return true;
   if (organization && MUNIDATA_ORG_HINTS.includes(organization.toLowerCase())) return true;
+  return false;
+}
+
+function looksLikeEmun(
+  organization: string | null | undefined,
+  ckan_id: string | null | undefined,
+): boolean {
+  if (ckan_id && ckan_id.startsWith("emun-scraper-")) return true;
+  if (organization && EMUN_ORG_HINTS.includes(organization.toLowerCase())) return true;
   return false;
 }
 
@@ -351,6 +368,19 @@ export function sourceBadgeFor(
         label: "מצב השלטון המקומי",
         accent: "#65a30d",
         sourceLinkKey: "home.source_link_munidata",
+      };
+    }
+    if (looksLikeEmun(organization, ckan_id)) {
+      // Indigo pill for מערכת אמו"ן (govextra.gov.il/pmo/emun, PMO
+      // government-decision follow-up), distinct from the munidata lime,
+      // servicescompass amber, registries teal and avodata sky-blue.
+      return {
+        bg: "#e0e7ff",
+        fg: "#3730a3",
+        id: "emun",
+        label: 'מערכת אמו"ן',
+        accent: "#4f46e5",
+        sourceLinkKey: "home.source_link_emun",
       };
     }
     if (looksLikeServicescompass(organization, ckan_id)) {

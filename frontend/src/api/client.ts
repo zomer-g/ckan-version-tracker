@@ -414,6 +414,17 @@ export const munidata = {
     }),
 };
 
+// govextra.gov.il/pmo/emun validation — same response shape. Server side at
+// app/api/emun.py; any /pmo/emun path is accepted and collapses to the single
+// dashboard dataset ("מערכת אמו״ן", Prime Minister's Office).
+export const emun = {
+  validate: (url: string) =>
+    request<GovIlValidation>("/emun/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+};
+
 // gov.il/apps/servicescompass validation — same response shape. Server side
 // at app/api/servicescompass.py; only the single app page is accepted
 // ("מצפן השירותים הממשלתיים", National Digital Agency), one dataset.

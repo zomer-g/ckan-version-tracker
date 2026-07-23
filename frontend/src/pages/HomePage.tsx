@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
@@ -26,6 +26,9 @@ import { SERVICESCOMPASS_PATTERN } from "../utils/servicescompassPattern";
 // municipal-data.org per-metric URL pattern. Mirror of _parse_munidata_url
 // in app/api/munidata.py.
 import { MUNIDATA_METRIC_PATTERN } from "../utils/munidataPattern";
+// govextra.gov.il/pmo/emun dashboard URL pattern. Mirror of _parse_emun_url
+// in app/api/emun.py.
+import { EMUN_DASHBOARD_PATTERN } from "../utils/emunPattern";
 // mevaker.gov.il reports-index URL pattern. Mirror of MEVAKER_SUBJECTS_RE
 // in app/api/mevaker.py.
 import { MEVAKER_SUBJECTS_PATTERN } from "../utils/mevakerPattern";
@@ -231,6 +234,7 @@ export default function HomePage() {
   const [servicescompassResult, setServicescompassResult] = useState<GovIlValidation | null>(null);
   // municipal-data.org per-metric scraper result — same shape.
   const [munidataResult, setMunidataResult] = useState<GovIlValidation | null>(null);
+  const [emunResult, setEmunResult] = useState<GovIlValidation | null>(null);
   // mevaker.gov.il reports scraper result — same shape.
   const [mevakerResult, setMevakerResult] = useState<GovIlValidation | null>(null);
   // geo.mot.gov.il (חצב) catalog scraper result — same shape.
@@ -303,6 +307,10 @@ export default function HomePage() {
     return MUNIDATA_METRIC_PATTERN.test(input.trim());
   };
 
+  const detectEmunUrl = (input: string): boolean => {
+    return EMUN_DASHBOARD_PATTERN.test(input.trim());
+  };
+
   const detectMevakerUrl = (input: string): boolean => {
     return MEVAKER_SUBJECTS_PATTERN.test(input.trim());
   };
@@ -350,6 +358,7 @@ export default function HomePage() {
     setAvodataResult(null);
     setServicescompassResult(null);
     setMunidataResult(null);
+    setEmunResult(null);
     setMevakerResult(null);
     setHatzavResult(null);
     setMankalResult(null);
@@ -478,6 +487,21 @@ export default function HomePage() {
           setCount(0);
         } else {
           setError(validation.error || "Invalid municipal-data.org URL");
+        }
+        setLoading(false);
+        return;
+      }
+
+      // 2d-3. Check for the govextra.gov.il/pmo/emun dashboard URL.
+      if (detectEmunUrl(query)) {
+        const validation = await emun.validate(query.trim());
+        if (validation.valid) {
+          setEmunResult(validation);
+          setRequestFormFor("emun");
+          setResults([]);
+          setCount(0);
+        } else {
+          setError(validation.error || "Invalid govextra.gov.il/pmo/emun URL");
         }
         setLoading(false);
         return;
@@ -1126,7 +1150,61 @@ export default function HomePage() {
           </section>
         )}
 
-        {/* mevaker.gov.il scraper result — deep-red MEVAKER chip. */}
+{/* govextra.gov.il/pmo/emun scraper result — indigo אמו"ן chip. */}
+        {!loading && emunResult && (
+          <section aria-label="emun result" style={{ marginBottom: "2rem" }}>
+            <div className="grid grid-2">
+              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+                <div className="flex-between mb-1">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{emunResult.title}</h2>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      fontSize: "0.65rem",
+                      fontWeight: 600,
+                      background: "#e0e7ff",
+                      color: "#3730a3",
+                    }}>
+                      מערכת אמו"ן
+                    </span>
+                  </div>
+                </div>
+                <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+                  <span>מעקב יישום החלטות הממשלה — משרד ראש הממשלה</span>
+                  <span>govextra.gov.il</span>
+                </div>
+                <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+                  <a href={emunResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                    {emunResult.url}
+                  </a>
+                </p>
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  {requestFormFor === "emun" ? (
+                    <RequestForm
+                      datasetTitle={emunResult.title || ""}
+                      onClose={() => setRequestFormFor(null)}
+                      sourceType="scraper"
+                      sourceUrl={emunResult.url}
+                    />
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setRequestFormFor("emun")}
+                      style={{ fontSize: "0.85rem" }}
+                    >
+                      {t("home.request_btn")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+                {/* mevaker.gov.il scraper result — deep-red MEVAKER chip. */}
         {!loading && mevakerResult && (
           <section aria-label="mevaker.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
