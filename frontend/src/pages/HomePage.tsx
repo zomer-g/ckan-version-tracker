@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, TrackedDataset, GovIlValidation, GovMapValidation } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
+import RegistrySourceCard from "../components/RegistrySourceCard";
 import GovmapRequestForm from "../components/GovmapRequestForm";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 // idf.il section pattern lives in utils/idfPattern.ts so the
@@ -251,6 +252,11 @@ export default function HomePage() {
   // knesset.gov.il committee-protocols scraper result — same shape. One
   // committee (CategoryID / Id scope) per pasted URL.
   const [knessetResult, setKnessetResult] = useState<GovIlValidation | null>(null);
+  // A source declared by the scraper worker's manifest instead of hardcoded
+  // here. One state and one card cover every such source — the chip colours,
+  // the site name and the poll cadence all arrive with the validation.
+  const [registryResult, setRegistryResult] =
+    useState<RegistrySourceValidation | null>(null);
 
   useEffect(() => {
     publicApi.datasets()
@@ -277,6 +283,20 @@ export default function HomePage() {
 
   const detectGovIlUrl = (input: string): boolean => {
     return GOV_IL_PATTERN.test(input.trim());
+  };
+
+  // Worth asking the server whether a manifest claims this URL. Deliberately
+  // shape-only — the manifests' regexes are Python-flavoured and live on the
+  // server, so the browser can't match them itself. data.gov.il is excluded
+  // because it has its own dedicated handling further down.
+  const looksLikeTrackableUrl = (input: string): boolean => {
+    const trimmed = input.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return false;
+    try {
+      return !new URL(trimmed).hostname.endsWith("data.gov.il");
+    } catch {
+      return false;
+    }
   };
 
   const detectGovMapUrl = (input: string): boolean => {
@@ -365,6 +385,7 @@ export default function HomePage() {
     setJdaResult(null);
     setEdenResults([]);
     setKnessetResult(null);
+    setRegistryResult(null);
     setSubmittedQuery("");
     try {
       // 1. Check for govmap.gov.il layer URL
@@ -605,6 +626,23 @@ export default function HomePage() {
         }
         setLoading(false);
         return;
+      }
+
+      // 2k. Sources the scraper worker declared (no code for them here). Runs
+      // after every hardcoded detector so it can never intercept one of them,
+      // and only for an absolute non-data.gov.il URL so a keyword search
+      // doesn't pay a round-trip. An unrecognised URL falls through silently
+      // to the search below, exactly as before this path existed.
+      if (looksLikeTrackableUrl(query)) {
+        const validation = await sources.validate(query.trim());
+        if (validation.valid) {
+          setRegistryResult(validation);
+          setRequestFormFor(validation.source_id || "registry");
+          setResults([]);
+          setCount(0);
+          setLoading(false);
+          return;
+        }
       }
 
       // 3. Check for data.gov.il URL
@@ -1538,6 +1576,16 @@ export default function HomePage() {
           </section>
         )}
 
+        {/* Worker-declared source — one card serves all of them. */}
+        {!loading && registryResult && (
+          <RegistrySourceCard
+            result={registryResult}
+            formOpen={requestFormFor === (registryResult.source_id || "registry")}
+            onOpenForm={() => setRequestFormFor(registryResult.source_id || "registry")}
+            onCloseForm={() => setRequestFormFor(null)}
+          />
+        )}
+
         {/* CKAN results */}
         {!loading && results.length > 0 && (
           <section aria-label={t("search.title")} style={{ marginBottom: "2rem" }}>
@@ -1800,7 +1848,9 @@ export default function HomePage() {
                           ? ds.source_url
                           : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
                       if (!sourceHref) return null;
-                      const linkLabel = t(sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id).sourceLinkKey);
+                      const dsBadge = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
+                      // Worker-declared sources label themselves from their manifest.
+                      const linkLabel = dsBadge.sourceLinkLabel ?? t(dsBadge.sourceLinkKey);
                       return (
                         <a
                           href={sourceHref}

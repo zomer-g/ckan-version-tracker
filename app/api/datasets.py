@@ -14,6 +14,7 @@ from app.models.user import User
 from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
 from app.services.odata_client import odata_client
+from app.services import source_registry
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,9 @@ class TrackRequest(BaseModel):
     source_url: str | None = None
     title: str | None = None
     scraper_config: dict | None = None
-    poll_interval: int = 604800
+    # Both null → fall back to DEFAULT_POLL_INTERVAL, or to the cadence the
+    # source's manifest declares when a registered source recognises the URL.
+    poll_interval: int | None = None
     preferred_interval: int | None = None
     resource_id: str | None = None
     # Subset of source resources to mirror. Required (>=1) for new CKAN
@@ -185,7 +188,50 @@ def dataset_is_neon_eligible(ds) -> bool:
     """
     if (getattr(ds, "source_type", None) or "ckan") == "ckan":
         return True
-    return (getattr(ds, "scraper_config", None) or {}).get("kind") in TABULAR_SCRAPER_KINDS
+    kind = (getattr(ds, "scraper_config", None) or {}).get("kind")
+    # Worker-declared sources say so in their manifest (neon_eligible) rather
+    # than being listed here. Reads the warm cache — no DB hit, since this runs
+    # inside response serialization for every dataset in a list.
+    return kind in TABULAR_SCRAPER_KINDS or kind in source_registry.neon_kinds()
+
+
+# Cadence used when neither the client nor a source manifest specifies one.
+DEFAULT_POLL_INTERVAL = 604800  # weekly
+
+
+def _invalid_scraper_url_detail() -> str:
+    """The 400 message listing what OVER can track.
+
+    Registered (worker-declared) sources are appended at runtime so a source
+    added without an OVER deploy still shows up in the error a user sees.
+    """
+    detail = (
+        "Invalid scraper URL — must be a gov.il collector, "
+        "idf.il page, practitioners.health.gov.il registry, "
+        "registries.health.gov.il registry, "
+        "avodata.labor.gov.il scope, mevaker.gov.il reports, "
+        "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
+        "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
+        "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
+        "knesset.gov.il committee (KNS_Committee ODATA), "
+        "municipal-data.org (מצב השלטון המקומי) metric, "
+        "or gov.il/apps/servicescompass (מצפן השירותים הממשלתיים)"
+    )
+    registered = source_registry.registry_source_names()
+    if registered:
+        detail += ". Also registered: " + ", ".join(registered)
+    return detail
+
+
+def _apply_registry_match(match, sc: dict) -> dict:
+    """Merge a manifest's scraper_config under the caller-supplied one.
+
+    Caller keys win: an admin tuning a single dataset (via scraper_config on
+    the request) must not be overwritten by the manifest default.
+    """
+    merged = dict(match.scraper_config)
+    merged.update(sc)
+    return merged
 
 
 def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
@@ -356,8 +402,10 @@ async def track_dataset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    raw_interval = body.preferred_interval if body.preferred_interval is not None else body.poll_interval
-    interval = max(raw_interval, settings.min_poll_interval)
+    requested_interval = (
+        body.preferred_interval if body.preferred_interval is not None else body.poll_interval
+    )
+    interval = max(requested_interval or DEFAULT_POLL_INTERVAL, settings.min_poll_interval)
 
     storage_mode = _validate_storage_mode(body.storage_mode)
 
@@ -471,22 +519,25 @@ async def track_dataset(
                 origin = "www.gov.il"
                 slug_prefix = "servicescompass-scraper"
                 mirror_prefix = "gov-versions-servicescompass"
+        # Declarative sources the worker registered (app/services/source_registry).
+        # Deliberately LAST: a manifest regex can never capture a URL one of the
+        # hardcoded parsers above already claims, however broadly it's written.
+        registry_match = None
         if not collector_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Invalid scraper URL — must be a gov.il collector, "
-                    "idf.il page, practitioners.health.gov.il registry, "
-                    "registries.health.gov.il registry, "
-                    "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
-                    "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
-                    "knesset.gov.il committee (KNS_Committee ODATA), "
-                    "municipal-data.org (מצב השלטון המקומי) metric, "
-                    "or gov.il/apps/servicescompass (מצפן השירותים הממשלתיים)"
-                ),
-            )
+            registry_match = await source_registry.classify_url(db, body.source_url)
+            if registry_match:
+                page_type = registry_match.page_type
+                collector_name = registry_match.collector_name
+                origin = registry_match.manifest.resolved_origin
+                slug_prefix = registry_match.manifest.slug_prefix
+                mirror_prefix = registry_match.manifest.mirror_prefix
+                if requested_interval is None:
+                    interval = max(
+                        registry_match.manifest.default_poll_interval,
+                        settings.min_poll_interval,
+                    )
+        if not collector_name:
+            raise HTTPException(status_code=400, detail=_invalid_scraper_url_detail())
 
         # Build a unique slug that includes a hash of the full source URL,
         # so two URLs with the same collector path (e.g. /collectors/policies
@@ -771,6 +822,11 @@ async def track_dataset(
             if scope:
                 sc.setdefault("committee_scope", scope[0])   # "category" | "single"
                 sc.setdefault("committee_scope_id", scope[1])
+        elif registry_match:
+            # A worker-declared source: its whole config (including the ``kind``
+            # the worker dispatches on) comes from the manifest, so there is no
+            # branch to add here when a new source ships.
+            sc = _apply_registry_match(registry_match, sc)
 
         ds = TrackedDataset(
             ckan_id=ckan_id,
@@ -1383,7 +1439,8 @@ class TrackingRequest(BaseModel):
     title: str | None = None
     resource_id: str | None = None
     resource_ids: list[str] | None = None
-    preferred_interval: int = 604800
+    # Null → the manifest's cadence for a registered source, else weekly.
+    preferred_interval: int | None = None
     requester_name: str = ""
     requester_notes: str = ""
     requester_contact: str = ""
@@ -1398,7 +1455,9 @@ async def submit_tracking_request(
 ):
     """Anonymous endpoint -- anyone can request tracking without login."""
 
-    interval = max(body.preferred_interval, settings.min_poll_interval)
+    interval = max(
+        body.preferred_interval or DEFAULT_POLL_INTERVAL, settings.min_poll_interval
+    )
 
     # ---- Scraper-type request ----
     if body.source_type == "scraper":
@@ -1492,22 +1551,23 @@ async def submit_tracking_request(
             if collector_name:
                 origin = "www.gov.il"
                 slug_prefix = "servicescompass-scraper"
+        # Worker-declared sources — last, so a manifest can never shadow one of
+        # the hardcoded parsers above. Mirror of the admin-POST branch.
+        registry_match = None
         if not collector_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Invalid scraper URL — must be a gov.il collector, "
-                    "idf.il page, practitioners.health.gov.il registry, "
-                    "registries.health.gov.il registry, "
-                    "avodata.labor.gov.il scope, mevaker.gov.il reports, "
-                    "geo.mot.gov.il (חצב) portal, apps.education.gov.il "
-                    "חוזרי מנכ\"ל portal, jda.gov.il (הרשות לפיתוח "
-                    "ירושלים), jeden.co.il (חברת עדן) tenders portal, "
-                    "knesset.gov.il committee (KNS_Committee ODATA), "
-                    "municipal-data.org (מצב השלטון המקומי) metric, "
-                    "or gov.il/apps/servicescompass (מצפן השירותים הממשלתיים)"
-                ),
-            )
+            registry_match = await source_registry.classify_url(db, body.source_url)
+            if registry_match:
+                page_type = registry_match.page_type
+                collector_name = registry_match.collector_name
+                origin = registry_match.manifest.resolved_origin
+                slug_prefix = registry_match.manifest.slug_prefix
+                if body.preferred_interval is None:
+                    interval = max(
+                        registry_match.manifest.default_poll_interval,
+                        settings.min_poll_interval,
+                    )
+        if not collector_name:
+            raise HTTPException(status_code=400, detail=_invalid_scraper_url_detail())
 
         # Duplicate check by source_url
         existing = await db.execute(
@@ -1672,6 +1732,13 @@ async def submit_tracking_request(
             if scope:
                 sc["committee_scope"] = scope[0]
                 sc["committee_scope_id"] = scope[1]
+        elif registry_match:
+            # Worker-declared source — the manifest supplies the whole config,
+            # including the ``kind`` the worker dispatches on. Unlike the admin
+            # flow, ``sc`` here is a hardcoded starting default rather than
+            # caller input, so the manifest wins outright.
+            sc = dict(registry_match.scraper_config)
+            sc.setdefault("download_files", False)
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,

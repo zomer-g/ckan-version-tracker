@@ -1,6 +1,8 @@
 import { Routes, Route, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, lazy, Suspense } from "react";
+import { sources } from "./api/client";
+import { primeRegistryBadges } from "./utils/sourceBadge";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
@@ -37,6 +39,25 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dir = i18n.language === "he" ? "rtl" : "ltr";
     document.documentElement.lang = i18n.language;
+  }, [i18n.language]);
+
+  // Chips for sources declared by the scraper worker instead of hardcoded in
+  // sourceBadge.ts. Non-blocking and best-effort: until it lands (or if it
+  // fails) such a dataset wears the generic scraper chip. Re-runs on a
+  // language switch because the source-link label is per-language.
+  useEffect(() => {
+    let cancelled = false;
+    sources
+      .registry()
+      .then((data) => {
+        if (!cancelled) primeRegistryBadges(data.sources || [], i18n.language);
+      })
+      .catch(() => {
+        /* generic chip is a fine fallback — never block the app on this */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [i18n.language]);
 
   // Focus management on route change

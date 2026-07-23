@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, GovIlValidation } from "../api/client";
+import { ckan, datasets as datasetsApi, govil, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, GovIlValidation, RegistrySourceValidation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 // idf.il section pattern lives in utils/idfPattern.ts — single
@@ -160,6 +160,13 @@ export default function SearchPage() {
   const [knessetTracked, setKnessetTracked] = useState<"tracked" | "pending" | null>(null);
   const [knessetTracking, setKnessetTracking] = useState(false);
   const [showKnessetInterval, setShowKnessetInterval] = useState(false);
+  // A source declared by the scraper worker's manifest. One state + one card
+  // covers every such source: its chip, name and cadence come with the
+  // validation response instead of being written into this file.
+  const [registryResult, setRegistryResult] = useState<RegistrySourceValidation | null>(null);
+  const [registryTracked, setRegistryTracked] = useState<"tracked" | "pending" | null>(null);
+  const [registryTracking, setRegistryTracking] = useState(false);
+  const [showRegistryInterval, setShowRegistryInterval] = useState(false);
 
   // Admin-only: ckan_id → tracked dataset id (local UUID), so admin actions
   // (poll/delete) can be rendered inline on results that are already tracked.
@@ -253,6 +260,19 @@ export default function SearchPage() {
     return KNESSET_PATTERN.test(input.trim());
   };
 
+  // Worth asking the server whether a manifest claims this URL. Shape-only —
+  // the manifests' regexes are Python-flavoured and live server-side, so the
+  // browser can't match them itself. data.gov.il has its own handling below.
+  const looksLikeTrackableUrl = (input: string): boolean => {
+    const trimmed = input.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return false;
+    try {
+      return !new URL(trimmed).hostname.endsWith("data.gov.il");
+    } catch {
+      return false;
+    }
+  };
+
   const search = async (e?: FormEvent) => {
     e?.preventDefault();
     setLoading(true);
@@ -298,6 +318,8 @@ export default function SearchPage() {
     setEdenTracked({});
     setShowEdenInterval({});
     setKnessetResult(null);
+    setRegistryResult(null);
+    setRegistryTracked(null);
     setKnessetTracked(null);
     setShowKnessetInterval(false);
     try {
@@ -506,6 +528,21 @@ export default function SearchPage() {
         return;
       }
 
+      // 1k. Sources the scraper worker declared (no code for them here).
+      // Last of the URL detectors so it can never intercept one of the
+      // hardcoded sources; an unrecognised URL falls through to the search
+      // below exactly as before.
+      if (looksLikeTrackableUrl(query)) {
+        const validation = await sources.validate(query.trim());
+        if (validation.valid) {
+          setRegistryResult(validation);
+          setResults([]);
+          setCount(0);
+          setLoading(false);
+          return;
+        }
+      }
+
       // 2. Check for data.gov.il URL
       const datasetName = extractDatasetName(query);
       const resourceId = extractResourceId(query);
@@ -707,6 +744,23 @@ export default function SearchPage() {
       }
     }
     setKnessetTracking(false);
+  };
+
+  const trackRegistryDataset = async (interval: number) => {
+    if (!registryResult?.url || !registryResult?.title) return;
+    setShowRegistryInterval(false);
+    setRegistryTracking(true);
+    try {
+      await datasetsApi.trackScraper(registryResult.url, registryResult.title, interval);
+      setRegistryTracked(isAdmin ? "tracked" : "pending");
+    } catch (err: any) {
+      if (err.message?.includes("already tracked")) {
+        setRegistryTracked("tracked");
+      } else {
+        setError(err.message);
+      }
+    }
+    setRegistryTracking(false);
   };
 
   const INTERVAL_OPTIONS = [
@@ -1009,6 +1063,47 @@ export default function SearchPage() {
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
           {knessetTracking ? t("common.loading") : t("search.track_btn")}
+        </button>
+      </div>
+    );
+  };
+
+  const renderRegistryTrackButton = () => {
+    if (registryTracked === "tracked") {
+      return <span className="badge badge-success" role="status">{t("search.tracking")}</span>;
+    }
+    if (registryTracked === "pending") {
+      return (
+        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+          {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
+        </span>
+      );
+    }
+    return (
+      <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        {showRegistryInterval && (
+          <select
+            // The source's own manifest knows its publishing rhythm; the
+            // person pasting the URL usually doesn't.
+            defaultValue={registryResult?.default_poll_interval || 604800}
+            onChange={(e) => trackRegistryDataset(Number(e.target.value))}
+            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
+            aria-label={t("tracked.poll_interval")}
+            autoFocus
+          >
+            <option value="" disabled>{t("tracked.poll_interval")}</option>
+            {INTERVAL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+        <button
+          className="btn-primary"
+          onClick={() => setShowRegistryInterval(!showRegistryInterval)}
+          disabled={registryTracking}
+          style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
+        >
+          {registryTracking ? t("common.loading") : t("search.track_btn")}
         </button>
       </div>
     );
@@ -1453,7 +1548,7 @@ export default function SearchPage() {
       <div aria-live="polite" aria-atomic="true">
         {loading && <div className="loading" role="status">{t("common.loading")}</div>}
 
-        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !servicescompassResult && !munidataResult && !emunResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && query && (
+        {!loading && results.length === 0 && !govIlResult && !idfResult && !healthResult && !registriesResult && !avodataResult && !servicescompassResult && !munidataResult && !emunResult && !mevakerResult && !hatzavResult && !mankalResult && !jdaResult && edenResults.length === 0 && !knessetResult && !registryResult && query && (
           <div className="empty-state">{t("search.no_results")}</div>
         )}
 
@@ -1871,6 +1966,45 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={knessetResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {knessetResult.url}
+              </a>
+            </p>
+          </article>
+        </div>
+      )}
+
+      {/* Worker-declared source — chip colours and labels come from its
+          manifest, so one card serves every source added from now on. */}
+      {registryResult && (
+        <div className="grid grid-2">
+          <article
+            className="card"
+            style={{ borderRight: `4px solid ${registryResult.badge?.accent || "var(--primary)"}` }}
+          >
+            <div className="flex-between mb-1">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{registryResult.title}</h2>
+                {registryResult.badge && (
+                  <span style={{
+                    display: "inline-block",
+                    padding: "0.15rem 0.5rem",
+                    borderRadius: "9999px",
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    background: registryResult.badge.bg,
+                    color: registryResult.badge.fg,
+                  }}>
+                    {registryResult.badge.label}
+                  </span>
+                )}
+              </div>
+              {renderRegistryTrackButton()}
+            </div>
+            <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
+              <span>{registryResult.label_he}</span>
+            </div>
+            <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
+              <a href={registryResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                {registryResult.url}
               </a>
             </p>
           </article>

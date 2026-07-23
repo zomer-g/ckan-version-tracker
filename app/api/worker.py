@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.scrape_task import ScrapeTask
+from app.models.source_registry import SourceRegistry
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
+from app.services import source_registry
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
@@ -149,7 +151,87 @@ class FailureReport(BaseModel):
     phase: str = ""
 
 
+class SourceSyncBody(BaseModel):
+    manifests: list[dict]
+    worker_version: str | None = None
+
+
 # --- Endpoints ---
+
+
+@router.post("/sources/sync")
+@limiter.limit("30/minute")
+async def sync_source_manifests(
+    request: Request,
+    body: SourceSyncBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register the declarative source manifests this worker can run.
+
+    The worker calls this at startup (and therefore after every self-update
+    re-exec), so a source added in the GOVSCRAPER repo becomes trackable on
+    over.org.il without an OVER deploy. See app/services/source_registry.py.
+
+    Idempotent: a manifest whose hash is unchanged is left alone. Manifests
+    absent from the payload are NEVER deleted or disabled — a worker still on
+    an older branch would otherwise wipe sources a newer worker registered.
+    Removing a source is a deliberate admin action.
+    """
+    _verify_worker_key(request)
+
+    upserted: list[str] = []
+    unchanged: list[str] = []
+    rejected: list[dict] = []
+
+    if len(body.manifests) > 200:
+        raise HTTPException(status_code=400, detail="too many manifests in one sync")
+
+    for raw in body.manifests:
+        try:
+            manifest = source_registry.validate_manifest(raw)
+        except Exception as e:
+            rejected.append({"id": (raw or {}).get("id"), "error": str(e)})
+            continue
+
+        digest = source_registry.manifest_hash(raw)
+        existing = (
+            await db.execute(
+                select(SourceRegistry).where(SourceRegistry.id == manifest.id)
+            )
+        ).scalar_one_or_none()
+
+        if existing and existing.manifest_hash == digest:
+            unchanged.append(manifest.id)
+            continue
+
+        if existing:
+            existing.manifest = raw
+            existing.manifest_hash = digest
+            existing.worker_version = body.worker_version
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(
+                SourceRegistry(
+                    id=manifest.id,
+                    manifest=raw,
+                    manifest_hash=digest,
+                    worker_version=body.worker_version,
+                )
+            )
+        upserted.append(manifest.id)
+
+    if upserted:
+        await db.commit()
+    source_registry.invalidate_cache()
+    await source_registry.load_enabled(db, force=True)
+
+    if rejected:
+        logger.warning("Source manifest sync rejected %d manifest(s): %s",
+                       len(rejected), rejected)
+    if upserted:
+        logger.info("Source manifest sync upserted: %s", ", ".join(upserted))
+
+    return {"upserted": upserted, "unchanged": unchanged, "rejected": rejected}
 
 @router.get("/poll")
 @limiter.limit("60/minute")

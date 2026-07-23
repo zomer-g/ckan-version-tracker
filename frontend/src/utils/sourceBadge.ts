@@ -48,6 +48,66 @@ export interface SourceBadge {
     | "home.source_link_jda"
     | "home.source_link_eden"
     | "home.source_link_knesset";
+  /** Ready-made source-link label for a worker-declared source, whose text
+   *  comes from its manifest rather than the bundle. When set, render this
+   *  instead of translating `sourceLinkKey`. */
+  sourceLinkLabel?: string;
+}
+
+/**
+ * Badges for sources registered at runtime (GET /api/sources/registry),
+ * keyed by ckan_id prefix ("<id>-scraper-").
+ *
+ * These sources have no code in this bundle — they're declared by a manifest
+ * in the scraper worker — so their chip can't be a branch in the ladder
+ * below. `primeRegistryBadges` fills this map once at boot; until it resolves
+ * (or if the request fails) such a dataset falls through to the generic
+ * GOV.IL scraper chip, which is a cosmetic miss, not a broken card.
+ */
+const runtimeBadges = new Map<string, SourceBadge>();
+
+export interface RegistrySourceView {
+  id: string;
+  label_he: string;
+  label_en: string;
+  site_url: string;
+  origin: string;
+  ckan_id_prefix: string;
+  badge: { bg: string; fg: string; accent: string; label: string };
+  source_link_he: string;
+  source_link_en: string;
+  default_poll_interval: number;
+  neon_eligible: boolean;
+  spatial: boolean;
+}
+
+export function primeRegistryBadges(
+  sources: RegistrySourceView[],
+  lang: string,
+): void {
+  runtimeBadges.clear();
+  for (const source of sources) {
+    runtimeBadges.set(source.ckan_id_prefix, {
+      id: source.id,
+      bg: source.badge.bg,
+      fg: source.badge.fg,
+      label: source.badge.label,
+      accent: source.badge.accent,
+      // Unused for these sources — sourceLinkLabel wins — but the field is
+      // required, and the generic key is the honest fallback.
+      sourceLinkKey: "home.source_link",
+      sourceLinkLabel:
+        lang === "en" ? source.source_link_en : source.source_link_he,
+    });
+  }
+}
+
+function registryBadgeFor(ckan_id: string | null | undefined): SourceBadge | null {
+  if (!ckan_id) return null;
+  for (const [prefix, badge] of runtimeBadges) {
+    if (ckan_id.startsWith(prefix)) return badge;
+  }
+  return null;
 }
 
 const IDF_ORG_HINTS = ["idf.il", "israel_defense_forces", "idf"];
@@ -302,6 +362,11 @@ export function sourceBadgeFor(
     };
   }
   if (source_type === "scraper") {
+    // Worker-declared sources first: their ckan_id prefixes are unique per
+    // source and can't collide with the hardcoded ones below (OVER rejects a
+    // manifest that claims a built-in source's id).
+    const registered = registryBadgeFor(ckan_id);
+    if (registered) return registered;
     if (looksLikeIdf(organization, ckan_id)) {
       return {
         // Saturated green per user request (#5d936c). The dark fg

@@ -450,11 +450,14 @@ export default function VersionsPage() {
               dataset.source_type === "scraper" || dataset.source_type === "govmap"
                 ? (dataset.source_url || "#")
                 : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`);
-            const linkLabel = t(sourceBadgeFor(
+            const sourceBadge = sourceBadgeFor(
               dataset.source_type,
               dataset.organization,
               dataset.ckan_id,
-            ).sourceLinkKey);
+            );
+            // A worker-declared source carries its own label (from its
+            // manifest); everything else translates a bundled key.
+            const linkLabel = sourceBadge.sourceLinkLabel ?? t(sourceBadge.sourceLinkKey);
             return (
               <a
                 href={sourceHref}

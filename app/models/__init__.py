@@ -12,6 +12,7 @@ from app.models.cbs_gazetteer import CbsGazetteer
 from app.models.cbs_feedback import CbsFeedback
 from app.models.auth_code import AuthCode
 from app.models.llm_budget import LlmDailyUsage
+from app.models.source_registry import SourceRegistry
 
 __all__ = [
     "User",
@@ -29,4 +30,5 @@ __all__ = [
     "CbsFeatured",
     "CbsGazetteer",
     "CbsFeedback",
+    "SourceRegistry",
 ]

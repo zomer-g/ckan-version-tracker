@@ -21,6 +21,10 @@ interface RequestFormProps {
   // Scraper mode
   sourceType?: "ckan" | "scraper";
   sourceUrl?: string;
+  // Pre-select a refresh cadence. Worker-declared sources pass the one from
+  // their manifest, since the site's own publishing rhythm is known there and
+  // not to the person pasting the URL.
+  defaultInterval?: number;
 }
 
 const INTERVAL_OPTIONS = [
@@ -41,6 +45,7 @@ export default function RequestForm({
   onClose,
   sourceType = "ckan",
   sourceUrl,
+  defaultInterval,
 }: RequestFormProps) {
   const { t, i18n } = useTranslation();
   // The single editable text field now NAMES THE DATASET (sent as `title`
@@ -50,7 +55,18 @@ export default function RequestForm({
   const [notes, setNotes] = useState("");
   // Default to a quarterly refresh; the user reveals the picker only if
   // they want it more often. 7776000s = 3 months = the last INTERVAL option.
-  const [interval, setInterval] = useState(7776000);
+  // Snap to an offered option — a manifest may declare a cadence that isn't
+  // one of these (e.g. 21600s), and an unlisted value renders as a blank
+  // select. Nearest match keeps the intent without a broken control.
+  const [interval, setInterval] = useState(() =>
+    defaultInterval
+      ? INTERVAL_OPTIONS.reduce((best, opt) =>
+          Math.abs(opt.value - defaultInterval) < Math.abs(best.value - defaultInterval)
+            ? opt
+            : best,
+        ).value
+      : 7776000,
+  );
   const [showFreq, setShowFreq] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);

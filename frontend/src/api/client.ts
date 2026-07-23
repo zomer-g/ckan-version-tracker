@@ -1,3 +1,5 @@
+import type { RegistrySourceView } from "../utils/sourceBadge";
+
 const BASE = "/api";
 
 function getToken(): string | null {
@@ -505,6 +507,32 @@ export const knesset = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+};
+
+// Sources declared by the scraper worker rather than hardcoded here. One
+// generic validate replaces the per-source endpoints above for every source
+// added from now on: the manifest's URL patterns live on the server (they're
+// Python regexes — `(?P<name>…)` is a syntax error in a JS RegExp), so the
+// browser asks the server to classify a pasted URL instead of matching it
+// locally. See app/api/sources.py.
+export interface RegistrySourceValidation extends GovIlValidation {
+  source_id?: string;
+  label_he?: string;
+  label_en?: string;
+  badge?: { bg: string; fg: string; accent: string; label: string };
+  source_link_he?: string;
+  source_link_en?: string;
+  default_poll_interval?: number;
+}
+
+export const sources = {
+  validate: (url: string) =>
+    request<RegistrySourceValidation>("/sources/validate", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  registry: () =>
+    request<{ sources: RegistrySourceView[] }>("/sources/registry"),
 };
 
 // CBS (cbs.gov.il) content index — a searchable catalog of the Central Bureau

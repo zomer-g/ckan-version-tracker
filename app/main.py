@@ -33,6 +33,7 @@ from app.api.mevaker import router as mevaker_router
 from app.api.hatzav import router as hatzav_router
 from app.api.mankal import router as mankal_router
 from app.api.jda import router as jda_router
+from app.api.sources import router as sources_router
 from app.api.eden import router as eden_router
 from app.api.knesset import router as knesset_router
 from app.api.knesset_protocols import router as knesset_protocols_router
@@ -110,6 +111,12 @@ async def lifespan(app: FastAPI):
     # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
     from app.services import mmm_activate
     asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
+    # Warm the declarative source-registry cache so the first pasted URL and
+    # the first neon-eligibility check don't race an empty cache. Manifests
+    # are pushed by the worker; see app/services/source_registry.py.
+    from app.database import async_session
+    from app.services import source_registry
+    asyncio.create_task(source_registry.warm_cache(async_session))
     yield
     shutdown_scheduler()
     logger.info("Shutting down גרסאות לעם")
@@ -174,6 +181,9 @@ app.include_router(eden_router)
 app.include_router(knesset_router)
 app.include_router(knesset_protocols_router)
 app.include_router(knesset_db_router)
+# Generic validate/registry endpoints for worker-declared sources — the one
+# router that never needs another entry here when a source is added.
+app.include_router(sources_router)
 app.include_router(tables_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)
