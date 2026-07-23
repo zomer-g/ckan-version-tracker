@@ -34,7 +34,13 @@ from app.services.storage_client import dataset_archives_neon
 logger = logging.getLogger(__name__)
 
 # search_path handed to the read-only console so every schema resolves unqualified.
-CONSOLE_SEARCH_PATH = "public, knesset, idx"
+#
+# `extensions` is last and is not a data schema — it holds PostGIS, installed
+# there so its ~1,000 functions and spatial_ref_sys stay out of the catalog and
+# the autocomplete. It has to be on the path anyway, or ST_AsText / ST_DWithin
+# do not resolve and every spatial example in the help below is a syntax error.
+# Last position means the three data schemas win any name collision.
+CONSOLE_SEARCH_PATH = "public, knesset, idx, extensions"
 
 # ── catalog cache ────────────────────────────────────────────────────────────
 # build_catalog() is called on EVERY /data page load *and* on every detail-cube

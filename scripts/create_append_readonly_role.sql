@@ -96,7 +96,19 @@ GRANT USAGE ON SCHEMA knesset TO :"ro_role";
 CREATE SCHEMA IF NOT EXISTS idx;
 GRANT USAGE ON SCHEMA idx TO :"ro_role";
 
--- 4) SELECT on every existing table/view in the three console schemas — and ONLY
+-- 3c) `extensions` — where PostGIS is installed, kept out of `public` so its
+--     ~1,000 functions and spatial_ref_sys do not flood the console's schema
+--     reference. It is on CONSOLE_SEARCH_PATH, so without USAGE here every
+--     ST_* call in the console fails to resolve. Deliberately NOT given the
+--     default-privileges treatment of the data schemas below: nothing of ours
+--     is ever created here, and future objects belong to the extension.
+--     Created only if absent; `CREATE EXTENSION postgis SCHEMA extensions` is a
+--     separate, deliberate step (see docs/neon-postgis/README.md).
+CREATE SCHEMA IF NOT EXISTS extensions;
+GRANT USAGE ON SCHEMA extensions TO :"ro_role";
+GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO :"ro_role";
+
+-- 4) SELECT on every existing table/view in the three DATA schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
 GRANT SELECT ON ALL TABLES IN SCHEMA public  TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA knesset TO :"ro_role";

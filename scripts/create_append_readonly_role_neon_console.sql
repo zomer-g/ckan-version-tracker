@@ -76,7 +76,17 @@ GRANT USAGE ON SCHEMA knesset TO over_readonly;
 CREATE SCHEMA IF NOT EXISTS idx;
 GRANT USAGE ON SCHEMA idx TO over_readonly;
 
--- 4) SELECT on every existing table/view in the three console schemas — and ONLY
+-- 3c) `extensions` — where PostGIS is installed, kept out of `public` so its
+--     ~1,000 functions and spatial_ref_sys do not flood the console's schema
+--     reference. It is on CONSOLE_SEARCH_PATH, so without USAGE here every
+--     ST_* call in the console fails to resolve. Deliberately NOT given the
+--     default-privileges treatment of the data schemas below: nothing of ours
+--     is ever created here, and future objects belong to the extension.
+CREATE SCHEMA IF NOT EXISTS extensions;
+GRANT USAGE ON SCHEMA extensions TO over_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO over_readonly;
+
+-- 4) SELECT on every existing table/view in the three DATA schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
 GRANT SELECT ON ALL TABLES IN SCHEMA public  TO over_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA knesset TO over_readonly;

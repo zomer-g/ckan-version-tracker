@@ -38,9 +38,15 @@ _SCRIPTS = os.path.join(_ROOT, "scripts")
 _PSQL_SQL = os.path.join(_SCRIPTS, "create_append_readonly_role.sql")
 _NEON_SQL = os.path.join(_SCRIPTS, "create_append_readonly_role_neon_console.sql")
 
-# Every schema the central /data console puts on its search_path must get all
-# four grant kinds. CONSOLE_SEARCH_PATH is the source of truth for the list.
-_CONSOLE_SCHEMAS = {"public", "knesset", "idx"}
+# Schemas holding OUR data. Each must get all four grant kinds, including the
+# default privileges that cover tables a future sync creates.
+_DATA_SCHEMAS = {"public", "knesset", "idx"}
+# Schemas on the console's search_path that hold no data of ours. PostGIS lives
+# in `extensions`; the role needs USAGE (or no ST_* call resolves) and SELECT on
+# spatial_ref_sys, but default privileges would be meaningless — we never create
+# anything there, and future objects belong to the extension.
+_SUPPORT_SCHEMAS = {"extensions"}
+_CONSOLE_SCHEMAS = _DATA_SCHEMAS | _SUPPORT_SCHEMAS
 
 
 def _grant_map(path: str) -> dict[str, set[str]]:
@@ -81,13 +87,20 @@ def test_console_search_path_matches_the_schemas_we_grant():
 @pytest.mark.parametrize("path", [_PSQL_SQL, _NEON_SQL])
 def test_provisioning_script_grants_every_console_schema(path):
     grants = _grant_map(path)
-    for schema in _CONSOLE_SCHEMAS:
+    for schema in _DATA_SCHEMAS:
         got = grants.get(schema, set())
-        # public gets USAGE via its own lockdown block; all others identical.
         expected = {"usage", "select", "default", "revoke_writes"}
         assert got == expected, (
-            f"{os.path.basename(path)}: schema {schema!r} has {sorted(got)}, "
+            f"{os.path.basename(path)}: data schema {schema!r} has {sorted(got)}, "
             f"expected {sorted(expected)}")
+    for schema in _SUPPORT_SCHEMAS:
+        got = grants.get(schema, set())
+        assert "usage" in got, (
+            f"{os.path.basename(path)}: {schema!r} needs USAGE or no ST_* call "
+            f"resolves in the console")
+        assert "default" not in got, (
+            f"{os.path.basename(path)}: {schema!r} should not carry default "
+            f"privileges — we never create objects there")
 
 
 def test_psql_and_neon_provisioning_scripts_agree():
