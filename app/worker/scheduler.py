@@ -233,6 +233,22 @@ async def init_scheduler() -> None:
                 await index_mirror.sync_due(db, limit=_settings.index_mirror_chunk)
         except Exception:  # noqa: BLE001 — never let one bad CSV kill the job
             logger.exception("index_mirror sync tick failed")
+        # Geometry backfill: bring already-mirrored layers up to the current
+        # PostGIS setting without waiting for a new version to land on each one
+        # (GovMap polls every 90 days, so that wait is effectively forever).
+        #
+        # Deliberately its own try: a backfill problem must not be mistaken for
+        # a sync problem, and vice versa. Self-terminating — candidates are
+        # layers MISSING the column, so once the corpus is converted every tick
+        # costs one cheap catalog query and stops. All the work is database-side.
+        try:
+            s = await index_mirror.backfill_geometry(
+                limit=_settings.index_mirror_geom_backfill_chunk)
+            if s.get("converted"):
+                logger.info("index_mirror geometry backfill: converted=%d remaining=%d",
+                            s["converted"], s.get("remaining"))
+        except Exception:  # noqa: BLE001 — never let it kill the sync job
+            logger.exception("index_mirror geometry backfill tick failed")
 
     if settings.index_mirror_enabled:
         scheduler.add_job(

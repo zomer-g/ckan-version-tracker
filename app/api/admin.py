@@ -1642,6 +1642,33 @@ async def index_mirror_sync(
             "note": "running in the background — poll /index-mirror/status"}
 
 
+@router.post("/index-mirror/backfill-geometry")
+@limiter.limit("6/minute")
+async def index_mirror_backfill_geometry(
+    request: Request,
+    limit: int = 25,
+    user: User = Depends(get_admin_user),
+):
+    """Add PostGIS ``geom`` to already-mirrored layers that lack it.
+
+    Call repeatedly until ``remaining`` reaches 0 — each call converts up to
+    ``limit`` layers, smallest first. Idempotent: candidates are chosen by the
+    absence of the column, so nothing is converted twice and a re-run simply
+    continues.
+
+    Cheap on purpose: the alternative (clearing checkpoints so the sync engine
+    rebuilds each table) would re-download ~710 MB of index CSVs to produce
+    content that is already correct. All the work here is database-side; the
+    dyno only issues SQL.
+    """
+    from app.services import index_mirror
+    s = await index_mirror.backfill_geometry(limit=max(1, min(int(limit), 200)))
+    logger.info("Index mirror geometry backfill by %s: %s", user.email,
+                {k: v for k, v in s.items()
+                 if k not in ("results", "failures", "skips")})
+    return s
+
+
 @router.post("/index-mirror/purge-ineligible")
 @limiter.limit("3/minute")
 async def index_mirror_purge(

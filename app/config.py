@@ -209,6 +209,13 @@ class Settings(BaseSettings):
     # direction is retroactive, so `postgis_rows` in the checkpoint is what
     # tells you which tables actually have it.
     index_mirror_postgis_enabled: bool = False
+    # Layers per tick for the in-place geometry backfill (see
+    # index_mirror.backfill_geometry). Only relevant while the corpus is
+    # catching up: once every layer has the column the query finds nothing and
+    # the tick is free. 10 per 10-minute tick converts ~250 layers in ~4 hours,
+    # which is deliberately unhurried — there is no deadline, and a small chunk
+    # keeps each tick well clear of the poll pipeline sharing the dyno.
+    index_mirror_geom_backfill_chunk: int = 10
 
     auto_discover_enabled: bool = False
     auto_discover_interval_hours: float = 6.0

@@ -213,6 +213,23 @@ def test_geometry_failure_is_reported_not_raised(monkeypatch):
     assert "rows" not in got
 
 
+def test_backfill_is_a_no_op_while_the_flag_is_off(monkeypatch):
+    _enable_postgis(monkeypatch, False)
+    got = asyncio.run(index_mirror.backfill_geometry(limit=5))
+    assert got == {"skipped": "postgis disabled"}
+
+
+def test_backfill_uses_the_final_index_name_not_a_staging_one(monkeypatch):
+    """The backfill converts a LIVE table, so its index must be born with the
+    name the table will keep — there is no swap afterwards to rename it."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn()
+    asyncio.run(index_mirror._add_geometry(conn, "govmap_9_abc", ["geometry_wkt"]))
+    created = [s for s in conn.executed if "CREATE INDEX" in s]
+    assert created and "govmap_9_abc_geom_gix" in created[0]
+    assert "__stg" not in created[0]
+
+
 def test_geom_index_name_stays_inside_the_identifier_budget():
     long_table = "govmap_" + "א" * 40          # Hebrew: 2 bytes per char
     name = index_mirror._geom_index_name(long_table)

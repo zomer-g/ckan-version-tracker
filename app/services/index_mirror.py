@@ -300,12 +300,16 @@ def _geom_index_name(table: str) -> str:
 
 
 async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
-    """Materialise ``geom`` + a GiST index on the STAGING table, before the swap.
+    """Materialise ``geom`` + a GiST index on ``staging``, before the swap.
 
-    Building it here rather than on the live table is not a preference: every
-    sync rebuilds the table and swaps it in, so a column added to the live table
-    would be destroyed by the next sync — and an UPDATE on a live table would
-    burst WAL across the whole corpus for nothing.
+    Building it on staging rather than on the live table is not a preference:
+    every sync rebuilds the table and swaps it in, so a column added to the live
+    table would be destroyed by the next sync.
+
+    (``backfill_geometry`` passes a LIVE table on purpose — see its docstring.
+    The index name is derived from whatever is passed, so the sync path gets a
+    ``…__stg_geom_gix`` that the swap renames, and the backfill gets the final
+    name directly. Same function, no special-casing.)
 
     **Never raises.** Geometry is an enhancement; a layer whose WKT we cannot
     convert must still get its content refreshed. All three statements run in one
@@ -361,6 +365,82 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
     except (ValueError, AttributeError):
         converted = 0
     return {"rows": converted}
+
+
+async def geometry_backfill_candidates(conn, limit: int) -> list[str]:
+    """Mirrored layers that carry ``geometry_wkt`` but not yet ``geom``.
+
+    Smallest first, so a run that is interrupted has still converted the most
+    layers it could in the time it had."""
+    rows = await conn.fetch(f"""
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = $1
+        WHERE c.relkind = 'r'
+          AND EXISTS (SELECT 1 FROM information_schema.columns col
+                      WHERE col.table_schema = $1 AND col.table_name = c.relname
+                        AND col.column_name = $2)
+          AND NOT EXISTS (SELECT 1 FROM information_schema.columns col
+                          WHERE col.table_schema = $1 AND col.table_name = c.relname
+                            AND col.column_name = $3)
+        ORDER BY pg_total_relation_size(c.oid) ASC
+        LIMIT $4
+    """, SCHEMA, WKT_COLUMN, GEOM_COLUMN, int(limit))
+    return [r["relname"] for r in rows]
+
+
+async def backfill_geometry(limit: int = 25) -> dict:
+    """Add ``geom`` to already-mirrored layers IN PLACE, without reloading them.
+
+    The obvious way to backfill would be to clear every checkpoint and let the
+    sync engine rebuild each table — but that re-downloads the whole 710 MB of
+    index CSVs from object storage and re-COPYs every row, hours of work to
+    produce tables whose content is already correct. The only thing missing is a
+    derived column, and deriving it is a second of database-side work per layer.
+
+    So this adds the column to the live table directly. That is normally the
+    wrong move here (the next sync rebuilds the table and would drop it), but it
+    is exactly right for a backfill: the flag is on, so that rebuild will
+    construct ``geom`` itself. Either path converges on the same table; this one
+    just gets there now instead of whenever a new version happens to land.
+
+    Chunked and idempotent — candidates are chosen by the ABSENCE of the column,
+    so a re-run picks up where the last one stopped and converting twice is
+    impossible. Per-layer failures are recorded, never raised, so one bad layer
+    cannot stall the rest.
+    """
+    if not settings.index_mirror_postgis_enabled:
+        return {"skipped": "postgis disabled"}
+    if not append_store.is_configured():
+        raise RuntimeError("append DB is not configured")
+
+    pool = await append_store.get_pool()
+    done, failed, skipped = [], [], []
+    async with pool.acquire() as conn:
+        await _ensure_state_table(conn)
+        tables = await geometry_backfill_candidates(conn, limit)
+        for table in tables:
+            cols = [r["column_name"] for r in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = $1 AND table_name = $2", SCHEMA, table)]
+            res = await _add_geometry(conn, table, cols)
+            note = res.get("error") or res.get("skipped")
+            await conn.execute(
+                f"UPDATE {_qt(STATE_TABLE)} SET postgis_rows = $1, postgis_note = $2 "
+                f"WHERE table_name = $3", res.get("rows"), note, table)
+            if res.get("rows") is not None:
+                done.append({"table": table, "rows": res["rows"]})
+            elif res.get("error"):
+                failed.append({"table": table, "error": res["error"]})
+            else:
+                skipped.append({"table": table, "reason": res.get("skipped")})
+        remaining = len(await geometry_backfill_candidates(conn, 10_000))
+
+    logger.info("idx backfill: converted=%d failed=%d skipped=%d remaining=%d",
+                len(done), len(failed), len(skipped), remaining)
+    return {"converted": len(done), "failed": len(failed),
+            "skipped": len(skipped), "remaining": remaining,
+            "results": done, "failures": failed, "skips": skipped}
 
 
 async def load_index_csv(r2_value: str, table: str) -> dict:
