@@ -103,7 +103,7 @@ function displayName(t: CatalogTable): string {
 function rowTooltip(t: CatalogTable): string {
   const parts = [displayName(t), t.table];
   if (t.description && t.description !== displayName(t)) parts.push(t.description);
-  if (hasGeometry(t)) parts.push("🗺 שכבה מרחבית — עמודת geom (EPSG:4326)");
+  if (hasGeometry(t)) parts.push("🗺 נתמך ב-PostGIS — ניתן לתשאל מרחבית (עמודת geom, EPSG:4326)");
   return parts.join("\n");
 }
 
@@ -688,8 +688,9 @@ export default function DataSqlPage() {
                                   explanation for anyone who hovers. */}
                               {hasGeometry(t) && (
                                 <span
-                                  title="שכבה מרחבית — כוללת עמודת geom לשאילתות גיאוגרפיות"
-                                  style={{ marginInlineStart: "0.3rem", fontSize: "0.75rem" }}
+                                  title="נתמך ב-PostGIS — אפשר לתשאל מרחבית (ST_Intersects, ST_DWithin, ST_AsText) על עמודת geom ב-EPSG:4326"
+                                  aria-label="שכבה נתמכת PostGIS"
+                                  style={{ marginInlineStart: "0.3rem", fontSize: "0.85rem", cursor: "help" }}
                                 >
                                   🗺
                                 </span>
@@ -756,7 +757,7 @@ export default function DataSqlPage() {
                     <SourceChip sourceType={selectedTable.source_type} organization={selectedTable.organization} ckanId={selectedTable.ckan_id} size="md" />
                   )}
                   {hasGeometry(selectedTable) && (
-                    <span title="שכבה מרחבית — ניתן לשאול שאלות גיאוגרפיות (ST_Intersects, ST_DWithin)"
+                    <span title="נתמך ב-PostGIS — ניתן לתשאל מרחבית: ST_Intersects, ST_DWithin, ST_AsText(geom)"
                           style={{ display: "inline-block", padding: "0.3rem 0.6rem", borderRadius: 9999, fontSize: "0.75rem", fontWeight: 700, background: "#dcfce7", color: "#166534" }}>
                       🗺 מרחבי
                     </span>
