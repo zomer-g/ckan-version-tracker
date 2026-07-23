@@ -615,3 +615,241 @@ def test_other_kinds_and_missing_kind_stay_eligible():
         _KDS(kind=None, source_type="scraper"))
     assert index_mirror.dataset_is_index_mirror_eligible(
         _KDS(kind="mevaker", source_type="scraper"))
+
+
+# ── loaded_versions cache (Neon scale-to-zero) ───────────────────────────────
+#
+# loaded_versions() is the ONLY thing the 10-minute scheduler tick does when
+# nothing changed, and it used to cost ~12 append-DB statements (ensure_schema's
+# CREATE/GRANT/ALTER DEFAULT PRIVILEGES + the state-table DDL + the SELECT) —
+# several of them catalog writes. On Neon that kept the compute from ever
+# scaling to zero. These pin the cache and, more importantly, every path that
+# MUST invalidate it.
+
+class _FakeConn:
+    def __init__(self, rows, log):
+        self._rows, self._log = rows, log
+
+    async def fetch(self, *a):
+        self._log.append("fetch")
+        return self._rows
+
+    async def execute(self, *a):
+        self._log.append("execute")
+        return "DELETE 3"
+
+
+class _FakePool:
+    def __init__(self, rows, log):
+        self._rows, self._log = rows, log
+
+    def acquire(self):
+        rows, log = self._rows, self._log
+
+        class _Acq:
+            async def __aenter__(self): return _FakeConn(rows, log)
+            async def __aexit__(self, *a): return False
+        return _Acq()
+
+
+def _install_fake_pool(monkeypatch, rows, log):
+    monkeypatch.setattr(index_mirror, "_loaded_versions_cache", None)
+    monkeypatch.setattr(append_store, "is_configured", lambda: True)
+
+    async def _pool():
+        return _FakePool(rows, log)
+    monkeypatch.setattr(append_store, "get_pool", _pool)
+    # ensure_schema/_ensure_state_table are the expensive part being skipped;
+    # count them too.
+    async def _noop(conn):
+        log.append("ddl")
+    monkeypatch.setattr(index_mirror, "ensure_schema", _noop)
+    monkeypatch.setattr(index_mirror, "_ensure_state_table", _noop)
+
+
+_ROW = {"dataset_id": "304e43d5-c419-43bd-8b46-f31a4da0c075",
+        "version_number": 5, "error": None, "deferred": None, "attempts": 0}
+
+
+def test_loaded_versions_reads_once_then_serves_from_memory(monkeypatch):
+    log = []
+    _install_fake_pool(monkeypatch, [_ROW], log)
+
+    first = asyncio.run(index_mirror.loaded_versions())
+    second = asyncio.run(index_mirror.loaded_versions())
+
+    assert first == second == {_ROW["dataset_id"]: 5}
+    assert log.count("fetch") == 1      # one SELECT total
+    assert log.count("ddl") == 2        # …and the DDL ran only with it
+
+
+def test_loaded_versions_returns_a_copy_callers_cannot_poison(monkeypatch):
+    log = []
+    _install_fake_pool(monkeypatch, [_ROW], log)
+
+    got = asyncio.run(index_mirror.loaded_versions())
+    got["injected"] = 999
+    assert "injected" not in asyncio.run(index_mirror.loaded_versions())
+
+
+def test_record_invalidates_the_cache(monkeypatch):
+    """Otherwise a just-synced dataset is re-offered for the life of the
+    process — an infinite re-sync loop, the worst possible failure here."""
+    log = []
+    _install_fake_pool(monkeypatch, [_ROW], log)
+    asyncio.run(index_mirror.loaded_versions())
+    assert index_mirror._loaded_versions_cache is not None
+
+    asyncio.run(index_mirror._record(
+        _ROW["dataset_id"], "idx_t", 6, 100, None))
+    assert index_mirror._loaded_versions_cache is None
+
+
+def test_retry_deferred_invalidates_the_cache(monkeypatch):
+    """Admin "retry deferred" must take effect now, not after the next deploy."""
+    log = []
+    _install_fake_pool(monkeypatch, [_ROW], log)
+    asyncio.run(index_mirror.loaded_versions())
+    assert index_mirror._loaded_versions_cache is not None
+
+    assert asyncio.run(index_mirror.retry_deferred()) == 3
+    assert index_mirror._loaded_versions_cache is None
+
+
+# ── pending(): refreshes outrank first-time loads ────────────────────────────
+#
+# The driver takes only a few datasets per tick, so the ORDER pending() returns
+# is what decides whether "a new version reaches SQL automatically" means
+# minutes or a day and a half.
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeDB:
+    """Answers pending()'s queries in order: datasets, then version numbers,
+    then (only if something moved) resource_mappings."""
+
+    def __init__(self, datasets, versions):
+        self.datasets, self.versions = datasets, versions
+        self.queries = 0
+        self.jsonb_fetches = 0
+
+    def _asked_for(self, q) -> set:
+        """The ids this query's ``WHERE tracked_dataset_id IN (...)`` names.
+
+        Honouring the filter is the whole point: the bug being guarded against
+        was a dataset never appearing in the IN-list, so a fake that returns
+        every row regardless would report the mirror as healthy while
+        production could not see the version at all."""
+        from sqlalchemy.dialects import postgresql
+        asked = set()
+        for v in q.compile(dialect=postgresql.dialect()).params.values():
+            asked.update(str(x) for x in v) if isinstance(v, (list, tuple)) \
+                else asked.add(str(v))
+        return {d.id for d, _, _ in self.versions if str(d.id) in asked}
+
+    async def execute(self, q):
+        self.queries += 1
+        if self.queries == 1:
+            return _FakeResult(self.datasets)
+        asked = self._asked_for(q)
+        if self.queries == 2:                     # (dataset_id, version_number)
+            return _FakeResult([(d.id, v) for d, v, _ in self.versions
+                                if d.id in asked])
+        self.jsonb_fetches += 1                   # + resource_mappings
+        return _FakeResult([(d.id, v, m) for d, v, m in self.versions
+                            if d.id in asked])
+
+
+def _mapping(key="k"):
+    return {index_mirror.CSV_RESOURCE_KEY: f"r2:{key}"}
+
+
+def test_pending_offers_a_refresh_before_a_first_time_load(monkeypatch):
+    """A live table whose version moved must not queue behind the backfill.
+
+    With ordering by title alone, "אבן" (never mirrored) preceded "תל" (already
+    mirrored, new version) and the stale visible table waited for the entire
+    backlog — 611 datasets / ~34 hours as measured on 2026-07-23."""
+    fresh = _DS(id="11111111-1111-1111-1111-111111111111", title="אבן",
+                ckan_name="even")
+    stale = _DS(id="22222222-2222-2222-2222-222222222222", title="תל",
+                ckan_name="tel")
+    db = _FakeDB([fresh, stale],
+                 [(fresh, 1, _mapping()), (stale, 7, _mapping())])
+
+    async def fake_loaded():
+        return {stale.id: 6}          # mirrored at v6, source is now at v7
+
+    monkeypatch.setattr(index_mirror, "loaded_versions", fake_loaded)
+    out = asyncio.run(index_mirror.pending(db))
+
+    assert [r["title"] for r in out] == ["תל", "אבן"]
+    assert out[0]["refresh"] is True and out[1]["refresh"] is False
+
+
+def test_pending_sees_a_new_version_while_a_backlog_exists(monkeypatch):
+    """The regression this replaces: the version query used to skip every
+    already-settled dataset whenever an unmirrored one existed, so a refresh was
+    invisible — not merely last in line."""
+    stale = _DS(id="22222222-2222-2222-2222-222222222222", title="תל",
+                ckan_name="tel")
+    backlog = [_DS(id=f"3333333{i}-3333-3333-3333-333333333333", title=f"ב{i}",
+                   ckan_name=f"b{i}") for i in range(5)]
+    db = _FakeDB([stale, *backlog],
+                 [(stale, 7, _mapping()), *[(d, 1, _mapping()) for d in backlog]])
+
+    async def fake_loaded():
+        return {stale.id: 6}
+
+    monkeypatch.setattr(index_mirror, "loaded_versions", fake_loaded)
+    out = asyncio.run(index_mirror.pending(db, limit=1))
+
+    assert len(out) == 1 and out[0]["dataset_id"] == stale.id
+
+
+def test_pending_is_one_cheap_query_when_nothing_moved(monkeypatch):
+    """The idle tick is the common case (GovMap polls every 90 days). It must
+    not pull a single resource_mappings JSONB."""
+    a = _DS(id="11111111-1111-1111-1111-111111111111", title="א", ckan_name="a")
+    b = _DS(id="22222222-2222-2222-2222-222222222222", title="ב", ckan_name="b")
+    db = _FakeDB([a, b], [(a, 3, _mapping()), (b, 4, _mapping())])
+
+    async def fake_loaded():
+        return {a.id: 3, b.id: 4}
+
+    monkeypatch.setattr(index_mirror, "loaded_versions", fake_loaded)
+    assert asyncio.run(index_mirror.pending(db)) == []
+    assert db.jsonb_fetches == 0
+    assert db.queries == 2            # datasets + version numbers, nothing else
+
+
+def test_pending_skips_a_version_without_an_index_csv(monkeypatch):
+    a = _DS(id="11111111-1111-1111-1111-111111111111", title="א", ckan_name="a")
+    db = _FakeDB([a], [(a, 2, {"אחר": "r2:other"})])
+
+    async def fake_loaded():
+        return {}
+
+    monkeypatch.setattr(index_mirror, "loaded_versions", fake_loaded)
+    assert asyncio.run(index_mirror.pending(db)) == []
+
+
+def test_pending_treats_a_deferred_dataset_as_a_refresh(monkeypatch):
+    """It jumps the queue when its version moves, then costs one HEAD and is
+    deferred again without a download — cheaper than a stale live table."""
+    d = _DS(id="11111111-1111-1111-1111-111111111111", title="ת", ckan_name="d")
+    n = _DS(id="22222222-2222-2222-2222-222222222222", title="א", ckan_name="n")
+    db = _FakeDB([d, n], [(d, 4, _mapping()), (n, 1, _mapping())])
+
+    async def fake_loaded():
+        return {d.id: 3}              # settled-as-deferred at v3
+
+    monkeypatch.setattr(index_mirror, "loaded_versions", fake_loaded)
+    out = asyncio.run(index_mirror.pending(db))
+    assert [r["title"] for r in out] == ["ת", "א"]

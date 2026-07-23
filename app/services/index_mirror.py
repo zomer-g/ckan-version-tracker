@@ -67,6 +67,12 @@ EXCLUDED_SCRAPER_KINDS = frozenset({"knesset"})
 
 STATE_TABLE = "_sync_state"
 
+# Process-local cache of the checkpoint read — see loaded_versions(). None =
+# not read yet / invalidated. Every writer of STATE_TABLE that can change what
+# loaded_versions() returns clears it (_record, purge_ineligible,
+# retry_deferred).
+_loaded_versions_cache: dict[str, int] | None = None
+
 # ── PostGIS geometry column ──────────────────────────────────────────────────
 # Optional, behind settings.index_mirror_postgis_enabled. GovMap index CSVs carry
 # the feature geometry as WKT text in `geometry_wkt`; with the extension present
@@ -581,9 +587,31 @@ async def loaded_versions() -> dict[str, int]:
     attempts). A transient error reports -1 so it gets retried — but only until
     ``MAX_ATTEMPTS``, after which it is deferred instead. That cap is what makes
     a crash loop impossible: a dataset that kills the process mid-load leaves an
-    incremented attempt counter behind, so it cannot be retried forever."""
+    incremented attempt counter behind, so it cannot be retried forever.
+
+    Cached in process, because "one cheap read" was neither. This is the only
+    thing the 10-minute scheduler tick does when nothing has changed — the
+    common case, since GovMap polls every 90 days — and each call opened a
+    connection to the append DB for ~12 statements, not one: ensure_schema
+    alone is CREATE SCHEMA + CREATE OR REPLACE FUNCTION + two GRANTs + ALTER
+    DEFAULT PRIVILEGES, and ``GRANT SELECT ON ALL TABLES`` re-grants across all
+    ~250 mirrored tables. Several of those are catalog WRITES, so an idle tick
+    was generating WAL every 10 minutes forever.
+
+    On Neon that is also the last scheduler job holding the append compute
+    awake: it scales to zero after 5 idle minutes, and a 10-minute tick caps
+    the achievable sleep at ~50% even after the knesset tick was gated (see
+    knesset_db._next_due_at). With the cache, a tick where nothing moved costs
+    ZERO append-DB statements and the compute can stay down.
+
+    Non-durable on purpose: a restart re-reads once, which also re-runs the
+    idempotent DDL/GRANTs — so the schema still converges on every deploy,
+    just not 144 times a day."""
+    global _loaded_versions_cache
     if not append_store.is_configured():
         return {}
+    if _loaded_versions_cache is not None:
+        return dict(_loaded_versions_cache)   # copy: callers must not mutate it
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await ensure_schema(conn)
@@ -599,7 +627,8 @@ async def loaded_versions() -> dict[str, int]:
         out[str(r["dataset_id"])] = int(r["version_number"]) if settled else -1
         if r["error"] and (r["attempts"] or 0) < MAX_ATTEMPTS:
             out[str(r["dataset_id"])] = -1
-    return out
+    _loaded_versions_cache = out
+    return dict(out)
 
 
 async def _record(dataset_id, table: str, version_number: int,
@@ -608,6 +637,7 @@ async def _record(dataset_id, table: str, version_number: int,
                   bump_attempt: bool = False,
                   postgis_rows: int | None = None,
                   postgis_note: str | None = None) -> None:
+    global _loaded_versions_cache
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await _ensure_state_table(conn)
@@ -633,6 +663,9 @@ async def _record(dataset_id, table: str, version_number: int,
         """, dataset_id, table, int(version_number), rows, error, deferred,
              csv_bytes, 1 if bump_attempt else 0, bump_attempt,
              postgis_rows, postgis_note)
+    # The checkpoint just moved — the next pending() must re-read it, or a
+    # just-synced dataset would be offered again for the life of the process.
+    _loaded_versions_cache = None
 
 
 async def pending(db, *, limit: int | None = None,
@@ -644,11 +677,19 @@ async def pending(db, *, limit: int | None = None,
     nothing changed" property the plan asks for: no object storage is touched
     and no table is written until something actually moved.
 
-    Ordered by title — deliberately NOT by CSV size, which would cost a HEAD
-    request per dataset and defeat the "cheap when nothing changed" property.
-    Size is handled where it actually matters instead: load_index_csv streams
-    and batches by bytes, so a multi-GB layer costs the same peak memory as a
-    small one."""
+    REFRESHES COME FIRST. A dataset that already has a table in ``idx`` and
+    whose version moved is offered ahead of one that was never mirrored, and
+    only then by title. Without that, "a new version reaches SQL automatically"
+    is true but unbounded in time: the driver takes 3 per tick, so a fresh
+    version could sit behind hundreds of first-time loads purely because its
+    title sorts late — over a day of staleness on a table users can already see.
+    A first-time load is invisible until it lands; a stale visible table is
+    actively misleading, so freshness wins.
+
+    Size is deliberately NOT part of the order: it would cost a HEAD request per
+    dataset and defeat the "cheap when nothing changed" property. It is handled
+    where it actually matters instead — load_index_csv streams and batches by
+    bytes, so a multi-GB layer costs the same peak memory as a small one."""
     from sqlalchemy import or_ as sa_or, select
 
     from app.models.tracked_dataset import TrackedDataset
@@ -675,20 +716,45 @@ async def pending(db, *, limit: int | None = None,
         return []
 
     done = await loaded_versions()
-    # Only ask the DB for versions of datasets that are not already settled —
-    # in steady state that is a handful of ids instead of ~2,900 rows of JSONB.
-    candidates = [r.id for r in datasets if done.get(str(r.id), -1) < 0
-                  or str(r.id) not in done]
-    if not candidates:
-        candidates = [r.id for r in datasets]
+    ids = [r.id for r in datasets]
 
-    latest: dict = {}
+    # PASS 1 — version numbers only, for EVERY eligible dataset. No JSONB.
+    #
+    # This used to ask only about datasets that were NOT already settled, to
+    # keep an idle tick cheap. That optimisation had a correctness cost that
+    # only shows up while a backfill is running: with even one never-mirrored
+    # dataset left, every already-mirrored one was excluded from the query, so
+    # a new version landing on a live table was INVISIBLE to the driver until
+    # the whole backlog drained. Measured 2026-07-23: 611 of 1,013 eligible
+    # datasets unmirrored, i.e. ~34 hours during which no refresh could happen.
+    #
+    # Asking for two plain columns is cheap enough to do unconditionally
+    # (~1,000 rows of uuid+int, no JSONB, released per chunk), and the JSONB is
+    # still fetched only for datasets that actually moved — which in steady
+    # state is none.
     CHUNK = 500
-    for i in range(0, len(candidates), CHUNK):
+    moved: list = []              # (dataset_id, version_number)
+    for i in range(0, len(ids), CHUNK):
+        rows = (await db.execute(
+            select(VersionIndex.tracked_dataset_id, VersionIndex.version_number)
+            .where(VersionIndex.tracked_dataset_id.in_(ids[i:i + CHUNK]))
+            .distinct(VersionIndex.tracked_dataset_id)
+            .order_by(VersionIndex.tracked_dataset_id,
+                      VersionIndex.version_number.desc())
+        )).all()
+        moved += [(r[0], int(r[1])) for r in rows
+                  if done.get(str(r[0]), -1) < int(r[1])]
+    if not moved:
+        return []                 # the normal case: one cheap query, no JSONB
+
+    # PASS 2 — resource_mappings for the movers only, to find the index CSV.
+    latest: dict = {}
+    moved_ids = [d for d, _ in moved]
+    for i in range(0, len(moved_ids), CHUNK):
         rows = (await db.execute(
             select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
                    VersionIndex.resource_mappings)
-            .where(VersionIndex.tracked_dataset_id.in_(candidates[i:i + CHUNK]))
+            .where(VersionIndex.tracked_dataset_id.in_(moved_ids[i:i + CHUNK]))
             .distinct(VersionIndex.tracked_dataset_id)
             .order_by(VersionIndex.tracked_dataset_id,
                       VersionIndex.version_number.desc())
@@ -697,8 +763,6 @@ async def pending(db, *, limit: int | None = None,
             v = index_csv_value(r[2] or {})
             if v:                          # keep only the value, drop the JSONB
                 latest[r[0]] = (int(r[1]), v)
-        if limit and len(latest) >= limit * 4:
-            break                          # enough candidates for this chunk
 
     out: list[dict] = []
     for ds in datasets:
@@ -714,8 +778,15 @@ async def pending(db, *, limit: int | None = None,
             "table": table_name(ds),
             "version_number": vnum,
             "r2_value": value,
+            # Rank 0 = this dataset has been through the driver before, so a
+            # table (or a recorded deferral) already exists for it and what is
+            # pending is a REFRESH. Rank 1 = never loaded. A previously deferred
+            # dataset ranks 0 too and will jump the queue when its version moves
+            # — that costs one HEAD request and it is deferred again without a
+            # download, which is cheaper than letting a live table go stale.
+            "refresh": str(ds.id) in done and done[str(ds.id)] >= 0,
         })
-    out.sort(key=lambda x: x["title"] or "")
+    out.sort(key=lambda x: (0 if x["refresh"] else 1, x["title"] or ""))
     return out[:limit] if limit else out
 
 
@@ -859,6 +930,7 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
     authoritative tables.
 
     ``apply=False`` reports what it would drop."""
+    global _loaded_versions_cache
     from sqlalchemy import select
 
     from app.models.tracked_dataset import TrackedDataset
@@ -886,6 +958,7 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
                 await conn.execute(
                     f"DELETE FROM {_qt(STATE_TABLE)} WHERE dataset_id = $1", dsid)
     if apply and victims:
+        _loaded_versions_cache = None      # checkpoint rows deleted
         from app.services.data_catalog import invalidate_catalog_cache
         invalidate_catalog_cache()
         logger.info("idx: purged %d ineligible mirrored tables", len(victims))
@@ -896,6 +969,7 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
 async def retry_deferred() -> int:
     """Clear the deferred marks so the next run re-offers them. Use after moving
     the backfill somewhere with more memory (or raising the cap)."""
+    global _loaded_versions_cache
     if not append_store.is_configured():
         return 0
     pool = await append_store.get_pool()
@@ -905,5 +979,8 @@ async def retry_deferred() -> int:
             f"DELETE FROM {_qt(STATE_TABLE)} "
             f"WHERE deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS}")
     n = int(str(res).rsplit(" ", 1)[-1] or 0)
+    # "Re-offer them" is read through loaded_versions — a stale cache would
+    # make this admin action look like it did nothing until the next deploy.
+    _loaded_versions_cache = None
     logger.info("idx: cleared %d deferred checkpoint rows", n)
     return n
