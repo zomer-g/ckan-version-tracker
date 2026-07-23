@@ -192,7 +192,18 @@ class Settings(BaseSettings):
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.
-    index_mirror_chunk: int = 3
+    # Datasets per tick. Was 3, set when the OOM was fresh and the fear was that
+    # more datasets per tick meant more memory. It does not: sync_due processes
+    # them SEQUENTIALLY on purpose, so peak RSS is one dataset's streaming peak
+    # no matter what this is — the chunk controls how long a tick RUNS, not how
+    # much it holds. And that one dataset is now doubly bounded: the 25MB size
+    # gate caps the CSV before download, COPY_BATCH_BYTES caps what is in flight.
+    #
+    # At 3 the mirror moved 18 datasets/hour against a backlog of 589, i.e. ~33
+    # hours to catch up, for no safety gained. 12 is ~2 minutes of work inside a
+    # 10-minute tick, and max_instances=1 means a long tick skips the next one
+    # rather than overlapping it.
+    index_mirror_chunk: int = 12
     index_mirror_interval_minutes: int = 10
     # Build a PostGIS `geom` column + GiST index on mirrored GovMap layers, so
     # /data can run spatial SQL instead of only matching geometry_wkt as text.
@@ -367,6 +378,14 @@ class Settings(BaseSettings):
     api_daily_byte_budget: int = 2 * 1024 ** 3   # 2 GB per IP per window
     api_budget_window_seconds: int = 86400        # rolling 24h
     api_contact_email: str = "guy@z-g.co.il"
+
+    # ── Looker Studio community-connector API (/api/connector) ──
+    # All Looker Studio traffic egresses from a small pool of Google IPs, so it
+    # cannot ride the per-IP budget above — a valid X-Connector-Key routes it to
+    # one shared "connector" bucket with its own (larger) cap instead. Empty key
+    # = feature off (the router answers 503).
+    connector_api_key: str = ""
+    connector_daily_byte_budget: int = 10 * 1024 ** 3   # shared bucket, 10 GB/window
 
     # ── Global daily hard cap on paid-LLM calls (anti-abuse) ──
     # The public natural-language endpoints (/api/cbs/ask + /api/cbs/resolve)
