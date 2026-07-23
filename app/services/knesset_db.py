@@ -83,6 +83,27 @@ _infra_ready = False
 # Serializes sync work (scheduler tick vs. admin-triggered run).
 sync_lock = asyncio.Lock()
 
+# In-process gate for the scheduler tick. The tick fires every 3 minutes — the
+# cadence the initial ~3M-row full load needed — but once every table is loaded
+# the sync is due only every ``sync_interval_hours`` (12h by default). So ~478
+# of the 480 daily ticks opened a connection to the append DB, read sync_state,
+# found nothing due, and closed again.
+#
+# On Neon that round-trip IS the cost. The append compute scales to zero after
+# 5 idle minutes, so a query every 3 minutes means it never gets there:
+# measured 2026-07-23, the append project burned 8.6 CU-hours/day of which 6.0
+# is the 0.25-CU idle floor (24h x 0.25) — roughly $20/month of "awake but
+# doing nothing", and this tick was the only scheduler job touching that DB on
+# a sub-5-minute cadence. Remembering the next-due time in process memory lets
+# the tick return without opening a connection at all, so the compute can
+# actually sleep between the two real passes a day.
+#
+# Deliberately process-local and non-durable: a restart just re-reads
+# sync_state once, which is the conservative direction to fail in. The gate is
+# only ever set when a pass found NOTHING due, is bypassed for admin-triggered
+# runs (``only_table``), and is cleared by reset_table.
+_next_due_at: datetime | None = None
+
 
 class EntitySet:
     __slots__ = ("name", "url_name", "base_url", "table", "columns", "has_last_updated")
@@ -424,9 +445,16 @@ async def sync_tick(budget_seconds: float = 240.0,
 
     Priority: tables mid-full-load (smallest known source first, so most tables
     become queryable early and the 1.9M-row vote table fills last), then tables
-    whose last successful sync is older than sync_interval_hours."""
+    whose last successful sync is older than sync_interval_hours.
+
+    Returns early — without touching the append DB — while the in-process
+    ``_next_due_at`` gate says nothing can be due yet (see its definition)."""
     if not is_configured():
         return {"skipped": "not configured"}
+    global _next_due_at
+    if only_table is None and _next_due_at is not None:
+        if datetime.now(timezone.utc) < _next_due_at:
+            return {"skipped": "not due", "next_due_at": _next_due_at.isoformat()}
     async with sync_lock:
         deadline = time.monotonic() + budget_seconds
         sets = {es.table: es for es in await ensure_infra()}
@@ -453,6 +481,14 @@ async def sync_tick(budget_seconds: float = 240.0,
                            s["last_id"] == 0,                     # resume in-progress first
                            s["source_count"] if s["source_count"] is not None else 2**62),
         )
+        if not queue:
+            # Nothing to do — arm the gate so the next ~239 ticks cost nothing.
+            if only_table is None:
+                _next_due_at = _next_due_time(states, sets, now, sync_interval_hours)
+            return {"worked": [], "completed": []}
+        # A pass that does real work leaves the gate open: the following tick
+        # re-reads sync_state (one round-trip) and re-arms from fresh state.
+        _next_due_at = None
         worked, completed_tables = [], []
         for s in queue:
             if time.monotonic() >= deadline:
@@ -471,6 +507,34 @@ async def sync_tick(budget_seconds: float = 240.0,
         return {"worked": worked, "completed": completed_tables}
 
 
+def _next_due_time(states: list[dict], sets: dict, now: datetime,
+                   sync_interval_hours: float) -> datetime | None:
+    """Earliest moment any mirrored table can become due again, or None when
+    that can't be established — in which case DON'T gate and let the next tick
+    ask the DB. Only called when the current pass found nothing due.
+
+    Returns None (no gate) if any table is mid-full-load, has never synced, or
+    has no sync_state row yet: those are due immediately and the 3-minute
+    cadence is exactly what drives them to completion."""
+    if len(states) < len(sets):
+        return None                       # a set without a state row ⇒ unknown
+    interval = timedelta(hours=sync_interval_hours)
+    soonest: datetime | None = None
+    for s in states:
+        if s["table_name"] not in sets:
+            continue                      # dropped upstream — never due
+        if not s["full_loaded"] or s["last_synced_at"] is None:
+            return None
+        due_at = s["last_synced_at"] + interval
+        if soonest is None or due_at < soonest:
+            soonest = due_at
+    if soonest is None:
+        return None
+    # due() used `>` on the same arithmetic, so soonest >= now here; the max()
+    # only rules out a zero-length gate on the boundary.
+    return max(soonest, now + timedelta(seconds=1))
+
+
 async def _run_pass(es: EntitySet, state: dict, deadline: float) -> tuple[bool, dict]:
     async with _http_client() as client:
         return await _sync_one_pass(client, es, state, deadline)
@@ -478,8 +542,12 @@ async def _run_pass(es: EntitySet, state: dict, deadline: float) -> tuple[bool, 
 
 async def reset_table(table: str) -> None:
     """Admin: force a fresh full walk of one table (data stays; rows re-upsert)."""
+    global _next_due_at
     await _write_state(table, {"full_loaded": False, "last_id": 0,
                                "status": "pending", "error": None})
+    # The table is due again now — drop the gate so the scheduler picks it up
+    # on the next tick instead of up to sync_interval_hours later.
+    _next_due_at = None
 
 
 # ── Read side ────────────────────────────────────────────────────────────────

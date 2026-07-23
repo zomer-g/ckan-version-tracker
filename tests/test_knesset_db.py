@@ -171,3 +171,146 @@ def test_meta_covers_known_sets_and_falls_back():
     assert group_of("KNS_SomethingNew") == "אחר"     # unknown set still renders
     for name, (group, desc) in TABLES.items():
         assert group and desc, name
+
+
+# ── Scale-to-zero gate (_next_due_at) ────────────────────────────────────────
+#
+# The 3-minute scheduler tick used to hit the append DB unconditionally, which
+# on Neon prevents the compute from ever scaling to zero (5-minute idle
+# window). These cover the arithmetic that decides when the tick may skip the
+# round-trip entirely, plus the fail-open cases that must NOT gate.
+
+from datetime import timedelta  # noqa: E402
+
+
+def _state(table, *, full_loaded=True, last_synced_at=None):
+    return {"table_name": table, "full_loaded": full_loaded,
+            "last_synced_at": last_synced_at}
+
+
+def test_next_due_time_is_the_soonest_table_deadline():
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object(), "b": object()}
+    states = [
+        _state("a", last_synced_at=now - timedelta(hours=1)),    # due in 11h
+        _state("b", last_synced_at=now - timedelta(hours=8)),    # due in 4h ← min
+    ]
+    assert K._next_due_time(states, sets, now, 12.0) == now + timedelta(hours=4)
+
+
+def test_next_due_time_does_not_gate_while_a_table_is_mid_full_load():
+    """The initial ~3M-row load NEEDS the 3-minute cadence to make progress."""
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object(), "b": object()}
+    states = [
+        _state("a", last_synced_at=now - timedelta(hours=1)),
+        _state("b", full_loaded=False, last_synced_at=now),
+    ]
+    assert K._next_due_time(states, sets, now, 12.0) is None
+
+
+def test_next_due_time_does_not_gate_when_a_table_never_synced():
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object()}
+    assert K._next_due_time([_state("a", last_synced_at=None)], sets, now, 12.0) is None
+
+
+def test_next_due_time_does_not_gate_when_a_set_has_no_state_row():
+    """Fewer state rows than entity sets ⇒ unknown table ⇒ ask the DB."""
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object(), "b": object()}
+    states = [_state("a", last_synced_at=now - timedelta(hours=1))]
+    assert K._next_due_time(states, sets, now, 12.0) is None
+
+
+def test_next_due_time_ignores_tables_dropped_upstream():
+    """A state row whose set vanished from $metadata must not pin the gate."""
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object()}
+    states = [
+        _state("a", last_synced_at=now - timedelta(hours=2)),        # due in 10h
+        _state("gone", last_synced_at=now - timedelta(days=400)),    # long overdue
+        _state("gone2", last_synced_at=now - timedelta(days=400)),
+    ]
+    assert K._next_due_time(states, sets, now, 12.0) == now + timedelta(hours=10)
+
+
+def test_next_due_time_never_returns_a_zero_length_gate():
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    sets = {"a": object()}
+    states = [_state("a", last_synced_at=now - timedelta(hours=12))]   # exactly due
+    assert K._next_due_time(states, sets, now, 12.0) > now
+
+
+def test_sync_tick_skips_without_touching_the_db_while_gated(monkeypatch):
+    """The whole point: a gated tick must not open an append-DB connection."""
+    monkeypatch.setattr(K.settings, "append_database_url", "postgresql://x/y")
+    monkeypatch.setattr(K.settings, "knesset_db_enabled", True)
+
+    async def _boom():
+        raise AssertionError("gated tick reached the append DB")
+    monkeypatch.setattr(K.append_store, "get_pool", _boom)
+    monkeypatch.setattr(K, "_next_due_at",
+                        datetime.now(timezone.utc) + timedelta(hours=4))
+
+    res = asyncio.run(K.sync_tick())
+    assert res["skipped"] == "not due"
+
+
+def test_sync_tick_gate_is_bypassed_for_admin_single_table_runs(monkeypatch):
+    """An admin pressing "סנכרן" must never be told "not due"."""
+    monkeypatch.setattr(K.settings, "append_database_url", "postgresql://x/y")
+    monkeypatch.setattr(K.settings, "knesset_db_enabled", True)
+    monkeypatch.setattr(K, "_next_due_at",
+                        datetime.now(timezone.utc) + timedelta(hours=4))
+
+    reached = []
+
+    async def _marker():
+        reached.append(True)
+        raise RuntimeError("stop here — we only needed to get past the gate")
+    monkeypatch.setattr(K, "ensure_infra", _marker)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(K.sync_tick(only_table="kns_bill"))
+    assert reached == [True]
+
+
+def test_mmm_loaded_version_cache_avoids_the_append_db(monkeypatch):
+    """Same gate, MMM half: the second append-DB query per tick, removed."""
+    from app.services import knesset_mmm_db as M
+
+    async def _boom():
+        raise AssertionError("cached _loaded_version reached the append DB")
+    monkeypatch.setattr(M.append_store, "get_pool", _boom)
+    monkeypatch.setattr(M, "_loaded_version_cache", 42)
+
+    assert asyncio.run(M._loaded_version()) == 42
+
+
+def test_mmm_loaded_version_reads_once_then_caches(monkeypatch):
+    from app.services import knesset_mmm_db as M
+
+    calls = []
+
+    class _Conn:
+        async def fetchval(self, *a):
+            calls.append(a)
+            return 7
+
+    class _Acq:
+        async def __aenter__(self): return _Conn()
+        async def __aexit__(self, *a): return False
+
+    class _Pool:
+        def acquire(self): return _Acq()
+
+    async def _pool():
+        return _Pool()
+
+    monkeypatch.setattr(M.append_store, "get_pool", _pool)
+    monkeypatch.setattr(M, "_loaded_version_cache", None)
+
+    assert asyncio.run(M._loaded_version()) == 7
+    assert asyncio.run(M._loaded_version()) == 7
+    assert len(calls) == 1          # second call served from process memory

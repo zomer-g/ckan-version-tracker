@@ -10,7 +10,9 @@ the MCP ``run_sql`` can query the catalog alongside the ODATA tables.
 Source of truth = the dataset's LATEST version (the scraper re-emits the full
 catalog each poll). Sync is versioned: ``sync_state.last_id`` stores the last
 loaded version_number, so the tick-time check is a single cheap SELECT until a
-new version lands. Only metadata is mirrored — the PDFs stay on
+new version lands — and after the first read that SELECT is served from a
+process-local cache, so a steady-state tick never touches the append DB at all
+(_loaded_version). Only metadata is mirrored — the PDFs stay on
 fs.knesset.gov.il / R2.
 """
 from __future__ import annotations
@@ -32,6 +34,9 @@ logger = logging.getLogger(__name__)
 TABLE = "mmm_documents"
 ENTITY_SET = "MMM_Documents"  # synthetic name for sync_state / the catalog
 CSV_RESOURCE_KEY = "נתוני הסורק"
+
+# Process-local cache of the loaded version_number — see _loaded_version().
+_loaded_version_cache: int | None = None
 
 # CSV header → (column, pg_type). `date` is re-parsed into a real DATE column
 # (date_text keeps the original string).
@@ -99,6 +104,21 @@ async def _latest_csv_source() -> tuple[int, str] | None:
 
 
 async def _loaded_version() -> int | None:
+    """version_number currently in knesset.mmm_documents, cached in process.
+
+    sync_if_due() runs on the 3-minute knesset scheduler tick, and this SELECT
+    used to be its unconditional cost: one append-DB round-trip every 3 minutes
+    forever, which on Neon is enough on its own to keep the compute from ever
+    scaling to zero (the 5-minute idle window never elapses — see the note on
+    knesset_db._next_due_at for the measured price of that).
+
+    The loaded version only changes when THIS process writes it, so a
+    process-local cache is exact rather than merely cheap: any other writer
+    would be a second dyno, and its write would be a no-op replay of the same
+    CSV. None = not read yet; a miss costs the same single SELECT as before."""
+    global _loaded_version_cache
+    if _loaded_version_cache is not None:
+        return _loaded_version_cache
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         try:
@@ -106,7 +126,8 @@ async def _loaded_version() -> int | None:
                 f"SELECT last_id FROM {_qtable('sync_state')} WHERE table_name = $1", TABLE)
         except Exception:  # schema/sync_state not created yet
             return None
-    return int(v) if v is not None else None
+    _loaded_version_cache = int(v) if v is not None else None
+    return _loaded_version_cache
 
 
 async def _ensure_table(conn) -> None:
@@ -140,11 +161,15 @@ def _row_values(r: dict) -> list | None:
 
 async def sync_if_due(force: bool = False) -> dict:
     """Load the MMM catalog CSV when a version newer than the loaded one exists
-    (or on force). Cheap no-op otherwise."""
+    (or on force). Cheap no-op otherwise — and on the no-op path it now costs
+    ZERO append-DB queries, only the app-DB version lookup."""
+    global _loaded_version_cache
     src = await _latest_csv_source()
     if not src:
         return {"skipped": "no MMM version with a catalog CSV"}
     vnum, url = src
+    if force:
+        _loaded_version_cache = None   # admin re-load: re-read the real state
     loaded = await _loaded_version()
     if not force and loaded is not None and loaded >= vnum:
         return {"skipped": f"version {vnum} already loaded"}
@@ -195,6 +220,7 @@ async def sync_if_due(force: bool = False) -> dict:
                 last_synced_at = EXCLUDED.last_synced_at, updated_at = now()
         """, TABLE, ENTITY_SET, _json.dumps([[c, t] for c, t in COLUMNS]),
             vnum, len(rows), count, now)
+    _loaded_version_cache = vnum   # committed above — keep the cache exact
     logger.info("knesset_mmm_db: loaded catalog v%d — %d rows (%d in table)",
                 vnum, total, count)
     return {"loaded_version": vnum, "rows": total, "total": count}
