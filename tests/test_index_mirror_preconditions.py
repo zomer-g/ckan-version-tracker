@@ -279,3 +279,68 @@ def test_load_index_csv_requires_configuration(monkeypatch, bad):
     monkeypatch.setattr(append_store.settings, "append_database_url", bad)
     with pytest.raises(RuntimeError, match="append DB is not configured"):
         asyncio.run(index_mirror.load_index_csv("r2:some/key", "t"))
+
+
+# ── copy-to-AI schema covers the WHOLE catalog, not just knesset ─────────────
+
+def _fake_catalog(monkeypatch, recs):
+    async def fake(db, use_cache=True):
+        return recs
+    monkeypatch.setattr(data_catalog, "build_catalog", fake)
+
+
+def test_schema_text_covers_every_schema(monkeypatch):
+    """The button is labelled 'copy schema to AI'; if it emits only one schema,
+    an assistant writes confident SQL against tables it was never shown."""
+    _fake_catalog(monkeypatch, [
+        {"schema": "public", "table": "append_x", "title": "מאגר",
+         "columns": [{"name": "a", "type": "text"}]},
+        {"schema": "knesset", "table": "kns_bill", "title": "הצעות חוק",
+         "columns": [{"name": "id", "type": "integer"}]},
+        {"schema": "idx", "table": "govmap_1_a", "title": "שכבה",
+         "columns": [{"name": "objectId", "type": "text"},
+                     {"name": "נפה", "type": "text"}]},
+    ])
+    out = asyncio.run(data_catalog.schema_text_all(db=None))
+    assert "public.append_x" in out
+    assert "knesset.kns_bill" in out
+    assert "idx." in out and "govmap_1_a" in out
+    # identifiers needing quotes are shown quoted, ready to paste
+    assert '"objectId"' in out and '"נפה"' in out
+    # bare lowercase names stay bare
+    assert "(a text)" in out
+    assert data_catalog.CONSOLE_SEARCH_PATH in out
+
+
+def test_schema_text_can_be_narrowed_to_one_schema(monkeypatch):
+    _fake_catalog(monkeypatch, [
+        {"schema": "public", "table": "append_x", "title": "",
+         "columns": [{"name": "a", "type": "text"}]},
+        {"schema": "idx", "table": "govmap_1_a", "title": "",
+         "columns": [{"name": "b", "type": "text"}]},
+    ])
+    out = asyncio.run(data_catalog.schema_text_all(db=None, schema="idx"))
+    assert "govmap_1_a" in out and "append_x" not in out
+
+
+def test_schema_text_is_one_line_per_table(monkeypatch):
+    """Compact by design — the catalog is hundreds of tables and grows with
+    every mirrored collection."""
+    _fake_catalog(monkeypatch, [
+        {"schema": "idx", "table": f"t{i}", "title": "",
+         "columns": [{"name": "a", "type": "text"}, {"name": "b", "type": "text"}]}
+        for i in range(20)
+    ])
+    out = asyncio.run(data_catalog.schema_text_all(db=None))
+    assert out.count("CREATE TABLE") == 20
+    assert len([l for l in out.splitlines() if l.startswith("CREATE TABLE")]) == 20
+
+
+def test_schema_text_skips_tables_without_columns(monkeypatch):
+    _fake_catalog(monkeypatch, [
+        {"schema": "idx", "table": "empty", "title": "", "columns": []},
+        {"schema": "idx", "table": "ok", "title": "",
+         "columns": [{"name": "a", "type": "text"}]},
+    ])
+    out = asyncio.run(data_catalog.schema_text_all(db=None))
+    assert "idx.ok" in out and "idx.empty" not in out

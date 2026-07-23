@@ -78,11 +78,18 @@ async def run_sql(request: Request, body: SqlBody):
 @router.get("/schema.txt", response_class=PlainTextResponse)
 @limiter.limit("20/minute")
 async def schema_txt(request: Request, table: str | None = None,
+                     schema: str | None = None,
                      db: AsyncSession = Depends(get_db)):
-    """DESCRIBE-style DDL for copy-to-AI. With ?table= → that one table's DDL
-    (dataset table via append_store, knesset table via the knesset schema dump);
-    without it → the whole knesset schema plus a pointer note (the full public
-    catalog can be hundreds of tables — pick one from the browser)."""
+    """DESCRIBE-style DDL for copy-to-AI.
+
+    ``?table=`` → that one table's full DDL. Otherwise the WHOLE catalog in
+    compact form (one CREATE TABLE line per table), optionally narrowed with
+    ``?schema=public|knesset|idx``.
+
+    It used to return only the knesset schema, which made the button misleading:
+    it is labelled "copy schema to AI" but handed over ~13% of the tables, so an
+    assistant given that text would confidently write SQL against tables it could
+    not see and miss every dataset and collection index."""
     _require_enabled()
     if table:
         rec = next((r for r in await data_catalog.build_catalog(db)
@@ -93,10 +100,9 @@ async def schema_txt(request: Request, table: str | None = None,
             from app.services import knesset_db
             return await knesset_db.schema_text()
         return await append_store.schema_text(table, title=rec.get("title"))
-    from app.services import knesset_db
-    if knesset_db.is_configured():
-        return await knesset_db.schema_text()
-    return "-- בחרו טבלה מהדפדפן כדי להעתיק את הסכימה שלה.\n"
+    if schema and schema not in ("public", "knesset", "idx"):
+        raise HTTPException(status_code=400, detail="Unknown schema")
+    return await data_catalog.schema_text_all(db, schema=schema)
 
 
 @router.get("/export.csv")

@@ -282,6 +282,69 @@ async def _knesset_records() -> list[dict]:
     return recs
 
 
+# ── copy-to-AI schema ────────────────────────────────────────────────────────
+
+# Order the schemas are presented in: the curated tables first, then the
+# auto-generated collection indexes (the long tail).
+_SCHEMA_ORDER = ["public", "knesset", "idx"]
+_SCHEMA_LABEL = {
+    "public": "מאגרי נתונים (data.gov.il ומקורות נוספים)",
+    "knesset": "מסד הנתונים של הכנסת",
+    "idx": "אינדקסים של אוספים (שכבות GovMap, מסמכי חופש מידע ועוד)",
+}
+
+
+async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str:
+    """The whole queryable catalog as compact DDL — what the copy-to-AI button
+    hands an assistant so it can write SQL over the site.
+
+    ONE LINE per table rather than a multi-line CREATE TABLE block. The verbose
+    form is nicer to read but this catalog is ~370 tables and ~3,800 columns
+    today and grows with every mirrored collection; the compact form keeps the
+    whole thing pasteable while staying valid DDL. Per-table detail is still
+    available from the browser (``/schema.txt?table=…``).
+
+    ``schema`` narrows the dump to one schema for anyone who only needs a slice.
+    """
+    catalog = await build_catalog(db)
+    if schema:
+        catalog = [r for r in catalog if r["schema"] == schema]
+
+    lines = [
+        "-- גרסאות לעם (over.org.il) — סכימת מסד הנתונים לכתיבת SQL",
+        "-- קריאה בלבד: משפט SELECT / WITH יחיד.",
+        "-- search_path = " + CONSOLE_SEARCH_PATH + " — אפשר לכתוב שם טבלה בלי",
+        "-- שם הסכימה, אלא אם השם מופיע ביותר מסכימה אחת.",
+        "-- שם עם אות גדולה, עברית או מילה שמורה חייב מרכאות כפולות — הוא מוצג",
+        "-- למטה בדיוק בצורה שבה יש לכתוב אותו.",
+        "-- טבלאות knesset: הכול באותיות קטנות (KNS_Bill ← kns_bill).",
+        "-- כל העמודות בסכימת idx הן text; המירו לפי הצורך (col::numeric, col::date).",
+    ]
+    by_schema: dict[str, list[dict]] = {}
+    for rec in catalog:
+        by_schema.setdefault(rec["schema"], []).append(rec)
+
+    order = {s: i for i, s in enumerate(_SCHEMA_ORDER)}
+    for sch in sorted(by_schema, key=lambda s: order.get(s, len(order))):
+        recs = sorted(by_schema[sch], key=lambda r: r["table"])
+        label = _SCHEMA_LABEL.get(sch, sch)
+        lines.append("")
+        lines.append(f"-- ═══ {sch} — {label} ({len(recs)} טבלאות) ═══")
+        for rec in recs:
+            cols = rec.get("columns") or []
+            if not cols:
+                continue
+            body = ", ".join(
+                f"{append_store._ident_ref(c['name'])} {c.get('type') or 'text'}"
+                for c in cols
+            )
+            ref = f"{sch}.{append_store._ident_ref(rec['table'])}"
+            title = (rec.get("title") or "").strip().replace("\n", " ")
+            comment = f"  -- {title}" if title else ""
+            lines.append(f"CREATE TABLE {ref} ({body});{comment}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # ── Detail cube ──────────────────────────────────────────────────────────────
 
 def _internal_key(k: str) -> bool:
