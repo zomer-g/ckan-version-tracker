@@ -71,6 +71,35 @@ function hasGeometry(t: CatalogTable): boolean {
   return t.columns.some((c) => c.type === "geometry");
 }
 
+// The spatial marker. An inline SVG rather than the 🗺 emoji: the emoji renders
+// at wildly different sizes and styles per platform (and as a flat glyph on
+// Windows), which is what made it read as noise next to the table name. This is
+// a fixed 15px folded-map on a green chip — same shape everywhere, legible at a
+// glance, and obviously an affordance rather than decoration.
+const SPATIAL_TITLE =
+  "נתמך ב-PostGIS — אפשר לתשאל מרחבית: ST_Intersects, ST_DWithin, ST_AsText(geom). המידע הגיאוגרפי שמור בעמודת geom (EPSG:4326).";
+
+function SpatialMark({ size = 15 }: { size?: number }) {
+  return (
+    <span
+      title={SPATIAL_TITLE}
+      aria-label="שכבה נתמכת PostGIS — ניתנת לתשאול מרחבי"
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: size + 6, height: size + 6, borderRadius: 4, flex: "0 0 auto",
+        background: "#dcfce7", color: "#15803d", cursor: "help",
+        verticalAlign: "middle",
+      }}
+    >
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M9 3 3 5.5v15L9 18l6 3 6-2.5v-15L15 6 9 3z" />
+        <path d="M9 3v15M15 6v15" />
+      </svg>
+    </span>
+  );
+}
+
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
@@ -273,6 +302,11 @@ export default function DataSqlPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  // Narrow the browser to layers that PostGIS can actually answer spatial
+  // questions about. Not folded into the text search on purpose: "מרחבי" is a
+  // property of the table, not a word in its name, and a user hunting for a map
+  // layer should not have to guess a keyword.
+  const [spatialOnly, setSpatialOnly] = useState(false);
   const [selected, setSelected] = useState<string | null>(searchParams.get("table"));
   const [detail, setDetail] = useState<CatalogTableDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -326,6 +360,7 @@ export default function DataSqlPage() {
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const shown = tables.filter((t) => {
+      if (spatialOnly && !hasGeometry(t)) return false;
       if (!f) return true;
       const badge = badgeOf(t);
       return (
@@ -346,7 +381,12 @@ export default function DataSqlPage() {
       g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
     }
     return [...m.values()].sort((a, b) => b.list.length - a.list.length);
-  }, [filter, tables]);
+  }, [filter, tables, spatialOnly]);
+
+  // How many layers the spatial filter would leave — shown on the toggle so the
+  // count is visible before clicking, and so "0" reads as "none yet" rather
+  // than looking like the filter is broken.
+  const spatialCount = useMemo(() => tables.filter(hasGeometry).length, [tables]);
 
   const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
 
@@ -600,6 +640,26 @@ export default function DataSqlPage() {
                 {" · "}
                 {shownTables.length === 1 ? "טבלה אחת" : `${shownTables.length.toLocaleString()} טבלאות`}
               </span>
+              {/* Spatial filter. A toggle rather than a checkbox row so it
+                  reads as a chip alongside the counts, and it carries its own
+                  count so "none yet" is distinguishable from "filter broken". */}
+              <button
+                type="button"
+                onClick={() => setSpatialOnly((v) => !v)}
+                aria-pressed={spatialOnly}
+                title={spatialOnly ? "הצג את כל הטבלאות" : SPATIAL_TITLE}
+                style={{
+                  display: "inline-flex", gap: "0.3rem", alignItems: "center",
+                  fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
+                  padding: "0.15rem 0.45rem", borderRadius: 9999,
+                  border: `1px solid ${spatialOnly ? "#15803d" : "var(--border, #cbd5e1)"}`,
+                  background: spatialOnly ? "#dcfce7" : "transparent",
+                  color: spatialOnly ? "#15803d" : "var(--text-muted)",
+                }}
+              >
+                <SpatialMark size={11} />
+                מרחבי בלבד ({spatialCount})
+              </button>
               <button type="button" onClick={() => setAllGroups(true)}
                 style={{ marginInlineStart: "auto", fontSize: "0.72rem", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline" }}>
                 הרחב הכל
@@ -683,16 +743,12 @@ export default function DataSqlPage() {
                             }}>
                               {displayName(t)}
                               {/* Spatial marker. Deliberately a glyph and not a
-                                  pill: the row is already tight and the name
-                                  must keep its ellipsis. The title carries the
-                                  explanation for anyone who hovers. */}
+                                  label: the row is tight and the name must keep
+                                  its ellipsis. The legend above the list and the
+                                  hover title carry the meaning. */}
                               {hasGeometry(t) && (
-                                <span
-                                  title="נתמך ב-PostGIS — אפשר לתשאל מרחבית (ST_Intersects, ST_DWithin, ST_AsText) על עמודת geom ב-EPSG:4326"
-                                  aria-label="שכבה נתמכת PostGIS"
-                                  style={{ marginInlineStart: "0.3rem", fontSize: "0.85rem", cursor: "help" }}
-                                >
-                                  🗺
+                                <span style={{ marginInlineStart: "0.35rem" }}>
+                                  <SpatialMark size={13} />
                                 </span>
                               )}
                             </span>
@@ -724,7 +780,22 @@ export default function DataSqlPage() {
           {!selectedTable && (
             <div className="text-sm text-muted" style={{ lineHeight: 1.7 }}>
               <p style={{ marginTop: 0 }}>בחרו טבלה מהרשימה כדי לראות דוגמה מהתוכן, פרטי המקור, קישור למקור והורדת הקבצים הגולמיים.</p>
-              <p style={{ marginBottom: 0 }}>הרשימה כוללת כל מאגר שנשמר כטבלה ניתנת-לתשאול, מקובצת לפי המקור. אפשר גם לכתוב SQL חופשי מעל הכל, כולל JOIN בין מאגרים ומעל טבלאות הכנסת.</p>
+              <p>הרשימה כוללת כל מאגר שנשמר כטבלה ניתנת-לתשאול, מקובצת לפי המקור. אפשר גם לכתוב SQL חופשי מעל הכל, כולל JOIN בין מאגרים ומעל טבלאות הכנסת.</p>
+              {/* Legend for the list marker. Without it the icon is a mystery:
+                  a tooltip only helps someone who already suspects it means
+                  something and bothers to hover. */}
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", padding: "0.6rem 0.7rem", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0", marginBottom: 0 }}>
+                <SpatialMark size={15} />
+                <div>
+                  <strong style={{ color: "#15803d" }}>שכבות מרחביות</strong> — טבלה שמסומנת בסמל הזה נתמכת ב-<strong>PostGIS</strong>,
+                  כלומר אפשר לשאול עליה שאלות גיאוגרפיות ולא רק טקסטואליות: מה נמצא בתוך אזור מסוים, מה במרחק X מטרים מנקודה,
+                  ואילו שתי שכבות חופפות. המידע שמור בעמודת <code dir="ltr" style={{ unicodeBidi: "isolate" }}>geom</code> ב-EPSG:4326.
+                  <div style={{ marginTop: "0.35rem" }}>
+                    דוגמה: <code dir="ltr" style={{ unicodeBidi: "isolate" }}>SELECT ST_AsText(geom) FROM …</code> ·
+                    לסינון הרשימה לשכבות כאלה בלבד — הכפתור <strong>״מרחבי בלבד״</strong> מעל הרשימה.
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           {selectedTable && (
@@ -757,9 +828,10 @@ export default function DataSqlPage() {
                     <SourceChip sourceType={selectedTable.source_type} organization={selectedTable.organization} ckanId={selectedTable.ckan_id} size="md" />
                   )}
                   {hasGeometry(selectedTable) && (
-                    <span title="נתמך ב-PostGIS — ניתן לתשאל מרחבית: ST_Intersects, ST_DWithin, ST_AsText(geom)"
-                          style={{ display: "inline-block", padding: "0.3rem 0.6rem", borderRadius: 9999, fontSize: "0.75rem", fontWeight: 700, background: "#dcfce7", color: "#166534" }}>
-                      🗺 מרחבי
+                    <span title={SPATIAL_TITLE}
+                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "#dcfce7", color: "#166534", cursor: "help" }}>
+                      <SpatialMark size={13} />
+                      נתמך ב-PostGIS
                     </span>
                   )}
                 </div>

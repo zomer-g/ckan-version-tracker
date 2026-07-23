@@ -212,10 +212,16 @@ class Settings(BaseSettings):
     # Layers per tick for the in-place geometry backfill (see
     # index_mirror.backfill_geometry). Only relevant while the corpus is
     # catching up: once every layer has the column the query finds nothing and
-    # the tick is free. 10 per 10-minute tick converts ~250 layers in ~4 hours,
-    # which is deliberately unhurried — there is no deadline, and a small chunk
-    # keeps each tick well clear of the poll pipeline sharing the dyno.
-    index_mirror_geom_backfill_chunk: int = 10
+    # the tick is free.
+    #
+    # Was 10, chosen before there were measurements. With them: a conversion is
+    # ~1 second of DATABASE-side work (ALTER + UPDATE + CREATE INDEX; the dyno
+    # only issues the SQL and never touches a geometry), and the largest layer
+    # in the corpus converted 31,849 rows without the dyno moving. 10/tick left
+    # ~250 layers needing four hours for no reason. 40 keeps a tick around
+    # ~40 seconds of DB time — still comfortably inside the tick and the pool's
+    # 180s command timeout, and max_instances=1 means ticks cannot overlap.
+    index_mirror_geom_backfill_chunk: int = 40
 
     auto_discover_enabled: bool = False
     auto_discover_interval_hours: float = 6.0
