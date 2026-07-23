@@ -521,20 +521,46 @@ _SQL_DENY = _re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|merge|call|do|vacuum|reindex)\b",
     _re.IGNORECASE,
 )
-# Leading SQL comments — a commented query is still a SELECT, and the consoles
-# lead with explanatory "-- ..." lines (the examples, the page placeholder), so
-# the START check must look past them. Only the check skips comments; the
-# statement is executed verbatim and the denylist still scans the whole text.
-_SQL_LEADING_COMMENT = _re.compile(r"^\s*(--[^\n]*\n|/\*.*?\*/)", _re.DOTALL)
+def _strip_sql_comments(s: str) -> str:
+    """Return the statement with its comments blanked out.
 
+    Every guard below runs against this, not the raw text: comments never
+    execute, so a ';' or the word "update" inside one must not fail the query.
+    The consoles lead with explanatory "-- ..." lines (the dropdown examples,
+    the page placeholder), and those sentences legitimately contain both.
 
-def _strip_leading_comments(s: str) -> str:
-    """Drop leading line/block comments so SELECT/WITH detection sees the SQL."""
-    prev = None
-    while prev != s:
-        prev = s
-        s = _SQL_LEADING_COMMENT.sub("", s, count=1)
-    return s
+    Comment starts are recognized only outside single-quoted strings, so a
+    literal like 'a--b' keeps its content. Block comments nest, as in Postgres.
+    """
+    out, i, n = [], 0, len(s)
+    in_string = False
+    depth = 0  # open /* … */ nesting level
+    while i < n:
+        c, nxt = s[i], s[i + 1: i + 2]
+        if depth:
+            if c == "/" and nxt == "*":
+                depth += 1; i += 2; continue
+            if c == "*" and nxt == "/":
+                depth -= 1; i += 2; continue
+            i += 1; continue
+        if in_string:
+            out.append(c)
+            # '' inside a string is an escaped quote, not the end of it.
+            if c == "'":
+                if nxt == "'":
+                    out.append(nxt); i += 2; continue
+                in_string = False
+            i += 1; continue
+        if c == "'":
+            in_string = True; out.append(c); i += 1; continue
+        if c == "-" and nxt == "-":
+            while i < n and s[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and nxt == "*":
+            depth = 1; i += 2; continue
+        out.append(c); i += 1
+    return "".join(out)
 
 
 # ── Case-insensitive identifier help (shared by every Neon-backed SQL console) ─
@@ -707,15 +733,22 @@ def validate_readonly_sql(sql: str) -> str:
 
     Returns the cleaned single statement, or raises ValueError with a Hebrew
     message. Shared by run_readonly_sql and iter_sql_csv so both apply the exact
-    same guards (single statement, SELECT/WITH only, no write/DDL keywords)."""
+    same guards (single statement, SELECT/WITH only, no write/DDL keywords).
+
+    The guards inspect the statement with comments removed — comments never
+    execute, so prose inside them must not trip the ';' or write-keyword checks.
+    What is RETURNED (and run) is the original text, comments included."""
     s = (sql or "").strip().rstrip(";").strip()
     if not s:
         raise ValueError("השאילתה ריקה")
-    if ";" in s:
+    code = _strip_sql_comments(s).strip().rstrip(";").strip()
+    if not code:
+        raise ValueError("השאילתה ריקה")
+    if ";" in code:
         raise ValueError("רק משפט יחיד מותר (ללא ';')")
-    if not _SQL_STARTS_OK.match(_strip_leading_comments(s)):
+    if not _SQL_STARTS_OK.match(code):
         raise ValueError("רק שאילתות SELECT / WITH מותרות")
-    if _SQL_DENY.search(s):
+    if _SQL_DENY.search(code):
         raise ValueError("רק קריאה (SELECT) מותרת — אסורות פעולות כתיבה/שינוי")
     return s
 

@@ -139,20 +139,29 @@ def test_chunk_size_keeps_params_under_ceiling():
     assert n2 * (18 + 1) <= 30000
 
 
-def test_validate_readonly_sql_allows_leading_comments():
-    # The SQL consoles lead with explanatory "-- ..." lines (the dropdown
-    # examples, the page placeholder), so a commented query is still a SELECT.
+def test_validate_readonly_sql_ignores_comments_in_every_guard():
+    # The consoles lead with explanatory "-- ..." lines (the dropdown examples,
+    # the page placeholder). Comments never execute, so prose inside them must
+    # not trip the SELECT/WITH, single-statement or write-keyword guards.
     assert A.validate_readonly_sql("-- מה יש בטבלה\nSELECT 1")
-    assert A.validate_readonly_sql("-- a\n-- b\nWITH x AS (SELECT 1) SELECT * FROM x")
     assert A.validate_readonly_sql("/* block */ SELECT 1")
+    # a semicolon inside a comment is not a second statement
+    assert A.validate_readonly_sql("-- corr(); regr_slope()\nSELECT 1")
+    # nor is a write keyword inside a comment a write
+    assert A.validate_readonly_sql("-- this does not update anything\nSELECT 1")
+    # and '--' inside a string literal is data, not a comment
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE x = 'a--b'")
 
 
 def test_validate_readonly_sql_comments_cannot_smuggle_writes():
-    # Skipping comments must not weaken the guard: what follows them still has
-    # to be a SELECT/WITH, and the denylist still scans the whole statement.
+    # Skipping comments must not weaken the guard: a comment cannot hide a
+    # second statement, and what follows one still has to be a SELECT/WITH.
     import pytest
     for bad in ("-- hi\nINSERT INTO t VALUES (1)",
                 "/* x */ DROP TABLE t",
+                "SELECT 1 -- c\n; DROP TABLE t",
+                "SELECT 1 /* c */ ; DROP TABLE t",
+                "SELECT 1; DROP TABLE t",
                 "-- only a comment\n"):
         with pytest.raises(ValueError):
             A.validate_readonly_sql(bad)
