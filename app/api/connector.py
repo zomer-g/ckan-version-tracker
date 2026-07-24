@@ -44,10 +44,12 @@ class ConnectorSqlBody(BaseModel):
 
 
 def _require_key(request: Request) -> None:
-    key = getattr(settings, "connector_api_key", "") or ""
+    # strip(): a value pasted into the Render dashboard with an invisible
+    # trailing space/newline must not 401 every single call.
+    key = (getattr(settings, "connector_api_key", "") or "").strip()
     if not key:
         raise HTTPException(status_code=503, detail="Connector API is not enabled")
-    supplied = request.headers.get("X-Connector-Key", "")
+    supplied = request.headers.get("X-Connector-Key", "").strip()
     if not secrets.compare_digest(supplied, key):
         raise HTTPException(status_code=401, detail="Invalid connector key")
 

@@ -46,8 +46,8 @@ def _budget_bucket(request: Request, path: str) -> tuple[str, int | None]:
     Anything else (including a wrong/absent key, which the router 401s) stays
     on the spoof-resistant per-IP bucket."""
     if path.startswith("/api/connector"):
-        key = getattr(settings, "connector_api_key", "") or ""
-        supplied = request.headers.get("x-connector-key", "")
+        key = (getattr(settings, "connector_api_key", "") or "").strip()
+        supplied = request.headers.get("x-connector-key", "").strip()
         if key and secrets.compare_digest(supplied, key):
             return "connector", int(getattr(settings, "connector_daily_byte_budget", 0) or 0)
     return _client_ip(request), None
