@@ -206,7 +206,7 @@ const REQS: { type: ChartType; label: string; icon: string; req: string }[] = [
   { type: "pie", label: "עוגה", icon: "🥧",
     req: "עמודת תווית + עמודה מספרית אחת. עד 8 פרוסות — היתר מקובץ ל'אחר'." },
   { type: "scatter", label: "פיזור", icon: "⚬",
-    req: "שתי עמודות מספריות (X ו-Y) — כל שורה נקודה. לבדיקת קשר בין שני מדדים." },
+    req: "שתי עמודות מספריות (X ו-Y) — כל שורה נקודה, עם קו מגמה ומקדם מתאם (r, R²)." },
   { type: "stat", label: "מספר", icon: "🔢",
     req: "תוצאה של שורה אחת — הערכים המספריים מוצגים כמספרים גדולים." },
   { type: "map", label: "מפה", icon: "🗺",
@@ -306,6 +306,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   const [fold, setFold] = useState(false);
   const [mode, setMode] = useState<BarMode>("group");
   const [donut, setDonut] = useState(false);
+  const [trend, setTrend] = useState(true);
   const [showVals, setShowVals] = useState(false);
   const [title, setTitle] = useState("");
   const [showSettings, setShowSettings] = useState(false);
@@ -339,6 +340,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     setFold(t === "pie");
     setMode("group");
     setDonut(false);
+    setTrend(true);
     setShowVals(false);
     setShowSettings(false);
     setColorOverrides({});
@@ -437,6 +439,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     if (flags.includes("vals")) setShowVals(true);
     if (flags.includes("fold")) setFold(true);
     if (flags.includes("nofold")) setFold(false);
+    if (flags.includes("notrend")) setTrend(false);
     setTitle(searchParams.get("ctitle") || "");
     setType(t);
     setXCol(x);
@@ -446,7 +449,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
 
   const urlCfg = type
     ? [type, xCol, yCols.join(","), agg, sort, String(topN), mode,
-       [donut && "donut", showVals && "vals", fold ? "fold" : "nofold"].filter(Boolean).join(","),
+       [donut && "donut", showVals && "vals", fold ? "fold" : "nofold", !trend && "notrend"].filter(Boolean).join(","),
        title.slice(0, 80)].join("§")
     : null;
   useEffect(() => {
@@ -462,7 +465,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
         p.set("csort", sort);
         p.set("ctop", String(topN));
         if (type === "bar" || type === "barh") p.set("cmode", mode);
-        const flags = [donut && "donut", showVals && "vals", fold ? "fold" : "nofold"].filter(Boolean).join(",");
+        const flags = [donut && "donut", showVals && "vals", fold ? "fold" : "nofold", !trend && "notrend"].filter(Boolean).join(",");
         p.set("cflags", flags);
         if (title.trim()) p.set("ctitle", title.trim().slice(0, 80));
       }
@@ -735,7 +738,16 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
               {type === "pie" ? "קטגוריה: " : "ציר X: "}
               <select
                 value={xCol}
-                onChange={(e) => setXCol(e.target.value)}
+                onChange={(e) => {
+                  const nx = e.target.value;
+                  // The new X may collide with a selected series — swap the old
+                  // X into that slot (when numeric) instead of dropping to zero
+                  // series, so the chart never blanks out on an X change.
+                  setYCols((prev) => prev.includes(nx)
+                    ? (numCols.includes(xCol) ? prev.map((y) => (y === nx ? xCol : y)) : prev.filter((y) => y !== nx))
+                    : prev);
+                  setXCol(nx);
+                }}
                 style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
               >
                 {(type === "scatter" ? numCols : type === "pie" ? (catCols.length ? catCols : columns) : columns).map((c) => (
@@ -887,6 +899,13 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                   </label>
                 )}
 
+                {type === "scatter" && (
+                  <label className="text-sm text-muted" style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center" }}>
+                    <input type="checkbox" checked={trend} onChange={(e) => setTrend(e.target.checked)} />
+                    קו מגמה ומתאם (רגרסיה לינארית)
+                  </label>
+                )}
+
                 {dualYAllowed && (
                   <label className="text-sm" style={{ display: "inline-flex", gap: "0.4rem", alignItems: "center" }}>
                     <input type="checkbox" checked={dualY} onChange={(e) => setDualY(e.target.checked)} />
@@ -985,7 +1004,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                 )}
                 {type === "scatter" && (
                   <ScatterChart rows={rows} xCol={xCol} yCols={activeY} colors={seriesColors}
-                    labelCol={catCols[0] || null} />
+                    labelCol={catCols[0] || null} trend={trend} />
                 )}
               </div>
               {prep && prep.truncated && (
@@ -1501,12 +1520,64 @@ function PieChart({ entries, colorFor, donut }: {
   );
 }
 
-// ── Scatter chart ────────────────────────────────────────────────────────────
+// ── Scatter chart (+ linear trend line & correlation) ────────────────────────
 
 const SCATTER_CAP = 2000;
 
-function ScatterChart({ rows, xCol, yCols, colors, labelCol }: {
-  rows: Row[]; xCol: string; yCols: string[]; colors: string[]; labelCol: string | null;
+interface Fit { n: number; slope: number; intercept: number; r: number | null }
+
+// Ordinary-least-squares fit + Pearson r over the drawn points.
+function linearFit(pts: { x: number; y: number }[]): Fit | null {
+  const n = pts.length;
+  if (n < 2) return null;
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; }
+  const mx = sx / n, my = sy / n;
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const p of pts) {
+    const dx = p.x - mx, dy = p.y - my;
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+  }
+  if (sxx === 0) return null; // vertical column of points — no slope
+  const slope = sxy / sxx;
+  const r = syy > 0 ? sxy / Math.sqrt(sxx * syy) : null;
+  return { n, slope, intercept: my - slope * mx, r };
+}
+
+// Coefficients: compact for big magnitudes, 3 significant digits otherwise.
+function fmtCoef(v: number): string {
+  if (v === 0) return "0";
+  if (Math.abs(v) >= 1000) return fmtCompact(v);
+  return String(Number(v.toPrecision(3)));
+}
+
+function fitLabel(fit: Fit): string {
+  const sign = fit.intercept >= 0 ? "+" : "−";
+  const parts = [`y = ${fmtCoef(fit.slope)}·x ${sign} ${fmtCoef(Math.abs(fit.intercept))}`];
+  if (fit.r !== null) parts.push(`r = ${fit.r.toFixed(2)}`, `R² = ${(fit.r * fit.r).toFixed(2)}`);
+  parts.push(`n = ${fit.n.toLocaleString()}`);
+  return parts.join("   ");
+}
+
+// Clip the trend line y = slope·x + b to the plot's value box; null when the
+// line misses the box entirely.
+function clipTrend(fit: Fit, xLo: number, xHi: number, yLo: number, yHi: number):
+    { x1: number; y1: number; x2: number; y2: number } | null {
+  const yAt = (x: number) => fit.slope * x + fit.intercept;
+  let a = xLo, b = xHi;
+  if (fit.slope !== 0) {
+    const xAtY = (y: number) => (y - fit.intercept) / fit.slope;
+    const [xA, xB] = [xAtY(yLo), xAtY(yHi)].sort((p, q) => p - q);
+    a = Math.max(a, xA); b = Math.min(b, xB);
+  } else if (fit.intercept < yLo || fit.intercept > yHi) {
+    return null;
+  }
+  if (a >= b) return null;
+  return { x1: a, y1: yAt(a), x2: b, y2: yAt(b) };
+}
+
+function ScatterChart({ rows, xCol, yCols, colors, labelCol, trend }: {
+  rows: Row[]; xCol: string; yCols: string[]; colors: string[]; labelCol: string | null; trend: boolean;
 }) {
   const m = { top: 16, right: 16, bottom: 56, left: 60 };
   const capped = rows.slice(0, SCATTER_CAP);
@@ -1528,6 +1599,17 @@ function ScatterChart({ rows, xCol, yCols, colors, labelCol }: {
   const plotW = W - m.left - m.right, plotH = H - m.top - m.bottom;
   const xOf = (v: number) => m.left + ((v - xScale.lo) / (xScale.hi - xScale.lo)) * plotW;
   const yOf = (v: number) => m.top + plotH - ((v - yScale.lo) / (yScale.hi - yScale.lo)) * plotH;
+
+  // Per-series regression over the drawn points, clipped to the plot box.
+  const fits = trend
+    ? yCols.map((_, s) => {
+        const sPts = pts
+          .filter((p) => p.ys[s] !== null)
+          .map((p) => ({ x: p.x!, y: p.ys[s]! }));
+        const fit = linearFit(sPts);
+        return fit && { fit, seg: clipTrend(fit, xScale.lo, xScale.hi, yScale.lo, yScale.hi) };
+      })
+    : [];
 
   return (
     <>
@@ -1555,6 +1637,28 @@ function ScatterChart({ rows, xCol, yCols, colors, labelCol }: {
             </g>
           )),
         )}
+        {/* Trend lines (dashed = fitted, not data) + the fit values, drawn
+            inside the SVG so PNG/SVG exports carry them. */}
+        {fits.map((f, s) => f && f.seg && (
+          <line key={`t${s}`}
+            x1={xOf(f.seg.x1)} y1={yOf(f.seg.y1)} x2={xOf(f.seg.x2)} y2={yOf(f.seg.y2)}
+            stroke={colors[s]} strokeWidth={1.8} strokeDasharray="7 5" strokeLinecap="round">
+            <title>{`קו מגמה — ${yCols[s]}: ${fitLabel(f.fit)}`}</title>
+          </line>
+        ))}
+        {fits.some(Boolean) && fits.map((f, s) => {
+          if (!f) return null;
+          const y = m.top + 6 + s * 17;
+          return (
+            <g key={`fl${s}`}>
+              <rect x={m.left + 8} y={y} width={10} height={10} rx={2} fill={colors[s]} />
+              <text x={m.left + 24} y={y + 9} textAnchor="start" fontSize={11} fill={INK}
+                style={{ fontVariantNumeric: "tabular-nums" }}>
+                {(yCols.length > 1 ? `${truncLabel(yCols[s], 14)}: ` : "") + fitLabel(f.fit)}
+              </text>
+            </g>
+          );
+        })}
       </svg>
       <Legend names={yCols} colors={colors} />
       {rows.length > SCATTER_CAP && (

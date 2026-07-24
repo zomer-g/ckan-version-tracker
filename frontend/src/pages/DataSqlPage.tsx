@@ -384,6 +384,9 @@ export default function DataSqlPage() {
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
   const [runId, setRunId] = useState(0);
+  // The SQL text that produced the current sqlResult (not the editor draft) —
+  // drives the "which tables feed this query" indication.
+  const [executedSql, setExecutedSql] = useState("");
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
   const placeholderRef = useRef(!searchParams.get("sql"));
 
@@ -521,10 +524,22 @@ export default function DataSqlPage() {
     setSqlError(null);
     dataCatalog
       .sql(sql)
-      .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); })
-      .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); })
+      .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); setExecutedSql(sql); })
+      .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); setExecutedSql(""); })
       .finally(() => setSqlRunning(false));
   }, []);
+
+  // Catalog tables referenced by the executed query (word-boundary scan of the
+  // SQL — catches FROM/JOIN/CTE references, quoted or schema-qualified alike).
+  const usedTables = useMemo(() => {
+    const used = new Set<string>();
+    if (!executedSql || !sqlResult) return used;
+    for (const t of tables) {
+      const esc = t.table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`\\b${esc}\\b`, "i").test(executedSql)) used.add(t.table);
+    }
+    return used;
+  }, [executedSql, sqlResult, tables]);
 
   const runSql = useCallback((sqlArg?: string) => {
     const sql = (typeof sqlArg === "string" ? sqlArg : sqlText).trim();
@@ -653,6 +668,35 @@ export default function DataSqlPage() {
             </a>
           )}
         </div>
+        {/* Which tables feed this query — chips in the source's colors; click
+            opens the table's cube. The browser list highlights the same set. */}
+        {sqlResult && !sqlError && usedTables.size > 0 && (
+          <div className="flex" style={{ gap: "0.35rem 0.4rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.55rem" }}>
+            <span className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
+              {usedTables.size === 1 ? "הטבלה שבשאילתה:" : `${usedTables.size} טבלאות בשאילתה:`}
+            </span>
+            {[...usedTables].map((name) => {
+              const t = byName.get(name)!;
+              const b = badgeOf(t);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => pickTable(t)}
+                  title={`${displayName(t)} — ${b.label}. לחיצה פותחת את פרטי הטבלה.`}
+                  style={{
+                    display: "inline-flex", gap: "0.3rem", alignItems: "center",
+                    fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
+                    padding: "0.12rem 0.5rem", borderRadius: 9999,
+                    border: `1px solid ${b.accent}`, background: b.bg, color: b.fg,
+                  }}
+                >
+                  <code dir="ltr" style={{ unicodeBidi: "isolate", fontSize: "0.7rem", background: "none", color: "inherit" }}>{name}</code>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {sqlError && (
           <div style={{ marginTop: "0.6rem", color: "var(--danger, #dc2626)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {sqlError}
@@ -746,6 +790,10 @@ export default function DataSqlPage() {
 
           {groups.map(({ badge, list }) => {
             const open = isOpen(badge.id);
+            // Tables the current query uses always render — even in a collapsed
+            // group — so the user sees exactly what the result is built from.
+            const usedInGroup = list.filter((t) => usedTables.has(t.table));
+            const visible = open ? list : usedInGroup;
             return (
               <div key={badge.id} style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: "var(--bg-muted, #f8fafc)" }}>
                 {/* Source header — click to expand/collapse; ↗ opens the source page */}
@@ -772,6 +820,11 @@ export default function DataSqlPage() {
                     <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }}>
                       {list.length === 1 ? "טבלה אחת" : `${list.length} טבלאות`}
                     </span>
+                    {usedInGroup.length > 0 && (
+                      <span style={{ fontSize: "0.66rem", fontWeight: 700, color: "#854d0e", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 9999, padding: "0.05rem 0.4rem", flex: "0 0 auto" }}>
+                        בשאילתה
+                      </span>
+                    )}
                   </button>
                   <Link
                     to={groupLink(badge)}
@@ -782,10 +835,11 @@ export default function DataSqlPage() {
                   </Link>
                 </div>
 
-                {open && (
+                {visible.length > 0 && (
                   <div style={{ padding: "0 0.25rem 0.3rem" }}>
-                    {list.map((t) => {
+                    {visible.map((t) => {
                       const active = selected === t.table;
+                      const used = usedTables.has(t.table);
                       return (
                         <button
                           key={t.table}
@@ -796,7 +850,7 @@ export default function DataSqlPage() {
                             display: "flex", width: "100%", gap: "0.5rem", alignItems: "center",
                             textAlign: "start", padding: "0.3rem 0.45rem", borderRadius: 4, cursor: "pointer",
                             border: "none", marginBottom: 1,
-                            background: active ? "var(--bg, #fff)" : "transparent",
+                            background: active ? "var(--bg, #fff)" : used ? "#fef9c3" : "transparent",
                             boxShadow: active ? `inset 2px 0 0 ${badge.accent}` : "none",
                           }}
                         >
@@ -805,9 +859,19 @@ export default function DataSqlPage() {
                                 secondary, LTR-isolated monospace line. */}
                             <span style={{
                               display: "block", fontSize: "0.8rem", color: "var(--text)",
-                              fontWeight: active ? 700 : 500,
+                              fontWeight: active || used ? 700 : 500,
                               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             }}>
+                              {used && (
+                                <span title="הטבלה משמשת את השאילתה הנוכחית" style={{
+                                  fontSize: "0.62rem", fontWeight: 700, color: "#854d0e",
+                                  background: "#fef3c7", border: "1px solid #f59e0b",
+                                  borderRadius: 9999, padding: "0.02rem 0.35rem",
+                                  marginInlineEnd: "0.35rem", verticalAlign: "middle",
+                                }}>
+                                  בשאילתה
+                                </span>
+                              )}
                               {displayName(t)}
                               {/* Spatial marker. Deliberately a glyph and not a
                                   label: the row is tight and the name must keep
