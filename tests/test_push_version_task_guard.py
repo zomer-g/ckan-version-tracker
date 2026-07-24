@@ -123,3 +123,18 @@ def test_push_passes_the_guard_when_a_task_is_running():
     db = _DB(has_running_task=True)
     resp = _push(_client(db))
     assert resp.status_code != 409
+
+
+def test_more_batches_defaults_off():
+    """The field must default false so every existing single-version push
+    completes its task exactly as before — only a batched run opts in.
+
+    (The batched interaction — task stays running across batches — is proven
+    worker-side in test_archive_batching.test_more_batches_is_true_until_the_
+    last_batch; exercising the full OVER version-creation path here would mean
+    mocking R2 + the append store, well past what this guard test covers.)"""
+    from app.api.worker import PushVersionRequest
+
+    req = PushVersionRequest(tracked_dataset_id=str(DS_ID),
+                             metadata_modified="2026-07-24T00:00:00")
+    assert req.more_batches is False

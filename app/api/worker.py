@@ -138,6 +138,13 @@ class PushVersionRequest(BaseModel):
     # Archive mode with 0 new items: mark the task completed without creating a
     # new version (avoids uploading the full CSV when nothing changed).
     skip_version: bool = False
+    # Batched archive: this is one of several versions the SAME task will push
+    # (a size-capped file corpus, one version per batch). When true, create the
+    # version but leave the task RUNNING — otherwise push_version marks it
+    # completed after batch 1, and every later batch's push then trips the
+    # no-running-task guard and is rejected. The worker sends false on the last
+    # batch, which completes the task as usual.
+    more_batches: bool = False
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -1256,7 +1263,9 @@ async def push_version(
         except Exception as e:
             logger.warning("Failed to refresh ODATA notes for %s: %s", ds.id, e)
 
-    # Mark any running task as completed
+    # Mark the running task completed — UNLESS more batches of this same run
+    # are coming, in which case keep it running so their pushes still pass the
+    # no-running-task guard. Its phase is nudged so the queue shows progress.
     task_result = await db.execute(
         select(ScrapeTask).where(
             ScrapeTask.tracked_dataset_id == ds.id,
@@ -1265,16 +1274,24 @@ async def push_version(
     )
     task = task_result.scalar_one_or_none()
     if task:
-        task.status = "completed"
-        task.completed_at = datetime.now(timezone.utc)
-        task.progress = 100
-        task.phase = "complete"
+        if body.more_batches:
+            task.phase = "batch_committed"
+            task.message = "מנה נשמרה — ממשיך לאסוף"
+        else:
+            task.status = "completed"
+            task.completed_at = datetime.now(timezone.utc)
+            task.progress = 100
+            task.phase = "complete"
         await db.commit()
 
     from app.services.activity_log import log_event
     await log_event(
         event="completed", dataset=ds, status="ok", actor="worker",
-        message=f"גירוד הסתיים — גרסה {next_version} נוצרה",
+        message=(
+            f"מנה נשמרה — גרסה {next_version} נוצרה, ממשיך לאסוף"
+            if body.more_batches
+            else f"גירוד הסתיים — גרסה {next_version} נוצרה"
+        ),
     )
 
     # Persist checkpoint patch back to scraper_config (archive mode).
