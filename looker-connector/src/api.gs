@@ -10,6 +10,9 @@ var BASE = 'https://over.org.il';
 
 function _key() {
   var key = PropertiesService.getScriptProperties().getProperty('OVER_CONNECTOR_KEY');
+  if (key) {
+    key = key.trim(); // a pasted trailing space/newline must not 401 every call
+  }
   if (!key) {
     _userError('ה-connector אינו מוגדר (חסר OVER_CONNECTOR_KEY ב-Script Properties).');
   }
@@ -55,12 +58,25 @@ function apiSql(sql, maxRows) {
 
 /**
  * Dev-only smoke test — run from the Apps Script editor after setting
- * OVER_CONNECTOR_KEY. Success looks like {columns=[x], rows=[{x=1}], ...};
- * an HTML/403 response means Cloudflare is challenging Google's egress IPs
- * and needs a WAF skip rule for /api/connector/*.
+ * OVER_CONNECTOR_KEY. Deliberately does a RAW fetch (no _userError): a
+ * CommunityConnector userError thrown outside a real Data Studio request
+ * still shows the run as "Completed", which reads as false success. Here
+ * the log always tells the truth:
+ *   HTTP 200 + {"columns":["x"],...} → end-to-end OK
+ *   HTTP 401 → OVER_CONNECTOR_KEY ≠ Render's CONNECTOR_API_KEY
+ *   HTTP 503 → CONNECTOR_API_KEY not set on the server
+ *   HTML/403 → Cloudflare challenging Google IPs → WAF skip rule needed
  */
 function smoke() {
-  Logger.log(apiSql('SELECT 1 AS x', 1));
+  var response = UrlFetchApp.fetch(BASE + '/api/connector/sql', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'X-Connector-Key': _key() },
+    payload: JSON.stringify({ sql: 'SELECT 1 AS x', max_rows: 1 }),
+    muteHttpExceptions: true,
+  });
+  Logger.log('HTTP ' + response.getResponseCode());
+  Logger.log(response.getContentText().slice(0, 500));
 }
 
 /** The trimmed table catalog for the config dropdown. */
