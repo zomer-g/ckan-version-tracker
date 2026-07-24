@@ -9,8 +9,14 @@
     "company": "OVER — גרסאות לעם",
     "companyUrl": "https://over.org.il",
     "logoUrl": "https://over.org.il/connector-logo.png",
-    "addOnUrl": "https://over.org.il/api",
-    "supportUrl": "https://over.org.il/api",
-    "description": "חיבור ישיר למסד הנתונים הציבורי של גרסאות לעם — מאגרי data.gov.il, מאגר הכנסת ועוד, ב-SQL קריאה בלבד."
+    "addOnUrl": "https://z-g.co.il/over-looker",
+    "supportUrl": "https://z-g.co.il/over-looker-support",
+    "privacyPolicyUrl": "https://z-g.co.il/over-looker-privacy",
+    "termsOfServiceUrl": "https://z-g.co.il/over-looker-terms",
+    "shortDescription": "דשבורדים על נתונים ציבוריים מישראל: מאגרי ממשלה, הכנסת והחלטות ממשלה, בקריאה בלבד.",
+    "description": "חיבור ישיר למסד הנתונים הציבורי של גרסאות לעם — מאגרי data.gov.il, מסד הנתונים של הכנסת, החלטות ממשלה ועוד. בוחרים טבלה מהקטלוג או כותבים שאילתת SELECT חופשית, ובונים דוחות על נתונים ציבוריים בקריאה בלבד. שמות עמודות בעברית מוצגים כפי שהם. אין צורך בהרשמה — דרוש רק חשבון Google.",
+    "authType": ["NONE"],
+    "feeType": ["FREE"],
+    "sources": ["OVER"]
   }
 }
