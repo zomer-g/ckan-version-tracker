@@ -623,6 +623,33 @@ async def push_version(
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    # Refuse a push for a dataset with no running task. push_version otherwise
+    # creates the version off whatever the worker sends, no matter the state of
+    # the task it came from — so a worker whose task was cancelled or reassigned
+    # (e.g. an operator killed a wedged run, or a stale process kept churning
+    # after a heartbeat timeout re-queued the work) can still land a stale or
+    # junk version, and for an archive source a bad checkpoint with it. There
+    # is at most one active task per dataset (migration 023), so "a running
+    # task exists" is the clean precondition that a legitimate in-flight push
+    # always satisfies.
+    running_task = (await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status == "running",
+        )
+    )).scalar_one_or_none()
+    if running_task is None:
+        logger.warning(
+            "Rejecting push-version for %s: no running task (cancelled or "
+            "reassigned). Worker %s.",
+            ds.id, request.headers.get("x-worker-id", "?"),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="No running task for this dataset — the task was cancelled "
+                   "or reassigned; this push is stale and was rejected.",
+        )
+
     # GovMap layers carry a placeholder title ("GovMap layer 200541") at
     # creation time because we don't fetch the catalog from the request path.
     # The scraper resolves the real Hebrew caption from govmap's catalog and
