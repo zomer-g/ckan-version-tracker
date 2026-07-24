@@ -16,9 +16,10 @@ import { useTranslation } from "react-i18next";
  */
 
 // Versioned deployment ID of the Looker Studio community connector
-// (looker-connector/README.md § פריסה). Empty until the first release
-// deployment — the card then shows a "coming soon" note instead of the link.
-const LOOKER_CONNECTOR_ID = "";
+// (looker-connector/README.md § פריסה) — v1, deployed 2026-07-24. When
+// empty, the card shows a "coming soon" note instead of the link.
+const LOOKER_CONNECTOR_ID =
+  "AKfycbysYqW5DXT1fSzmMeOEN6lQfOCz-CF8gTA3rDcyqi7tk59buf9MEmMDpvGnFZ0AVqyVAA";
 
 interface ApiParam {
   name: string;

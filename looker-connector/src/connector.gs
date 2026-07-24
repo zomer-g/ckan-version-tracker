@@ -20,10 +20,10 @@ function getAuthType() {
   return cc.newAuthTypeResponse().setAuthType(cc.AuthType.NONE).build();
 }
 
-// Development: true → full stack traces in Looker Studio. Flip to false
-// before sharing the deployment link.
+// Released: false hides stack traces from end users. Flip to true locally
+// when debugging in Looker Studio.
 function isAdminUser() {
-  return true;
+  return false;
 }
 
 function getConfig() {
