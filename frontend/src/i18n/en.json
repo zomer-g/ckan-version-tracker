@@ -5,6 +5,7 @@
     "pending_waiting": "Requests waiting for review",
     "tracked": "Tracked",
     "organizations": "Organizations",
+    "sources": "Sources",
     "tags": "Tags",
     "admin": "Admin",
     "login": "Login",
@@ -16,7 +17,12 @@
     "menu": "Navigation menu",
     "cbs": "CBS",
     "data_sql": "SQL",
-    "knesset_db": "Knesset DB"
+    "knesset_db": "Knesset DB",
+    "projects": "Projects",
+    "catalog": "Catalog",
+    "odata": "Information for the People",
+    "ocal": "Calendar for the People",
+    "ocoi": "Conflicts of Interest for the People"
   },
   "tags": {
     "page_title": "Tags",
@@ -221,7 +227,34 @@
     "description": "Tracking government open data version history",
     "source_code": "Source Code",
     "info_for_people": "Information for the People",
-    "copyright": "© 2026 Gai Zomer"
+    "copyright": "© 2026 Gai Zomer",
+    "group_projects": "Projects",
+    "group_catalog": "Catalog",
+    "group_about": "About"
+  },
+  "projects": {
+    "processed_badge": "Processed data",
+    "processed_note": "Note: this is a <strong>processed-data</strong> project, not an official source. The data was automatically extracted, processed and interpreted, and is not an original government document or decision. For any material use, verify against the official source.",
+    "coming_soon": "Coming soon",
+    "coming_soon_body": "This project's interface and data will be imported here soon.",
+    "visit_site": "Go to the project site",
+    "odata_title": "Information for the People",
+    "odata_desc": "A central hub making processed, organized public information from government publications accessible.",
+    "odata_search": {
+      "intro": "Search directly across Information for the People. Results are loaded live from its API and link back to the source.",
+      "placeholder": "Search a dataset on Information for the People...",
+      "button": "Search",
+      "searching": "Searching...",
+      "error": "Search failed. Please try again shortly.",
+      "no_results": "No matching datasets found.",
+      "results_count": "{{count}} datasets on Information for the People",
+      "resources": "{{count}} resources",
+      "view_all": "View all {{count}} results on Information for the People ↗"
+    },
+    "ocal_title": "Calendar for the People",
+    "ocal_desc": "The public work calendars of officials and public figures, after extracting and processing the meetings and entities.",
+    "ocoi_title": "Conflicts of Interest for the People",
+    "ocoi_desc": "A processed mapping of relationships and conflicts of interest extracted from public declarations."
   },
   "about": {
     "title": "About Versions for the People",

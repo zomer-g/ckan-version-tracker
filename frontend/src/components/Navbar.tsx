@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { datasets as datasetsApi } from "../api/client";
@@ -44,10 +44,39 @@ function HamburgerIcon({ open }: { open: boolean }) {
   );
 }
 
+function ChevronIcon() {
+  return (
+    <svg
+      className="nav-chevron"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+// A single navigable link.
+type NavLeaf = { to: string; label: string };
+// A dropdown group of links, shown under one heading.
+type NavGroup = { key: string; label: string; children: NavLeaf[] };
+type NavEntry = NavLeaf | NavGroup;
+
+const isGroup = (e: NavEntry): e is NavGroup =>
+  (e as NavGroup).children !== undefined;
+
 export default function Navbar() {
   const { t, i18n } = useTranslation();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Which desktop dropdown is open (by group key), or null.
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const navDesktopRef = useRef<HTMLDivElement>(null);
 
   // Subtle public "requests waiting" dot: poll the pending count so the admin
   // (or anyone) notices a backlog on landing, without logging in. Best-effort
@@ -77,23 +106,68 @@ export default function Navbar() {
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
-  const navClass = (path: string) =>
-    `nav-link${isActive(path) ? " is-active" : ""}`;
-
-  const navItems: { to: string; label: string }[] = [
+  // Two-level structure: a few flat entry points + grouped dropdowns.
+  const navEntries: NavEntry[] = [
     { to: "/", label: t("nav.search") },
-    { to: "/organizations", label: t("nav.organizations", "ארגונים") },
-    { to: "/sources", label: t("nav.sources", "מקורות") },
-    { to: "/tags", label: t("nav.tags", "תגיות") },
-    { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
     { to: "/data", label: t("nav.data_sql", "SQL") },
-    { to: "/knesset", label: t("nav.knesset_db", "הכנסת") },
-    { to: "/api", label: t("nav.api", "API") },
-    { to: "/about", label: t("nav.about") },
-    { to: "/rationale", label: t("nav.rationale", "הרציונל") },
+    {
+      key: "projects",
+      label: t("nav.projects", "פרויקטים"),
+      children: [
+        { to: "/knesset", label: t("nav.knesset_db", "הכנסת") },
+        { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
+        { to: "/projects/odata", label: t("nav.odata", "מידע לעם") },
+        { to: "/projects/ocal", label: t("nav.ocal", "יומן לעם") },
+        { to: "/projects/ocoi", label: t("nav.ocoi", "ניגוד עניינים לעם") },
+      ],
+    },
+    {
+      key: "catalog",
+      label: t("nav.catalog", "קטלוג"),
+      children: [
+        { to: "/organizations", label: t("nav.organizations", "ארגונים") },
+        { to: "/tags", label: t("nav.tags", "תגיות") },
+        { to: "/sources", label: t("nav.sources", "מקורות") },
+      ],
+    },
+    {
+      key: "about",
+      label: t("nav.about"),
+      children: [
+        { to: "/about", label: t("nav.about") },
+        { to: "/rationale", label: t("nav.rationale", "הרציונל") },
+        { to: "/api", label: t("nav.api", "API") },
+      ],
+    },
   ];
 
+  const groupActive = (g: NavGroup) => g.children.some((c) => isActive(c.to));
+
   const closeMobile = () => setMobileOpen(false);
+  const closeDesktop = () => setOpenGroup(null);
+
+  // Close an open desktop dropdown on outside click or Escape.
+  useEffect(() => {
+    if (!openGroup) return;
+    const onDown = (e: MouseEvent) => {
+      if (!navDesktopRef.current?.contains(e.target as Node)) closeDesktop();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDesktop();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openGroup]);
+
+  // Any route change closes both menus.
+  useEffect(() => {
+    closeDesktop();
+    closeMobile();
+  }, [location.pathname]);
 
   return (
     <header>
@@ -118,17 +192,54 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop nav — visible at ≥640px */}
-          <div className="navbar-nav-desktop">
-            {navItems.map((item) => (
-              <Link
-                key={item.to}
-                to={item.to}
-                className={navClass(item.to)}
-                aria-current={isActive(item.to) ? "page" : undefined}
-              >
-                {item.label}
-              </Link>
-            ))}
+          <div className="navbar-nav-desktop" ref={navDesktopRef}>
+            {navEntries.map((entry) =>
+              isGroup(entry) ? (
+                <div key={entry.key} className="nav-group">
+                  <button
+                    type="button"
+                    className={`nav-link nav-group-btn${
+                      groupActive(entry) ? " is-active" : ""
+                    }${openGroup === entry.key ? " is-open" : ""}`}
+                    aria-haspopup="true"
+                    aria-expanded={openGroup === entry.key}
+                    onClick={() =>
+                      setOpenGroup((cur) => (cur === entry.key ? null : entry.key))
+                    }
+                  >
+                    {entry.label}
+                    <ChevronIcon />
+                  </button>
+                  {openGroup === entry.key && (
+                    <div className="nav-dropdown" role="menu">
+                      {entry.children.map((child) => (
+                        <Link
+                          key={child.to}
+                          to={child.to}
+                          role="menuitem"
+                          className={`nav-dropdown-link${
+                            isActive(child.to) ? " is-active" : ""
+                          }`}
+                          aria-current={isActive(child.to) ? "page" : undefined}
+                          onClick={closeDesktop}
+                        >
+                          {child.label}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link
+                  key={entry.to}
+                  to={entry.to}
+                  className={`nav-link${isActive(entry.to) ? " is-active" : ""}`}
+                  aria-current={isActive(entry.to) ? "page" : undefined}
+                >
+                  {entry.label}
+                </Link>
+              )
+            )}
             <button
               className="btn-lang"
               onClick={toggleLang}
@@ -160,17 +271,38 @@ export default function Navbar() {
             aria-label={t("nav.menu", "תפריט ניווט")}
           >
             <div className="container">
-              {navItems.map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  onClick={closeMobile}
-                  className={`navbar-mobile-link${isActive(item.to) ? " is-active" : ""}`}
-                  aria-current={isActive(item.to) ? "page" : undefined}
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {navEntries.map((entry) =>
+                isGroup(entry) ? (
+                  <div key={entry.key} className="navbar-mobile-group">
+                    <div className="navbar-mobile-group-title">{entry.label}</div>
+                    {entry.children.map((child) => (
+                      <Link
+                        key={child.to}
+                        to={child.to}
+                        onClick={closeMobile}
+                        className={`navbar-mobile-link navbar-mobile-sublink${
+                          isActive(child.to) ? " is-active" : ""
+                        }`}
+                        aria-current={isActive(child.to) ? "page" : undefined}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <Link
+                    key={entry.to}
+                    to={entry.to}
+                    onClick={closeMobile}
+                    className={`navbar-mobile-link${
+                      isActive(entry.to) ? " is-active" : ""
+                    }`}
+                    aria-current={isActive(entry.to) ? "page" : undefined}
+                  >
+                    {entry.label}
+                  </Link>
+                )
+              )}
               <button
                 className="btn-lang navbar-mobile-lang"
                 onClick={() => {

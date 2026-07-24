@@ -15,6 +15,7 @@ import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
 import RationalePage from "./pages/RationalePage";
 import ApiPage from "./pages/ApiPage";
+import ProjectImportPage from "./pages/ProjectImportPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
@@ -105,6 +106,9 @@ export default function App() {
             }
           />
           <Route path="/api" element={<ApiPage />} />
+          <Route path="/projects/odata" element={<ProjectImportPage project="odata" />} />
+          <Route path="/projects/ocal" element={<ProjectImportPage project="ocal" />} />
+          <Route path="/projects/ocoi" element={<ProjectImportPage project="ocoi" />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />
           <Route

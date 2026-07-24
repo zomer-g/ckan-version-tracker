@@ -405,6 +405,70 @@ label {
   background: rgba(255, 255, 255, 0.15);
 }
 
+/* — Desktop dropdown groups (second hierarchy level) — */
+.nav-group {
+  position: relative;
+}
+
+.navbar .nav-group-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.nav-chevron {
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 0.75;
+  transition: transform 0.15s;
+}
+
+.navbar .nav-group-btn.is-open .nav-chevron {
+  transform: rotate(180deg);
+}
+
+.nav-dropdown {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  inset-inline-start: 0;
+  min-width: 12rem;
+  background: var(--primary-800);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.25));
+  padding: 0.35rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.navbar .nav-dropdown-link {
+  display: block;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.navbar .nav-dropdown-link:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  opacity: 1;
+}
+
+.navbar .nav-dropdown-link.is-active {
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+}
+
 /* — Mobile hamburger — */
 .navbar-hamburger {
   display: none;                  /* visible only via media query below */
@@ -453,6 +517,27 @@ label {
 .navbar-mobile-link.is-active {
   background: rgba(255, 255, 255, 0.15);
   color: white;
+}
+
+/* — Mobile grouped sections (second hierarchy level) — */
+.navbar-mobile-group {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.navbar-mobile-group-title {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.navbar-mobile-sublink {
+  padding-inline-start: 1.4rem;
+  font-size: 0.9rem;
 }
 
 .navbar-mobile-lang {
@@ -587,6 +672,200 @@ label {
   font-weight: 700;
 }
 
+/* ── Sibling-project pages (מידע/יומן/ניגוד עניינים לעם) ──────────────
+   These surface PROCESSED, derived data — the banner must read loudly as
+   "not an original source". */
+.processed-banner {
+  background: #92400e;                       /* amber-900 */
+  background: linear-gradient(90deg, #b45309 0%, #92400e 100%);
+  color: #fff8ec;
+  border-bottom: 2px solid #f59e0b;          /* amber-500 */
+}
+
+.processed-banner .container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 0.7rem;
+  padding-bottom: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.processed-banner-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  background: #f59e0b;                        /* amber-500 */
+  color: #3b2606;
+  font-weight: 800;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--radius-full);
+}
+
+.processed-banner-text {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.project-hero-desc {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.05rem;
+  margin-top: 0.75rem;
+  max-width: 42rem;
+}
+
+.project-soon-card {
+  text-align: center;
+}
+
+.project-soon-tag {
+  display: inline-block;
+  background: var(--primary-100);
+  color: var(--primary-700);
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: var(--radius-full);
+  margin-bottom: 1rem;
+}
+
+.project-soon-link {
+  display: inline-block;
+}
+
+/* — odata (מידע לעם) live CKAN search — */
+.odata-search-intro {
+  color: var(--text-muted, #556);
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.odata-search-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.odata-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 1rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.odata-search-input:focus {
+  outline: 2px solid var(--primary-200);
+  outline-offset: 1px;
+  border-color: var(--primary-700);
+}
+
+.odata-search-form .btn-primary {
+  flex-shrink: 0;
+}
+
+.odata-search-msg {
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  background: var(--primary-50, #eef6f9);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.odata-search-error {
+  background: #fdecec;
+  color: #9b1c1c;
+}
+
+.odata-search-count {
+  font-size: 0.85rem;
+  color: var(--text-muted, #556);
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.odata-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.odata-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.odata-result:hover {
+  border-color: var(--primary-200);
+  box-shadow: var(--shadow-sm);
+}
+
+.odata-result-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--primary-700);
+  text-decoration: none;
+}
+
+.odata-result-title:hover {
+  text-decoration: underline;
+}
+
+.odata-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--text-muted, #556);
+}
+
+.odata-result-org {
+  font-weight: 500;
+}
+
+.odata-result-notes {
+  margin-top: 0.55rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.odata-search-more {
+  display: inline-block;
+  margin-top: 1.1rem;
+  font-weight: 600;
+  color: var(--primary-700);
+}
+
+.odata-visit-link {
+  display: inline-block;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  font-size: 0.9rem;
+  color: var(--primary-700);
+}
+
+@media (max-width: 640px) {
+  .odata-search-form {
+    flex-direction: column;
+  }
+}
+
 .about-section {
   max-width: 800px;
   margin: 2rem auto;
@@ -701,8 +980,12 @@ label {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 2rem;
+  gap: 2rem 3rem;
   flex-wrap: wrap;
+}
+
+.footer-brand-col {
+  max-width: 20rem;
 }
 
 .footer-brand {
@@ -716,36 +999,51 @@ label {
   font-size: 0.85rem;
 }
 
-.footer-links {
+.footer-groups {
   display: flex;
-  gap: 1.5rem;
-  align-items: center;
+  gap: 2.5rem;
+  flex-wrap: wrap;
 }
 
-.footer-links a {
+.footer-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.footer-group-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  margin-bottom: 0.15rem;
+}
+
+.footer-group a {
   font-size: 0.9rem;
 }
 
 .footer-copy {
-  text-align: end;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 0.85rem;
   opacity: 0.85;
 }
 
 @media (max-width: 640px) {
-  .footer-inner {
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
+  .footer-groups {
+    gap: 1.75rem;
   }
 
   .footer-copy {
-    text-align: center;
-  }
-
-  .footer-links {
-    flex-wrap: wrap;
     justify-content: center;
+    text-align: center;
   }
 }
 
