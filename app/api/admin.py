@@ -27,6 +27,7 @@ from app.services import storage_client as storage_lib
 from app.services.storage_client import storage_client
 from app.services.r2_backfill import (
     backfill_dataset_to_r2,
+    consolidate_dataset_versions,
     repair_dataset_r2,
     rebuild_dataset_versions,
     seed_neon_from_versions,
@@ -581,6 +582,40 @@ async def rebuild_versions_endpoint(
     logger.info("Rebuild versions for %s by %s: %s→%s versions, apply=%s",
                 uid, user.email, s.get("old_version_count"),
                 s.get("new_version_count"), apply)
+    return s
+
+
+@router.post("/datasets/{dataset_id}/consolidate-versions")
+@limiter.limit("5/minute")
+async def consolidate_versions_endpoint(
+    request: Request,
+    dataset_id: str,
+    dedup_key: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Merge a batched-bootstrap dataset's per-batch versions into ONE.
+
+    A size-capped archive run publishes one version per batch; for a
+    whole-corpus snapshot source that leaves N partial versions on the page
+    (each with the full index CSV + only its batch's ZIP parts). This builds
+    one complete index CSV from the deduped NEON rows and references it plus
+    EVERY batch's ZIP parts under a single version, removing the old rows in
+    place (R2 ZIP bytes untouched — see
+    ``app.services.r2_backfill.consolidate_dataset_versions``).
+
+    ``dedup_key`` is the column identifying a logical item (one row per item in
+    the merged CSV), e.g. ``מספר הסכם``. ``apply=false`` (default) returns the
+    plan without writing. Follow a successful apply with
+    ``/seed-neon?apply=true&reset=true`` to rebuild the NEON table deduped.
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    s = await consolidate_dataset_versions(db, uid, dedup_key=dedup_key, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=400, detail=s["error"])
+    logger.info("Consolidate versions for %s by %s: %s→1, zip_parts=%s, apply=%s",
+                uid, user.email, s.get("old_version_count"), s.get("zip_parts"), apply)
     return s
 
 

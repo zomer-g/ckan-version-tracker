@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import uuid as uuidlib
 from datetime import datetime, timezone
@@ -625,6 +626,196 @@ async def rebuild_dataset_versions(db, ds_uuid: uuidlib.UUID, *, apply: bool) ->
 
     await db.commit()
     summary["committed"] = True
+    return summary
+
+
+# ── consolidate a batched-bootstrap dataset's per-batch versions into ONE ──────
+# A size-capped archive run (batch_max_bytes) publishes one version PER batch to
+# stay disk-bounded and resumable. For a whole-corpus SNAPSHOT source (e.g. the
+# collective-agreements register) that leaks the internal batching into N
+# user-visible versions, each holding the full item CSV + only ITS batch's ZIP
+# parts. This merges them into a SINGLE version: one complete index CSV built
+# from the deduped NEON rows + every batch's ZIP parts under one _zip_parts list.
+#
+# The ZIP objects are REUSED in place — the old version rows are removed with a
+# raw db.delete (like rebuild_dataset_versions), NEVER the delete-version
+# endpoint, so R2 bytes survive and the consolidated version keeps referencing
+# them. NEON dedup is a separate follow-up (seed_neon_from_versions reset=True).
+
+_CONSOLIDATED_CSV_NAME = "נתוני הסורק"  # the resource-name key the worker/UI use
+
+
+def _zip_keys_of(mappings: dict) -> list[str]:
+    """The ZIP storage values a version references, in order (_zip_parts then a
+    lone _zip). Only real storage values (r2:/odata) — bookkeeping is skipped."""
+    out: list[str] = []
+    for part in (mappings or {}).get("_zip_parts") or []:
+        if isinstance(part, str) and part:
+            out.append(part)
+    lone = (mappings or {}).get("_zip")
+    if isinstance(lone, str) and lone:
+        out.append(lone)
+    return out
+
+
+async def _build_deduped_index_csv(table: str, dedup_key: str) -> tuple[str, int]:
+    """Stream the deduped latest-row-per-key index to a temp CSV (utf-8-sig).
+
+    Each agreement accumulated one NEON row without its filename (early batch)
+    and one with it (its own batch). DISTINCT ON the key, newest ``first_seen``
+    first, keeps the row that carries the ``attachment_filename``. ``first_seen``
+    itself is dropped from the output — it's NEON bookkeeping, not index data.
+    Returns (temp_path, row_count).
+    """
+    from app.services import append_store
+    from app.services.append_store import _qi
+
+    cols = await append_store.user_columns(table)  # source cols + first_seen, no row_hash
+    if dedup_key not in cols:
+        raise ValueError(f"dedup_key {dedup_key!r} not a column of {table}")
+    out_cols = [c for c in cols if c != "first_seen"]
+    col_list = ", ".join(_qi(c) for c in out_cols)
+    key_q = _qi(dedup_key)
+    sql = (
+        f"SELECT DISTINCT ON ({key_q}) {col_list} "
+        f"FROM public.{_qi(table)} "
+        f"ORDER BY {key_q}, first_seen DESC NULLS LAST"
+    )
+
+    import csv as _csv
+    import tempfile as _tempfile
+
+    pool = await append_store.get_pool()
+    fd, path = _tempfile.mkstemp(suffix=".csv", prefix="consolidate-")
+    os.close(fd)
+    rows = 0
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        writer = _csv.writer(fh)
+        writer.writerow(out_cols)
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                cur = await conn.cursor(sql)
+                while True:
+                    batch = await cur.fetch(1000)
+                    if not batch:
+                        break
+                    for rec in batch:
+                        writer.writerow(
+                            ["" if rec[c] is None else str(rec[c]) for c in out_cols]
+                        )
+                        rows += 1
+    return path, rows
+
+
+async def consolidate_dataset_versions(
+    db, ds_uuid: uuidlib.UUID, *, dedup_key: str, apply: bool
+) -> dict:
+    """Merge a batched dataset's per-batch versions into ONE.
+
+    ``dedup_key`` is the column that identifies a logical item (so the deduped
+    index CSV keeps one row per item) — e.g. ``"מספר הסכם"``. ``apply=False``
+    reports the plan without writing. On apply: builds the deduped index CSV
+    from NEON, uploads it to R2, creates ONE VersionIndex referencing that CSV +
+    every batch's ZIP parts, and removes the old version rows in place.
+    """
+    from app.services import append_store
+
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+    )).scalar_one_or_none()
+    if not ds:
+        return {"error": "dataset not found"}
+
+    versions = list((await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == ds_uuid)
+        .order_by(VersionIndex.version_number.asc())
+    )).scalars().all())
+    if not versions:
+        return {"error": "no versions to consolidate"}
+
+    # ZIP parts across every version, oldest-batch first — this order becomes
+    # the _zip_parts list, so the UI numbers them חלק 1..N in batch order.
+    zip_keys: list[str] = []
+    seen: set[str] = set()
+    for v in versions:
+        for k in _zip_keys_of(v.resource_mappings or {}):
+            if k not in seen:
+                seen.add(k)
+                zip_keys.append(k)
+
+    table = append_store.table_name(ds)
+    latest = versions[-1]
+
+    summary = {
+        "dataset_id": str(ds_uuid), "title": ds.title, "apply": apply,
+        "old_version_count": len(versions),
+        "zip_parts": len(zip_keys),
+        "neon_table": table,
+        "dedup_key": dedup_key,
+        "committed": False,
+    }
+    if not zip_keys:
+        return {**summary, "error": "no ZIP parts found across versions — nothing to merge"}
+
+    if not apply:
+        # Cheap plan preview — don't build the (large) CSV on a dry run.
+        summary["neon_rows"] = await append_store.table_count(table)
+        return summary
+
+    if not storage_client.is_configured():
+        return {**summary, "error": "R2 storage is not configured"}
+
+    # 1. Build the complete deduped index CSV from NEON and stash it on R2.
+    csv_path, csv_rows = await _build_deduped_index_csv(table, dedup_key)
+    try:
+        csv_key = storage.build_key(str(ds_uuid), 1, "index.csv")
+        await storage_client.upload_object(
+            csv_key, file_path=csv_path, content_type="text/csv; charset=utf-8",
+        )
+    finally:
+        try:
+            os.remove(csv_path)
+        except OSError:
+            pass
+    csv_value = f"r2:{csv_key}"
+
+    # 2. One clean version referencing the full CSV + every batch's ZIP parts.
+    resource_mappings = {
+        _CONSOLIDATED_CSV_NAME: csv_value,
+        "_zip_parts": zip_keys,
+        "_names": {_CONSOLIDATED_CSV_NAME: "טבלת נתונים מלאה (CSV)"},
+        "_resource_ids": [],
+    }
+    change_summary = {
+        "type": "scraper",
+        "total_rows": csv_rows,
+        "total_attachments": len(zip_keys),
+        "resources": [{"name": _CONSOLIDATED_CSV_NAME, "format": "CSV", "rows": csv_rows}],
+        "resources_added": [csv_value, *zip_keys],
+        "resources_removed": [], "resources_modified": [],
+        "consolidated_from_versions": len(versions),
+    }
+
+    # 3. Remove the old rows IN PLACE (raw delete — never delete-version, which
+    #    would destroy the R2 ZIP objects the new version reuses), add the one.
+    for v in versions:
+        await db.delete(v)
+    await db.flush()
+    db.add(VersionIndex(
+        tracked_dataset_id=ds_uuid,
+        version_number=1,
+        metadata_modified=ds.last_modified or latest.metadata_modified,
+        detected_at=latest.detected_at,
+        odata_metadata_resource_id=None,
+        change_summary=change_summary,
+        resource_mappings=resource_mappings,
+        source="consolidated",
+    ))
+    await db.commit()
+
+    summary.update({"committed": True, "new_version_count": 1, "csv_rows": csv_rows,
+                    "csv_key": csv_key})
     return summary
 
 
