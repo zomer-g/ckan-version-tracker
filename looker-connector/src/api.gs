@@ -53,6 +53,16 @@ function apiSql(sql, maxRows) {
   return JSON.parse(response.getContentText());
 }
 
+/**
+ * Dev-only smoke test — run from the Apps Script editor after setting
+ * OVER_CONNECTOR_KEY. Success looks like {columns=[x], rows=[{x=1}], ...};
+ * an HTML/403 response means Cloudflare is challenging Google's egress IPs
+ * and needs a WAF skip rule for /api/connector/*.
+ */
+function smoke() {
+  Logger.log(apiSql('SELECT 1 AS x', 1));
+}
+
 /** The trimmed table catalog for the config dropdown. */
 function fetchTables() {
   var response = UrlFetchApp.fetch(BASE + '/api/connector/tables', {
