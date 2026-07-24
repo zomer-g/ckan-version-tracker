@@ -1,7 +1,7 @@
 {
   "id": "OVER",
   "name": "OVER — Israeli Government Open Data",
-  "categories": ["CATEGORY_ID_TBD"],
+  "categories": ["PUBLIC_DATA"],
   "organization": "OVER",
   "iconUrl": "https://over.org.il/connector-logo.png",
   "sourceUrl": "https://over.org.il",
