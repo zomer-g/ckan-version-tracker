@@ -76,3 +76,42 @@ def test_extract_folder_id_variants():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── background heartbeat (stall-watchdog defense) ───────────────────────────
+
+def test_heartbeat_loop_bumps_then_stops_cleanly(monkeypatch):
+    """The concurrent heartbeat must keep bumping updated_at while a slow job
+    runs, and stop promptly when signalled — so it never outlives the job."""
+    import asyncio
+    import app.worker.drive_export_runner as r
+
+    monkeypatch.setattr(r, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+
+    bumps = {"n": 0}
+
+    class _FakeCtx:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def execute(self, *a, **kw):
+            bumps["n"] += 1
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(r, "async_session", lambda: _FakeCtx())
+
+    async def go():
+        stop = asyncio.Event()
+        task = asyncio.create_task(r._heartbeat_loop("job1", stop))
+        await asyncio.sleep(0.05)          # let a few ticks fire
+        assert bumps["n"] >= 1
+        stop.set()
+        await asyncio.wait_for(task, timeout=1.0)  # stops promptly, no hang
+        return bumps["n"]
+
+    n = asyncio.run(go())
+    # And it stopped: no further bumps after the event was set.
+    import time as _t; _t.sleep(0.03)
+    assert bumps["n"] == n

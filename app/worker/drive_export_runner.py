@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 STUCK_HEARTBEAT_MINUTES = 20
+# A background heartbeat bumps updated_at this often while a job runs, so the
+# stuck-watchdog only fires on a GENUINE hang (crashed runner / dyno recycle),
+# never on merely-slow-but-progressing work. Before this, the only heartbeat
+# was per-20-documents (_doc_progress); a slow stretch — staging a ~530 MB ZIP
+# part, or a run of Drive 429s while pushing tens of thousands of files — could
+# exceed the 20-min window with no heartbeat and get the job killed mid-export.
+HEARTBEAT_INTERVAL_SECONDS = 60
 TMP_DIR = "/tmp/drive_export"
 # Re-mint the access token after this long; Google access tokens last ~1h
 # and a large export can outrun a single one.
@@ -81,7 +88,51 @@ async def drain_one_drive_export() -> None:
         await _mark_failed(job_id, f"runner crashed: {e}")
 
 
+async def _heartbeat_loop(job_id, stop: "asyncio.Event") -> None:
+    """Bump the job's updated_at every HEARTBEAT_INTERVAL_SECONDS until stopped.
+
+    Runs concurrently with the upload work. Because all the staging/upload I/O
+    is async (httpx) — and the CPU-bound unzip is offloaded to a thread — the
+    event loop stays responsive during slow stretches, so this keeps firing and
+    the stuck-watchdog stays quiet. If the whole runner dies (dyno recycle),
+    this task dies with it and updated_at goes stale as intended, so a genuine
+    crash is still rescued."""
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=HEARTBEAT_INTERVAL_SECONDS)
+            return  # stop was set
+        except asyncio.TimeoutError:
+            pass
+        try:
+            async with async_session() as db:
+                await db.execute(
+                    update(DriveExportJob)
+                    .where(DriveExportJob.id == job_id,
+                           DriveExportJob.status == "running")
+                    .values(updated_at=datetime.now(timezone.utc))
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("Drive export heartbeat tick failed for %s", job_id, exc_info=True)
+
+
 async def _run_job(job_id) -> None:
+    """Run the export under a background heartbeat so a slow-but-progressing job
+    isn't false-killed by the stuck-watchdog."""
+    stop = asyncio.Event()
+    hb = asyncio.create_task(_heartbeat_loop(job_id, stop))
+    try:
+        await _run_job_body(job_id)
+    finally:
+        stop.set()
+        hb.cancel()
+        try:
+            await hb
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
+async def _run_job_body(job_id) -> None:
     # Load everything we need up front.
     async with async_session() as db:
         job = (
