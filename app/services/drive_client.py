@@ -95,11 +95,27 @@ async def get_access_token(refresh_token: str) -> str:
             },
         )
     if resp.status_code != 200:
-        # invalid_grant ⇒ the refresh token was revoked / expired; the admin
-        # must reconnect Drive.
+        # Surface Google's actual reason instead of a bare status code.
+        #   invalid_grant  → the refresh token was revoked/expired (the common
+        #     case: an OAuth consent screen still in "Testing" mode expires
+        #     refresh tokens after 7 days) → the admin must reconnect Drive.
+        #   invalid_client → the server's client_id/secret is wrong (a config
+        #     problem, not something reconnecting fixes).
+        reason = ""
+        try:
+            reason = (resp.json() or {}).get("error", "")
+        except Exception:
+            pass
+        logger.warning("Google token refresh failed: %s %s",
+                       resp.status_code, resp.text[:300])
+        hint = ("Reconnect Drive and try again."
+                if reason != "invalid_client"
+                else "The server's Google OAuth client is misconfigured — "
+                     "this won't be fixed by reconnecting.")
+        detail = f" [{reason}]" if reason else ""
         raise DriveError(
-            f"Could not refresh Google access token ({resp.status_code}). "
-            "Reconnect Drive and try again."
+            f"Could not refresh Google access token ({resp.status_code}{detail}). "
+            f"{hint}"
         )
     return resp.json()["access_token"]
 
