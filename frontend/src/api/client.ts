@@ -314,6 +314,10 @@ export const drive = {
       method: "POST",
       body: JSON.stringify({ next }),
     }),
+  disconnect: () =>
+    request<{ connected: boolean; was_connected: boolean }>("/drive/disconnect", {
+      method: "POST",
+    }),
   exportVersion: (versionId: string, folderUrl: string) =>
     request<DriveExportJob>(`/versions/${versionId}/export-to-drive`, {
       method: "POST",

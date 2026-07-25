@@ -25,6 +25,7 @@ import ActivityLogPanel from "../components/ActivityLogPanel";
 import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
 import PageContentPanel from "../components/PageContentPanel";
+import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
@@ -124,7 +125,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content" | "drive";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -137,10 +138,14 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
   { id: "content",   label: "טקסטים",            emoji: "📝" },
+  { id: "drive",     label: "חיבור Drive",       emoji: "📁" },
 ];
 
 function readTabFromHash(): AdminTab {
-  const h = (typeof window !== "undefined" ? window.location.hash : "").replace("#", "");
+  // Tolerate a query suffix on the hash: the Drive consent callback returns to
+  // "/admin#drive" and appends "?drive=connected" onto it.
+  const raw = (typeof window !== "undefined" ? window.location.hash : "").replace("#", "");
+  const h = raw.split(/[?&]/)[0];
   return (ADMIN_TABS.find((t) => t.id === h)?.id) ?? "queue";
 }
 
@@ -1230,6 +1235,8 @@ export default function AdminPage() {
       {tab === "mcp" && <McpUsersPanel />}
 
       {tab === "content" && <PageContentPanel />}
+
+      {tab === "drive" && <DriveConnectionPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}

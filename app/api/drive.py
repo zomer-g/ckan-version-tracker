@@ -68,6 +68,24 @@ async def drive_status(admin: User = Depends(get_admin_user)):
     return {"connected": bool(admin.google_refresh_token)}
 
 
+@router.post("/drive/disconnect")
+async def drive_disconnect(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Forget the current admin's stored Drive refresh token.
+
+    Use before reconnecting when the stored token has gone stale (a
+    consent screen left in "Testing" expires refresh tokens after 7 days),
+    or to revoke the link entirely. The token on Google's side is untouched;
+    reconnecting re-consents and stores a fresh one.
+    """
+    was_connected = bool(admin.google_refresh_token)
+    admin.google_refresh_token = None
+    await db.commit()
+    return {"connected": False, "was_connected": was_connected}
+
+
 @router.post("/versions/{version_id}/export-to-drive", response_model=ExportJobResponse)
 async def export_version_to_drive(
     version_id: str,
