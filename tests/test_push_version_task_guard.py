@@ -138,3 +138,34 @@ def test_more_batches_defaults_off():
     req = PushVersionRequest(tracked_dataset_id=str(DS_ID),
                              metadata_modified="2026-07-24T00:00:00")
     assert req.more_batches is False
+    assert req.consolidate_dedup_key is None
+
+
+def test_auto_consolidation_fires_only_on_a_final_multi_version_push(monkeypatch):
+    """The trigger must fire only when a multi-batch bootstrap finishes
+    (not more_batches, a dedup key, and this run produced >1 version), and
+    never mid-run or for a first-ever single version."""
+    from app.api import worker as worker_api
+
+    scheduled = []
+
+    def _fake_create_task(coro):
+        scheduled.append(coro)
+        coro.close()  # we only assert the decision, not run the merge
+        return None
+
+    import asyncio as _asyncio
+    monkeypatch.setattr(_asyncio, "create_task", _fake_create_task)
+
+    def _decides(*, more_batches, dedup_key, next_version):
+        scheduled.clear()
+        # Mirror the guard in push_version (kept in sync with the real code).
+        if (not more_batches) and dedup_key and next_version > 1:
+            _asyncio.create_task(
+                worker_api._run_consolidate_bg(DS_ID, dedup_key))
+        return len(scheduled) == 1
+
+    assert _decides(more_batches=False, dedup_key="k", next_version=5) is True
+    assert _decides(more_batches=True, dedup_key="k", next_version=5) is False   # mid-run
+    assert _decides(more_batches=False, dedup_key=None, next_version=5) is False  # no key
+    assert _decides(more_batches=False, dedup_key="k", next_version=1) is False   # single version

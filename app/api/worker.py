@@ -145,6 +145,12 @@ class PushVersionRequest(BaseModel):
     # no-running-task guard and is rejected. The worker sends false on the last
     # batch, which completes the task as usual.
     more_batches: bool = False
+    # Set by the worker on the FINAL push of a multi-batch run: the item-key
+    # column to consolidate on. When present (and the run produced >1 version),
+    # push_version schedules a background merge of the per-batch versions into
+    # ONE — reusing consolidate_dataset_versions — so a big bootstrap ends as a
+    # single version + one deduped NEON table without a manual admin step.
+    consolidate_dedup_key: str | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -605,6 +611,30 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
                 _os.remove(tmp)
             except OSError:
                 pass
+
+
+async def _run_consolidate_bg(ds_id: uuid.UUID, dedup_key: str) -> None:
+    """Merge a finished multi-batch run's per-batch versions into ONE, then
+    rebuild NEON deduped. Best-effort: opens its own session, and if it dies
+    (e.g. dyno recycle) the versions simply stay un-merged and the admin
+    consolidate endpoint remains the fallback."""
+    from app.database import async_session
+    from app.services.r2_backfill import (
+        consolidate_dataset_versions, seed_neon_from_versions,
+    )
+    try:
+        async with async_session() as db:
+            s = await consolidate_dataset_versions(
+                db, ds_id, dedup_key=dedup_key, apply=True)
+            logger.info("Auto-consolidate %s: %s→1 (zip_parts=%s, csv_rows=%s)",
+                        ds_id, s.get("old_version_count"), s.get("zip_parts"),
+                        s.get("csv_rows"))
+        if s.get("committed"):
+            async with async_session() as db:
+                await seed_neon_from_versions(db, ds_id, apply=True, reset=True)
+                logger.info("Auto-consolidate %s: NEON reseeded from the merged version", ds_id)
+    except Exception:
+        logger.exception("Auto-consolidate failed for %s (admin endpoint remains available)", ds_id)
 
 
 @router.post("/push-version")
@@ -1306,6 +1336,18 @@ async def push_version(
             logger.warning("Failed to save scraper_config_patch for %s: %s", ds.id, e)
 
     logger.info("Scraper version %d created for %s (%d rows)", next_version, ds.title, total_rows)
+
+    # Final push of a multi-batch run + a dedup key → auto-merge the per-batch
+    # versions into one, so a big bootstrap ends as a single version without a
+    # manual admin step. Only when this run actually produced >1 version
+    # (next_version > 1), so a first-ever single-batch run is left alone.
+    if (not body.more_batches) and body.consolidate_dedup_key and next_version > 1:
+        import asyncio as _asyncio
+        _asyncio.create_task(
+            _run_consolidate_bg(ds.id, body.consolidate_dedup_key.strip())
+        )
+        logger.info("Scheduled auto-consolidation for %s (dedup_key=%s)",
+                    ds.id, body.consolidate_dedup_key)
 
     return {
         "version_id": str(version.id),
