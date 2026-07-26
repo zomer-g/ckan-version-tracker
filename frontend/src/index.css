@@ -1303,6 +1303,28 @@ label {
   color: #b45309;
 }
 
+/* Import-to-SQL action button (admin odata panel). */
+.odata-sql-query-btn {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #b45309;
+  border-radius: 4px;
+  background: #fff7ed;
+  color: #b45309;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.odata-sql-query-btn:hover:not(:disabled) {
+  background: #b45309;
+  color: #fff;
+}
+.odata-sql-query-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
 .about-section {
   max-width: 800px;
   margin: 2rem auto;

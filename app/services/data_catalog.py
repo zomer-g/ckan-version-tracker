@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # the autocomplete. It has to be on the path anyway, or ST_AsText / ST_DWithin
 # do not resolve and every spatial example in the help below is a syntax error.
 # Last position means the three data schemas win any name collision.
-CONSOLE_SEARCH_PATH = "public, knesset, idx, extensions"
+CONSOLE_SEARCH_PATH = "public, knesset, idx, odata, extensions"
 
 # ── catalog cache ────────────────────────────────────────────────────────────
 # build_catalog() is called on EVERY /data page load *and* on every detail-cube
@@ -209,8 +209,50 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
                                    est.get(tbl), columns))
 
     out.extend(await _index_records(db, datasets))
+    out.extend(await _odata_records())
     out.extend(await _knesset_records())
     return out
+
+
+async def _odata_records() -> list[dict]:
+    """Catalog rows for admin-imported מידע לעם tables (schema ``odata``,
+    kind='odata').
+
+    These are PROCESSED data an admin chose to pull from odata.org.il into a
+    real queryable table — one per imported resource. Badged as its own source
+    ("מידע לעם") in the /data browser so it is never confused with an original
+    public source."""
+    from app.services import odata_import
+    try:
+        imports = await odata_import.list_imports()
+    except Exception:  # noqa: BLE001 — never let this break the whole catalog
+        logger.debug("data_catalog: odata list_imports failed", exc_info=True)
+        return []
+    if not imports:
+        return []
+    cols_by_table = await append_store.schema_table_columns(odata_import.SCHEMA)
+    recs: list[dict] = []
+    for m in imports:
+        columns = cols_by_table.get(m["table"])
+        if not columns:
+            continue                      # table dropped out of band
+        recs.append({
+            "table": m["table"],
+            "schema": odata_import.SCHEMA,
+            "kind": "odata",
+            "title": m.get("title") or m["table"],
+            "description": m.get("organization") or "",
+            "dataset_id": None,
+            "version_id": None,
+            "organization": m.get("organization"),
+            "ckan_id": None,
+            "source_type": "odata",
+            "source_url": m.get("source_url") or "https://www.odata.org.il",
+            "tags": [],
+            "columns": columns,
+            "est_rows": m.get("rows"),
+        })
+    return recs
 
 
 async def _index_records(db: AsyncSession, datasets: list[TrackedDataset]) -> list[dict]:
@@ -399,9 +441,10 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
                "sample": sample, "csv_export": True}
         return rec
 
-    if rec["kind"] == "index":
-        # Mirrored index CSV: the raw file lives on R2 and is reachable from the
-        # dataset's versions page, so no per-version download links here.
+    if rec["kind"] in ("index", "odata"):
+        # Mirrored index CSV / admin-imported odata table: schema-qualified count
+        # and sample, no per-version file links (the raw source lives elsewhere —
+        # R2 for index, odata.org.il for odata, reachable via source_url).
         try:
             count = await append_store.table_count(table, schema=schema)
         except Exception:  # noqa: BLE001

@@ -1,0 +1,244 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { admin, OdataImport } from "../api/client";
+import {
+  OdataDataset,
+  odataDatasetUrl,
+  odataPackageSearch,
+} from "../api/odata";
+
+/**
+ * Admin: curate which מידע לעם (odata) resources become queryable SQL tables.
+ *
+ * Top — browse the odata catalog (search → items → files) and "import" a
+ * datastore file, which POSTs to /admin/odata/import: the backend pulls its
+ * datastore dump into a real ``odata.<table>`` that then appears in /data under
+ * the "מידע לעם" source. Bottom — the tables already imported, with delete.
+ * These are PROCESSED data, always badged as such.
+ */
+function fmtDate(v?: string | null): string {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return String(v).slice(0, 16);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+export default function OdataImportPanel() {
+  const [query, setQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
+  const [items, setItems] = useState<OdataDataset[]>([]);
+  const [count, setCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [openItem, setOpenItem] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const [imports, setImports] = useState<OdataImport[]>([]);
+  const [importsLoading, setImportsLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null); // resource_id in flight
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const search = useCallback(async (q: string) => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    setError(false);
+    try {
+      const { count, results } = await odataPackageSearch(q, 20, ctrl.signal);
+      setItems(results);
+      setCount(count);
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+      setError(true);
+      setItems([]);
+      setCount(0);
+    } finally {
+      if (abortRef.current === ctrl) setLoading(false);
+    }
+  }, []);
+
+  const loadImports = useCallback(async () => {
+    setImportsLoading(true);
+    try {
+      const r = await admin.odataImports();
+      setImports(r.imports || []);
+    } catch {
+      setImports([]);
+    } finally {
+      setImportsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { search(activeQuery); }, [activeQuery, search]);
+  useEffect(() => { loadImports(); }, [loadImports]);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const importedIds = new Set(imports.map((i) => i.resource_id));
+
+  const doImport = async (resourceId: string, label: string) => {
+    setBusy(resourceId);
+    setMsg(null);
+    try {
+      const r = await admin.odataImport(resourceId);
+      setMsg({ ok: true, text: `יובא: ${r.title || label} → odata.${r.table} (${(r.rows ?? 0).toLocaleString()} שורות)` });
+      await loadImports();
+    } catch (e) {
+      setMsg({ ok: false, text: `ייבוא נכשל: ${(e as Error).message}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doDelete = async (imp: OdataImport) => {
+    if (!window.confirm(`למחוק את הטבלה odata.${imp.table}? (${imp.title || imp.resource_id})`)) return;
+    setBusy(imp.resource_id);
+    setMsg(null);
+    try {
+      await admin.odataDeleteImport(imp.resource_id);
+      setMsg({ ok: true, text: `נמחק: odata.${imp.table}` });
+      await loadImports();
+    } catch (e) {
+      setMsg({ ok: false, text: `מחיקה נכשלה: ${(e as Error).message}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      <div style={{ fontSize: "0.88rem", lineHeight: 1.6, color: "#7c2d12", background: "#fffdf9", border: "1px solid #f59e0b", borderInlineStart: "4px solid #b45309", borderRadius: 6, padding: "0.75rem 0.9rem" }}>
+        <strong>מידע מעובד.</strong> כאן בוחרים קבצים ספציפיים מ־מידע לעם (odata.org.il)
+        ודוחפים אותם לטבלת SQL אמיתית. הטבלאות מופיעות בקונסולת ה-SQL תחת המקור
+        <strong> "מידע לעם"</strong> וניתנות לתשאול ול-JOIN — אך הן מידע מעובד, לא מקור
+        ציבורי מקורי. אפשר לייבא רק קבצים שנטענו ל-datastore.
+      </div>
+
+      {msg && (
+        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: msg.ok ? "#ecfdf5" : "#fef2f2", color: msg.ok ? "#065f46" : "#991b1b", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}` }}>
+          {msg.text}
+        </div>
+      )}
+
+      {/* ── Imported tables ── */}
+      <section>
+        <h3 style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>
+          טבלאות מיובאות ({imports.length})
+        </h3>
+        {importsLoading ? (
+          <div className="text-sm text-muted">טוען…</div>
+        ) : imports.length === 0 ? (
+          <div className="text-sm text-muted">עדיין לא יובאו טבלאות. חפשו למטה ובחרו קובץ לייבוא.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead>
+                <tr style={{ textAlign: "start", borderBottom: "2px solid var(--border, #e5e7eb)" }}>
+                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>כותרת</th>
+                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>טבלה</th>
+                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>שורות</th>
+                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>יובא</th>
+                  <th style={{ padding: "0.4rem 0.5rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {imports.map((imp) => (
+                  <tr key={imp.resource_id} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                    <td style={{ padding: "0.4rem 0.5rem" }}>
+                      {imp.source_url ? (
+                        <a href={imp.source_url} target="_blank" rel="noopener noreferrer">{imp.title || imp.resource_id}</a>
+                      ) : (imp.title || imp.resource_id)}
+                      {imp.organization && <div className="text-muted" style={{ fontSize: "0.75rem" }}>{imp.organization}</div>}
+                    </td>
+                    <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <code dir="ltr" style={{ unicodeBidi: "isolate", fontSize: "0.78rem" }}>odata.{imp.table}</code>
+                    </td>
+                    <td style={{ padding: "0.4rem 0.5rem", fontVariantNumeric: "tabular-nums" }}>{(imp.rows ?? 0).toLocaleString()}</td>
+                    <td style={{ padding: "0.4rem 0.5rem", whiteSpace: "nowrap" }}>{fmtDate(imp.imported_at)}</td>
+                    <td style={{ padding: "0.4rem 0.5rem", whiteSpace: "nowrap" }}>
+                      <button type="button" onClick={() => doDelete(imp)} disabled={busy === imp.resource_id}
+                        style={{ fontSize: "0.78rem", padding: "0.2rem 0.6rem", border: "1px solid #dc2626", background: "none", color: "#dc2626", borderRadius: 4, cursor: "pointer" }}>
+                        מחק
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ── Browse + import ── */}
+      <section>
+        <h3 style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>ייבוא קובץ חדש ממידע לעם</h3>
+        <form onSubmit={(e) => { e.preventDefault(); setActiveQuery(query.trim()); }} role="search"
+          style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", maxWidth: 520 }}>
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="חיפוש פריט במידע לעם…" aria-label="חיפוש פריט במידע לעם"
+            style={{ flex: 1, minWidth: 0, padding: "0.45rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }} />
+          <button type="submit" disabled={loading}
+            style={{ padding: "0.45rem 1rem", border: "none", borderRadius: 4, background: "#b45309", color: "#fff", fontWeight: 600, cursor: "pointer" }}>
+            {loading ? "מחפש…" : "חפש"}
+          </button>
+        </form>
+
+        {error && <div className="text-sm" style={{ color: "#b91c1c" }}>החיפוש נכשל. נסו שוב.</div>}
+        {!error && (
+          <>
+            <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
+              {loading ? "טוען…" : `${count.toLocaleString()} פריטים במידע לעם`}
+            </div>
+            <div className="odata-group-list">
+              {items.map((d) => {
+                const org = d.organization?.title || d.organization?.name;
+                const open = openItem === d.name;
+                const resources = d.resources || [];
+                return (
+                  <div key={d.name} className="odata-item">
+                    <button type="button" className="odata-item-head" aria-expanded={open}
+                      onClick={() => setOpenItem(open ? null : d.name)}>
+                      <span className="odata-item-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+                      <span className="odata-item-title">{d.title?.trim() || d.name}</span>
+                      <span className="odata-item-count">{resources.length}</span>
+                    </button>
+                    {open && (
+                      <div className="odata-item-files">
+                        {org && <div className="odata-item-org">{org}</div>}
+                        {resources.length === 0 && <div className="odata-item-empty">אין קבצים.</div>}
+                        {resources.map((r, i) => {
+                          const already = r.id ? importedIds.has(r.id) : false;
+                          const queryable = !!(r.datastore_active && r.id);
+                          return (
+                            <div key={r.id || i} className="odata-file-row">
+                              <span className="odata-file-format">{(r.format || "").toUpperCase() || "—"}</span>
+                              {r.url ? (
+                                <a className="odata-file-link" href={r.url} target="_blank" rel="noopener noreferrer" title={r.name || ""}>{r.name?.trim() || "קובץ"}</a>
+                              ) : (
+                                <span className="odata-file-link">{r.name?.trim() || "קובץ"}</span>
+                              )}
+                              {queryable ? (
+                                <button type="button" className="odata-sql-query-btn" disabled={busy === r.id}
+                                  onClick={() => doImport(r.id!, d.title?.trim() || d.name)}
+                                  title="ייבוא הקובץ לטבלת SQL תחת המקור מידע לעם">
+                                  {busy === r.id ? "מייבא…" : already ? "↻ ייבא מחדש" : "⭳ ייבא ל-SQL"}
+                                </button>
+                              ) : (
+                                <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }} title="אין datastore — לא ניתן לתשאול">לא ניתן לייבוא</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <a className="odata-item-open" href={odataDatasetUrl(d.name, "he")} target="_blank" rel="noopener noreferrer">פתיחה במידע לעם ↗</a>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}

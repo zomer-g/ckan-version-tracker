@@ -63,6 +63,13 @@ const KNESSET_DB_BADGE: Badge = {
   bg: "#e0e7ff", fg: "#3730a3", accent: "#4f46e5",
 };
 
+// Admin-imported מידע לעם tables (kind "odata"): PROCESSED data, not an original
+// public source — a distinct amber source group so it never reads as one.
+const ODATA_BADGE: Badge = {
+  id: "odata", label: "מידע לעם (מידע מעובד)",
+  bg: "#ffedd5", fg: "#9a3412", accent: "#ea580c",
+};
+
 // Does this table carry a queryable PostGIS column? Keyed on the column TYPE,
 // not the name: append_store._ckan_type labels geometry distinctly, so this
 // stays true if the column is ever renamed, and false for a layer that only has
@@ -102,6 +109,7 @@ function SpatialMark({ size = 15 }: { size?: number }) {
 
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
+  if (t.kind === "odata") return ODATA_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
   return { id: b.id, label: b.label, bg: b.bg, fg: b.fg, accent: b.accent };
 }
@@ -109,7 +117,9 @@ function badgeOf(t: CatalogTable): Badge {
 // Where a group's header links to: the source page for tracked sources (the
 // same /sources/:id hierarchy), the Knesset page for the ODATA mirror.
 function groupLink(b: Badge): string {
-  return b.id === "knesset-db" ? "/knesset?tab=sql" : `/sources/${b.id}`;
+  if (b.id === "knesset-db") return "/knesset?tab=sql";
+  if (b.id === "odata") return "/projects/odata";
+  return `/sources/${b.id}`;
 }
 
 // Human-readable table name. Knesset tables carry a Hebrew description that is

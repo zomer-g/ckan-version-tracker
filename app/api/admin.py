@@ -1724,3 +1724,62 @@ async def index_mirror_purge(
     logger.info("Index mirror purge by %s: purged=%s apply=%s",
                 user.email, s.get("purged"), apply)
     return s
+
+
+# ── מידע לעם (odata) import — admin-curated processed-data tables ────────────
+
+class OdataImportRequest(BaseModel):
+    resource_id: str
+
+
+@router.get("/odata/imports")
+@limiter.limit("30/minute")
+async def odata_imports_list(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Resources already imported from מידע לעם into queryable ``odata`` tables."""
+    from app.services import odata_import
+    items = await odata_import.list_imports()
+    return {"imports": items, "count": len(items)}
+
+
+@router.post("/odata/import")
+@limiter.limit("12/minute")
+async def odata_import_resource(
+    request: Request,
+    body: OdataImportRequest,
+    user: User = Depends(get_admin_user),
+):
+    """Pull one odata datastore resource into a real ``odata.<table>`` (processed
+    data, badged "מידע לעם" in /data). Replaces the table if re-imported."""
+    from app.services import odata_import
+    rid = (body.resource_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="resource_id is required")
+    try:
+        res = await odata_import.import_resource(rid)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("odata import failed for %s", rid)
+        raise HTTPException(status_code=502, detail=f"ייבוא נכשל: {e}")
+    logger.info("odata import by %s: %s -> odata.%s (%s rows)",
+                user.email, rid, res["table"], res["rows"])
+    return res
+
+
+@router.delete("/odata/imports/{resource_id}")
+@limiter.limit("30/minute")
+async def odata_import_delete(
+    request: Request,
+    resource_id: str,
+    user: User = Depends(get_admin_user),
+):
+    """Drop an imported odata table and forget it."""
+    from app.services import odata_import
+    ok = await odata_import.delete_import(resource_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not imported")
+    logger.info("odata import deleted by %s: %s", user.email, resource_id)
+    return {"deleted": True}
