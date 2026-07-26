@@ -26,8 +26,6 @@ must stay aligned with the ``search_vector`` trigger (Ocal migration 021).
 Not ported here: the MK-expenses layer (deferred) and the admin surface
 (app/api/ocal_admin.py, later phase).
 """
-from __future__ import annotations
-
 import csv
 import io
 import re

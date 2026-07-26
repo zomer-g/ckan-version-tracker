@@ -6,8 +6,6 @@ surface that lets the corpus be curated inside OVER so the legacy Ocal Node
 admin can be retired. The auto-import triggers (candidates/import/scan) live in
 app/api/admin.py; everything else is here.
 """
-from __future__ import annotations
-
 import logging
 import uuid
 
