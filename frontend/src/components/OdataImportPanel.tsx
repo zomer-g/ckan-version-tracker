@@ -4,6 +4,7 @@ import {
   OdataDataset,
   odataDatasetUrl,
   odataPackageSearch,
+  isImportableResource,
 } from "../api/odata";
 
 /**
@@ -111,7 +112,8 @@ export default function OdataImportPanel() {
         <strong>מידע מעובד.</strong> כאן בוחרים קבצים ספציפיים מ־מידע לעם (odata.org.il)
         ודוחפים אותם לטבלת SQL אמיתית. הטבלאות מופיעות בקונסולת ה-SQL תחת המקור
         <strong> "מידע לעם"</strong> וניתנות לתשאול ול-JOIN — אך הן מידע מעובד, לא מקור
-        ציבורי מקורי. אפשר לייבא רק קבצים שנטענו ל-datastore.
+        ציבורי מקורי. נתמכים הפורמטים <strong>CSV, XLS, XLSX, ICS/ICAL</strong> (וגם כל
+        משאב עם datastore).
       </div>
 
       {msg && (
@@ -208,7 +210,7 @@ export default function OdataImportPanel() {
                         {resources.length === 0 && <div className="odata-item-empty">אין קבצים.</div>}
                         {resources.map((r, i) => {
                           const already = r.id ? importedIds.has(r.id) : false;
-                          const queryable = !!(r.datastore_active && r.id);
+                          const queryable = isImportableResource(r);
                           return (
                             <div key={r.id || i} className="odata-file-row">
                               <span className="odata-file-format">{(r.format || "").toUpperCase() || "—"}</span>
@@ -224,7 +226,7 @@ export default function OdataImportPanel() {
                                   {busy === r.id ? "מייבא…" : already ? "↻ ייבא מחדש" : "⭳ ייבא ל-SQL"}
                                 </button>
                               ) : (
-                                <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }} title="אין datastore — לא ניתן לתשאול">לא ניתן לייבוא</span>
+                                <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }} title="פורמט לא נתמך לייבוא (נתמכים: CSV/XLS/XLSX/ICAL או datastore)">לא ניתן לייבוא</span>
                               )}
                             </div>
                           );

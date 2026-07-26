@@ -30,6 +30,18 @@ export function odataDatasetUrl(name: string, lang: string) {
   return `${ODATA_BASE}${prefix}/dataset/${encodeURIComponent(name)}`;
 }
 
+// Formats the SQL importer can turn into a table (mirrors odata_import.py).
+const IMPORTABLE_FORMATS = new Set(["CSV", "XLS", "XLSX", "ICS", "ICAL", "ICA"]);
+
+/** Can this resource be imported into a SQL table? Supported file format, or a
+ *  datastore-active resource (whose dump we can always pull as CSV). */
+export function isImportableResource(r: OdataResource): boolean {
+  if (!r.id) return false;
+  if ((r.format || "").toUpperCase() && IMPORTABLE_FORMATS.has((r.format || "").toUpperCase()))
+    return true;
+  return !!r.datastore_active;
+}
+
 export async function odataPackageSearch(
   q: string,
   rows = 20,

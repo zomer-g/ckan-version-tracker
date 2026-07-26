@@ -33,6 +33,13 @@ slowapi==0.1.9
 # Utilities
 python-multipart==0.0.20
 
+# File parsing for admin-curated odata imports (app/services/odata_import.py):
+# XLSX via openpyxl, legacy XLS via xlrd, ICS/ICAL via icalendar. CSV uses the
+# stdlib. Ported from the OCAL import engine.
+openpyxl==3.1.5
+xlrd==2.0.1
+icalendar==5.0.13
+
 # LLM (natural-language CBS search — app/api/cbs_ask.py). Provider chosen by
 # whichever key is set: DeepSeek (OpenAI-compatible SDK) preferred, then Anthropic.
 openai==2.26.0

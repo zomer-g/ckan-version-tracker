@@ -13,11 +13,14 @@ version landing. There is no auto-sync — a re-import replaces the table.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import io
 import logging
 import os
 import re
 import tempfile
+import unicodedata
 from urllib.parse import urlsplit
 
 import httpx
@@ -134,23 +137,205 @@ async def _download_dump(resource_id: str, path: str) -> None:
                     fh.write(chunk)
 
 
-async def _load_csv_into(path: str, table: str) -> dict:
-    """Load a local CSV into ``odata.<table>``, replacing it atomically.
+# ── file-format parsing (ported from OCAL's ckan.ts import engine) ───────────
+# odata resources come as CSV/XLS/XLSX (spreadsheets) or ICS/ICAL (calendars).
+# Spreadsheets are downloaded RAW (not via the datastore) because CKAN's
+# datastore mangles Hebrew column names into ASCII; parsing the file keeps them.
 
-    Same shape as index_mirror.load_index_csv: every column ``text``, ``_id``
-    dropped, rows streamed to a staging table via COPY, then a single-transaction
-    drop+rename so readers see the old table or the new one, never a partial."""
-    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
-        header = next(csv.reader(fh), None)
-    if not header:
-        raise ValueError("dump CSV is empty (no header row)")
-    safe = append_store.safe_column_names(header)
-    # Drop CKAN datastore bookkeeping columns.
-    keep = [i for i, c in enumerate(safe) if c and c not in ("_id", "_full_text")]
-    columns = [safe[i] for i in keep]
+SPREADSHEET_FORMATS = {"XLS", "XLSX"}
+ICAL_FORMATS = {"ICS", "ICAL", "ICA"}
+SUPPORTED_FILE_FORMATS = {"CSV"} | SPREADSHEET_FORMATS | ICAL_FORMATS
+
+# A cell holds a real header if it is a string carrying a Hebrew or Latin letter.
+_LETTER_RE = re.compile("[A-Za-zא-ת]")
+# Invisible marks Israeli gov files embed in headers (RTL/LTR/BOM/ZWS/…).
+_INVISIBLE_RE = re.compile(
+    "[​-‏﻿­  ‪-‮⁠]")
+
+
+def is_supported_file_format(fmt: str | None) -> bool:
+    return (fmt or "").upper() in SUPPORTED_FILE_FORMATS
+
+
+def _norm_header(s: str) -> str:
+    """NFC-normalise, strip invisible directional marks, collapse whitespace."""
+    s = unicodedata.normalize("NFC", s or "")
+    s = _INVISIBLE_RE.sub("", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+async def _download_file(url: str, path: str) -> None:
+    """Stream a resource's raw file to ``path``."""
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0), follow_redirects=True
+    ) as client:
+        async with client.stream(
+            "GET", url, headers={"User-Agent": _UA},
+        ) as resp:
+            resp.raise_for_status()
+            with open(path, "wb") as fh:
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    fh.write(chunk)
+
+
+def _rows_to_table(rows: list[list]) -> tuple[list[str], list[list]]:
+    """A matrix of cell values → (safe column names, data rows).
+
+    Ports OCAL's header handling: auto-detect the real header row (gov files
+    often start with merged title/logo rows) by picking the first row with the
+    most letter-bearing string cells; strip invisible marks; and fall back to
+    synthetic ``col_N`` headers for header-less files."""
+    if not rows:
+        return [], []
+    best_i, best_score = 0, -1
+    for i, r in enumerate(rows[:20]):
+        score = sum(1 for v in r if isinstance(v, str) and _LETTER_RE.search(v))
+        if score > best_score:
+            best_score, best_i = score, i
+        if best_score >= 5:
+            break
+    if best_score <= 0:
+        # Header-less: synthesise col_1..col_n, every row is data.
+        ncols = max((len(r) for r in rows), default=0)
+        columns = [f"col_{k + 1}" for k in range(ncols)]
+        data = [[None if j >= len(r) or r[j] is None else str(r[j])
+                 for j in range(ncols)] for r in rows]
+        return columns, data
+    header = rows[best_i]
+    raw = [_norm_header(str(v)) if v is not None else "" for v in header]
+    safe = append_store.safe_column_names(raw)
+    keep = [j for j, c in enumerate(safe) if c and c not in ("_id", "_full_text")]
+    columns = [safe[j] for j in keep]
+    data = [[None if j >= len(r) or r[j] is None else str(r[j]) for j in keep]
+            for r in rows[best_i + 1:]]
+    return columns, data
+
+
+def _parse_xlsx(path: str) -> tuple[list[str], list[list]]:
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        best_rows: list[list] = []
+        best_cols = -1
+        for ws in wb.worksheets:
+            sheet_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+            ncols = max((len(r) for r in sheet_rows), default=0)
+            if ncols > best_cols:            # widest sheet wins (skip chart junk)
+                best_cols, best_rows = ncols, sheet_rows
+        return _rows_to_table(best_rows)
+    finally:
+        wb.close()
+
+
+def _parse_xls(path: str) -> tuple[list[str], list[list]]:
+    import xlrd
+    book = xlrd.open_workbook(path)
+    best = max(book.sheets(), key=lambda s: s.ncols, default=None)
+    if best is None:
+        return [], []
+    rows = [best.row_values(i) for i in range(best.nrows)]
+    return _rows_to_table(rows)
+
+
+def _parse_csv_file(path: str) -> tuple[list[str], list[list]]:
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+    # Many Israeli gov CSVs are Windows-1255, not UTF-8. If the UTF-8 decode
+    # produced no Hebrew but the bytes are in the win-1255 Hebrew range, redecode.
+    if not re.search(r"[א-ת]", text) and any(0xC0 <= b <= 0xFA for b in raw):
+        try:
+            text = raw.decode("windows-1255")
+        except Exception:  # noqa: BLE001 — keep the utf-8 attempt on failure
+            pass
+        if text[:1] == "﻿":
+            text = text[1:]
+    rows = [list(r) for r in csv.reader(io.StringIO(text))]
+    return _rows_to_table(rows)
+
+
+def _ical_dt(prop) -> str:
+    if prop is None:
+        return ""
+    try:
+        dt = getattr(prop, "dt", prop)
+        return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+    except Exception:  # noqa: BLE001
+        return str(prop)
+
+
+def _parse_ical(path: str) -> tuple[list[str], list[list]]:
+    from icalendar import Calendar
+    with open(path, "rb") as fh:
+        cal = Calendar.from_ical(fh.read())
+    columns = ["title", "start_time", "end_time", "location", "description",
+               "organizer", "participants", "uid", "status"]
+    data: list[list] = []
+    for comp in cal.walk("VEVENT"):
+        def g(k: str) -> str:
+            v = comp.get(k)
+            return "" if v is None else str(v)
+        organizer = g("organizer").replace("mailto:", "").replace("MAILTO:", "")
+        att = comp.get("attendee")
+        attendees = att if isinstance(att, list) else ([att] if att else [])
+        parts: list[str] = []
+        for a in attendees:
+            cn = None
+            try:
+                cn = a.params.get("CN")
+            except Exception:  # noqa: BLE001
+                cn = None
+            parts.append(str(cn) if cn else
+                         str(a).replace("mailto:", "").replace("MAILTO:", ""))
+        data.append([
+            g("summary"), _ical_dt(comp.get("dtstart")), _ical_dt(comp.get("dtend")),
+            g("location"), g("description"), organizer, ", ".join(parts),
+            g("uid"), g("status"),
+        ])
+    return columns, data
+
+
+def _parse_file(path: str, fmt: str) -> tuple[list[str], list[list]]:
+    """Dispatch a downloaded file to the right parser → (columns, rows)."""
+    f = (fmt or "").upper()
+    if f in ICAL_FORMATS:
+        return _parse_ical(path)
+    if f == "XLSX":
+        return _parse_xlsx(path)
+    if f == "XLS":
+        return _parse_xls(path)
+    if f == "CSV":
+        return _parse_csv_file(path)
+    raise ValueError(f"unsupported format: {fmt}")
+
+
+def _batches_from_rows(rows: list[list], ncols: int):
+    """Yield COPY batches of tuples from parsed rows, bounded by rows AND bytes
+    (matches _iter_batches). Rows are normalised to exactly ``ncols`` values."""
+    batch: list[tuple] = []
+    nbytes = 0
+    for r in rows:
+        rec = tuple(r[j] if j < len(r) else None for j in range(ncols))
+        batch.append(rec)
+        nbytes += sum(len(v) for v in rec if isinstance(v, str))
+        if len(batch) >= 20_000 or nbytes >= 16 * 1024 * 1024:
+            yield batch
+            batch, nbytes = [], 0
+    if batch:
+        yield batch
+
+
+# ── NEON loaders ─────────────────────────────────────────────────────────────
+
+async def _load_rows(table: str, columns: list[str], batch_iter) -> dict:
+    """Create ``odata.<table>`` from ``columns`` + an iterable of COPY batches
+    (each a list of tuples), replacing any existing table atomically.
+
+    Every column is ``text``; rows land in a staging table and a single
+    transaction drops the old table and renames staging into place, so readers
+    see the old table or the new one, never a partial load."""
     if not columns:
-        raise ValueError("dump CSV has no usable columns")
-
+        raise ValueError("no usable columns")
     staging = append_store.clip_ident_bytes(table, 63 - len("__stg")) + "__stg"
     defs = ", ".join(f"{_qi(c)} text" for c in columns)
     pool = await append_store.get_pool()
@@ -160,7 +345,9 @@ async def _load_csv_into(path: str, table: str) -> dict:
         await conn.execute(f"CREATE TABLE {_qt(staging)} ({defs})")
         rows = 0
         try:
-            for batch in _iter_batches(path, columns, keep):
+            for batch in batch_iter:
+                if not batch:
+                    continue
                 await conn.copy_records_to_table(
                     staging, schema_name=SCHEMA, columns=columns, records=batch,
                 )
@@ -180,10 +367,27 @@ async def _load_csv_into(path: str, table: str) -> dict:
     return {"rows": rows, "columns": len(columns)}
 
 
-async def import_resource(resource_id: str) -> dict:
-    """Import one odata datastore resource into a queryable ``odata`` table.
+async def _load_csv_into(path: str, table: str) -> dict:
+    """Load a datastore-dump CSV file into ``odata.<table>`` (streaming)."""
+    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        header = next(csv.reader(fh), None)
+    if not header:
+        raise ValueError("dump CSV is empty (no header row)")
+    safe = append_store.safe_column_names(header)
+    keep = [i for i, c in enumerate(safe) if c and c not in ("_id", "_full_text")]
+    columns = [safe[i] for i in keep]
+    if not columns:
+        raise ValueError("dump CSV has no usable columns")
+    return await _load_rows(table, columns, _iter_batches(path, columns, keep))
 
-    Raises ValueError if the resource has no datastore (nothing to query)."""
+
+async def import_resource(resource_id: str) -> dict:
+    """Import one odata resource into a queryable ``odata`` table.
+
+    Handles CSV / XLS / XLSX / ICS / ICAL (ported from OCAL), plus any
+    datastore-active resource via its CSV dump. Spreadsheets and calendars are
+    downloaded RAW and parsed (keeps Hebrew column names). Raises ValueError for
+    an unsupported, non-datastore resource."""
     if not append_store.is_configured():
         raise RuntimeError("append DB is not configured (APPEND_DATABASE_URL missing)")
 
@@ -191,10 +395,6 @@ async def import_resource(resource_id: str) -> dict:
         timeout=httpx.Timeout(60.0), follow_redirects=True
     ) as client:
         res = await _fetch_json(client, "resource_show", id=resource_id)
-        if not res.get("datastore_active"):
-            raise ValueError(
-                "המשאב אינו ניתן לתשאול (אין לו datastore). ניתן לייבא רק "
-                "קבצים שנטענו ל-datastore של מידע לעם.")
         pkg: dict = {}
         if res.get("package_id"):
             try:
@@ -203,22 +403,47 @@ async def import_resource(resource_id: str) -> dict:
                 logger.debug("odata: package_show failed for %s", res.get("package_id"),
                              exc_info=True)
 
+    fmt = (res.get("format") or "").upper()
+    url = (res.get("url") or "").strip()
+    datastore_active = bool(res.get("datastore_active"))
+    supported = fmt in SUPPORTED_FILE_FORMATS
+    if not supported and not datastore_active:
+        raise ValueError(
+            f"פורמט לא נתמך: {res.get('format') or '—'}. "
+            f"נתמכים: CSV, XLS, XLSX, ICS/ICAL, או משאב עם datastore.")
+
     dataset_name = pkg.get("name")
     title = (pkg.get("title") or "").strip() or (res.get("name") or "").strip() \
         or dataset_name or resource_id
     org = ((pkg.get("organization") or {}) or {}).get("title")
-    fmt = (res.get("format") or "").upper()
     table = table_name_for(resource_id, dataset_name)
     source_url = (
         f"{ODATA_BASE}/dataset/{dataset_name}/resource/{resource_id}"
         if dataset_name else f"{ODATA_BASE}/dataset"
     )
 
-    fd, tmp = tempfile.mkstemp(suffix=".csv", prefix="odata-import-")
+    suffix = ".ics" if fmt in ICAL_FORMATS else (".xlsx" if fmt in SPREADSHEET_FORMATS else ".csv")
+    fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="odata-import-")
     os.close(fd)
     try:
-        await _download_dump(resource_id, tmp)
-        loaded = await _load_csv_into(tmp, table)
+        if fmt == "CSV" and datastore_active:
+            # Clean, CKAN-normalised CSV — stream the datastore dump.
+            await _download_dump(resource_id, tmp)
+            loaded = await _load_csv_into(tmp, table)
+        elif supported:
+            if not url:
+                raise ValueError("למשאב אין קובץ להורדה")
+            await _download_file(url, tmp)
+            # Parsing is CPU-bound (openpyxl / ical) — keep it off the event loop.
+            columns, rows = await asyncio.to_thread(_parse_file, tmp, fmt)
+            if not columns:
+                raise ValueError("לא נמצאו עמודות בקובץ")
+            loaded = await _load_rows(table, columns,
+                                      _batches_from_rows(rows, len(columns)))
+        else:
+            # datastore-active but blank/unknown format → CSV dump.
+            await _download_dump(resource_id, tmp)
+            loaded = await _load_csv_into(tmp, table)
     finally:
         try:
             os.remove(tmp)
