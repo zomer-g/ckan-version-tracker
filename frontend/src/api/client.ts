@@ -1332,6 +1332,7 @@ export interface OdataImport {
   organization?: string | null;
   format?: string | null;
   source_url?: string | null;
+  source_file_url?: string | null;
   rows?: number | null;
   columns?: number | null;
   imported_at?: string | null;
@@ -1347,6 +1348,10 @@ export const admin = {
       method: "POST",
       body: JSON.stringify({ resource_id }),
     }),
+  // Client-side path: the browser fetched the file (Cloudflare blocks our
+  // datacenter IP) and uploads the bytes here. `fd` carries file + metadata.
+  odataImportFile: (fd: FormData) =>
+    request<OdataImport>("/admin/odata/import-file", { method: "POST", body: fd }),
   odataDeleteImport: (resource_id: string) =>
     request<{ deleted: boolean }>(
       `/admin/odata/imports/${encodeURIComponent(resource_id)}`,

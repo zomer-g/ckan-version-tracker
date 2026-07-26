@@ -4,7 +4,10 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request,
+    UploadFile,
+)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1867,3 +1870,62 @@ async def field_flags_recompute(
         raise HTTPException(status_code=400, detail=str(e))
     logger.info("field-flags recompute by %s: %s", user.email, stats)
     return stats
+
+
+@router.post("/odata/import-file")
+@limiter.limit("12/minute")
+async def odata_import_file(
+    request: Request,
+    file: UploadFile = File(...),
+    resource_id: str = Form(...),
+    format: str = Form(""),
+    dataset_name: str = Form(""),
+    title: str = Form(""),
+    organization: str = Form(""),
+    source_url: str = Form(""),
+    file_url: str = Form(""),
+    user: User = Depends(get_admin_user),
+):
+    """Import a מידע לעם file the ADMIN's BROWSER already downloaded.
+
+    odata's file downloads sit behind Cloudflare and 403 our datacenter IP, but
+    the browser can fetch them (CORS is open). The bytes arrive as an upload; we
+    parse (CSV/XLS/XLSX/ICAL) and load into ``odata.<table>``."""
+    import os
+    import tempfile
+    from app.services import odata_import
+
+    rid = (resource_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="resource_id is required")
+    fmt = (format or "").upper()
+    suffix = ".ics" if fmt in ("ICS", "ICAL", "ICA") else (
+        ".xlsx" if fmt in ("XLS", "XLSX") else ".csv")
+    fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="odata-upload-")
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        res = await odata_import.import_uploaded(
+            resource_id=rid, fmt=fmt, dataset_name=(dataset_name or None),
+            title=(title or None), organization=(organization or None),
+            source_url=(source_url or None), file_url=(file_url or None),
+            tmp_path=tmp,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("odata import-file failed for %s", rid)
+        raise HTTPException(status_code=500, detail=f"ייבוא נכשל: {e}")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    logger.info("odata import-file by %s: %s -> odata.%s (%s rows)",
+                user.email, rid, res["table"], res["rows"])
+    return res

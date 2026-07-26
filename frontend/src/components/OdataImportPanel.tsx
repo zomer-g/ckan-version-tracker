@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { admin, OdataImport } from "../api/client";
 import {
   OdataDataset,
+  OdataResource,
+  ODATA_BASE,
   odataDatasetUrl,
   odataPackageSearch,
   isImportableResource,
@@ -77,12 +79,32 @@ export default function OdataImportPanel() {
 
   const importedIds = new Set(imports.map((i) => i.resource_id));
 
-  const doImport = async (resourceId: string, label: string) => {
-    setBusy(resourceId);
+  // The file is fetched CLIENT-SIDE (Cloudflare 403s our datacenter IP, but the
+  // browser can read it — CORS is open) and uploaded to the backend to parse.
+  const doImport = async (r: OdataResource, d: OdataDataset) => {
+    if (!r.id || !r.url) {
+      setMsg({ ok: false, text: "למשאב אין קובץ להורדה." });
+      return;
+    }
+    const label = d.title?.trim() || d.name;
+    setBusy(r.id);
     setMsg(null);
     try {
-      const r = await admin.odataImport(resourceId);
-      setMsg({ ok: true, text: `יובא: ${r.title || label} → odata.${r.table} (${(r.rows ?? 0).toLocaleString()} שורות)` });
+      const resp = await fetch(r.url);
+      if (!resp.ok) throw new Error(`הורדת הקובץ מ-odata נכשלה (${resp.status})`);
+      const blob = await resp.blob();
+      const fmt = (r.format || "").toUpperCase() || (r.datastore_active ? "CSV" : "");
+      const fd = new FormData();
+      fd.append("file", blob, r.name?.trim() || "file");
+      fd.append("resource_id", r.id);
+      fd.append("format", fmt);
+      fd.append("dataset_name", d.name || "");
+      fd.append("title", label || "");
+      fd.append("organization", d.organization?.title || d.organization?.name || "");
+      fd.append("source_url", `${ODATA_BASE}/dataset/${d.name}/resource/${r.id}`);
+      fd.append("file_url", r.url);
+      const res = await admin.odataImportFile(fd);
+      setMsg({ ok: true, text: `יובא: ${res.title || label} → odata.${res.table} (${(res.rows ?? 0).toLocaleString()} שורות)` });
       await loadImports();
     } catch (e) {
       setMsg({ ok: false, text: `ייבוא נכשל: ${(e as Error).message}` });
@@ -221,7 +243,7 @@ export default function OdataImportPanel() {
                               )}
                               {queryable ? (
                                 <button type="button" className="odata-sql-query-btn" disabled={busy === r.id}
-                                  onClick={() => doImport(r.id!, d.title?.trim() || d.name)}
+                                  onClick={() => doImport(r, d)}
                                   title="ייבוא הקובץ לטבלת SQL תחת המקור מידע לעם">
                                   {busy === r.id ? "מייבא…" : already ? "↻ ייבא מחדש" : "⭳ ייבא ל-SQL"}
                                 </button>

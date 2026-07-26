@@ -106,6 +106,87 @@ async def ensure_registry(conn) -> None:
             imported_at  timestamptz NOT NULL DEFAULT now()
         )
     """)
+    # Added later: the original file URL, kept alongside the resource-page
+    # source_url so provenance links survive (see import flow).
+    await conn.execute(
+        f"ALTER TABLE {_qt(REGISTRY)} ADD COLUMN IF NOT EXISTS source_file_url text")
+
+
+async def _record_import(*, resource_id: str, table: str, package_id: str | None,
+                         dataset_name: str | None, title: str, organization: str | None,
+                         fmt: str, source_url: str, file_url: str | None,
+                         rows: int, columns: int) -> None:
+    """Upsert the registry row, grant the console role SELECT, drop the catalog
+    cache — shared by both the server-side and client-upload import paths."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await ensure_registry(conn)
+        await conn.execute(f"""
+            INSERT INTO {_qt(REGISTRY)}
+                (resource_id, table_name, package_id, dataset_name, title,
+                 organization, format, source_url, source_file_url, rows,
+                 columns, imported_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+            ON CONFLICT (resource_id) DO UPDATE SET
+                table_name = EXCLUDED.table_name,
+                package_id = EXCLUDED.package_id,
+                dataset_name = EXCLUDED.dataset_name,
+                title = EXCLUDED.title,
+                organization = EXCLUDED.organization,
+                format = EXCLUDED.format,
+                source_url = EXCLUDED.source_url,
+                source_file_url = EXCLUDED.source_file_url,
+                rows = EXCLUDED.rows,
+                columns = EXCLUDED.columns,
+                imported_at = now()
+        """, resource_id, table, package_id, dataset_name, title, organization,
+             fmt, source_url, file_url, rows, columns)
+        role = _readonly_role()
+        if role:
+            try:
+                await conn.execute(f"GRANT SELECT ON {_qt(table)} TO {_qi(role)}")
+            except Exception:  # noqa: BLE001
+                logger.warning("odata: grant on %s failed", table, exc_info=True)
+    from app.services.data_catalog import invalidate_catalog_cache
+    invalidate_catalog_cache()
+
+
+async def import_uploaded(
+    *, resource_id: str, fmt: str, dataset_name: str | None, title: str | None,
+    organization: str | None, source_url: str | None, file_url: str | None,
+    tmp_path: str,
+) -> dict:
+    """Import a file the ADMIN's BROWSER already downloaded and uploaded to us.
+
+    odata's file downloads are behind Cloudflare and 403 datacenter IPs (Render),
+    while the admin's browser can fetch them (CORS is open). So the file arrives
+    as an upload; we only parse + load it here. Provenance links (source_url =
+    resource page, file_url = original file) are stored with the table."""
+    if not append_store.is_configured():
+        raise RuntimeError("append DB is not configured (APPEND_DATABASE_URL missing)")
+    f = (fmt or "").upper()
+    if f not in SUPPORTED_FILE_FORMATS:
+        raise ValueError(
+            f"פורמט לא נתמך: {fmt or '—'}. נתמכים: CSV, XLS, XLSX, ICS/ICAL.")
+    columns, rows = await asyncio.to_thread(_parse_file, tmp_path, f)
+    if not columns:
+        raise ValueError("לא נמצאו עמודות בקובץ")
+    table = table_name_for(resource_id, dataset_name)
+    loaded = await _load_rows(table, columns, _batches_from_rows(rows, len(columns)))
+    final_title = (title or "").strip() or dataset_name or resource_id
+    src = source_url or (
+        f"{ODATA_BASE}/dataset/{dataset_name}/resource/{resource_id}"
+        if dataset_name else f"{ODATA_BASE}/dataset")
+    await _record_import(
+        resource_id=resource_id, table=table, package_id=None,
+        dataset_name=dataset_name, title=final_title, organization=organization,
+        fmt=f, source_url=src, file_url=file_url,
+        rows=loaded["rows"], columns=loaded["columns"])
+    logger.info("odata import (upload): %s -> odata.%s (%d rows, %s)",
+                resource_id, table, loaded["rows"], f)
+    return {"resource_id": resource_id, "table": table, "title": final_title,
+            "organization": organization, "rows": loaded["rows"],
+            "columns": loaded["columns"], "source_url": src, "format": f}
 
 
 async def _fetch_json(client: httpx.AsyncClient, action: str, **params) -> dict:
@@ -450,36 +531,11 @@ async def import_resource(resource_id: str) -> dict:
         except OSError:
             pass
 
-    pool = await append_store.get_pool()
-    async with pool.acquire() as conn:
-        await ensure_registry(conn)
-        await conn.execute(f"""
-            INSERT INTO {_qt(REGISTRY)}
-                (resource_id, table_name, package_id, dataset_name, title,
-                 organization, format, source_url, rows, columns, imported_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
-            ON CONFLICT (resource_id) DO UPDATE SET
-                table_name = EXCLUDED.table_name,
-                package_id = EXCLUDED.package_id,
-                dataset_name = EXCLUDED.dataset_name,
-                title = EXCLUDED.title,
-                organization = EXCLUDED.organization,
-                format = EXCLUDED.format,
-                source_url = EXCLUDED.source_url,
-                rows = EXCLUDED.rows,
-                columns = EXCLUDED.columns,
-                imported_at = now()
-        """, resource_id, table, res.get("package_id"), dataset_name, title,
-             org, fmt, source_url, loaded["rows"], loaded["columns"])
-        role = _readonly_role()
-        if role:
-            try:
-                await conn.execute(f"GRANT SELECT ON {_qt(table)} TO {_qi(role)}")
-            except Exception:  # noqa: BLE001
-                logger.warning("odata: grant on %s failed", table, exc_info=True)
-
-    from app.services.data_catalog import invalidate_catalog_cache
-    invalidate_catalog_cache()
+    await _record_import(
+        resource_id=resource_id, table=table, package_id=res.get("package_id"),
+        dataset_name=dataset_name, title=title, organization=org, fmt=fmt,
+        source_url=source_url, file_url=url or None,
+        rows=loaded["rows"], columns=loaded["columns"])
     logger.info("odata import: %s -> odata.%s (%d rows, %d cols)",
                 resource_id, table, loaded["rows"], loaded["columns"])
     return {"resource_id": resource_id, "table": table, "title": title,
@@ -497,8 +553,8 @@ async def list_imports() -> list[dict]:
             await ensure_registry(conn)
             rows = await conn.fetch(f"""
                 SELECT r.resource_id, r.table_name, r.dataset_name, r.title,
-                       r.organization, r.format, r.source_url, r.rows,
-                       r.columns, r.imported_at
+                       r.organization, r.format, r.source_url, r.source_file_url,
+                       r.rows, r.columns, r.imported_at
                 FROM {_qt(REGISTRY)} r
                 JOIN pg_class c ON c.relname = r.table_name
                 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -512,8 +568,8 @@ async def list_imports() -> list[dict]:
         "resource_id": r["resource_id"], "table": r["table_name"],
         "dataset_name": r["dataset_name"], "title": r["title"],
         "organization": r["organization"], "format": r["format"],
-        "source_url": r["source_url"], "rows": r["rows"],
-        "columns": r["columns"], "imported_at": r["imported_at"],
+        "source_url": r["source_url"], "source_file_url": r["source_file_url"],
+        "rows": r["rows"], "columns": r["columns"], "imported_at": r["imported_at"],
     } for r in rows]
 
 
