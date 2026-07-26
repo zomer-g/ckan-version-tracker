@@ -249,7 +249,13 @@
       "no_results": "No matching datasets found.",
       "results_count": "{{count}} datasets on Information for the People",
       "resources": "{{count}} resources",
-      "view_all": "View all {{count}} results on Information for the People ↗"
+      "view_all": "View all {{count}} results on Information for the People ↗",
+      "filters": "Filters",
+      "filters_orgs": "Organizations",
+      "filters_formats": "Formats",
+      "clear_filters": "Clear",
+      "show_more": "Show {{count}} more",
+      "show_less": "Show less"
     },
     "ocal_title": "Calendar for the People",
     "ocal_desc": "The public work calendars of officials and public figures, after extracting and processing the meetings and entities.",

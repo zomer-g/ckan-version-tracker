@@ -790,6 +790,126 @@ label {
   font-weight: 600;
 }
 
+/* — Faceted layout: filters sidebar + results — */
+.odata-layout {
+  display: grid;
+  grid-template-columns: 15rem 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.odata-facets {
+  position: sticky;
+  top: 4.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+}
+
+.odata-facets-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.6rem;
+}
+
+.odata-clear {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--primary-700);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0;
+}
+.odata-clear:hover {
+  text-decoration: underline;
+}
+
+.odata-facet + .odata-facet {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.odata-facet-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted, #556);
+  margin-bottom: 0.4rem;
+}
+
+.odata-facet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.odata-facet-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: start;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  color: var(--text);
+}
+.odata-facet-item:hover {
+  background: var(--primary-50, #eef6f9);
+}
+.odata-facet-item.is-active {
+  background: var(--primary-100);
+  color: var(--primary-900);
+  font-weight: 600;
+}
+
+.odata-facet-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.odata-facet-count {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted, #667);
+  font-variant-numeric: tabular-nums;
+}
+.odata-facet-item.is-active .odata-facet-count {
+  color: var(--primary-700);
+}
+
+.odata-facet-more {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--primary-700);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 0.5rem 0;
+}
+.odata-facet-more:hover {
+  text-decoration: underline;
+}
+
+.odata-main {
+  min-width: 0;
+}
+
 .odata-results {
   list-style: none;
   margin: 0;
@@ -858,6 +978,15 @@ label {
   width: 100%;
   font-size: 0.9rem;
   color: var(--primary-700);
+}
+
+@media (max-width: 720px) {
+  .odata-layout {
+    grid-template-columns: 1fr;
+  }
+  .odata-facets {
+    position: static;
+  }
 }
 
 @media (max-width: 640px) {

@@ -249,7 +249,13 @@
       "no_results": "לא נמצאו מאגרים תואמים.",
       "results_count": "{{count}} מאגרים במידע לעם",
       "resources": "{{count}} משאבים",
-      "view_all": "צפייה בכל {{count}} התוצאות במידע לעם ↗"
+      "view_all": "צפייה בכל {{count}} התוצאות במידע לעם ↗",
+      "filters": "סינון",
+      "filters_orgs": "ארגונים",
+      "filters_formats": "פורמטים",
+      "clear_filters": "נקה",
+      "show_more": "הצג עוד {{count}}",
+      "show_less": "הצג פחות"
     },
     "ocal_title": "יומן לעם",
     "ocal_desc": "יומני העבודה הציבוריים של נבחרי ובכירי הציבור, לאחר חילוץ ועיבוד של הפגישות והישויות.",
