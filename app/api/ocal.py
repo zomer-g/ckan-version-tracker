@@ -866,3 +866,20 @@ async def download_bulk(request: Request, body: BulkDownloadBody):
         media_type="application/zip",
         headers={"Content-Disposition": _content_disposition(zip_name)},
     )
+
+
+# TEMPORARY diagnostic — remove after fixing the ocal fdw setup. Returns the
+# fdw setup outcome + parsed target (NO password) so we can see why Neon fdw
+# fails without server-log access.
+@router.get("/_fdw_debug")
+async def _fdw_debug(request: Request):
+    from app.services import ocal_fdw
+    tgt = ocal_fdw._target() or {}
+    res = await ocal_fdw.ensure_fdw()
+    return {
+        "configured": ocal_fdw.is_configured(),
+        "target": {"host": tgt.get("host"), "port": tgt.get("port"),
+                   "dbname": tgt.get("dbname"), "user": tgt.get("user"),
+                   "has_password": bool(tgt.get("password"))},
+        "result": res,
+    }
