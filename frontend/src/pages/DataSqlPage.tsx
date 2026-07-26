@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactElement } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   dataCatalog,
@@ -551,7 +551,12 @@ export default function DataSqlPage() {
     for (const g of m.values()) {
       g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
     }
-    return [...m.values()].sort((a, b) => b.list.length - a.list.length);
+    // Official public sources first (by size), then PROCESSED sources (odata /
+    // "מידע לעם") always last — they render below a clear divider.
+    const isProcessed = (g: { badge: Badge }) => (g.badge.id === "odata" ? 1 : 0);
+    return [...m.values()].sort(
+      (a, b) => isProcessed(a) - isProcessed(b) || b.list.length - a.list.length,
+    );
   }, [filter, tables, activeFacets]);
 
   // Per-facet counts — shown on each chip so the number is visible before
@@ -563,6 +568,12 @@ export default function DataSqlPage() {
   );
 
   const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
+
+  // Index of the first PROCESSED source group (odata) — the divider goes above it.
+  const firstProcessedIdx = useMemo(
+    () => groups.findIndex((g) => g.badge.id === "odata"),
+    [groups],
+  );
 
   // Which source group the currently-selected table lives in (kept open).
   const selectedGroupId = useMemo(() => {
@@ -909,14 +920,24 @@ export default function DataSqlPage() {
             <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>אין טבלאות תואמות.</div>
           )}
 
-          {groups.map(({ badge, list }) => {
+          {groups.map(({ badge, list }, idx) => {
             const open = isOpen(badge.id);
             // Tables the current query uses always render — even in a collapsed
             // group — so the user sees exactly what the result is built from.
             const usedInGroup = list.filter((t) => usedTables.has(t.table));
             const visible = open ? list : usedInGroup;
+            const isProcessed = badge.id === "odata";
+            // Divider before the FIRST processed source — everything below it is
+            // derived data, not an original official source.
+            const showDivider = isProcessed && idx === firstProcessedIdx;
             return (
-              <div key={badge.id} style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: "var(--bg-muted, #f8fafc)" }}>
+              <Fragment key={badge.id}>
+              {showDivider && (
+                <div className="sql-processed-divider" role="separator">
+                  <span>מאגרים מעובדים — אינם ממקור רשמי מקורי</span>
+                </div>
+              )}
+              <div style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: isProcessed ? "#fffdf9" : "var(--bg-muted, #f8fafc)" }}>
                 {/* Source header — click to expand/collapse; ↗ opens the source page */}
                 <div className="flex" style={{ gap: "0.4rem", alignItems: "center", padding: "0.35rem 0.5rem" }}>
                   <button
@@ -1028,6 +1049,7 @@ export default function DataSqlPage() {
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           })}
         </div>

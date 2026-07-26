@@ -1094,6 +1094,29 @@ label {
   }
 }
 
+/* Divider above the processed (non-official) sources in the SQL table browser. */
+.sql-processed-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.9rem 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #b45309;
+  text-transform: none;
+}
+.sql-processed-divider::before,
+.sql-processed-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 0;
+  border-top: 2px dashed #f59e0b;
+}
+.sql-processed-divider span {
+  flex: 0 0 auto;
+}
+
 /* ── SQL table browser: מידע לעם structure group (processed, not queryable) ── */
 /* Lives as the LAST group inside the narrow table browser. Amber accent marks
    it apart from the queryable system-table groups. */
