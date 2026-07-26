@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   dataCatalog,
@@ -107,39 +107,87 @@ function SpatialMark({ size = 15 }: { size?: number }) {
   );
 }
 
-// Content field-flag: the table has a locality (יישוב) column. Comes from the
-// dataset's field_flags metadata (app/services/field_flags.py), so it stays true
-// regardless of the exact column name and is only set once the recompute job ran.
-function hasLocality(t: CatalogTable): boolean {
-  return t.field_flags?.has_locality === true;
+// ── Content field-flags ──────────────────────────────────────────────────────
+// Boolean metadata about what KINDS of columns a dataset carries (a locality
+// name, a local-authority name, a government-ministry name, a date), from
+// field_flags (app/services/field_flags.py). Surfaced in the catalog like the
+// spatial/PostGIS affordance: a tinted-chip glyph per dataset + a filter chip.
+// Data-driven so adding the next flag is one array entry — nothing else changes.
+interface FieldFacet {
+  key: string;          // field_flags key
+  short: string;        // chip label
+  title: string;        // hover text / legend line
+  aria: string;
+  bg: string;
+  fg: string;
+  icon: ReactElement;    // inner <svg> paths (24x24, stroke=currentColor)
 }
 
-// Locality marker — same chip shape as SpatialMark (a fixed-size glyph on a
-// tinted chip, legible and clearly an affordance), in a distinct amber so it
-// never blurs with the green PostGIS mark. A simple map-pin.
-const LOCALITY_TITLE =
-  "המאגר כולל עמודת שם יישוב — ניתן לצרף (JOIN) לפי יישוב למאגרים אחרים (אוכלוסייה, שלטון מקומי וכו').";
+function flagTrue(t: CatalogTable, key: string): boolean {
+  return t.field_flags?.[key] === true;
+}
 
-function LocalityMark({ size = 15 }: { size?: number }) {
+// A field marker: a fixed-size glyph on a tinted chip (same shape as SpatialMark
+// so the two families read as one system, distinct colours so they never blur).
+function FieldMark({ facet, size = 15 }: { facet: FieldFacet; size?: number }) {
   return (
     <span
-      title={LOCALITY_TITLE}
-      aria-label="מאגר עם עמודת שם יישוב"
+      title={facet.title}
+      aria-label={facet.aria}
       style={{
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         width: size + 6, height: size + 6, borderRadius: 4, flex: "0 0 auto",
-        background: "#fef3c7", color: "#b45309", cursor: "help",
-        verticalAlign: "middle",
+        background: facet.bg, color: facet.fg, cursor: "help", verticalAlign: "middle",
       }}
     >
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z" />
-        <circle cx="12" cy="11" r="2.2" />
+        {facet.icon}
       </svg>
     </span>
   );
 }
+
+const FIELD_FACETS: FieldFacet[] = [
+  { key: "has_locality", short: "יישוב", bg: "#fef3c7", fg: "#b45309",
+    title: "כולל עמודת שם יישוב — ניתן ל-JOIN לפי יישוב (אוכלוסייה, שלטון מקומי, בחירות).",
+    aria: "מאגר עם עמודת שם יישוב",
+    icon: (<><path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z" /><circle cx="12" cy="11" r="2.2" /></>) },
+  { key: "has_authority", short: "רשות", bg: "#dbeafe", fg: "#1d4ed8",
+    title: "כולל עמודת רשות מקומית — ניתן ל-JOIN לפי רשות (תקציבים, ביקורת, מצב השלטון המקומי).",
+    aria: "מאגר עם עמודת רשות מקומית",
+    icon: (<><path d="M3 21h18M5 21V8l7-4 7 4v13" /><path d="M9 21v-5h6v5" /></>) },
+  { key: "has_ministry", short: "משרד", bg: "#ede9fe", fg: "#6d28d9",
+    title: "כולל עמודת משרד ממשלתי — ניתן ל-JOIN לפי משרד.",
+    aria: "מאגר עם עמודת משרד ממשלתי",
+    icon: (<><path d="M4 21h16M4 10l8-6 8 6M6 10v11M10 10v11M14 10v11M18 10v11" /></>) },
+  { key: "has_date", short: "תאריך", bg: "#ccfbf1", fg: "#0f766e",
+    title: "כולל עמודת תאריך — ניתן לנתח לאורך זמן (מגמות, סדרות עתיות).",
+    aria: "מאגר עם עמודת תאריך",
+    icon: (<><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></>) },
+];
+
+// One row per filterable facet: the PostGIS capability (SpatialMark) + every
+// content field-flag. Drives the filter chips, the per-row markers and the
+// legend from a single source, so "won't hold all the filters" can't recur.
+interface FilterFacet {
+  key: string;
+  short: string;
+  title: string;
+  bg: string;
+  fg: string;
+  test: (t: CatalogTable) => boolean;
+  mark: (size: number) => ReactElement;
+}
+
+const FILTER_FACETS: FilterFacet[] = [
+  { key: "__spatial", short: "מרחבי", title: SPATIAL_TITLE, bg: "#dcfce7", fg: "#15803d",
+    test: hasGeometry, mark: (s) => <SpatialMark size={s} /> },
+  ...FIELD_FACETS.map((f): FilterFacet => ({
+    key: f.key, short: f.short, title: f.title, bg: f.bg, fg: f.fg,
+    test: (t) => flagTrue(t, f.key), mark: (s) => <FieldMark facet={f} size={s} />,
+  })),
+];
 
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
@@ -177,7 +225,7 @@ function rowTooltip(t: CatalogTable): string {
   const parts = [displayName(t), t.table];
   if (t.description && t.description !== displayName(t)) parts.push(t.description);
   if (hasGeometry(t)) parts.push("🗺 נתמך ב-PostGIS — ניתן לתשאל מרחבית (עמודת geom, EPSG:4326)");
-  if (hasLocality(t)) parts.push("📍 כולל עמודת שם יישוב — ניתן ל-JOIN לפי יישוב");
+  for (const f of FIELD_FACETS) if (flagTrue(t, f.key)) parts.push(f.title);
   return parts.join("\n");
 }
 
@@ -413,15 +461,18 @@ export default function DataSqlPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
-  // Narrow the browser to layers that PostGIS can actually answer spatial
-  // questions about. Not folded into the text search on purpose: "מרחבי" is a
-  // property of the table, not a word in its name, and a user hunting for a map
-  // layer should not have to guess a keyword.
-  const [spatialOnly, setSpatialOnly] = useState(false);
-  // Narrow the browser to datasets that carry a locality (יישוב) column — the
-  // JOIN key for cross-source analysis. Same reasoning as spatialOnly: a
-  // metadata facet, not folded into the free-text search.
-  const [localityOnly, setLocalityOnly] = useState(false);
+  // Facet filters (PostGIS + content field-flags). A Set of active FILTER_FACETS
+  // keys — AND-combined — kept out of the free-text search on purpose: these are
+  // properties of the table, not words in its name. A Set (not a bool per facet)
+  // so the list of facets can grow without new state.
+  const [activeFacets, setActiveFacets] = useState<Set<string>>(new Set());
+  const toggleFacet = useCallback((key: string) => {
+    setActiveFacets((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
   const [selected, setSelected] = useState<string | null>(searchParams.get("table"));
   const [detail, setDetail] = useState<CatalogTableDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -478,8 +529,9 @@ export default function DataSqlPage() {
   const groups = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const shown = tables.filter((t) => {
-      if (spatialOnly && !hasGeometry(t)) return false;
-      if (localityOnly && !hasLocality(t)) return false;
+      for (const facet of FILTER_FACETS) {
+        if (activeFacets.has(facet.key) && !facet.test(t)) return false;
+      }
       if (!f) return true;
       const badge = badgeOf(t);
       return (
@@ -500,13 +552,15 @@ export default function DataSqlPage() {
       g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
     }
     return [...m.values()].sort((a, b) => b.list.length - a.list.length);
-  }, [filter, tables, spatialOnly, localityOnly]);
+  }, [filter, tables, activeFacets]);
 
-  // How many layers the spatial filter would leave — shown on the toggle so the
-  // count is visible before clicking, and so "0" reads as "none yet" rather
-  // than looking like the filter is broken.
-  const spatialCount = useMemo(() => tables.filter(hasGeometry).length, [tables]);
-  const localityCount = useMemo(() => tables.filter(hasLocality).length, [tables]);
+  // Per-facet counts — shown on each chip so the number is visible before
+  // clicking, and so "0" reads as "none yet" rather than a broken filter. A
+  // facet with 0 matches is hidden entirely.
+  const facetCounts = useMemo(
+    () => Object.fromEntries(FILTER_FACETS.map((f) => [f.key, tables.filter(f.test).length])),
+    [tables],
+  );
 
   const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
 
@@ -796,62 +850,56 @@ export default function DataSqlPage() {
           />
           {/* Expand/collapse all + total count */}
           {!loading && groups.length > 0 && (
-            <div className="flex" style={{ gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
-              <span className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
-                {groups.length === 1 ? "מקור אחד" : `${groups.length} מקורות`}
-                {" · "}
-                {shownTables.length === 1 ? "טבלה אחת" : `${shownTables.length.toLocaleString()} טבלאות`}
-              </span>
-              {/* Spatial filter. A toggle rather than a checkbox row so it
-                  reads as a chip alongside the counts, and it carries its own
-                  count so "none yet" is distinguishable from "filter broken". */}
-              <button
-                type="button"
-                onClick={() => setSpatialOnly((v) => !v)}
-                aria-pressed={spatialOnly}
-                title={spatialOnly ? "הצג את כל הטבלאות" : SPATIAL_TITLE}
-                style={{
-                  display: "inline-flex", gap: "0.3rem", alignItems: "center",
-                  fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
-                  padding: "0.15rem 0.45rem", borderRadius: 9999,
-                  border: `1px solid ${spatialOnly ? "#15803d" : "var(--border, #cbd5e1)"}`,
-                  background: spatialOnly ? "#dcfce7" : "transparent",
-                  color: spatialOnly ? "#15803d" : "var(--text-muted)",
-                }}
-              >
-                <SpatialMark size={11} />
-                מרחבי בלבד ({spatialCount})
-              </button>
-              {/* Locality filter — mirrors the spatial toggle, amber to match
-                  the LocalityMark chip. Only shown once the flag has been
-                  computed for at least one dataset. */}
-              {localityCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setLocalityOnly((v) => !v)}
-                  aria-pressed={localityOnly}
-                  title={localityOnly ? "הצג את כל הטבלאות" : LOCALITY_TITLE}
-                  style={{
-                    display: "inline-flex", gap: "0.3rem", alignItems: "center",
-                    fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
-                    padding: "0.15rem 0.45rem", borderRadius: 9999,
-                    border: `1px solid ${localityOnly ? "#b45309" : "var(--border, #cbd5e1)"}`,
-                    background: localityOnly ? "#fef3c7" : "transparent",
-                    color: localityOnly ? "#b45309" : "var(--text-muted)",
-                  }}
-                >
-                  <LocalityMark size={11} />
-                  עם יישוב ({localityCount})
+            <div style={{ marginBottom: "0.5rem" }}>
+              <div className="flex" style={{ gap: "0.5rem", alignItems: "center", marginBottom: "0.4rem" }}>
+                <span className="text-sm text-muted" style={{ fontSize: "0.75rem" }}>
+                  {groups.length === 1 ? "מקור אחד" : `${groups.length} מקורות`}
+                  {" · "}
+                  {shownTables.length === 1 ? "טבלה אחת" : `${shownTables.length.toLocaleString()} טבלאות`}
+                </span>
+                <button type="button" onClick={() => setAllGroups(true)}
+                  style={{ marginInlineStart: "auto", fontSize: "0.72rem", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline" }}>
+                  הרחב הכל
                 </button>
-              )}
-              <button type="button" onClick={() => setAllGroups(true)}
-                style={{ marginInlineStart: "auto", fontSize: "0.72rem", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline" }}>
-                הרחב הכל
-              </button>
-              <button type="button" onClick={() => setAllGroups(false)}
-                style={{ fontSize: "0.72rem", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", textDecoration: "underline" }}>
-                כווץ הכל
-              </button>
+                <button type="button" onClick={() => setAllGroups(false)}
+                  style={{ fontSize: "0.72rem", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", textDecoration: "underline" }}>
+                  כווץ הכל
+                </button>
+              </div>
+              {/* Facet filters — one wrapping chip per PostGIS/field-flag facet, so
+                  the row grows to as many rows as needed instead of overflowing.
+                  Each carries its own count; a facet with 0 matches is hidden. */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                {FILTER_FACETS.filter((f) => facetCounts[f.key] > 0).map((f) => {
+                  const on = activeFacets.has(f.key);
+                  return (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => toggleFacet(f.key)}
+                      aria-pressed={on}
+                      title={on ? "בטל סינון" : f.title}
+                      style={{
+                        display: "inline-flex", gap: "0.3rem", alignItems: "center",
+                        fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
+                        padding: "0.15rem 0.45rem", borderRadius: 9999,
+                        border: `1px solid ${on ? f.fg : "var(--border, #cbd5e1)"}`,
+                        background: on ? f.bg : "transparent",
+                        color: on ? f.fg : "var(--text-muted)",
+                      }}
+                    >
+                      {f.mark(11)}
+                      {f.short} ({facetCounts[f.key].toLocaleString()})
+                    </button>
+                  );
+                })}
+                {activeFacets.size > 0 && (
+                  <button type="button" onClick={() => setActiveFacets(new Set())}
+                    style={{ fontSize: "0.72rem", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", textDecoration: "underline" }}>
+                    נקה סינון
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -955,11 +1003,11 @@ export default function DataSqlPage() {
                                   <SpatialMark size={13} />
                                 </span>
                               )}
-                              {hasLocality(t) && (
-                                <span style={{ marginInlineStart: "0.35rem" }}>
-                                  <LocalityMark size={13} />
+                              {FIELD_FACETS.filter((f) => flagTrue(t, f.key)).map((f) => (
+                                <span key={f.key} style={{ marginInlineStart: "0.35rem" }}>
+                                  <FieldMark facet={f} size={13} />
                                 </span>
-                              )}
+                              ))}
                             </span>
                             <code dir="ltr" style={{
                               display: "block", fontSize: "0.7rem", color: "var(--text-muted)",
@@ -1006,15 +1054,21 @@ export default function DataSqlPage() {
                   </div>
                 </div>
               </div>
-              {localityCount > 0 && (
-                <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", padding: "0.6rem 0.7rem", borderRadius: 6, background: "#fffbeb", border: "1px solid #fde68a", marginTop: "0.5rem" }}>
-                  <LocalityMark size={15} />
-                  <div>
-                    <strong style={{ color: "#b45309" }}>מאגרים עם שם יישוב</strong> — טבלה שמסומנת בסמל הזה כוללת עמודת שם יישוב,
-                    כך שאפשר לצרף אותה (JOIN) לפי יישוב למאגרים אחרים — אוכלוסייה, מצב השלטון המקומי, בחירות ועוד.
-                    <div style={{ marginTop: "0.35rem" }}>
-                      לסינון הרשימה למאגרים כאלה בלבד — הכפתור <strong>״עם יישוב״</strong> מעל הרשימה.
-                    </div>
+              {FIELD_FACETS.some((f) => facetCounts[f.key] > 0) && (
+                <div style={{ padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--surface-2, #f8fafc)", border: "1px solid var(--border, #e2e8f0)", marginTop: "0.5rem" }}>
+                  <strong style={{ display: "block", marginBottom: "0.4rem" }}>שדות תוכן — מפתחות ל-JOIN בין מאגרים</strong>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                    {FIELD_FACETS.filter((f) => facetCounts[f.key] > 0).map((f) => (
+                      <div key={f.key} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+                        <FieldMark facet={f} size={14} />
+                        <span style={{ fontSize: "0.8rem" }}>
+                          <strong style={{ color: f.fg }}>{f.short}</strong> — {f.title}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    כל סמל מסמן שהמאגר כולל עמודה כזו. לחצו על צ׳יפ הסינון מעל הרשימה כדי להציג רק מאגרים כאלה.
                   </div>
                 </div>
               )}
@@ -1056,13 +1110,13 @@ export default function DataSqlPage() {
                       נתמך ב-PostGIS
                     </span>
                   )}
-                  {hasLocality(selectedTable) && (
-                    <span title={LOCALITY_TITLE}
-                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "#fef3c7", color: "#92400e", cursor: "help" }}>
-                      <LocalityMark size={13} />
-                      עם שם יישוב
+                  {FIELD_FACETS.filter((f) => flagTrue(selectedTable, f.key)).map((f) => (
+                    <span key={f.key} title={f.title}
+                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: f.bg, color: f.fg, cursor: "help" }}>
+                      <FieldMark facet={f} size={13} />
+                      {f.short}
                     </span>
-                  )}
+                  ))}
                 </div>
               </div>
 
