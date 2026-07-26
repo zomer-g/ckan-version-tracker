@@ -1783,3 +1783,30 @@ async def odata_import_delete(
         raise HTTPException(status_code=404, detail="not imported")
     logger.info("odata import deleted by %s: %s", user.email, resource_id)
     return {"deleted": True}
+
+
+class FieldFlagsRecomputeRequest(BaseModel):
+    # Which flag keys to (re)compute + merge. Defaults to the first flag we
+    # enabled — has_locality — so the rollout can grow one field at a time.
+    fields: list[str] | None = None
+
+
+@router.post("/field-flags/recompute")
+@limiter.limit("6/minute")
+async def field_flags_recompute(
+    request: Request,
+    body: FieldFlagsRecomputeRequest | None = None,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recompute per-dataset content field-flags (e.g. has_locality) from the
+    live column list and MERGE them into tracked_datasets.field_flags. Additive:
+    keys outside the requested set are left untouched. Admin only."""
+    from app.services import field_flags as ff
+    fields = tuple((body.fields if body and body.fields else ff.DEFAULT_FIELDS))
+    try:
+        stats = await ff.recompute(db, fields=fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("field-flags recompute by %s: %s", user.email, stats)
+    return stats

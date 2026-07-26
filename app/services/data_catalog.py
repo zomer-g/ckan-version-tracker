@@ -147,6 +147,7 @@ def _ds_record(ds: TrackedDataset, tbl: str, resource_name: str | None,
         "archive_url": f"/archive/{ds.id}",
         "versions_url": f"/versions/{ds.id}",
         "tags": [t.name for t in (ds.tags or [])],
+        "field_flags": ds.field_flags or {},
         "columns": columns,
         "est_rows": est_rows,
     }

@@ -296,6 +296,9 @@ class DatasetResponse(BaseModel):
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
     tags: list[TagBrief] = []
+    # Content field-flags metadata (e.g. {"has_locality": true}); see
+    # app/services/field_flags.py. Empty until the recompute job has run.
+    field_flags: dict = {}
 
     model_config = {"from_attributes": True}
 
@@ -390,6 +393,7 @@ async def list_tracked(
                 new_resources_at_source=ds.new_resources_at_source,
                 version_count=version_counts.get(ds.id, 0),
                 tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
+                field_flags=ds.field_flags or {},
             )
         )
     return response_list

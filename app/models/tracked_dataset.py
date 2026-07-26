@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,6 +40,13 @@ class TrackedDataset(Base):
     # Probe baselines used by conditional_archiver to decide whether to
     # short-circuit the full download. See migration 017 for shape.
     resource_probes: Mapped[dict | None] = mapped_column(JSONB)
+    # Content field-flags: boolean metadata describing what KINDS of columns the
+    # tracked table has, e.g. {"has_locality": true}. Dataset metadata (like
+    # title/source), NOT rows and NOT tags. Computed + merged additively by
+    # app/services/field_flags.py (migration 043).
+    field_flags: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
