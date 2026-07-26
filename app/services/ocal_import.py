@@ -444,12 +444,14 @@ async def _record_exception(res: dict, pkg: dict, reason: str) -> None:
 
 # ── the import ────────────────────────────────────────────────────────────────
 
-async def import_resource(resource_id: str, *, force: bool = False) -> dict:
+async def import_resource(resource_id: str, *, force: bool = False,
+                          enrich: bool = True) -> dict:
     """Import one odata diary resource into the ocal DB.
 
     ``force`` (manual admin action) bypasses the auto-import gate. Without it, a
     resource that fails the gate raises SkipImport and is recorded in
-    diary_exceptions so discovery won't re-evaluate it."""
+    diary_exceptions so discovery won't re-evaluate it. ``enrich`` runs the free
+    entity-extraction / cross-ref / matching chain afterwards (non-fatal)."""
     if not ocal_db.is_configured():
         raise RuntimeError("OCAL_DATABASE_URL not configured")
 
@@ -496,11 +498,20 @@ async def import_resource(resource_id: str, *, force: bool = False) -> dict:
     await _update_source_stats(source_id)
     logger.info("ocal_import: %s -> source %s (%d/%d rows, conf=%.2f)",
                 resource_id, source_id, inserted, len(rows), conf)
+
+    enriched = None
+    if enrich:
+        try:
+            from app.services import ocal_enrich
+            enriched = await ocal_enrich.enrich_source(source_id, is_resync=False)
+        except Exception:  # noqa: BLE001 — enrichment is best-effort
+            logger.exception("ocal_import: enrichment failed for %s", source_id)
+
     return {
         "resource_id": resource_id, "source_id": str(source_id), "title": ds_name,
         "rows_parsed": len(rows), "events_upserted": inserted,
         "mapping": mapping, "confidence": round(conf, 3),
-        "person_matched": person_id is not None,
+        "person_matched": person_id is not None, "enriched": enriched,
     }
 
 
