@@ -43,6 +43,7 @@ from app.api.connector import router as connector_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
 from app.api.ocal import router as ocal_router
+from app.api.ocal_admin import router as ocal_admin_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
@@ -218,6 +219,7 @@ app.include_router(connector_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)
 app.include_router(ocal_router)
+app.include_router(ocal_admin_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)

@@ -1666,3 +1666,108 @@ export const ocal = {
     return resp.blob();
   },
 };
+
+// ── Ocal admin (all require an OVER admin JWT) — /api/admin/ocal ──
+export interface OcalAdminSource {
+  id: string;
+  name: string;
+  color: string;
+  is_enabled: boolean;
+  total_events: number;
+  first_event_date: string | null;
+  last_event_date: string | null;
+  resource_id: string | null;
+  dataset_url: string | null;
+  sync_status: string;
+  last_sync_at: string | null;
+  reviewed_at: string | null;
+  review_notes: string | null;
+  person_name: string | null;
+  organization_name: string | null;
+  person_id: string | null;
+  organization_id: string | null;
+}
+export interface OcalAdminPerson {
+  id: string;
+  name: string;
+  wikipedia_link: string | null;
+  notes: string | null;
+  organization_id: string | null;
+  organization_name: string | null;
+  source_count: number;
+}
+export interface OcalAdminOrg {
+  id: string;
+  name: string;
+  website: string | null;
+  description: string | null;
+}
+export interface OcalCandidate {
+  resource_id: string;
+  resource_name: string | null;
+  format: string | null;
+  dataset_title: string | null;
+  organization: string | null;
+  last_modified: string | null;
+}
+export interface OcalException {
+  resource_id: string;
+  dataset_title: string | null;
+  resource_format: string | null;
+  resource_name: string | null;
+  exception_reason: string;
+  moved_at: string;
+}
+
+function aqs(params: Record<string, unknown>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null || v === "") continue;
+    p.set(k, String(v));
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+export const ocalAdmin = {
+  // sources
+  sources: (params: { q?: string; enabled?: boolean; reviewed?: boolean; limit?: number; offset?: number } = {}) =>
+    request<{ sources: OcalAdminSource[]; total: number }>(`/admin/ocal/sources${aqs(params)}`),
+  patchSource: (id: string, body: Partial<Pick<OcalAdminSource, "name" | "is_enabled" | "person_id" | "organization_id" | "review_notes" | "color">>) =>
+    request<{ updated: boolean }>(`/admin/ocal/sources/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  reviewSource: (id: string) => request(`/admin/ocal/sources/${id}/review`, { method: "POST" }),
+  unreviewSource: (id: string) => request(`/admin/ocal/sources/${id}/unreview`, { method: "POST" }),
+  deleteSource: (id: string) => request<void>(`/admin/ocal/sources/${id}`, { method: "DELETE" }),
+  reimportSource: (id: string, clear = false) =>
+    request<Record<string, unknown>>(`/admin/ocal/sources/${id}/reimport${aqs({ clear })}`, { method: "POST" }),
+  enrichSource: (id: string) => request<Record<string, unknown>>(`/admin/ocal/sources/${id}/enrich`, { method: "POST" }),
+  // candidates / scan / import (in admin.py)
+  candidates: (limit = 50) => request<{ candidates: OcalCandidate[]; count: number }>(`/admin/ocal/candidates${aqs({ limit })}`),
+  scan: (max_import = 5) =>
+    request<{ candidates: number; imported: number; skipped: number; errors: number }>(`/admin/ocal/scan${aqs({ max_import })}`, { method: "POST" }),
+  importOne: (resource_id: string) =>
+    request<{ events_upserted: number; source_id: string; rows_parsed: number }>(`/admin/ocal/import`, { method: "POST", body: JSON.stringify({ resource_id }) }),
+  // exceptions
+  exceptions: (limit = 200) => request<{ exceptions: OcalException[]; count: number }>(`/admin/ocal/exceptions${aqs({ limit })}`),
+  clearException: (resource_id: string) => request<void>(`/admin/ocal/exceptions/${resource_id}`, { method: "DELETE" }),
+  // people
+  people: (q?: string) => request<{ people: OcalAdminPerson[]; count: number }>(`/admin/ocal/people${aqs({ q })}`),
+  createPerson: (body: { name: string; organization_id?: string; wikipedia_link?: string; notes?: string }) =>
+    request<{ id: string }>(`/admin/ocal/people`, { method: "POST", body: JSON.stringify(body) }),
+  patchPerson: (id: string, body: { name: string; organization_id?: string; wikipedia_link?: string; notes?: string }) =>
+    request(`/admin/ocal/people/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deletePerson: (id: string) => request<void>(`/admin/ocal/people/${id}`, { method: "DELETE" }),
+  mergePeople: (source_ids: string[], target_id: string) =>
+    request<Record<string, unknown>>(`/admin/ocal/people/merge`, { method: "POST", body: JSON.stringify({ source_ids, target_id }) }),
+  // organizations
+  organizations: (q?: string) => request<{ organizations: OcalAdminOrg[]; count: number }>(`/admin/ocal/organizations${aqs({ q })}`),
+  createOrg: (body: { name: string; website?: string; description?: string }) =>
+    request<{ id: string }>(`/admin/ocal/organizations`, { method: "POST", body: JSON.stringify(body) }),
+  patchOrg: (id: string, body: { name: string; website?: string; description?: string }) =>
+    request(`/admin/ocal/organizations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteOrg: (id: string) => request<void>(`/admin/ocal/organizations/${id}`, { method: "DELETE" }),
+  // content
+  content: () => request<{ content: { key: string; value: string; updated_at: string }[] }>(`/admin/ocal/content`),
+  putContent: (key: string, value: string) =>
+    request(`/admin/ocal/content/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+};

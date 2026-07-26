@@ -27,6 +27,7 @@ import McpUsersPanel from "../components/McpUsersPanel";
 import PageContentPanel from "../components/PageContentPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
+import OcalAdminPanel from "../components/OcalAdminPanel";
 import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
@@ -126,7 +127,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content" | "drive" | "odata";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content" | "drive" | "odata" | "ocal";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -141,6 +142,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "content",   label: "טקסטים",            emoji: "📝" },
   { id: "drive",     label: "חיבור Drive",       emoji: "📁" },
   { id: "odata",     label: "מידע לעם → SQL",    emoji: "📊" },
+  { id: "ocal",      label: "יומן לעם",           emoji: "📔" },
 ];
 
 function readTabFromHash(): AdminTab {
@@ -1241,6 +1243,8 @@ export default function AdminPage() {
       {tab === "drive" && <DriveConnectionPanel />}
 
       {tab === "odata" && <OdataImportPanel />}
+
+      {tab === "ocal" && <OcalAdminPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}
