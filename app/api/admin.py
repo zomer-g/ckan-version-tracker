@@ -1931,31 +1931,50 @@ async def odata_import_file(
     return res
 
 
-@router.post("/ocal/fdw-setup")
+async def _run_ocal_sync_bg(who: str) -> None:
+    from app.services import ocal_mirror
+    try:
+        s = await ocal_mirror.sync_all()
+        logger.info("ocal mirror sync by %s: synced=%s failed=%s rows=%s",
+                    who, s.get("synced"), s.get("failed"), s.get("rows"))
+    except Exception:
+        logger.exception("ocal mirror background sync failed")
+
+
+@router.post("/ocal/sync")
 @limiter.limit("6/minute")
-async def ocal_fdw_setup(
+async def ocal_sync(
     request: Request,
+    background_tasks: BackgroundTasks,
+    wait: bool = False,
     user: User = Depends(get_admin_user),
 ):
-    """(Re)create the postgres_fdw foreign tables that expose יומן לעם (ocal) in
-    the /data console. Idempotent; returns the outcome (fdw support on Neon is
-    confirmed empirically)."""
-    from app.services import ocal_fdw
-    res = await ocal_fdw.ensure_fdw()
-    logger.info("ocal fdw setup by %s: %s", user.email, res)
-    if not res.get("ok"):
-        raise HTTPException(status_code=502, detail=res.get("reason") or "fdw setup failed")
-    return res
+    """Materialise יומן לעם (ocal) into the console DB's ``ocal`` schema so it can
+    be JOINed with every other table. ``wait=true`` runs inline and returns the
+    per-table result; otherwise it runs in the background."""
+    from app.services import ocal_mirror
+    if not ocal_mirror.is_configured():
+        raise HTTPException(status_code=409,
+                            detail="OCAL_DATABASE_URL / append DB not configured")
+    if wait:
+        s = await ocal_mirror.sync_all()
+        logger.info("ocal mirror sync (wait) by %s: %s", user.email,
+                    {k: s.get(k) for k in ("synced", "failed", "rows")})
+        if not s.get("ok"):
+            raise HTTPException(status_code=502, detail=s.get("reason") or "sync failed")
+        return s
+    background_tasks.add_task(_run_ocal_sync_bg, user.email)
+    return {"started": True}
 
 
-@router.get("/ocal/fdw-status")
+@router.get("/ocal/status")
 @limiter.limit("30/minute")
-async def ocal_fdw_status(
+async def ocal_status(
     request: Request,
     user: User = Depends(get_admin_user),
 ):
-    """Which ocal foreign tables are currently exposed in /data."""
-    from app.services import ocal_fdw
-    tables = await ocal_fdw.list_tables()
-    return {"configured": ocal_fdw.is_configured(), "tables": tables,
+    """Which ocal tables are materialised in /data, with row counts."""
+    from app.services import ocal_mirror
+    tables = await ocal_mirror.list_tables()
+    return {"configured": ocal_mirror.is_configured(), "tables": tables,
             "count": len(tables)}

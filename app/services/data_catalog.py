@@ -217,20 +217,21 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
 
 
 async def _ocal_records() -> list[dict]:
-    """Catalog rows for the יומן לעם foreign tables (schema ``ocal``, kind='ocal').
+    """Catalog rows for the יומן לעם tables (schema ``ocal``, kind='ocal').
 
-    These are LIVE views (postgres_fdw) into the separate ocal Neon DB — processed
-    data, badged "יומן לעם", grouped with the other non-official sources. Empty
-    (and harmless) when fdw isn't set up."""
-    from app.services import ocal_fdw
+    These are LOCAL tables materialised from the separate ocal Neon DB (see
+    ocal_mirror) — processed data, badged "יומן לעם", grouped with the other
+    non-official sources. Real local tables, so they JOIN freely with every
+    other schema. Empty (and harmless) before the first sync."""
+    from app.services import ocal_mirror
     try:
-        tables = await ocal_fdw.list_tables()
+        tables = await ocal_mirror.list_tables()
     except Exception:  # noqa: BLE001 — never let this break the whole catalog
         logger.debug("data_catalog: ocal list_tables failed", exc_info=True)
         return []
     if not tables:
         return []
-    cols_by_table = await append_store.schema_table_columns(ocal_fdw.SCHEMA)
+    cols_by_table = await append_store.schema_table_columns(ocal_mirror.SCHEMA)
     recs: list[dict] = []
     for m in tables:
         columns = cols_by_table.get(m["table"])
@@ -238,7 +239,7 @@ async def _ocal_records() -> list[dict]:
             continue
         recs.append({
             "table": m["table"],
-            "schema": ocal_fdw.SCHEMA,
+            "schema": ocal_mirror.SCHEMA,
             "kind": "ocal",
             "title": m.get("title") or m["table"],
             "description": "יומן לעם (ocal.org.il) — מידע מעובד",
@@ -250,8 +251,7 @@ async def _ocal_records() -> list[dict]:
             "source_url": "https://ocal.org.il",
             "tags": [],
             "columns": columns,
-            # No cheap estimate for a foreign table — the detail cube counts it.
-            "est_rows": None,
+            "est_rows": m.get("rows"),
         })
     return recs
 

@@ -1357,13 +1357,13 @@ export const admin = {
       `/admin/odata/imports/${encodeURIComponent(resource_id)}`,
       { method: "DELETE" },
     ),
-  // יומן לעם (ocal) live foreign-table exposure (postgres_fdw)
-  ocalFdwStatus: () =>
-    request<{ configured: boolean; tables: { table: string; title: string }[]; count: number }>(
-      "/admin/ocal/fdw-status"),
-  ocalFdwSetup: () =>
-    request<{ ok: boolean; tables?: string[]; imported?: string[] }>(
-      "/admin/ocal/fdw-setup", { method: "POST" }),
+  // יומן לעם (ocal) materialised into the console DB's `ocal` schema
+  ocalStatus: () =>
+    request<{ configured: boolean; tables: { table: string; title: string; rows: number | null }[]; count: number }>(
+      "/admin/ocal/status"),
+  ocalSync: (wait = false) =>
+    request<{ ok?: boolean; started?: boolean; synced?: number; failed?: number; rows?: number }>(
+      `/admin/ocal/sync${wait ? "?wait=true" : ""}`, { method: "POST" }),
   activityLog: (opts: { dataset_id?: string; event?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.dataset_id) p.set("dataset_id", opts.dataset_id);

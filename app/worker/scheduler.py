@@ -260,6 +260,28 @@ async def init_scheduler() -> None:
             misfire_grace_time=300,
         )
 
+    # יומן לעם (ocal) mirror → the local `ocal` schema, so /data can JOIN it with
+    # every other table. ocal lives in a separate Neon DB, so this streams a copy
+    # in (all-text, atomic swap). No-op when OCAL_DATABASE_URL / append DB are
+    # unset. Runs shortly after boot (initial populate) and then every 6 h.
+    async def ocal_mirror_sync_job() -> None:
+        try:
+            from app.services import ocal_mirror
+            if ocal_mirror.is_configured():
+                await ocal_mirror.sync_all()
+        except Exception:  # noqa: BLE001 — never let it kill the scheduler
+            logger.exception("ocal mirror sync tick failed")
+
+    scheduler.add_job(
+        ocal_mirror_sync_job,
+        trigger=IntervalTrigger(hours=6),
+        id="ocal_mirror_sync",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=90),
+    )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the
