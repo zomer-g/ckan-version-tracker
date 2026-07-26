@@ -255,7 +255,9 @@
       "filters_formats": "Formats",
       "clear_filters": "Clear",
       "show_more": "Show {{count}} more",
-      "show_less": "Show less"
+      "show_less": "Show less",
+      "files": "Files ({{count}})",
+      "file_unnamed": "file"
     },
     "ocal_title": "Calendar for the People",
     "ocal_desc": "The public work calendars of officials and public figures, after extracting and processing the meetings and entities.",

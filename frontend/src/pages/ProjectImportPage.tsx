@@ -49,9 +49,9 @@ export default function ProjectImportPage({ project }: { project: ProjectKey }) 
         </div>
       </div>
 
-      <div className="about-section">
+      <div className={project === "odata" ? "odata-section" : "about-section"}>
         {project === "odata" ? (
-          <div className="about-card">
+          <div className="about-card odata-card">
             <OdataSearch />
             <a
               className="odata-visit-link"

@@ -255,7 +255,9 @@
       "filters_formats": "פורמטים",
       "clear_filters": "נקה",
       "show_more": "הצג עוד {{count}}",
-      "show_less": "הצג פחות"
+      "show_less": "הצג פחות",
+      "files": "קבצים ({{count}})",
+      "file_unnamed": "קובץ"
     },
     "ocal_title": "יומן לעם",
     "ocal_desc": "יומני העבודה הציבוריים של נבחרי ובכירי הציבור, לאחר חילוץ ועיבוד של הפגישות והישויות.",

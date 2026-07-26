@@ -20,12 +20,19 @@ const FACET_LIMIT = 50;
 const FACET_VISIBLE = 10;
 
 type OdataOrg = { title?: string; name?: string };
+type OdataResource = {
+  id?: string;
+  name?: string;
+  format?: string;
+  url?: string;
+};
 type OdataPackage = {
   name: string;
   title?: string;
   notes?: string;
   num_resources?: number;
   organization?: OdataOrg | null;
+  resources?: OdataResource[];
 };
 type FacetItem = { name: string; count: number };
 
@@ -42,6 +49,18 @@ function snippet(text: string | undefined, max = 220) {
   if (!text) return "";
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > max ? clean.slice(0, max).trimEnd() + "…" : clean;
+}
+
+function resourceName(r: OdataResource, fallback: string) {
+  const n = r.name?.trim();
+  if (n) return n;
+  try {
+    const tail = decodeURIComponent((r.url || "").split("/").pop() || "");
+    if (tail) return tail;
+  } catch {
+    /* malformed URL — use the fallback */
+  }
+  return fallback;
 }
 
 /** Solr filter-query: OR within a field, AND across fields. */
@@ -334,6 +353,51 @@ export default function OdataSearch() {
                     </div>
                     {pkg.notes && (
                       <p className="odata-result-notes">{snippet(pkg.notes)}</p>
+                    )}
+                    {pkg.resources && pkg.resources.length > 0 && (
+                      <details className="odata-files">
+                        <summary className="odata-files-summary">
+                          {t("projects.odata_search.files", {
+                            count: pkg.resources.length,
+                          })}
+                        </summary>
+                        <ul className="odata-file-list">
+                          {pkg.resources.map((r, idx) => (
+                            <li key={r.id || `${pkg.name}-${idx}`}>
+                              {r.url ? (
+                                <a
+                                  className="odata-file"
+                                  href={r.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <span className="odata-file-format">
+                                    {(r.format || "").toUpperCase() || "—"}
+                                  </span>
+                                  <span className="odata-file-name">
+                                    {resourceName(
+                                      r,
+                                      t("projects.odata_search.file_unnamed")
+                                    )}
+                                  </span>
+                                </a>
+                              ) : (
+                                <span className="odata-file odata-file-disabled">
+                                  <span className="odata-file-format">
+                                    {(r.format || "").toUpperCase() || "—"}
+                                  </span>
+                                  <span className="odata-file-name">
+                                    {resourceName(
+                                      r,
+                                      t("projects.odata_search.file_unnamed")
+                                    )}
+                                  </span>
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
                   </li>
                 );

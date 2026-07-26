@@ -737,6 +737,29 @@ label {
 }
 
 /* — odata (מידע לעם) live CKAN search — */
+/* Wider shell than .about-section (800px) so facets + results breathe. */
+.odata-section {
+  max-width: 1160px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+/* The search lives inside .about-card, whose `.about-card ul { list-style:
+   disc }` would otherwise bullet every odata list. Override with higher
+   specificity. */
+.about-card .odata-results,
+.about-card .odata-facet-list,
+.about-card .odata-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.about-card .odata-results li,
+.about-card .odata-facet-list li,
+.about-card .odata-file-list li {
+  margin-bottom: 0;
+}
+
 .odata-search-intro {
   color: var(--text-muted, #556);
   font-size: 0.95rem;
@@ -878,6 +901,7 @@ label {
 }
 
 .odata-facet-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -937,6 +961,7 @@ label {
   font-size: 1.05rem;
   color: var(--primary-700);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 
 .odata-result-title:hover {
@@ -961,6 +986,80 @@ label {
   font-size: 0.9rem;
   line-height: 1.6;
   color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* result title is an <a> inside .about-card — undo the blanket underline */
+.about-card .odata-result-title {
+  text-decoration: none;
+}
+.about-card .odata-result-title:hover {
+  text-decoration: underline;
+}
+
+/* — per-result file (resource) list — */
+.odata-files {
+  margin-top: 0.7rem;
+}
+
+.odata-files-summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary-700);
+  list-style: revert;
+  width: fit-content;
+}
+.odata-files-summary:hover {
+  text-decoration: underline;
+}
+
+.odata-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.55rem !important;
+}
+
+.about-card .odata-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  text-decoration: none;
+  color: var(--text);
+  min-width: 0;
+}
+.about-card a.odata-file:hover {
+  background: var(--primary-50, #eef6f9);
+}
+
+.odata-file-disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.odata-file-format {
+  flex-shrink: 0;
+  min-width: 3.2rem;
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius);
+  background: var(--primary-100);
+  color: var(--primary-900);
+  text-transform: uppercase;
+}
+
+.odata-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .odata-search-more {
