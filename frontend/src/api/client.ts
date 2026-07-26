@@ -978,6 +978,9 @@ export interface CatalogTable {
   versions_url?: string;
   page_url?: string;
   tags: string[];
+  // Content field-flags metadata (e.g. { has_locality: true }); see
+  // app/services/field_flags.py. Absent/empty until the recompute job has run.
+  field_flags?: Record<string, boolean>;
   columns: CatalogColumn[];
   est_rows: number | null;
 }

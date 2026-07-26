@@ -107,6 +107,40 @@ function SpatialMark({ size = 15 }: { size?: number }) {
   );
 }
 
+// Content field-flag: the table has a locality (יישוב) column. Comes from the
+// dataset's field_flags metadata (app/services/field_flags.py), so it stays true
+// regardless of the exact column name and is only set once the recompute job ran.
+function hasLocality(t: CatalogTable): boolean {
+  return t.field_flags?.has_locality === true;
+}
+
+// Locality marker — same chip shape as SpatialMark (a fixed-size glyph on a
+// tinted chip, legible and clearly an affordance), in a distinct amber so it
+// never blurs with the green PostGIS mark. A simple map-pin.
+const LOCALITY_TITLE =
+  "המאגר כולל עמודת שם יישוב — ניתן לצרף (JOIN) לפי יישוב למאגרים אחרים (אוכלוסייה, שלטון מקומי וכו').";
+
+function LocalityMark({ size = 15 }: { size?: number }) {
+  return (
+    <span
+      title={LOCALITY_TITLE}
+      aria-label="מאגר עם עמודת שם יישוב"
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: size + 6, height: size + 6, borderRadius: 4, flex: "0 0 auto",
+        background: "#fef3c7", color: "#b45309", cursor: "help",
+        verticalAlign: "middle",
+      }}
+    >
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z" />
+        <circle cx="12" cy="11" r="2.2" />
+      </svg>
+    </span>
+  );
+}
+
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
   if (t.kind === "odata") return ODATA_BADGE;
@@ -143,6 +177,7 @@ function rowTooltip(t: CatalogTable): string {
   const parts = [displayName(t), t.table];
   if (t.description && t.description !== displayName(t)) parts.push(t.description);
   if (hasGeometry(t)) parts.push("🗺 נתמך ב-PostGIS — ניתן לתשאל מרחבית (עמודת geom, EPSG:4326)");
+  if (hasLocality(t)) parts.push("📍 כולל עמודת שם יישוב — ניתן ל-JOIN לפי יישוב");
   return parts.join("\n");
 }
 
@@ -383,6 +418,10 @@ export default function DataSqlPage() {
   // property of the table, not a word in its name, and a user hunting for a map
   // layer should not have to guess a keyword.
   const [spatialOnly, setSpatialOnly] = useState(false);
+  // Narrow the browser to datasets that carry a locality (יישוב) column — the
+  // JOIN key for cross-source analysis. Same reasoning as spatialOnly: a
+  // metadata facet, not folded into the free-text search.
+  const [localityOnly, setLocalityOnly] = useState(false);
   const [selected, setSelected] = useState<string | null>(searchParams.get("table"));
   const [detail, setDetail] = useState<CatalogTableDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -440,6 +479,7 @@ export default function DataSqlPage() {
     const f = filter.trim().toLowerCase();
     const shown = tables.filter((t) => {
       if (spatialOnly && !hasGeometry(t)) return false;
+      if (localityOnly && !hasLocality(t)) return false;
       if (!f) return true;
       const badge = badgeOf(t);
       return (
@@ -460,12 +500,13 @@ export default function DataSqlPage() {
       g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
     }
     return [...m.values()].sort((a, b) => b.list.length - a.list.length);
-  }, [filter, tables, spatialOnly]);
+  }, [filter, tables, spatialOnly, localityOnly]);
 
   // How many layers the spatial filter would leave — shown on the toggle so the
   // count is visible before clicking, and so "0" reads as "none yet" rather
   // than looking like the filter is broken.
   const spatialCount = useMemo(() => tables.filter(hasGeometry).length, [tables]);
+  const localityCount = useMemo(() => tables.filter(hasLocality).length, [tables]);
 
   const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
 
@@ -781,6 +822,28 @@ export default function DataSqlPage() {
                 <SpatialMark size={11} />
                 מרחבי בלבד ({spatialCount})
               </button>
+              {/* Locality filter — mirrors the spatial toggle, amber to match
+                  the LocalityMark chip. Only shown once the flag has been
+                  computed for at least one dataset. */}
+              {localityCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setLocalityOnly((v) => !v)}
+                  aria-pressed={localityOnly}
+                  title={localityOnly ? "הצג את כל הטבלאות" : LOCALITY_TITLE}
+                  style={{
+                    display: "inline-flex", gap: "0.3rem", alignItems: "center",
+                    fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
+                    padding: "0.15rem 0.45rem", borderRadius: 9999,
+                    border: `1px solid ${localityOnly ? "#b45309" : "var(--border, #cbd5e1)"}`,
+                    background: localityOnly ? "#fef3c7" : "transparent",
+                    color: localityOnly ? "#b45309" : "var(--text-muted)",
+                  }}
+                >
+                  <LocalityMark size={11} />
+                  עם יישוב ({localityCount})
+                </button>
+              )}
               <button type="button" onClick={() => setAllGroups(true)}
                 style={{ marginInlineStart: "auto", fontSize: "0.72rem", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline" }}>
                 הרחב הכל
@@ -892,6 +955,11 @@ export default function DataSqlPage() {
                                   <SpatialMark size={13} />
                                 </span>
                               )}
+                              {hasLocality(t) && (
+                                <span style={{ marginInlineStart: "0.35rem" }}>
+                                  <LocalityMark size={13} />
+                                </span>
+                              )}
                             </span>
                             <code dir="ltr" style={{
                               display: "block", fontSize: "0.7rem", color: "var(--text-muted)",
@@ -938,6 +1006,18 @@ export default function DataSqlPage() {
                   </div>
                 </div>
               </div>
+              {localityCount > 0 && (
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", padding: "0.6rem 0.7rem", borderRadius: 6, background: "#fffbeb", border: "1px solid #fde68a", marginTop: "0.5rem" }}>
+                  <LocalityMark size={15} />
+                  <div>
+                    <strong style={{ color: "#b45309" }}>מאגרים עם שם יישוב</strong> — טבלה שמסומנת בסמל הזה כוללת עמודת שם יישוב,
+                    כך שאפשר לצרף אותה (JOIN) לפי יישוב למאגרים אחרים — אוכלוסייה, מצב השלטון המקומי, בחירות ועוד.
+                    <div style={{ marginTop: "0.35rem" }}>
+                      לסינון הרשימה למאגרים כאלה בלבד — הכפתור <strong>״עם יישוב״</strong> מעל הרשימה.
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {selectedTable && (
@@ -974,6 +1054,13 @@ export default function DataSqlPage() {
                           style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "#dcfce7", color: "#166534", cursor: "help" }}>
                       <SpatialMark size={13} />
                       נתמך ב-PostGIS
+                    </span>
+                  )}
+                  {hasLocality(selectedTable) && (
+                    <span title={LOCALITY_TITLE}
+                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "#fef3c7", color: "#92400e", cursor: "help" }}>
+                      <LocalityMark size={13} />
+                      עם שם יישוב
                     </span>
                   )}
                 </div>

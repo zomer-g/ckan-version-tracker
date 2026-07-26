@@ -296,6 +296,7 @@ async def _index_records(db: AsyncSession, datasets: list[TrackedDataset]) -> li
             "archive_url": f"/archive/{ds.id}",
             "versions_url": f"/versions/{ds.id}",
             "tags": [t.name for t in (ds.tags or [])],
+            "field_flags": ds.field_flags or {},
             "columns": columns,
             "est_rows": m.get("rows"),
         })
