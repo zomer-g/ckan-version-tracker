@@ -1745,7 +1745,8 @@ export const ocalAdmin = {
   deleteSource: (id: string) => request<void>(`/admin/ocal/sources/${id}`, { method: "DELETE" }),
   reimportSource: (id: string, clear = false) =>
     request<Record<string, unknown>>(`/admin/ocal/sources/${id}/reimport${aqs({ clear })}`, { method: "POST" }),
-  enrichSource: (id: string) => request<Record<string, unknown>>(`/admin/ocal/sources/${id}/enrich`, { method: "POST" }),
+  enrichSource: (id: string, ai = false) => request<Record<string, unknown>>(`/admin/ocal/sources/${id}/enrich${aqs({ ai })}`, { method: "POST" }),
+  aiNerStatus: () => request<{ enabled: boolean; available: boolean; provider: string | null; auto: boolean; batch: number }>(`/admin/ocal/ai-ner/status`),
   // candidates / scan / import (in admin.py)
   candidates: (limit = 50) => request<{ candidates: OcalCandidate[]; count: number }>(`/admin/ocal/candidates${aqs({ limit })}`),
   scan: (max_import = 5) =>

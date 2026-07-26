@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_admin_user
+from app.config import settings
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import ocal_db
@@ -160,10 +161,29 @@ async def reimport_source(request: Request, source_id: str,
 @limiter.limit("10/minute")
 async def enrich_source_ep(request: Request, source_id: str,
                            resync: bool = Query(True),
+                           ai: bool = Query(False),
                            user: User = Depends(get_admin_user)):
+    """Re-run enrichment for one source. ``ai=true`` also runs Stage 3 AI-NER
+    (paid LLM) — the on-demand action that matches the legacy Ocal admin button.
+    Ignored (no-op) when no LLM key is configured."""
     from app.services import ocal_enrich
-    res = await ocal_enrich.enrich_source(_uuid(source_id), is_resync=resync)
+    res = await ocal_enrich.enrich_source(_uuid(source_id), is_resync=resync, run_ai=ai)
+    logger.info("ocal admin: source %s enriched by %s (ai=%s)", source_id, user.email, ai)
     return res
+
+
+@router.get("/ai-ner/status")
+@limiter.limit("30/minute")
+async def ai_ner_status(request: Request, user: User = Depends(get_admin_user)):
+    """Report whether the paid AI-NER stage can run (which LLM provider is set)."""
+    from app.services import ocal_enrich
+    return {
+        "enabled": settings.ocal_ai_ner_enabled,
+        "available": ocal_enrich.ai_ner_available(),
+        "provider": ocal_enrich.ai_ner_provider(),
+        "auto": settings.ocal_ai_ner_auto,
+        "batch": settings.ocal_ai_ner_batch,
+    }
 
 
 # ── exceptions (auto-rejected candidates) ────────────────────────────────────

@@ -10,16 +10,23 @@ Run after a source's events are upserted (see ocal_import.import_resource):
   4. find_matches_for_source — group cross-diary duplicate events (similar_events
      + diary_events.match_group_id).
 
-Stage 3 (AI-NER) is intentionally NOT run here — Ocal ran it manually only.
+Stage 3 (AI-NER, ``ai_ner_for_source``) is the PAID LLM stage — a faithful port
+of Ocal's ``stageAiNer``. Like the legacy service it is OFF the automatic path
+(Ocal's pipeline.ts imported with skipAI=true) and runs only on admin demand, or
+automatically when ``settings.ocal_ai_ner_auto`` is set. It reuses the same LLM
+keys as /api/cbs/ask (DeepSeek preferred, then Anthropic).
+
 All writes go to the ocal DB (app/services/ocal_db.py). Thresholds/method strings
 match Ocal exactly so the enrichment is consistent with the migrated corpus.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
 
+from app.config import settings
 from app.services import ocal_db
 
 logger = logging.getLogger(__name__)
@@ -378,6 +385,224 @@ async def find_matches_for_source(source_id, *, is_resync: bool = False) -> dict
     return {"created": created, "joined": joined}
 
 
+# ── Stage 3: AI-NER (paid LLM) — faithful port of Ocal's stageAiNer ───────────
+# Verbatim from Ocal server/src/services/entityExtractor.ts (AI_NER_PROMPT).
+_AI_NER_PROMPT = (
+    "You are an expert at named entity recognition (NER) for Israeli government "
+    "diary events (יומן) written in Hebrew.\n\n"
+    "ENTITY TYPES:\n"
+    "- person: Named individuals — strip honorifics (שר, ח\"כ, ד\"ר, פרופ', עו\"ד, "
+    "מנכ\"ל, הרב, גב', מר) and return only the personal name\n"
+    "- organization: Government ministries (משרד...), companies, unions, committees, "
+    "political parties\n"
+    "- place: Cities, buildings, venues (NOT generic room numbers like \"חדר 105\")\n\n"
+    "RULES:\n"
+    "- Generic role references without a proper name (\"ראש המחלקה\", \"נציג הוועדה\") → skip\n"
+    "- Return full ministry name including ה- prefix: \"משרד הביטחון\" not \"ביטחון\"\n"
+    "- Omit entities with confidence below 0.4\n"
+    "- Each entity gets a \"role\": \"participant\" (person/org present at event), "
+    "\"location\" (place), or \"mentioned\" (referenced but not present)\n\n"
+    "INPUT: A JSON array where each element has \"id\" (event UUID) and \"text\" "
+    "(Hebrew event text).\n\n"
+    "OUTPUT: A JSON array. Each element:\n"
+    '{"id":"<event_id>","entities":[{"name":"<Hebrew name>","type":"person"|'
+    '"organization"|"place","role":"participant"|"location"|"mentioned","raw":'
+    '"<exact substring>","confidence":0.0-1.0}]}\n\n'
+    "Return ONLY the JSON array, no explanation. Empty entities array if nothing found."
+)
+
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+_DEEPSEEK_MODEL = "deepseek-chat"
+_ANTHROPIC_MODEL = "claude-opus-4-8"
+
+
+def ai_ner_provider() -> str | None:
+    """Same selection as /api/cbs/ask: DeepSeek preferred, then Anthropic."""
+    if settings.deepseek_api_key:
+        return "deepseek"
+    if settings.anthropic_api_key:
+        return "anthropic"
+    return None
+
+
+def ai_ner_available() -> bool:
+    return bool(settings.ocal_ai_ner_enabled and ai_ner_provider())
+
+
+def _parse_ner_json(raw: str) -> list:
+    """Tolerant JSON extraction — the model may wrap the array in ```json fences,
+    or return {"results": [...]} / {"data": [...]} instead of a bare array."""
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw).strip()
+    try:
+        obj = json.loads(raw)
+    except (ValueError, TypeError):
+        # last resort — grab the outermost [ ... ] span
+        i, j = raw.find("["), raw.rfind("]")
+        if i >= 0 and j > i:
+            try:
+                obj = json.loads(raw[i:j + 1])
+            except (ValueError, TypeError):
+                return []
+        else:
+            return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        return obj.get("results") or obj.get("data") or obj.get("events") or []
+    return []
+
+
+async def _ai_ner_call(payload: list[dict]) -> list:
+    """One LLM round-trip: [{id,text}] → [{id,entities:[...]}]. Provider-agnostic."""
+    provider = ai_ner_provider()
+    user = json.dumps(payload, ensure_ascii=False)
+    if provider == "deepseek":
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.deepseek_api_key, base_url=_DEEPSEEK_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=_DEEPSEEK_MODEL, temperature=0,
+            max_tokens=settings.ocal_ai_ner_max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _AI_NER_PROMPT},
+                {"role": "user", "content": user},
+            ],
+        )
+        return _parse_ner_json(resp.choices[0].message.content or "")
+    if provider == "anthropic":
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model=_ANTHROPIC_MODEL, max_tokens=settings.ocal_ai_ner_max_tokens,
+            system=_AI_NER_PROMPT,
+            messages=[{"role": "user", "content": user}],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+        return _parse_ner_json(text)
+    return []
+
+
+_AI_ROLES = {"participant", "location", "mentioned"}
+_AI_TYPES = {"person", "organization", "place"}
+
+
+async def ai_ner_for_source(source_id, *, errors: list | None = None) -> int:
+    """Stage 3 — LLM NER over a source's events (extraction_method='ai_ner').
+
+    Batches events (settings.ocal_ai_ner_batch), builds a title+location+
+    other_fields text per event, asks the LLM for entities, resolves each to the
+    people/organizations registry by Jaccard (>=0.7 → entity_id + canonical name),
+    and inserts into event_entities (ON CONFLICT DO NOTHING). Every batch failure
+    is soft — logged + recorded in ``errors`` — so one bad call never aborts."""
+    if errors is None:
+        errors = []
+    if not ai_ner_available():
+        logger.info("ocal_enrich: AI-NER skipped for %s (no provider / disabled)", source_id)
+        return 0
+
+    preg, oreg = await _load_registries()
+    batch = max(1, int(settings.ocal_ai_ner_batch))
+    pool = await ocal_db.get_pool()
+    offset = 0
+    total_inserted = 0
+
+    while True:
+        events = await ocal_db.fetch(
+            "SELECT id, title, location, other_fields FROM diary_events "
+            "WHERE source_id=$1 AND is_active ORDER BY id LIMIT $2 OFFSET $3",
+            source_id, batch, offset)
+        if not events:
+            break
+        offset += len(events)
+
+        payload: list[dict] = []
+        for e in events:
+            other = e["other_fields"] or {}
+            other_text = ""
+            if isinstance(other, dict):
+                other_text = " | ".join(
+                    str(v) for v in other.values()
+                    if isinstance(v, str) and v.strip())
+            text = "\n".join(
+                normalize_text(t) for t in (e["title"], e["location"], other_text) if t)
+            if text.strip():
+                payload.append({"id": str(e["id"]), "text": text})
+
+        if not payload:
+            if len(events) < batch:
+                break
+            continue
+
+        # Map the string id we sent back to the real UUID; the model must only
+        # attach entities to events from THIS batch (guards hallucinated ids).
+        id_map = {str(e["id"]): e["id"] for e in events}
+
+        try:
+            parsed = await _ai_ner_call(payload)
+        except Exception as exc:  # noqa: BLE001 — soft per-batch
+            errors.append(f"AI NER batch error at offset {offset}: {exc}")
+            logger.warning("ocal_enrich: AI-NER batch failed at offset %d: %s", offset, exc)
+            if len(events) < batch:
+                break
+            continue
+
+        rows: list[tuple] = []
+        seen: set[tuple] = set()
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            ev_id = id_map.get(str(item.get("id")))
+            if ev_id is None:
+                continue
+            for ent in item.get("entities") or []:
+                if not isinstance(ent, dict):
+                    continue
+                name = ent.get("name")
+                try:
+                    conf = float(ent.get("confidence", 0))
+                except (ValueError, TypeError):
+                    conf = 0.0
+                etype = ent.get("type")
+                role = ent.get("role")
+                if not name or conf < 0.4 or etype not in _AI_TYPES or role not in _AI_ROLES:
+                    continue
+                cleaned = clean_name(normalize_text(name))
+                if not cleaned:
+                    continue
+                low = cleaned.lower()
+                entity_id, resolved = None, cleaned
+                if etype == "person":
+                    pid, pcanon, ps = _best(low, preg)
+                    if ps >= 0.7:
+                        entity_id, resolved = pid, pcanon
+                elif etype == "organization":
+                    oid, ocanon, os = _best(low, oreg)
+                    if os >= 0.7:
+                        entity_id, resolved = oid, ocanon
+                key = (ev_id, etype, resolved, role)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append((ev_id, etype, entity_id, resolved, role,
+                             ent.get("raw"), conf, "ai_ner"))
+
+        if rows:
+            async with pool.acquire() as conn:
+                for i in range(0, len(rows), 500):
+                    await conn.executemany(_EE_INSERT, rows[i:i + 500])
+            total_inserted += len(rows)
+
+        if len(events) < batch:
+            break
+
+    logger.info("ocal_enrich: AI-NER for %s — inserted=%d (%s)",
+                source_id, total_inserted, ai_ner_provider())
+    return total_inserted
+
+
 # ── Materialized view + orchestrator ──────────────────────────────────────────
 
 async def refresh_entity_matview() -> None:
@@ -391,11 +616,25 @@ async def refresh_entity_matview() -> None:
             logger.warning("ocal_enrich: mv_entity_counts refresh skipped: %s", e)
 
 
-async def enrich_source(source_id, *, is_resync: bool = False) -> dict:
-    """Full free-enrichment chain for one source. Each stage is non-fatal."""
+async def enrich_source(source_id, *, is_resync: bool = False,
+                        run_ai: bool = False) -> dict:
+    """Full enrichment chain for one source. Each stage is non-fatal.
+
+    The free stages (entities → cross-refs → matview → matching) always run.
+    ``run_ai`` adds Stage 3 (paid LLM NER) between the free entity pass and
+    cross-referencing — so the cross-ref/matview see the AI-added entities too —
+    mirroring the legacy admin "run entity extraction (with AI)" action. AI-NER
+    is a no-op when disabled or no LLM key is set."""
     out = {}
     try:
         out["entities"] = await extract_entities_for_source(source_id, clear_existing=is_resync)
+        if run_ai and ai_ner_available():
+            ai_errors: list = []
+            out["ai_ner"] = {
+                "inserted": await ai_ner_for_source(source_id, errors=ai_errors),
+                "provider": ai_ner_provider(),
+                "errors": ai_errors,
+            }
         out["cross_refs"] = await cross_reference_for_source(source_id, is_resync=is_resync)
         await refresh_entity_matview()
     except Exception:  # noqa: BLE001

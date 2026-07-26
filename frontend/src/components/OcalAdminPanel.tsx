@@ -49,6 +49,9 @@ function SourcesSection() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "enabled" | "disabled" | "unreviewed">("all");
   const [busy, setBusy] = useState<string | null>(null);
+  const [ner, setNer] = useState<{ available: boolean; provider: string | null } | null>(null);
+
+  useEffect(() => { ocalAdmin.aiNerStatus().then(setNer).catch(() => setNer(null)); }, []);
 
   const load = useCallback(() => {
     const params: Record<string, unknown> = { q, limit: 300 };
@@ -115,6 +118,19 @@ function SourcesSection() {
                     )}
                     <button style={btn} disabled={busy === s.id}
                       onClick={() => act(s.id, () => ocalAdmin.enrichSource(s.id), "הועשר")}>העשר</button>
+                    {ner?.available && (
+                      <button style={{ ...btn, color: "#6d28d9", borderColor: "#c4b5fd" }} disabled={busy === s.id}
+                        title={`חילוץ ישויות עם LLM (${ner.provider}) — כרוך בעלות`}
+                        onClick={async () => {
+                          if (!confirm(`להריץ חילוץ ישויות AI על "${s.name}"? הפעולה כרוכה בעלות LLM.`)) return;
+                          setBusy(s.id);
+                          try {
+                            const r = await ocalAdmin.enrichSource(s.id, true) as { ai_ner?: { inserted?: number; provider?: string } };
+                            ok(`חילוץ AI הושלם — ${r.ai_ner?.inserted ?? 0} ישויות (${r.ai_ner?.provider ?? ner.provider})`);
+                            load();
+                          } catch (e) { fail(e); } finally { setBusy(null); }
+                        }}>חילוץ AI</button>
+                    )}
                     <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5" }} disabled={busy === s.id}
                       onClick={() => { if (confirm(`למחוק את "${s.name}" וכל האירועים שלו?`)) act(s.id, () => ocalAdmin.deleteSource(s.id), "נמחק"); }}>מחק</button>
                   </div>

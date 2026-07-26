@@ -503,7 +503,11 @@ async def import_resource(resource_id: str, *, force: bool = False,
     if enrich:
         try:
             from app.services import ocal_enrich
-            enriched = await ocal_enrich.enrich_source(source_id, is_resync=False)
+            # AI-NER stays off the auto path unless ocal_ai_ner_auto is set —
+            # the legacy Ocal pipeline imported with skipAI=true (free stages
+            # only); the paid LLM stage is an admin-triggered action by default.
+            enriched = await ocal_enrich.enrich_source(
+                source_id, is_resync=False, run_ai=settings.ocal_ai_ner_auto)
         except Exception:  # noqa: BLE001 — enrichment is best-effort
             logger.exception("ocal_import: enrichment failed for %s", source_id)
 

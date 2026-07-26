@@ -301,6 +301,20 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # ── יומן לעם (Ocal) Stage-3 AI-NER (LLM entity extraction) ──
+    # The legacy Ocal pipeline ran the two FREE stages (owner-link + participant
+    # parse) on every auto-import, and only ran the paid LLM NER on ADMIN demand
+    # (pipeline.ts imports with skipAI=true; the admin "run entity extraction"
+    # button and manual PDF uploads pass skipAI=false). We mirror that exactly:
+    # ``ocal_ai_ner_auto`` stays OFF so the scheduler keeps doing free stages
+    # only, and AI-NER is triggered per-source from the admin panel. It reuses
+    # deepseek_api_key/anthropic_api_key (DeepSeek's deepseek-chat matches the
+    # model the old service used); with neither key it is a no-op.
+    ocal_ai_ner_enabled: bool = True     # allow admin-triggered AI-NER at all
+    ocal_ai_ner_auto: bool = False       # ALSO run it automatically after each import
+    ocal_ai_ner_batch: int = 50          # events per LLM call (Ocal AI_BATCH)
+    ocal_ai_ner_max_tokens: int = 4000   # per-call output cap (Ocal used 4000)
+
     # ── MCP machine-to-machine service token ──
     # Optional shared secret that lets a trusted machine — the "חיפוש רוחבי"
     # discovery gateway — call /mcp WITHOUT the interactive Google OAuth flow.
