@@ -315,6 +315,14 @@ class Settings(BaseSettings):
     ocal_ai_ner_batch: int = 50          # events per LLM call (Ocal AI_BATCH)
     ocal_ai_ner_max_tokens: int = 4000   # per-call output cap (Ocal used 4000)
 
+    # LLM-assisted FIELD MAPPING for table files (CSV/XLS/ICAL) — ports Ocal's
+    # fieldMapper.mapFields: heuristic first, and only when heuristic confidence
+    # < 0.8 AND a key is set, ask the LLM to map columns→schema (used iff it beats
+    # heuristic). This is the diary DATA-STRUCTURING step (NOT the PDF path, which
+    # stays unported). Reuses deepseek_api_key/anthropic_api_key; no key ⇒ heuristic
+    # only. On the same auto path as Ocal (it ran mapFields on every import).
+    ocal_llm_mapping_enabled: bool = True
+
     # ── MCP machine-to-machine service token ──
     # Optional shared secret that lets a trusted machine — the "חיפוש רוחבי"
     # discovery gateway — call /mcp WITHOUT the interactive Google OAuth flow.

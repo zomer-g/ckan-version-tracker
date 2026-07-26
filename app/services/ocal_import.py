@@ -23,6 +23,7 @@ Hebrew free-text.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -135,6 +136,138 @@ def map_fields(columns: list[str]) -> tuple[dict, float]:
     else:
         conf = (n / _N_TARGETS) * 0.5
     return mapping, conf
+
+
+# ── LLM-assisted field mapping (ported from OCAL fieldMapper.mapFields) ────────
+# Table files (CSV/XLS/ICAL) with creative Hebrew headers or serial/fraction
+# date-time columns often defeat the regex heuristic. When heuristic confidence
+# is below _LLM_MAPPING_THRESHOLD and an LLM key is set, ask the model to map
+# columns → schema (given the first 3 sample rows), and use it only if it beats
+# the heuristic — exactly what the legacy Node service did on every import.
+_LLM_MAPPING_THRESHOLD = 0.8
+_VALID_TARGETS = frozenset(HEURISTIC_PATTERNS.keys())
+
+_LLM_MAPPING_PROMPT = (
+    "You are mapping columns from an Israeli public official's calendar/diary "
+    "(יומן) dataset to a standardized schema.\n\n"
+    "IMPORTANT data patterns to recognize:\n"
+    "- Excel serial date numbers (e.g. 45270, 45882) represent dates — the column "
+    "containing them is a date column\n"
+    "- Decimal fractions (e.g. 0.4375, 0.625, 0.708) represent times as fractions "
+    "of a day — the column containing them is a time column\n"
+    "- Hebrew column names may use creative or non-standard naming (e.g. \"פעילות\" "
+    "= title, \"שם אירוע/פגישה\" = title, \"יום בשבוע\" with serial numbers = "
+    "start_date, \"משאבי פגישה\" with venues = location)\n\n"
+    "Given these column names: {{FIELDS}}\n\n"
+    "And these sample records (first 3): {{SAMPLES}}\n\n"
+    "Map each column to ONE of these target fields:\n"
+    "- title (required): The event subject/title/name\n"
+    "- start_date (required): The event date (look for date strings, serial "
+    "numbers, or day columns)\n"
+    "- start_time: The event start time (time strings or decimal fractions)\n"
+    "- end_date: The event end date (if separate from start_date)\n"
+    "- end_time: The event end time\n"
+    "- location: The event location/venue/room/resources\n"
+    "- participants: The event participants/attendees/invitees\n"
+    "- organizer: The event organizer\n"
+    "- notes: Notes, comments, or classification\n\n"
+    "Return ONLY a valid JSON object mapping target field names to source column "
+    "names. Only include mappings you are confident about. Do NOT include unmapped "
+    'fields.\nExample: {"title":"נושא","start_date":"תאריך","start_time":"שעת התחלה",'
+    '"location":"מיקום"}'
+)
+
+
+def _mapping_llm_provider() -> str | None:
+    """DeepSeek preferred (deepseek-chat, the model Ocal used), then Anthropic."""
+    if not settings.ocal_llm_mapping_enabled:
+        return None
+    if settings.deepseek_api_key:
+        return "deepseek"
+    if settings.anthropic_api_key:
+        return "anthropic"
+    return None
+
+
+async def _llm_map_call(prompt: str) -> dict:
+    """One LLM round-trip returning the raw {target: source_col} object."""
+    provider = _mapping_llm_provider()
+    if provider == "deepseek":
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.deepseek_api_key,
+                             base_url="https://api.deepseek.com")
+        resp = await client.chat.completions.create(
+            model="deepseek-chat", temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = resp.choices[0].message.content or "{}"
+    elif provider == "anthropic":
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(
+            model="claude-opus-4-8", max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = "".join(b.text for b in resp.content
+                          if getattr(b, "type", None) == "text") or "{}"
+    else:
+        return {}
+    content = content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"\n?```$", "", content).strip()
+    try:
+        obj = json.loads(content)
+    except (ValueError, TypeError):
+        i, j = content.find("{"), content.rfind("}")
+        obj = json.loads(content[i:j + 1]) if i >= 0 and j > i else {}
+    return obj if isinstance(obj, dict) else {}
+
+
+async def map_fields_llm(columns: list[str], rows: list) -> tuple[dict, float]:
+    """LLM field mapping with the same validation + confidence as Ocal.
+
+    ``rows`` are value-lists aligned with ``columns``; the first 3 become the
+    sample records shown to the model. Returns ({target: original_column}, conf).
+    Raises on network/parse failure so the caller can fall back to heuristic."""
+    samples = [dict(zip(columns, r)) for r in rows[:3]]
+    prompt = (_LLM_MAPPING_PROMPT
+              .replace("{{FIELDS}}", json.dumps(columns, ensure_ascii=False))
+              .replace("{{SAMPLES}}", json.dumps(samples, ensure_ascii=False, default=str)))
+    raw = await _llm_map_call(prompt)
+
+    norm_cols = [odi._norm_header(c) for c in columns]
+    mapping: dict[str, str] = {}
+    claimed: set[str] = set()
+    for target, value in raw.items():
+        if target not in _VALID_TARGETS or not isinstance(value, str):
+            continue
+        nv = odi._norm_header(value)
+        if nv and nv not in claimed and nv in norm_cols:
+            mapping[target] = columns[norm_cols.index(nv)]
+            claimed.add(nv)
+
+    has_required = all(t in mapping for t in _REQUIRED)
+    conf = min(0.95, 0.7 + len(mapping) * 0.05) if has_required else 0.3
+    return mapping, conf
+
+
+async def map_fields_best(columns: list[str], rows: list) -> tuple[dict, float, str]:
+    """Heuristic first; if weak (<0.8) and an LLM key is set, try LLM and keep it
+    only if it beats the heuristic. Mirrors Ocal fieldMapper.mapFields."""
+    mapping, conf = map_fields(columns)
+    if conf >= _LLM_MAPPING_THRESHOLD or _mapping_llm_provider() is None:
+        return mapping, conf, "heuristic"
+    try:
+        llm_map, llm_conf = await map_fields_llm(columns, rows)
+        if llm_conf > conf:
+            logger.info("ocal_import: LLM field-mapping used (conf %.2f > heuristic %.2f)",
+                        llm_conf, conf)
+            return llm_map, llm_conf, "llm"
+    except Exception as e:  # noqa: BLE001 — LLM mapping is best-effort
+        logger.warning("ocal_import: LLM field-mapping failed, using heuristic: %s", e)
+    return mapping, conf, "heuristic"
 
 
 # ── date/time parsing (ported from OCAL dateParser.ts, string-hardened) ──────
@@ -465,7 +598,7 @@ async def import_resource(resource_id: str, *, force: bool = False,
                 logger.debug("ocal_import: package_show failed for %s", res.get("package_id"))
 
     columns, rows = await _fetch_and_parse(res)
-    mapping, conf = map_fields(columns)
+    mapping, conf, map_method = await map_fields_best(columns, rows)
 
     if not force:
         if not all(t in mapping for t in _REQUIRED):
@@ -496,8 +629,8 @@ async def import_resource(resource_id: str, *, force: bool = False,
 
     inserted = await _upsert_events(records)
     await _update_source_stats(source_id)
-    logger.info("ocal_import: %s -> source %s (%d/%d rows, conf=%.2f)",
-                resource_id, source_id, inserted, len(rows), conf)
+    logger.info("ocal_import: %s -> source %s (%d/%d rows, conf=%.2f, map=%s)",
+                resource_id, source_id, inserted, len(rows), conf, map_method)
 
     enriched = None
     if enrich:
@@ -514,7 +647,7 @@ async def import_resource(resource_id: str, *, force: bool = False,
     return {
         "resource_id": resource_id, "source_id": str(source_id), "title": ds_name,
         "rows_parsed": len(rows), "events_upserted": inserted,
-        "mapping": mapping, "confidence": round(conf, 3),
+        "mapping": mapping, "confidence": round(conf, 3), "map_method": map_method,
         "person_matched": person_id is not None, "enriched": enriched,
     }
 
