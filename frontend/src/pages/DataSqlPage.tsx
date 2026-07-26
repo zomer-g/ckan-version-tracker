@@ -70,6 +70,15 @@ const ODATA_BADGE: Badge = {
   bg: "#ffedd5", fg: "#9a3412", accent: "#ea580c",
 };
 
+// יומן לעם (kind "ocal"): live foreign-table view of the ocal DB — also PROCESSED.
+const OCAL_BADGE: Badge = {
+  id: "ocal", label: "יומן לעם (מידע מעובד)",
+  bg: "#fef3c7", fg: "#92400e", accent: "#d97706",
+};
+
+// The processed (non-official-source) badges, rendered below the divider.
+const PROCESSED_BADGE_IDS = new Set(["odata", "ocal"]);
+
 // Does this table carry a queryable PostGIS column? Keyed on the column TYPE,
 // not the name: append_store._ckan_type labels geometry distinctly, so this
 // stays true if the column is ever renamed, and false for a layer that only has
@@ -192,6 +201,7 @@ const FILTER_FACETS: FilterFacet[] = [
 function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
   if (t.kind === "odata") return ODATA_BADGE;
+  if (t.kind === "ocal") return OCAL_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
   return { id: b.id, label: b.label, bg: b.bg, fg: b.fg, accent: b.accent };
 }
@@ -201,6 +211,7 @@ function badgeOf(t: CatalogTable): Badge {
 function groupLink(b: Badge): string {
   if (b.id === "knesset-db") return "/knesset?tab=sql";
   if (b.id === "odata") return "/projects/odata";
+  if (b.id === "ocal") return "/projects/ocal";
   return `/sources/${b.id}`;
 }
 
@@ -552,8 +563,8 @@ export default function DataSqlPage() {
       g.list.sort((x, y) => displayName(x).localeCompare(displayName(y), "he"));
     }
     // Official public sources first (by size), then PROCESSED sources (odata /
-    // "מידע לעם") always last — they render below a clear divider.
-    const isProcessed = (g: { badge: Badge }) => (g.badge.id === "odata" ? 1 : 0);
+    // ocal) always last — they render below a clear divider.
+    const isProcessed = (g: { badge: Badge }) => (PROCESSED_BADGE_IDS.has(g.badge.id) ? 1 : 0);
     return [...m.values()].sort(
       (a, b) => isProcessed(a) - isProcessed(b) || b.list.length - a.list.length,
     );
@@ -569,9 +580,9 @@ export default function DataSqlPage() {
 
   const shownTables = useMemo(() => groups.flatMap((g) => g.list), [groups]);
 
-  // Index of the first PROCESSED source group (odata) — the divider goes above it.
+  // Index of the first PROCESSED source group — the divider goes above it.
   const firstProcessedIdx = useMemo(
-    () => groups.findIndex((g) => g.badge.id === "odata"),
+    () => groups.findIndex((g) => PROCESSED_BADGE_IDS.has(g.badge.id)),
     [groups],
   );
 
@@ -926,10 +937,10 @@ export default function DataSqlPage() {
             // group — so the user sees exactly what the result is built from.
             const usedInGroup = list.filter((t) => usedTables.has(t.table));
             const visible = open ? list : usedInGroup;
-            const isProcessed = badge.id === "odata";
+            const isProcessed = PROCESSED_BADGE_IDS.has(badge.id);
             // Divider before the FIRST processed source — everything below it is
             // derived data, not an original official source.
-            const showDivider = isProcessed && idx === firstProcessedIdx;
+            const showDivider = idx === firstProcessedIdx;
             return (
               <Fragment key={badge.id}>
               {showDivider && (

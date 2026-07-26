@@ -962,8 +962,8 @@ export interface CatalogTable {
   // Kept in step with data_catalog: `idx` (the mirrored index CSVs, kind
   // "index") joined public and knesset and this union was never widened, so
   // TypeScript has been quietly wrong about every GovMap layer since.
-  schema: "public" | "knesset" | "idx" | "odata";
-  kind: "dataset" | "knesset" | "index" | "odata";
+  schema: "public" | "knesset" | "idx" | "odata" | "ocal";
+  kind: "dataset" | "knesset" | "index" | "odata" | "ocal";
   title: string;
   description?: string;
   group?: string | null;
@@ -1357,6 +1357,13 @@ export const admin = {
       `/admin/odata/imports/${encodeURIComponent(resource_id)}`,
       { method: "DELETE" },
     ),
+  // יומן לעם (ocal) live foreign-table exposure (postgres_fdw)
+  ocalFdwStatus: () =>
+    request<{ configured: boolean; tables: { table: string; title: string }[]; count: number }>(
+      "/admin/ocal/fdw-status"),
+  ocalFdwSetup: () =>
+    request<{ ok: boolean; tables?: string[]; imported?: string[] }>(
+      "/admin/ocal/fdw-setup", { method: "POST" }),
   activityLog: (opts: { dataset_id?: string; event?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.dataset_id) p.set("dataset_id", opts.dataset_id);

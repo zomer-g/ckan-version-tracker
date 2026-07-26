@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # the autocomplete. It has to be on the path anyway, or ST_AsText / ST_DWithin
 # do not resolve and every spatial example in the help below is a syntax error.
 # Last position means the three data schemas win any name collision.
-CONSOLE_SEARCH_PATH = "public, knesset, idx, odata, extensions"
+CONSOLE_SEARCH_PATH = "public, knesset, idx, odata, ocal, extensions"
 
 # ── catalog cache ────────────────────────────────────────────────────────────
 # build_catalog() is called on EVERY /data page load *and* on every detail-cube
@@ -211,8 +211,49 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
 
     out.extend(await _index_records(db, datasets))
     out.extend(await _odata_records())
+    out.extend(await _ocal_records())
     out.extend(await _knesset_records())
     return out
+
+
+async def _ocal_records() -> list[dict]:
+    """Catalog rows for the יומן לעם foreign tables (schema ``ocal``, kind='ocal').
+
+    These are LIVE views (postgres_fdw) into the separate ocal Neon DB — processed
+    data, badged "יומן לעם", grouped with the other non-official sources. Empty
+    (and harmless) when fdw isn't set up."""
+    from app.services import ocal_fdw
+    try:
+        tables = await ocal_fdw.list_tables()
+    except Exception:  # noqa: BLE001 — never let this break the whole catalog
+        logger.debug("data_catalog: ocal list_tables failed", exc_info=True)
+        return []
+    if not tables:
+        return []
+    cols_by_table = await append_store.schema_table_columns(ocal_fdw.SCHEMA)
+    recs: list[dict] = []
+    for m in tables:
+        columns = cols_by_table.get(m["table"])
+        if not columns:
+            continue
+        recs.append({
+            "table": m["table"],
+            "schema": ocal_fdw.SCHEMA,
+            "kind": "ocal",
+            "title": m.get("title") or m["table"],
+            "description": "יומן לעם (ocal.org.il) — מידע מעובד",
+            "dataset_id": None,
+            "version_id": None,
+            "organization": None,
+            "ckan_id": None,
+            "source_type": "ocal",
+            "source_url": "https://ocal.org.il",
+            "tags": [],
+            "columns": columns,
+            # No cheap estimate for a foreign table — the detail cube counts it.
+            "est_rows": None,
+        })
+    return recs
 
 
 async def _odata_records() -> list[dict]:
@@ -443,10 +484,10 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
                "sample": sample, "csv_export": True}
         return rec
 
-    if rec["kind"] in ("index", "odata"):
-        # Mirrored index CSV / admin-imported odata table: schema-qualified count
-        # and sample, no per-version file links (the raw source lives elsewhere —
-        # R2 for index, odata.org.il for odata, reachable via source_url).
+    if rec["kind"] in ("index", "odata", "ocal"):
+        # Mirrored index CSV / imported odata table / ocal foreign table:
+        # schema-qualified count and sample, no per-version file links (the raw
+        # source lives elsewhere, reachable via source_url).
         try:
             count = await append_store.table_count(table, schema=schema)
         except Exception:  # noqa: BLE001

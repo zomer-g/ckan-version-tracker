@@ -1929,3 +1929,33 @@ async def odata_import_file(
     logger.info("odata import-file by %s: %s -> odata.%s (%s rows)",
                 user.email, rid, res["table"], res["rows"])
     return res
+
+
+@router.post("/ocal/fdw-setup")
+@limiter.limit("6/minute")
+async def ocal_fdw_setup(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """(Re)create the postgres_fdw foreign tables that expose יומן לעם (ocal) in
+    the /data console. Idempotent; returns the outcome (fdw support on Neon is
+    confirmed empirically)."""
+    from app.services import ocal_fdw
+    res = await ocal_fdw.ensure_fdw()
+    logger.info("ocal fdw setup by %s: %s", user.email, res)
+    if not res.get("ok"):
+        raise HTTPException(status_code=502, detail=res.get("reason") or "fdw setup failed")
+    return res
+
+
+@router.get("/ocal/fdw-status")
+@limiter.limit("30/minute")
+async def ocal_fdw_status(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Which ocal foreign tables are currently exposed in /data."""
+    from app.services import ocal_fdw
+    tables = await ocal_fdw.list_tables()
+    return {"configured": ocal_fdw.is_configured(), "tables": tables,
+            "count": len(tables)}
