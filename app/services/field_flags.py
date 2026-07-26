@@ -133,6 +133,10 @@ async def recompute(db: AsyncSession, fields=DEFAULT_FIELDS) -> dict:
             changed += 1
 
     await db.commit()
+    # The /data catalog caches its records (incl. field_flags) for ~5 min per
+    # process; drop this process's copy so the change shows at once. Other worker
+    # processes converge on their own TTL — that's the documented backstop.
+    data_catalog.invalidate_catalog_cache()
     stats = {
         "fields": list(fields),
         "datasets_total": len(datasets),

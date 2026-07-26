@@ -1333,6 +1333,7 @@ async def update_tracked(
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
+        field_flags=ds.field_flags or {},
     )
 
 
@@ -1980,4 +1981,5 @@ async def get_tracked_public(
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
+        field_flags=ds.field_flags or {},
     )
