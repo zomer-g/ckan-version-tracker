@@ -118,6 +118,26 @@ class Settings(BaseSettings):
     # See app/services/ocal_db.py.
     ocal_database_url: str = ""
 
+    # ── יומן לעם (Ocal) diary auto-import ──
+    # A scheduled job that discovers new diary resources on odata.org.il (CKAN
+    # keyword "יומן"), fetches+parses them (reusing app/services/odata_import.py's
+    # CSV/XLS/XLSX/ICAL parser, ported from OCAL), heuristically maps columns to
+    # the diary_events schema, and upserts into the ocal DB — keeping the corpus
+    # fresh once the legacy Ocal Node service is retired. Off ⇒ no discovery.
+    # Rejected candidates are recorded in diary_exceptions so discovery converges.
+    ocal_import_enabled: bool = True
+    ocal_import_interval_hours: float = 12.0
+    # How many NEW resources to evaluate+import per scheduler tick (each is a
+    # download+parse — kept small for the 512MB dyno).
+    ocal_import_per_tick: int = 2
+    # Auto-import gate: a discovered resource is imported only when title AND a
+    # start-date column mapped (the real correctness guarantee) and it has at
+    # least this many rows. The confidence floor is deliberately LOW — a valid
+    # diary can be just two columns (נושא + תאריך, confidence ~0.27); requiring
+    # more would reject legitimate minimal diaries. Others → auto_rejected.
+    ocal_import_confidence: float = 0.25
+    ocal_import_min_rows: int = 10
+
     # ── Knesset ODATA mirror ("מסד הנתונים של הכנסת") ──
     # Syncs all ~48 Knesset ODATA-v4 entity sets into a `knesset` schema in the
     # append DB above, with a public read-only SQL console at /knesset. Requires

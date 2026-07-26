@@ -304,6 +304,33 @@ async def init_scheduler() -> None:
             settings.auto_discover_interval_hours,
         )
 
+    # יומן לעם (Ocal) diary auto-import: discover new diary resources on
+    # odata.org.il and onboard a bounded few per tick into the ocal DB (reuses
+    # odata_import's parser). No-op unless OCAL_DATABASE_URL is set and the
+    # feature flag is on. Rejected candidates are recorded so it converges.
+    async def ocal_import_job() -> None:
+        from app.services import ocal_db, ocal_import
+        if not (settings.ocal_import_enabled and ocal_db.is_configured()):
+            return
+        try:
+            r = await ocal_import.scan_once()
+            if r.get("imported") or r.get("skipped"):
+                logger.info("ocal_import tick: %s", r)
+        except Exception:  # noqa: BLE001 — never let a bad scan kill the job
+            logger.exception("ocal_import scan tick failed")
+
+    if settings.ocal_import_enabled:
+        scheduler.add_job(
+            ocal_import_job,
+            trigger=IntervalTrigger(hours=settings.ocal_import_interval_hours),
+            id="ocal_import",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=600,
+        )
+        logger.info("Ocal diary auto-import enabled — every %.1fh",
+                    settings.ocal_import_interval_hours)
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

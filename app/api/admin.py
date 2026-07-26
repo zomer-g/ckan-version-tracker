@@ -1785,6 +1785,63 @@ async def odata_import_delete(
     return {"deleted": True}
 
 
+# ── יומן לעם (Ocal) diary import — admin triggers over the scheduled auto-import ─
+
+class OcalImportRequest(BaseModel):
+    resource_id: str
+
+
+@router.get("/ocal/candidates")
+@limiter.limit("10/minute")
+async def ocal_import_candidates(
+    request: Request,
+    limit: int = 50,
+    user: User = Depends(get_admin_user),
+):
+    """New diary resources on odata.org.il not yet imported or rejected."""
+    from app.services import ocal_import
+    cands = await ocal_import.discover_candidates(limit=max(1, min(limit, 200)))
+    return {"candidates": cands, "count": len(cands)}
+
+
+@router.post("/ocal/import")
+@limiter.limit("12/minute")
+async def ocal_import_one(
+    request: Request,
+    body: OcalImportRequest,
+    user: User = Depends(get_admin_user),
+):
+    """Force-import one diary resource into the ocal DB (bypasses the auto gate)."""
+    from app.services import ocal_import
+    rid = (body.resource_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="resource_id is required")
+    try:
+        res = await ocal_import.import_resource(rid, force=True)
+    except ocal_import.SkipImport as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("ocal admin import failed: %s", rid)
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("ocal diary imported by %s: %s", user.email, rid)
+    return res
+
+
+@router.post("/ocal/scan")
+@limiter.limit("3/minute")
+async def ocal_import_scan(
+    request: Request,
+    max_import: int = 5,
+    user: User = Depends(get_admin_user),
+):
+    """Run the diary discovery+import scan once, now (honours the auto gate)."""
+    from app.services import ocal_import
+    res = await ocal_import.scan_once(max_import=max(1, min(max_import, 20)))
+    logger.info("ocal diary scan by %s: %s", user.email,
+                {k: res.get(k) for k in ("candidates", "imported", "skipped", "errors")})
+    return res
+
+
 class FieldFlagsRecomputeRequest(BaseModel):
     # Which flag keys to (re)compute + merge. Defaults to the first flag we
     # enabled — has_locality — so the rollout can grow one field at a time.
