@@ -216,32 +216,43 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
     return out
 
 
+# Human titles for יומן לעם (ocal) tables. Any table not listed falls back to its
+# own name, so tables the ocal app adds later still surface.
+_OCAL_TITLES = {
+    "diary_events": "יומן לעם — אירועי יומן",
+    "diary_sources": "יומן לעם — מקורות יומן",
+    "organizations": "יומן לעם — ארגונים",
+    "people": "יומן לעם — אנשים",
+    "event_entities": "יומן לעם — ישויות באירועים",
+    "entity_cross_refs": "יומן לעם — הצלבות בין ישויות",
+    "similar_events": "יומן לעם — אירועים דומים",
+    "site_content": "יומן לעם — תוכן אתר",
+    "mv_entity_counts": "יומן לעם — ספירת ישויות",
+}
+
+
 async def _ocal_records() -> list[dict]:
     """Catalog rows for the יומן לעם tables (schema ``ocal``, kind='ocal').
 
-    These are LOCAL tables materialised from the separate ocal Neon DB (see
-    ocal_mirror) — processed data, badged "יומן לעם", grouped with the other
-    non-official sources. Real local tables, so they JOIN freely with every
-    other schema. Empty (and harmless) before the first sync."""
-    from app.services import ocal_mirror
+    The ``ocal`` schema is co-located IN the console (append) DB — the ocal app
+    writes there directly, so this reads its live production tables (no copy).
+    Processed data, badged "יומן לעם", grouped with the other non-official
+    sources. Empty (and harmless) until the schema is populated."""
     try:
-        tables = await ocal_mirror.list_tables()
+        cols_by_table = await append_store.schema_table_columns("ocal")
     except Exception:  # noqa: BLE001 — never let this break the whole catalog
-        logger.debug("data_catalog: ocal list_tables failed", exc_info=True)
+        logger.debug("data_catalog: ocal schema columns failed", exc_info=True)
         return []
-    if not tables:
-        return []
-    cols_by_table = await append_store.schema_table_columns(ocal_mirror.SCHEMA)
     recs: list[dict] = []
-    for m in tables:
-        columns = cols_by_table.get(m["table"])
-        if not columns:
+    for table, columns in sorted(cols_by_table.items()):
+        # Skip bookkeeping / staging leftovers, never real data.
+        if not columns or table.startswith("_") or table.endswith("__stg"):
             continue
         recs.append({
-            "table": m["table"],
-            "schema": ocal_mirror.SCHEMA,
+            "table": table,
+            "schema": "ocal",
             "kind": "ocal",
-            "title": m.get("title") or m["table"],
+            "title": _OCAL_TITLES.get(table, table),
             "description": "יומן לעם (ocal.org.il) — מידע מעובד",
             "dataset_id": None,
             "version_id": None,
@@ -251,7 +262,7 @@ async def _ocal_records() -> list[dict]:
             "source_url": "https://ocal.org.il",
             "tags": [],
             "columns": columns,
-            "est_rows": m.get("rows"),
+            "est_rows": None,
         })
     return recs
 
