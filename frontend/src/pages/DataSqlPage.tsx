@@ -8,7 +8,6 @@ import {
 } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
-import OdataStructureGroup from "../components/OdataStructureGroup";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import SqlEditor, {
@@ -905,11 +904,6 @@ export default function DataSqlPage() {
               </div>
             );
           })}
-
-          {/* מידע לעם — data structure only (list of items + files), at the
-              END of the table browser, in the same box. Processed data, NOT
-              queryable; importing files into SQL is a later step. */}
-          <OdataStructureGroup />
         </div>
 
         {/* Detail cube */}
