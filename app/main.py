@@ -249,6 +249,13 @@ from app.mcp.knesset_routes import knesset_mcp_router, knesset_mcp_wellknown_rou
 app.include_router(knesset_mcp_wellknown_router)
 app.include_router(knesset_mcp_router)
 
+# Dedicated יומן לעם (Ocal) MCP at /ocal/mcp (same OAuth server + api_users gate;
+# calendar-events tools over the migrated Ocal Neon DB). Registered before the
+# SPA fallback so /ocal/mcp isn't swallowed by the React /projects/ocal route.
+from app.mcp.ocal_routes import ocal_mcp_router, ocal_mcp_wellknown_router
+app.include_router(ocal_mcp_wellknown_router)
+app.include_router(ocal_mcp_router)
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"

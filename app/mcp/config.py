@@ -21,6 +21,9 @@ CBS_MCP_PREFIX = "/cbs/mcp"
 # same authorization server (SQL mirror of the Knesset ODATA tables; metadata +
 # protocol links only, no document content).
 KNESSET_MCP_PREFIX = "/knesset/mcp"
+# Dedicated יומן לעם (Ocal) MCP — a FOURTH protected resource on the same
+# authorization server (officials' public work-calendars, migrated into OVER).
+OCAL_MCP_PREFIX = "/ocal/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -61,6 +64,17 @@ def knesset_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the Knesset resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/knesset/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{KNESSET_MCP_PREFIX}"
+
+
+def ocal_mcp_url(request: Request, path: str = "") -> str:
+    """The Ocal MCP resource URL, e.g. https://www.over.org.il/ocal/mcp."""
+    return f"{base_url(request)}{OCAL_MCP_PREFIX}{path}"
+
+
+def ocal_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the Ocal resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/ocal/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{OCAL_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:
