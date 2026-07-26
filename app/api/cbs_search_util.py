@@ -177,8 +177,6 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
         params[pk] = f"{pfx}%"
     catchall = " OR ".join(catch_terms) if catch_terms else "false"
 
-    rank = (f"ts_rank(search_vector, to_tsquery('simple', :tsq))"
-            if tsq else "0")
     # BUCKET the text rank into 0.001-wide tiers before ordering. ts_rank is
     # mildly length-sensitive (normalization 0), so two pages with the SAME
     # title pattern but different full_text length get fractionally different
@@ -194,15 +192,24 @@ def build_search(filters: dict, sort: str = "relevance") -> tuple[str, str, dict
     # hit@1 9.4%→7.0%): it merged genuinely different relevances (0.13 vs 0.14)
     # and let recency override real precision. 0.001 still merges the CPI
     # editions (both → 0.130) while preserving finer distinctions elsewhere.
-    rank_bucket = f"round(({rank})::numeric, 3)" if tsq else "0"
-    order = (
-        "(coalesce(item_type, '') = 'intent') DESC, "  # curated guidance rows first
-        f"({catchall}) ASC, "                          # navigational index pages last
-        f"{rank_bucket} DESC, "                         # text relevance, bucketed
+    order_terms = [
+        "(coalesce(item_type, '') = 'intent') DESC",  # curated guidance rows first
+        f"({catchall}) ASC",                          # navigational index pages last
+    ]
+    # Text relevance, bucketed — ONLY when there is a usable FTS query. When the
+    # query reduces to no FTS terms (all stopwords / short tokens → tsq == ""),
+    # there is nothing to rank by; a literal "0" here would be read by Postgres
+    # as ORDER BY column-position 0 ("position 0 is not in select list" → 500),
+    # so the term is omitted entirely and rows fall through to the recency keys.
+    if tsq:
+        order_terms.append(
+            "round((ts_rank(search_vector, to_tsquery('simple', :tsq)))::numeric, 3) DESC")
+    order_terms += [
         # Recency within a relevance tier. data_vintage (the enrichment-parsed
         # year of the DATA) is preferred over the crawler's year_end because
         # many monthly pages carry the year only in the title.
-        "coalesce(data_vintage, year_end, year_start) DESC NULLS LAST, "
-        "last_crawled DESC NULLS LAST, id DESC"
-    )
-    return where, order, params
+        "coalesce(data_vintage, year_end, year_start) DESC NULLS LAST",
+        "last_crawled DESC NULLS LAST",
+        "id DESC",
+    ]
+    return where, ", ".join(order_terms), params
