@@ -97,38 +97,20 @@ def _guard_db_separation() -> None:
     )
 
 
-def _guard_ocal_db_separation() -> None:
-    """Refuse to boot if the migrated ocal DB shares a physical Postgres with the
-    append DB.
-
-    The ocal DB (OCAL_DATABASE_URL) holds the migrated יומן לעם auth tables —
-    api_users (bearer tokens) and admin_users. The append DB backs the PUBLIC SQL
-    consoles. Both env vars are set by hand in the Render dashboard, so a
-    copy-paste mistake could point them at one Neon database and expose ocal's
-    tokens through a console. Same fail-closed policy as _guard_db_separation.
-    """
-    collides, details = settings.ocal_db_shares_append_db()
-    if not collides:
-        return
-    logger.critical(
-        "SECURITY: OCAL_DATABASE_URL and APPEND_DATABASE_URL resolve to the SAME "
-        "Postgres database (%s) — the PUBLIC SQL consoles would expose the ocal "
-        "api_users tokens / admin_users. Point OCAL_DATABASE_URL at a SEPARATE "
-        "Neon database. Refusing to start.",
-        details["ocal"],
-    )
-    raise RuntimeError(
-        "OCAL_DATABASE_URL must be a different physical database from "
-        "APPEND_DATABASE_URL (the public SQL consoles run against the append DB, "
-        f"which must not reach ocal's auth tables). Parsed targets: {details}"
-    )
+# NOTE: an earlier guard forbade OCAL_DATABASE_URL from sharing the append DB.
+# That is now the DESIRED topology: the ocal DATA tables are co-located in the
+# append DB under schema `ocal` so the public /data console can live-query and
+# JOIN them (search_path includes `ocal`). Safety is preserved by EXCLUSION, not
+# separation — only the data tables are migrated into `ocal`; ocal's auth tables
+# (api_users/admin_users/mcp_oauth_*) are NOT copied into the append DB and the
+# console's read-only role (over_readonly) is granted SELECT on schema `ocal`
+# only. The append-vs-main guard below still stands. See app/services/ocal_db.py.
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
     _guard_db_separation()
-    _guard_ocal_db_separation()
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See

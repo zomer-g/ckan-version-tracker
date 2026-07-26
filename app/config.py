@@ -104,18 +104,17 @@ class Settings(BaseSettings):
     # app/services/append_store.get_readonly_pool.
     append_readonly_database_url: str = ""
 
-    # ── Ocal ("יומן לעם") migrated database ──
-    # Dedicated Neon Postgres holding the migrated יומן לעם data (diary_sources,
-    # diary_events, event_entities, entity_cross_refs, similar_events,
-    # mv_entity_counts, site_content, …) PLUS its sensitive tables (admin_users,
-    # api_users with bearer tokens, mcp_oauth_codes). Kept as a THIRD physical
-    # database, separate from BOTH database_url (operational) and
-    # append_database_url (public-SQL-console DB), so ocal's tokens are never
-    # reachable from a public SQL console — see ocal_db_shares_append_db() and the
-    # startup guard in app/main.py. Empty ⇒ the /projects/ocal feature is off (the
-    # /api/ocal router answers 503). Set the VALUE in the Render dashboard — like
-    # append_database_url it is intentionally NOT in render.yaml.
-    # See app/services/ocal_db.py.
+    # ── Ocal ("יומן לעם") data connection ──
+    # Where the ocal app reads/writes its DATA tables (diary_events, diary_sources,
+    # people, organizations, event_entities, entity_cross_refs, similar_events,
+    # mv_entity_counts, site_content, diary_exceptions). Points at the APPEND DB,
+    # and app/services/ocal_db.py sets search_path=ocal so all access lands in
+    # schema `ocal` there — co-located with the console so /data can live-query and
+    # JOIN it (no copy, no refresh). ocal's AUTH tables (api_users/admin_users/
+    # mcp_oauth_*) are deliberately NOT in the append DB, so the console's
+    # read-only role (granted SELECT on schema `ocal` only) can never reach them.
+    # Empty ⇒ the /projects/ocal feature is off (the /api/ocal router answers 503).
+    # Set the VALUE in the Render dashboard (not in render.yaml).
     ocal_database_url: str = ""
 
     # ── יומן לעם (Ocal) diary auto-import ──
@@ -480,29 +479,5 @@ class Settings(BaseSettings):
         if main is None or append is None:
             return False, details
         return (main == append), details
-
-    def ocal_db_shares_append_db(self) -> tuple[bool, dict]:
-        """True if OCAL_DATABASE_URL and APPEND_DATABASE_URL address the SAME
-        physical Postgres (host+port+dbname).
-
-        Security invariant (mirrors append_db_shares_main_db): the ocal DB holds
-        api_users (bearer tokens) + admin_users, while the append DB backs the
-        PUBLIC SQL consoles (/api/append/{id}/sql, /api/knesset-db/sql). If the
-        two resolve to one physical database, those consoles could read ocal's
-        tokens. They MUST be separate. See app/main.py startup guard.
-
-        Returns (collides, details). collides is False when either DB is
-        unconfigured (nothing exposed) or the two targets differ.
-        """
-        ocal = parse_pg_target(self.ocal_database_url)
-        append = parse_pg_target(self.append_database_url)
-        details = {
-            "ocal": None if ocal is None else {"host": ocal[0], "port": ocal[1], "dbname": ocal[2]},
-            "append": None if append is None else {"host": append[0], "port": append[1], "dbname": append[2]},
-        }
-        if ocal is None or append is None:
-            return False, details
-        return (ocal == append), details
-
 
 settings = Settings()

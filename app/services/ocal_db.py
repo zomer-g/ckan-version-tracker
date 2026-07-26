@@ -70,6 +70,18 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
     )
 
 
+# search_path resolves the ocal tables whether they live in a standalone DB
+# (schema ``public``) or, once co-located in the append DB for live /data JOINs,
+# in schema ``ocal``. ``ocal`` first ⇒ reads AND writes hit the ocal tables there;
+# ``extensions`` lets the Hebrew FTS config / pg_trgm resolve on the append DB;
+# ``public`` is the fallback for the standalone ocal DB. Passed as a startup
+# option (server_settings) so it survives the pool's RESET ALL between
+# acquisitions — a plain per-connection ``SET`` does not. On the append DB it is
+# ALSO the ocal_app role default (ALTER ROLE ... SET search_path). ocal issues no
+# DDL at runtime, so there is no risk of writing into public.
+_SEARCH_PATH = "ocal, extensions, public"
+
+
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
@@ -84,6 +96,7 @@ async def get_pool() -> asyncpg.Pool:
                 _pool = await asyncpg.create_pool(
                     dsn=_dsn_from(settings.ocal_database_url),
                     ssl=ctx,
+                    server_settings={"search_path": _SEARCH_PATH},
                     min_size=0,            # let Neon scale to zero between requests
                     max_size=5,
                     command_timeout=60,
