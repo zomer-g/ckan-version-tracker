@@ -42,6 +42,7 @@ from app.api.tables import router as tables_router
 from app.api.connector import router as connector_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
+from app.api.ocal import router as ocal_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
@@ -95,10 +96,38 @@ def _guard_db_separation() -> None:
     )
 
 
+def _guard_ocal_db_separation() -> None:
+    """Refuse to boot if the migrated ocal DB shares a physical Postgres with the
+    append DB.
+
+    The ocal DB (OCAL_DATABASE_URL) holds the migrated יומן לעם auth tables —
+    api_users (bearer tokens) and admin_users. The append DB backs the PUBLIC SQL
+    consoles. Both env vars are set by hand in the Render dashboard, so a
+    copy-paste mistake could point them at one Neon database and expose ocal's
+    tokens through a console. Same fail-closed policy as _guard_db_separation.
+    """
+    collides, details = settings.ocal_db_shares_append_db()
+    if not collides:
+        return
+    logger.critical(
+        "SECURITY: OCAL_DATABASE_URL and APPEND_DATABASE_URL resolve to the SAME "
+        "Postgres database (%s) — the PUBLIC SQL consoles would expose the ocal "
+        "api_users tokens / admin_users. Point OCAL_DATABASE_URL at a SEPARATE "
+        "Neon database. Refusing to start.",
+        details["ocal"],
+    )
+    raise RuntimeError(
+        "OCAL_DATABASE_URL must be a different physical database from "
+        "APPEND_DATABASE_URL (the public SQL consoles run against the append DB, "
+        f"which must not reach ocal's auth tables). Parsed targets: {details}"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
     _guard_db_separation()
+    _guard_ocal_db_separation()
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See
@@ -188,6 +217,7 @@ app.include_router(tables_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)
+app.include_router(ocal_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)
