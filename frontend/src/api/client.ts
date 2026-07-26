@@ -962,8 +962,8 @@ export interface CatalogTable {
   // Kept in step with data_catalog: `idx` (the mirrored index CSVs, kind
   // "index") joined public and knesset and this union was never widened, so
   // TypeScript has been quietly wrong about every GovMap layer since.
-  schema: "public" | "knesset" | "idx";
-  kind: "dataset" | "knesset" | "index";
+  schema: "public" | "knesset" | "idx" | "odata";
+  kind: "dataset" | "knesset" | "index" | "odata";
   title: string;
   description?: string;
   group?: string | null;
@@ -1321,8 +1321,34 @@ export interface ActivityLogPage {
   offset: number;
 }
 
+export interface OdataImport {
+  resource_id: string;
+  table: string;
+  dataset_name?: string | null;
+  title?: string | null;
+  organization?: string | null;
+  format?: string | null;
+  source_url?: string | null;
+  rows?: number | null;
+  columns?: number | null;
+  imported_at?: string | null;
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
+  // מידע לעם (odata) → queryable SQL tables (admin-curated import)
+  odataImports: () =>
+    request<{ imports: OdataImport[]; count: number }>("/admin/odata/imports"),
+  odataImport: (resource_id: string) =>
+    request<OdataImport>("/admin/odata/import", {
+      method: "POST",
+      body: JSON.stringify({ resource_id }),
+    }),
+  odataDeleteImport: (resource_id: string) =>
+    request<{ deleted: boolean }>(
+      `/admin/odata/imports/${encodeURIComponent(resource_id)}`,
+      { method: "DELETE" },
+    ),
   activityLog: (opts: { dataset_id?: string; event?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
     const p = new URLSearchParams();
     if (opts.dataset_id) p.set("dataset_id", opts.dataset_id);
@@ -1508,4 +1534,132 @@ export interface OrganizationDetail extends Organization {
 export const organizations = {
   list: () => request<Organization[]>("/organizations"),
   get: (id: string) => request<OrganizationDetail>(`/organizations/${id}`),
+};
+
+// ── יומן לעם (Ocal), migrated into OVER — /api/ocal ──
+export interface OcalEvent {
+  id: string;
+  source_id: string;
+  title: string;
+  start_time: string | null;
+  end_time: string | null;
+  location: string | null;
+  participants: string | null;
+  dataset_name?: string;
+  dataset_link: string | null;
+  event_date: string;
+  source_name: string;
+  source_color: string;
+  source_reviewed?: boolean;
+  match_count?: number | null;
+  top_entities?: { name: string; type: string }[] | null;
+  cross_ref_summary?: { confirmed: number; unconfirmed: number; total: number } | null;
+}
+export interface OcalPagination {
+  page: number;
+  per_page: number;
+  total: number;
+  total_pages: number;
+}
+export interface OcalSearchResponse {
+  data: OcalEvent[];
+  pagination: OcalPagination;
+}
+export interface OcalSource {
+  id: string;
+  name: string;
+  color: string;
+  is_enabled: boolean;
+  total_events: number;
+  first_event_date: string | null;
+  last_event_date: string | null;
+  dataset_url?: string | null;
+  resource_url?: string | null;
+  person_name?: string | null;
+  organization_name?: string | null;
+}
+export interface OcalStats {
+  total_events: number;
+  total_sources: number;
+  total_organizations: number;
+}
+export interface OcalEntity {
+  entity_name: string;
+  entity_type: string;
+  entity_id: string | null;
+  event_count: number;
+}
+export interface OcalCalendarResponse {
+  events: OcalEvent[];
+  date_range: { from: string; to: string };
+  event_counts: Record<string, number>;
+}
+
+export interface OcalSearchParams {
+  q?: string;
+  from_date?: string;
+  to_date?: string;
+  source_ids?: string[];
+  location?: string;
+  participants?: string;
+  cross_ref_status?: "confirmed" | "unconfirmed";
+  page?: number;
+  per_page?: number;
+  sort?: "date_asc" | "date_desc" | "relevance";
+}
+
+function ocalQS(params: Record<string, unknown>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null || v === "") continue;
+    if (Array.isArray(v)) {
+      if (v.length) p.set(k, v.join(","));
+    } else {
+      p.set(k, String(v));
+    }
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+export const ocal = {
+  events: (params: OcalSearchParams = {}) =>
+    request<OcalSearchResponse>(`/ocal/events${ocalQS(params as Record<string, unknown>)}`),
+  event: (id: string) => request<OcalEvent>(`/ocal/events/${id}`),
+  calendar: (params: {
+    date: string;
+    view?: string;
+    source_ids?: string[];
+    entity_names?: string[];
+    max_date?: string;
+  }) =>
+    request<OcalCalendarResponse>(
+      `/ocal/calendar${ocalQS(params as Record<string, unknown>)}`,
+    ),
+  sources: () => request<{ data: OcalSource[] }>("/ocal/sources"),
+  stats: () => request<OcalStats>("/ocal/stats"),
+  entities: (
+    params: { source_ids?: string[]; type?: string; from_date?: string; to_date?: string } = {},
+  ) => request<{ data: OcalEntity[] }>(`/ocal/entities${ocalQS(params as Record<string, unknown>)}`),
+  // Public GET endpoints — safe as plain <a href> (no auth needed).
+  downloadSourceUrl: (
+    id: string,
+    opts: { format?: "csv" | "json"; from_date?: string; to_date?: string } = {},
+  ) => `${BASE}/ocal/download/source/${id}${ocalQS(opts as Record<string, unknown>)}`,
+  downloadBulk: async (
+    source_ids: string[],
+    format: "csv" | "json" = "csv",
+    range?: { from_date?: string; to_date?: string },
+  ): Promise<Blob> => {
+    const resp = await fetch(`${BASE}/ocal/download/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_ids, format, ...range }),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(e.detail || resp.statusText);
+    }
+    return resp.blob();
+  },
 };
