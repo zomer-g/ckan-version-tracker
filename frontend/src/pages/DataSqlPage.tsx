@@ -8,8 +8,7 @@ import {
 } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
-import OdataSqlCatalog from "../components/OdataSqlCatalog";
-import { isOdataSql, odataSql } from "../api/odata";
+import OdataStructureGroup from "../components/OdataStructureGroup";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import SqlEditor, {
@@ -389,9 +388,6 @@ export default function DataSqlPage() {
   // The SQL text that produced the current sqlResult (not the editor draft) —
   // drives the "which tables feed this query" indication.
   const [executedSql, setExecutedSql] = useState("");
-  // True when the current result came from an odata passthrough (processed
-  // data) rather than the Neon DB — raises the "not an original source" banner.
-  const [processedResult, setProcessedResult] = useState(false);
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
   const placeholderRef = useRef(!searchParams.get("sql"));
 
@@ -527,13 +523,10 @@ export default function DataSqlPage() {
   const runFetch = useCallback((sql: string) => {
     setSqlRunning(true);
     setSqlError(null);
-    // Route odata-marked queries to odata's own engine (processed data);
-    // everything else runs read-only against Neon as before.
-    const odata = isOdataSql(sql);
-    const exec = odata ? odataSql(sql) : dataCatalog.sql(sql);
-    exec
-      .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); setExecutedSql(sql); setProcessedResult(odata); })
-      .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); setExecutedSql(""); setProcessedResult(false); })
+    dataCatalog
+      .sql(sql)
+      .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); setExecutedSql(sql); })
+      .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); setExecutedSql(""); })
       .finally(() => setSqlRunning(false));
   }, []);
 
@@ -561,15 +554,6 @@ export default function DataSqlPage() {
     }
     runFetch(sql);
   }, [sqlText, setSearchParams, runFetch]);
-
-  // "▶ שאילתה" from the odata catalog: drop the passthrough SQL into the editor,
-  // run it, and scroll the console into view so the result + banner are visible.
-  const seedOdataQuery = useCallback((sql: string) => {
-    setSqlText(sql);
-    placeholderRef.current = false;
-    runSql(sql);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [runSql]);
 
   // "גרף מהיר" from the table cube: load the generated SQL into the editor, put
   // the chart config + sql in the URL in ONE write (SqlChartPanel opens the
@@ -717,17 +701,6 @@ export default function DataSqlPage() {
         {sqlError && (
           <div style={{ marginTop: "0.6rem", color: "var(--danger, #dc2626)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {sqlError}
-          </div>
-        )}
-        {/* Conditional "processed data" banner — only when the result came from
-            an odata passthrough. Sits directly above the results field. */}
-        {sqlResult && !sqlError && processedResult && (
-          <div className="sql-processed-banner" role="note">
-            <span className="processed-banner-badge">מידע מעובד</span>
-            <span>
-              התוצאה נשענת על טבלה של <strong>מידע לעם</strong> (odata.org.il) —
-              מידע מעובד ולא מקור ציבורי מקורי. יש לאמת מול המקור הרשמי.
-            </span>
           </div>
         )}
         {sqlResult && !sqlError && (
@@ -932,6 +905,11 @@ export default function DataSqlPage() {
               </div>
             );
           })}
+
+          {/* מידע לעם — data structure only (list of items + files), at the
+              END of the table browser, in the same box. Processed data, NOT
+              queryable; importing files into SQL is a later step. */}
+          <OdataStructureGroup />
         </div>
 
         {/* Detail cube */}
@@ -1127,11 +1105,6 @@ export default function DataSqlPage() {
           )}
         </div>
       </div>
-
-      {/* Processed-data catalog (מידע לעם) — deliberately separated from the
-          queryable system tables above. Browsable items + files; each
-          datastore file can be queried via an odata passthrough. */}
-      <OdataSqlCatalog onQuery={seedOdataQuery} />
     </div>
   );
 }
