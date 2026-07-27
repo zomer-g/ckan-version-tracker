@@ -1931,3 +1931,99 @@ async def odata_import_file(
     return res
 
 
+
+
+# ── Table profiler (dataset profiling + enrichment) ───────────────────────────
+class ProfilerRunRequest(BaseModel):
+    scope: str = "pilot"          # "pilot" | "table"
+    n: int = 20                   # pilot size
+    schema_name: str | None = None  # for scope="table"
+    table_name: str | None = None
+    enrich: bool = True           # run the LLM layer after the SQL profile
+    force: bool = False           # re-profile even if the signature is unchanged
+
+
+async def _run_profiler_pilot_bg(n: int, enrich: bool, force: bool):
+    """Background pilot run — creates its own DB session (BackgroundTasks runs
+    after the request's session is closed)."""
+    from app.database import async_session
+    from app.services import table_profiler
+    async with async_session() as db:
+        try:
+            res = await table_profiler.run_pilot(db, n=n, enrich=enrich, force=force)
+            logger.info("profiler pilot done: %s profiled, %s enriched, %s errors",
+                        len(res["profiled"]), res["enriched"], len(res["errors"]))
+        except Exception:  # noqa: BLE001
+            logger.exception("profiler pilot crashed")
+
+
+@router.post("/profiler/run")
+@limiter.limit("6/minute")
+async def profiler_run(
+    request: Request,
+    body: ProfilerRunRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run the table profiler.
+
+    ``scope="pilot"`` (default) profiles ~n tables spanning every source type in
+    the background (the full pass + LLM enrichment can exceed the HTTP timeout)
+    and returns 'started'. ``scope="table"`` profiles ONE table synchronously and
+    returns its profile inline (handy for iterating on a single table)."""
+    from app.services import append_store as _as
+    from app.services import table_profiler
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="NEON append DB is not configured")
+
+    if body.scope == "table":
+        if not body.schema_name or not body.table_name:
+            raise HTTPException(status_code=422, detail="schema_name and table_name required for scope=table")
+        try:
+            await table_profiler.ensure_profile_table()
+            localities = await table_profiler._load_locality_names(db)
+            prof = await table_profiler.profile_table(
+                body.schema_name, body.table_name, locality_names=localities)
+            enrichment = {}
+            if body.enrich and table_profiler.llm_available():
+                sample = await _as.sample_rows(body.table_name, schema=body.schema_name, limit=5)
+                enrichment = await table_profiler.enrich_profile(
+                    body.schema_name, body.table_name, db, sample_rows=sample.get("rows"))
+            return {"profile": prof, "enrichment": enrichment}
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.exception("profile_table failed for %s.%s", body.schema_name, body.table_name)
+            raise HTTPException(status_code=500, detail=f"profiling failed: {e}")
+
+    background_tasks.add_task(_run_profiler_pilot_bg, body.n, body.enrich, body.force)
+    logger.info("profiler pilot (n=%s enrich=%s force=%s) started by %s",
+                body.n, body.enrich, body.force, user.email)
+    return {"status": "started", "scope": "pilot", "n": body.n,
+            "message": "Profiling pilot in the background; poll GET /api/admin/profiler/coverage."}
+
+
+@router.get("/profiler/coverage")
+@limiter.limit("60/minute")
+async def profiler_coverage(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    from app.services import table_profiler
+    return await table_profiler.coverage()
+
+
+@router.get("/profiler/profile")
+@limiter.limit("60/minute")
+async def profiler_get(
+    request: Request,
+    schema_name: str,
+    table_name: str,
+    user: User = Depends(get_admin_user),
+):
+    from app.services import table_profiler
+    prof = await table_profiler.get_profile(schema_name, table_name)
+    if not prof:
+        raise HTTPException(status_code=404, detail="no profile for that table yet")
+    return prof
