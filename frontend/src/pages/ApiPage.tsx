@@ -515,7 +515,7 @@ export default function ApiPage() {
           <p style={{ color: "var(--primary-100)", fontSize: "0.95rem" }}>
             {t(
               "api.subtitle",
-              "ממשק פתוח לשלושה מקורות — מאגרי ממשלה (OVER), אינדקס הלמ״ס, ופרוטוקולי הכנסת — ב-REST וב-MCP",
+              "ממשק פתוח לארבעה מקורות — מאגרי ממשלה (OVER), אינדקס הלמ״ס, פרוטוקולי הכנסת, ויומני נבחרי ציבור (יומן לעם) — ב-REST וב-MCP",
             )}
           </p>
         </div>
@@ -526,7 +526,7 @@ export default function ApiPage() {
           <p>
             {t(
               "api.intro",
-              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 ו-/api/append, הלמ״ס תחת /api/cbs, והכנסת תחת /api/knesset-db ו-/api/knesset-protocols.",
+              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 ו-/api/append, הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal.",
             )}
           </p>
           <p>
