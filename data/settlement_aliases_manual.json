@@ -1,0 +1,17 @@
+[
+  {"variant": "תל אביב", "name": "תל אביב -יפו", "note": "short form (official has -יפו)"},
+  {"variant": "נצרת עילית", "name": "נוף הגליל", "note": "renamed 2019"},
+  {"variant": "מודיעין", "name": "מודיעין-מכבים-רעות", "note": "short form"},
+  {"variant": "הרצליה", "name": "הרצלייה", "note": "common ktiv haser"},
+  {"variant": "נהריה", "name": "נהרייה", "note": "common ktiv haser"},
+  {"variant": "קרית שמונה", "name": "קריית שמונה", "note": "ktiv haser"},
+  {"variant": "קרית גת", "name": "קריית גת", "note": "ktiv haser"},
+  {"variant": "קרית אתא", "name": "קריית אתא", "note": "ktiv haser"},
+  {"variant": "קרית ביאליק", "name": "קריית ביאליק", "note": "ktiv haser"},
+  {"variant": "קרית מוצקין", "name": "קריית מוצקין", "note": "ktiv haser"},
+  {"variant": "קרית ים", "name": "קריית ים", "note": "ktiv haser"},
+  {"variant": "קרית אונו", "name": "קריית אונו", "note": "ktiv haser"},
+  {"variant": "קרית מלאכי", "name": "קריית מלאכי", "note": "ktiv haser"},
+  {"variant": "קרית עקרון", "name": "קריית עקרון", "note": "ktiv haser"},
+  {"variant": "בית שאן", "name": "בית שאן", "note": "self (placeholder for future)"}
+]

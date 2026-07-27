@@ -43,6 +43,17 @@ def test_aliases_english_and_translit_no_hebrew_prefix():
     assert not any(k.startswith("בtel") for k, _, _, _ in al)
 
 
+def test_manual_aliases_resolve_known_gaps():
+    recs = si.load_seed()
+    rows = si.manual_alias_rows(recs)
+    by_variant = {surf: (code, kind, w) for _, code, surf, kind, w in rows}
+    # short form + rename must be present, weighted above prefixed guesses
+    assert "תל אביב" in by_variant and by_variant["תל אביב"][1] == "manual"
+    assert by_variant["תל אביב"][0] == 5000
+    assert "נצרת עילית" in by_variant and by_variant["נצרת עילית"][0] == 1061
+    assert all(w == 85 for _, _, _, _, w in rows)
+
+
 def test_seed_loads_and_generates():
     recs = si.load_seed()
     assert len(recs) > 1000

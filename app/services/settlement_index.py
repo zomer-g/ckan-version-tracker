@@ -16,7 +16,10 @@ same /data SQL console and get the read-only role's SELECT automatically):
   ``weight`` so the resolver prefers an official-name hit over a prefixed guess.
 
 The ``over_`` prefix marks these as OVER-generated artifacts (same convention as
-over_table_profiles and the coming per-dataset ``Over_Settlement`` columns).
+over_table_profiles). Cross-referencing is done WITHOUT touching the original
+state data: SQL functions ``over_settlement(text)`` / ``over_settlement_code(text)``
+(see ensure_functions) let a /data console user JOIN a locality value to its
+official settlement at query time, so the source table stays untouched.
 
 Seed: ``data/settlements_2024.json`` (generated from bycode2024.xlsx, committed).
 Load via ``POST /api/admin/settlements/load`` (worker/admin).
@@ -35,8 +38,11 @@ logger = logging.getLogger(__name__)
 
 SETTLEMENTS_TABLE = "over_settlements"
 ALIASES_TABLE = "over_settlement_aliases"
-SEED_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                         "data", "settlements_2024.json")
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
+SEED_PATH = os.path.join(_DATA_DIR, "settlements_2024.json")
+# Curated supplement for what CBS official names miss: short forms (תל אביב →
+# תל אביב -יפו), renames (נצרת עילית → נוף הגליל), and ktiv-haser spellings.
+MANUAL_PATH = os.path.join(_DATA_DIR, "settlement_aliases_manual.json")
 
 # Hebrew one-letter prepositions/conjunctions that attach to a place name, plus
 # the common two-letter combinations. Applied to the normalized base form.
@@ -147,15 +153,92 @@ async def ensure_tables() -> None:
             f"ON public.{_qi(ALIASES_TABLE)} (variant)")
 
 
+async def ensure_functions() -> None:
+    """Create the SQL cross-reference functions so a /data console user can JOIN
+    a free-text locality value to the official settlement WITHOUT touching the
+    original table — the state's data stays untouched, the mapping stays here:
+
+        SELECT "רשות", over_settlement("רשות")      AS official_name,
+                        over_settlement_code("רשות") AS code
+        FROM   append_munidata_...;
+
+    ``over_settlement_norm`` mirrors the Python norm() exactly (keep only Hebrew
+    consonant letters + Latin + digits, lowercase) so SQL and API resolve
+    identically. EXECUTE defaults to PUBLIC, so the read-only console role can
+    call them; the functions run as the caller and read only the (SELECT-granted)
+    index tables."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.over_settlement_norm(q text)
+            RETURNS text LANGUAGE sql IMMUTABLE AS $$
+              SELECT lower(regexp_replace(coalesce(q, ''), '[^0-9A-Za-zא-ת]+', '', 'g'))
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.over_settlement_code(q text)
+            RETURNS integer LANGUAGE sql STABLE AS $$
+              SELECT a.code
+              FROM public.over_settlement_aliases a
+              JOIN public.over_settlements s ON s.code = a.code
+              WHERE a.variant = public.over_settlement_norm(q)
+              ORDER BY a.weight DESC, s.population DESC NULLS LAST
+              LIMIT 1
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.over_settlement(q text)
+            RETURNS text LANGUAGE sql STABLE AS $$
+              SELECT s.name
+              FROM public.over_settlement_aliases a
+              JOIN public.over_settlements s ON s.code = a.code
+              WHERE a.variant = public.over_settlement_norm(q)
+              ORDER BY a.weight DESC, s.population DESC NULLS LAST
+              LIMIT 1
+            $$;
+            """
+        )
+
+
 def load_seed() -> list[dict]:
     with open(SEED_PATH, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def manual_alias_rows(recs: list[dict]) -> list[tuple]:
+    """Curated (variant→code) rows from MANUAL_PATH, resolved by official name.
+
+    weight 85 sits above prefixed guesses (50) and English/translit (70) but
+    below an exact official-name hit (100). Entries whose target name is not in
+    the seed are skipped (logged), so a typo can't silently mis-map."""
+    try:
+        with open(MANUAL_PATH, encoding="utf-8") as fh:
+            manual = json.load(fh)
+    except FileNotFoundError:
+        return []
+    name2code = {r["name"]: r["code"] for r in recs}
+    rows: list[tuple] = []
+    for m in manual:
+        code = name2code.get(m.get("name"))
+        if code is None:
+            logger.warning("manual alias target not found: %r", m.get("name"))
+            continue
+        key = norm(m.get("variant"))
+        if key:
+            rows.append((key, code, m.get("variant"), "manual", 85))
+    return rows
 
 
 async def load(*, rebuild: bool = True) -> dict:
     """(Re)load the settlements + regenerate the alias index from the seed."""
     recs = load_seed()
     await ensure_tables()
+    await ensure_functions()
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -182,6 +265,7 @@ async def load(*, rebuild: bool = True) -> dict:
             for r in recs:
                 for key, surface, kind, weight in aliases_for(r):
                     alias_rows.append((key, r["code"], surface, kind, weight))
+            alias_rows.extend(manual_alias_rows(recs))
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(ALIASES_TABLE)} (variant,code,surface,kind,weight)
                     VALUES ($1,$2,$3,$4,$5)
