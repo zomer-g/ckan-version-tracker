@@ -2058,3 +2058,34 @@ async def settlements_load(
         raise HTTPException(status_code=500, detail=f"load failed: {e}")
     logger.info("settlement index loaded by %s: %s", user.email, res)
     return {"status": "ok", **res}
+
+
+async def _run_harvest_bg(use_llm: bool, per_col_cap: int):
+    from app.services import settlement_harvest
+    try:
+        res = await settlement_harvest.harvest(use_llm=use_llm, per_col_cap=per_col_cap)
+        logger.info("settlement harvest done: %s", res)
+    except Exception:  # noqa: BLE001
+        logger.exception("settlement harvest crashed")
+
+
+@router.post("/settlements/harvest")
+@limiter.limit("3/minute")
+async def settlements_harvest(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    use_llm: bool = True,
+    per_col_cap: int = 3000,
+    user: User = Depends(get_admin_user),
+):
+    """Scan every profiler-flagged locality/authority column across all datasets,
+    resolve real values through the index, LLM-map the misses, and collect the
+    rest in over_settlement_unresolved. Runs in the background (a full scan +
+    LLM passes can exceed the HTTP timeout)."""
+    from app.services import append_store as _as
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    background_tasks.add_task(_run_harvest_bg, use_llm, per_col_cap)
+    logger.info("settlement harvest started by %s (llm=%s cap=%s)", user.email, use_llm, per_col_cap)
+    return {"status": "started",
+            "message": "Harvest running in the background; results in over_settlement_unresolved."}

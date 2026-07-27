@@ -220,11 +220,12 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
 # Human titles for OVER's own processed index tables (public.over_*). Any over_
 # table not listed still surfaces under its own name.
 _OVER_TITLES = {
-    "over_settlements": "גרסאות לעם — יישובים (מדד הלמ״ס)",
+    "over_settlements": "גרסאות לעם — יישובים (קובץ הלמ״ס)",
     "over_settlement_aliases": "גרסאות לעם — הטיות שמות יישובים",
-    "over_authorities": "גרסאות לעם — רשויות מקומיות",
+    "over_authorities": "גרסאות לעם — רשויות מקומיות (קובץ הלמ״ס)",
     "over_authority_aliases": "גרסאות לעם — הטיות שמות רשויות",
     "over_table_profiles": "גרסאות לעם — פרופילי טבלאות",
+    "over_settlement_unresolved": "גרסאות לעם — ערכי יישוב שלא נפתרו (לאיסוף הטיות)",
 }
 
 
