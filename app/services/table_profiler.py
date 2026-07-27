@@ -813,19 +813,18 @@ async def _load_locality_names(db) -> set[str]:
     return names
 
 
-async def run_pilot(db, *, n: int = 20, enrich: bool = True, force: bool = False) -> dict:
-    """Profile a diverse pilot of ~n tables spanning every source type, then
-    (optionally) LLM-enrich each. Skips tables whose signature is unchanged
-    unless ``force``. Returns a run summary."""
-    from app.services.data_catalog import build_catalog
-    await ensure_profile_table()
-    catalog = await build_catalog(db, use_cache=False)
-    pilot = select_pilot(catalog, n=n)
+async def _run_over_records(db, records: list[dict], *, enrich: bool, force: bool,
+                            use_public_budget: bool) -> dict:
+    """Profile a list of catalog records (SQL always; LLM if ``enrich``). Shared
+    engine for the pilot and the whole-catalog backfill. ``use_public_budget``
+    routes the LLM call through the public cbs daily budget (True, for the
+    anonymous-facing paths) or bypasses it (False, for trusted admin/worker runs)."""
     localities = await _load_locality_names(db)
-
     done, skipped, errors, enriched = [], [], [], 0
-    for rec in pilot:
+    for rec in records:
         schema, table = rec.get("schema", "public"), rec["table"]
+        if table.startswith("over_") or table == PROFILE_TABLE:
+            continue
         try:
             if not force:
                 existing = await get_profile(schema, table)
@@ -833,20 +832,133 @@ async def run_pilot(db, *, n: int = 20, enrich: bool = True, force: bool = False
                 if existing and existing.get("signature") == sig and existing.get("status") in ("sql_done", "enriched"):
                     skipped.append(f"{schema}.{table}")
                     continue
-            prof = await profile_table(
+            await profile_table(
                 schema, table, columns=rec.get("columns"), est_rows=rec.get("est_rows"),
                 locality_names=localities, title=rec.get("title"), kind=rec.get("kind"))
             done.append(f"{schema}.{table}")
             if enrich and llm_available():
                 sample = await append_store.sample_rows(table, schema=schema, limit=5)
-                res = await enrich_profile(schema, table, db, sample_rows=sample.get("rows"))
+                res = await enrich_profile(schema, table, db if use_public_budget else None,
+                                           sample_rows=sample.get("rows"))
                 if res:
                     enriched += 1
-        except Exception as exc:  # noqa: BLE001 — one bad table must not stop the pilot
+        except Exception as exc:  # noqa: BLE001 — one bad table must not stop the run
             logger.exception("profiling failed for %s.%s", schema, table)
             errors.append({"table": f"{schema}.{table}", "error": str(exc)})
-    return {
-        "pilot_size": len(pilot), "profiled": done, "skipped": skipped,
-        "enriched": enriched, "errors": errors,
-        "buckets": sorted({_type_key(r) for r in pilot}),
-    }
+    return {"profiled": done, "skipped": skipped, "enriched": enriched, "errors": errors}
+
+
+async def run_pilot(db, *, n: int = 20, enrich: bool = True, force: bool = False) -> dict:
+    """Profile a diverse pilot of ~n tables spanning every source type."""
+    from app.services.data_catalog import build_catalog
+    await ensure_profile_table()
+    catalog = await build_catalog(db, use_cache=False)
+    pilot = select_pilot(catalog, n=n)
+    res = await _run_over_records(db, pilot, enrich=enrich, force=force, use_public_budget=True)
+    return {**res, "pilot_size": len(pilot), "buckets": sorted({_type_key(r) for r in pilot})}
+
+
+async def run_all(db, *, enrich: bool = True, force: bool = False) -> dict:
+    """Backfill: profile EVERY table in the catalog. Trusted admin action — LLM
+    calls BYPASS the public cbs budget. Signature-skips unchanged tables unless
+    ``force``. Run in the background (a full sweep is minutes-to-hours)."""
+    from app.services.data_catalog import build_catalog
+    await ensure_profile_table()
+    catalog = await build_catalog(db, use_cache=False)
+    res = await _run_over_records(db, catalog, enrich=enrich, force=force, use_public_budget=False)
+    return {**res, "catalog_size": len(catalog)}
+
+
+# ── Per-dataset auto-profiling (poll-pipeline hook) ───────────────────────────
+# Fire-and-forget tasks are kept referenced here so the event loop does not GC
+# them mid-run (the standard asyncio create_task pattern).
+_bg_tasks: set = set()
+
+
+async def profile_dataset(db, dataset, *, is_new: bool = False) -> dict:
+    """Profile every NEON table of one dataset after a poll landed new data.
+
+    The SQL layer (ranges, formats, entities) ALWAYS runs — that is the user's
+    "re-profile after every update" requirement, and it is free. The LLM
+    enrichment layer runs only when it can actually change: a brand-new dataset,
+    a table with no profile yet, or a schema change (the column set differs).
+    Best-effort and fully guarded — never raises into the poll pipeline."""
+    from app.services import data_catalog
+    from app.models.version_index import VersionIndex
+    from sqlalchemy import select, desc
+
+    if not data_catalog._dataset_is_neon(dataset):
+        return {"skipped": "not a NEON-backed dataset"}
+    await ensure_profile_table()
+
+    lv = (await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == dataset.id)
+        .order_by(desc(VersionIndex.version_number)).limit(1)
+    )).scalar_one_or_none()
+    maps = (lv.resource_mappings if lv else {}) or {}
+    tables = data_catalog._tables_of(dataset, maps)
+    localities = await _load_locality_names(db)
+
+    profiled, enriched = [], []
+    for t in tables:
+        tbl = t.get("table")
+        if not tbl:
+            continue
+        title = dataset.title
+        if t.get("resource_name"):
+            title = f"{title} — {t['resource_name']}"
+        try:
+            existing = await get_profile("public", tbl)
+            prof = await profile_table("public", tbl, locality_names=localities,
+                                       title=title, kind="dataset")
+            profiled.append(tbl)
+            new_cols = set(((prof.get("sql_profile") or {}).get("columns") or {}).keys())
+            old_cols = set((((existing or {}).get("sql_profile") or {}).get("columns") or {}).keys())
+            need_enrich = is_new or existing is None or new_cols != old_cols
+            if (need_enrich and llm_available()
+                    and getattr(settings, "profiler_auto_enrich", True)):
+                sample = await append_store.sample_rows(tbl, schema="public", limit=5)
+                # db=None ⇒ bypass the PUBLIC cbs daily budget: the worker is a
+                # trusted caller, not an anonymous endpoint.
+                res = await enrich_profile("public", tbl, None, sample_rows=sample.get("rows"))
+                if res:
+                    enriched.append(tbl)
+        except Exception:  # noqa: BLE001 — one table must not break the rest
+            logger.exception("profile_dataset: failed on %s", tbl)
+    return {"profiled": profiled, "enriched": enriched}
+
+
+async def _profile_after_poll_bg(dataset_id, is_new: bool) -> None:
+    if not getattr(settings, "profiler_auto_enabled", True):
+        return
+    from app.database import async_session
+    from app.models.tracked_dataset import TrackedDataset
+    from sqlalchemy import select
+    try:
+        async with async_session() as db:
+            ds = (await db.execute(
+                select(TrackedDataset).where(TrackedDataset.id == dataset_id)
+            )).scalar_one_or_none()
+            if ds:
+                res = await profile_dataset(db, ds, is_new=is_new)
+                logger.info("auto-profile %s (new=%s): %s", dataset_id, is_new, res)
+    except Exception:  # noqa: BLE001
+        logger.exception("auto-profile bg failed for %s", dataset_id)
+
+
+def kick_profile_after_poll(dataset_id, is_new: bool) -> None:
+    """Schedule a background profile of a dataset whose poll just landed new data.
+
+    Non-blocking and never raises — safe to call from the critical poll path.
+    Does nothing if the profiler is disabled or no event loop is running."""
+    if not getattr(settings, "profiler_auto_enabled", True):
+        return
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop (shouldn't happen in the async worker) — skip silently
+    task = loop.create_task(_profile_after_poll_bg(dataset_id, is_new))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)

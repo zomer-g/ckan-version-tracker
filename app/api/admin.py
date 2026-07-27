@@ -1935,7 +1935,7 @@ async def odata_import_file(
 
 # ── Table profiler (dataset profiling + enrichment) ───────────────────────────
 class ProfilerRunRequest(BaseModel):
-    scope: str = "pilot"          # "pilot" | "table"
+    scope: str = "pilot"          # "pilot" | "all" | "table"
     n: int = 20                   # pilot size
     schema_name: str | None = None  # for scope="table"
     table_name: str | None = None
@@ -1943,18 +1943,21 @@ class ProfilerRunRequest(BaseModel):
     force: bool = False           # re-profile even if the signature is unchanged
 
 
-async def _run_profiler_pilot_bg(n: int, enrich: bool, force: bool):
-    """Background pilot run — creates its own DB session (BackgroundTasks runs
-    after the request's session is closed)."""
+async def _run_profiler_bg(scope: str, n: int, enrich: bool, force: bool):
+    """Background profiler run (pilot or whole-catalog) — own DB session, since
+    BackgroundTasks runs after the request's session is closed."""
     from app.database import async_session
     from app.services import table_profiler
     async with async_session() as db:
         try:
-            res = await table_profiler.run_pilot(db, n=n, enrich=enrich, force=force)
-            logger.info("profiler pilot done: %s profiled, %s enriched, %s errors",
-                        len(res["profiled"]), res["enriched"], len(res["errors"]))
+            if scope == "all":
+                res = await table_profiler.run_all(db, enrich=enrich, force=force)
+            else:
+                res = await table_profiler.run_pilot(db, n=n, enrich=enrich, force=force)
+            logger.info("profiler %s done: %s profiled, %s enriched, %s errors",
+                        scope, len(res["profiled"]), res["enriched"], len(res["errors"]))
         except Exception:  # noqa: BLE001
-            logger.exception("profiler pilot crashed")
+            logger.exception("profiler %s crashed", scope)
 
 
 @router.post("/profiler/run")
@@ -1997,11 +2000,12 @@ async def profiler_run(
             logger.exception("profile_table failed for %s.%s", body.schema_name, body.table_name)
             raise HTTPException(status_code=500, detail=f"profiling failed: {e}")
 
-    background_tasks.add_task(_run_profiler_pilot_bg, body.n, body.enrich, body.force)
-    logger.info("profiler pilot (n=%s enrich=%s force=%s) started by %s",
-                body.n, body.enrich, body.force, user.email)
-    return {"status": "started", "scope": "pilot", "n": body.n,
-            "message": "Profiling pilot in the background; poll GET /api/admin/profiler/coverage."}
+    scope = "all" if body.scope == "all" else "pilot"
+    background_tasks.add_task(_run_profiler_bg, scope, body.n, body.enrich, body.force)
+    logger.info("profiler %s (n=%s enrich=%s force=%s) started by %s",
+                scope, body.n, body.enrich, body.force, user.email)
+    return {"status": "started", "scope": scope, "n": body.n,
+            "message": f"Profiling ({scope}) in the background; poll GET /api/admin/profiler/coverage."}
 
 
 @router.get("/profiler/coverage")

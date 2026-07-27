@@ -458,6 +458,14 @@ class Settings(BaseSettings):
     llm_budget_enabled: bool = True
     cbs_ask_daily_budget: int = 2000   # max LLM parses/day, summed over everyone
 
+    # Table profiler (app/services/table_profiler.py). When auto is on, a poll
+    # that lands a new version for a NEON-backed dataset re-runs the (free) SQL
+    # profile of its table(s); the LLM enrichment layer runs only for a brand-new
+    # dataset or a schema change (auto_enrich). The worker path bypasses the
+    # public cbs budget (it is trusted, not an anonymous endpoint).
+    profiler_auto_enabled: bool = True   # profile after each poll that changes data
+    profiler_auto_enrich: bool = True    # allow the LLM layer on new/changed schemas
+
     # SSO
     app_base_url: str = "http://localhost:8000"
     google_client_id: str = ""

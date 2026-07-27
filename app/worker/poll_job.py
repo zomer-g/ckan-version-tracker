@@ -420,6 +420,13 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                     old_mappings, next_version, new_modified, latest_version, db,
                 )
                 if appended:
+                    # Refresh the table profile (ranges/formats/entities) now that
+                    # new rows landed; LLM enrichment only if new/schema-changed.
+                    try:
+                        from app.services import table_profiler
+                        table_profiler.kick_profile_after_poll(ds.id, is_first_version)
+                    except Exception:  # noqa: BLE001 — never break a poll
+                        logger.exception("kick_profile_after_poll (append_only) failed for %s", ds.id)
                     return
 
             # If detect_resource_changes saw failures but nothing changed
@@ -446,6 +453,7 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
             # stuck forever on the failure instead of retrying. Defined here so
             # it's in scope for both the create-version and the no-op branches.
             advance_watermark = True
+            version_created = False  # set True only when a version row is added
 
             if is_first_version or changed_resources:
                 logger.info(
@@ -593,6 +601,7 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
                         resource_mappings=resource_mappings,
                     )
                     db.add(version)
+                    version_created = True
                     # Partial success → keep last_error so the user knows
                     # something didn't make it; full success → clear it.
                     if errors:
@@ -624,6 +633,16 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
             if advance_watermark:
                 ds.last_modified = new_modified
             await db.commit()
+
+            # A new version landed for a snapshot/NEON dataset → refresh its
+            # table profile in the background (SQL ranges always; LLM only on a
+            # new dataset or schema change). Guarded so it can't break the poll.
+            if version_created:
+                try:
+                    from app.services import table_profiler
+                    table_profiler.kick_profile_after_poll(ds.id, is_first_version)
+                except Exception:  # noqa: BLE001
+                    logger.exception("kick_profile_after_poll failed for %s", ds.id)
 
         except Exception as exc:
             logger.exception("Error polling dataset %s", ds.ckan_name)
