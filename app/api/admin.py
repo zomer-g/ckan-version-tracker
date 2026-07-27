@@ -2031,3 +2031,30 @@ async def profiler_get(
     if not prof:
         raise HTTPException(status_code=404, detail="no profile for that table yet")
     return prof
+
+
+# ── Settlement index (יישוב reference — official names + inflections) ──────────
+@router.post("/settlements/load")
+@limiter.limit("6/minute")
+async def settlements_load(
+    request: Request,
+    rebuild: bool = True,
+    user: User = Depends(get_admin_user),
+):
+    """(Re)build the settlement index from the committed CBS seed
+    (data/settlements_2024.json): loads public.over_settlements and regenerates
+    public.over_settlement_aliases (official names + Hebrew-prefix/geresh/spacing
+    inflections + English/transliteration)."""
+    from app.services import append_store as _as
+    from app.services import settlement_index
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    try:
+        res = await settlement_index.load(rebuild=rebuild)
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="settlements seed file missing")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("settlement index load failed")
+        raise HTTPException(status_code=500, detail=f"load failed: {e}")
+    logger.info("settlement index loaded by %s: %s", user.email, res)
+    return {"status": "ok", **res}
