@@ -223,14 +223,25 @@ def manual_alias_rows(recs: list[dict]) -> list[tuple]:
         return []
     name2code = {r["name"]: r["code"] for r in recs}
     rows: list[tuple] = []
+    seen: set[tuple[str, int]] = set()
     for m in manual:
         code = name2code.get(m.get("name"))
         if code is None:
             logger.warning("manual alias target not found: %r", m.get("name"))
             continue
-        key = norm(m.get("variant"))
-        if key:
-            rows.append((key, code, m.get("variant"), "manual", 85))
+        variant = m.get("variant") or ""
+        base = norm(variant)
+        if not base:
+            continue
+        if (base, code) not in seen:
+            seen.add((base, code)); rows.append((base, code, variant, "manual", 85))
+        # Prefix-expand Hebrew manual variants too (so 'בתל אביב' resolves like
+        # the auto layer does for official names), one weight tier lower.
+        if re.search(r"[֐-׿]", base):
+            for p in _PREFIXES:
+                k = p + base
+                if (k, code) not in seen:
+                    seen.add((k, code)); rows.append((k, code, p + variant, "manual_prefix", 55))
     return rows
 
 

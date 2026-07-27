@@ -51,7 +51,9 @@ def test_manual_aliases_resolve_known_gaps():
     assert "תל אביב" in by_variant and by_variant["תל אביב"][1] == "manual"
     assert by_variant["תל אביב"][0] == 5000
     assert "נצרת עילית" in by_variant and by_variant["נצרת עילית"][0] == 1061
-    assert all(w == 85 for _, _, _, _, w in rows)
+    # base manual = weight 85; prefixed manual variants ('בתל אביב') = 55
+    assert by_variant["תל אביב"][2] == 85
+    assert "בתל אביב" in by_variant and by_variant["בתל אביב"] == (5000, "manual_prefix", 55)
 
 
 def test_seed_loads_and_generates():
