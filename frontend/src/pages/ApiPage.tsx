@@ -224,6 +224,57 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       },
     ],
   },
+  {
+    id: "ocal",
+    title: "יומן לעם — יומני נבחרי ובכירי ציבור",
+    note: "יומני פגישות של נבחרי ובכירי ציבור בישראל, מאוחדים ומועשרים (ישויות, הצלבות בין יומנים, קיבוץ אירועים חופפים). כתובת בסיס: /api/ocal.",
+    endpoints: [
+      {
+        path: "/api/ocal/events",
+        description: "חיפוש אירועי יומן: טקסט חופשי, טווח תאריכים, מקורות, מיקום, משתתפים וישויות.",
+        params: [
+          { name: "q", desc: "טקסט חופשי בכותרת/מיקום/משתתפים" },
+          { name: "from_date / to_date", desc: "טווח תאריכים (YYYY-MM-DD)" },
+          { name: "source_ids", desc: "סינון לפי יומני מקור (מזהים, מופרדים בפסיק)" },
+          { name: "location / participants / entity_names", desc: "סינון לפי מיקום / משתתפים / ישויות" },
+          { name: "page / per_page", desc: "עימוד (per_page עד 100)" },
+          { name: "sort", desc: "date_desc (ברירת מחדל) | date_asc" },
+        ],
+        example: "/api/ocal/events?q=פגישה&from_date=2024-01-01&per_page=5",
+      },
+      {
+        path: "/api/ocal/events/{id}",
+        description: "אירוע בודד על כל פרטיו, כולל ישויות מקושרות, הצלבות בין יומנים ואירועים חופפים.",
+        example: "/api/ocal/events/{event_id}",
+      },
+      {
+        path: "/api/ocal/calendar",
+        description: "תצוגת לוח-שנה של אירועים לפי חודש/שבוע/יום, עם ספירות וצביעה לפי מקור.",
+        params: [
+          { name: "date", desc: "תאריך עוגן (YYYY-MM-DD)" },
+          { name: "view", desc: "month (ברירת מחדל) | week | 4day | day" },
+          { name: "source_ids / entity_names", desc: "סינון לפי מקורות / ישויות" },
+        ],
+        example: "/api/ocal/calendar?date=2024-03-01&view=month",
+      },
+      {
+        path: "/api/ocal/sources",
+        description: "קטלוג יומני המקור: שם, בעלים, צבע, טווח תאריכים ומספר אירועים.",
+        example: "/api/ocal/sources",
+      },
+      {
+        path: "/api/ocal/stats",
+        description: "היקף הקורפוס: מספר האירועים, היומנים והארגונים.",
+        example: "/api/ocal/stats",
+      },
+      {
+        path: "/api/ocal/download/source/{id}",
+        description: "הורדת כל אירועי יומן מקור כ-CSV או JSON (UTF-8 עם BOM, כותרות עבריות).",
+        params: [{ name: "format", desc: "csv (ברירת מחדל) | json" }],
+        example: "/api/ocal/download/source/{source_id}?format=csv",
+      },
+    ],
+  },
 ];
 
 const MCP_SERVERS: {
@@ -253,6 +304,13 @@ const MCP_SERVERS: {
     path: "/knesset/mcp",
     purpose: "חיפוש ועדות/ישיבות/פרוטוקולים, מסמכי ממ״מ, שליפת ישיבה, ו-SQL חופשי על מראה ה-ODATA של הכנסת.",
     tools: ["search_committees", "search_sessions", "search_protocols", "get_session", "search_mmm", "run_sql", "list_tables", "get_stats"],
+  },
+  {
+    key: "ocal",
+    label: "יומן לעם — יומני נבחרי ציבור",
+    path: "/ocal/mcp",
+    purpose: "חיפוש אירועי יומן, שליפת אירוע, רשימת ישויות ומקורות, איתור פגישות משותפות בין שני אישים, וסטטיסטיקות.",
+    tools: ["search_events", "get_event", "list_entities", "list_sources", "find_meetings_between", "get_stats"],
   },
 ];
 
@@ -291,7 +349,7 @@ function McpCard() {
 
       <p className="api-mcp-lead">
         גישה מובנית לדאטה דרך Model Context Protocol — ה-LLM מחפש ומושך נתונים
-        מתוך השיחה, בלי לעבור דרך ה-API הציבורי. שלושה שרתי MCP <strong>חיים</strong>,
+        מתוך השיחה, בלי לעבור דרך ה-API הציבורי. ארבעה שרתי MCP <strong>חיים</strong>,
         אחד לכל מקור. הגישה בהזמנה (Google + רשימת מוזמנים) — לקבלת גישה שלחו
         אימייל ל-<a href="mailto:guy@z-g.co.il">guy@z-g.co.il</a> עם כתובת ה-Google
         שאיתה תתחברו ושורה על השימוש המתוכנן.
@@ -333,7 +391,7 @@ function McpCard() {
           </li>
           <li>
             ה-connector יסומן Connected, ובסרגל הכלים של השיחה יופיעו הפעולות של
-            אותו שרת. אפשר לחבר את שלושת השרתים במקביל.
+            אותו שרת. אפשר לחבר את כל ארבעת השרתים במקביל.
           </li>
         </ol>
       </div>
