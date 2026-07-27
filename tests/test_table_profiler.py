@@ -111,6 +111,35 @@ def test_entity_date_takes_precedence():
     assert r["guess"] == "date"
 
 
+# ── column classification (declared type vs sniffed) ─────────────────────────
+def test_classify_trusts_declared_timestamp():
+    # A real timestamptz column reads as "...+00" when cast to text and would
+    # NOT match any text date format — the declared type must win.
+    cls = p._classify_columns(
+        {"first_seen": ["2026-07-21 18:58:55.359262+00"]},
+        {"first_seen": "timestamp"})
+    assert cls["first_seen"] == {"kind": "date", "native": True}
+
+
+def test_classify_trusts_declared_numeric():
+    cls = p._classify_columns({"n": ["1", "2"]}, {"n": "int"})
+    assert cls["n"]["kind"] == "numeric" and cls["n"]["native"] is True
+
+
+def test_classify_sniffs_text_columns():
+    # append data columns are declared text — fall back to value sniffing.
+    cls = p._classify_columns(
+        {"d": ["03.01.1993", "19.07.2026"], "amt": ["10", "20"]},
+        {"d": "text", "amt": "text"})
+    assert cls["d"]["kind"] == "date" and not cls["d"].get("native")
+    assert cls["amt"]["kind"] == "numeric" and not cls["amt"].get("native")
+
+
+def test_native_exprs_have_no_cast():
+    assert "::numeric" not in p._numeric_expr("n", native=True)
+    assert p._date_expr("t", None, native=True).startswith('MIN("t")')
+
+
 # ── signature ─────────────────────────────────────────────────────────────────
 def test_signature_stable_and_sensitive():
     cols = [{"name": "a", "type": "text"}, {"name": "b", "type": "int"}]

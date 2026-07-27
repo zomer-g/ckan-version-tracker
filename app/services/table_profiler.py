@@ -384,10 +384,25 @@ async def _sample_column_values(schema: str, table: str, cols: list[str],
     return out
 
 
-def _classify_columns(samples: dict[str, list[str]]) -> dict[str, dict]:
-    """Per column: {kind: numeric|date|text, date_fmt, numeric_rate}."""
+def _classify_columns(samples: dict[str, list[str]],
+                      col_types: dict[str, str] | None = None) -> dict[str, dict]:
+    """Per column: {kind: numeric|date|text|empty, native, date_fmt, numeric_rate}.
+
+    Trusts the DECLARED Postgres type first: a real ``timestamp``/``date`` or
+    numeric column (typed knesset/idx/odata schemas, and the append tables'
+    ``first_seen`` timestamptz) is classified natively — exact MIN/MAX with no
+    format guessing. Only genuinely text-typed columns (all append data columns,
+    which store everything as text) are SNIFFED from the sample."""
+    col_types = col_types or {}
     result: dict[str, dict] = {}
     for col, vals in samples.items():
+        declared = col_types.get(col)
+        if declared == "timestamp":
+            result[col] = {"kind": "date", "native": True}
+            continue
+        if declared in ("int", "numeric"):
+            result[col] = {"kind": "numeric", "native": True}
+            continue
         if not vals:
             result[col] = {"kind": "empty"}
             continue
@@ -403,8 +418,10 @@ def _classify_columns(samples: dict[str, list[str]]) -> dict[str, dict]:
     return result
 
 
-def _numeric_expr(col: str) -> str:
+def _numeric_expr(col: str, native: bool = False) -> str:
     q = _qi(col)
+    if native:  # already a numeric-typed column — no cast/guard needed
+        return (f"MIN({q}) AS min_{{i}}, MAX({q}) AS max_{{i}}, AVG({q}) AS avg_{{i}}")
     nz = f"NULLIF(regexp_replace({q}::text, '[,\\s]', '', 'g'), '')"
     guard = f"{nz} ~ '^-?[0-9]+(\\.[0-9]+)?$'"
     return (
@@ -414,8 +431,10 @@ def _numeric_expr(col: str) -> str:
     )
 
 
-def _date_expr(col: str, pgfmt: str | None) -> str:
+def _date_expr(col: str, pgfmt: str | None, native: bool = False) -> str:
     q = _qi(col)
+    if native:  # already a timestamp/date-typed column — MIN/MAX directly
+        return f"MIN({q}) AS min_{{i}}, MAX({q}) AS max_{{i}}"
     if not pgfmt:
         return f"NULL::timestamp AS min_{{i}}, NULL::timestamp AS max_{{i}}"
     # to_timestamp is lenient; guard with a length check to avoid garbage rows.
@@ -437,12 +456,14 @@ async def _aggregate(schema: str, table: str, cols: list[str],
         q = _qi(col)
         parts.append(
             f"count(*) FILTER (WHERE {q} IS NOT NULL AND {q}::text <> '') AS nn_{idx}")
-        kind = classes.get(col, {}).get("kind")
+        cls = classes.get(col, {})
+        kind = cls.get("kind")
+        native = bool(cls.get("native"))
         if kind == "numeric":
-            parts.append(_numeric_expr(col).format(i=idx))
+            parts.append(_numeric_expr(col, native).format(i=idx))
         elif kind == "date":
-            pgfmt = (classes[col].get("date_fmt") or {}).get("postgres")
-            parts.append(_date_expr(col, pgfmt).format(i=idx))
+            pgfmt = (cls.get("date_fmt") or {}).get("postgres")
+            parts.append(_date_expr(col, pgfmt, native).format(i=idx))
         meta.append((idx, col, kind))
         idx += 1
     sql = f"SELECT {', '.join(parts)} FROM {ref}"
@@ -533,8 +554,9 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
         await upsert_profile(rec)
         return rec
 
+    col_types = {c["name"]: c.get("type") for c in columns}
     samples = await _sample_column_values(schema, table, col_names, est_rows)
-    classes = _classify_columns(samples)
+    classes = _classify_columns(samples, col_types)
     agg = await _aggregate(schema, table, col_names, classes)
     total = agg["total"]
     ndist = await _pg_stats_distinct(schema, table)
@@ -572,8 +594,12 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
                           "avg": col_agg.get("avg"), "numeric_rate": cls.get("numeric_rate")})
         elif cls.get("kind") == "date":
             entry.update({"min": col_agg.get("min"), "max": col_agg.get("max"),
+                          "native": bool(cls.get("native")),
                           "date_format": cls.get("date_fmt")})
-            date_specs[c] = cls.get("date_fmt")
+            # Only text-stored dates need a parse spec for phase-2 normalization;
+            # native timestamp columns are already queryable as dates.
+            if not cls.get("native") and cls.get("date_fmt"):
+                date_specs[c] = cls.get("date_fmt")
         else:
             entry["top_values"] = top_vals
             keyword_pool.extend(samples.get(c, []))
