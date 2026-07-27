@@ -95,9 +95,26 @@ The append DB + LLM keys live on Render, not in the local `.env`. Two ways:
 - [x] API + MCP + /data ProfilePanel — verified live on prod
 - [ ] Re-run pilot with the native-type fix (force=true) to refresh knesset date ranges
 - [ ] Investigate the 2 pilot errors (likely a large idx/govmap layer timeout)
+- [x] Auto-profile on poll: every version that lands for a NEON dataset kicks a
+      background profile (SQL always; LLM only new/schema-changed). Hooked in
+      poll_job at both version-landed points. Flags: `profiler_auto_enabled`,
+      `profiler_auto_enrich`.
+- [x] Whole-catalog backfill: `POST /api/admin/profiler/run {"scope":"all"}` →
+      `run_all()`, LLM bypasses the public cbs budget (trusted admin action).
 - [ ] Admin review/approve UI (`status` → `approved`)
-- [ ] Scheduler pass (whole-catalog, budgeted)
 - [ ] Phase 2 — standardization (alias index + `over_*` canonical columns)
+
+## Cost (measured, 1,053 tables)
+
+- Neon compute: a few cents (bounded scans + TABLESAMPLE on >1M-row tables).
+- LLM one-time full map: **~$2–4 on DeepSeek** (default). On Anthropic Opus
+  (`claude-opus-4-8`) it would be **~$120–180** — for a bulk map, keep DeepSeek,
+  or switch the profiler's Anthropic model to Haiku 4.5 (~$9). Measured input:
+  ~3.3k tokens for a 26-col table; corpus ≈ 2.5M in / 1.3M out.
+- Ongoing: each update = free SQL refresh; each new/changed-schema table = one
+  LLM call (~$0.002 DeepSeek). Hundreds of updates/day ≈ pennies.
+- Time: ~11s/table with LLM → ~3h sequential (background); the sweep is chunked
+  by the catalog and signature-skips unchanged tables.
 
 ## Phase 2 — standardization (design, not yet built)
 
