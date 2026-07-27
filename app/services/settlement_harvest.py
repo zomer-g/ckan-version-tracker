@@ -114,6 +114,26 @@ _LLM_PROMPT = """אתה ממפה שמות של מקומות בישראל (ייש
 אל תמציא מקומות שאינם קיימים; בספק — null."""
 
 
+def _loads(raw: str):
+    """Tolerant JSON load that PRESERVES a top-level list (strips ``` fences)."""
+    import re
+    s = (raw or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
+        s = re.sub(r"\n?```$", "", s).strip()
+    try:
+        return json.loads(s)
+    except (ValueError, TypeError):
+        for a, b in (("[", "]"), ("{", "}")):
+            i, j = s.find(a), s.rfind(b)
+            if i >= 0 and j > i:
+                try:
+                    return json.loads(s[i:j + 1])
+                except (ValueError, TypeError):
+                    pass
+    return None
+
+
 async def _llm_map(values: list[str]) -> dict[str, str]:
     """{input_value: official_name_guess} for a batch, via DeepSeek→Anthropic."""
     provider = table_profiler.llm_provider()
@@ -141,13 +161,36 @@ async def _llm_map(values: list[str]) -> dict[str, str]:
     except Exception:  # noqa: BLE001
         logger.exception("harvest LLM batch failed")
         return {}
-    parsed = table_profiler._parse_json(raw)
-    items = parsed if isinstance(parsed, list) else (
-        parsed.get("results") or parsed.get("data") or [])
+    parsed = _loads(raw)  # list OR dict (table_profiler._parse_json drops lists)
     out: dict[str, str] = {}
-    for it in items:
-        if isinstance(it, dict) and it.get("input") and it.get("official"):
-            out[str(it["input"])] = str(it["official"])
+
+    def _clean(v):
+        s = "" if v is None else str(v).strip()
+        return s if s and s.lower() not in ("null", "none", "-") else None
+
+    # Shape 1: an array of {input, official}. Shape 2: {results|data|...: [...]}.
+    # Shape 3 (what DeepSeek json_object mode tends to return): a FLAT object
+    # {input: official}. Handle all three so the mapping is never silently lost.
+    lst = None
+    if isinstance(parsed, list):
+        lst = parsed
+    elif isinstance(parsed, dict):
+        for key in ("results", "data", "mappings", "items", "output"):
+            if isinstance(parsed.get(key), list):
+                lst = parsed[key]; break
+        if lst is None:
+            lst = next((v for v in parsed.values() if isinstance(v, list)), None)
+    if lst is not None:
+        for it in lst:
+            if isinstance(it, dict):
+                inp, off = it.get("input"), _clean(it.get("official"))
+                if inp and off:
+                    out[str(inp)] = off
+    elif isinstance(parsed, dict):
+        for k, v in parsed.items():                 # flat {input: official}
+            off = _clean(v)
+            if off:
+                out[str(k)] = off
     return out
 
 
@@ -212,9 +255,12 @@ async def harvest_llm_pass(*, limit: int = 4000) -> dict:
         return {"llm_available": False}
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
+        # 'pending' = not yet tried; also RETRY 'unresolved' rows that never got a
+        # guess (e.g. an earlier parse bug), but leave ones already llm_mapped.
         pend = await conn.fetch(
             f"SELECT norm_key, value_raw FROM public.{_qi(UNRESOLVED_TABLE)} "
-            f"WHERE status = 'pending' ORDER BY occurrences DESC LIMIT {int(limit)}")
+            f"WHERE resolved_code IS NULL AND (status = 'pending' OR llm_guess IS NULL) "
+            f"ORDER BY occurrences DESC LIMIT {int(limit)}")
     mapped = still = 0
     for i in range(0, len(pend), LLM_BATCH):
         batch = pend[i:i + LLM_BATCH]
