@@ -2060,13 +2060,18 @@ async def settlements_load(
     return {"status": "ok", **res}
 
 
-async def _run_harvest_bg(use_llm: bool, per_col_cap: int):
+async def _run_harvest_bg(phase: str, per_col_cap: int):
     from app.services import settlement_harvest
     try:
-        res = await settlement_harvest.harvest(use_llm=use_llm, per_col_cap=per_col_cap)
-        logger.info("settlement harvest done: %s", res)
+        if phase == "scan":
+            res = await settlement_harvest.harvest_scan(per_col_cap=per_col_cap)
+        elif phase == "llm":
+            res = await settlement_harvest.harvest_llm_pass()
+        else:
+            res = await settlement_harvest.harvest(per_col_cap=per_col_cap)
+        logger.info("settlement harvest (%s) done: %s", phase, res)
     except Exception:  # noqa: BLE001
-        logger.exception("settlement harvest crashed")
+        logger.exception("settlement harvest (%s) crashed", phase)
 
 
 @router.post("/settlements/harvest")
@@ -2074,18 +2079,22 @@ async def _run_harvest_bg(use_llm: bool, per_col_cap: int):
 async def settlements_harvest(
     request: Request,
     background_tasks: BackgroundTasks,
-    use_llm: bool = True,
+    phase: str = "full",          # "scan" (SQL only) | "llm" (map pending) | "full"
     per_col_cap: int = 3000,
     user: User = Depends(get_admin_user),
 ):
     """Scan every profiler-flagged locality/authority column across all datasets,
-    resolve real values through the index, LLM-map the misses, and collect the
-    rest in over_settlement_unresolved. Runs in the background (a full scan +
-    LLM passes can exceed the HTTP timeout)."""
+    resolve real values through the index, and collect the misses in
+    over_settlement_unresolved (status='pending'); the LLM pass then maps what it
+    can (status='llm_mapped', writing new aliases) and leaves the rest
+    'unresolved' for review. ``phase=scan`` runs the fast SQL pass only (visible
+    incrementally); ``phase=llm`` maps the pending rows; ``full`` does both.
+    Background (a 558-table scan can exceed the HTTP timeout)."""
     from app.services import append_store as _as
     if not _as.is_configured():
         raise HTTPException(status_code=409, detail="Append DB is not configured")
-    background_tasks.add_task(_run_harvest_bg, use_llm, per_col_cap)
-    logger.info("settlement harvest started by %s (llm=%s cap=%s)", user.email, use_llm, per_col_cap)
-    return {"status": "started",
-            "message": "Harvest running in the background; results in over_settlement_unresolved."}
+    phase = phase if phase in ("scan", "llm", "full") else "full"
+    background_tasks.add_task(_run_harvest_bg, phase, per_col_cap)
+    logger.info("settlement harvest (%s) started by %s", phase, user.email)
+    return {"status": "started", "phase": phase,
+            "message": "Harvest running in the background; watch over_settlement_unresolved."}

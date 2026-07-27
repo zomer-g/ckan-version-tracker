@@ -112,7 +112,7 @@ async def _llm_map(values: list[str]) -> dict[str, str]:
         if provider == "deepseek":
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=settings.deepseek_api_key,
-                                 base_url=table_profiler._DEEPSEEK_BASE_URL)
+                                 base_url=table_profiler._DEEPSEEK_BASE_URL, timeout=90)
             resp = await client.chat.completions.create(
                 model=table_profiler._DEEPSEEK_MODEL, temperature=0, max_tokens=4000,
                 response_format={"type": "json_object"},
@@ -121,7 +121,7 @@ async def _llm_map(values: list[str]) -> dict[str, str]:
             raw = resp.choices[0].message.content or ""
         else:
             from anthropic import AsyncAnthropic
-            client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+            client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=90)
             resp = await client.messages.create(
                 model=table_profiler._ANTHROPIC_MODEL, max_tokens=4000,
                 system=_LLM_PROMPT, messages=[{"role": "user", "content": user}])
@@ -152,79 +152,95 @@ async def _add_alias(entity: str, value: str, code: int) -> None:
             norm(value), code, value)
 
 
-async def harvest(*, use_llm: bool = True, per_col_cap: int = 3000) -> dict:
-    """Run the full harvest. Returns a summary of what was scanned/mapped."""
+async def harvest_scan(*, rebuild: bool = True, per_col_cap: int = 3000) -> dict:
+    """Phase A — SQL only, no LLM. Scan every locality column and UPSERT the
+    unresolved distinct values INCREMENTALLY (per column), so progress is visible
+    in over_settlement_unresolved as it runs and one slow column can't lose the
+    rest. Accumulates occurrences + source list across columns via ON CONFLICT."""
     await ensure_unresolved_table()
+    pool = await append_store.get_pool()
+    if rebuild:
+        async with pool.acquire() as conn:
+            await conn.execute(f"TRUNCATE public.{_qi(UNRESOLVED_TABLE)}")
     cols = await locality_columns()
-
-    # Aggregate unresolved distinct values across all locality columns by norm key.
-    agg: dict[str, dict] = {}
-    scanned_cols = 0
+    scanned = 0
     for c in cols:
         try:
             vals = await _unresolved_values(c["schema"], c["table"], c["column"], per_col_cap)
         except Exception as exc:  # noqa: BLE001 — skip a bad/huge column, keep going
             logger.info("harvest: skipped %s.%s.%s: %s", c["schema"], c["table"], c["column"], exc)
             continue
-        scanned_cols += 1
-        for val, cnt in vals:
-            k = norm(val)
-            if not k:
-                continue
-            e = agg.setdefault(k, {"value": val, "occ": 0, "sources": []})
-            e["occ"] += cnt
-            e["sources"].append({"schema": c["schema"], "table": c["table"],
-                                  "column": c["column"], "count": cnt})
-
-    unresolved_keys = list(agg.keys())
-    llm_mapped = 0
-    still_unresolved = 0
-
-    # LLM pass over the unique surface values, then validate the guess via the index.
-    guesses: dict[str, str] = {}
-    if use_llm and unresolved_keys and table_profiler.llm_available():
-        uniq_values = [agg[k]["value"] for k in unresolved_keys]
-        for i in range(0, len(uniq_values), LLM_BATCH):
-            guesses.update(await _llm_map(uniq_values[i:i + LLM_BATCH]))
-
-    pool = await append_store.get_pool()
-    for k, e in agg.items():
-        val = e["value"]
-        official = guesses.get(val)
-        resolved_code = resolved_name = entity = None
-        status = "unresolved"
-        if official:
-            s = await settlement_index.resolve(official)  # settlement first
-            if s:
-                resolved_code, resolved_name, entity = s["code"], s["name"], "settlement"
-            else:
-                a = await _resolve_authority(official)
-                if a:
-                    resolved_code, resolved_name, entity = a["code"], a["name"], "authority"
-        if resolved_code is not None:
-            await _add_alias(entity, val, resolved_code)
-            status = "llm_mapped"; llm_mapped += 1
-        else:
-            still_unresolved += 1
+        scanned += 1
+        if not vals:
+            continue
+        src = {"schema": c["schema"], "table": c["table"], "column": c["column"]}
+        rows = [(norm(v), v, cnt, json.dumps([{**src, "count": cnt}], ensure_ascii=False))
+                for v, cnt in vals if norm(v)]
         async with pool.acquire() as conn:
-            await conn.execute(
+            await conn.executemany(
                 f"""INSERT INTO public.{_qi(UNRESOLVED_TABLE)}
-                    (norm_key,value_raw,occurrences,sources,llm_guess,resolved_code,
-                     resolved_name,entity,status,updated_at)
-                    VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9, now())
+                    (norm_key,value_raw,occurrences,sources,status,updated_at)
+                    VALUES ($1,$2,$3,$4::jsonb,'pending', now())
                     ON CONFLICT (norm_key) DO UPDATE SET
-                      value_raw=EXCLUDED.value_raw, occurrences=EXCLUDED.occurrences,
-                      sources=EXCLUDED.sources, llm_guess=EXCLUDED.llm_guess,
-                      resolved_code=EXCLUDED.resolved_code, resolved_name=EXCLUDED.resolved_name,
-                      entity=EXCLUDED.entity, status=EXCLUDED.status, updated_at=now()""",
-                k, val, e["occ"], json.dumps(e["sources"], ensure_ascii=False),
-                official, resolved_code, resolved_name, entity, status)
+                      occurrences = public.{_qi(UNRESOLVED_TABLE)}.occurrences + EXCLUDED.occurrences,
+                      sources = public.{_qi(UNRESOLVED_TABLE)}.sources || EXCLUDED.sources,
+                      updated_at = now()""",
+                rows)
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(UNRESOLVED_TABLE)}")
+    return {"locality_columns": len(cols), "columns_scanned": scanned,
+            "distinct_unresolved_values": int(total or 0)}
 
-    return {
-        "locality_columns": len(cols), "columns_scanned": scanned_cols,
-        "distinct_unresolved_values": len(agg),
-        "llm_mapped": llm_mapped, "still_unresolved": still_unresolved,
-    }
+
+async def harvest_llm_pass(*, limit: int = 4000) -> dict:
+    """Phase B — take the still-pending unresolved values, ask the LLM for each
+    one's official name, validate that guess through the index, and on success
+    write an 'llm' alias + mark the row llm_mapped. Batched, timeout-guarded."""
+    if not table_profiler.llm_available():
+        return {"llm_available": False}
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        pend = await conn.fetch(
+            f"SELECT norm_key, value_raw FROM public.{_qi(UNRESOLVED_TABLE)} "
+            f"WHERE status = 'pending' ORDER BY occurrences DESC LIMIT {int(limit)}")
+    mapped = still = 0
+    for i in range(0, len(pend), LLM_BATCH):
+        batch = pend[i:i + LLM_BATCH]
+        guesses = await _llm_map([r["value_raw"] for r in batch])
+        for r in batch:
+            official = guesses.get(r["value_raw"])
+            code = name = entity = None
+            if official:
+                s = await settlement_index.resolve(official)
+                if s:
+                    code, name, entity = s["code"], s["name"], "settlement"
+                else:
+                    a = await _resolve_authority(official)
+                    if a:
+                        code, name, entity = a["code"], a["name"], "authority"
+            async with pool.acquire() as conn:
+                if code is not None:
+                    await _add_alias(entity, r["value_raw"], code)
+                    await conn.execute(
+                        f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
+                            resolved_code=$3, resolved_name=$4, entity=$5,
+                            status='llm_mapped', updated_at=now() WHERE norm_key=$1""",
+                        r["norm_key"], official, code, name, entity)
+                    mapped += 1
+                else:
+                    await conn.execute(
+                        f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
+                            status='unresolved', updated_at=now() WHERE norm_key=$1""",
+                        r["norm_key"], official)
+                    still += 1
+    return {"processed": len(pend), "llm_mapped": mapped, "still_unresolved": still}
+
+
+async def harvest(*, use_llm: bool = True, per_col_cap: int = 3000) -> dict:
+    """Full harvest: incremental scan, then (optionally) the LLM pass."""
+    scan = await harvest_scan(rebuild=True, per_col_cap=per_col_cap)
+    llm = await harvest_llm_pass() if use_llm else {"skipped": True}
+    return {**scan, "llm": llm}
 
 
 async def _resolve_authority(q: str) -> dict | None:
