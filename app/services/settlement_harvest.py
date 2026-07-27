@@ -74,19 +74,31 @@ async def locality_columns() -> list[dict]:
             for r in rows]
 
 
+# A column is only treated as a genuine locality column if at least this fraction
+# of its DISTINCT values already resolve to a real settlement/authority. This
+# filters out free-text/name columns the profiler heuristic over-flagged (which
+# would otherwise dump thousands of non-place values into the unresolved pile).
+MIN_RESOLVE_RATE = 0.4
+MIN_DISTINCT = 3
+
+
 async def _unresolved_values(schema: str, table: str, col: str, cap: int) -> list[tuple[str, int]]:
-    """Distinct values of one locality column that the rule index does NOT resolve
-    (neither as a settlement nor an authority), with their occurrence counts."""
+    """Distinct UNRESOLVED values of one locality column — but ONLY if the column
+    is genuinely locality-like (≥ MIN_RESOLVE_RATE of its distinct values resolve).
+    A column that fails the gate returns [] (it isn't really a place column)."""
     ro = await append_store.get_readonly_pool()
     ref = f"{_qi(schema)}.{_qi(table)}"
     q = _qi(col)
     sql = (
         f"WITH d AS (SELECT {q}::text AS val, count(*) c FROM {ref} "
-        f"           WHERE {q} IS NOT NULL AND {q}::text <> '' GROUP BY 1) "
-        f"SELECT val, c FROM d "
-        f"WHERE public.over_settlement_code(val) IS NULL "
-        f"  AND public.over_authority_code(val) IS NULL "
-        f"ORDER BY c DESC LIMIT {int(cap)}"
+        f"           WHERE {q} IS NOT NULL AND {q}::text <> '' GROUP BY 1), "
+        f"     r AS (SELECT val, c, (public.over_settlement_code(val) IS NOT NULL "
+        f"                       OR public.over_authority_code(val) IS NOT NULL) resolved FROM d), "
+        f"     s AS (SELECT count(*) tot, count(*) FILTER (WHERE resolved) res FROM r) "
+        f"SELECT r.val, r.c FROM r, s "
+        f"WHERE NOT r.resolved AND s.tot >= {MIN_DISTINCT} "
+        f"  AND s.res::float / NULLIF(s.tot,0) >= {MIN_RESOLVE_RATE} "
+        f"ORDER BY r.c DESC LIMIT {int(cap)}"
     )
     async with ro.acquire() as conn:
         async with conn.transaction(readonly=True):
