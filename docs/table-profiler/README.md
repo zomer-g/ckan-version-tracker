@@ -73,17 +73,31 @@ The append DB + LLM keys live on Render, not in the local `.env`. Two ways:
 - **Local:** set `APPEND_DATABASE_URL` (+ optional key), then
   `python scripts/run_profiler_pilot.py --n 20`.
 
+## Access (shipped)
+
+- `GET /api/tables/{table}/profile` — public, one table's profile (404 if unprofiled).
+- `profile` is also embedded in `GET /api/tables/{table}/detail`.
+- MCP tool `get_table_profile(table, schema)` on the OVER server.
+- /data table-detail screen: `ProfilePanel` (frontend/src/components/ProfilePanel.tsx)
+  — collapsible summary + tags/keywords + per-field table (type, min/max, detected
+  date format, recurring-entity label, fill%, distinct, AI description).
+
 ## Status
 
 - [x] Storage table + model-free DDL in append DB
 - [x] SQL deterministic profiler (min/max, date-format, top-values, entities, keywords)
+- [x] Native-type path: declared timestamp/numeric columns get exact MIN/MAX (no sniff)
 - [x] LLM enrichment (budget-guarded, provider-agnostic)
 - [x] Admin endpoints + standalone pilot runner
-- [x] Offline tests (18, green)
-- [ ] **Run the 20-table pilot** (needs append-DB connectivity — deploy or local env)
-- [ ] Surface `over_table_profiles` in the /data catalog picker + table-detail summary
+- [x] Offline tests (22, green)
+- [x] **20-table pilot RUN on prod** — 18/20 profiled+enriched across all buckets
+      (2 errored, logged); verified gov-decisions dates 1993-01-03..2026-07-19
+- [x] API + MCP + /data ProfilePanel — verified live on prod
+- [ ] Re-run pilot with the native-type fix (force=true) to refresh knesset date ranges
+- [ ] Investigate the 2 pilot errors (likely a large idx/govmap layer timeout)
 - [ ] Admin review/approve UI (`status` → `approved`)
-- [ ] Scheduler pass (whole-catalog, budgeted) once the pilot looks good
+- [ ] Scheduler pass (whole-catalog, budgeted)
+- [ ] Phase 2 — standardization (alias index + `over_*` canonical columns)
 
 ## Phase 2 — standardization (design, not yet built)
 
