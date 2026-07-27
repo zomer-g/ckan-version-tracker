@@ -988,8 +988,50 @@ export interface CatalogFile {
   name: string;
   url: string;
 }
+export interface TableProfileColumn {
+  detected_kind?: string;
+  non_null?: number;
+  fill_rate?: number;
+  distinct_est?: number;
+  distinct_ratio?: number;
+  min?: number | string | null;
+  max?: number | string | null;
+  avg?: number | null;
+  native?: boolean;
+  numeric_rate?: number;
+  date_format?: { python?: string; postgres?: string; match_rate?: number; ambiguous?: boolean } | null;
+  entity_guess?: { guess?: string; confidence?: number; evidence?: string[] };
+  top_values?: Array<{ value: string; count: number }>;
+}
+
+// The auto-computed profile / metadata for one table (see table_profiler).
+export interface TableProfile {
+  schema_name: string;
+  table_name: string;
+  row_count: number | null;
+  column_count: number | null;
+  status?: string;
+  summary_he?: string | null;
+  profiled_at?: string | null;
+  enriched_at?: string | null;
+  sql_profile?: {
+    candidate_key?: string | null;
+    keywords?: Array<{ token: string; count: number }>;
+    columns?: Record<string, TableProfileColumn>;
+    geometry_columns?: string[];
+  };
+  llm_enrichment?: {
+    summary_he?: string;
+    tags?: string[];
+    keywords?: string[];
+    columns?: Record<string, { description_he?: string; semantic_type?: string; date_format_ok?: boolean }>;
+  };
+  date_parse_specs?: Record<string, unknown>;
+}
+
 export interface CatalogTableDetail extends CatalogTable {
   row_count: number | null;
+  profile?: TableProfile | null;
   files: CatalogFile[];
   // `omitted_columns` are real columns deliberately NOT fetched for the preview
   // (geometry/WKT — see append_store._BULK_COLS): they live in TOAST and pulling
@@ -1008,6 +1050,8 @@ export const dataCatalog = {
   tables: () => request<{ tables: CatalogTable[] }>("/tables"),
   tableDetail: (table: string) =>
     request<CatalogTableDetail>(`/tables/${encodeURIComponent(table)}/detail`),
+  tableProfile: (table: string) =>
+    request<TableProfile>(`/tables/${encodeURIComponent(table)}/profile`),
   // Read-only SQL over public + knesset (single SELECT/WITH, READ ONLY tx).
   sql: (sql: string) =>
     request<KnessetDbSqlResult>("/tables/sql", {

@@ -10,6 +10,7 @@ import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
+import ProfilePanel from "../components/ProfilePanel";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -1207,6 +1208,10 @@ export default function DataSqlPage() {
 
               {/* No-SQL chart tool over the selected table */}
               <QuickChartBuilder key={selectedTable.table} table={selectedTable} onCreate={quickChart} />
+
+              {/* Auto-computed profile: detected field types, min/max ranges,
+                  date formats, recurring-entity classification, summary. */}
+              {detail?.profile && <ProfilePanel profile={detail.profile} />}
 
               {/* Raw source files */}
               {detail && detail.files.length > 0 && (

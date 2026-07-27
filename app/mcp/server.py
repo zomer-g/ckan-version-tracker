@@ -97,6 +97,19 @@ TOOLS: list[dict] = [
         "description": "סטטיסטיקה כללית: מספר מאגרים פעילים, ארגונים, וסך גרסאות.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_table_profile",
+        "description": "פרופיל/מטא-דאטה שחושב אוטומטית על טבלה: לכל שדה — הסוג שזוהה (מספר/תאריך/טקסט), טווח min/max למספרים ותאריכים, פורמט התאריך, שיעור מילוי, מונה ערכים ייחודיים, ערכים שכיחים, וזיהוי ישות חוזרת (יישוב/רשות מקומית/תאגיד/אדם). כולל תקציר טקסטואלי של המאגר ומילות מפתח. השתמש כדי להבין מה מכיל שדה לפני תשאול. שם הטבלה מגיע מ-query_dataset_rows / search_datasets או מקונסולת /data.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "table": {"type": "string", "description": "שם הטבלה הפיזי (למשל append_policies_96dcbeac_03c59ca7, kns_bill)"},
+                "schema": {"type": "string", "enum": ["public", "knesset", "idx", "odata"], "default": "public",
+                           "description": "הסכימה של הטבלה (ברירת מחדל public)"},
+            },
+            "required": ["table"],
+        },
+    },
 ]
 
 
@@ -253,6 +266,20 @@ async def _tool_get_stats(request, db, user, a) -> tuple[dict, int]:
             "source": "over.org.il"}, 0
 
 
+async def _tool_get_table_profile(request, db, user, a) -> tuple[dict, int]:
+    from app.services import table_profiler
+    table = (a.get("table") or "").strip()
+    schema = (a.get("schema") or "public").strip()
+    if not table:
+        return {"error": "table is required"}, 0
+    if schema not in table_profiler.PROFILABLE_SCHEMAS:
+        return {"error": f"unsupported schema: {schema}"}, 0
+    prof = await table_profiler.get_profile(schema, table)
+    if not prof:
+        return {"error": "table has not been profiled yet", "table": table, "schema": schema}, 0
+    return prof, 1
+
+
 _IMPL = {
     "search_datasets": _tool_search_datasets,
     "get_dataset": _tool_get_dataset,
@@ -260,6 +287,7 @@ _IMPL = {
     "list_organizations": _tool_list_organizations,
     "list_tags": _tool_list_tags,
     "get_stats": _tool_get_stats,
+    "get_table_profile": _tool_get_table_profile,
 }
 
 

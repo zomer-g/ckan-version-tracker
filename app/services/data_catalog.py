@@ -490,9 +490,17 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
     schema = rec["schema"]
     sample = await append_store.sample_rows(table, schema=schema, limit=20)
 
+    # Attach the stored profile (min/max, detected types, entities, summary) if
+    # the profiler has run on this table — surfaced on the /data detail screen.
+    from app.services import table_profiler
+    try:
+        profile = await table_profiler.get_profile(schema, table)
+    except Exception:  # noqa: BLE001 — a missing profile table must not 500 the cube
+        profile = None
+
     if rec["kind"] == "knesset":
         rec = {**rec, "row_count": rec.get("est_rows"), "files": [],
-               "sample": sample, "csv_export": True}
+               "sample": sample, "csv_export": True, "profile": profile}
         return rec
 
     if rec["kind"] in ("index", "odata", "ocal"):
@@ -504,7 +512,7 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
         except Exception:  # noqa: BLE001
             count = rec.get("est_rows")
         return {**rec, "row_count": count, "files": [], "sample": sample,
-                "csv_export": True}
+                "csv_export": True, "profile": profile}
 
     # Dataset table — exact count + raw-file links from the latest version.
     try:
@@ -517,5 +525,5 @@ async def table_detail(table: str, db: AsyncSession) -> dict | None:
     lm = await _latest_mappings(db, [UUID(rec["dataset_id"])])
     _, maps = next(iter(lm.values()), (None, {}))
     return {**rec, "row_count": count, "files": _files_of(version_id, maps),
-            "sample": sample,
+            "sample": sample, "profile": profile,
             "csv_url": f"/api/append/{rec['dataset_id']}/download.csv"}

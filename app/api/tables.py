@@ -59,6 +59,25 @@ async def table_detail(table: str, request: Request, db: AsyncSession = Depends(
     return detail
 
 
+@router.get("/{table}/profile")
+@limiter.limit("60/minute")
+async def table_profile(table: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """The stored PROFILE / metadata for one table — min/max ranges, detected
+    column kinds & date formats, recurring-entity classification, keywords, and
+    the LLM summary. Public + read-only. 404 if the table is unknown or has not
+    been profiled yet. Resolves the schema from the catalog (the security gate)."""
+    _require_enabled()
+    from app.services import table_profiler
+    catalog = await data_catalog.build_catalog(db)
+    rec = next((r for r in catalog if r["table"] == table), None)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Unknown table")
+    prof = await table_profiler.get_profile(rec["schema"], table)
+    if prof is None:
+        raise HTTPException(status_code=404, detail="Table has not been profiled yet")
+    return prof
+
+
 @router.post("/sql")
 @limiter.limit("20/minute")
 async def run_sql(request: Request, body: SqlBody):
