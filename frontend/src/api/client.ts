@@ -963,7 +963,7 @@ export interface CatalogTable {
   // "index") joined public and knesset and this union was never widened, so
   // TypeScript has been quietly wrong about every GovMap layer since.
   schema: "public" | "knesset" | "idx" | "odata" | "ocal";
-  kind: "dataset" | "knesset" | "index" | "odata" | "ocal";
+  kind: "dataset" | "knesset" | "index" | "odata" | "ocal" | "over";
   title: string;
   description?: string;
   group?: string | null;

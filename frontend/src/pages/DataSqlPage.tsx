@@ -77,8 +77,16 @@ const OCAL_BADGE: Badge = {
   bg: "#fef3c7", fg: "#92400e", accent: "#d97706",
 };
 
+// גרסאות לעם (kind "over"): OVER's OWN processed index tables (settlement /
+// authority reference + inflections, table profiles) — a series meant to be
+// JOINed against the datasets. Also PROCESSED, not an original public source.
+const OVER_BADGE: Badge = {
+  id: "over", label: "גרסאות לעם (אינדקסים מעובדים)",
+  bg: "#fae8ff", fg: "#86198f", accent: "#c026d3",
+};
+
 // The processed (non-official-source) badges, rendered below the divider.
-const PROCESSED_BADGE_IDS = new Set(["odata", "ocal"]);
+const PROCESSED_BADGE_IDS = new Set(["odata", "ocal", "over"]);
 
 // Does this table carry a queryable PostGIS column? Keyed on the column TYPE,
 // not the name: append_store._ckan_type labels geometry distinctly, so this
@@ -203,6 +211,7 @@ function badgeOf(t: CatalogTable): Badge {
   if (t.kind === "knesset") return KNESSET_DB_BADGE;
   if (t.kind === "odata") return ODATA_BADGE;
   if (t.kind === "ocal") return OCAL_BADGE;
+  if (t.kind === "over") return OVER_BADGE;
   const b = sourceBadgeFor(t.source_type, t.organization, t.ckan_id);
   return { id: b.id, label: b.label, bg: b.bg, fg: b.fg, accent: b.accent };
 }
@@ -213,6 +222,7 @@ function groupLink(b: Badge): string {
   if (b.id === "knesset-db") return "/knesset?tab=sql";
   if (b.id === "odata") return "/projects/odata";
   if (b.id === "ocal") return "/projects/ocal";
+  if (b.id === "over") return "/data";
   return `/sources/${b.id}`;
 }
 

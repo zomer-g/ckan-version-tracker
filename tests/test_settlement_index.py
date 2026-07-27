@@ -56,6 +56,17 @@ def test_manual_aliases_resolve_known_gaps():
     assert "בתל אביב" in by_variant and by_variant["בתל אביב"] == (5000, "manual_prefix", 55)
 
 
+def test_authorities_seed_and_aliases():
+    auth = si._load_json(si.AUTH_SEED_PATH)
+    assert len(auth) > 200  # ~257 authorities
+    # regional councils (מועצה אזורית) present — the ones missing from settlements
+    assert any(a.get("municipal_status") == "מועצה אזורית" for a in auth)
+    # the same alias engine applies (prefix + norm)
+    r = auth[0]
+    keys = {k for k, _, _, _ in si.aliases_for(r)}
+    assert si.norm(r["name"]) in keys
+
+
 def test_seed_loads_and_generates():
     recs = si.load_seed()
     assert len(recs) > 1000

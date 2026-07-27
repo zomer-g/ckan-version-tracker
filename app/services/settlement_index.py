@@ -38,8 +38,11 @@ logger = logging.getLogger(__name__)
 
 SETTLEMENTS_TABLE = "over_settlements"
 ALIASES_TABLE = "over_settlement_aliases"
+AUTHORITIES_TABLE = "over_authorities"
+AUTH_ALIASES_TABLE = "over_authority_aliases"
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
 SEED_PATH = os.path.join(_DATA_DIR, "settlements_2024.json")
+AUTH_SEED_PATH = os.path.join(_DATA_DIR, "authorities_2024.json")
 # Curated supplement for what CBS official names miss: short forms (תל אביב →
 # תל אביב -יפו), renames (נצרת עילית → נוף הגליל), and ktiv-haser spellings.
 MANUAL_PATH = os.path.join(_DATA_DIR, "settlement_aliases_manual.json")
@@ -151,6 +154,35 @@ async def ensure_tables() -> None:
         await conn.execute(
             f"CREATE INDEX IF NOT EXISTS {_qi(ALIASES_TABLE + '_variant_idx')} "
             f"ON public.{_qi(ALIASES_TABLE)} (variant)")
+        # Local authorities (רשות מקומית) — incl. regional councils, which are
+        # NOT settlements. Same shape as the settlement index.
+        await conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS public.{_qi(AUTHORITIES_TABLE)} (
+                code             integer PRIMARY KEY,
+                name             text NOT NULL,
+                district         text,
+                municipal_status text,
+                year             integer,
+                updated_at       timestamptz DEFAULT now()
+            )
+            """
+        )
+        await conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS public.{_qi(AUTH_ALIASES_TABLE)} (
+                variant  text    NOT NULL,
+                code     integer NOT NULL,
+                surface  text,
+                kind     text,
+                weight   integer DEFAULT 50,
+                PRIMARY KEY (variant, code)
+            )
+            """
+        )
+        await conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {_qi(AUTH_ALIASES_TABLE + '_variant_idx')} "
+            f"ON public.{_qi(AUTH_ALIASES_TABLE)} (variant)")
 
 
 async def ensure_functions() -> None:
@@ -203,6 +235,41 @@ async def ensure_functions() -> None:
             $$;
             """
         )
+        # Authority resolvers — same norm, over the authority alias index.
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.over_authority_code(q text)
+            RETURNS integer LANGUAGE sql STABLE AS $$
+              SELECT a.code
+              FROM public.over_authority_aliases a
+              WHERE a.variant = public.over_settlement_norm(q)
+              ORDER BY a.weight DESC
+              LIMIT 1
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION public.over_authority(q text)
+            RETURNS text LANGUAGE sql STABLE AS $$
+              SELECT s.name
+              FROM public.over_authority_aliases a
+              JOIN public.over_authorities s ON s.code = a.code
+              WHERE a.variant = public.over_settlement_norm(q)
+              ORDER BY a.weight DESC
+              LIMIT 1
+            $$;
+            """
+        )
+
+
+def _load_json(path: str) -> list[dict]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        logger.warning("index seed missing: %s", path)
+        return []
 
 
 def load_seed() -> list[dict]:
@@ -284,8 +351,36 @@ async def load(*, rebuild: bool = True) -> dict:
                       surface=EXCLUDED.surface, kind=EXCLUDED.kind, weight=EXCLUDED.weight""",
                 alias_rows,
             )
-    logger.info("settlement index loaded: %d settlements, %d aliases", len(recs), len(alias_rows))
-    return {"settlements": len(recs), "aliases": len(alias_rows)}
+            # ── Authorities (רשות מקומית) — same alias engine ──────────────
+            auth = _load_json(AUTH_SEED_PATH)
+            if rebuild:
+                await conn.execute(f"TRUNCATE public.{_qi(AUTHORITIES_TABLE)}")
+                await conn.execute(f"TRUNCATE public.{_qi(AUTH_ALIASES_TABLE)}")
+            await conn.executemany(
+                f"""INSERT INTO public.{_qi(AUTHORITIES_TABLE)}
+                    (code,name,district,municipal_status,year) VALUES ($1,$2,$3,$4,$5)
+                    ON CONFLICT (code) DO UPDATE SET
+                      name=EXCLUDED.name, district=EXCLUDED.district,
+                      municipal_status=EXCLUDED.municipal_status,
+                      year=EXCLUDED.year, updated_at=now()""",
+                [(r["code"], r["name"], r.get("district"), r.get("municipal_status"),
+                  r.get("year")) for r in auth],
+            )
+            auth_alias_rows: list[tuple] = []
+            for r in auth:
+                for key, surface, kind, weight in aliases_for(r):
+                    auth_alias_rows.append((key, r["code"], surface, kind, weight))
+            await conn.executemany(
+                f"""INSERT INTO public.{_qi(AUTH_ALIASES_TABLE)} (variant,code,surface,kind,weight)
+                    VALUES ($1,$2,$3,$4,$5)
+                    ON CONFLICT (variant,code) DO UPDATE SET
+                      surface=EXCLUDED.surface, kind=EXCLUDED.kind, weight=EXCLUDED.weight""",
+                auth_alias_rows,
+            )
+    logger.info("index loaded: %d settlements (%d aliases), %d authorities (%d aliases)",
+                len(recs), len(alias_rows), len(auth), len(auth_alias_rows))
+    return {"settlements": len(recs), "aliases": len(alias_rows),
+            "authorities": len(auth), "authority_aliases": len(auth_alias_rows)}
 
 
 # ── query ─────────────────────────────────────────────────────────────────────
