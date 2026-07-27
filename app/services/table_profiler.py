@@ -455,11 +455,15 @@ def _numeric_expr(col: str, native: bool = False) -> str:
     )
 
 
-def _date_expr(col: str, pgfmt: str | None, native: bool = False) -> str:
+def _date_expr(col: str, pgfmt: str | None, native: bool = False, safe: bool = True) -> str:
     q = _qi(col)
     if native:  # already a timestamp/date-typed column — MIN/MAX directly
         return f"MIN({q}) AS min_{{i}}, MAX({q}) AS max_{{i}}"
-    if not pgfmt:
+    if not pgfmt or not safe:
+        # ``safe=False`` is the fallback pass: some text values matched the format
+        # in the sample but are invalid dates over the full table (bare year,
+        # 31/02, …) and to_timestamp throws "field value out of range", crashing
+        # the whole aggregate. Skip the range for text dates on that retry.
         return f"NULL::timestamp AS min_{{i}}, NULL::timestamp AS max_{{i}}"
     # to_timestamp is lenient; guard with a length check to avoid garbage rows.
     src = f"NULLIF({q}::text, '')"
@@ -475,10 +479,13 @@ _AGG_TIMEOUT_MS = 240_000  # 4 min — enough for ~1M-row full scans
 
 
 async def _aggregate(schema: str, table: str, cols: list[str],
-                     classes: dict[str, dict], *, est_rows: int | None = None) -> dict:
+                     classes: dict[str, dict], *, est_rows: int | None = None,
+                     date_ranges: bool = True) -> dict:
     """One scan: total count, per-column non-null count, and min/max/avg for the
     classified numeric & date columns. For very large tables the aggregate runs
-    over a TABLESAMPLE (``approx=True``) so it stays within the timeout."""
+    over a TABLESAMPLE (``approx=True``) so it stays within the timeout.
+    ``date_ranges=False`` is the retry pass that skips text-date min/max after an
+    invalid-date crash."""
     ro = await append_store.get_readonly_pool()
     ref = f"{_qi(schema)}.{_qi(table)}"
     approx = bool(est_rows and est_rows > _AGG_SAMPLE_ROWS)
@@ -500,7 +507,7 @@ async def _aggregate(schema: str, table: str, cols: list[str],
             parts.append(_numeric_expr(col, native).format(i=idx))
         elif kind == "date":
             pgfmt = (cls.get("date_fmt") or {}).get("postgres")
-            parts.append(_date_expr(col, pgfmt, native).format(i=idx))
+            parts.append(_date_expr(col, pgfmt, native, safe=date_ranges).format(i=idx))
         meta.append((idx, col, kind))
         idx += 1
     sql = f"SELECT {', '.join(parts)} FROM {src}"
@@ -599,7 +606,14 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
     col_types = {c["name"]: c.get("type") for c in columns}
     samples = await _sample_column_values(schema, table, col_names, est_rows)
     classes = _classify_columns(samples, col_types)
-    agg = await _aggregate(schema, table, col_names, classes, est_rows=est_rows)
+    date_ranges_skipped = False
+    try:
+        agg = await _aggregate(schema, table, col_names, classes, est_rows=est_rows)
+    except Exception as exc:  # noqa: BLE001 — most often an invalid text date
+        logger.info("aggregate retry without date ranges for %s.%s: %s", schema, table, exc)
+        agg = await _aggregate(schema, table, col_names, classes, est_rows=est_rows,
+                               date_ranges=False)
+        date_ranges_skipped = True
     approx = bool(agg.get("approx"))
     scan_total = agg["total"]  # rows the aggregate actually scanned (sample if approx)
     # Real row count: the planner estimate when we sampled, else the exact scan count.
@@ -668,6 +682,10 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
         # Ranges/fill for this (very large) table were computed over a sample.
         sql_profile["approx_ranges"] = True
         sql_profile["scanned_rows"] = scan_total
+    if date_ranges_skipped:
+        # A text date column held invalid values (bare year, 31/02, …); ranges
+        # for text dates were skipped so the rest of the table still profiles.
+        sql_profile["date_ranges_skipped"] = True
     if bad_name_cols:
         # Surface columns skipped for un-encodable names (ascii-safe rendering).
         sql_profile["unprofilable_columns"] = [
