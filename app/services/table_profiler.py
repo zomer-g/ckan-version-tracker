@@ -237,6 +237,29 @@ def _norm_place(s: str) -> str:
     return re.sub(r"[\s\-־'\"״׳.]+", "", (s or "").strip())
 
 
+def is_encodable(s) -> bool:
+    """True if ``s`` is a str that survives a UTF-8 round-trip.
+
+    Some upstream CSVs were decoded with damage (CP862 / bad sniffing), leaving
+    LONE SURROGATES in column names (e.g. 'תא\\udc90ריך'). asyncpg cannot encode
+    such a name back to UTF-8, so any query that references the column raises and
+    the whole table is lost. We detect these and skip just the bad columns."""
+    if not isinstance(s, str):
+        return False
+    try:
+        s.encode("utf-8")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _sanitize_json(s: str) -> str:
+    """Replace any non-UTF-8-encodable code points (lone surrogates leaking in
+    from corrupted row DATA) with U+FFFD, so storing the profile never fails on
+    a value asyncpg cannot encode."""
+    return s.encode("utf-8", "replace").decode("utf-8")
+
+
 def table_signature(row_count: int | None, columns: list[dict]) -> str:
     """Stable fingerprint of a table's shape — lets a re-profile skip unchanged
     tables. Sensitive to row count and the ordered (name,type) column list."""
@@ -246,7 +269,7 @@ def table_signature(row_count: int | None, columns: list[dict]) -> str:
          "cols": [(c.get("name"), c.get("type")) for c in columns]},
         ensure_ascii=False, sort_keys=True,
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(_sanitize_json(payload).encode("utf-8")).hexdigest()[:16]
 
 
 # ── Storage (append DB, public.over_table_profiles) ───────────────────────────
@@ -295,8 +318,8 @@ async def upsert_profile(rec: dict) -> None:
             """,
             rec["schema_name"], rec["table_name"], rec.get("title"), rec.get("kind"),
             rec.get("row_count"), rec.get("column_count"), rec.get("signature"),
-            json.dumps(rec.get("sql_profile"), ensure_ascii=False),
-            json.dumps(rec.get("date_parse_specs"), ensure_ascii=False),
+            _sanitize_json(json.dumps(rec.get("sql_profile"), ensure_ascii=False)),
+            _sanitize_json(json.dumps(rec.get("date_parse_specs"), ensure_ascii=False)),
             rec.get("status", "sql_done"),
         )
 
@@ -311,7 +334,8 @@ async def save_enrichment(schema: str, table: str, enrichment: dict, summary_he:
                    status='enriched', enriched_at=now()
              WHERE schema_name=$1 AND table_name=$2
             """,
-            schema, table, json.dumps(enrichment, ensure_ascii=False), summary_he,
+            schema, table, _sanitize_json(json.dumps(enrichment, ensure_ascii=False)),
+            (_sanitize_json(summary_he) if summary_he else summary_he),
         )
 
 
@@ -443,12 +467,25 @@ def _date_expr(col: str, pgfmt: str | None, native: bool = False) -> str:
     return f"MIN({conv}) AS min_{{i}}, MAX({conv}) AS max_{{i}}"
 
 
+# Above this many rows, the regex-guarded numeric/date casts over the WHOLE table
+# blow the aggregate's statement_timeout (vehicles 4.1M, tikufim ~900k). Compute
+# the aggregate over a TABLESAMPLE instead — ranges become approximate (flagged).
+_AGG_SAMPLE_ROWS = 2_000_000
+_AGG_TIMEOUT_MS = 240_000  # 4 min — enough for ~1M-row full scans
+
+
 async def _aggregate(schema: str, table: str, cols: list[str],
-                     classes: dict[str, dict]) -> dict:
+                     classes: dict[str, dict], *, est_rows: int | None = None) -> dict:
     """One scan: total count, per-column non-null count, and min/max/avg for the
-    classified numeric & date columns."""
+    classified numeric & date columns. For very large tables the aggregate runs
+    over a TABLESAMPLE (``approx=True``) so it stays within the timeout."""
     ro = await append_store.get_readonly_pool()
     ref = f"{_qi(schema)}.{_qi(table)}"
+    approx = bool(est_rows and est_rows > _AGG_SAMPLE_ROWS)
+    src = ref
+    if approx:
+        frac = min(100.0, max(0.05, 300_000.0 * 100.0 / est_rows))
+        src = f"{ref} TABLESAMPLE SYSTEM ({frac:.4f})"
     parts = ["count(*) AS total"]
     meta: list[tuple[int, str, str]] = []  # (idx, col, kind)
     idx = 0
@@ -466,12 +503,12 @@ async def _aggregate(schema: str, table: str, cols: list[str],
             parts.append(_date_expr(col, pgfmt, native).format(i=idx))
         meta.append((idx, col, kind))
         idx += 1
-    sql = f"SELECT {', '.join(parts)} FROM {ref}"
+    sql = f"SELECT {', '.join(parts)} FROM {src}"
     async with ro.acquire() as conn:
         async with conn.transaction(readonly=True):
-            await conn.execute("SET LOCAL statement_timeout = 60000")
+            await conn.execute(f"SET LOCAL statement_timeout = {_AGG_TIMEOUT_MS}")
             row = await conn.fetchrow(sql)
-    agg = {"total": int(row["total"] or 0), "columns": {}}
+    agg = {"total": int(row["total"] or 0), "approx": approx, "columns": {}}
     for i, col, kind in meta:
         entry = {"non_null": int(row[f"nn_{i}"] or 0)}
         if kind == "numeric":
@@ -542,10 +579,15 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
     if columns is None:
         by_table = await append_store.schema_table_columns(schema)
         columns = by_table.get(table, [])
+    # Columns whose names carry lone surrogates (corrupted upstream CSV decoding)
+    # cannot be referenced in a query without asyncpg failing to encode them —
+    # skip just those so the rest of the table still profiles.
+    bad_name_cols = [c["name"] for c in columns if not is_encodable(c.get("name"))]
     col_names = [c["name"] for c in columns
-                 if c["name"] not in _HIDDEN and c.get("type") != "geometry"
-                 and c["name"].lower() not in _BULK]
-    geom_cols = [c["name"] for c in columns if c.get("type") == "geometry"]
+                 if is_encodable(c.get("name")) and c["name"] not in _HIDDEN
+                 and c.get("type") != "geometry" and str(c["name"]).lower() not in _BULK]
+    geom_cols = [c["name"] for c in columns
+                 if c.get("type") == "geometry" and is_encodable(c.get("name"))]
     if not col_names:
         rec = {"schema_name": schema, "table_name": table, "title": title, "kind": kind,
                "row_count": 0, "column_count": len(columns), "signature": table_signature(0, columns),
@@ -557,8 +599,11 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
     col_types = {c["name"]: c.get("type") for c in columns}
     samples = await _sample_column_values(schema, table, col_names, est_rows)
     classes = _classify_columns(samples, col_types)
-    agg = await _aggregate(schema, table, col_names, classes)
-    total = agg["total"]
+    agg = await _aggregate(schema, table, col_names, classes, est_rows=est_rows)
+    approx = bool(agg.get("approx"))
+    scan_total = agg["total"]  # rows the aggregate actually scanned (sample if approx)
+    # Real row count: the planner estimate when we sampled, else the exact scan count.
+    total = int(est_rows) if (approx and est_rows) else scan_total
     ndist = await _pg_stats_distinct(schema, table)
 
     text_cols = [c for c in col_names if classes.get(c, {}).get("kind") in ("text", "empty")]
@@ -576,6 +621,9 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
         raw_nd = ndist.get(c, 0.0)
         distinct = int(raw_nd) if raw_nd >= 0 else int(round(-raw_nd * total))
         distinct_ratio = (distinct / total) if total else 0.0
+        # fill_rate is measured against what the aggregate scanned (the sample,
+        # when approx), so nn and its denominator come from the same population.
+        fill_den = scan_total
         top_vals = top_by_col.get(c, [])
         top_strings = [t["value"] for t in top_vals]
         entity = classify_entity_heuristic(
@@ -584,7 +632,7 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
         entry: dict = {
             "detected_kind": cls.get("kind"),
             "non_null": nn,
-            "fill_rate": round(nn / total, 4) if total else 0.0,
+            "fill_rate": round(nn / fill_den, 4) if fill_den else 0.0,
             "distinct_est": distinct,
             "distinct_ratio": round(distinct_ratio, 4),
             "entity_guess": entity,
@@ -616,6 +664,14 @@ async def profile_table(schema: str, table: str, *, columns: list[dict] | None =
              if columns_profile[c]["distinct_ratio"] >= 0.99 and columns_profile[c]["fill_rate"] >= 0.99),
             None),
     }
+    if approx:
+        # Ranges/fill for this (very large) table were computed over a sample.
+        sql_profile["approx_ranges"] = True
+        sql_profile["scanned_rows"] = scan_total
+    if bad_name_cols:
+        # Surface columns skipped for un-encodable names (ascii-safe rendering).
+        sql_profile["unprofilable_columns"] = [
+            n.encode("utf-8", "replace").decode("utf-8") for n in bad_name_cols]
     rec = {
         "schema_name": schema, "table_name": table, "title": title, "kind": kind,
         "row_count": total, "column_count": len(col_names),

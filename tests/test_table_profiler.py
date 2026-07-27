@@ -140,6 +140,30 @@ def test_native_exprs_have_no_cast():
     assert p._date_expr("t", None, native=True).startswith('MIN("t")')
 
 
+# ── corrupted-UTF8 column names ───────────────────────────────────────────────
+def test_is_encodable():
+    assert p.is_encodable("תאריך פרסום") is True
+    assert p.is_encodable("objectId") is True
+    # lone surrogate (what asyncpg leaves from a bad CP862/CSV decode) → not encodable
+    assert p.is_encodable("תא\udc90ריך") is False
+    assert p.is_encodable(None) is False
+    assert p.is_encodable(123) is False
+
+
+def test_sanitize_json_replaces_surrogates():
+    import json
+    bad = json.dumps({"col": "תא\udc90ריך"}, ensure_ascii=False)
+    out = p._sanitize_json(bad)
+    out.encode("utf-8")  # must not raise
+    assert "\udc90" not in out
+
+
+def test_signature_survives_bad_column_name():
+    # A table whose column name has a lone surrogate must still hash (no raise).
+    s = p.table_signature(10, [{"name": "תא\udc90ריך", "type": "text"}])
+    assert isinstance(s, str) and len(s) == 16
+
+
 # ── signature ─────────────────────────────────────────────────────────────────
 def test_signature_stable_and_sensitive():
     cols = [{"name": "a", "type": "text"}, {"name": "b", "type": "int"}]
