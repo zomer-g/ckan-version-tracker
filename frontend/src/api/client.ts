@@ -32,8 +32,23 @@ async function request<T>(
   const resp = await fetch(`${BASE}${path}`, { ...options, headers });
 
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail || resp.statusText);
+    // Read as text first so a NON-JSON error (e.g. a Cloudflare WAF block page,
+    // which is HTML) still yields an informative message instead of a blank one.
+    const raw = await resp.text().catch(() => "");
+    let detail = "";
+    try {
+      const j = JSON.parse(raw);
+      detail = j?.detail || j?.message || "";
+    } catch {
+      /* not JSON — fall through to the heuristics below */
+    }
+    if (!detail) {
+      const blocked = resp.status === 403 && /cloudflare|blocked|attention required|<html/i.test(raw);
+      detail = blocked
+        ? 'הבקשה נחסמה (403) על-ידי שכבת אבטחה (Cloudflare WAF) — השאילתה זוהתה בטעות כמסוכנת. נסו לנסח אותה מחדש.'
+        : `שגיאת שרת (${resp.status}${resp.statusText ? " " + resp.statusText : ""})`;
+    }
+    throw new Error(detail);
   }
 
   if (resp.status === 204) return undefined as T;
