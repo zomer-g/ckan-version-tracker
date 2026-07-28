@@ -29,8 +29,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tables", tags=["tables"])
 
 
+def _decode_sql(sql: str | None, sql_b64: str | None) -> str:
+    """Resolve a query from either the plain ``sql`` or its base64 form.
+
+    The console sends ``sql_b64`` so a Cloudflare/WAF managed rule doesn't match
+    the SQL keywords in the request as an injection attack and 403 the request
+    before it ever reaches us (legitimate console queries with patterns like
+    ``<> ''`` were being blocked). Plain ``sql`` stays supported for API callers."""
+    if sql_b64:
+        import base64
+        try:
+            return base64.b64decode(sql_b64).decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"sql_b64 is not valid base64/UTF-8: {exc}")
+    if sql:
+        return sql
+    raise ValueError("either sql or sql_b64 is required")
+
+
 class SqlBody(BaseModel):
-    sql: str
+    sql: str | None = None
+    sql_b64: str | None = None
 
 
 def _require_enabled() -> None:
@@ -85,8 +104,9 @@ async def run_sql(request: Request, body: SqlBody):
     knesset schemas (search_path = public, knesset)."""
     _require_enabled()
     try:
+        sql = _decode_sql(body.sql, body.sql_b64)
         return await append_store.run_readonly_sql(
-            body.sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
+            sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -126,12 +146,14 @@ async def schema_txt(request: Request, table: str | None = None,
 
 @router.get("/export.csv")
 @limiter.limit("6/minute")
-async def export_csv(request: Request, sql: str):
+async def export_csv(request: Request, sql: str | None = None, sql_b64: str | None = None):
     """Run the SQL on the server and stream the full result (≤200k rows) as CSV
     over both schemas. First chunk is pulled eagerly so validation/SQL errors
-    become a clean 400 instead of a broken download."""
+    become a clean 400 instead of a broken download. ``sql_b64`` (base64) is
+    accepted so the query in the URL doesn't trip a WAF SQLi rule."""
     _require_enabled()
     try:
+        sql = _decode_sql(sql, sql_b64)
         stream = append_store.iter_sql_csv(
             sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
         )

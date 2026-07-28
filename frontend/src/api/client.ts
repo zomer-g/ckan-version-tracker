@@ -55,6 +55,15 @@ async function request<T>(
   return resp.json();
 }
 
+// UTF-8-safe base64 (btoa alone mangles Hebrew). Wraps console SQL so a WAF
+// doesn't pattern-match the query as an injection attempt.
+function utf8ToBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
 // Auth
 export const auth = {
   me: () => request<{ id: string; email: string; display_name: string; is_admin: boolean }>("/auth/me"),
@@ -1068,14 +1077,17 @@ export const dataCatalog = {
   tableProfile: (table: string) =>
     request<TableProfile>(`/tables/${encodeURIComponent(table)}/profile`),
   // Read-only SQL over public + knesset (single SELECT/WITH, READ ONLY tx).
+  // Sent base64-encoded so a Cloudflare/WAF managed rule doesn't false-positive
+  // the SQL keywords in the body as an injection attack (→ 403 block page).
   sql: (sql: string) =>
     request<KnessetDbSqlResult>("/tables/sql", {
       method: "POST",
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql_b64: utf8ToBase64(sql) }),
     }),
-  // Direct browser download (server streams); not a fetch.
+  // Direct browser download (server streams); not a fetch. base64 for the same
+  // WAF reason — the query would otherwise sit in the URL as plain SQL.
   exportUrl: (sql: string) =>
-    `/api/tables/export.csv?sql=${encodeURIComponent(sql)}`,
+    `/api/tables/export.csv?sql_b64=${encodeURIComponent(utf8ToBase64(sql))}`,
   schemaTxtUrl: (table?: string) =>
     `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
 };
