@@ -11,6 +11,7 @@ import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import ProfilePanel from "../components/ProfilePanel";
+import JoinBuilder from "../components/JoinBuilder";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -1248,6 +1249,7 @@ export default function DataSqlPage() {
               {/* Auto-computed profile: detected field types, min/max ranges,
                   date formats, recurring-entity classification, summary. */}
               {detail?.profile && <ProfilePanel profile={detail.profile} onUseSql={useSql} />}
+              {detail?.profile && <JoinBuilder profile={detail.profile} tables={tables} onUseSql={useSql} />}
 
               {/* Raw source files */}
               {detail && detail.files.length > 0 && (
