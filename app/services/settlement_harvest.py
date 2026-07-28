@@ -18,6 +18,7 @@ WRITES to the OVER index tables.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -265,9 +266,12 @@ async def harvest_llm_pass(*, limit: int = 4000) -> dict:
     for i in range(0, len(pend), LLM_BATCH):
         batch = pend[i:i + LLM_BATCH]
         try:
-            await _process_batch(pool, batch)
-        except Exception:  # noqa: BLE001 — one bad batch must not kill the whole pass
-            logger.exception("harvest_llm_pass: batch %d failed", i)
+            # wait_for is the real guard: a hung await (DB pool acquire, LLM read)
+            # can't be caught by try/except — only a timeout abandons it so the
+            # loop keeps going. Both earlier stalls were such hangs.
+            await asyncio.wait_for(_process_batch(pool, batch), timeout=180)
+        except Exception:  # noqa: BLE001 — timeout OR error: skip this batch, continue
+            logger.exception("harvest_llm_pass: batch %d abandoned", i)
             failed += len(batch)
     # Recount from the DB (authoritative) rather than trusting the loop counters.
     async with pool.acquire() as conn:
@@ -281,37 +285,40 @@ async def harvest_llm_pass(*, limit: int = 4000) -> dict:
 
 
 async def _process_batch(pool, batch) -> None:
-    """Map + persist one LLM batch; each row guarded so a single bad row (odd DB
-    error, unexpected value) can't abort the batch."""
-    guesses = await _llm_map([r["value_raw"] for r in batch])
+    """Map + persist one LLM batch; each row is timeout+error guarded so neither a
+    hung await nor a bad row can abort the batch."""
+    guesses = await asyncio.wait_for(_llm_map([r["value_raw"] for r in batch]), timeout=120)
     for r in batch:
         try:
-            official = guesses.get(r["value_raw"])
-            code = name = entity = None
-            if official:
-                s = await settlement_index.resolve(official)
-                if s:
-                    code, name, entity = s["code"], s["name"], "settlement"
-                else:
-                    a = await _resolve_authority(official)
-                    if a:
-                        code, name, entity = a["code"], a["name"], "authority"
-            if code is not None:
-                await _add_alias(entity, r["value_raw"], code)
-            async with pool.acquire() as conn:
-                if code is not None:
-                    await conn.execute(
-                        f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
-                            resolved_code=$3, resolved_name=$4, entity=$5,
-                            status='llm_mapped', updated_at=now() WHERE norm_key=$1""",
-                        r["norm_key"], official, code, name, entity)
-                else:
-                    await conn.execute(
-                        f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
-                            status='unresolved', updated_at=now() WHERE norm_key=$1""",
-                        r["norm_key"], official)
-        except Exception:  # noqa: BLE001 — skip a single bad row, keep the batch going
+            await asyncio.wait_for(_persist_row(pool, r, guesses.get(r["value_raw"])), timeout=25)
+        except Exception:  # noqa: BLE001 — hung/bad row: skip it, keep the batch going
             logger.exception("harvest row failed: %r", r["value_raw"])
+
+
+async def _persist_row(pool, r, official) -> None:
+    code = name = entity = None
+    if official:
+        s = await settlement_index.resolve(official)
+        if s:
+            code, name, entity = s["code"], s["name"], "settlement"
+        else:
+            a = await _resolve_authority(official)
+            if a:
+                code, name, entity = a["code"], a["name"], "authority"
+    if code is not None:
+        await _add_alias(entity, r["value_raw"], code)
+    async with pool.acquire(timeout=15) as conn:
+        if code is not None:
+            await conn.execute(
+                f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
+                    resolved_code=$3, resolved_name=$4, entity=$5,
+                    status='llm_mapped', updated_at=now() WHERE norm_key=$1""",
+                r["norm_key"], official, code, name, entity)
+        else:
+            await conn.execute(
+                f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
+                    status='unresolved', updated_at=now() WHERE norm_key=$1""",
+                r["norm_key"], official)
 
 
 async def harvest(*, use_llm: bool = True, per_col_cap: int = 3000) -> dict:
