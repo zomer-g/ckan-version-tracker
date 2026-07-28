@@ -261,11 +261,31 @@ async def harvest_llm_pass(*, limit: int = 4000) -> dict:
             f"SELECT norm_key, value_raw FROM public.{_qi(UNRESOLVED_TABLE)} "
             f"WHERE resolved_code IS NULL AND (status = 'pending' OR llm_guess IS NULL) "
             f"ORDER BY occurrences DESC LIMIT {int(limit)}")
-    mapped = still = 0
+    mapped = still = failed = 0
     for i in range(0, len(pend), LLM_BATCH):
         batch = pend[i:i + LLM_BATCH]
-        guesses = await _llm_map([r["value_raw"] for r in batch])
-        for r in batch:
+        try:
+            await _process_batch(pool, batch)
+        except Exception:  # noqa: BLE001 — one bad batch must not kill the whole pass
+            logger.exception("harvest_llm_pass: batch %d failed", i)
+            failed += len(batch)
+    # Recount from the DB (authoritative) rather than trusting the loop counters.
+    async with pool.acquire() as conn:
+        mapped = await conn.fetchval(
+            f"SELECT count(*) FROM public.{_qi(UNRESOLVED_TABLE)} WHERE resolved_code IS NOT NULL")
+        still = await conn.fetchval(
+            f"SELECT count(*) FROM public.{_qi(UNRESOLVED_TABLE)} "
+            f"WHERE llm_guess IS NOT NULL AND resolved_code IS NULL")
+    return {"processed": len(pend), "llm_mapped": int(mapped or 0),
+            "unresolved": int(still or 0), "failed_rows": failed}
+
+
+async def _process_batch(pool, batch) -> None:
+    """Map + persist one LLM batch; each row guarded so a single bad row (odd DB
+    error, unexpected value) can't abort the batch."""
+    guesses = await _llm_map([r["value_raw"] for r in batch])
+    for r in batch:
+        try:
             official = guesses.get(r["value_raw"])
             code = name = entity = None
             if official:
@@ -276,22 +296,22 @@ async def harvest_llm_pass(*, limit: int = 4000) -> dict:
                     a = await _resolve_authority(official)
                     if a:
                         code, name, entity = a["code"], a["name"], "authority"
+            if code is not None:
+                await _add_alias(entity, r["value_raw"], code)
             async with pool.acquire() as conn:
                 if code is not None:
-                    await _add_alias(entity, r["value_raw"], code)
                     await conn.execute(
                         f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
                             resolved_code=$3, resolved_name=$4, entity=$5,
                             status='llm_mapped', updated_at=now() WHERE norm_key=$1""",
                         r["norm_key"], official, code, name, entity)
-                    mapped += 1
                 else:
                     await conn.execute(
                         f"""UPDATE public.{_qi(UNRESOLVED_TABLE)} SET llm_guess=$2,
                             status='unresolved', updated_at=now() WHERE norm_key=$1""",
                         r["norm_key"], official)
-                    still += 1
-    return {"processed": len(pend), "llm_mapped": mapped, "still_unresolved": still}
+        except Exception:  # noqa: BLE001 — skip a single bad row, keep the batch going
+            logger.exception("harvest row failed: %r", r["value_raw"])
 
 
 async def harvest(*, use_llm: bool = True, per_col_cap: int = 3000) -> dict:
