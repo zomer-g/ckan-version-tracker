@@ -52,6 +52,13 @@ MANUAL_PATH = os.path.join(_DATA_DIR, "settlement_aliases_manual.json")
 _PREFIXES = ["ה", "ו", "ב", "ל", "מ", "כ", "ש",
              "וה", "ול", "וב", "ומ", "וכ", "כש", "מה", "שב", "של", "שה", "לכ"]
 
+# Administrative descriptors people prepend to an authority/place name in the
+# data — "עיריית תל אביב", "מ.א. מטה בנימין", "מועצה מקומית X". Stored as their
+# NORMALIZED forms (norm() drops the dots/spaces): "מ.א." → "מא". Prepended to the
+# normalized base so "מ.א. מטה בנימין" (norm "מאמטהבנימין") resolves to the
+# authority מטה בנימין. Especially recovers the regional councils.
+_ADMIN_PREFIXES = ["עיריית", "עירית", "מועצהמקומית", "מועצהאזורית", "מא", "ממ", "מועצה"]
+
 _PAREN_RE = re.compile(r"\s*\([^)]*\)\s*")          # "(שבט)", "(קיבוץ)"
 # Keep ONLY Hebrew consonant letters (alef..tav incl. finals, U+05D0–U+05EA),
 # Latin letters, and digits. This deliberately drops niqqud, the Hebrew geresh
@@ -106,6 +113,8 @@ def aliases_for(rec: dict) -> list[tuple[str, str, str, int]]:
         if re.search(r"[֐-׿]", base):
             for p in _PREFIXES:
                 add(p + base, p + surface, "prefix", 50)
+            for ap in _ADMIN_PREFIXES:            # "עיריית X", "מ.א. X", …
+                add(ap + base, surface, "admin_prefix", 55)
 
     # Latin spellings — English + transliteration (no Hebrew prefixing).
     for field, kind in (("name_en", "english"), ("translit", "translit")):
