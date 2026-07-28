@@ -45,7 +45,7 @@ async function request<T>(
     if (!detail) {
       const blocked = resp.status === 403 && /cloudflare|blocked|attention required|<html/i.test(raw);
       detail = blocked
-        ? 'הבקשה נחסמה (403) על-ידי שכבת אבטחה (Cloudflare WAF) — השאילתה זוהתה בטעות כמסוכנת. נסו לנסח אותה מחדש.'
+        ? 'הבקשה נחסמה (403) על-ידי Cloudflare — ברוב המקרים זו הגבלת-קצב (המתינו כמה שניות ונסו שוב). אם זה חוזר גם אחרי המתנה, ייתכן שחוקת אבטחה חסמה את השאילתה — נסו לנסח אותה מחדש.'
         : `שגיאת שרת (${resp.status}${resp.statusText ? " " + resp.statusText : ""})`;
     }
     throw new Error(detail);
