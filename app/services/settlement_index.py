@@ -331,7 +331,9 @@ async def load(*, rebuild: bool = True) -> dict:
         async with conn.transaction():
             if rebuild:
                 await conn.execute(f"TRUNCATE public.{_qi(SETTLEMENTS_TABLE)}")
-                await conn.execute(f"TRUNCATE public.{_qi(ALIASES_TABLE)}")
+                # Keep harvested 'llm' aliases (learned from real data) — only the
+                # deterministically-generated ones are rebuilt from the seed.
+                await conn.execute(f"DELETE FROM public.{_qi(ALIASES_TABLE)} WHERE kind <> 'llm'")
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(SETTLEMENTS_TABLE)}
                     (code,name,name_en,translit,district,subdistrict,municipal_status,
@@ -364,7 +366,7 @@ async def load(*, rebuild: bool = True) -> dict:
             auth = _load_json(AUTH_SEED_PATH)
             if rebuild:
                 await conn.execute(f"TRUNCATE public.{_qi(AUTHORITIES_TABLE)}")
-                await conn.execute(f"TRUNCATE public.{_qi(AUTH_ALIASES_TABLE)}")
+                await conn.execute(f"DELETE FROM public.{_qi(AUTH_ALIASES_TABLE)} WHERE kind <> 'llm'")
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(AUTHORITIES_TABLE)}
                     (code,name,district,municipal_status,year) VALUES ($1,$2,$3,$4,$5)
