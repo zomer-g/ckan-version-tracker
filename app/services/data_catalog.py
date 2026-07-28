@@ -226,6 +226,7 @@ _OVER_TITLES = {
     "over_authority_aliases": "גרסאות לעם — הטיות שמות רשויות",
     "over_table_profiles": "גרסאות לעם — פרופילי טבלאות",
     "over_settlement_unresolved": "גרסאות לעם — ערכי יישוב שלא נפתרו (לאיסוף הטיות)",
+    "over_settlement_found": "גרסאות לעם — הטיות שנמצאו בפועל + טבלת המקור",
 }
 
 

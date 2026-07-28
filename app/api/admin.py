@@ -2067,6 +2067,8 @@ async def _run_harvest_bg(phase: str, per_col_cap: int):
             res = await settlement_harvest.harvest_scan(per_col_cap=per_col_cap)
         elif phase == "llm":
             res = await settlement_harvest.harvest_llm_pass()
+        elif phase == "provenance":
+            res = await settlement_harvest.harvest_provenance(per_col_cap=per_col_cap)
         else:
             res = await settlement_harvest.harvest(per_col_cap=per_col_cap)
         logger.info("settlement harvest (%s) done: %s", phase, res)
@@ -2093,7 +2095,7 @@ async def settlements_harvest(
     from app.services import append_store as _as
     if not _as.is_configured():
         raise HTTPException(status_code=409, detail="Append DB is not configured")
-    phase = phase if phase in ("scan", "llm", "full") else "full"
+    phase = phase if phase in ("scan", "llm", "provenance", "full") else "full"
     background_tasks.add_task(_run_harvest_bg, phase, per_col_cap)
     logger.info("settlement harvest (%s) started by %s", phase, user.email)
     return {"status": "started", "phase": phase,

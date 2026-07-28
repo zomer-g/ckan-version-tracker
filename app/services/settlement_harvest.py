@@ -31,8 +31,89 @@ from app.services import table_profiler  # provider selection + JSON parse reuse
 logger = logging.getLogger(__name__)
 
 UNRESOLVED_TABLE = "over_settlement_unresolved"
+FOUND_TABLE = "over_settlement_found"   # provenance: which table each variant came from
 _LOCALITY_ENTITIES = ("locality", "municipality")
 LLM_BATCH = 40
+
+
+async def ensure_found_table() -> None:
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS public.{_qi(FOUND_TABLE)} (
+                code         integer NOT NULL,   -- resolved settlement/authority code
+                entity       text,               -- settlement | authority
+                surface      text NOT NULL,       -- the value exactly as it appears in the data
+                schema_name  text NOT NULL,
+                table_name   text NOT NULL,
+                column_name  text NOT NULL,
+                occurrences  bigint,
+                PRIMARY KEY (code, surface, table_name, column_name)
+            )
+            """
+        )
+
+
+async def _resolved_values(schema: str, table: str, col: str, cap: int) -> list[tuple]:
+    """Distinct RESOLVED values of one locality column — but only if the column is
+    genuinely locality-like (same MIN_RESOLVE_RATE gate as the unresolved scan).
+    Returns (surface, count, code, entity)."""
+    ro = await append_store.get_readonly_pool()
+    ref = f"{_qi(schema)}.{_qi(table)}"
+    q = _qi(col)
+    sql = (
+        f"WITH d AS (SELECT {q}::text AS val, count(*) c FROM {ref} "
+        f"           WHERE {q} IS NOT NULL AND {q}::text <> '' GROUP BY 1), "
+        f"     r AS (SELECT val, c, public.over_settlement_code(val) sc, public.over_authority_code(val) ac FROM d), "
+        f"     s AS (SELECT count(*) tot, count(*) FILTER (WHERE sc IS NOT NULL OR ac IS NOT NULL) res FROM r) "
+        f"SELECT r.val, r.c, COALESCE(r.sc, r.ac) code, "
+        f"       CASE WHEN r.sc IS NOT NULL THEN 'settlement' ELSE 'authority' END entity "
+        f"FROM r, s "
+        f"WHERE (r.sc IS NOT NULL OR r.ac IS NOT NULL) AND s.tot >= {MIN_DISTINCT} "
+        f"  AND s.res::float / NULLIF(s.tot,0) >= {MIN_RESOLVE_RATE} "
+        f"ORDER BY r.c DESC LIMIT {int(cap)}"
+    )
+    async with ro.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute("SET LOCAL statement_timeout = 60000")
+            recs = await conn.fetch(sql)
+    return [(r["val"], int(r["c"]), int(r["code"]), r["entity"]) for r in recs]
+
+
+async def harvest_provenance(*, rebuild: bool = True, per_col_cap: int = 5000) -> dict:
+    """Record, per genuine locality column, every RESOLVED value + the table it
+    came from — into over_settlement_found. This is what lets you ask 'which
+    tables did this settlement's spellings appear in'."""
+    await ensure_found_table()
+    pool = await append_store.get_pool()
+    if rebuild:
+        async with pool.acquire() as conn:
+            await conn.execute(f"TRUNCATE public.{_qi(FOUND_TABLE)}")
+    cols = await locality_columns()
+    scanned = 0
+    for c in cols:
+        try:
+            vals = await _resolved_values(c["schema"], c["table"], c["column"], per_col_cap)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("provenance: skipped %s.%s.%s: %s", c["schema"], c["table"], c["column"], exc)
+            continue
+        scanned += 1
+        if not vals:
+            continue
+        rows = [(code, entity, surface, c["schema"], c["table"], c["column"], cnt)
+                for surface, cnt, code, entity in vals]
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                f"""INSERT INTO public.{_qi(FOUND_TABLE)}
+                    (code, entity, surface, schema_name, table_name, column_name, occurrences)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    ON CONFLICT (code, surface, table_name, column_name) DO UPDATE SET
+                      occurrences = EXCLUDED.occurrences""",
+                rows)
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(FOUND_TABLE)}")
+    return {"columns_scanned": scanned, "rows": int(total or 0)}
 
 
 async def ensure_unresolved_table() -> None:
