@@ -12,6 +12,7 @@ import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import ProfilePanel from "../components/ProfilePanel";
 import JoinBuilder from "../components/JoinBuilder";
+import DataTabs from "../components/DataTabs";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -738,6 +739,7 @@ export default function DataSqlPage() {
 
   return (
     <div className="container mt-3">
+      <DataTabs active="console" />
       <div className="page-header" style={{ marginBottom: "0.75rem" }}>
         <h1 style={{ margin: 0 }}>מאגר הנתונים — ממשק SQL מרכזי</h1>
         <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
