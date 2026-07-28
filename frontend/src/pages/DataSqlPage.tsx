@@ -505,6 +505,14 @@ export default function DataSqlPage() {
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
+  // Post-run cooldown: keeps "run" locked briefly after each query so rapid
+  // repeated runs (impatient clicking / holding Ctrl+Enter) can't machine-gun
+  // the endpoint and trip Cloudflare's rate limit. busyRef is the SYNCHRONOUS
+  // guard (state updates are async, so a burst could slip through before
+  // sqlRunning flips) covering the button, the keyboard shortcut, and snippet
+  // buttons alike.
+  const [sqlCooldown, setSqlCooldown] = useState(false);
+  const busyRef = useRef(false);
   const [runId, setRunId] = useState(0);
   // The SQL text that produced the current sqlResult (not the editor draft) —
   // drives the "which tables feed this query" indication.
@@ -658,13 +666,20 @@ export default function DataSqlPage() {
   // The fetch half of "run" — no URL writes (callers own the searchParams
   // update; two setSearchParams in one tick clobber each other in react-router).
   const runFetch = useCallback((sql: string) => {
+    if (busyRef.current) return;          // already running or in cooldown — ignore
+    busyRef.current = true;
     setSqlRunning(true);
     setSqlError(null);
     dataCatalog
       .sql(sql)
       .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); setExecutedSql(sql); })
       .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); setExecutedSql(""); })
-      .finally(() => setSqlRunning(false));
+      .finally(() => {
+        setSqlRunning(false);
+        setSqlCooldown(true);
+        // ~1s cooldown → caps runs at roughly 1/sec, well under any rate limit.
+        setTimeout(() => { busyRef.current = false; setSqlCooldown(false); }, 1000);
+      });
   }, []);
 
   // Catalog tables referenced by the executed query (word-boundary scan of the
@@ -776,14 +791,16 @@ export default function DataSqlPage() {
         />
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", marginTop: "0.5rem", flexWrap: "wrap" }}>
           <button
-            type="button" onClick={() => runSql()} disabled={sqlRunning}
+            type="button" onClick={() => runSql()} disabled={sqlRunning || sqlCooldown}
+            title={sqlCooldown ? "המתנה קצרה בין הרצות (מניעת חסימת קצב)" : undefined}
             style={{
               padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
               background: "var(--primary, #0f766e)", color: "white",
-              cursor: sqlRunning ? "wait" : "pointer", opacity: sqlRunning ? 0.7 : 1,
+              cursor: (sqlRunning || sqlCooldown) ? "wait" : "pointer",
+              opacity: (sqlRunning || sqlCooldown) ? 0.7 : 1,
             }}
           >
-            {sqlRunning ? "מריץ…" : "▶ הרץ"}
+            {sqlRunning ? "מריץ…" : sqlCooldown ? "רגע…" : "▶ הרץ"}
           </button>
           <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
           {sqlResult && (
