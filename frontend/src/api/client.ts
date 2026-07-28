@@ -1092,6 +1092,24 @@ export const dataCatalog = {
     `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
 };
 
+// ---- Settlement / authority normalizer ----
+export interface ResolvedName {
+  input: string;
+  official: string | null;
+  code: number | null;
+  entity: "settlement" | "authority" | null;
+  matched: boolean;
+}
+export const settlements = {
+  // Resolve a pasted list of locality names to their official names. Stateless
+  // and read-only on the server (not stored); safe, parameterized lookup.
+  resolveBatch: (names: string[]) =>
+    request<{ total: number; matched: number; results: ResolvedName[] }>(
+      "/settlements/resolve-batch",
+      { method: "POST", body: JSON.stringify({ names }) },
+    ),
+};
+
 // ---- Knesset committee-protocol search (over the Neon `knesset` schema) ----
 export interface ProtocolRow {
   document_id: number;

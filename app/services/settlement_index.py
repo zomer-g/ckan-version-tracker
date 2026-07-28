@@ -418,6 +418,50 @@ async def resolve(q: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def resolve_many(names: list[str]) -> list[dict]:
+    """Resolve a LIST of free-text locality values to their official names.
+
+    For the paste-a-list normalizer. Security-critical, so it stays entirely
+    PARAMETERIZED: the inputs are normalized to keys in Python and looked up with
+    ``variant = ANY($1::text[])`` — user text is never concatenated into SQL, and
+    the whole thing runs on the least-privilege read-only role. Two set-based
+    queries (settlements, authorities) resolve the whole list at once; a value is
+    resolved as a settlement first, else an authority, else left unmatched."""
+    pairs = [(n, norm(n)) for n in names]
+    keys = sorted({k for _, k in pairs if k})
+    smap: dict[str, dict] = {}
+    amap: dict[str, dict] = {}
+    if keys:
+        pool = await append_store.get_readonly_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction(readonly=True):
+                await conn.execute("SET LOCAL statement_timeout = 15000")
+                for tbl, ref, dest, order in (
+                    (ALIASES_TABLE, SETTLEMENTS_TABLE, smap, "a.weight DESC, s.population DESC NULLS LAST"),
+                    (AUTH_ALIASES_TABLE, AUTHORITIES_TABLE, amap, "a.weight DESC"),
+                ):
+                    rows = await conn.fetch(
+                        f"""SELECT DISTINCT ON (a.variant) a.variant, s.code, s.name
+                            FROM public.{_qi(tbl)} a
+                            JOIN public.{_qi(ref)} s ON s.code = a.code
+                            WHERE a.variant = ANY($1::text[])
+                            ORDER BY a.variant, {order}""",
+                        keys,
+                    )
+                    for r in rows:
+                        dest[r["variant"]] = {"code": r["code"], "name": r["name"]}
+    out: list[dict] = []
+    for name, k in pairs:
+        s, a = (smap.get(k), amap.get(k)) if k else (None, None)
+        if s:
+            out.append({"input": name, "official": s["name"], "code": s["code"], "entity": "settlement", "matched": True})
+        elif a:
+            out.append({"input": name, "official": a["name"], "code": a["code"], "entity": "authority", "matched": True})
+        else:
+            out.append({"input": name, "official": None, "code": None, "entity": None, "matched": False})
+    return out
+
+
 async def search(q: str | None, limit: int = 25) -> list[dict]:
     pool = await append_store.get_readonly_pool()
     async with pool.acquire() as conn:

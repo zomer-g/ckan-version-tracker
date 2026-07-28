@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 
 // Tab strip for the /data area: the SQL console and the healed-cross-reference
 // guide. Each tab is its own route (dedicated URL) so it's linkable/shareable.
-export default function DataTabs({ active }: { active: "console" | "guide" }) {
+export default function DataTabs({ active }: { active: "console" | "guide" | "normalize" }) {
   const tab = (to: string, label: string, key: string) => {
     const on = active === key;
     return (
@@ -24,6 +24,7 @@ export default function DataTabs({ active }: { active: "console" | "guide" }) {
   return (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border, #e5e7eb)", marginBottom: "1rem", flexWrap: "wrap" }}>
       {tab("/data", "</> קונסולת SQL", "console")}
+      {tab("/data/normalize", "🧹 נרמול רשימת שמות", "normalize")}
       {tab("/data/guide", "📖 מדריך — הצלבה מתוקנת", "guide")}
     </div>
   );
