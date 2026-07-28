@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { dataCatalog } from "../api/client";
 import type { TableProfile, TableProfileColumn } from "../api/client";
 
 // Hebrew labels for the two classification axes the profiler produces.
@@ -58,7 +59,115 @@ function entityLabel(col: string, profile: TableProfile): { he: string; llm: boo
   return null;
 }
 
-export default function ProfilePanel({ profile }: { profile: TableProfile | null | undefined }) {
+// ── JOIN-with-healing helper ─────────────────────────────────────────────────
+// The state's raw locality/authority fields are dirty (variants, prefixes,
+// spellings). These generators wrap the field in over_settlement()/over_authority()
+// so a JOIN resolves the canonical name/code and mismatched values still line up.
+function qi(col: string): string {
+  return '"' + col.replace(/"/g, '""') + '"';
+}
+function tableRef(p: TableProfile): string {
+  return p.schema_name && p.schema_name !== "public" ? `${p.schema_name}.${p.table_name}` : p.table_name;
+}
+// settlement (יישוב) vs authority (רשות); null = not a place column.
+function localityKind(col: string, p: TableProfile): "settlement" | "authority" | null {
+  const t = p.llm_enrichment?.columns?.[col]?.semantic_type
+    || p.sql_profile?.columns?.[col]?.entity_guess?.guess;
+  if (t === "locality") return "settlement";
+  if (t === "municipality") return "authority";
+  return null;
+}
+const SQL = {
+  fixedCols(p: TableProfile, col: string): string {
+    const r = tableRef(p), c = qi(col);
+    return `-- עמודות תקניות: ערך היישוב/רשות המקורי + השם והסמל הרשמיים\n`
+      + `SELECT *,\n`
+      + `       COALESCE(over_settlement(${c}), over_authority(${c}))           AS over_settlement,\n`
+      + `       COALESCE(over_settlement_code(${c}), over_authority_code(${c})) AS over_settlement_code\n`
+      + `FROM ${r}\nLIMIT 100`;
+  },
+  enrich(p: TableProfile, col: string): string {
+    const r = tableRef(p), c = qi(col);
+    return `-- העשרה: הוספת מחוז/נפה/אוכלוסייה מאינדקס היישובים\n`
+      + `SELECT t.*, s.name AS יישוב_רשמי, s.district AS מחוז, s.subdistrict AS נפה, s.population AS אוכלוסייה\n`
+      + `FROM ${r} t\n`
+      + `LEFT JOIN over_settlements s ON s.code = over_settlement_code(t.${c})\nLIMIT 100`;
+  },
+  joinTemplate(p: TableProfile, col: string): string {
+    const r = tableRef(p), c = qi(col);
+    return `-- הצלבה מתוקנת: שני הצדדים נרפאים לפי סמל יישוב/רשות.\n`
+      + `-- החליפו את <טבלה_שנייה> ו-<עמודת_יישוב> בטבלה ובעמודה שלכם.\n`
+      + `WITH a AS (\n`
+      + `  SELECT *, COALESCE(over_settlement_code(${c}), over_authority_code(${c})) AS over_code\n`
+      + `  FROM ${r}\n)\n`
+      + `SELECT a.*, b.*\n`
+      + `FROM a\n`
+      + `JOIN <טבלה_שנייה> b\n`
+      + `  ON a.over_code = COALESCE(over_settlement_code(b."<עמודת_יישוב>"),\n`
+      + `                            over_authority_code(b."<עמודת_יישוב>"))\nLIMIT 100`;
+  },
+  coverage(p: TableProfile, col: string): string {
+    const r = tableRef(p), c = qi(col);
+    return `SELECT count(DISTINCT ${c}) AS distinct_values,\n`
+      + `       count(DISTINCT ${c}) FILTER (WHERE COALESCE(over_settlement_code(${c}), over_authority_code(${c})) IS NOT NULL) AS healed\n`
+      + `FROM ${r}`;
+  },
+};
+
+function JoinHelper({ profile, columns, onUseSql }: {
+  profile: TableProfile; columns: string[];
+  onUseSql: (sql: string, run?: boolean) => void;
+}) {
+  const [cov, setCov] = useState<Record<string, { total: number; healed: number } | "loading" | "error">>({});
+  const checkCoverage = async (col: string) => {
+    setCov((s) => ({ ...s, [col]: "loading" }));
+    try {
+      const res = await dataCatalog.sql(SQL.coverage(profile, col));
+      const row = (res.rows?.[0] || {}) as Record<string, unknown>;
+      setCov((s) => ({ ...s, [col]: { total: Number(row.distinct_values) || 0, healed: Number(row.healed) || 0 } }));
+    } catch {
+      setCov((s) => ({ ...s, [col]: "error" }));
+    }
+  };
+  const btn: React.CSSProperties = {
+    fontSize: "0.72rem", padding: "0.15rem 0.5rem", borderRadius: 4, cursor: "pointer",
+    border: "1px solid var(--primary, #2563eb)", background: "var(--bg, #fff)", color: "var(--primary, #2563eb)",
+  };
+  return (
+    <div style={{ marginTop: "0.6rem", padding: "0.5rem 0.7rem", border: "1px dashed var(--primary, #93c5fd)", borderRadius: 6 }}>
+      <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.15rem" }}>
+        🔗 הצלבה מתוקנת — תיקון שדות יישוב/רשות תוך כדי JOIN
+      </div>
+      <div className="text-muted" style={{ fontSize: "0.74rem", marginBottom: "0.5rem" }}>
+        עוטף את השדה ב-<code>over_settlement()</code>/<code>over_authority()</code> כדי שערכים בכתיב שונה עדיין יצליבו.
+      </div>
+      {columns.map((col) => {
+        const c = cov[col];
+        return (
+          <div key={col} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "0.3rem 0", borderTop: "1px solid var(--border,#eef2f5)" }}>
+            <span style={{ fontWeight: 600, fontSize: "0.8rem", minWidth: 110 }}>{col}</span>
+            <button style={btn} onClick={() => onUseSql(SQL.fixedCols(profile, col), true)}>עמודות תקניות</button>
+            <button style={btn} onClick={() => onUseSql(SQL.enrich(profile, col), true)}>העשרה (מחוז/אוכלוסייה)</button>
+            <button style={btn} onClick={() => onUseSql(SQL.joinTemplate(profile, col), false)}>תבנית JOIN</button>
+            <button style={{ ...btn, borderColor: "#94a3b8", color: "#475569" }} onClick={() => checkCoverage(col)}>בדוק כיסוי</button>
+            {c === "loading" && <span className="text-muted" style={{ fontSize: "0.74rem" }}>בודק…</span>}
+            {c === "error" && <span style={{ fontSize: "0.74rem", color: "#b91c1c" }}>שגיאה</span>}
+            {c && c !== "loading" && c !== "error" && (
+              <span style={chip(c.healed === c.total ? "#dcfce7" : "#fef9c3", c.healed === c.total ? "#15803d" : "#a16207")}>
+                {c.healed}/{c.total} נפתרים ({c.total ? Math.round((c.healed / c.total) * 100) : 0}%)
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function ProfilePanel({ profile, onUseSql }: {
+  profile: TableProfile | null | undefined;
+  onUseSql?: (sql: string, run?: boolean) => void;
+}) {
   const [open, setOpen] = useState(true);
   if (!profile) return null;
 
@@ -173,6 +282,11 @@ export default function ProfilePanel({ profile }: { profile: TableProfile | null
               </tbody>
             </table>
           </div>
+
+          {onUseSql && (() => {
+            const locCols = colNames.filter((c) => localityKind(c, profile));
+            return locCols.length ? <JoinHelper profile={profile} columns={locCols} onUseSql={onUseSql} /> : null;
+          })()}
 
           <div className="text-muted" style={{ fontSize: "0.72rem", marginTop: "0.4rem" }}>
             פרופיל מחושב אוטומטית (טווחים ופורמטים מ-SQL; תקציר וסיווג שדות ב-AI). ייתכנו אי-דיוקים.

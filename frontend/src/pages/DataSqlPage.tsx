@@ -709,6 +709,15 @@ export default function DataSqlPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [runFetch, setSearchParams]);
 
+  // Load a generated snippet (from the profile's JOIN helper) into the editor,
+  // scroll up, and optionally run it.
+  const useSql = useCallback((sql: string, run = false) => {
+    setSqlText(sql);
+    placeholderRef.current = false;
+    if (run) runSql(sql);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [runSql]);
+
   const selectedTable = selected ? byName.get(selected) || null : null;
 
   return (
@@ -1221,7 +1230,7 @@ export default function DataSqlPage() {
 
               {/* Auto-computed profile: detected field types, min/max ranges,
                   date formats, recurring-entity classification, summary. */}
-              {detail?.profile && <ProfilePanel profile={detail.profile} />}
+              {detail?.profile && <ProfilePanel profile={detail.profile} onUseSql={useSql} />}
 
               {/* Raw source files */}
               {detail && detail.files.length > 0 && (
