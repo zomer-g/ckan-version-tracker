@@ -108,11 +108,24 @@ CREATE SCHEMA IF NOT EXISTS extensions;
 GRANT USAGE ON SCHEMA extensions TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO :"ro_role";
 
--- 4) SELECT on every existing table/view in the three DATA schemas — and ONLY
+-- 3d) `odata` (מידע לעם, admin-curated imports) and `ocal` (יומן לעם) — both
+--      co-located IN this DB and both on CONSOLE_SEARCH_PATH, so the console
+--      resolves names in them. odata_import.py re-asserts the odata grants on
+--      every import, but nothing grants ocal at all: its tables are written by
+--      the ocal app directly. Without USAGE here, every /data query touching
+--      them dies with "permission denied for schema".
+CREATE SCHEMA IF NOT EXISTS odata;
+GRANT USAGE ON SCHEMA odata TO :"ro_role";
+CREATE SCHEMA IF NOT EXISTS ocal;
+GRANT USAGE ON SCHEMA ocal TO :"ro_role";
+
+-- 4) SELECT on every existing table/view in the DATA schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
 GRANT SELECT ON ALL TABLES IN SCHEMA public  TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA knesset TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA idx     TO :"ro_role";
+GRANT SELECT ON ALL TABLES IN SCHEMA odata   TO :"ro_role";
+GRANT SELECT ON ALL TABLES IN SCHEMA ocal    TO :"ro_role";
 
 -- 5) Auto-grant SELECT on FUTURE tables the sync pipeline creates, so a newly
 --    tracked dataset / new Knesset entity set is immediately queryable by the
@@ -124,6 +137,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA idx     TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA public  GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA knesset GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA idx     GRANT SELECT ON TABLES TO :"ro_role";
+ALTER DEFAULT PRIVILEGES IN SCHEMA odata   GRANT SELECT ON TABLES TO :"ro_role";
+ALTER DEFAULT PRIVILEGES IN SCHEMA ocal    GRANT SELECT ON TABLES TO :"ro_role";
 
 -- 6) Belt-and-braces: make sure no stray write privileges linger on existing
 --    objects (e.g. from a previous over-broad grant). SELECT stays (re-granted
@@ -134,6 +149,10 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA knesset FROM :"ro_role";
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA idx     FROM :"ro_role";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON ALL TABLES IN SCHEMA odata   FROM :"ro_role";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON ALL TABLES IN SCHEMA ocal    FROM :"ro_role";
 
 -- ── Verification (printed; the script does not fail on these, they are FYI) ──
 \echo ''

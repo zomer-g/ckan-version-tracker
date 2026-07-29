@@ -88,9 +88,19 @@ GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO over_readonly;
 
 -- 4) SELECT on every existing table/view in the three DATA schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
+-- odata (מידע לעם) and ocal (יומן לעם): co-located here and on
+-- CONSOLE_SEARCH_PATH. Nothing else grants ocal — its tables are written by the
+-- ocal app — so without this every /data query on it is "permission denied".
+CREATE SCHEMA IF NOT EXISTS odata;
+GRANT USAGE ON SCHEMA odata TO over_readonly;
+CREATE SCHEMA IF NOT EXISTS ocal;
+GRANT USAGE ON SCHEMA ocal TO over_readonly;
+
 GRANT SELECT ON ALL TABLES IN SCHEMA public  TO over_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA knesset TO over_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA idx     TO over_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA odata   TO over_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA ocal    TO over_readonly;
 
 -- 5) Auto-grant SELECT on FUTURE tables, so a newly tracked dataset / Knesset
 --    entity set / mirrored index is queryable without re-running this script.
@@ -100,6 +110,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA idx     TO over_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public  GRANT SELECT ON TABLES TO over_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA knesset GRANT SELECT ON TABLES TO over_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA idx     GRANT SELECT ON TABLES TO over_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA odata   GRANT SELECT ON TABLES TO over_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ocal    GRANT SELECT ON TABLES TO over_readonly;
 
 -- 6) Belt-and-braces: strip any stray write privileges left by an earlier
 --    over-broad grant. SELECT stays (re-granted in step 4).
@@ -109,6 +121,10 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA knesset FROM over_readonly;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA idx     FROM over_readonly;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON ALL TABLES IN SCHEMA odata   FROM over_readonly;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON ALL TABLES IN SCHEMA ocal    FROM over_readonly;
 
 
 -- ── VERIFICATION — run these separately and read the results ────────────────

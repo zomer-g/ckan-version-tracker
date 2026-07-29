@@ -40,7 +40,13 @@ _NEON_SQL = os.path.join(_SCRIPTS, "create_append_readonly_role_neon_console.sql
 
 # Schemas holding OUR data. Each must get all four grant kinds, including the
 # default privileges that cover tables a future sync creates.
-_DATA_SCHEMAS = {"public", "knesset", "idx"}
+#
+# `odata` (מידע לעם imports) and `ocal` (יומן לעם) are co-located in this DB and
+# reached through the console like any other data schema. odata_import.py also
+# re-grants odata at runtime, but ocal has no runtime grant at all — its tables
+# are written by the ocal app — so the script is the only thing standing between
+# the console and "permission denied for schema ocal".
+_DATA_SCHEMAS = {"public", "knesset", "idx", "odata", "ocal"}
 # Schemas on the console's search_path that hold no data of ours. PostGIS lives
 # in `extensions`; the role needs USAGE (or no ST_* call resolves) and SELECT on
 # spatial_ref_sys, but default privileges would be meaningless — we never create
