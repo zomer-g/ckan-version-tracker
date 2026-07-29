@@ -84,8 +84,20 @@ def test_empty_query_has_no_tsquery_param():
     where, order, params = build_search({"section": "publications"})
     assert "tsq" not in params
     assert "to_tsquery" not in where
-    # relevance order without a query falls back to a literal rank of 0.
-    assert " 0 DESC" in order
+
+
+def test_empty_query_omits_the_rank_term_entirely():
+    """Regression: with no FTS terms the rank term used to fall back to a
+    literal ``0 DESC``. Postgres reads a bare integer in ORDER BY as a COLUMN
+    POSITION, so that 0 raised "position 0 is not in select list" and the
+    search 500'd. The term must be dropped, not zeroed — rows then fall
+    through to the recency keys."""
+    _, order, _ = build_search({"section": "publications"})
+    assert " 0 DESC" not in order
+    assert "ts_rank" not in order
+    # The non-text sort keys still apply, in their usual order.
+    assert order.startswith("(coalesce(item_type, '') = 'intent') DESC")
+    assert "coalesce(data_vintage, year_end, year_start) DESC NULLS LAST" in order
 
 
 def test_enrichment_filters():

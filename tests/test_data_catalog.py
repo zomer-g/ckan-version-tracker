@@ -76,7 +76,7 @@ def _ds(**kw):
         id=uuid.uuid4(), ckan_name="my_dataset", title="מאגר לדוגמה",
         organization="org", ckan_id="ckan-1", source_type="ckan",
         source_url=None, resource_id=None, storage_mode="full_snapshot",
-        scraper_config=None, tags=[],
+        scraper_config=None, tags=[], field_flags={},
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
