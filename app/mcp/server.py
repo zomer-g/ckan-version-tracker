@@ -75,12 +75,13 @@ TOOLS: list[dict] = [
     },
     {
         "name": "query_dataset_rows",
-        "description": "תשאול תוכן (שורות) של מאגר טבלאי שנשמר ב-NEON (append). פילטרים/חיפוש/עימוד. רק למאגרים עם נתונים טבלאיים.",
+        "description": "תשאול תוכן (שורות) של מאגר טבלאי שנשמר ב-NEON (append). פילטרים/חיפוש/עימוד. רק למאגרים עם נתונים טבלאיים. שים לב: למאגר אחד יכולות להיות כמה טבלאות (טבלה לכל משאב) — התשובה מחזירה אז את השדה tables, וכל קריאה מחזירה טבלה אחת בלבד. בחר טבלה אחרת עם table.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "dataset_id": {"type": "string", "description": "UUID של המאגר"},
                 "q": {"type": "string", "description": "חיפוש מחרוזת בכל העמודות"},
+                "table": {"type": "string", "description": "לאיזו טבלה של המאגר לפנות — שם הטבלה, מזהה המשאב או שם המשאב, כפי שמופיעים בשדה tables. ברירת המחדל היא הטבלה הראשונה."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
@@ -203,18 +204,46 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
         raise ValueError("מאגר לא נמצא")
     if not append_store.is_configured():
         raise ValueError("אחסון NEON לא מוגדר בשרת")
-    table = append_store.table_name(d)
+    # Via the shared resolver, NOT table_name(d). This used to guess the
+    # deterministic single-table name and never read resource_mappings at all, so
+    # every multi-resource dataset answered `total: 0` — and a model reading that
+    # concludes "the dataset is empty", which is a wrong answer, not an error.
+    from app.services import append_tables
+    tables = await append_tables.resolve_tables(d, db)
+    sel = (a.get("table") or "").strip()
+    if sel:
+        chosen = next((t for t in tables if sel in (t["table"], t.get("resource_id"),
+                                                    t.get("resource_name"))), None)
+        if not chosen:
+            raise ValueError(
+                "לא נמצאה טבלה בשם הזה במאגר. הטבלאות הזמינות: "
+                + ", ".join(f"{t['table']} ({t.get('resource_name') or '—'})" for t in tables))
+    else:
+        chosen = tables[0]
     limit = min(int(a.get("limit") or 25), 200)
-    res = await append_store.query(table, limit=limit, offset=max(int(a.get("offset") or 0), 0),
+    res = await append_store.query(chosen["table"], limit=limit,
+                                   offset=max(int(a.get("offset") or 0), 0),
                                    q=a.get("q"), filters={})
     rows = res.get("rows") if isinstance(res, dict) else res
     b = base_url(request)
-    return {
+    out = {
         "dataset_id": str(d.id), "title": d.title,
+        "table": chosen["table"], "resource_name": chosen.get("resource_name"),
         "rows": rows, "total": res.get("total") if isinstance(res, dict) else None,
         "query_url": f"{b}/api/append/{d.id}/datastore_search",
         "page_url": f"{b}/versions/{d.id}",
-    }, len(rows or [])
+    }
+    if len(tables) > 1:
+        # Without this the caller cannot tell it is holding one table out of
+        # several, and will present a partial answer as the whole dataset.
+        out["tables"] = [
+            {k: t.get(k) for k in ("table", "resource_id", "resource_name")}
+            for t in tables
+        ]
+        out["note"] = (f"למאגר {len(tables)} טבלאות; התשובה הזו מכסה את "
+                       f"'{chosen.get('resource_name') or chosen['table']}' בלבד. "
+                       f"השתמש בפרמטר table כדי לתשאול טבלה אחרת.")
+    return out, len(rows or [])
 
 
 async def _tool_list_organizations(request, db, user, a) -> tuple[dict, int]:

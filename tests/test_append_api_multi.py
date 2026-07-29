@@ -225,3 +225,46 @@ def test_resolve_rejects_a_dataset_that_is_not_an_append_archive():
     with pytest.raises(HTTPException) as e:
         _resolve([], ds=ds)
     assert e.value.status_code == 409
+
+
+# ── one resolver, structurally ───────────────────────────────────────────────
+
+class _MappingsDB:
+    """resolve_tables issues exactly ONE query (the mappings), unlike _resolve."""
+
+    def __init__(self, mapping_rows):
+        self.mapping_rows = mapping_rows
+
+    async def execute(self, q):
+        return _Result(rows=[(m,) for m in self.mapping_rows])
+
+
+def test_the_shared_resolver_reads_the_newest_neon_mapping():
+    from app.services import append_tables
+    got = asyncio.run(append_tables.resolve_tables(
+        _ds(), _MappingsDB([{"r2:x": "y"}, _MULTI])))
+    assert [t["resource_id"] for t in got] == [_R1, _R2]
+
+
+def test_the_shared_resolver_falls_back_when_no_version_has_a_mapping():
+    from app.services import append_tables
+    ds = _ds()
+    got = asyncio.run(append_tables.resolve_tables(ds, _MappingsDB([])))
+    assert [t["table"] for t in got] == [append_store.table_name(ds)]
+
+
+def test_the_mcp_does_not_guess_the_table_name_itself():
+    """Source-level guard for the failure mode that outlived the API fix.
+
+    query_dataset_rows called append_store.table_name(d) directly and never read
+    resource_mappings, so fixing /api/append did nothing for it — the MCP does
+    not go through the HTTP endpoint it advertises as query_url. A model was
+    told `total: 0` for a dataset holding 2,806 rows, and "empty dataset" is the
+    only sane reading of that. Mocked tests cannot see this; matching the source
+    can."""
+    import re as _re
+    src = open("app/mcp/server.py", encoding="utf-8").read()
+    body = src.split("async def _tool_query_dataset_rows")[1].split("\nasync def ")[0]
+    assert not _re.search(r"append_store\.table_name\(", body), \
+        "query_dataset_rows must resolve through append_tables.resolve_tables"
+    assert "append_tables.resolve_tables" in body

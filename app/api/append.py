@@ -37,7 +37,7 @@ from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
-from app.services import append_store
+from app.services import append_store, append_tables
 
 logger = logging.getLogger(__name__)
 
@@ -106,25 +106,20 @@ async def _resolve(dataset_id: str, db: AsyncSession,
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    tables: list[dict] = []
-    rows = (await db.execute(
-        select(VersionIndex.resource_mappings)
-        .where(VersionIndex.tracked_dataset_id == uid)
-        .order_by(VersionIndex.version_number.desc())
-    )).all()
-    for (mappings,) in rows:
-        if mappings and (mappings.get("append_table") or mappings.get("_append_tables")):
-            tables = append_store.tables_from_mappings(ds, mappings)
-            break
-    if not tables:
-        # No append_db version yet. Still resolvable when this dataset archives
-        # to NEON — either a classic append_only dataset, or a full-snapshot
-        # dataset opted into the r2+neon plan (archive_neon) and seeded
-        # retroactively before its first forward dual-write version exists.
-        from app.services.storage_client import dataset_archives_neon
-        if ds.storage_mode != "append_only" and not dataset_archives_neon(ds):
-            raise HTTPException(status_code=409, detail="Dataset is not an append archive")
-        tables = append_store.tables_from_mappings(ds, None)
+    has_mapping = any(
+        m and (m.get("append_table") or m.get("_append_tables"))
+        for (m,) in (await db.execute(
+            select(VersionIndex.resource_mappings)
+            .where(VersionIndex.tracked_dataset_id == uid)
+        )).all()
+    )
+    # No NEON mapping on any version. Still resolvable when this dataset archives
+    # to NEON — either a classic append_only dataset, or a full-snapshot dataset
+    # opted into the r2+neon plan (archive_neon) and seeded retroactively before
+    # its first forward dual-write version exists.
+    if not has_mapping and not append_tables.is_append_archive(ds):
+        raise HTTPException(status_code=409, detail="Dataset is not an append archive")
+    tables = await append_tables.resolve_tables(ds, db)
     return ds, _pick(tables, selector)["table"], tables
 
 
