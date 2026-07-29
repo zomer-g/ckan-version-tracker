@@ -248,10 +248,24 @@ export const versions = {
 // Append archive (per-dataset Postgres tables — the row-level APPEND store).
 // Public read: browse, filter, and download the accumulated rows of a
 // data.gov.il datastore dataset that OVER archives append-only.
+// One physical NEON table of a dataset. A CKAN dataset archived as
+// append_db_multi has one per datastore resource.
+export interface AppendTableRef {
+  table: string;
+  resource_id: string | null;
+  resource_name: string | null;
+}
+
 export interface AppendSchema {
   dataset_id: string;
   dataset_title: string;
   table: string;
+  resource_id?: string | null;
+  resource_name?: string | null;
+  // Every table of the dataset, first-registered first. Length > 1 only for
+  // multi-resource datasets; `multi_table` is the server's own verdict.
+  tables?: AppendTableRef[];
+  multi_table?: boolean;
   total: number;
   columns: string[];
   key: string | null;
@@ -276,6 +290,10 @@ function appendQuery(opts: {
   sort?: string;
   order?: string;
   q?: string;
+  // Which table of a multi-resource dataset. Must be sent BEFORE the per-column
+  // filters below and is a reserved name server-side, so it can never be
+  // mistaken for a column filter.
+  table?: string;
   filters?: Record<string, string>;
 }): string {
   const p = new URLSearchParams();
@@ -284,6 +302,7 @@ function appendQuery(opts: {
   if (opts.sort) p.set("sort", opts.sort);
   if (opts.order) p.set("order", opts.order);
   if (opts.q) p.set("q", opts.q);
+  if (opts.table) p.set("table", opts.table);
   for (const [k, v] of Object.entries(opts.filters || {})) {
     if (v) p.set(k, v);
   }
@@ -299,8 +318,10 @@ export interface AppendSqlResult {
 }
 
 export const appendArchive = {
-  schema: (datasetId: string) =>
-    request<AppendSchema>(`/append/${datasetId}/schema`),
+  schema: (datasetId: string, table?: string) =>
+    request<AppendSchema>(
+      `/append/${datasetId}/schema${table ? `?table=${encodeURIComponent(table)}` : ""}`,
+    ),
   rows: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
     request<AppendRows>(`/append/${datasetId}/rows${appendQuery(opts)}`),
   // Direct browser download (streams server-side); not a fetch.

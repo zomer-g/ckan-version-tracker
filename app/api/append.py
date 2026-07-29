@@ -6,13 +6,20 @@ is open access — but every column name is validated against the live schema an
 every filter value is parameterized (see app/services/append_store.py).
 
 Endpoints (all under /api/append):
-  GET /{dataset_id}/schema           → {dataset_title, table, total, columns, key}
+  GET /{dataset_id}/schema           → {dataset_title, table, tables, total, columns, key}
   GET /{dataset_id}/rows?…           → {columns, rows, total, limit, offset, sort, order}
   GET /{dataset_id}/download.csv?…   → streaming CSV of the (filtered) table
 
 Filtering on rows/download: ``q`` does a free-text ILIKE across all columns;
 any query param whose name is a real column does a per-column ILIKE. Reserved
-params: limit, offset, sort, order, q.
+params: limit, offset, sort, order, q, table/resource/resource_id.
+
+MULTI-RESOURCE DATASETS. A CKAN dataset archived as ``append_db_multi`` has one
+NEON table PER datastore resource, and these endpoints are single-table by
+nature. So each accepts ``?table=`` — a physical table name, a resource id, or a
+resource name — and defaults to the dataset's first resource. ``/schema`` lists
+them all (and ``/schema.txt`` emits every table's DDL when unselected), which is
+the only way a consumer learns there is more than one.
 """
 import json as _json
 import logging
@@ -38,16 +45,56 @@ router = APIRouter(prefix="/api/append", tags=["append"])
 class SqlBody(BaseModel):
     sql: str
 
-_RESERVED = {"limit", "offset", "sort", "order", "q"}
+# `table` and its aliases select ONE table of a multi-resource dataset. Reserved
+# like limit/offset/sort/order/q so /rows and /download.csv never mistake the
+# selector for a per-column filter.
+_TABLE_PARAMS = ("table", "resource", "resource_id")
+_RESERVED = {"limit", "offset", "sort", "order", "q", *_TABLE_PARAMS}
 
 
-async def _resolve(dataset_id: str, db: AsyncSession) -> tuple[TrackedDataset, str]:
-    """Return (dataset, append_table) or raise 404/409.
+def _pick(tables: list[dict], selector: str | None) -> dict:
+    """The table a request is addressing.
 
-    The table name is read from the dataset's most recent ``append_db`` version
-    (resource_mappings.append_table); falls back to the deterministic
-    table_name(ds). 409 if this dataset isn't an append-DB dataset / the feature
-    is off."""
+    No selector ⇒ the first, which for a multi-resource dataset is the first
+    resource as registered (see append_store.tables_from_mappings on why the
+    order is not the JSONB key order). A selector matches a physical table name,
+    a resource id, or a resource name — one param, three ways to name the same
+    thing, because callers arrive from /schema, from CKAN habits, or from the UI.
+
+    An unmatched selector is a 404 that LISTS what exists: the alternative is
+    silently serving a different table than the one asked for, which is how this
+    whole class of bug goes unnoticed."""
+    if not selector:
+        return tables[0]
+    sel = selector.strip()
+    for t in tables:
+        if sel in (t["table"], t.get("resource_id"), t.get("resource_name")):
+            return t
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": f"No table {sel!r} in this dataset",
+            "available": [
+                {k: t.get(k) for k in ("table", "resource_id", "resource_name")}
+                for t in tables
+            ],
+        },
+    )
+
+
+async def _resolve(dataset_id: str, db: AsyncSession,
+                   selector: str | None = None) -> tuple[TrackedDataset, str, list[dict]]:
+    """Return (dataset, chosen_table, all_tables) or raise 404/409.
+
+    Tables come from the dataset's most recent version that carries a NEON
+    mapping — ``append_table`` for a single-table dataset, ``_append_tables`` for
+    a multi-resource one (``append_db_multi``) — and fall back to the
+    deterministic table_name(ds). 409 if this dataset isn't an append-DB dataset
+    / the feature is off.
+
+    Reading ONLY ``append_table`` here is what made all 7 multi-resource datasets
+    serve as empty across all 7 endpoints; resolution now goes through the shared
+    append_store.tables_from_mappings."""
     if not append_store.is_configured():
         raise HTTPException(status_code=409, detail="Append archive DB is not configured")
     uid = parse_uuid(dataset_id, "dataset_id")
@@ -57,17 +104,17 @@ async def _resolve(dataset_id: str, db: AsyncSession) -> tuple[TrackedDataset, s
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    table: str | None = None
+    tables: list[dict] = []
     rows = (await db.execute(
         select(VersionIndex.resource_mappings)
         .where(VersionIndex.tracked_dataset_id == uid)
         .order_by(VersionIndex.version_number.desc())
     )).all()
     for (mappings,) in rows:
-        if mappings and mappings.get("append_table"):
-            table = mappings["append_table"]
+        if mappings and (mappings.get("append_table") or mappings.get("_append_tables")):
+            tables = append_store.tables_from_mappings(ds, mappings)
             break
-    if not table:
+    if not tables:
         # No append_db version yet. Still resolvable when this dataset archives
         # to NEON — either a classic append_only dataset, or a full-snapshot
         # dataset opted into the r2+neon plan (archive_neon) and seeded
@@ -75,8 +122,19 @@ async def _resolve(dataset_id: str, db: AsyncSession) -> tuple[TrackedDataset, s
         from app.services.storage_client import dataset_archives_neon
         if ds.storage_mode != "append_only" and not dataset_archives_neon(ds):
             raise HTTPException(status_code=409, detail="Dataset is not an append archive")
-        table = append_store.table_name(ds)
-    return ds, table
+        tables = append_store.tables_from_mappings(ds, None)
+    return ds, _pick(tables, selector)["table"], tables
+
+
+def _selector(request: Request, table: str | None) -> str | None:
+    """The table selector, from the documented ``table`` param or its aliases."""
+    if table:
+        return table
+    for k in _TABLE_PARAMS[1:]:
+        v = request.query_params.get(k)
+        if v:
+            return v
+    return None
 
 
 def _filters_from(request: Request, exclude: set[str]) -> dict[str, str]:
@@ -93,16 +151,35 @@ def _filters_from(request: Request, exclude: set[str]) -> dict[str, str]:
 # on the giant append datasets (e.g. the 4.1M-row vehicle registry) is a real
 # scan. Matches its /schema.txt sibling's ceiling.
 @limiter.limit("20/minute")
-async def archive_schema(dataset_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    ds, table = await _resolve(dataset_id, db)
-    cols = await append_store.user_columns(table)
+async def archive_schema(dataset_id: str, request: Request,
+                         table: str | None = None,
+                         db: AsyncSession = Depends(get_db)):
+    """Schema of one archive table.
+
+    ``tables`` lists EVERY table of the dataset, so a consumer can discover that
+    a multi-resource dataset has more than one at all — without it, the only
+    honest reading of this response is "the dataset is this one table"."""
+    ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
+    cols = await append_store.user_columns(tbl)
     if not cols:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
-    total = await append_store.table_count(table)
+    total = await append_store.table_count(tbl)
+    chosen = next((t for t in tables if t["table"] == tbl), {})
     return {
         "dataset_id": str(ds.id),
         "dataset_title": ds.title,
-        "table": table,
+        "table": tbl,
+        "resource_id": chosen.get("resource_id"),
+        "resource_name": chosen.get("resource_name"),
+        # No per-table COUNT(*) here: this endpoint's single count is already a
+        # full scan on the big archives (the 4.1M-row vehicle registry), and
+        # multiplying it by the table count is how a discovery call turns into a
+        # timeout. Ask /schema?table=… for another table's total.
+        "tables": [
+            {k: t.get(k) for k in ("table", "resource_id", "resource_name")}
+            for t in tables
+        ],
+        "multi_table": len(tables) > 1,
         "total": total,
         "columns": cols,
         "key": (ds.scraper_config or {}).get("append_key"),
@@ -113,13 +190,29 @@ async def archive_schema(dataset_id: str, request: Request, db: AsyncSession = D
 
 @router.get("/{dataset_id}/schema.txt", response_class=PlainTextResponse)
 @limiter.limit("20/minute")
-async def archive_schema_txt(dataset_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """DESCRIBE-style DDL of this dataset's archive table as plain text — for
-    pasting into an LLM ('copy schema for AI')."""
-    ds, table = await _resolve(dataset_id, db)
-    if await append_store.table_count(table) == 0 and not await append_store.user_columns(table):
+async def archive_schema_txt(dataset_id: str, request: Request,
+                             table: str | None = None,
+                             db: AsyncSession = Depends(get_db)):
+    """DESCRIBE-style DDL of this dataset's archive table(s) as plain text — for
+    pasting into an LLM ('copy schema for AI').
+
+    With no ``table`` selector, a multi-resource dataset returns the DDL of ALL
+    its tables. Handing an LLM one table out of several is worse than useless:
+    it will confidently write queries against the half it was shown."""
+    sel = _selector(request, table)
+    ds, tbl, tables = await _resolve(dataset_id, db, sel)
+    wanted = tables if (sel is None and len(tables) > 1) else [
+        next(t for t in tables if t["table"] == tbl)]
+    out: list[str] = []
+    for t in wanted:
+        if await append_store.user_columns(t["table"]):
+            label = ds.title
+            if t.get("resource_name"):
+                label = f"{ds.title} — {t['resource_name']}"
+            out.append(await append_store.schema_text(t["table"], title=label))
+    if not out:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
-    return await append_store.schema_text(table, title=ds.title)
+    return "\n\n".join(out)
 
 
 @router.get("/{dataset_id}/rows")
@@ -132,11 +225,12 @@ async def archive_rows(
     sort: str | None = None,
     order: str = "desc",
     q: str | None = None,
+    table: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    _, table = await _resolve(dataset_id, db)
+    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     return await append_store.query(
-        table,
+        tbl,
         limit=limit, offset=offset, sort=sort, order=order, q=q,
         filters=_filters_from(request, exclude=set()),
     )
@@ -150,12 +244,19 @@ async def archive_download(
     sort: str | None = None,
     order: str = "desc",
     q: str | None = None,
+    table: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    ds, table = await _resolve(dataset_id, db)
+    ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
     filters = _filters_from(request, exclude=set())
     safe = (ds.ckan_name or "archive").replace("/", "_")[:60]
-    stream = append_store.iter_csv(table, sort=sort, order=order, q=q, filters=filters)
+    if len(tables) > 1:
+        # Name the table in the file, or several downloads of a multi-resource
+        # dataset all land as the same filename and become indistinguishable.
+        chosen = next((t for t in tables if t["table"] == tbl), {})
+        part = (chosen.get("resource_name") or tbl).replace("/", "_")[:40]
+        safe = f"{safe}_{part}"
+    stream = append_store.iter_csv(tbl, sort=sort, order=order, q=q, filters=filters)
     return StreamingResponse(
         stream,
         media_type="text/csv; charset=utf-8",
@@ -169,16 +270,19 @@ async def archive_sql(
     dataset_id: str,
     request: Request,
     body: SqlBody,
+    table: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Run a user-supplied read-only SELECT against the append DB. Guarded by a
     READ ONLY transaction + statement_timeout + row cap (see
-    append_store.run_readonly_sql). The dataset's table name is in /schema so
-    the client can reference it. Errors (validation, SQL syntax, timeout) come
-    back as 400 with the message."""
-    _, table = await _resolve(dataset_id, db)  # 404/409 if not an append dataset
+    append_store.run_readonly_sql). The dataset's table name(s) are in /schema so
+    the client can reference them — the SQL may name any table it likes, and
+    ``table`` only picks whose column casing gets auto-corrected. Errors
+    (validation, SQL syntax, timeout) come back as 400 with the message."""
+    # 404/409 if not an append dataset
+    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
-        return await append_store.run_readonly_sql(body.sql, table=table)
+        return await append_store.run_readonly_sql(body.sql, table=tbl)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
@@ -203,6 +307,7 @@ async def datastore_search(
     filters: str | None = None,
     distinct: bool = False,
     include_total: bool = True,
+    table: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """CKAN ``datastore_search``-style query over the dataset's NEON content.
@@ -212,8 +317,11 @@ async def datastore_search(
     ``fields`` (comma-separated projection), ``sort`` ("col, col2 desc"),
     ``limit``/``offset``, ``distinct``, ``include_total``. Returns the CKAN
     envelope ``{success, result:{resource_id, fields:[{id,type}], records, total,
-    limit, offset, _links}}``."""
-    ds, table = await _resolve(dataset_id, db)
+    limit, offset, _links}}``.
+
+    ``table`` selects one table of a multi-resource dataset (name, resource id or
+    resource name); ``tables`` in the result says what else is there."""
+    ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
     field_list = [c.strip() for c in fields.split(",") if c.strip()] if fields else None
     filt: dict = {}
     if filters:
@@ -224,12 +332,21 @@ async def datastore_search(
         if not isinstance(filt, dict):
             raise HTTPException(status_code=400, detail="filters must be a JSON object")
     res = await append_store.datastore_search(
-        table, fields=field_list, filters=filt, q=q, sort=sort,
+        tbl, fields=field_list, filters=filt, q=q, sort=sort,
         limit=limit, offset=offset, distinct=distinct, include_total=include_total,
     )
     if res is None:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
     res["resource_id"] = str(ds.id)
+    res["table"] = tbl
+    if len(tables) > 1:
+        # Otherwise a caller (MCP's query_dataset_rows included) reads a partial
+        # answer as the whole dataset — the same wrong conclusion the resolution
+        # bug produced, just with rows in it.
+        res["tables"] = [
+            {k: t.get(k) for k in ("table", "resource_id", "resource_name")}
+            for t in tables
+        ]
     base = request.url.remove_query_params("offset")
     res["_links"] = {
         "start": str(base.include_query_params(offset=0)),
@@ -244,14 +361,15 @@ async def datastore_search_sql(
     dataset_id: str,
     request: Request,
     sql: str,
+    table: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """CKAN ``datastore_search_sql``-style read-only SQL (single SELECT/WITH).
-    Reference the dataset's table by the name in /schema. Returns the CKAN
+    Reference the dataset's table(s) by the name(s) in /schema. Returns the CKAN
     envelope ``{success, result:{records, fields:[{id,type}]}}``."""
-    _, table = await _resolve(dataset_id, db)
+    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
-        r = await append_store.run_readonly_sql(sql, table=table)
+        r = await append_store.run_readonly_sql(sql, table=tbl)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001

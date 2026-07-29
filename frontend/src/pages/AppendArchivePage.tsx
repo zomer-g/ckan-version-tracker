@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { appendArchive, AppendSchema, AppendRows, AppendSqlResult } from "../api/client";
+import { appendArchive, AppendSchema, AppendTableRef, AppendRows, AppendSqlResult } from "../api/client";
 import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable, CopySchemaButton } from "../components/SqlEditor";
 
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
@@ -45,6 +45,11 @@ export default function AppendArchivePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Which table of a multi-resource dataset (append_db_multi) is being viewed.
+  // undefined = whatever the server picks first, which is the only sane initial
+  // state: we do not know the dataset's tables until /schema answers.
+  const [table, setTable] = useState<string | undefined>(undefined);
+
   const [limit, setLimit] = useState(50);
   const [offset, setOffset] = useState(0);
   const [sort, setSort] = useState<string | undefined>(undefined);
@@ -75,13 +80,13 @@ export default function AppendArchivePage() {
   useEffect(() => {
     if (!datasetId) return;
     appendArchive
-      .schema(datasetId)
+      .schema(datasetId, table)
       .then((s) => {
         setSchema(s);
         setSqlText((prev) => prev || `SELECT *\nFROM ${s.table}\nORDER BY first_seen DESC\nLIMIT 100`);
       })
       .catch((e) => setError(e?.message || "schema error"));
-  }, [datasetId]);
+  }, [datasetId, table]);
 
   const runSql = useCallback(() => {
     if (!datasetId || !sqlText.trim()) return;
@@ -98,14 +103,14 @@ export default function AppendArchivePage() {
     if (!datasetId) return;
     setLoading(true);
     appendArchive
-      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, filters: debounced.filters })
+      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, table, filters: debounced.filters })
       .then((r) => {
         setData(r);
         setError(null);
       })
       .catch((e) => setError(e?.message || "rows error"))
       .finally(() => setLoading(false));
-  }, [datasetId, limit, offset, sort, order, debounced]);
+  }, [datasetId, limit, offset, sort, order, debounced, table]);
 
   useEffect(() => {
     load();
@@ -148,13 +153,15 @@ export default function AppendArchivePage() {
   const downloadHref = useMemo(
     () =>
       datasetId
-        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, filters: debounced.filters })
+        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, table, filters: debounced.filters })
         : "#",
-    [datasetId, sort, order, debounced],
+    [datasetId, sort, order, debounced, table],
   );
   const downloadAllHref = useMemo(
-    () => (datasetId ? appendArchive.downloadUrl(datasetId, {}) : "#"),
-    [datasetId],
+    // "הכל" means all of the table on screen — for a multi-resource dataset the
+    // tables can have different schemas, so there is no one CSV of the dataset.
+    () => (datasetId ? appendArchive.downloadUrl(datasetId, { table }) : "#"),
+    [datasetId, table],
   );
 
   if (error && !schema) {
@@ -213,6 +220,23 @@ export default function AppendArchivePage() {
           </Link>
         </div>
       </div>
+
+      {schema?.multi_table && schema.tables && (
+        <TablePicker
+          tables={schema.tables}
+          current={schema.table}
+          onPick={(t) => {
+            setTable(t);
+            // A sibling table can have entirely different columns, so anything
+            // scoped to the old one has to go — a stale sort or column filter
+            // would come back as an error or, worse, as silently zero rows.
+            setOffset(0);
+            setSort(undefined);
+            setFilters({});
+            setQ("");
+          }}
+        />
+      )}
 
       {schema && <StorageExplainBox schema={schema} />}
 
@@ -412,6 +436,53 @@ export default function AppendArchivePage() {
 //     hash → each change becomes a new dated record (vehicle registry).
 //   - keyed: only new keys captured; in-place changes are NOT recorded.
 //   - keyless: every distinct row STATE captured (flights board).
+/** Tab strip for a dataset archived as one NEON table PER datastore resource.
+ *
+ * Shown only when there really is more than one. Without it the page renders the
+ * first table and says nothing — which is the same silent partial truth as the
+ * bug this shipped with, just with rows in it. */
+function TablePicker({
+  tables, current, onPick,
+}: {
+  tables: AppendTableRef[];
+  current: string;
+  onPick: (table: string) => void;
+}) {
+  return (
+    <div style={{ margin: "0.5rem 0 0.75rem" }}>
+      <div className="text-sm text-muted" style={{ marginBottom: "0.35rem" }}>
+        למאגר הזה {tables.length} טבלאות נפרדות (משאב אחד לכל טבלה) — לכל אחת עמודות משלה:
+      </div>
+      <div className="flex" style={{ gap: "0.4rem", flexWrap: "wrap" }}>
+        {tables.map((t) => {
+          const active = t.table === current;
+          return (
+            <button
+              key={t.table}
+              type="button"
+              onClick={() => !active && onPick(t.table)}
+              aria-current={active ? "true" : undefined}
+              title={t.table}
+              style={{
+                fontSize: "0.85rem",
+                padding: "0.35rem 0.8rem",
+                cursor: active ? "default" : "pointer",
+                borderRadius: 4,
+                fontWeight: active ? 600 : 400,
+                border: "1px solid var(--primary, #0f766e)",
+                background: active ? "var(--primary, #0f766e)" : "none",
+                color: active ? "white" : "var(--primary, #0f766e)",
+              }}
+            >
+              {t.resource_name || t.table}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function StorageExplainBox({ schema }: { schema: AppendSchema }) {
   const key = schema.key;
   const diff = !!schema.capture_changes;

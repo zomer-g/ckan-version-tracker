@@ -111,20 +111,12 @@ async def _latest_mappings(db: AsyncSession, dataset_ids: list) -> dict:
 
 def _tables_of(ds: TrackedDataset, mappings: dict) -> list[dict]:
     """Resolve the physical NEON table(s) of one dataset from its latest version's
-    resource_mappings. Returns [{table, resource_name|None}] — one entry for a
-    single-table dataset, several for a multi-resource NEON dataset. Falls back to
-    the deterministic single-table name when no mapping exists yet."""
-    multi = mappings.get("_append_tables")
-    if isinstance(multi, dict) and multi:
-        names = mappings.get("_names") or {}
-        return [
-            {"table": tbl, "resource_name": names.get(rid)}
-            for rid, tbl in multi.items() if tbl
-        ]
-    single = mappings.get("append_table")
-    if isinstance(single, str) and single:
-        return [{"table": single, "resource_name": None}]
-    return [{"table": append_store.table_name(ds), "resource_name": None}]
+    resource_mappings. Returns [{table, resource_id, resource_name|None}].
+
+    Delegates to append_store, which is also what app/api/append.py resolves
+    through — the duplicate that used to live here is exactly how the public API
+    ended up unable to see multi-resource tables at all."""
+    return append_store.tables_from_mappings(ds, mappings)
 
 
 def _ds_record(ds: TrackedDataset, tbl: str, resource_name: str | None,

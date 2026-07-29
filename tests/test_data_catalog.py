@@ -85,7 +85,8 @@ def _ds(**kw):
 def test_tables_of_single_from_mapping():
     ds = _ds()
     out = C._tables_of(ds, {"append_table": "append_my_dataset_abc123"})
-    assert out == [{"table": "append_my_dataset_abc123", "resource_name": None}]
+    assert out == [{"table": "append_my_dataset_abc123",
+                    "resource_id": None, "resource_name": None}]
 
 
 def test_tables_of_multi_resource():
@@ -96,8 +97,8 @@ def test_tables_of_multi_resource():
     }
     out = sorted(C._tables_of(ds, maps), key=lambda r: r["table"])
     assert out == [
-        {"table": "append_ds_a_1", "resource_name": "2023"},
-        {"table": "append_ds_a_2", "resource_name": "2024"},
+        {"table": "append_ds_a_1", "resource_id": "rid1", "resource_name": "2023"},
+        {"table": "append_ds_a_2", "resource_id": "rid2", "resource_name": "2024"},
     ]
 
 
@@ -107,6 +108,15 @@ def test_tables_of_falls_back_to_deterministic_name():
     assert len(out) == 1
     assert out[0]["table"] == A.table_name(ds)
     assert out[0]["resource_name"] is None
+
+
+def test_tables_of_delegates_to_the_shared_resolver():
+    """The catalog and the public /api/append must resolve a dataset's tables
+    through ONE function. Two readers of this JSONB shape is precisely how the
+    API ended up unable to see multi-resource tables while the catalog could."""
+    ds = _ds()
+    maps = {"_append_tables": {"r1": "t1"}, "_names": {"r1": "n"}}
+    assert C._tables_of(ds, maps) == A.tables_from_mappings(ds, maps)
 
 
 # ── source url + file links ──────────────────────────────────────────────────

@@ -297,6 +297,48 @@ async def drop_table(table: str) -> None:
         await conn.execute(f'DROP TABLE IF EXISTS {_qi(table)}')
 
 
+def tables_from_mappings(ds, mappings: dict | None) -> list[dict]:
+    """The physical NEON table(s) behind one dataset version, in a STABLE order.
+
+    Returns ``[{"table", "resource_id", "resource_name"}]`` — one entry for a
+    single-table dataset, one per datastore resource for a multi-resource NEON
+    dataset (``append_db_multi``), falling back to the deterministic
+    ``table_name(ds)`` when the version carries no mapping at all.
+
+    THE SINGLE SOURCE OF TRUTH for that resolution. It used to live only in
+    data_catalog, while app/api/append.py looked for ``append_table`` and nothing
+    else — so every one of the seven public append endpoints served a
+    multi-resource dataset from a single-table name that does not exist. All 7
+    such datasets reported 0 rows, an empty CSV and a 404 schema while their rows
+    sat in NEON, and /api/append/datastore_search answered MCP's
+    query_dataset_rows with ``total: 0``: a consumer, human or model, concludes
+    "empty dataset" rather than "failed read". Two readers of one JSONB shape is
+    what made that possible, so there is now one.
+
+    Order comes from ``_resource_ids``, NOT from iterating ``_append_tables``.
+    That mapping arrives out of JSONB, and Postgres does not preserve object key
+    order in jsonb (keys are stored sorted by length, then bytewise) — so
+    iterating it would make "the dataset's first table" depend on how the
+    resource UUIDs happen to sort. Callers default to the first entry, so that
+    order is user-visible and has to be the order the resources were registered
+    in."""
+    m = mappings or {}
+    multi = m.get("_append_tables")
+    if isinstance(multi, dict) and multi:
+        names = m.get("_names") or {}
+        order = [str(r) for r in (m.get("_resource_ids") or []) if str(r) in multi]
+        order += [r for r in multi if r not in order]
+        return [
+            {"table": multi[r], "resource_id": r, "resource_name": names.get(r)}
+            for r in order if multi.get(r)
+        ]
+    single = m.get("append_table")
+    rid = getattr(ds, "resource_id", None)
+    if isinstance(single, str) and single:
+        return [{"table": single, "resource_id": rid, "resource_name": None}]
+    return [{"table": table_name(ds), "resource_id": rid, "resource_name": None}]
+
+
 def row_hash(row: dict, cols: list[str]) -> str:
     """SHA-256 over the row's column values (str-coerced, None→''), used as the
     dedup identity for keyless datasets. Matches version_detector._row_identity
