@@ -1064,6 +1064,29 @@ def test_retry_deferred_can_be_limited_to_one_dataset(monkeypatch):
     assert "dataset_id = $1" in sql and args == ("d49264eb",)
 
 
+def test_force_clears_a_clean_checkpoint_for_one_dataset(monkeypatch):
+    """"Mirror this one again" — the only way to re-offer a dataset at the
+    version it already holds, and the only way to exercise the append path on
+    demand instead of waiting for the source to move."""
+    log = _install_sql_pool(monkeypatch)
+    asyncio.run(index_mirror.retry_deferred(dataset_id="d1", force=True))
+    sql, args = log[-1]
+    assert "deferred IS NOT NULL" not in sql, "force must ignore the deferred state"
+    assert "dataset_id = $1" in sql and args == ("d1",)
+
+
+def test_force_without_a_dataset_id_is_refused(monkeypatch):
+    """It would re-offer all ~900 mirrored datasets and re-download the whole
+    corpus — never what anyone means to ask for."""
+    _install_sql_pool(monkeypatch)
+    try:
+        asyncio.run(index_mirror.retry_deferred(force=True))
+    except ValueError as e:
+        assert "dataset_id" in str(e)
+    else:
+        raise AssertionError("force with no dataset_id must raise")
+
+
 def test_retry_deferred_without_filters_clears_everything(monkeypatch):
     """The original behaviour has to survive: no filters, no extra predicates."""
     log = _install_sql_pool(monkeypatch)

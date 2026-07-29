@@ -1282,7 +1282,8 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
             "tables": [t for _, t in victims[:50]]}
 
 
-async def retry_deferred(*, dataset_id=None, max_csv_mb: int | None = None) -> int:
+async def retry_deferred(*, dataset_id=None, max_csv_mb: int | None = None,
+                         force: bool = False) -> int:
     """Clear the deferred marks so the next run re-offers them. Use after moving
     the backfill somewhere with more memory (or raising the cap).
 
@@ -1295,11 +1296,22 @@ async def retry_deferred(*, dataset_id=None, max_csv_mb: int | None = None) -> i
 
     A row with no recorded ``csv_bytes`` is left alone by ``max_csv_mb``: unknown
     size is what the gate already treats as too big, and a tiered rollout must
-    not smuggle one in."""
+    not smuggle one in.
+
+    ``force`` also clears a CLEAN checkpoint, so a dataset is re-offered at the
+    version it already holds — "mirror this one again". It REQUIRES a
+    ``dataset_id``: without one it would re-offer all ~900 mirrored datasets and
+    re-download the whole corpus, which is not a thing anyone means to ask for.
+    On an incremental table a forced re-sync should insert nothing (the CSV
+    hashes to rows that are already there), which is exactly what makes it a
+    useful check."""
     global _loaded_versions_cache
+    if force and dataset_id is None:
+        raise ValueError("force requires a dataset_id — clearing every "
+                         "checkpoint would re-download the whole corpus")
     if not append_store.is_configured():
         return 0
-    where = [f"(deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS})"]
+    where = [] if force else [f"(deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS})"]
     params: list = []
     if dataset_id is not None:
         params.append(dataset_id)

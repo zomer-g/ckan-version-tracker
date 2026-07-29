@@ -1641,6 +1641,7 @@ async def index_mirror_retry_deferred(
     request: Request,
     max_csv_mb: int | None = None,
     dataset_id: str | None = None,
+    force: bool = False,
     user: User = Depends(get_admin_user),
 ):
     """Re-queue what was deferred (oversized / repeatedly failed).
@@ -1651,13 +1652,21 @@ async def index_mirror_retry_deferred(
 
     Both filters take a tier at a time instead of the whole 9GB backlog:
     ``?max_csv_mb=250`` re-queues only what fits under 250MB, ``?dataset_id=…``
-    exactly one dataset."""
+    exactly one dataset.
+
+    ``?force=true`` (dataset_id required) also clears a CLEAN checkpoint, so one
+    dataset is re-mirrored at the version it already holds."""
     from app.services import index_mirror
     uid = parse_uuid(dataset_id, "dataset_id") if dataset_id else None
-    n = await index_mirror.retry_deferred(dataset_id=uid, max_csv_mb=max_csv_mb)
+    try:
+        n = await index_mirror.retry_deferred(dataset_id=uid,
+                                              max_csv_mb=max_csv_mb, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     logger.info("Index mirror retry-deferred by %s: cleared %d (max_csv_mb=%s, "
-                "dataset_id=%s)", user.email, n, max_csv_mb, dataset_id)
-    return {"cleared": n, "max_csv_mb": max_csv_mb,
+                "dataset_id=%s, force=%s)", user.email, n, max_csv_mb,
+                dataset_id, force)
+    return {"cleared": n, "max_csv_mb": max_csv_mb, "force": force,
             "dataset_id": str(uid) if uid else None}
 
 
