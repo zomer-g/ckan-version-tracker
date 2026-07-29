@@ -132,6 +132,31 @@ def test_the_selector_is_never_treated_as_a_column_filter():
         assert p in api._RESERVED
 
 
+# ── the download filename ────────────────────────────────────────────────────
+
+def test_a_hebrew_filename_does_not_break_the_header():
+    """Caught in production, not by these tests: naming multi-table CSVs after
+    their resource put "סניפים - עברית" in Content-Disposition, header values
+    must be latin-1 encodable, and every such download 500ed."""
+    h = api._content_disposition("branches_סניפים - עברית_append.csv")
+    h.encode("latin-1")                      # what the server does; must not raise
+    assert "filename*=UTF-8''" in h          # the real name still travels
+    assert 'filename="branches_' in h        # and an ASCII fallback exists
+
+
+def test_the_ascii_fallback_cannot_inject_a_header():
+    """It lands inside a quoted header string, so a stray quote or newline would
+    end the value and start something else."""
+    h = api._content_disposition('a"b\r\nX-Evil: 1.csv')
+    assert '"' not in h.split("filename*=")[0].split('filename="')[1].rstrip('"; ')
+    assert "\r" not in h and "\n" not in h
+
+
+def test_an_all_non_ascii_name_still_yields_a_filename():
+    h = api._content_disposition("סניפים.csv")
+    assert 'filename="' in h and 'filename=""' not in h
+
+
 # ── _resolve: the endpoints' single entry point ──────────────────────────────
 
 class _Result:

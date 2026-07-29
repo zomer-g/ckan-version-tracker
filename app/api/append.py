@@ -23,6 +23,8 @@ the only way a consumer learns there is more than one.
 """
 import json as _json
 import logging
+import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -135,6 +137,25 @@ def _selector(request: Request, table: str | None) -> str | None:
         if v:
             return v
     return None
+
+
+def _content_disposition(name: str) -> str:
+    """``Content-Disposition`` for a download whose name may be non-ASCII.
+
+    HTTP header values must be latin-1 encodable, so a Hebrew name in a bare
+    ``filename=`` raises UnicodeEncodeError inside the server and the response
+    500s. Measured, not theoretical: naming multi-table CSVs after their resource
+    ("סניפים - עברית") turned every one of those downloads into a 500, while the
+    single-table path was fine because a ckan_name is always a slug.
+
+    So: an ASCII-only ``filename`` that always works, plus RFC 5987
+    ``filename*`` carrying the real name for anything from the last decade. The
+    ASCII fallback is restricted to a safe character set rather than merely
+    transliterated — it lands in a quoted header string, where a stray quote or
+    newline would be header injection."""
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "archive"
+    return (f"attachment; filename=\"{ascii_name[:80]}\"; "
+            f"filename*=UTF-8''{quote(name, safe='')}")
 
 
 def _filters_from(request: Request, exclude: set[str]) -> dict[str, str]:
@@ -260,7 +281,7 @@ async def archive_download(
     return StreamingResponse(
         stream,
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{safe}_append.csv"'},
+        headers={"Content-Disposition": _content_disposition(f"{safe}_append.csv")},
     )
 
 
