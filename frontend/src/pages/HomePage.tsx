@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation } from "../api/client";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
 import RegistrySourceCard from "../components/RegistrySourceCard";
 import GovmapRequestForm from "../components/GovmapRequestForm";
+import ResolvedMatches from "../components/ResolvedMatches";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 // idf.il section pattern lives in utils/idfPattern.ts so the
 // HomePage and SearchPage versions can never drift when we add new
@@ -163,6 +164,7 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
 
 export default function HomePage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -216,6 +218,11 @@ export default function HomePage() {
 
   // Request form state — which dataset has form open
   const [requestFormFor, setRequestFormFor] = useState<string | null>(null);
+
+  // Datasets that already track the pasted source URL. Only ever populated
+  // when the URL is ambiguous (several datasets cut from one page) — a single
+  // match navigates straight to its versions page instead.
+  const [resolvedMatches, setResolvedMatches] = useState<ResolveMatch[]>([]);
 
   // Gov.il scraper result
   const [govIlResult, setGovIlResult] = useState<GovIlValidation | null>(null);
@@ -298,6 +305,12 @@ export default function HomePage() {
       return false;
     }
   };
+
+  // Worth asking the catalog "do we already track this?". Unlike
+  // looksLikeTrackableUrl this INCLUDES data.gov.il — a tracked CKAN resource
+  // should resolve from its package link just like a scraper source does.
+  const isAbsoluteUrl = (input: string): boolean =>
+    /^https?:\/\//i.test(input.trim());
 
   const detectGovMapUrl = (input: string): boolean => {
     return GOVMAP_PATTERN.test(input.trim());
@@ -386,8 +399,34 @@ export default function HomePage() {
     setEdenResults([]);
     setKnessetResult(null);
     setRegistryResult(null);
+    setResolvedMatches([]);
     setSubmittedQuery("");
     try {
+      // 0. Is this URL ALREADY TRACKED? Runs before every detector below,
+      // because those only answer "could we scrape this?" — they never look
+      // at the catalog, so a pasted link to a layer OVER already has used to
+      // open a request form for it. Matching is by identity (see
+      // app/services/url_identity.py), so the viewport params GovMap writes
+      // into a copied link ("?c=219143.61,618345.06&lay=11") don't hide the
+      // dataset stored as "?lay=11".
+      if (isAbsoluteUrl(trimmed)) {
+        const hit = await resolve.lookup(trimmed).catch(() => null);
+        if (hit?.found && hit.matches.length === 1) {
+          // Unambiguous — go straight to the versions the user came for.
+          navigate(`/versions/${hit.matches[0].id}`, { replace: true });
+          return;
+        }
+        if (hit?.found && hit.matches.length > 1) {
+          // Several datasets are cut from this one page — let the user pick
+          // rather than guess, and don't offer to re-request any of them.
+          setResolvedMatches(hit.matches);
+          setResults([]);
+          setCount(0);
+          setLoading(false);
+          return;
+        }
+      }
+
       // 1. Check for govmap.gov.il layer URL
       if (detectGovMapUrl(query)) {
         const validation = await govmap.validate(query.trim());
@@ -744,6 +783,12 @@ export default function HomePage() {
         <div aria-live="polite" aria-atomic="true">
           {loading && <div className="loading" role="status">{t("common.loading")}</div>}
         </div>
+
+        {/* Already tracked — a pasted source URL that resolved to more than
+            one dataset. A single match never lands here (it redirects). */}
+        {!loading && resolvedMatches.length > 0 && (
+          <ResolvedMatches matches={resolvedMatches} sourceUrl={query.trim()} />
+        )}
 
         {/* GovMap layer result */}
         {!loading && govMapResult && (
@@ -1720,7 +1765,7 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && matchedTracked.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
+        {!loading && results.length === 0 && matchedTracked.length === 0 && resolvedMatches.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 

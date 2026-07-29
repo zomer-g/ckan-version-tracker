@@ -34,6 +34,8 @@ from app.api.hatzav import router as hatzav_router
 from app.api.mankal import router as mankal_router
 from app.api.jda import router as jda_router
 from app.api.sources import router as sources_router
+from app.api.resolve import router as resolve_router
+from app.api.resolve import direct_router
 from app.api.eden import router as eden_router
 from app.api.knesset import router as knesset_router
 from app.api.knesset_protocols import router as knesset_protocols_router
@@ -197,6 +199,8 @@ app.include_router(knesset_db_router)
 # Generic validate/registry endpoints for worker-declared sources — the one
 # router that never needs another entry here when a source is added.
 app.include_router(sources_router)
+app.include_router(resolve_router)
+app.include_router(direct_router)
 app.include_router(tables_router)
 app.include_router(settlements_router)
 app.include_router(connector_router)

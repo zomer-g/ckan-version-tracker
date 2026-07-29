@@ -387,6 +387,64 @@ export const govmap = {
     }),
 };
 
+// Source-URL resolver — "does OVER already track what this URL points at?"
+// Backs the /lookup deep link and the home search box, so a pasted link that
+// is already tracked opens its versions page instead of a request form.
+export interface ResolveMatch {
+  id: string;
+  title: string;
+  organization?: string | null;
+  source_type?: string | null;
+  source_url?: string | null;
+  status?: string | null;
+  is_active: boolean;
+  version_count: number;
+  /** "identity" = same thing; "path" = same page, may be more than one. */
+  match: "identity" | "path" | string;
+}
+
+export interface ResolveResponse {
+  url: string;
+  found: boolean;
+  matches: ResolveMatch[];
+}
+
+export const resolve = {
+  lookup: (url: string) =>
+    request<ResolveResponse>(`/resolve?url=${encodeURIComponent(url)}`),
+};
+
+/**
+ * The shareable deep link for a source URL: it opens the dataset's versions
+ * page if OVER tracks it, and the collection request form if it doesn't.
+ * One link, correct before and after the source is onboarded.
+ *
+ * The shape is a fixed prefix plus the source URL verbatim —
+ * `over.org.il/direct/<source url>` — so any tool (the browser extension,
+ * a script, a spreadsheet formula) can build it by concatenation, with no
+ * encoding step and nothing to look up. Only the two characters that would
+ * break reassembly are escaped: "#" (everything after it never reaches the
+ * server) and spaces.
+ */
+export function lookupLinkFor(sourceUrl: string, origin?: string): string {
+  const base = origin ?? (typeof window !== "undefined" ? window.location.origin : "");
+  return `${base}/direct/${encodeURI(sourceUrl.trim()).replace(/#/g, "%23")}`;
+}
+
+/**
+ * Twin of ``rebuild_source_url`` in app/api/resolve.py — reassembles the
+ * source URL from a /direct/<url> route. The path part and the query string
+ * arrive separately; a percent-encoded URL arrives whole, with no query.
+ * In production the server redirects /direct/* before the SPA loads, so this
+ * runs only in dev and as a safety net.
+ */
+export function sourceUrlFromDirectPath(splat: string, search: string): string {
+  let url = (splat || "").replace(/^\/+/, "");
+  const query = (search || "").replace(/^\?/, "");
+  if (query) url += (url.includes("?") ? "&" : "?") + query;
+  return url.replace(/^(https?):\/+/i, "$1://");
+}
+
 // IDF Validation — shares the same response shape as gov.il
 // (page_type, collector_name, title, url, error). The server side lives
 // at app/api/idf.py; only Military-Prosecution unit pages are accepted
@@ -1218,6 +1276,10 @@ export const publicApi = {
         status: "pending" | "duplicate" | "invalid";
         layer_id?: string;
         error?: string;
+        // Present on "duplicate": the dataset that already tracks this layer,
+        // so the form can link straight to it.
+        dataset_id?: string;
+        dataset_title?: string;
       }>;
     }>("/datasets/requests", {
       method: "POST",

@@ -14,6 +14,7 @@ import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
+import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
 // idf code paths. Only govmap pages that actually have a GeoJSON
@@ -473,6 +474,7 @@ export default function VersionsPage() {
               </a>
             );
           })()}
+          {dataset && <CopyLookupLinkButton dataset={dataset} />}
           {isAdmin && (
             <button
               type="button"

@@ -1,5 +1,6 @@
 import { useState, FormEvent, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { publicApi } from "../api/client";
 
 const GOVMAP_LAY_RE = /[?&]lay(?:er|ers)?=(\d+)/i;
@@ -50,7 +51,14 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
   const [showFreq, setShowFreq] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<
-    Array<{ url: string; status: string; layer_id?: string; error?: string }> | null
+    Array<{
+      url: string;
+      status: string;
+      layer_id?: string;
+      error?: string;
+      dataset_id?: string;
+      dataset_title?: string;
+    }> | null
   >(null);
   const [error, setError] = useState("");
 
@@ -123,6 +131,16 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
               </strong>{" "}
               {r.layer_id ? `lay=${r.layer_id} — ` : ""}
               {r.url}
+              {/* A duplicate is a layer we ALREADY have — send the user to it
+                  instead of leaving them with a bare "duplicate" count. */}
+              {r.status === "duplicate" && r.dataset_id && (
+                <>
+                  {" — "}
+                  <Link to={`/versions/${r.dataset_id}`}>
+                    {r.dataset_title || t("lookup.open_versions")} ←
+                  </Link>
+                </>
+              )}
               {r.error && <span style={{ color: "#dc2626" }}> ({r.error})</span>}
             </li>
           ))}

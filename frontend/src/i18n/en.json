@@ -136,6 +136,25 @@
     "no_results": "No results found",
     "results_count": "{{count}} total results"
   },
+  "lookup": {
+    "title": "Direct link to a dataset",
+    "intro": "Paste a source URL — a GovMap layer, a gov.il collector, a data.gov.il dataset — and get one link that is always right: it opens the dataset's versions page if it is already tracked, and the collection request form if it isn't.",
+    "source_url_label": "Source URL",
+    "generated_label": "Your direct link (copy and share)",
+    "copy": "Copy",
+    "copied": "Copied ✓",
+    "open": "Open the link",
+    "explainer": "The link never needs updating: the day the source is onboarded, the very same link starts opening its versions page instead of the form.",
+    "resolving": "Looking this source up in the catalog…",
+    "already_tracked_title": "Already tracked here",
+    "already_tracked_hint": "{{count}} datasets are collected from this page — pick the one you want:",
+    "open_versions": "Open versions page",
+    "status_pending": "Requested — awaiting approval.",
+    "copy_link": "Copy direct link",
+    "copy_link_title": "A link that opens this page by its source URL — and the request form if the dataset is ever untracked",
+    "pattern_label": "The fixed pattern",
+    "pattern_hint": "Any tool can build the link by plain concatenation: the prefix plus the source URL as-is. A percent-encoded URL works too."
+  },
   "tracked": {
     "title": "Tracked Datasets",
     "empty": "No datasets being tracked. Search for a dataset and add it to tracking.",

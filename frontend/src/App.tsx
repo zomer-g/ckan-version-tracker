@@ -9,6 +9,7 @@ import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import LoginPage from "./pages/LoginPage";
 import HomePage from "./pages/HomePage";
+import LookupPage from "./pages/LookupPage";
 import VersionsPage from "./pages/VersionsPage";
 import AppendArchivePage from "./pages/AppendArchivePage";
 import AdminPage from "./pages/AdminPage";
@@ -78,6 +79,12 @@ export default function App() {
       <div id="main-content" ref={mainRef} tabIndex={-1} role="main" style={{ outline: "none", flex: 1 }}>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          {/* Shareable deep link → the dataset's versions page if tracked, the
+              collection request form if not. /direct/<url> is the shape tools
+              build by concatenation; in production the server redirects it
+              before the SPA loads, so this route is the dev/safety-net twin. */}
+          <Route path="/lookup" element={<LookupPage />} />
+          <Route path="/direct/*" element={<LookupPage />} />
           <Route
             path="/versions/:datasetId"
             element={<div className="container mt-3"><VersionsPage /></div>}

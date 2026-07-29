@@ -13,6 +13,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
+from app.services.dataset_lookup import find_datasets_for_url
 from app.services.odata_client import odata_client
 from app.services import source_registry
 from app.config import settings
@@ -550,12 +551,15 @@ async def track_dataset(
         ckan_id = f"{slug_prefix}-{unique_slug}"
         ckan_name = unique_slug
 
-        # Duplicate check by source_url
-        existing = await db.execute(
-            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
-        )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Dataset already tracked")
+        # Duplicate check by source-URL IDENTITY, not string equality, so a
+        # trailing slash / "www." / reordered params can't slip a second copy
+        # of an already-tracked page past it.
+        existing = await find_datasets_for_url(db, body.source_url, strict=True)
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset already tracked: {existing[0]['title']}",
+            )
 
         mirror_name = f"{mirror_prefix}-{unique_slug}"
 
@@ -1574,11 +1578,9 @@ async def submit_tracking_request(
         if not collector_name:
             raise HTTPException(status_code=400, detail=_invalid_scraper_url_detail())
 
-        # Duplicate check by source_url
-        existing = await db.execute(
-            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
-        )
-        if existing.scalar_one_or_none():
+        # Duplicate check by source-URL identity — see the admin path above.
+        existing = await find_datasets_for_url(db, body.source_url, strict=True)
+        if existing:
             raise HTTPException(status_code=400, detail="Already tracked or requested")
 
         unique_slug = scraper_url_slug(collector_name, body.source_url)
@@ -1791,11 +1793,19 @@ async def submit_tracking_request(
                 })
                 continue
 
-            dup = await db.execute(
-                select(TrackedDataset).where(TrackedDataset.source_url == url)
-            )
-            if dup.scalar_one_or_none():
-                results.append({"url": url, "status": "duplicate"})
+            # Identity match, NOT string equality: the map writes the current
+            # viewport into the URL, so a copied "?c=...&lay=11" is the same
+            # layer as the stored "?lay=11". Comparing strings is what created
+            # ~20 duplicate layers before migration 035.
+            dup = await find_datasets_for_url(db, url, strict=True)
+            if dup:
+                results.append({
+                    "url": url,
+                    "status": "duplicate",
+                    "layer_id": parsed.layer_id,
+                    "dataset_id": dup[0]["id"],
+                    "dataset_title": dup[0]["title"],
+                })
                 continue
 
             layer_id = parsed.layer_id
