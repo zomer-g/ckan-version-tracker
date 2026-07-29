@@ -539,18 +539,48 @@ def test_append_never_drops_or_renames_the_live_table(tmp_path, monkeypatch):
         assert "RENAME TO" not in sql, sql
 
 
-def test_append_stages_in_an_unlogged_temp_table(tmp_path, monkeypatch):
+def test_append_stages_in_an_unlogged_table_not_a_temp_one(tmp_path, monkeypatch):
     """The CSV still has to be streamed in full (R2 holds a whole snapshot per
-    version). Staging it in a TEMP table is what keeps that read out of the WAL —
-    only the delta is written durably."""
+    version). UNLOGGED keeps that read out of the WAL so only the delta is
+    written durably — and it must NOT be TEMP.
+
+    Measured in production on the 244MB הסדרים מותנים משטרה CSV: a temp table
+    lives in the session's LOCAL buffer pool, capped by temp_buffers (8MB by
+    default), and Postgres aborted the whole append with "no empty local buffer
+    available" (localbuf.c). An unlogged table uses shared_buffers and has no
+    such ceiling."""
     monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
     conn = _LoadConn()
     path = _csv(tmp_path, "a,b\n1,2\n")
     asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"], ["a", "b"], [0, 1]))
 
-    assert any("CREATE TEMP TABLE" in s and "ON COMMIT DROP" in s
-               for s in conn.executed)
-    assert conn.copied and conn.copied[0][1] == "pg_temp"
+    assert any("CREATE UNLOGGED TABLE" in s for s in conn.executed)
+    assert not any("TEMP" in s for s in conn.executed), \
+        "temp_buffers caps a temp table at a size these CSVs exceed"
+    assert conn.copied and conn.copied[0][1] == "idx"
+
+
+def test_append_always_drops_its_staging_table(tmp_path, monkeypatch):
+    """Staging is a permanent relation now, so nothing cleans it up implicitly —
+    a leftover would be re-COPYed into on the next run and double the delta."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+
+    class _Boom(_LoadConn):
+        async def execute(self, sql, *a):
+            self.executed.append(sql)
+            if "INSERT INTO" in sql:
+                raise RuntimeError("diff blew up")
+            return "OK"
+
+    conn = _Boom()
+    path = _csv(tmp_path, "a,b\n1,2\n")
+    try:
+        asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"],
+                                         ["a", "b"], [0, 1]))
+    except RuntimeError:
+        pass
+    drops = [s for s in conn.executed if "DROP TABLE" in s and "__stg" in s]
+    assert len(drops) == 2, "staging must be dropped before AND after the load"
 
 
 def test_append_hashes_in_the_live_order_not_the_csv_order(tmp_path, monkeypatch):

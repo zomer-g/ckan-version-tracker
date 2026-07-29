@@ -762,27 +762,37 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
     """Insert only the rows the table does not already hold.
 
     The CSV is a full snapshot, so the whole of it still has to be read — but it
-    lands in a TEMP table, which Postgres does not WAL-log, and is then diffed
-    away. Only the delta is written durably, which is what makes a refresh cost
-    the size of the CHANGE instead of the size of the table.
+    lands in an UNLOGGED staging table, which Postgres does not WAL-log, and is
+    then diffed away. Only the delta is written durably, which is what makes a
+    refresh cost the size of the CHANGE instead of the size of the table.
+
+    UNLOGGED and not TEMP, which is what the first production run taught us the
+    hard way: temp tables live in the session's LOCAL buffer pool, capped by
+    ``temp_buffers`` (8MB by default), and a 244MB one exhausts it —
+    ``no empty local buffer available`` out of Postgres' localbuf.c, with the
+    whole append rolled back. An unlogged table uses shared_buffers like any
+    other relation, so it has no such ceiling while still skipping the WAL.
 
     The diff is set-based and runs entirely in the database: no hash set is ever
     built in the dyno's memory, so this costs the same whether the table holds a
     thousand rows or ten million. Hashing happens in ``live_cols`` order on both
     sides — see _hash_expr."""
-    stg = "_idx_stg"
-    qstg = f'"pg_temp"."{stg}"'
+    staging = _staging_name(table)
     defs = ", ".join(f"{_qi(c)} text" for c in columns)
     src = ", ".join(_qi(c) for c in live_cols)
     rows = 0
-    async with conn.transaction():
-        # ON COMMIT DROP is the only cleanup needed, and it fires on rollback
-        # too — so a load that dies mid-flight cannot leave staging behind for
-        # the next one on this pooled connection to trip over.
-        await conn.execute(f"CREATE TEMP TABLE {_qi(stg)} ({defs}) ON COMMIT DROP")
+    # Same name the rebuild path stages under, on purpose: one stray-object shape
+    # to reason about, and either path's pre-emptive DROP cleans up after the
+    # other. The INSERT is a single statement and therefore atomic on its own —
+    # the delta lands whole or not at all — so no explicit transaction is needed
+    # around the load, and holding one open across a multi-minute COPY would only
+    # pin the target table for longer.
+    await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
+    await conn.execute(f"CREATE UNLOGGED TABLE {_qt(staging)} ({defs})")
+    try:
         for batch in _iter_batches(tmp, columns, keep):
             await conn.copy_records_to_table(
-                stg, schema_name="pg_temp", columns=columns, records=batch,
+                staging, schema_name=SCHEMA, columns=columns, records=batch,
             )
             rows += len(batch)
 
@@ -792,7 +802,7 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
         tag = await conn.execute(f"""
             WITH h AS (
                 SELECT {src}, {_hash_expr(live_cols, alias='s')} AS _idx_h
-                FROM {qstg} s
+                FROM {_qt(staging)} s
             )
             INSERT INTO {_qt(table)} ({src}, {_qi(HASH_COLUMN)})
             SELECT {src}, h._idx_h FROM h
@@ -801,6 +811,12 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
                 WHERE f.{_qi(HASH_COLUMN)} = h._idx_h
             )
         """)
+    finally:
+        try:
+            await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            logger.debug("idx: staging cleanup failed for %s", staging,
+                         exc_info=True)
     try:
         new_rows = int(str(tag).rsplit(" ", 1)[-1])
     except (ValueError, AttributeError):
