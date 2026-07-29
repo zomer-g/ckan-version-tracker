@@ -25,18 +25,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from slowapi import _rate_limit_exceeded_handler  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from sqlalchemy import select  # noqa: E402
-from sqlalchemy.dialects.postgresql import JSONB  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession, async_sessionmaker, create_async_engine,
 )
-from sqlalchemy.ext.compiler import compiles  # noqa: E402
-
-
-# SQLite has no JSONB. JSONB subclasses the generic JSON type, so only the DDL
-# keyword needs translating — bind/result handling is already portable.
-@compiles(JSONB, "sqlite")
-def _compile_jsonb_on_sqlite(type_, compiler, **kw):  # noqa: D401
-    return "JSON"
 
 
 from app.api import datasets as datasets_api  # noqa: E402

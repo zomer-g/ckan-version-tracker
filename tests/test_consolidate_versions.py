@@ -16,14 +16,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test")
 import uuid
 
 import pytest
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.ext.compiler import compiles
-
-
-@compiles(JSONB, "sqlite")
-def _jsonb_sqlite(type_, compiler, **kw):
-    return "JSON"
 
 
 import asyncio  # noqa: E402

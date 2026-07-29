@@ -44,8 +44,11 @@ class TrackedDataset(Base):
     # tracked table has, e.g. {"has_locality": true}. Dataset metadata (like
     # title/source), NOT rows and NOT tags. Computed + merged additively by
     # app/services/field_flags.py (migration 043).
+    # No "::jsonb" cast on the default: Postgres coerces the literal to jsonb
+    # for a jsonb column anyway, and the cast is a syntax error in every other
+    # dialect — it broke create_all() on the SQLite DBs the tests build.
     field_flags: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+        JSONB, nullable=False, server_default=text("'{}'"), default=dict
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
