@@ -394,6 +394,247 @@ def test_results_never_leak_the_storage_key(monkeypatch):
     assert all("r2_value" not in r for r in out["results"])
 
 
+# ── incremental append: a refresh costs the change, not the table ────────────
+#
+# The replace-every-sync loader rewrote the whole relation to record a handful of
+# new rows — הסדרים מותנים משטרה is a 244MB CSV that gains ~45 rows a week. These
+# pin the rule that decides rebuild-vs-append and the shape of each path.
+
+def _live(*cols):
+    return list(cols)
+
+
+def test_a_table_that_does_not_exist_yet_is_rebuilt():
+    assert not index_mirror._can_append(None, ["a", "b"])
+
+
+def test_a_table_without_the_hash_column_is_rebuilt():
+    """Mirrored before this mode existed: there is no identity to diff against.
+    The rebuild is free — it replaces a load that would have happened anyway."""
+    assert not index_mirror._can_append(_live("a", "b"), ["a", "b"])
+
+
+def test_a_matching_table_is_appended_to():
+    assert index_mirror._can_append(
+        _live("a", "b", index_mirror.HASH_COLUMN,
+              index_mirror.FIRST_SEEN_COLUMN), ["a", "b"])
+
+
+def test_a_changed_column_set_forces_a_rebuild():
+    """The hash is computed over the source columns, so a different SET is a
+    different identity and EVERY row would read as new — the table would double
+    instead of growing by the delta."""
+    live = _live("a", "b", index_mirror.HASH_COLUMN, index_mirror.FIRST_SEEN_COLUMN)
+    assert not index_mirror._can_append(live, ["a", "b", "c"])
+    assert not index_mirror._can_append(live, ["a"])
+
+
+def test_a_reordered_column_set_still_appends():
+    """Order changing is not a schema change: the loader hashes in the LIVE
+    table's order on both sides, so a source that shuffles its columns must not
+    trigger a full rebuild."""
+    live = _live("a", "b", index_mirror.HASH_COLUMN, index_mirror.FIRST_SEEN_COLUMN)
+    assert index_mirror._can_append(live, ["b", "a"])
+
+
+def test_the_geometry_column_is_not_mistaken_for_a_source_column():
+    """`geom` is derived, not source — counting it would make every GovMap layer
+    look like a schema change and rebuild forever."""
+    live = _live("a", "geometry_wkt", "geom", index_mirror.HASH_COLUMN,
+                 index_mirror.FIRST_SEEN_COLUMN)
+    assert index_mirror._source_columns(live) == ["a", "geometry_wkt"]
+    assert index_mirror._can_append(live, ["a", "geometry_wkt"])
+
+
+def test_incremental_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_incremental", False)
+    assert not index_mirror._can_append(
+        _live("a", index_mirror.HASH_COLUMN), ["a"])
+
+
+def test_the_hash_matches_the_public_append_tables():
+    """One definition of "the same row" for idx and public.append_*, not two
+    that drift apart."""
+    assert (index_mirror._hash_expr(["a", "b"])
+            == append_store._content_hash_expr(["a", "b"]))
+
+
+def test_the_hash_depends_on_column_order():
+    """Which is why every caller passes the LIVE order — hashing in CSV order
+    would make every existing row look new the first time a source reorders."""
+    assert index_mirror._hash_expr(["a", "b"]) != index_mirror._hash_expr(["b", "a"])
+
+
+def test_loader_columns_cannot_be_shadowed_by_the_source():
+    for c in ("_id", index_mirror.HASH_COLUMN, index_mirror.FIRST_SEEN_COLUMN):
+        assert c in index_mirror.SYSTEM_COLUMNS
+
+
+class _LoadConn:
+    """Enough of an asyncpg connection for the two load paths."""
+
+    def __init__(self, inserted=3, total=10):
+        self.executed: list[str] = []
+        self.copied: list[tuple] = []
+        self.inserted, self.total = inserted, total
+
+    async def execute(self, sql, *a):
+        self.executed.append(sql)
+        if "INSERT INTO" in sql:
+            return f"INSERT 0 {self.inserted}"
+        return "OK"
+
+    async def fetchval(self, sql, *a):
+        if "count(*)" in sql:
+            return self.total
+        return None
+
+    async def fetch(self, *a):
+        return []
+
+    async def copy_records_to_table(self, table, *, schema_name=None,
+                                    columns=None, records=None):
+        self.copied.append((table, schema_name, columns, list(records)))
+
+    def transaction(self):
+        class _Tx:
+            async def __aenter__(s): return s
+            async def __aexit__(s, *e): return False
+        return _Tx()
+
+
+def _csv(tmp_path, text):
+    p = tmp_path / "idx.csv"
+    p.write_text(text, encoding="utf-8")
+    return str(p)
+
+
+def test_append_writes_only_the_rows_the_table_lacks(tmp_path, monkeypatch):
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn(inserted=45, total=32752)
+    path = _csv(tmp_path, "a,b\n1,2\n3,4\n")
+
+    out = asyncio.run(index_mirror._append(
+        conn, path, "t", ["a", "b"], ["a", "b"], [0, 1]))
+
+    assert out["mode"] == "append"
+    assert out["new_rows"] == 45          # what was WRITTEN
+    assert out["rows"] == 32752           # what the table now holds
+    assert out["seen_rows"] == 2          # what the CSV carried
+    joined = " | ".join(conn.executed)
+    assert "NOT EXISTS" in joined, "the diff is what makes this incremental"
+    assert '"idx"."t"' in joined
+
+
+def test_append_never_drops_or_renames_the_live_table(tmp_path, monkeypatch):
+    """The regression that would silently undo the whole change: an append path
+    that still swaps a table in writes the full relation every time."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn()
+    path = _csv(tmp_path, "a,b\n1,2\n")
+    asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"], ["a", "b"], [0, 1]))
+
+    for sql in conn.executed:
+        assert not ("DROP TABLE" in sql and '"idx"."t"' in sql), sql
+        assert "RENAME TO" not in sql, sql
+
+
+def test_append_stages_in_an_unlogged_temp_table(tmp_path, monkeypatch):
+    """The CSV still has to be streamed in full (R2 holds a whole snapshot per
+    version). Staging it in a TEMP table is what keeps that read out of the WAL —
+    only the delta is written durably."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn()
+    path = _csv(tmp_path, "a,b\n1,2\n")
+    asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"], ["a", "b"], [0, 1]))
+
+    assert any("CREATE TEMP TABLE" in s and "ON COMMIT DROP" in s
+               for s in conn.executed)
+    assert conn.copied and conn.copied[0][1] == "pg_temp"
+
+
+def test_append_hashes_in_the_live_order_not_the_csv_order(tmp_path, monkeypatch):
+    """A source that swaps two columns must not orphan every existing row."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn()
+    path = _csv(tmp_path, "b,a\n2,1\n")
+    asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"], ["b", "a"], [0, 1]))
+
+    insert = [s for s in conn.executed if "INSERT INTO" in s][0]
+    assert index_mirror._hash_expr(["a", "b"], alias="s") in insert
+
+
+def test_append_skips_the_geometry_pass_when_nothing_was_inserted(tmp_path, monkeypatch):
+    """A poll that finds no new rows must cost nothing beyond the diff."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", True)
+    conn = _LoadConn(inserted=0)
+    path = _csv(tmp_path, "a,geometry_wkt\n1,POINT(34.7 32.0)\n")
+    out = asyncio.run(index_mirror._append(
+        conn, path, "t", ["a", "geometry_wkt"], ["a", "geometry_wkt"], [0, 1]))
+
+    assert out["new_rows"] == 0
+    assert not any("ANALYZE" in s for s in conn.executed)
+    assert not any("try_geom" in s for s in conn.executed)
+
+
+def test_rebuild_creates_the_identity_the_next_sync_diffs_against(tmp_path, monkeypatch):
+    """Without the hash column and its index, every later sync falls back to a
+    rebuild — the mode would never actually engage."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn()
+    path = _csv(tmp_path, "a,b\n1,2\n3,4\n")
+
+    out = asyncio.run(index_mirror._rebuild(conn, path, "t", ["a", "b"], [0, 1]))
+
+    assert out["mode"] == "rebuild" and out["rows"] == 2 and out["new_rows"] == 2
+    joined = " | ".join(conn.executed)
+    assert index_mirror.HASH_COLUMN in joined
+    assert index_mirror.FIRST_SEEN_COLUMN in joined
+    assert "CREATE INDEX" in joined and "RENAME TO" in joined
+
+
+def test_rebuild_index_is_not_unique(tmp_path, monkeypatch):
+    """A source CSV that legitimately repeats a row would fail a UNIQUE build,
+    and losing the whole table to that is worse than holding the duplicate."""
+    monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
+    conn = _LoadConn()
+    path = _csv(tmp_path, "a\n1\n1\n")
+    asyncio.run(index_mirror._rebuild(conn, path, "t", ["a"], [0]))
+
+    created = [s for s in conn.executed if "CREATE INDEX" in s or "CREATE UNIQUE" in s]
+    assert created and not any("UNIQUE" in s for s in created)
+
+
+def test_hash_index_name_stays_inside_the_identifier_budget():
+    long_table = "govmap_" + "א" * 40          # Hebrew: 2 bytes per char
+    name = index_mirror._hash_index_name(long_table)
+    assert len(name.encode("utf-8")) <= 63
+    assert name.endswith("_hash_ix")
+
+
+def test_a_staging_index_never_collides_with_the_live_table_s(monkeypatch):
+    """Index names share the relation namespace with TABLES. table_name() can
+    emit a full 63 bytes, and clipping alone made a long layer's staging index
+    resolve to the SAME name its live index already held — so every sync after
+    the first hit "relation already exists" and the layer silently lost its
+    geometry. Both indexes are built on staging now, so both need this."""
+    table = "govmap_" + "x" * 47 + "_ab12cd34"          # exactly 63 bytes
+    staging = index_mirror._staging_name(table)
+    assert len(table.encode()) == 63
+
+    for name_of in (index_mirror._geom_index_name, index_mirror._hash_index_name):
+        assert name_of(staging) != name_of(table), name_of.__name__
+        assert len(name_of(staging).encode("utf-8")) <= 63
+        assert len(name_of(table).encode("utf-8")) <= 63
+
+
+def test_short_table_names_keep_their_existing_index_names():
+    """The common case must not be renamed — these indexes already exist in
+    production under exactly these names."""
+    assert index_mirror._geom_index_name("govmap_9_abc") == "govmap_9_abc_geom_gix"
+    assert index_mirror._hash_index_name("govmap_9_abc") == "govmap_9_abc_hash_ix"
+
+
 # ── the /data console must reach the new schema ──────────────────────────────
 
 def test_console_search_path_includes_idx():
@@ -756,6 +997,80 @@ def test_retry_deferred_invalidates_the_cache(monkeypatch):
 
     assert asyncio.run(index_mirror.retry_deferred()) == 3
     assert index_mirror._loaded_versions_cache is None
+
+
+# ── staged retry: the backlog is worked off in tiers, not in one go ──────────
+#
+# 54 datasets are deferred, 9GB of CSV, the largest 3.5GB. Clearing all of them
+# on a 512MB dyno that also serves the site is the exact failure the size gate
+# was added to stop, so the filters below are what make a rollout possible.
+
+class _SqlConn:
+    def __init__(self, log):
+        self._log = log
+
+    async def fetch(self, *a):
+        return []
+
+    async def execute(self, sql, *args):
+        self._log.append((sql, args))
+        return "DELETE 2"
+
+
+class _SqlPool:
+    def __init__(self, log):
+        self._log = log
+
+    def acquire(self):
+        log = self._log
+
+        class _Acq:
+            async def __aenter__(self): return _SqlConn(log)
+            async def __aexit__(self, *a): return False
+        return _Acq()
+
+
+def _install_sql_pool(monkeypatch):
+    log: list = []
+    monkeypatch.setattr(append_store, "is_configured", lambda: True)
+    monkeypatch.setattr(index_mirror, "_loaded_versions_cache", None)
+
+    async def _pool():
+        return _SqlPool(log)
+
+    async def _noop(conn):
+        pass
+
+    monkeypatch.setattr(append_store, "get_pool", _pool)
+    monkeypatch.setattr(index_mirror, "_ensure_state_table", _noop)
+    return log
+
+
+def test_retry_deferred_can_be_limited_to_a_size_tier(monkeypatch):
+    log = _install_sql_pool(monkeypatch)
+    asyncio.run(index_mirror.retry_deferred(max_csv_mb=250))
+    sql, args = log[-1]
+    assert "csv_bytes <= $1" in sql
+    assert args == (250 * 1024 * 1024,)
+    # Unknown size is what the gate already treats as too big — a tiered rollout
+    # must not smuggle one in under the ceiling.
+    assert "csv_bytes IS NOT NULL" in sql
+
+
+def test_retry_deferred_can_be_limited_to_one_dataset(monkeypatch):
+    log = _install_sql_pool(monkeypatch)
+    asyncio.run(index_mirror.retry_deferred(dataset_id="d49264eb"))
+    sql, args = log[-1]
+    assert "dataset_id = $1" in sql and args == ("d49264eb",)
+
+
+def test_retry_deferred_without_filters_clears_everything(monkeypatch):
+    """The original behaviour has to survive: no filters, no extra predicates."""
+    log = _install_sql_pool(monkeypatch)
+    asyncio.run(index_mirror.retry_deferred())
+    sql, args = log[-1]
+    assert args == ()
+    assert "csv_bytes" not in sql and "dataset_id =" not in sql
 
 
 # ── pending(): refreshes outrank first-time loads ────────────────────────────

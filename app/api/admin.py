@@ -1587,16 +1587,20 @@ async def backfill_ckan_uuids(
 _IDX_BG: set = set()
 
 
-async def _run_index_sync_bg(limit: int, who: str) -> None:
+async def _run_index_sync_bg(limit: int, who: str, max_csv_mb: int | None = None,
+                             dataset_id=None) -> None:
     """Background runner for a backfill chunk. Opens its own DB session — a
     multi-GB layer can stream for far longer than an HTTP request may live."""
     from app.database import async_session
     from app.services import index_mirror
     async with async_session() as db:
         try:
-            s = await index_mirror.sync_due(db, limit=limit)
-            logger.info("Index mirror sync by %s: synced=%s failed=%s rows=%s",
-                        who, s.get("synced"), s.get("failed"), s.get("rows"))
+            s = await index_mirror.sync_due(db, limit=limit, dataset_id=dataset_id,
+                                            max_csv_mb=max_csv_mb)
+            logger.info("Index mirror sync by %s: synced=%s failed=%s rows=%s "
+                        "new=%s appended=%s rebuilt=%s",
+                        who, s.get("synced"), s.get("failed"), s.get("rows"),
+                        s.get("new_rows"), s.get("appended"), s.get("rebuilt"))
         except Exception:
             logger.exception("Index mirror background sync failed")
 
@@ -1622,6 +1626,7 @@ async def index_mirror_status(
         "deferred": len(deferred),
         "deferred_bytes": sum(d.get("csv_bytes") or 0 for d in deferred),
         "max_csv_mb": settings.index_mirror_max_csv_mb,
+        "incremental": settings.index_mirror_incremental,
         "pending_sample": [
             {"title": t["title"], "table": t["table"], "version": t["version_number"]}
             for t in todo[:20]
@@ -1634,16 +1639,26 @@ async def index_mirror_status(
 @limiter.limit("3/minute")
 async def index_mirror_retry_deferred(
     request: Request,
+    max_csv_mb: int | None = None,
+    dataset_id: str | None = None,
     user: User = Depends(get_admin_user),
 ):
-    """Re-queue everything that was deferred (oversized / repeatedly failed).
+    """Re-queue what was deferred (oversized / repeatedly failed).
 
-    Only meaningful once the sync has somewhere with more memory to run — on the
-    web dyno the size gate would simply defer them again."""
+    Clearing a deferral only re-OFFERS the dataset — the size gate still runs, so
+    a re-queue without a matching ``max_csv_mb`` on the following sync call just
+    defers it again (at the cost of one HEAD).
+
+    Both filters take a tier at a time instead of the whole 9GB backlog:
+    ``?max_csv_mb=250`` re-queues only what fits under 250MB, ``?dataset_id=…``
+    exactly one dataset."""
     from app.services import index_mirror
-    n = await index_mirror.retry_deferred()
-    logger.info("Index mirror retry-deferred by %s: cleared %d", user.email, n)
-    return {"cleared": n}
+    uid = parse_uuid(dataset_id, "dataset_id") if dataset_id else None
+    n = await index_mirror.retry_deferred(dataset_id=uid, max_csv_mb=max_csv_mb)
+    logger.info("Index mirror retry-deferred by %s: cleared %d (max_csv_mb=%s, "
+                "dataset_id=%s)", user.email, n, max_csv_mb, dataset_id)
+    return {"cleared": n, "max_csv_mb": max_csv_mb,
+            "dataset_id": str(uid) if uid else None}
 
 
 @router.post("/index-mirror/sync")
@@ -1653,6 +1668,7 @@ async def index_mirror_sync(
     background_tasks: BackgroundTasks,
     limit: int = 20,
     dataset_id: str | None = None,
+    max_csv_mb: int | None = None,
     wait: bool = False,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
@@ -1663,6 +1679,12 @@ async def index_mirror_sync(
     already at the current version, so this is safe to call repeatedly until
     ``pending`` reaches 0. ``wait=true`` runs inline (small chunks only);
     otherwise it returns immediately and streams in the background.
+
+    ``max_csv_mb`` overrides ``INDEX_MIRROR_MAX_CSV_MB`` for THIS run only, which
+    is what makes a tiered rollout possible without a deploy: pair it with
+    ``retry-deferred?max_csv_mb=…`` and a small ``limit`` to work off the backlog
+    a step at a time, watching the dyno's memory between steps. Nothing about it
+    is sticky — the scheduler keeps using the configured cap.
     """
     from app.services import append_store, index_mirror
     if not append_store.is_configured():
@@ -1670,12 +1692,13 @@ async def index_mirror_sync(
     limit = max(1, min(int(limit), 200))
     uid = parse_uuid(dataset_id, "dataset_id") if dataset_id else None
     if wait:
-        s = await index_mirror.sync_due(db, limit=limit, dataset_id=uid)
+        s = await index_mirror.sync_due(db, limit=limit, dataset_id=uid,
+                                        max_csv_mb=max_csv_mb)
         logger.info("Index mirror sync (inline) by %s: %s", user.email,
                     {k: v for k, v in s.items() if k != "results"})
         return s
     todo = await index_mirror.pending(db, limit=limit, dataset_id=uid)
-    background_tasks.add_task(_run_index_sync_bg, limit, user.email)
+    background_tasks.add_task(_run_index_sync_bg, limit, user.email, max_csv_mb, uid)
     return {"started": True, "queued": len(todo),
             "note": "running in the background — poll /index-mirror/status"}
 

@@ -219,8 +219,22 @@ class Settings(BaseSettings):
     # recorded as such and wait for a run with real memory headroom (the
     # over-worker service, a one-off job, or an out-of-Render backfill).
     index_mirror_enabled: bool = True
+    # Insert only the rows a table does not already hold (identified by
+    # `_row_hash`), instead of rebuilding the whole table on every sync. A
+    # refresh then costs the size of the CHANGE, not the size of the table:
+    # הסדרים מותנים משטרה is a 244MB CSV that gains ~45 rows a week, and the
+    # replace path rewrote ~170MB of relation + indexes + WAL to record them.
+    # First load of a table (and any load whose CSV columns changed) still
+    # rebuilds. False restores replace-on-every-sync. See index_mirror.
+    index_mirror_incremental: bool = True
     # Skip (and record as deferred) any index CSV larger than this. Checked with
     # a HEAD before a byte is downloaded.
+    #
+    # This gates the DOWNLOAD, which incremental mode does not make cheaper — R2
+    # holds a full snapshot per version, so a refresh still streams the whole CSV
+    # even when it writes 45 rows. Raise it in TIERS with the admin endpoints
+    # (retry-deferred?max_csv_mb=… then sync?max_csv_mb=…) rather than in one
+    # step: 54 datasets are deferred, 9GB of CSV, the largest 3.5GB.
     index_mirror_max_csv_mb: int = 25
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick

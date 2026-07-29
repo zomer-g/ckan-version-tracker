@@ -12,11 +12,32 @@ rollout itself (§10.4) is driven from the admin endpoint, not from here.
 
 Design decisions, all settled in the pilot (§10.1):
 
-* **Latest version only.** The table is REPLACED on each sync, never appended
-  to; version history stays in R2. That removes ``_row_hash`` and the ON CONFLICT
-  dedup entirely — which is also why this path exists instead of reusing
-  ``append_store.append_rows`` (measured 4.8–5.5x slower, plus a 1.04–1.12x
-  storage premium for the unique index).
+* **Incremental append.** A sync inserts only the rows the table does not
+  already hold, identified by ``_row_hash`` (md5 over the source columns, the
+  same expression ``public.append_*`` uses). The first load of a table — and any
+  load whose CSV column SET changed — still rebuilds it from scratch; every load
+  after that writes the delta and nothing else.
+
+  This replaced a full REPLACE-on-every-sync. The rewrite was the dominant cost
+  of a refresh and it grew with the table, not with the change: הסדרים מותנים
+  משטרה is a 244 MB CSV that gains ~45 rows a week, so replacing it rewrote
+  ~170 MB of relation (plus its indexes, plus the WAL and the Neon history
+  behind it) to record 45 rows. The CSV still has to be streamed in full — R2
+  holds a whole snapshot per version, so there is nothing smaller to read — but
+  it lands in an UNLOGGED temp table that is diffed away, and only the delta is
+  written durably.
+
+  What this trades: the table now accumulates every row ever seen instead of
+  mirroring the latest version. A row deleted at the source stays, with the
+  ``_first_seen`` timestamp of when it arrived. For a version tracker that is
+  the more useful shape — and it is what ``storage_mode='append_only'`` datasets
+  have always done in ``public.append_*``. Set ``INDEX_MIRROR_INCREMENTAL=false``
+  to go back to replace-on-every-sync.
+
+  One consequence worth knowing: identical rows are identical hashes, so a row
+  the source ADDS a second copy of is not recorded twice. Duplicates present in
+  the same CSV are preserved (the diff is against the live table, not within the
+  batch); a duplicate that arrives in a LATER version is not.
 * **Every column is ``text``.** These CSVs have no reliable declared types, and
   the console lets users cast. Postgres TOAST-compresses the big geometry cells
   well enough that a table typically lands SMALLER than its source CSV (0.70x
@@ -32,6 +53,7 @@ Design decisions, all settled in the pilot (§10.1):
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
 import os
 import re
@@ -46,6 +68,9 @@ from app.services.storage_client import is_storage_value, storage_client
 logger = logging.getLogger(__name__)
 
 SCHEMA = "idx"
+
+# Postgres clips identifiers at this many BYTES — and Hebrew is 2 per letter.
+_MAX_IDENT_BYTES = 63
 
 # The one resource every scraper/govmap version carries: its index CSV.
 CSV_RESOURCE_KEY = "נתוני הסורק"
@@ -66,6 +91,24 @@ ELIGIBLE_SOURCE_TYPES = ("scraper", "govmap")
 EXCLUDED_SCRAPER_KINDS = frozenset({"knesset"})
 
 STATE_TABLE = "_sync_state"
+
+# ── the loader's own columns ─────────────────────────────────────────────────
+# `_row_hash` is the row's identity (md5 over the source columns) and carries a
+# plain btree index; the incremental path anti-joins against it. NOT a UNIQUE
+# index on purpose: a source CSV that legitimately repeats a row would fail the
+# index build, and losing the whole table to that is a far worse outcome than
+# holding the duplicate.
+#
+# `_first_seen` is when the row first reached us — the only thing an accumulating
+# table cannot reconstruct afterwards, and what lets the console ask "what is new
+# since last month" without diffing R2 objects by hand.
+HASH_COLUMN = "_row_hash"
+FIRST_SEEN_COLUMN = "_first_seen"
+
+# Source columns the loader drops rather than lets collide with its own. `_id`
+# was already excluded (it is CKAN's, and meaningless once mirrored); the other
+# two would silently shadow the columns this module writes.
+SYSTEM_COLUMNS = frozenset({"_id", HASH_COLUMN, FIRST_SEEN_COLUMN})
 
 # Process-local cache of the checkpoint read — see loaded_versions(). None =
 # not read yet / invalidated. Every writer of STATE_TABLE that can change what
@@ -170,6 +213,86 @@ def _qt(table: str, schema: str = SCHEMA) -> str:
 def _staging_name(table: str) -> str:
     """Staging table name that stays inside the 63-byte identifier budget."""
     return append_store.clip_ident_bytes(table, 63 - len("__stg")) + "__stg"
+
+
+def _index_name(table: str, suffix: str) -> str:
+    """Index name for ``table``, inside the 63-byte identifier budget.
+
+    Clipping alone is not enough, and the reason is a real (soft) failure that
+    was already in the geometry path before the hash index joined it: index
+    names share the relation namespace with TABLES, and a 63-byte table name
+    clips to exactly the same prefix as its ``__stg`` staging twin —
+    ``<table[:54]>_geom_gix`` for both. So the second sync of such a layer tried
+    to CREATE an index on staging under the name the LIVE table's index already
+    held, and lost its geometry to "relation already exists" every time.
+
+    An md5 of the FULL name is what keeps the two apart once clipping starts
+    discarding the bytes that distinguish them. Short names — the common case —
+    are untouched, so existing indexes keep their names."""
+    plain = f"{table}_{suffix}"
+    if len(plain.encode("utf-8")) <= _MAX_IDENT_BYTES:
+        return plain
+    h = hashlib.md5(table.encode("utf-8")).hexdigest()[:8]
+    head = append_store.clip_ident_bytes(
+        table, _MAX_IDENT_BYTES - len(suffix) - len(h) - 2)
+    return f"{head}_{h}_{suffix}"
+
+
+def _hash_index_name(table: str) -> str:
+    """btree index name for ``_row_hash``, inside the 63-byte budget."""
+    return _index_name(table, "hash_ix")
+
+
+def _hash_expr(columns: list[str], alias: str = "") -> str:
+    """SQL expression for a row's identity, over ``columns`` in the given order.
+
+    Delegates to append_store so ``idx`` and ``public.append_*`` hash a row the
+    same way — one definition of "the same row", not two that drift.
+
+    ORDER IS PART OF THE IDENTITY. Every caller must pass the LIVE table's
+    column order, not the CSV's: the two can differ (a source that reorders its
+    columns without changing them), and hashing in CSV order would make every
+    existing row look new."""
+    return append_store._content_hash_expr(columns, alias)
+
+
+async def _live_columns(conn, table: str) -> list[str] | None:
+    """Column names of ``idx.<table>`` in ordinal order, or None if it does not
+    exist yet."""
+    rows = await conn.fetch(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+        SCHEMA, table)
+    return [r["column_name"] for r in rows] or None
+
+
+def _source_columns(live: list[str]) -> list[str]:
+    """The source columns of a live table — everything this module did not add
+    itself."""
+    return [c for c in live if c not in SYSTEM_COLUMNS and c != GEOM_COLUMN]
+
+
+def _can_append(live: list[str] | None, columns: list[str]) -> bool:
+    """Whether this table can take an incremental append of a CSV with
+    ``columns``, or has to be rebuilt.
+
+    Three ways to end up rebuilding, all of them correct:
+
+    * **no table yet** — nothing to append to;
+    * **no ``_row_hash``** — mirrored before this mode existed, so there is no
+      identity to diff against. The rebuild is free: it replaces a load that
+      would have happened anyway, and every sync after it is incremental;
+    * **the column SET changed** — the hash is computed over the source columns,
+      so a different set is a different identity and EVERY row would read as new.
+      Rebuilding is both cheaper and more honest than doubling the table.
+
+    Column ORDER changing is fine and does not force a rebuild: the loader hashes
+    in the live table's order on both sides."""
+    if not settings.index_mirror_incremental or not live:
+        return False
+    if HASH_COLUMN not in live:
+        return False
+    return set(_source_columns(live)) == set(columns)
 
 
 def _readonly_role() -> str | None:
@@ -346,8 +469,7 @@ def _iter_batches(path: str, columns: list[str], keep: list[int]):
 
 def _geom_index_name(table: str) -> str:
     """GiST index name for ``table``, inside the 63-byte identifier budget."""
-    suffix = "_geom_gix"
-    return append_store.clip_ident_bytes(table, 63 - len(suffix)) + suffix
+    return _index_name(table, "geom_gix")
 
 
 async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
@@ -431,6 +553,68 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
     return out
 
 
+async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
+    """Build ``geom`` for the rows an append just added, on the LIVE table.
+
+    The incremental path never swaps a table in, so there is no staging copy to
+    build the column on — and no need for one: only the new rows have a NULL
+    ``geom``, so converting exactly those is both the correct set and the cheap
+    one. A table that has no ``geom`` column at all (mirrored while the flag was
+    off) is handed to _add_geometry, which builds the column and its index under
+    the final names — the same thing backfill_geometry does.
+
+    Never raises, for the same reason _add_geometry doesn't: geometry is an
+    enhancement, and a layer whose WKT will not convert must still get its new
+    rows."""
+    if not settings.index_mirror_postgis_enabled:
+        return {"skipped": "postgis disabled"}
+    if WKT_COLUMN not in columns:
+        return {"skipped": "no geometry column"}
+
+    has_geom = await conn.fetchval(
+        "SELECT true FROM information_schema.columns "
+        "WHERE table_schema = $1 AND table_name = $2 AND column_name = $3",
+        SCHEMA, table, GEOM_COLUMN)
+    if not has_geom:
+        return await _add_geometry(conn, table, columns)
+
+    geom, wkt = _qi(GEOM_COLUMN), _qi(WKT_COLUMN)
+    pending_wkt = (f"{geom} IS NULL AND {wkt} IS NOT NULL AND {wkt} <> ''")
+    sample = await conn.fetchval(
+        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table)} "
+        f"WHERE {pending_wkt} LIMIT 1")
+    if sample is None:
+        return {"skipped": "no geometry rows"}
+    crs = classify_wkt_crs(sample)
+    if crs != "degrees":
+        return {"skipped": f"wkt looks like {crs}, expected degrees "
+                           f"(EPSG:{GEOM_SRID}) — re-scrape the dataset"}
+    try:
+        status = await conn.execute(
+            f"UPDATE {_qt(table)} SET {geom} = "
+            f"{_qt('try_geom')}({wkt}, {GEOM_SRID}) WHERE {pending_wkt}")
+        # Rows the parser refused keep a NULL geom, so they are re-offered by the
+        # WHERE above on every later sync. That is deliberate and bounded (they
+        # are a handful): a PostGIS upgrade then fixes them without a reload.
+        bad = await conn.fetchval(
+            f"SELECT count(*) FROM {_qt(table)} WHERE {pending_wkt}")
+    except Exception as exc:  # noqa: BLE001 — the append must survive this
+        logger.warning("idx mirror: geometry fill failed for %s", table,
+                       exc_info=True)
+        return {"error": f"{type(exc).__name__}: {exc}"[:500]}
+
+    try:
+        attempted = int(str(status).rsplit(" ", 1)[-1])
+    except (ValueError, AttributeError):
+        attempted = 0
+    bad = int(bad or 0)
+    out: dict = {"rows": attempted - bad}
+    if bad:
+        out["skipped"] = (f"{bad} of {attempted} rows had WKT PostGIS could not "
+                          f"parse (kept as NULL geom)")
+    return out
+
+
 async def geometry_backfill_candidates(conn, limit: int) -> list[str]:
     """Mirrored layers that carry ``geometry_wkt`` but not yet ``geom``.
 
@@ -507,15 +691,141 @@ async def backfill_geometry(limit: int = 25) -> dict:
             "results": done, "failures": failed, "skips": skipped}
 
 
+async def _rebuild(conn, tmp: str, table: str, columns: list[str],
+                   keep: list[int]) -> dict:
+    """Build the table from scratch and swap it in atomically.
+
+    The path for a first load, for a table that predates ``_row_hash``, and for
+    a CSV whose column set changed. Rows land in a staging table; one transaction
+    drops the old table and renames staging into place, so readers see either the
+    previous version or the new one, never a partial load."""
+    staging = _staging_name(table)
+    defs = ", ".join(f"{_qi(c)} text" for c in columns)
+    await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
+    await conn.execute(
+        f"CREATE TABLE {_qt(staging)} ({defs}, "
+        f"{_qi(HASH_COLUMN)} text, "
+        f"{_qi(FIRST_SEEN_COLUMN)} timestamptz NOT NULL DEFAULT now())")
+
+    rows = 0
+    try:
+        for batch in _iter_batches(tmp, columns, keep):
+            await conn.copy_records_to_table(
+                staging, schema_name=SCHEMA, columns=columns, records=batch,
+            )
+            rows += len(batch)
+
+        # One pass to stamp the identity every later sync diffs against. Paid
+        # once per table, not once per version — which is the whole point.
+        await conn.execute(
+            f"UPDATE {_qt(staging)} SET {_qi(HASH_COLUMN)} = {_hash_expr(columns)}")
+        await conn.execute(
+            f"CREATE INDEX {_qi(_hash_index_name(staging))} "
+            f"ON {_qt(staging)} ({_qi(HASH_COLUMN)})")
+
+        geom = await _add_geometry(conn, staging, columns)
+
+        # Atomic cutover: readers see the old table or the new one.
+        async with conn.transaction():
+            await conn.execute(f"DROP TABLE IF EXISTS {_qt(table)}")
+            await conn.execute(
+                f"ALTER TABLE {_qt(staging)} RENAME TO {_qi(table)}")
+            # Only now are the names free: an index shares the relation
+            # namespace with tables, so the previous version's indexes had to
+            # be dropped (with their table, a line above) before these can
+            # take the final names.
+            await conn.execute(
+                f"ALTER INDEX {_qt(_hash_index_name(staging))} "
+                f"RENAME TO {_qi(_hash_index_name(table))}")
+            if geom.get("rows") is not None:
+                await conn.execute(
+                    f"ALTER INDEX {_qt(_geom_index_name(staging))} "
+                    f"RENAME TO {_qi(_geom_index_name(table))}")
+    except BaseException:
+        # Never leave a half-filled staging table behind to confuse the next
+        # run or the catalog.
+        try:
+            await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            logger.debug("idx: staging cleanup failed for %s", staging,
+                         exc_info=True)
+        raise
+
+    # Planner stats for the fresh table (cheap, and the /data console's row
+    # estimates read reltuples).
+    await conn.execute(f"ANALYZE {_qt(table)}")
+    return {"rows": rows, "new_rows": rows, "mode": "rebuild", "geom": geom}
+
+
+async def _append(conn, tmp: str, table: str, live_cols: list[str],
+                  columns: list[str], keep: list[int]) -> dict:
+    """Insert only the rows the table does not already hold.
+
+    The CSV is a full snapshot, so the whole of it still has to be read — but it
+    lands in a TEMP table, which Postgres does not WAL-log, and is then diffed
+    away. Only the delta is written durably, which is what makes a refresh cost
+    the size of the CHANGE instead of the size of the table.
+
+    The diff is set-based and runs entirely in the database: no hash set is ever
+    built in the dyno's memory, so this costs the same whether the table holds a
+    thousand rows or ten million. Hashing happens in ``live_cols`` order on both
+    sides — see _hash_expr."""
+    stg = "_idx_stg"
+    qstg = f'"pg_temp"."{stg}"'
+    defs = ", ".join(f"{_qi(c)} text" for c in columns)
+    src = ", ".join(_qi(c) for c in live_cols)
+    rows = 0
+    async with conn.transaction():
+        # ON COMMIT DROP is the only cleanup needed, and it fires on rollback
+        # too — so a load that dies mid-flight cannot leave staging behind for
+        # the next one on this pooled connection to trip over.
+        await conn.execute(f"CREATE TEMP TABLE {_qi(stg)} ({defs}) ON COMMIT DROP")
+        for batch in _iter_batches(tmp, columns, keep):
+            await conn.copy_records_to_table(
+                stg, schema_name="pg_temp", columns=columns, records=batch,
+            )
+            rows += len(batch)
+
+        # The CTE's hash column is prefixed because a source column really can
+        # be called anything — an index CSV with an `_h` column would otherwise
+        # make this ambiguous.
+        tag = await conn.execute(f"""
+            WITH h AS (
+                SELECT {src}, {_hash_expr(live_cols, alias='s')} AS _idx_h
+                FROM {qstg} s
+            )
+            INSERT INTO {_qt(table)} ({src}, {_qi(HASH_COLUMN)})
+            SELECT {src}, h._idx_h FROM h
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {_qt(table)} f
+                WHERE f.{_qi(HASH_COLUMN)} = h._idx_h
+            )
+        """)
+    try:
+        new_rows = int(str(tag).rsplit(" ", 1)[-1])
+    except (ValueError, AttributeError):
+        new_rows = 0
+
+    geom: dict = {"skipped": "no new rows"}
+    if new_rows:
+        geom = await _fill_geometry(conn, table, live_cols)
+        await conn.execute(f"ANALYZE {_qt(table)}")
+    total = await conn.fetchval(f"SELECT count(*) FROM {_qt(table)}")
+    return {"rows": int(total or 0), "new_rows": new_rows, "seen_rows": rows,
+            "mode": "append", "geom": geom}
+
+
 async def load_index_csv(r2_value: str, table: str) -> dict:
-    """Load one index CSV from R2 into ``idx.<table>``, replacing it atomically.
+    """Load one index CSV from R2 into ``idx.<table>``.
 
     ``r2_value`` is the ``r2:``-marked value straight out of
     ``version_index.resource_mappings["נתוני הסורק"]``.
 
-    Returns ``{"table", "rows", "columns"}``. Raises on failure — the caller owns
-    the retry/checkpoint policy (stage 1); a failure here leaves the PREVIOUS
-    table untouched, because nothing is swapped until the load has finished.
+    Appends the delta when the table can take one, rebuilds it otherwise (see
+    _can_append). Returns ``{"table", "rows", "new_rows", "mode", "columns"}``.
+    Raises on failure — the caller owns the retry/checkpoint policy (stage 1); a
+    failure leaves the PREVIOUS table untouched, because the rebuild swaps only
+    once the load has finished and the append runs in one transaction.
     """
     if not append_store.is_configured():
         raise RuntimeError("append DB is not configured (APPEND_DATABASE_URL missing)")
@@ -536,61 +846,29 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
         # Hebrew letter is 2 of them, so distinct long headers sharing a prefix
         # would otherwise collapse onto each other.
         safe = append_store.safe_column_names(header)
-        keep = [i for i, c in enumerate(safe) if c and c != "_id"]
+        keep = [i for i, c in enumerate(safe) if c and c not in SYSTEM_COLUMNS]
         columns = [safe[i] for i in keep]
         if not columns:
             raise ValueError("index CSV has no usable columns")
 
-        staging = _staging_name(table)
-        defs = ", ".join(f"{_qi(c)} text" for c in columns)
         pool = await append_store.get_pool()
         async with pool.acquire() as conn:
             await ensure_schema(conn)
-            await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
-            await conn.execute(f"CREATE TABLE {_qt(staging)} ({defs})")
+            live = await _live_columns(conn, table)
+            if _can_append(live, columns):
+                res = await _append(conn, tmp, table, _source_columns(live),
+                                    columns, keep)
+            else:
+                res = await _rebuild(conn, tmp, table, columns, keep)
 
-            rows = 0
-            try:
-                for batch in _iter_batches(tmp, columns, keep):
-                    await conn.copy_records_to_table(
-                        staging, schema_name=SCHEMA, columns=columns, records=batch,
-                    )
-                    rows += len(batch)
-
-                geom = await _add_geometry(conn, staging, columns)
-
-                # Atomic cutover: readers see the old table or the new one.
-                async with conn.transaction():
-                    await conn.execute(f"DROP TABLE IF EXISTS {_qt(table)}")
-                    await conn.execute(
-                        f"ALTER TABLE {_qt(staging)} RENAME TO {_qi(table)}")
-                    if geom.get("rows") is not None:
-                        # Only now is the name free: an index shares the relation
-                        # namespace with tables, so the previous version's index
-                        # had to be dropped (with its table, a line above) before
-                        # this one can take the final name.
-                        await conn.execute(
-                            f"ALTER INDEX {_qt(_geom_index_name(staging))} "
-                            f"RENAME TO {_qi(_geom_index_name(table))}")
-            except BaseException:
-                # Never leave a half-filled staging table behind to confuse the
-                # next run or the catalog.
-                try:
-                    await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
-                except Exception:  # noqa: BLE001 — cleanup is best-effort
-                    logger.debug("idx: staging cleanup failed for %s", staging,
-                                 exc_info=True)
-                raise
-
-            # Planner stats for the fresh table (cheap, and the /data console's
-            # row estimates read reltuples).
-            await conn.execute(f"ANALYZE {_qt(table)}")
-
-        logger.info("idx mirror: loaded %s — %d rows, %d columns%s",
-                    table, rows, len(columns),
+        geom = res["geom"]
+        logger.info("idx mirror: %s %s — %d new of %d rows, %d columns%s",
+                    res["mode"], table, res["new_rows"], res["rows"],
+                    len(columns),
                     f", geom {geom['rows']}" if geom.get("rows") is not None
                     else f" (geom: {geom.get('skipped') or geom.get('error')})")
-        return {"table": table, "rows": rows, "columns": len(columns),
+        return {"table": table, "rows": res["rows"], "new_rows": res["new_rows"],
+                "mode": res["mode"], "columns": len(columns),
                 "geom_rows": geom.get("rows"),
                 "geom_error": geom.get("error"),
                 "geom_skipped": geom.get("skipped")}
@@ -861,6 +1139,7 @@ async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
                       postgis_rows=res.get("geom_rows"),
                       postgis_note=res.get("geom_error") or res.get("geom_skipped"))
         return {**item, "rows": res["rows"], "columns": res["columns"], "ok": True,
+                "new_rows": res.get("new_rows"), "mode": res.get("mode"),
                 "geom_rows": res.get("geom_rows"),
                 "geom_note": res.get("geom_error") or res.get("geom_skipped")}
     except Exception as e:  # noqa: BLE001 — one bad dataset must not stop a run
@@ -895,12 +1174,17 @@ async def sync_due(db, *, limit: int = 20, dataset_id=None,
         # New/replaced tables ⇒ the /data catalog must not serve a stale list.
         from app.services.data_catalog import invalidate_catalog_cache
         invalidate_catalog_cache()
-    logger.info("idx sync: %d ok, %d deferred, %d failed, %d rows",
+    logger.info("idx sync: %d ok, %d deferred, %d failed, %d rows (%d new)",
                 len(ok), len(deferred), len(bad),
-                sum(r.get("rows") or 0 for r in ok))
+                sum(r.get("rows") or 0 for r in ok),
+                sum(r.get("new_rows") or 0 for r in ok))
     return {
         "pending": len(todo), "synced": len(ok), "deferred": len(deferred),
         "failed": len(bad), "rows": sum(r.get("rows") or 0 for r in ok),
+        # What this run actually WROTE, as opposed to what the tables now hold.
+        "new_rows": sum(r.get("new_rows") or 0 for r in ok),
+        "appended": sum(1 for r in ok if r.get("mode") == "append"),
+        "rebuilt": sum(1 for r in ok if r.get("mode") == "rebuild"),
         "results": [{k: (str(v) if k == "dataset_id" else v)
                      for k, v in r.items() if k != "r2_value"} for r in results],
     }
@@ -998,18 +1282,36 @@ async def purge_ineligible(db, *, apply: bool = False) -> dict:
             "tables": [t for _, t in victims[:50]]}
 
 
-async def retry_deferred() -> int:
+async def retry_deferred(*, dataset_id=None, max_csv_mb: int | None = None) -> int:
     """Clear the deferred marks so the next run re-offers them. Use after moving
-    the backfill somewhere with more memory (or raising the cap)."""
+    the backfill somewhere with more memory (or raising the cap).
+
+    Both filters exist so the 9 GB of deferred CSVs can be worked off in TIERS
+    rather than all at once. Clearing everything re-queues 54 datasets whose
+    largest is 3.5 GB, on a 512 MB dyno that also serves the site — the failure
+    mode the size gate was introduced to stop. ``max_csv_mb`` re-queues only what
+    fits under a chosen ceiling (raise it a step at a time, watching memory), and
+    ``dataset_id`` re-queues exactly one.
+
+    A row with no recorded ``csv_bytes`` is left alone by ``max_csv_mb``: unknown
+    size is what the gate already treats as too big, and a tiered rollout must
+    not smuggle one in."""
     global _loaded_versions_cache
     if not append_store.is_configured():
         return 0
+    where = [f"(deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS})"]
+    params: list = []
+    if dataset_id is not None:
+        params.append(dataset_id)
+        where.append(f"dataset_id = ${len(params)}")
+    if max_csv_mb:
+        params.append(int(max_csv_mb) * 1024 * 1024)
+        where.append(f"csv_bytes IS NOT NULL AND csv_bytes <= ${len(params)}")
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await _ensure_state_table(conn)
         res = await conn.execute(
-            f"DELETE FROM {_qt(STATE_TABLE)} "
-            f"WHERE deferred IS NOT NULL OR attempts >= {MAX_ATTEMPTS}")
+            f"DELETE FROM {_qt(STATE_TABLE)} WHERE {' AND '.join(where)}", *params)
     n = int(str(res).rsplit(" ", 1)[-1] or 0)
     # "Re-offer them" is read through loaded_versions — a stale cache would
     # make this admin action look like it did nothing until the next deploy.
