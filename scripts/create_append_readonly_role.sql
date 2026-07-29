@@ -138,6 +138,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public  GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA knesset GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA idx     GRANT SELECT ON TABLES TO :"ro_role";
 ALTER DEFAULT PRIVILEGES IN SCHEMA odata   GRANT SELECT ON TABLES TO :"ro_role";
+-- ⚠ ocal: ALTER DEFAULT PRIVILEGES only covers tables created by the role that
+--   RUNS it, and ocal's tables are created by `ocal_app`, not by the role that
+--   runs this script. So this line covers nothing on its own — the equivalent
+--   must also be run AS ocal_app:
+--       ALTER DEFAULT PRIVILEGES IN SCHEMA ocal GRANT SELECT ON TABLES TO <ro_role>;
+--   (that is how prod got `{over_readonly=r/ocal_app}`; verify with pg_default_acl).
 ALTER DEFAULT PRIVILEGES IN SCHEMA ocal    GRANT SELECT ON TABLES TO :"ro_role";
 
 -- 6) Belt-and-braces: make sure no stray write privileges linger on existing

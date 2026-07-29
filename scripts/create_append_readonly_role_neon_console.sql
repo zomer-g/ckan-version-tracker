@@ -111,6 +111,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public  GRANT SELECT ON TABLES TO over_readon
 ALTER DEFAULT PRIVILEGES IN SCHEMA knesset GRANT SELECT ON TABLES TO over_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA idx     GRANT SELECT ON TABLES TO over_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA odata   GRANT SELECT ON TABLES TO over_readonly;
+-- ⚠ ocal: ALTER DEFAULT PRIVILEGES only covers tables created by the role that
+--   RUNS it, and ocal's tables are created by `ocal_app`. Re-run this one line
+--   while connected AS ocal_app, or future ocal tables lose SELECT.
 ALTER DEFAULT PRIVILEGES IN SCHEMA ocal    GRANT SELECT ON TABLES TO over_readonly;
 
 -- 6) Belt-and-braces: strip any stray write privileges left by an earlier
