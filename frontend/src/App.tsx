@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from "react-router-dom";
+import { Routes, Route, useLocation, useNavigationType } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, lazy, Suspense } from "react";
 import { sources } from "./api/client";
@@ -65,10 +65,26 @@ export default function App() {
     };
   }, [i18n.language]);
 
-  // Focus management on route change
+  // Focus + scroll management on route change.
+  //
+  // React Router does not reset scroll on navigation, so following a link from
+  // halfway down a long page landed on the NEXT page still scrolled — header
+  // above the viewport, content starting mid-way. It only looked right when the
+  // destination happened to be short (the browser clamps the offset) or was
+  // still loading its data, which is why it struck intermittently.
+  //
+  // Two exceptions:
+  //   · POP (back/forward) — leave it alone; the browser restores the previous
+  //     position, which is exactly what going back is for.
+  //   · A hash (/x#section) — the caller named a target, don't override it.
+  // preventScroll stops the a11y focus from re-introducing the same jump:
+  // #main-content sits below the navbar, so focusing it can pull the header
+  // back out of view on pages where it doesn't span the viewport.
+  const navigationType = useNavigationType();
   useEffect(() => {
-    mainRef.current?.focus();
-  }, [location.pathname]);
+    mainRef.current?.focus({ preventScroll: true });
+    if (navigationType !== "POP" && !location.hash) window.scrollTo(0, 0);
+  }, [location.pathname, location.hash, navigationType]);
 
   return (
     <AuthProvider>
