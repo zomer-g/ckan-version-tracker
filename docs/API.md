@@ -193,6 +193,20 @@ what changed and where to download the snapshot data on odata.org.il.
   - `"r2"` — independent object store; `download_url` is the object's public
     URL and the two `odata_*` fields are `null`. (Newer versions land in R2;
     older ones remain on ODATA. Both are served transparently.)
+- `name` is either the source's own resource name, or one of the
+  underscore keys for files OVER adds alongside the data:
+
+  | `name` | `format` | what it is |
+  |---|---|---|
+  | `_geojson` | `GeoJSON` | the layer's features, WGS84 (gzipped) |
+  | `_gpkg` | `GPKG` | GeoPackage — heavy layers publish this instead of CSV+GeoJSON |
+  | `_parquet` | `GeoParquet` | the same features as a columnar analytics file |
+  | `_symbology` | `ZIP` | the layer's OGC SLD symbology + its field dictionary (machine name → Hebrew alias) |
+  | `_zip`, `_zip_parts` | `ZIP` | files the source published as attachments |
+
+  When one of these holds several files the name carries a 0-based index
+  (`_zip_parts_0`, `_zip_parts_1`, …); `_geojson` alone keeps its bare name
+  in the single-file case, as it always has.
 
 `404` if the dataset UUID does not exist. An empty array means the
 dataset has been registered but no versions have been detected yet.

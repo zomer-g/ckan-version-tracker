@@ -88,9 +88,10 @@ class VersionResource(BaseModel):
     # resource id / resource page).
     odata_resource_id: str | None = None
     odata_resource_url: str | None = None
-    # Inferred resource format ("GeoJSON" for entries built from the
-    # _geojson list mapping; None otherwise). Lets the frontend route
-    # govmap layers to the in-page map without HEADing the URL.
+    # Declared resource format, from the mapping key an entry was built from
+    # ("GeoJSON", "GPKG", "GeoParquet", "ZIP"); None for source-named resources,
+    # whose format the source itself declares in change_summary. Lets the
+    # frontend route govmap layers to the in-page map without HEADing the URL.
     format: str | None = None
 
 
@@ -224,6 +225,20 @@ def _dataset_summary(
     )
 
 
+# Format stamped on each element of a list-valued mapping key. Declared rather
+# than sniffed: nothing here is derivable from an R2 key or an ODATA UUID, and a
+# consumer that has to HEAD every URL to learn a file's type is not being served
+# an API. Unknown keys simply carry no format.
+_KEY_FORMATS = {
+    "_geojson": "GeoJSON",
+    "_gpkg": "GPKG",
+    "_parquet": "GeoParquet",
+    "_symbology": "ZIP",   # SLD symbology + field dictionary
+    "_zip_parts": "ZIP",
+    "_zip": "ZIP",
+}
+
+
 def _extract_version_resources(
     ds: TrackedDataset, mappings: dict | None
 ) -> list[VersionResource]:
@@ -232,14 +247,19 @@ def _extract_version_resources(
     `resource_mappings` mixes three kinds of entry:
       - named resources (key is the source resource name, value is the
         odata resource_id string),
-      - bookkeeping keys (``_hashes``, ``_resource_ids``,
-        ``_zip_parts``) — skipped,
-      - the ``_geojson`` key which stores a *list* of odata resource
-        ids for GeoJSON layers uploaded by the govmap pipeline (see
-        ``app/api/worker.py``'s push-version handler). We expose each
-        of those as its own VersionResource so the frontend can fetch
-        them; ``format`` is stamped "GeoJSON" so the map component can
-        find them without probing every download URL.
+      - bookkeeping keys (``_hashes``, ``_resource_ids``) — skipped,
+      - underscore keys holding a *list* of resource ids uploaded by the
+        govmap/attachment pipelines (``_geojson``, ``_gpkg``, ``_parquet``,
+        ``_symbology``, ``_zip_parts`` — see ``app/api/worker.py``'s
+        push-version handler). Each element becomes its own VersionResource
+        so an API consumer sees every file the version actually holds, with
+        ``format`` stamped from the key (which also lets the frontend route
+        GeoJSON to the in-page map without probing every download URL).
+
+    List-valued keys used to fall through the string-only check below, so
+    everything except ``_geojson`` — a layer's GeoPackage, its GeoParquet, its
+    symbology bundle, multipart attachment ZIPs — was archived, downloadable on
+    the site, and invisible to every API consumer.
     """
     if not mappings:
         return []
@@ -273,26 +293,27 @@ def _extract_version_resources(
         return isinstance(v, str) and (storage.is_storage_value(v) or len(v) >= 30)
 
     for key, value in mappings.items():
-        if key in ("_hashes", "_resource_ids", "_zip_parts", "_appendonly_seen"):
+        if key in ("_hashes", "_resource_ids", "_appendonly_seen",
+                   "_names", "_filedates", "_probes"):
             continue
-        # Govmap GeoJSON layers are list-valued; emit one entry per id.
-        if key == "_geojson" and isinstance(value, list):
+        # The aggregate keys are list-valued; emit one entry per id.
+        if isinstance(value, list):
             for idx, rid in enumerate(value):
                 if not _is_resource(rid) or rid in seen:
                     continue
                 seen.add(rid)
-                # When the list has one entry the canonical "_geojson"
-                # name is friendlier; on the rare multi-layer scrape
-                # we suffix with the index so each entry has a unique
-                # key the frontend can react-key on.
-                name = "_geojson" if len(value) == 1 else f"_geojson_{idx}"
-                out.append(_make(name, rid, fmt="GeoJSON"))
+                # When the list has one entry the canonical key name is
+                # friendlier; on a multi-layer scrape or a multipart ZIP we
+                # suffix with the index so each entry has a unique key the
+                # frontend can react-key on.
+                name = key if len(value) == 1 else f"{key}_{idx}"
+                out.append(_make(name, rid, fmt=_KEY_FORMATS.get(key)))
             continue
         if _is_resource(value):
             if value in seen:
                 continue
             seen.add(value)
-            out.append(_make(key, value))
+            out.append(_make(key, value, fmt=_KEY_FORMATS.get(key)))
     return out
 
 

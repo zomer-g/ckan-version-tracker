@@ -8,6 +8,7 @@ import httpx
 import json
 import logging
 import os as _os
+import re
 import tempfile as _tempfile
 import uuid
 from datetime import datetime, timezone
@@ -118,6 +119,12 @@ class PushVersionRequest(BaseModel):
     zip_resource_id: str | None = None
     # Preferred for large attachment sets: list of pre-uploaded ZIP part resource_ids
     zip_resource_ids: list[str] | None = None
+    # The GovMap layer's documentation bundle (OGC SLD symbology + the field
+    # dictionary that maps its machine names to Hebrew aliases). Its own key so
+    # it stops masquerading as "קבצים מצורפים": it documents the layer, it is
+    # not a payload the source published. Older workers have no such field and
+    # ship it through `zip_resource_ids` — `_split_doc_bundles` recovers those.
+    symbology_resource_ids: list[str] | None = None
     # GeoJSON resources already uploaded via /upload-geojson — referenced here
     # so push-version can link them into the version index without re-uploading.
     geojson_resource_ids: list[str] | None = None
@@ -655,6 +662,41 @@ async def _run_consolidate_bg(ds_id: uuid.UUID, dedup_key: str) -> None:
         logger.exception("Auto-consolidate failed for %s (admin endpoint remains available)", ds_id)
 
 
+# A GovMap documentation bundle is named "<layer>_symbology.zip" (SLD + icons +
+# field dictionary) or "<layer>_fields.zip" (dictionary only) — see govscraper
+# field_dictionary.documentation_zip. The Hebrew part of the name is stripped by
+# storage.build_key's _safe_filename, so the object key tail is what survives.
+_DOC_BUNDLE_RE = re.compile(r"(?:^|_)(?:symbology|fields)\.zip$", re.IGNORECASE)
+
+
+def _is_doc_bundle(value: str) -> bool:
+    """Is this pre-uploaded ZIP the layer's documentation bundle rather than
+    source attachments? Judged by filename, which only an R2 key carries — an
+    ODATA resource_id is an opaque UUID here, so those stay in the ZIP channel
+    (govmap versions are all R2-backed, so nothing real is missed)."""
+    if not isinstance(value, str) or not storage.is_storage_value(value):
+        return False
+    return bool(_DOC_BUNDLE_RE.search(storage.key_of(value).rsplit("/", 1)[-1]))
+
+
+def _split_doc_bundles(
+    zip_ids: list[str], declared: list[str] | None,
+) -> tuple[list[str], list[str]]:
+    """Partition the pre-uploaded ZIPs into (attachments, documentation).
+
+    Workers that know about `symbology_resource_ids` declare the bundle
+    outright; older ones (and the pinned worker at the time of writing) push it
+    through `zip_resource_ids`, where it lands in `_zip_parts` and is presented
+    to the reader as generic attachments. Recognizing it here means the fix
+    holds for both, and no worker deploy has to precede this one.
+    """
+    docs = list(declared or [])
+    keep: list[str] = []
+    for rid in zip_ids:
+        (docs if _is_doc_bundle(rid) else keep).append(rid)
+    return keep, docs
+
+
 @router.post("/push-version")
 @limiter.limit("30/minute")
 async def push_version(
@@ -1132,17 +1174,34 @@ async def push_version(
         logger.info("Linked %d pre-uploaded GeoParquet resource(s)",
                     len(body.parquet_resource_ids))
 
+    # A layer's documentation bundle travels on the same channel as attachments;
+    # give it its own mapping key so the UI and the API can name it for what it
+    # is, and so an attachment-less govmap version stops reporting attachments.
+    zip_ids, doc_ids = _split_doc_bundles(
+        list(body.zip_resource_ids or []), body.symbology_resource_ids,
+    )
+    zip_single = body.zip_resource_id
+    if zip_single and _is_doc_bundle(zip_single):
+        doc_ids.append(zip_single)
+        zip_single = None
+    if doc_ids:
+        for rid in doc_ids:
+            odata_resource_ids.append(rid)
+        resource_mappings["_symbology"] = doc_ids
+        logger.info("Linked %d documentation bundle(s) (symbology + fields)",
+                    len(doc_ids))
+
     # ZIP attachment handling: prefer pre-uploaded zip_resource_ids (list of
     # multipart parts), fall back to single zip_resource_id, then inline base64.
-    if body.zip_resource_ids:
-        for rid in body.zip_resource_ids:
+    if zip_ids:
+        for rid in zip_ids:
             odata_resource_ids.append(rid)
-        resource_mappings["_zip_parts"] = list(body.zip_resource_ids)
-        logger.info("Using %d pre-uploaded ZIP part(s)", len(body.zip_resource_ids))
+        resource_mappings["_zip_parts"] = list(zip_ids)
+        logger.info("Using %d pre-uploaded ZIP part(s)", len(zip_ids))
         # Worker uploads with version_number=1 hardcoded (it can't know
         # next_version yet). Now that we do, rewrite each resource's
         # 'v1' marker to match the version we're about to commit.
-        for rid in body.zip_resource_ids:
+        for rid in zip_ids:
             if storage.is_storage_value(rid):
                 continue  # R2 key — no ODATA resource to rename
             try:
@@ -1150,19 +1209,19 @@ async def push_version(
             except Exception as e:
                 logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
                                rid, next_version, e)
-    elif body.zip_resource_id:
+    elif zip_single:
         # Single ZIP was already uploaded via /api/worker/upload-zip
-        odata_resource_ids.append(body.zip_resource_id)
-        resource_mappings["_zip"] = body.zip_resource_id
-        logger.info("Using pre-uploaded ZIP resource %s", body.zip_resource_id)
-        if not storage.is_storage_value(body.zip_resource_id):
+        odata_resource_ids.append(zip_single)
+        resource_mappings["_zip"] = zip_single
+        logger.info("Using pre-uploaded ZIP resource %s", zip_single)
+        if not storage.is_storage_value(zip_single):
             try:
                 await odata_client.update_resource_version_number(
-                    body.zip_resource_id, next_version,
+                    zip_single, next_version,
                 )
             except Exception as e:
                 logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
-                               body.zip_resource_id, next_version, e)
+                               zip_single, next_version, e)
     elif body.zip_file and (ds.odata_dataset_id or _use_r2(ds)):
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)

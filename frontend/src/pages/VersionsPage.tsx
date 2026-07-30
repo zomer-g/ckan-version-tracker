@@ -89,6 +89,8 @@ function versionFiles(
             ? "שכבה גיאוגרפית (GPKG)"
             : key === "_parquet"
               ? "GeoParquet (WGS84)"
+              : key === "_symbology"
+                ? "סימבולוגיה ומילון שדות (ZIP)"
               : key === "_zip" || key === "_zip_parts"
             ? "קבצים מצורפים (ZIP)"
             : key === "metadata"
