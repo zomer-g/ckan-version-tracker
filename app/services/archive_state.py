@@ -186,9 +186,17 @@ def describe(
 
     Returns a dict shaped for ``ArchiveState`` (see app/api/datasets.py).
     """
-    file_store = actual_file_store(mappings)
-    rows = _has_rows(mappings, archives_neon)
-    is_stub = bool((mappings or {}).get(_STUB_KEY))
+    # A dataset with no versions has archived NOTHING, so every store reads
+    # "none" — including the NEON one. Without this guard the ``archives_neon``
+    # declaration leaks in and a never-polled dataset on a neon plan reports
+    # fidelity="none" alongside row_store="neon", i.e. "nothing is archived" and
+    # "the rows are in NEON" at once. Prod 2026-07-30 had one (אתרים לאומיים),
+    # which rendered "לא נשמרו נתונים" next to a NEON chip. The fallback exists to
+    # cover a scraper dual-write that archived rows without stamping a table key —
+    # that presupposes a version.
+    file_store = actual_file_store(mappings) if has_versions else "none"
+    rows = _has_rows(mappings, archives_neon) if has_versions else False
+    is_stub = bool((mappings or {}).get(_STUB_KEY)) if has_versions else False
 
     # Order matters. Rows first: a dual-write version carries BOTH a NEON table
     # and an R2 snapshot, and that is the fullest state there is. The stub check

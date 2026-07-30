@@ -70,6 +70,22 @@ def test_no_versions_is_none():
     assert archive_state.MISMATCH_NO_VERSION in st["mismatch"]
 
 
+def test_no_versions_reports_no_store_even_on_a_neon_plan():
+    """Caught on prod (אתרים לאומיים): a never-polled dataset whose PLAN includes
+    NEON reported fidelity="none" and row_store="neon" together — "nothing is
+    archived" and "the rows are in NEON" at once, which rendered
+    "לא נשמרו נתונים" next to a NEON chip.
+
+    The archives_neon fallback covers a scraper dual-write that wrote rows without
+    stamping a table key; that presupposes a version existing at all."""
+    st = _describe(None, has_versions=False, plan="r2+neon", archives_neon=True)
+    assert st["fidelity"] == archive_state.NONE
+    assert st["row_store"] == "none"
+    assert st["file_store"] == "none"
+    # The only finding worth making about it is that it has never been archived.
+    assert st["mismatch"] == [archive_state.MISMATCH_NO_VERSION]
+
+
 def test_files_only_when_mappings_hold_objects():
     st = _describe({"res-1": R2, "_hashes": {"res-1": "x"}})
     assert st["fidelity"] == archive_state.FILES
