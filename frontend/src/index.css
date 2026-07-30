@@ -375,8 +375,24 @@ label {
   100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
 }
 
+/* Indeterminate scrape-progress bar: a run whose total is unknown (the GovMap
+   spatial-analysis walk paginates to exhaustion, so there is no count to divide
+   by) gets a moving stripe rather than a fake fill level. */
+@keyframes queueIndeterminate {
+  from { background-position: 0 0; }
+  to   { background-position: 20px 0; }
+}
+
+.queue-indeterminate {
+  height: 100%;
+  animation: queueIndeterminate 1.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pending-dot { animation: none; }
+  /* Still a stripe, just not a moving one — it must stay visually distinct
+     from a real fill level. */
+  .queue-indeterminate { animation: none; }
 }
 
 .navbar-nav-desktop {

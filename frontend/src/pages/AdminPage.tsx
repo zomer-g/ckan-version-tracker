@@ -1033,8 +1033,23 @@ export default function AdminPage() {
                   🔄 בעבודה כרגע ({queue.running.length})
                 </div>
                 {queue.running.map((t) => {
-                  const ageMs = t.created_at ? Date.now() - new Date(t.created_at).getTime() : 0;
-                  const isStuck = ageMs > 30 * 60 * 1000;  // 30 minutes
+                  // Liveness is the HEARTBEAT, not the age. This used to flag
+                  // anything running over 30 minutes as "possibly stuck",
+                  // which painted every legitimately long scrape red — a
+                  // GovMap layer with ~527k features reports every few seconds
+                  // for seven hours and is perfectly healthy. The server
+                  // auto-fails a task after 10 min of silence, so 5 min without
+                  // a report is the honest early warning.
+                  const silentMs = t.updated_at ? Date.now() - new Date(t.updated_at).getTime() : 0;
+                  const isStuck = silentMs > 5 * 60 * 1000;
+                  // A worker that can't know the total (the GovMap
+                  // spatial-analysis walk paginates until a short page — there
+                  // is no count endpoint) sends total=0, which arrives here as
+                  // percentage 0. Printing "0%" next to a run that has already
+                  // written half a million features is simply false, so an
+                  // unmeasurable run says so and leans on the message line,
+                  // which carries the real feature count.
+                  const hasPercent = t.progress > 0;
                   return (
                     <div key={t.task_id} style={{
                       padding: "0.6rem 0.75rem",
@@ -1056,7 +1071,7 @@ export default function AdminPage() {
                               color: "#991b1b",
                               fontWeight: 600,
                             }}>
-                              ⚠ ייתכן שתקוע
+                              ⚠ אין דיווח {formatRelative(t.updated_at)}
                             </span>
                           )}
                         </div>
@@ -1078,7 +1093,10 @@ export default function AdminPage() {
                         </button>
                       </div>
                       <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
-                        שלב: <strong>{t.phase || "—"}</strong> · {t.progress}% · התחיל {formatRelative(t.created_at)}
+                        שלב: <strong>{t.phase || "—"}</strong>
+                        {" · "}{hasPercent ? `${t.progress}%` : "התקדמות ללא סה\"כ ידוע"}
+                        {" · "}התחיל {formatRelative(t.created_at)}
+                        {t.updated_at && <>{" · "}דיווח אחרון {formatRelative(t.updated_at)}</>}
                         {" · "}מכונה: <strong>{workerLabel(t) || "—"}</strong>
                       </div>
                       {t.message && (
@@ -1086,7 +1104,10 @@ export default function AdminPage() {
                           {t.message}
                         </div>
                       )}
-                      {/* Progress bar */}
+                      {/* Progress bar. With no known total there is no honest
+                          fill level, so the bar goes indeterminate (a moving
+                          stripe) instead of showing a 2% sliver that reads as
+                          "barely started". */}
                       <div style={{
                         marginTop: "0.4rem",
                         height: "6px",
@@ -1094,12 +1115,20 @@ export default function AdminPage() {
                         borderRadius: "3px",
                         overflow: "hidden",
                       }}>
-                        <div style={{
-                          width: `${Math.max(2, t.progress)}%`,
-                          height: "100%",
-                          background: isStuck ? "#dc2626" : "#16a34a",
-                          transition: "width 0.5s",
-                        }} />
+                        {hasPercent ? (
+                          <div style={{
+                            width: `${Math.max(2, t.progress)}%`,
+                            height: "100%",
+                            background: isStuck ? "#dc2626" : "#16a34a",
+                            transition: "width 0.5s",
+                          }} />
+                        ) : (
+                          <div className="queue-indeterminate" style={{
+                            background: `repeating-linear-gradient(90deg, ${
+                              isStuck ? "#dc2626" : "#16a34a"
+                            } 0 10px, transparent 10px 20px)`,
+                          }} />
+                        )}
                       </div>
                     </div>
                   );

@@ -722,6 +722,11 @@ async def list_scrape_tasks(
             "worker_ip": t.worker_ip,
             "worker_id": t.worker_id,
             "created_at": t.created_at.isoformat() if t.created_at else None,
+            # Last heartbeat (bumped by every progress report). This — not the
+            # task's AGE — is what says whether a run is alive: a GovMap layer
+            # with half a million features legitimately runs for hours while
+            # reporting every few seconds.
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
         }
         for t, ds in running_result.all()
     ]

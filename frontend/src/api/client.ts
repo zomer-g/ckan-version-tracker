@@ -1372,6 +1372,8 @@ export interface ScrapeQueueRunning {
   worker_ip: string | null;
   worker_id: string | null;
   created_at: string | null;
+  /** Last heartbeat. The liveness signal — task age is not one. */
+  updated_at: string | null;
 }
 
 export interface ScrapeQueuePending {
