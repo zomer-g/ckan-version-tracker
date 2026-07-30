@@ -847,6 +847,15 @@ function ArchiveExplanation(props: {
   ) {
     explainKey = "versions.archive_explain_ckan";
   }
+  // A metadata stub has no original files, so every per-source copy above is
+  // false for it — archive_explain_ckan promises "the dataset's original files
+  // from data.gov.il as they were on the scan date", which for רישוי מערך
+  // האוטובוסים is a 200-row excerpt of 688,256. The reality strip in the header
+  // now says so plainly, and this card was contradicting it two lines down.
+  const stub =
+    dataset.archive?.fidelity === "sample" ||
+    dataset.archive?.fidelity === "none";
+  if (stub) explainKey = "versions.archive_explain_sample";
   return (
     <section
       className="card"
@@ -899,7 +908,9 @@ function ArchiveExplanation(props: {
           color: "var(--text)",
         }}
       >
-        {t("versions.archive_section_intro")}
+        {t(stub
+          ? "versions.archive_section_intro_sample"
+          : "versions.archive_section_intro")}
       </p>
       <p
         style={{
