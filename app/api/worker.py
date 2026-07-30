@@ -246,6 +246,28 @@ async def sync_source_manifests(
 
     return {"upserted": upserted, "unchanged": unchanged, "rejected": rejected}
 
+def next_pending_task_q():
+    """The claim order: highest priority band first, oldest-first within a band.
+
+    Factored out of ``poll_for_task`` so the ordering can be tested directly
+    and so the admin queue panel can render the queue in the same order the
+    worker will actually drain it — a panel sorted differently from the claim
+    would show the wrong task as "next".
+
+    This ordering is what lets one queue carry both routine polls and a
+    whole-catalog GovMap backfill: hundreds of band-0 tasks can sit in the
+    queue without pushing back a single routine poll, because a band-0 task is
+    only ever claimed when nothing above it is pending.
+    """
+    return (
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(ScrapeTask.status == "pending")
+        .order_by(ScrapeTask.priority.desc(), ScrapeTask.created_at.asc())
+        .limit(1)
+    )
+
+
 @router.get("/poll")
 @limiter.limit("60/minute")
 async def poll_for_task(
@@ -426,11 +448,7 @@ async def poll_for_task(
     cancelled_locals = 0
     while True:
         result = await db.execute(
-            select(ScrapeTask, TrackedDataset)
-            .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
-            .where(ScrapeTask.status == "pending")
-            .order_by(ScrapeTask.created_at.asc())
-            .limit(1)
+            next_pending_task_q()
             # CRITICAL with multiple workers: the claim must be atomic.
             # Without a row lock, two workers polling in the same instant
             # both SELECT the same pending task, both flip it to 'running',

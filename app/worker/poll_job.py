@@ -55,12 +55,18 @@ _active_polls: set[str] = set()
 _POLL_SEMAPHORE = asyncio.Semaphore(max(1, settings.poll_max_concurrency))
 
 
-async def poll_dataset(dataset_id: str, force: bool = False) -> None:
+async def poll_dataset(
+    dataset_id: str, force: bool = False, priority: int | None = None
+) -> None:
     """Poll a single tracked dataset for changes (single-flight wrapper).
 
     ``force=True`` (a manual "retry" from the admin) bypasses the
     unchanged-metadata short-circuits so a genuinely stuck dataset actually
     re-runs the download/upload instead of no-opping.
+
+    ``priority`` sets the queue band of the scrape task this poll creates for
+    scraper/govmap datasets (None → routine). Only relevant on that path; a
+    CKAN dataset is snapshotted inline and never touches the queue.
     """
     if dataset_id in _active_polls:
         logger.info(
@@ -78,12 +84,12 @@ async def poll_dataset(dataset_id: str, force: bool = False) -> None:
             # still prevents this dataset overlapping itself; a manually-polled
             # dataset is the user's explicit choice, so its memory cost is
             # accepted.
-            await _poll_dataset(dataset_id, force=force)
+            await _poll_dataset(dataset_id, force=force, priority=priority)
         else:
             # Automatic poll: bound global concurrency BEFORE any heavy work so a
             # deploy-time stampede queues here instead of all spiking memory.
             async with _POLL_SEMAPHORE:
-                await _poll_dataset(dataset_id, force=force)
+                await _poll_dataset(dataset_id, force=force, priority=priority)
     finally:
         _active_polls.discard(dataset_id)
 
@@ -140,7 +146,9 @@ async def resume_interrupted_appends() -> None:
     await poll_dataset(dataset_id)
 
 
-async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
+async def _poll_dataset(
+    dataset_id: str, force: bool = False, priority: int | None = None
+) -> None:
     """Poll a single tracked dataset for changes."""
     logger.info("Polling dataset %s%s", dataset_id, " (forced)" if force else "")
 
@@ -169,7 +177,7 @@ async def _poll_dataset(dataset_id: str, force: bool = False) -> None:
             await _collect_datacollector_api(ds, db)
             return
         if ds.source_type in ("scraper", "govmap"):
-            await _create_scrape_task(ds, db)
+            await _create_scrape_task(ds, db, priority=priority)
             return
 
         if ds.status != "active":
@@ -852,9 +860,16 @@ async def _collect_datacollector_api(ds: TrackedDataset, db) -> None:
     )
 
 
-async def _create_scrape_task(ds: TrackedDataset, db) -> None:
-    """Create a scrape task for the worker to pick up."""
-    from app.models.scrape_task import ScrapeTask
+async def _create_scrape_task(
+    ds: TrackedDataset, db, priority: int | None = None
+) -> None:
+    """Create a scrape task for the worker to pick up.
+
+    ``priority`` selects the claim band (app/models/scrape_task.py); the
+    default is routine work. Bulk backfills pass PRIORITY_BACKFILL so they
+    queue behind everything the system does on its normal cadence.
+    """
+    from app.models.scrape_task import PRIORITY_ROUTINE, ScrapeTask
 
     # Check if there's already a pending/running task
     existing = await db.execute(
@@ -863,8 +878,24 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
             ScrapeTask.status.in_(["pending", "running"]),
         )
     )
-    if existing.scalar_one_or_none():
-        logger.info("Scrape task already exists for %s, skipping", ds.ckan_name)
+    prio = PRIORITY_ROUTINE if priority is None else priority
+    existing_task = existing.scalar_one_or_none()
+    if existing_task:
+        # At most one active task per dataset (uq_scrape_tasks_active_per_dataset),
+        # so we can't queue a second one at the higher band — PROMOTE the one
+        # that's there instead. Without this, a layer sitting in the band-0
+        # backfill queue would ignore a manual "דגום" until the whole backfill
+        # drained. Only ever raises the band; a routine poll must not demote a
+        # task a human is waiting on. Running tasks are already claimed, so the
+        # bump is a no-op for them (harmless).
+        if existing_task.status == "pending" and prio > (existing_task.priority or 0):
+            logger.info(
+                "Scrape task for %s already queued at priority %d — promoting to %d",
+                ds.ckan_name, existing_task.priority or 0, prio,
+            )
+            existing_task.priority = prio
+        else:
+            logger.info("Scrape task already exists for %s, skipping", ds.ckan_name)
         ds.last_polled_at = datetime.now(timezone.utc)
         await db.commit()
         return
@@ -872,6 +903,7 @@ async def _create_scrape_task(ds: TrackedDataset, db) -> None:
     task = ScrapeTask(
         tracked_dataset_id=ds.id,
         status="pending",
+        priority=prio,
         phase="queued",
         # `message` is String(500); some source URLs are far longer than that
         # (e.g. idf.il unit pages whose percent-encoded Hebrew+Arabic paths run

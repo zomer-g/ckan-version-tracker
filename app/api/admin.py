@@ -715,6 +715,7 @@ async def list_scrape_tasks(
             "task_id": str(t.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
+            "priority": t.priority,
             "phase": t.phase,
             "progress": t.progress,
             "message": t.message,
@@ -725,18 +726,23 @@ async def list_scrape_tasks(
         for t, ds in running_result.all()
     ]
 
-    # Pending tasks (FIFO)
+    # Pending tasks, in the order the worker will actually claim them:
+    # priority band first, oldest-first inside a band. Matching the claim query
+    # in app/api/worker.py matters — a panel that showed plain FIFO would say a
+    # backfill layer is "next" when a routine poll behind it is what really
+    # goes out next.
     pending_result = await db.execute(
         select(ScrapeTask, TrackedDataset)
         .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
         .where(ScrapeTask.status == "pending")
-        .order_by(ScrapeTask.created_at.asc())
+        .order_by(ScrapeTask.priority.desc(), ScrapeTask.created_at.asc())
     )
     pending = [
         {
             "task_id": str(t.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
+            "priority": t.priority,
             "worker_ip": t.worker_ip,
             "worker_id": t.worker_id,
             "created_at": t.created_at.isoformat() if t.created_at else None,

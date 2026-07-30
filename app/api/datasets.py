@@ -1507,11 +1507,17 @@ async def trigger_poll(
             detail="המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה",
         )
 
+    from app.models.scrape_task import PRIORITY_MANUAL
     from app.worker.poll_job import poll_dataset
 
     # Manual "retry" from the admin → force a real re-poll (bypass the
     # unchanged-metadata short-circuits) so a stuck dataset actually re-runs.
-    background_tasks.add_task(poll_dataset, str(ds.id), force=True)
+    # Top priority band: a human clicked and is watching, so this must not
+    # queue behind a bulk backfill (and PROMOTES the dataset's task if the
+    # backfill already queued one for it — see _create_scrape_task).
+    background_tasks.add_task(
+        poll_dataset, str(ds.id), force=True, priority=PRIORITY_MANUAL
+    )
     return {"message": "Poll triggered", "dataset_id": str(ds.id)}
 
 

@@ -1364,6 +1364,8 @@ export interface ScrapeQueueRunning {
   task_id: string;
   dataset_id: string;
   dataset_title: string;
+  /** Claim band — see PRIORITY_* in app/models/scrape_task.py. */
+  priority: number;
   phase: string | null;
   progress: number;
   message: string | null;
@@ -1376,6 +1378,8 @@ export interface ScrapeQueuePending {
   task_id: string;
   dataset_id: string;
   dataset_title: string;
+  /** Claim band. `pending` arrives already sorted by priority, then age. */
+  priority: number;
   worker_ip: string | null;
   worker_id: string | null;
   created_at: string | null;
@@ -1396,6 +1400,29 @@ export interface ScrapeQueueResponse {
   running: ScrapeQueueRunning[];
   pending: ScrapeQueuePending[];
   failed: ScrapeQueueFailed[];
+}
+
+/**
+ * GovMap coverage rollout, plus the engine-epoch backfill: the whole-catalog
+ * re-scrape triggered when the scraper starts capturing materially more per
+ * layer. `crossed` counts layers ATTEMPTED under the current engine, which is
+ * why `failed` is reported separately rather than netted out.
+ */
+export interface GovmapCoverageStatus {
+  total_layers: number;
+  ever_triggered: number;
+  not_yet_triggered: number;
+  datasets_created: number;
+  backfill:
+    | { active: false }
+    | {
+        active: true;
+        epoch: string;
+        crossed: number;
+        failed: number;
+        remaining: number;
+        in_flight: number;
+      };
 }
 
 export interface ScheduledJobRow {
@@ -1609,6 +1636,8 @@ export const admin = {
     request<McpUser>(`/admin/mcp-users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   mcpDisableUser: (id: string) => request<void>(`/admin/mcp-users/${id}`, { method: "DELETE" }),
   scrapeTasks: () => request<ScrapeQueueResponse>("/admin/scrape-tasks"),
+  govmapCoverageStatus: () =>
+    request<GovmapCoverageStatus>("/admin/govmap-coverage/status"),
   cancelScrapeTask: (taskId: string) =>
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {
       method: "DELETE",

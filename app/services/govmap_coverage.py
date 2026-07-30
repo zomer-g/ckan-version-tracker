@@ -38,6 +38,51 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
+def engine_epoch() -> datetime | None:
+    """Parse ``settings.govmap_engine_epoch`` into an aware UTC datetime.
+
+    A layer last scraped before this instant was captured by the previous,
+    field-poorer engine and needs a re-scrape regardless of how recent it is.
+    Empty / unparseable → None (feature off), never an exception: a typo in an
+    env var must not take the whole rollout tick down."""
+    raw = (settings.govmap_engine_epoch or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("GOVMAP_ENGINE_EPOCH is not a valid ISO timestamp: %r", raw)
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def trigger_priority(
+    last_triggered_at: datetime | None,
+    epoch: datetime | None,
+    refresh_cutoff: datetime,
+) -> int:
+    """Which queue band a due layer's scrape task belongs in.
+
+    Only the epoch backfill is de-prioritized, and only when the epoch is the
+    ONLY reason the layer is due:
+
+      * never scraped        → coverage band. It has no data at all; that's a
+                               gap in the catalog, not bulk catch-up.
+      * older than refresh   → coverage band. It would be due today anyway,
+                               epoch or not — the routine quarterly cycle.
+      * pre-epoch only       → backfill band. Its data is current; it's being
+                               re-scraped purely to pick up the new engine's
+                               extra fields, which can wait for an idle queue.
+    """
+    from app.models.scrape_task import PRIORITY_BACKFILL, PRIORITY_COVERAGE
+
+    if last_triggered_at is None or epoch is None:
+        return PRIORITY_COVERAGE
+    if last_triggered_at < refresh_cutoff:
+        return PRIORITY_COVERAGE
+    return PRIORITY_BACKFILL if last_triggered_at < epoch else PRIORITY_COVERAGE
+
+
 def _catalog_headers() -> dict:
     rid = uuid.uuid4().hex
     return {
@@ -284,7 +329,12 @@ async def scrape_next_layer() -> dict:
       * never triggered (new inventory / newly discovered catalog layers), or
       * last triggered ≥ ``GOVMAP_COVERAGE_REFRESH_DAYS`` ago (the ongoing
         quarterly-style refresh — coverage datasets are skipped by the normal
-        per-dataset scheduler, this tick is their ONLY driver).
+        per-dataset scheduler, this tick is their ONLY driver), or
+      * last triggered before ``GOVMAP_ENGINE_EPOCH`` — captured by an older,
+        field-poorer scraper engine. This is the whole-catalog backfill: the
+        epoch makes every layer due at once, and each pick stamps
+        ``last_triggered_at``, so the sweep completes itself and then stops.
+        Those tasks are queued at PRIORITY_BACKFILL, behind every routine poll.
 
     A FAILED layer is NOT auto-retried on a short cadence (used to be every
     ``GOVMAP_COVERAGE_RETRY_HOURS``). GovMap's public WFS is permanently gone,
@@ -304,6 +354,12 @@ async def scrape_next_layer() -> dict:
     target = max(1, int(settings.govmap_coverage_concurrency))
     refresh_cutoff = datetime.now(timezone.utc) - timedelta(
         days=float(settings.govmap_coverage_refresh_days))
+    # A layer captured before the engine epoch is missing fields the current
+    # scraper produces, so it's due even if it was scraped yesterday. Taking
+    # the LATER of the two cutoffs means the epoch backfill and the routine
+    # 90-day refresh are one mechanism, not two competing ones.
+    epoch = engine_epoch()
+    cutoff = max(refresh_cutoff, epoch) if epoch else refresh_cutoff
     async with async_session() as db:
         active_ids = [
             r[0] for r in (await db.execute(_active_coverage_tasks_q())).all()
@@ -316,18 +372,33 @@ async def scrape_next_layer() -> dict:
 
         due = (
             GovmapCoverage.last_triggered_at.is_(None)
-            | (GovmapCoverage.last_triggered_at < refresh_cutoff)
+            | (GovmapCoverage.last_triggered_at < cutoff)
         )
 
-        # Next DUE layers: NULL last_triggered_at first (never scraped), then
-        # the stalest, tie-broken by sort_order. Exclude layers whose dataset
-        # already has an active task (their last_triggered_at may be old —
-        # e.g. a giant layer still scraping since yesterday's tick).
+        # Next DUE layers: never-scraped first (a brand-new catalog entry has
+        # NO data at all — that beats refreshing one that merely has stale
+        # data), then HEAVIEST first: layer_kind 2=polygon > 1=line > 0=point,
+        # tie-broken by GovMap's own complexity score.
+        #
+        # Heavy-first is the operator's call for the epoch backfill: the big
+        # polygon/line layers are the ones that fail, time out, or expose
+        # engine bugs, so hitting them at the START of a day-long backfill
+        # leaves the whole day to react — rather than discovering at hour 20
+        # that the hard half doesn't work. The cost is that the early hours
+        # show slow numeric progress (few, slow layers) and that a routine
+        # poll arriving mid-backfill may wait behind a long-running layer;
+        # priority can reorder the queue but cannot preempt a running task.
+        #
+        # Exclude layers whose dataset already has an active task (their
+        # last_triggered_at may be old — e.g. a giant layer still scraping
+        # since yesterday's tick).
         q = (
             select(GovmapCoverage)
             .where(due)
             .order_by(
-                GovmapCoverage.last_triggered_at.asc().nullsfirst(),
+                GovmapCoverage.last_triggered_at.is_(None).desc(),
+                GovmapCoverage.layer_kind.desc().nullslast(),
+                GovmapCoverage.complexity.desc().nullslast(),
                 GovmapCoverage.sort_order.asc(),
             )
             .limit(slots)
@@ -345,22 +416,25 @@ async def scrape_next_layer() -> dict:
         triggered = []
         for row in rows:
             ds = await _ensure_dataset(db, row)
+            # Band the task by WHY this layer is due — read before overwriting
+            # last_triggered_at, which is the very field the decision rests on.
+            prio = trigger_priority(row.last_triggered_at, epoch, refresh_cutoff)
             row.last_triggered_at = datetime.now(timezone.utc)
-            triggered.append((str(ds.id), row.layer_id, row.caption))
+            triggered.append((str(ds.id), row.layer_id, row.caption, prio))
         await db.commit()
 
     # Trigger the scrapes (each creates a pending task a free worker claims).
     # poll_dataset's single-flight guard + the DB's one-active-task-per-dataset
     # unique index make double-triggers harmless.
     from app.worker.poll_job import poll_dataset
-    for ds_id, layer_id, caption in triggered:
-        await poll_dataset(ds_id)
-        logger.info("govmap coverage: triggered layer %s (%s) → ds %s",
-                    layer_id, caption, ds_id)
+    for ds_id, layer_id, caption, prio in triggered:
+        await poll_dataset(ds_id, priority=prio)
+        logger.info("govmap coverage: triggered layer %s (%s) → ds %s (priority %d)",
+                    layer_id, caption, ds_id, prio)
     return {
         "triggered": [
-            {"layer_id": lid, "caption": cap, "dataset_id": dsid}
-            for dsid, lid, cap in triggered
+            {"layer_id": lid, "caption": cap, "dataset_id": dsid, "priority": prio}
+            for dsid, lid, cap, prio in triggered
         ],
         "active_before": len(active_ids),
         "target": target,
@@ -368,7 +442,14 @@ async def scrape_next_layer() -> dict:
 
 
 async def coverage_status(db) -> dict:
-    """Rollout progress for the admin view."""
+    """Rollout progress for the admin view, including the engine-epoch backfill.
+
+    Backfill progress is derived, not stored: a layer has "crossed the epoch"
+    once its ``last_triggered_at`` is at or after it. Crossed means ATTEMPTED,
+    not necessarily succeeded — the heavy line/polygon layers whose public WFS
+    is gone fail on every engine — so the failures are counted separately from
+    the newest terminal task per layer, and the two numbers are reported side
+    by side rather than blended into one misleading "done" count."""
     total = (await db.execute(select(func.count()).select_from(GovmapCoverage))).scalar() or 0
     triggered = (await db.execute(
         select(func.count()).select_from(GovmapCoverage).where(
@@ -380,9 +461,58 @@ async def coverage_status(db) -> dict:
             GovmapCoverage.tracked_dataset_id.isnot(None)
         )
     )).scalar() or 0
-    return {
+    out = {
         "total_layers": int(total),
         "ever_triggered": int(triggered),
         "not_yet_triggered": int(total) - int(triggered),
         "datasets_created": int(with_ds),
     }
+
+    epoch = engine_epoch()
+    if epoch is None:
+        out["backfill"] = {"active": False}
+        return out
+
+    crossed = (await db.execute(
+        select(func.count()).select_from(GovmapCoverage).where(
+            GovmapCoverage.last_triggered_at >= epoch
+        )
+    )).scalar() or 0
+
+    # Of the attempted ones, how many ended in a failed task? One row per
+    # coverage dataset — its newest task — so a layer that failed and was
+    # later retried successfully is not counted as a failure.
+    newest = (
+        select(
+            ScrapeTask.tracked_dataset_id.label("ds_id"),
+            func.max(ScrapeTask.created_at).label("latest"),
+        )
+        .where(ScrapeTask.status.in_(("completed", "failed")))
+        .group_by(ScrapeTask.tracked_dataset_id)
+        .subquery()
+    )
+    failed = (await db.execute(
+        select(func.count())
+        .select_from(GovmapCoverage)
+        .join(newest, newest.c.ds_id == GovmapCoverage.tracked_dataset_id)
+        .join(
+            ScrapeTask,
+            (ScrapeTask.tracked_dataset_id == newest.c.ds_id)
+            & (ScrapeTask.created_at == newest.c.latest),
+        )
+        .where(
+            GovmapCoverage.last_triggered_at >= epoch,
+            ScrapeTask.status == "failed",
+        )
+    )).scalar() or 0
+
+    in_flight = len((await db.execute(_active_coverage_tasks_q())).all())
+    out["backfill"] = {
+        "active": True,
+        "epoch": epoch.isoformat(),
+        "crossed": int(crossed),          # re-scraped by the current engine
+        "failed": int(failed),            # ...of which the last attempt failed
+        "remaining": int(total) - int(crossed),
+        "in_flight": in_flight,
+    }
+    return out

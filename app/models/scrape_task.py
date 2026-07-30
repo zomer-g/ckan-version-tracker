@@ -1,9 +1,24 @@
 """Scrape task queue for external worker integration."""
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+
+# Priority bands. The worker claims the highest priority pending task, oldest
+# first within a band (app/api/worker.py). One queue, two kinds of work: a bulk
+# backfill can be dumped in wholesale without ever delaying a routine poll,
+# because a band-0 task is only claimed when nothing above it is pending.
+#
+# NOTE what priority does NOT do: a task that is already RUNNING cannot be
+# preempted. A heavy GovMap layer holds its worker for up to ~75 min, so when
+# every live worker happens to be mid-backfill a routine poll still waits for
+# one of them to finish. Priority governs the queue, not the fleet.
+PRIORITY_MANUAL = 200      # admin "דגום" — a human is watching, jump the queue
+PRIORITY_ROUTINE = 100     # scheduled polls: the normal cadence of the system
+PRIORITY_COVERAGE = 10     # GovMap coverage rollout's routine quarterly refresh
+PRIORITY_BACKFILL = 0      # one-shot whole-catalog re-scrapes; strictly last
+
 
 class ScrapeTask(Base):
     __tablename__ = "scrape_tasks"
@@ -27,6 +42,10 @@ class ScrapeTask(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tracked_dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tracked_datasets.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/completed/failed
+    # Claim order: higher first, then oldest. See the PRIORITY_* bands above.
+    priority: Mapped[int] = mapped_column(
+        SmallInteger, default=PRIORITY_ROUTINE, server_default=text("100"), nullable=False
+    )
     phase: Mapped[str | None] = mapped_column(String(50))
     progress: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str | None] = mapped_column(String(500))

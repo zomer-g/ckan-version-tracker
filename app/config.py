@@ -436,6 +436,26 @@ class Settings(BaseSettings):
     govmap_coverage_refresh_days: float = 90.0
     govmap_coverage_retry_hours: float = 6.0
 
+    # Engine epoch: the moment the GovMap scraper started producing materially
+    # RICHER output (2026-07-30 16:00 Israel time = 13:00Z — many more fields
+    # per feature, plus each layer's symbology). Every layer whose last scrape
+    # predates this was captured by the old engine and is therefore stale in a
+    # way `refresh_days` can't see: its data is recent, but it's missing
+    # columns that now exist.
+    #
+    # So the rollout's DUE test is `last_triggered_at < max(refresh_cutoff,
+    # epoch)` — which makes the ENTIRE catalog due at once, exactly the bulk
+    # re-scrape we want, without a second queue or a one-shot script. It's
+    # self-terminating: each pick stamps last_triggered_at, so a layer crosses
+    # the epoch once and the tick goes back to being a no-op when the catalog
+    # has caught up. Those tasks are enqueued at PRIORITY_BACKFILL so they
+    # never delay routine polling.
+    #
+    # Set to "" to switch the epoch backfill off (the routine 90-day refresh
+    # keeps working). Bump it whenever a future engine change again makes every
+    # existing capture obsolete.
+    govmap_engine_epoch: str = "2026-07-30T13:00:00Z"
+
     cors_origins: str = ""
 
     # ── Public-API data budget (anti-abuse) ──

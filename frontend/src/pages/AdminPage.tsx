@@ -10,6 +10,7 @@ import {
   TrackedDataset,
   StorageTarget,
   CoverageReport,
+  GovmapCoverageStatus,
   ScrapeQueueResponse,
   ScheduledJobsResponse,
   DatasetSizesResponse,
@@ -92,6 +93,19 @@ function workerLabel(t: { worker_id?: string | null; worker_ip?: string | null }
   const ip = (t.worker_ip || "").trim();
   if (id && ip && id !== ip) return `${id} (${ip})`;
   return id || ip || "";
+}
+
+// Queue priority bands — mirrors PRIORITY_* in app/models/scrape_task.py.
+// The queue holds two very different kinds of work at once (routine polls and
+// a whole-catalog GovMap backfill), and without a visible band the panel looks
+// like a mysteriously out-of-order FIFO.
+const PRIORITY_ROUTINE = 100;
+
+function priorityChip(priority: number | undefined): { label: string; bg: string; fg: string } | null {
+  if (priority === undefined || priority === PRIORITY_ROUTINE) return null;  // the norm needs no label
+  if (priority > PRIORITY_ROUTINE) return { label: "ידני — קופץ בראש התור", bg: "#dcfce7", fg: "#166534" };
+  if (priority <= 0) return { label: "השלמת GovMap — רק כשהתור פנוי", bg: "#f1f5f9", fg: "#475569" };
+  return { label: "כיסוי GovMap שוטף", bg: "#f1f5f9", fg: "#475569" };
 }
 
 const INTERVAL_OPTIONS = [
@@ -195,6 +209,10 @@ export default function AdminPage() {
   >(null);
   // Scrape queue state
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
+  // GovMap rollout + engine-epoch backfill progress, shown above the queue —
+  // the backfill runs for about a day at the bottom priority band, so the
+  // queue panel alone (6 tasks at a time) gives no sense of where it's up to.
+  const [govmapCoverage, setGovmapCoverage] = useState<GovmapCoverageStatus | null>(null);
   // Scheduled jobs state (next-run preview)
   const [schedule, setSchedule] = useState<ScheduledJobsResponse | null>(null);
   // Dataset sizes (admin-only). Loaded once per panel open; cached on
@@ -446,6 +464,13 @@ export default function AdminPage() {
       setQueue(q);
     } catch (e) {
       console.error("Failed to load queue", e);
+    }
+    // Separate try/catch on purpose: the backfill readout is a nice-to-have
+    // next to the queue itself, so a failure here must not blank the queue.
+    try {
+      setGovmapCoverage(await adminApi.govmapCoverageStatus());
+    } catch (e) {
+      console.error("Failed to load govmap coverage status", e);
     }
   };
 
@@ -964,6 +989,37 @@ export default function AdminPage() {
           </button>
         </div>
 
+        {/* Engine-epoch backfill: a whole-catalog GovMap re-scrape running in
+            the bottom priority band. Only rendered while it still has layers
+            to go — once the catalog has caught up it disappears on its own. */}
+        {govmapCoverage?.backfill.active && govmapCoverage.backfill.remaining > 0 && (() => {
+          const bf = govmapCoverage.backfill as Extract<GovmapCoverageStatus["backfill"], { active: true }>;
+          const total = govmapCoverage.total_layers || 1;
+          const pct = Math.round((bf.crossed / total) * 100);
+          return (
+            <div style={{
+              marginBottom: "0.75rem",
+              padding: "0.6rem 0.75rem",
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: "6px",
+              fontSize: "0.8rem",
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
+                🗺️ השלמת GovMap למנוע החדש — {bf.crossed}/{govmapCoverage.total_layers} שכבות ({pct}%)
+              </div>
+              <div style={{ height: 6, background: "#e2e8f0", borderRadius: 9999, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${pct}%`, background: "#64748b" }} />
+              </div>
+              <div className="text-muted" style={{ marginTop: "0.35rem" }}>
+                נותרו {bf.remaining} · בעבודה {bf.in_flight}
+                {bf.failed > 0 && <> · נכשלו {bf.failed}</>}
+                {" · "}רץ בעדיפות נמוכה, רק כשאין משימות שוטפות בתור
+              </div>
+            </div>
+          );
+        })()}
+
         {!queue ? (
           <div className="text-sm text-muted">טוען...</div>
         ) : queue.running.length === 0 && queue.pending.length === 0 && queue.failed.length === 0 ? (
@@ -1073,7 +1129,13 @@ export default function AdminPage() {
                 <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                   {queue.pending.map((t) => {
                     const ageMs = t.created_at ? Date.now() - new Date(t.created_at).getTime() : 0;
-                    const isOld = ageMs > 60 * 60 * 1000;  // 1 hour
+                    // "Waiting over an hour" is a warning sign for routine work
+                    // — but it's the DESIGNED behaviour for a de-prioritized
+                    // backfill task, which is meant to sit until the queue is
+                    // free. Flagging those yellow would paint the whole panel
+                    // as a problem during a day-long GovMap sweep.
+                    const isOld = ageMs > 60 * 60 * 1000 && t.priority >= PRIORITY_ROUTINE;
+                    const chip = priorityChip(t.priority);
                     return (
                       <li key={t.task_id} style={{
                         padding: "0.4rem 0.6rem",
@@ -1088,6 +1150,18 @@ export default function AdminPage() {
                         alignItems: "center",
                       }}>
                         <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                        {chip && (
+                          <span style={{
+                            fontSize: "0.7rem",
+                            padding: "0.1rem 0.4rem",
+                            borderRadius: "9999px",
+                            background: chip.bg,
+                            color: chip.fg,
+                            whiteSpace: "nowrap",
+                          }}>
+                            {chip.label}
+                          </span>
+                        )}
                         <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                           נוסף {formatRelative(t.created_at)}
                         </span>
