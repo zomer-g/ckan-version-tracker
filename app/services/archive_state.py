@@ -61,6 +61,17 @@ _ROW_KEYS = ("append_table", "_append_tables")
 # latest version records counts rather than data.
 _STUB_KEY = "_large_dataset_info"
 
+# The stub's OWN downloadable resource: the 200-row sample CSV that
+# create_lightweight_snapshot pushes to the ODATA mirror. It is a real, fetchable
+# resource, which is exactly the trap — counting it makes a stub look like a
+# dataset with archived files. Verified on prod 2026-07-30: all 16 stub datasets
+# reported ``file_store="odata"`` from this one key, which put an "ODATA" chip
+# next to "מטא־דאטה בלבד" (implying downloadable data) and fired a redundant
+# file-store mismatch on top of the sample_only one. Ignored while the stub
+# marker is present, and only then — a resource legitimately NAMED "sample" on a
+# normal dataset still counts.
+_STUB_OWN_SAMPLE_KEY = "sample"
+
 _R2_PREFIX = "r2:"
 # A bare ODATA resource id is a canonical UUID. Matched strictly (not by length)
 # so a row hash or a NEON table name can never be mistaken for a stored file.
@@ -79,7 +90,12 @@ NONE = "none"          # nothing archived (no versions, or an empty version)
 # Each is independently actionable; nothing is flagged that a human can't act on.
 MISMATCH_NO_VERSION = "no_version"    # tracked, never archived
 MISMATCH_SAMPLE_ONLY = "sample_only"  # plan promises data, archive holds a stub
-MISMATCH_FILE_STORE = "file_store"    # plan's file target ≠ where the files are
+MISMATCH_FILE_STORE = "file_store"    # files sit somewhere the plan doesn't name
+# ^ In practice this almost always means "still on the legacy ODATA mirror under a
+# plan of r2" — and note that plan is usually r2 only because r2 is the GLOBAL
+# default, not because anyone pinned it. So it reads as "this dataset's bytes
+# haven't been moved off ODATA yet" (18 CKAN datasets on prod 2026-07-30), which
+# is actionable: there is an admin /migrate-r2 endpoint for exactly that.
 
 
 def _iter_file_values(mappings: dict | None) -> Iterator[str]:
@@ -89,9 +105,16 @@ def _iter_file_values(mappings: dict | None) -> Iterator[str]:
     ``_geojson``, ``_gpkg``, ``_parquet``, …), skipping bookkeeping keys, and
     yields only values that are recognizably a storage reference — an ``r2:``
     marker or a bare ODATA resource UUID.
+
+    On a metadata stub the ``sample`` resource is skipped: it is the stub's own
+    200-row excerpt, not an archive of the data (see _STUB_OWN_SAMPLE_KEY).
     """
-    for key, value in (mappings or {}).items():
-        if key in _BOOKKEEPING_KEYS:
+    m = mappings or {}
+    skip = _BOOKKEEPING_KEYS
+    if m.get(_STUB_KEY):
+        skip = skip | {_STUB_OWN_SAMPLE_KEY}
+    for key, value in m.items():
+        if key in skip:
             continue
         for v in (value if isinstance(value, list) else [value]):
             if not isinstance(v, str) or not v:
@@ -128,6 +151,16 @@ def _has_rows(mappings: dict | None, archives_neon: bool) -> bool:
     declared plan is the only signal available in the OVER DB — hence the
     ``archives_neon`` fallback. It's a declaration, not an observation, so it is
     deliberately never used to CLEAR a flag, only to set one.
+
+    KNOWN BOUNDARY: this reads only the LATEST version, while the NEON table is a
+    property of the DATASET — it persists once created. So a dataset that streamed
+    rows in v10 and then fell back to a metadata stub in v11 would under-report
+    ``row_store="none"`` even though its table still holds the rows.
+    ``append_tables.resolve_tables`` handles that shape correctly (it walks
+    versions newest-first) at the cost of a query per dataset. Measured across
+    every CKAN dataset on prod 2026-07-30: ZERO datasets are in that state, so the
+    extra query buys nothing today. If it ever appears, widen this to the same
+    newest-first walk rather than trusting the latest version alone.
     """
     m = mappings or {}
     if any(m.get(k) for k in _ROW_KEYS):

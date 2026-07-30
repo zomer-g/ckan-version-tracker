@@ -123,6 +123,48 @@ def test_metadata_stub_is_sample_not_files():
     assert archive_state.MISMATCH_SAMPLE_ONLY in st["mismatch"]
 
 
+def test_a_stubs_own_sample_csv_is_not_counted_as_archived_files():
+    """Caught in production, not by the mock: all 16 stub datasets reported
+    ``file_store="odata"`` off the single `sample` key.
+
+    That resource is real and fetchable — it's the 200-row excerpt
+    create_lightweight_snapshot pushes to the mirror — so counting it put an
+    "ODATA" chip next to "מטא־דאטה בלבד" on the public page (advertising
+    downloadable data that does not exist) and fired a second, redundant
+    file-store mismatch on top of sample_only.
+    """
+    st = _describe({
+        "sample": "ba5856f0-ccd8-40ac-ab85-815720e25e39",
+        "_large_dataset_info": {"record_count": 688256},
+    }, plan="r2")
+    assert st["fidelity"] == archive_state.SAMPLE
+    assert st["file_store"] == "none"
+    # sample_only says the real thing; file_store would only add noise.
+    assert st["mismatch"] == [archive_state.MISMATCH_SAMPLE_ONLY]
+
+
+def test_a_resource_actually_named_sample_still_counts_on_a_normal_dataset():
+    """The skip above is conditional on the stub marker — it must not blind the
+    derivation to a legitimately-named resource on a healthy dataset."""
+    st = _describe({"sample": R2}, plan="r2")
+    assert st["fidelity"] == archive_state.FILES
+    assert st["file_store"] == "r2"
+
+
+def test_an_append_only_dataset_that_only_ever_stubbed_reports_sample():
+    """Prod case 4240a562: storage_mode=append_only, plan r2, and all 8 versions
+    are metadata stubs — the delta archive declined every time, so nothing was
+    ever appended. "append_only" is a declaration; it must not be read as
+    evidence that rows exist."""
+    st = _describe(
+        {"sample": ODATA_RID, "_large_dataset_info": {"record_count": 4135444}},
+        plan="r2", archives_neon=False,
+    )
+    assert st["fidelity"] == archive_state.SAMPLE
+    assert st["row_store"] == "none"
+    assert st["sample_of"] == 4135444
+
+
 def test_a_stub_that_later_streamed_to_neon_is_no_longer_a_sample():
     """Fixing a stub means opting it into NEON. Once rows land, the dataset must
     stop being reported as a stub even if the old key is still carried."""
