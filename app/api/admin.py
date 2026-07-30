@@ -21,6 +21,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
 from app.api.datasets import (
+    DatasetResponse,
     apply_storage_target,
     dataset_is_neon_eligible,
     storage_target_of,
@@ -1093,6 +1094,7 @@ async def refresh_dataset_sizes_job() -> None:
 @limiter.limit("30/minute")
 async def dataset_sizes(
     request: Request,
+    summary: bool = False,
     user: User = Depends(get_admin_user),
 ):
     """Resource sizes per active dataset, plus per-version breakdown.
@@ -1111,8 +1113,20 @@ async def dataset_sizes(
     (worker streams, other scheduled jobs) and helped tip a 512MB dyno
     into OOM. Returns an empty list on a cold boot before the job's first
     tick has run yet, rather than block the page.
+
+    ``summary=1`` drops the per-version breakdown, which is ~10,800 entries
+    catalog-wide (~1MB). The admin datasets tab only shows the per-dataset
+    total, so it asks for the summary; the VersionsPage needs the breakdown.
     """
-    return _dataset_sizes_cache["payload"] or {"datasets": []}
+    payload = _dataset_sizes_cache["payload"] or {"datasets": []}
+    if summary:
+        return {
+            "datasets": [
+                {k: v for k, v in d.items() if k != "versions"}
+                for d in payload.get("datasets", [])
+            ]
+        }
+    return payload
 
 
 @router.get("/scheduled-jobs")
@@ -1440,6 +1454,190 @@ async def over_coverage_fix(
         user.email, len(ids), ", ".join(i[:8] for i in ids),
     )
     return report
+
+
+# ---------------------------------------------------------------------------
+# Paginated + searchable active-dataset list for the admin "מאגרים פעילים" tab.
+#
+# The tab used to render the WHOLE catalog from the public GET /api/datasets:
+# ~1,100 active datasets in one 1MB response, each one a card carrying an
+# organization <select> (164 options), a tag picker and four more controls —
+# hundreds of thousands of DOM nodes on every admin page load. This endpoint
+# does the filtering and slicing in SQL so the tab fetches one page at a time.
+# ---------------------------------------------------------------------------
+
+class AdminDatasetsPage(BaseModel):
+    items: list[DatasetResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# Free-text tokens that should match a storage plan, so a single search box can
+# serve "לפי מילים בשם המאגר, תגיות, ארגון או אופן שמירה". Values are the
+# unified storage targets (see VALID_STORAGE_TARGETS in app/api/datasets.py).
+_STORAGE_TARGET_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "local": ("local", "מקומי", "מקומית"),
+    "r2": ("r2",),
+    "neon": ("neon", "ניאון"),
+    "odata": ("odata", "אודטה"),
+}
+# ...and the two storage MODES (the "אופן שמירה" selector proper).
+_STORAGE_MODE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "append_only": ("append", "תוספת", "אפנד"),
+    "full_snapshot": ("full_snapshot", "snapshot", "מלאה", "מלא"),
+}
+
+
+def _storage_target_expr():
+    """SQL twin of ``storage_target_of`` — the derived storage plan as a column.
+
+    Keep in lockstep with app/api/datasets.py: the plan is encoded across three
+    scraper_config keys (upload_mode / storage_backend / archive_neon) and falls
+    back to the global STORAGE_BACKEND default when nothing is pinned.
+    """
+    from sqlalchemy import String, case, cast, func, literal
+
+    sc = TrackedDataset.scraper_config
+    backend = func.coalesce(sc["storage_backend"].astext, literal(settings.storage_backend))
+    # Postgres renders a JSON true as the text 'true'; SQLite (the unit-test DB)
+    # yields the integer 1, which never compares equal to a string there — cast
+    # first and accept both spellings so the expression is dialect-portable.
+    archive_neon = func.lower(cast(sc["archive_neon"].astext, String))
+    return case(
+        (sc["upload_mode"].astext == "local_only", literal("local")),
+        (backend == "neon", literal("neon")),
+        (archive_neon.in_(("true", "1")), backend + literal("+neon")),
+        else_=backend,
+    )
+
+
+@router.get("/datasets", response_model=AdminDatasetsPage)
+@limiter.limit("60/minute")
+async def admin_datasets(
+    request: Request,
+    q: str | None = None,
+    storage: str | None = None,
+    source_type: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One page of active datasets, newest-first, for the admin datasets tab.
+
+    ``q`` matches (case-insensitively, anywhere) the dataset title, its CKAN
+    name, its organization (slug or title), any of its tags, or a storage-plan
+    keyword ("neon", "r2", "מקומי", "תוספת", …). ``storage`` filters exactly on
+    a storage target ("r2+neon") or a storage mode ("append_only").
+    """
+    from sqlalchemy import exists, func, or_
+    from sqlalchemy.orm import selectinload
+
+    from app.api.datasets import build_dataset_response
+    from app.models.tag import Tag, dataset_tags
+    from app.models.user import User as UserModel
+    from app.models.version_index import VersionIndex
+
+    limit = max(1, min(int(limit or 25), 200))
+    offset = max(0, int(offset or 0))
+
+    storage_expr = _storage_target_expr()
+
+    conds = [
+        TrackedDataset.status == "active",
+        # Same exclusion as the public list: ~2,900 auto-generated
+        # one-per-committee-meeting rows are bulk-managed, not individually
+        # administered, and would drown the tab.
+        TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
+    ]
+    if source_type:
+        conds.append(TrackedDataset.source_type == source_type)
+    if storage:
+        s = storage.strip()
+        if s in ("append_only", "full_snapshot"):
+            conds.append(TrackedDataset.storage_mode == s)
+        else:
+            conds.append(storage_expr == s)
+    if q and q.strip():
+        term = q.strip()
+        like = f"%{term}%"
+        lowered = term.lower()
+        matches = [
+            TrackedDataset.title.ilike(like),
+            TrackedDataset.ckan_name.ilike(like),
+            TrackedDataset.organization.ilike(like),
+            Organization.title.ilike(like),
+            # Tags: EXISTS, not a join — a dataset with 3 matching tags must
+            # still be ONE row (and must not skew the total count).
+            exists(
+                select(1)
+                .select_from(dataset_tags)
+                .join(Tag, Tag.id == dataset_tags.c.tag_id)
+                .where(
+                    dataset_tags.c.dataset_id == TrackedDataset.id,
+                    Tag.name.ilike(like),
+                )
+            ),
+        ]
+        targets = [
+            t for t, words in _STORAGE_TARGET_KEYWORDS.items()
+            if any(w in lowered for w in words)
+        ]
+        if targets:
+            # "neon" must also match the r2+neon / odata+neon combos.
+            matches.append(or_(*[storage_expr.like(f"%{t}%") for t in targets]))
+        modes = [
+            m for m, words in _STORAGE_MODE_KEYWORDS.items()
+            if any(w in lowered for w in words)
+        ]
+        if modes:
+            matches.append(TrackedDataset.storage_mode.in_(modes))
+        conds.append(or_(*matches))
+
+    base = (
+        select(TrackedDataset, UserModel, Organization)
+        .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+        .where(*conds)
+    )
+
+    total = (await db.execute(
+        select(func.count()).select_from(
+            select(TrackedDataset.id)
+            .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+            .where(*conds)
+            .subquery()
+        )
+    )).scalar() or 0
+
+    rows = (await db.execute(
+        base.options(selectinload(TrackedDataset.tags))
+        .order_by(TrackedDataset.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )).unique().all()
+
+    # Version counts for THIS page only — the public list groups over the whole
+    # VersionIndex table, which is the expensive part of that endpoint.
+    ds_ids = [ds.id for ds, _u, _o in rows]
+    version_counts: dict = {}
+    if ds_ids:
+        version_counts = dict((await db.execute(
+            select(VersionIndex.tracked_dataset_id, func.count(VersionIndex.id))
+            .where(VersionIndex.tracked_dataset_id.in_(ds_ids))
+            .group_by(VersionIndex.tracked_dataset_id)
+        )).all())
+
+    return AdminDatasetsPage(
+        items=[
+            build_dataset_response(ds, requester, org, version_counts.get(ds.id, 0))
+            for ds, requester, org in rows
+        ],
+        total=int(total),
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ---------------------------------------------------------------------------

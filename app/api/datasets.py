@@ -316,6 +316,49 @@ def _build_source_url(ds: TrackedDataset) -> str:
     return base
 
 
+def build_dataset_response(ds, requester, org, version_count: int) -> DatasetResponse:
+    """Serialize one tracked dataset row for the list endpoints.
+
+    Shared by the public catalog (``GET /api/datasets``) and the paginated
+    admin list (``GET /api/admin/datasets``) so the two can never drift —
+    the admin cards read fields (storage plan, neon eligibility, new
+    resources) that only exist here.
+    """
+    return DatasetResponse(
+        id=str(ds.id),
+        ckan_id=ds.ckan_id,
+        ckan_name=ds.ckan_name,
+        title=ds.title,
+        organization=ds.organization,
+        organization_id=str(ds.organization_id) if ds.organization_id else None,
+        organization_title=org.title if org else None,
+        odata_dataset_id=ds.odata_dataset_id,
+        poll_interval=ds.poll_interval,
+        is_active=ds.is_active,
+        status=ds.status,
+        last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
+        last_modified=ds.last_modified,
+        requester_name=requester.display_name if requester else None,
+        requester_email=requester.email if requester else None,
+        resource_id=ds.resource_id,
+        resource_name=None,  # resource name is already in the title
+        source_url=_build_source_url(ds),
+        source_type=ds.source_type or "ckan",
+        storage_mode=ds.storage_mode or "full_snapshot",
+        append_key=(ds.scraper_config or {}).get("append_key"),
+        upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
+        storage_target=storage_target_of(ds.scraper_config),
+        neon_eligible=dataset_is_neon_eligible(ds),
+        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
+        last_error=ds.last_error,
+        resource_ids=ds.resource_ids,
+        new_resources_at_source=ds.new_resources_at_source,
+        version_count=version_count,
+        tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
+        field_flags=ds.field_flags or {},
+    )
+
+
 @router.get("", response_model=list[DatasetResponse])
 # Heavy AND anonymous: a 3-way join + selectinload(tags) + a catalog-wide
 # VersionIndex count, with no pagination — the very cost that contributed to the
@@ -360,44 +403,10 @@ async def list_tracked(
     )
     version_counts = dict(count_result.all())
     # Build response — no external API calls here (performance critical)
-    response_list = []
-    for ds, requester, org in rows:
-        response_list.append(
-            DatasetResponse(
-                id=str(ds.id),
-                ckan_id=ds.ckan_id,
-                ckan_name=ds.ckan_name,
-                title=ds.title,
-                organization=ds.organization,
-                organization_id=str(ds.organization_id) if ds.organization_id else None,
-                organization_title=org.title if org else None,
-                odata_dataset_id=ds.odata_dataset_id,
-                poll_interval=ds.poll_interval,
-                is_active=ds.is_active,
-                status=ds.status,
-                last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
-                last_modified=ds.last_modified,
-                requester_name=requester.display_name if requester else None,
-                requester_email=requester.email if requester else None,
-                resource_id=ds.resource_id,
-                resource_name=None,  # resource name is already in the title
-                source_url=_build_source_url(ds),
-                source_type=ds.source_type or "ckan",
-                storage_mode=ds.storage_mode or "full_snapshot",
-                append_key=(ds.scraper_config or {}).get("append_key"),
-                upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
-        storage_target=storage_target_of(ds.scraper_config),
-        neon_eligible=dataset_is_neon_eligible(ds),
-        capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
-                last_error=ds.last_error,
-                resource_ids=ds.resource_ids,
-                new_resources_at_source=ds.new_resources_at_source,
-                version_count=version_counts.get(ds.id, 0),
-                tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
-                field_flags=ds.field_flags or {},
-            )
-        )
-    return response_list
+    return [
+        build_dataset_response(ds, requester, org, version_counts.get(ds.id, 0))
+        for ds, requester, org in rows
+    ]
 
 
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)

@@ -1398,7 +1398,8 @@ export interface DatasetSizeRow {
   title: string;
   total_bytes: number;
   version_count: number;
-  versions: DatasetSizeVersion[];
+  // Absent when fetched with `summary` (the admin datasets tab).
+  versions?: DatasetSizeVersion[];
   latest_version_type?: string | null;
   suggest_delta_archive?: boolean;
 }
@@ -1496,6 +1497,14 @@ export interface ActivityLogPage {
   offset: number;
 }
 
+// One page of the admin active-datasets list (GET /admin/datasets).
+export interface AdminDatasetsPage {
+  items: TrackedDataset[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface OdataImport {
   resource_id: string;
   table: string;
@@ -1512,6 +1521,21 @@ export interface OdataImport {
 
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
+  // One page of active datasets for the admin "מאגרים פעילים" tab. The tab used
+  // to pull the entire catalog (~1,100 rows / 1MB) from the public /datasets on
+  // every admin page load; filtering + slicing now happen in SQL.
+  datasetsPage: (
+    opts: { q?: string; storage?: string; source_type?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set("q", opts.q);
+    if (opts.storage) p.set("storage", opts.storage);
+    if (opts.source_type) p.set("source_type", opts.source_type);
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.offset != null) p.set("offset", String(opts.offset));
+    const qs = p.toString();
+    return request<AdminDatasetsPage>(`/admin/datasets${qs ? `?${qs}` : ""}`);
+  },
   // מידע לעם (odata) → queryable SQL tables (admin-curated import)
   odataImports: () =>
     request<{ imports: OdataImport[]; count: number }>("/admin/odata/imports"),
@@ -1560,7 +1584,12 @@ export const admin = {
       method: "DELETE",
     }),
   scheduledJobs: () => request<ScheduledJobsResponse>("/admin/scheduled-jobs"),
-  datasetSizes: () => request<DatasetSizesResponse>("/admin/dataset-sizes"),
+  // `summary` drops the per-version breakdown (~10,800 rows catalog-wide) —
+  // the admin datasets tab only shows the per-dataset total.
+  datasetSizes: (summary = false) =>
+    request<DatasetSizesResponse>(
+      `/admin/dataset-sizes${summary ? "?summary=1" : ""}`,
+    ),
   datastoreJobs: (status?: string) =>
     request<DatastorePushJob[]>(
       status

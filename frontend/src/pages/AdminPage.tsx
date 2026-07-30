@@ -4,7 +4,6 @@ import { Link } from "react-router-dom";
 import {
   admin as adminApi,
   datasets as datasetsApi,
-  publicApi,
   organizations as orgsApi,
   tagsApi,
   PendingRequest,
@@ -156,7 +155,19 @@ function readTabFromHash(): AdminTab {
 export default function AdminPage() {
   const { t } = useTranslation();
   const [requests, setRequests] = useState<PendingRequest[]>([]);
+  // Active datasets — ONE PAGE at a time (server-side search + slice, see
+  // GET /api/admin/datasets). This tab used to render the whole catalog
+  // (~1,100 cards, each with a 164-option organization <select> and a tag
+  // picker), which is what made /admin#datasets crawl.
   const [allDatasets, setAllDatasets] = useState<TrackedDataset[]>([]);
+  const [dsTotal, setDsTotal] = useState(0);
+  const [dsLoading, setDsLoading] = useState(false);
+  const [dsQInput, setDsQInput] = useState("");   // what's typed
+  const [dsQ, setDsQ] = useState("");             // what's submitted
+  const [dsStorage, setDsStorage] = useState("");
+  const [dsSourceType, setDsSourceType] = useState("");
+  const [dsOffset, setDsOffset] = useState(0);
+  const [dsLimit, setDsLimit] = useState(25);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [intervalOverrides, setIntervalOverrides] = useState<Record<string, number>>({});
@@ -211,13 +222,23 @@ export default function AdminPage() {
     loadTags();
     loadQueue();
     loadSchedule();
-    loadSizes();
     const id = setInterval(() => {
       loadQueue();
       loadSchedule();
     }, 5000);
     return () => clearInterval(id);
   }, []);
+
+  // Datasets tab only: fetch the current page whenever the search, the filters
+  // or the offset change. The sizes payload (one row per dataset + per version)
+  // is pulled lazily here too — it used to load on every admin page view, even
+  // on tabs that never show a size.
+  useEffect(() => {
+    if (tab !== "datasets") return;
+    loadDatasets();
+    if (!sizes && !sizesLoading) loadSizes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, dsQ, dsStorage, dsSourceType, dsOffset, dsLimit]);
 
   const loadTags = async () => {
     try {
@@ -430,7 +451,9 @@ export default function AdminPage() {
   const loadSizes = async () => {
     setSizesLoading(true);
     try {
-      const s = await adminApi.datasetSizes();
+      // summary=1: this tab shows only the per-dataset total, never the
+      // per-version breakdown (which is ~10,800 rows across the catalog).
+      const s = await adminApi.datasetSizes(true);
       setSizes(s);
     } catch (e) {
       console.error("Failed to load dataset sizes", e);
@@ -456,16 +479,33 @@ export default function AdminPage() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [pending, all] = await Promise.all([
-        adminApi.pending(),
-        publicApi.datasets(),
-      ]);
-      setRequests(pending);
-      setAllDatasets(all);
+      setRequests(await adminApi.pending());
     } catch (e) {
       console.error(e);
     }
     setLoading(false);
+  };
+
+  // One page of active datasets, honoring the current search/filters. Called by
+  // the effect below on every filter or page change, and after any mutation
+  // that can move a row in or out of the current page.
+  const loadDatasets = async () => {
+    setDsLoading(true);
+    try {
+      const page = await adminApi.datasetsPage({
+        q: dsQ || undefined,
+        storage: dsStorage || undefined,
+        source_type: dsSourceType || undefined,
+        limit: dsLimit,
+        offset: dsOffset,
+      });
+      setAllDatasets(page.items);
+      setDsTotal(page.total);
+    } catch (e) {
+      console.error("Failed to load datasets page", e);
+    } finally {
+      setDsLoading(false);
+    }
   };
 
   const handleApprove = async (id: string) => {
@@ -553,7 +593,7 @@ export default function AdminPage() {
       // Poll runs in the background. Refresh the list a few seconds later
       // so the row reflects last_polled_at / last_error / new version count
       // without the admin having to reload the page manually.
-      setTimeout(() => { loadAll().catch(() => {}); }, 4000);
+      setTimeout(() => { loadDatasets().catch(() => {}); }, 4000);
       setTimeout(() => setPollToast(null), 6000);
     } catch (e: any) {
       setPollToast({ id, ok: false, msg: e?.message || "שגיאה בדגום" });
@@ -568,6 +608,7 @@ export default function AdminPage() {
     try {
       await datasetsApi.untrack(id);
       setAllDatasets((prev) => prev.filter((d) => d.id !== id));
+      setDsTotal((n) => Math.max(0, n - 1));
     } catch (e) { console.error(e); }
     setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
   };
@@ -746,7 +787,34 @@ export default function AdminPage() {
 
   if (loading) return <div className="loading" role="status">{t("common.loading")}</div>;
 
+  // The server already returns only active rows for the current page; the
+  // filter stays as a belt-and-braces guard.
   const activeDatasets = allDatasets.filter((d) => d.status === "active");
+  const dsFrom = dsTotal === 0 ? 0 : dsOffset + 1;
+  const dsTo = Math.min(dsOffset + dsLimit, dsTotal);
+  const datasetPager = dsTotal > dsLimit ? (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", margin: "0.75rem 0" }}>
+      <button
+        className="btn-secondary"
+        disabled={dsOffset === 0 || dsLoading}
+        onClick={() => setDsOffset(Math.max(0, dsOffset - dsLimit))}
+        style={{ fontSize: "0.8rem", padding: "0.3rem 0.8rem" }}
+      >
+        ‹ הקודם
+      </button>
+      <span className="text-muted" style={{ fontSize: "0.8rem" }}>
+        {dsFrom}–{dsTo} מתוך {dsTotal.toLocaleString()}
+      </span>
+      <button
+        className="btn-secondary"
+        disabled={dsTo >= dsTotal || dsLoading}
+        onClick={() => setDsOffset(dsOffset + dsLimit)}
+        style={{ fontSize: "0.8rem", padding: "0.3rem 0.8rem" }}
+      >
+        הבא ›
+      </button>
+    </div>
+  ) : null;
 
   // Build per-dataset status map for inline indicators
   const datasetStatusMap = new Map<string, { kind: "running" | "pending" | "failed"; tooltip?: string }>();
@@ -1382,8 +1450,77 @@ export default function AdminPage() {
 
       {tab === "datasets" && (<>
       {/* Section 2: Active Datasets Management */}
-      <div className="page-header">
-        <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)" }}>{activeDatasets.length} מאגרים</h2>
+      <div className="page-header" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-muted)", margin: 0 }}>
+          {dsTotal.toLocaleString()} מאגרים
+          {dsTotal > 0 && <span style={{ fontWeight: 400 }}> · מציג {dsFrom}–{dsTo}</span>}
+          {dsLoading && <span style={{ fontWeight: 400 }}> · טוען…</span>}
+        </h2>
+      </div>
+
+      {/* Search + filters. All three run in SQL (GET /api/admin/datasets), so
+          the browser only ever renders one page of cards. */}
+      <div className="card mb-2" style={{ padding: "0.75rem 1rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+        <form
+          onSubmit={(e) => { e.preventDefault(); setDsOffset(0); setDsQ(dsQInput.trim()); }}
+          style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}
+        >
+          <input
+            value={dsQInput}
+            onChange={(e) => setDsQInput(e.target.value)}
+            placeholder="חיפוש לפי שם מאגר / תגית / ארגון / אופן שמירה…"
+            aria-label="חיפוש מאגרים"
+            style={{ fontSize: "0.85rem", padding: "0.35rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", width: "22rem", maxWidth: "60vw" }}
+          />
+          <button type="submit" className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.35rem 0.8rem" }}>חפש</button>
+          {dsQ && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => { setDsQInput(""); setDsQ(""); setDsOffset(0); }}
+              style={{ fontSize: "0.8rem", padding: "0.35rem 0.6rem" }}
+              title="נקה חיפוש"
+            >
+              ×
+            </button>
+          )}
+        </form>
+        <select
+          value={dsStorage}
+          onChange={(e) => { setDsOffset(0); setDsStorage(e.target.value); }}
+          aria-label="סינון לפי אופן שמירה"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+        >
+          <option value="">כל אופני השמירה</option>
+          <option value="append_only">תוספת בלבד</option>
+          <option value="full_snapshot">שמירה מלאה</option>
+          <option value="local">מקומי</option>
+          <option value="r2">R2</option>
+          <option value="r2+neon">R2 + NEON</option>
+          <option value="neon">NEON בלבד</option>
+          <option value="odata">ODATA</option>
+          <option value="odata+neon">ODATA + NEON</option>
+        </select>
+        <select
+          value={dsSourceType}
+          onChange={(e) => { setDsOffset(0); setDsSourceType(e.target.value); }}
+          aria-label="סינון לפי סוג מקור"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+        >
+          <option value="">כל המקורות</option>
+          <option value="ckan">data.gov.il</option>
+          <option value="scraper">סקרייפר</option>
+          <option value="govmap">GovMap</option>
+          <option value="cbs">למ"ס</option>
+        </select>
+        <select
+          value={dsLimit}
+          onChange={(e) => { setDsOffset(0); setDsLimit(Number(e.target.value)); }}
+          aria-label="מאגרים בעמוד"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px", marginInlineStart: "auto" }}
+        >
+          {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} בעמוד</option>)}
+        </select>
       </div>
 
       {/* OVER full-version coverage audit (#4) */}
@@ -1429,9 +1566,16 @@ export default function AdminPage() {
       </div>
 
       {activeDatasets.length === 0 ? (
-        <div className="empty-state">אין מאגרים פעילים</div>
+        <div className="empty-state">
+          {dsLoading
+            ? "טוען…"
+            : dsQ || dsStorage || dsSourceType
+              ? "אין מאגרים התואמים לחיפוש"
+              : "אין מאגרים פעילים"}
+        </div>
       ) : (
         <div>
+          {datasetPager}
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               {activeDatasets.map((ds) => (
                 <div key={ds.id} className="card" style={{ padding: "0.85rem 1rem", boxShadow: "var(--shadow-sm)" }}>
@@ -1791,6 +1935,7 @@ export default function AdminPage() {
                 </div>
               ))}
           </div>
+          {datasetPager}
         </div>
       )}
 

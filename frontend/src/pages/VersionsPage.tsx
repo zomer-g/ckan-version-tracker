@@ -237,7 +237,7 @@ export default function VersionsPage() {
         const me = resp.datasets.find((d) => d.dataset_id === datasetId);
         if (!me) return;
         const m = new Map<string, number>();
-        for (const v of me.versions) m.set(v.version_id, v.total_bytes);
+        for (const v of me.versions ?? []) m.set(v.version_id, v.total_bytes);
         setVersionSizes(m);
         setDatasetTotalBytes(me.total_bytes);
       })
