@@ -195,6 +195,7 @@
     "reject": "Reject",
     "requester": "Requested by",
     "requested_at": "Requested at",
+    "storage_plan": "Storage plan",
     "storage_mode": "Storage mode",
     "storage_full": "Full snapshot",
     "storage_append": "Append only",

@@ -130,6 +130,33 @@ export type StorageTarget =
   | "r2+neon"
   | "odata+neon";
 
+/**
+ * What a dataset's archive ACTUALLY holds — derived server-side from the LATEST
+ * version's `resource_mappings`, NOT from the configured `storage_target`.
+ *
+ * The two disagree regularly: a CKAN dataset above the 50k-row threshold that
+ * wasn't opted into a NEON archive keeps a plan of "r2" while archiving only a
+ * metadata stub (counts + column names + 200 sample rows). See
+ * app/services/archive_state.py.
+ *
+ * `fidelity: null` = this endpoint didn't compute it. The unpaginated public
+ * catalog (`GET /api/datasets`) deliberately skips it — loading 1,090 versions'
+ * mappings is the payload that OOM-killed the 512MB dyno. The dataset detail
+ * endpoint and the paginated admin list both populate it.
+ */
+export interface ArchiveState {
+  // full = files + queryable rows · rows = NEON only · files = objects only
+  // sample = metadata stub, no data · none = nothing archived
+  fidelity: "full" | "rows" | "files" | "sample" | "none" | null;
+  // Where the files actually are, read off the mapping values.
+  file_store: "r2" | "odata" | "mixed" | "none";
+  row_store: "neon" | "none";
+  // Source row count behind a metadata stub (what ISN'T archived).
+  sample_of: number | null;
+  // Plan-vs-reality flags: no_version | sample_only | file_store. Admin surface.
+  mismatch: string[];
+}
+
 export interface TrackedDataset {
   id: string;
   ckan_id: string;
@@ -160,6 +187,9 @@ export interface TrackedDataset {
   // DIFF mode (append_only only): capture changes to existing rows via a
   // COPY-staged content diff. Heavy — reserved for rare/extreme cases.
   capture_changes: boolean;
+  // What the archive actually holds. Populated by the dataset-detail and admin
+  // list endpoints; `fidelity` is null elsewhere.
+  archive?: ArchiveState;
   last_error: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;

@@ -18,6 +18,7 @@ import {
   Tag,
   TagWithCount,
 } from "../api/client";
+import ArchiveChips from "../components/ArchiveChips";
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
@@ -58,6 +59,15 @@ const admFieldLabel = {
   color: "var(--text-muted)",
   marginBottom: "0.2rem",
   fontWeight: 600,
+} as const;
+
+// Caption for a control NESTED inside a field group — used where one group holds
+// two distinct choices (the storage plan's accumulation mode vs. its destination).
+const admSubLabel = {
+  fontSize: "0.62rem",
+  color: "var(--text-muted)",
+  fontWeight: 500,
+  marginBottom: 0,
 } as const;
 
 function formatRelative(iso: string | null): string {
@@ -1703,6 +1713,16 @@ export default function AdminPage() {
                         ⚠ {ds.last_error}
                       </div>
                     )}
+                    {/* What this dataset ACTUALLY holds, next to the plan it was
+                        configured with. The two selectors below set the plan;
+                        this line is the only place that says whether the plan is
+                        being honoured — a >50k-row CKAN dataset not opted into
+                        NEON reads "R2 — סנפשוט מלא" while archiving a stub. */}
+                    <ArchiveChips
+                      archive={ds.archive}
+                      variant="admin"
+                      plan={ds.storage_target}
+                    />
                     {isCkanLike(ds.source_type) && (
                       <div style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.7rem" }}>
                         <span className="badge" style={{ fontSize: "0.65rem" }}>
@@ -1806,8 +1826,15 @@ export default function AdminPage() {
                     </select>
                     </div>
                     <div style={{ flex: "1 1 14rem", minWidth: "12rem" }}>
-                      <div style={admFieldLabel}>{t("admin.storage_mode") || "אחסון"}</div>
+                      {/* Two DIFFERENT choices sit in this group — how versions
+                          accumulate (storage_mode) and where the bytes go
+                          (storage_target) — and only the first was ever
+                          captioned, with the group's own label. Both now carry
+                          their own, using the translations that already existed.
+                          The reality line above reports against both. */}
+                      <div style={admFieldLabel}>{t("admin.storage_plan") || "תוכנית אחסון"}</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                      <div style={admSubLabel}>{t("admin.storage_mode") || "אופן שמירה"}</div>
                       <select
                         value={ds.storage_mode || "full_snapshot"}
                         onChange={(e) =>
@@ -1847,6 +1874,9 @@ export default function AdminPage() {
                         </label>
                         </>
                       )}
+                      <div style={{ ...admSubLabel, marginTop: "0.2rem" }}>
+                        {t("admin.storage_target") || "יעד אחסון"}
+                      </div>
                       <select
                         value={ds.storage_target || "r2"}
                         onChange={(e) =>

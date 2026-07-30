@@ -1534,7 +1534,7 @@ async def admin_datasets(
     from sqlalchemy import exists, func, or_
     from sqlalchemy.orm import selectinload
 
-    from app.api.datasets import build_dataset_response
+    from app.api.datasets import build_dataset_response, latest_mappings_for
     from app.models.tag import Tag, dataset_tags
     from app.models.user import User as UserModel
     from app.models.version_index import VersionIndex
@@ -1629,9 +1629,18 @@ async def admin_datasets(
             .group_by(VersionIndex.tracked_dataset_id)
         )).all())
 
+    # Latest version's mappings for THIS page — what the plan-vs-reality column
+    # is derived from. Bounded by `limit`, which is why the admin tab can afford
+    # this and the unpaginated public catalog can't.
+    latest_mappings = await latest_mappings_for(db, ds_ids)
+
     return AdminDatasetsPage(
         items=[
-            build_dataset_response(ds, requester, org, version_counts.get(ds.id, 0))
+            build_dataset_response(
+                ds, requester, org, version_counts.get(ds.id, 0),
+                latest_mappings=latest_mappings.get(ds.id),
+                with_archive=True,
+            )
             for ds, requester, org in rows
         ],
         total=int(total),

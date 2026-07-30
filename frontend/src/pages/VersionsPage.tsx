@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+import ArchiveChips from "../components/ArchiveChips";
 import SourceChip from "../components/SourceChip";
 import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
@@ -403,6 +404,12 @@ export default function VersionsPage() {
               <TagChips tags={dataset.tags} />
             </div>
           )}
+          {/* What this dataset actually holds. Until now the page never said —
+              a visitor inferred it from WHICH call-to-action appeared ("צפה
+              בארכיון המצטבר" ⇒ NEON, "ארכיון הקבצים" ⇒ ODATA, download links ⇒
+              R2). That inference is silent when there is nothing to download and
+              nothing to query, which is exactly the case worth stating. */}
+          {dataset && <ArchiveChips archive={dataset.archive} variant="public" />}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
           {isAppend && datasetId && (

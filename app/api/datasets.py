@@ -15,7 +15,7 @@ from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
 from app.services.dataset_lookup import find_datasets_for_url
 from app.services.odata_client import odata_client
-from app.services import source_registry
+from app.services import archive_state, source_registry
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -259,6 +259,77 @@ class TagBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ArchiveState(BaseModel):
+    """What the dataset's archive actually holds, derived from its LATEST
+    version's ``resource_mappings`` — see app/services/archive_state.py.
+
+    The storage PLAN (``storage_target``) says what was configured; this says what
+    is there. They disagree far more often than the UI ever showed: a >50k-row
+    CKAN dataset not opted into NEON keeps a plan of "r2" while archiving only a
+    metadata stub.
+
+    ``fidelity`` is null when the endpoint didn't load the latest version (the
+    unpaginated public catalog deliberately doesn't — pulling 1,090 mappings,
+    some carrying thousands of row hashes in ``_appendonly_seen``, is exactly the
+    payload that OOM-killed the 512MB dyno before). Null renders as nothing;
+    ``"none"`` is the measured claim that nothing is archived.
+    """
+    fidelity: str | None = None      # full | rows | files | sample | none
+    file_store: str = "none"         # r2 | odata | mixed | none  (ACTUAL)
+    row_store: str = "none"          # neon | none
+    sample_of: int | None = None     # source row count behind a stub
+    mismatch: list[str] = []         # plan-vs-reality flags (admin surface)
+
+
+async def latest_mappings_for(db: AsyncSession, ds_ids: list) -> dict:
+    """``{dataset_id: resource_mappings}`` for the highest-numbered version of
+    each dataset in ``ds_ids``.
+
+    Joins on ``max(version_number)`` rather than using ``DISTINCT ON`` so the
+    query also runs on the SQLite DBs the unit tests build. Callers must keep
+    ``ds_ids`` bounded (a page, or one dataset) — mappings are unbounded JSONB.
+    """
+    if not ds_ids:
+        return {}
+    from sqlalchemy import and_, func
+    from app.models.version_index import VersionIndex
+
+    newest = (
+        select(
+            VersionIndex.tracked_dataset_id.label("did"),
+            func.max(VersionIndex.version_number).label("vn"),
+        )
+        .where(VersionIndex.tracked_dataset_id.in_(ds_ids))
+        .group_by(VersionIndex.tracked_dataset_id)
+        .subquery()
+    )
+    rows = (await db.execute(
+        select(VersionIndex.tracked_dataset_id, VersionIndex.resource_mappings)
+        .join(
+            newest,
+            and_(
+                VersionIndex.tracked_dataset_id == newest.c.did,
+                VersionIndex.version_number == newest.c.vn,
+            ),
+        )
+    )).all()
+    return {did: mappings for did, mappings in rows}
+
+
+def archive_state_for(ds, mappings: dict | None, *, has_versions: bool) -> ArchiveState:
+    """Derive one dataset's ArchiveState. ``mappings`` is its latest version's
+    (None when it has no versions)."""
+    from app.services.storage_client import dataset_archives_neon, dataset_stores_files
+
+    return ArchiveState(**archive_state.describe(
+        mappings,
+        has_versions=has_versions,
+        plan=storage_target_of(ds.scraper_config),
+        archives_neon=dataset_archives_neon(ds),
+        stores_files=dataset_stores_files(ds),
+    ))
+
+
 class DatasetResponse(BaseModel):
     id: str
     ckan_id: str
@@ -293,6 +364,11 @@ class DatasetResponse(BaseModel):
     # rows are captured, via a COPY-staged set diff + a one-time table migration.
     # Heavy — reserved for rare cases (e.g. the vehicle registry). Default off.
     capture_changes: bool = False
+    # What the archive ACTUALLY holds (vs. what storage_target was set to).
+    # Populated only where the latest version is loaded — see ArchiveState. Left
+    # null (not an empty object) elsewhere so the unpaginated public catalog,
+    # already ~1MB over 1,090 rows, doesn't carry 1,090 useless placeholders.
+    archive: ArchiveState | None = None
     last_error: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
@@ -316,15 +392,27 @@ def _build_source_url(ds: TrackedDataset) -> str:
     return base
 
 
-def build_dataset_response(ds, requester, org, version_count: int) -> DatasetResponse:
+def build_dataset_response(
+    ds, requester, org, version_count: int,
+    *, latest_mappings: dict | None = None, with_archive: bool = False,
+) -> DatasetResponse:
     """Serialize one tracked dataset row for the list endpoints.
 
     Shared by the public catalog (``GET /api/datasets``) and the paginated
     admin list (``GET /api/admin/datasets``) so the two can never drift —
     the admin cards read fields (storage plan, neon eligibility, new
     resources) that only exist here.
+
+    ``with_archive`` opts into the plan-vs-reality derivation, which needs the
+    dataset's latest ``resource_mappings``. The paginated admin list passes it;
+    the unpaginated public catalog does not (see ArchiveState on why).
     """
+    archive = (
+        archive_state_for(ds, latest_mappings, has_versions=version_count > 0)
+        if with_archive else None
+    )
     return DatasetResponse(
+        archive=archive,
         id=str(ds.id),
         ckan_id=ds.ckan_id,
         ckan_name=ds.ckan_name,
@@ -1973,7 +2061,14 @@ async def get_tracked_public(
     if not row:
         raise HTTPException(status_code=404, detail="Dataset not found")
     ds, org = row
+    # One dataset, so loading its latest version's mappings is cheap — and this
+    # is the endpoint the dataset page reads, where "what is actually archived
+    # here" is the question a visitor has.
+    latest = await latest_mappings_for(db, [ds.id])
     return DatasetResponse(
+        archive=archive_state_for(
+            ds, latest.get(ds.id), has_versions=ds.id in latest,
+        ),
         id=str(ds.id),
         ckan_id=ds.ckan_id,
         ckan_name=ds.ckan_name,
