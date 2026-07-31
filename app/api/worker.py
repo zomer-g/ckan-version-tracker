@@ -26,7 +26,7 @@ from app.models.source_registry import SourceRegistry
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
-from app.services import source_registry
+from app.services import append_store, sampling_runs, source_registry
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
@@ -65,11 +65,21 @@ _dataset_storage = storage.dataset_storage_target
 _use_r2 = storage.dataset_uses_r2
 
 
-def _poll_scraper_config(ds) -> dict:
+def _poll_scraper_config(ds, task=None) -> dict:
     """Build the scraper_config sent to the worker in the /poll response.
 
-    Starts from the dataset's stored config and fills defaults the worker
-    relies on:
+    Starts from the dataset's stored config, merges the task's per-RUN
+    ``params`` over it (migration 047), and fills defaults the worker
+    relies on.
+
+    The run params are merged LAST and win: they are how one dataset is sampled
+    several ways — the whole register, only what is new, only the files at a
+    given status, a single file — without forking the dataset or mutating its
+    stored config. A task with no params is the routine full poll, byte for byte
+    what it was before this existed, and a scraper that reads none of the keys
+    is unaffected by their presence.
+
+    Defaults filled here:
 
     * ``download_files`` — preserve the historical fallback (catalog-only).
     * ``max_missing_fraction`` — the worker's completeness gate fails a scrape
@@ -84,6 +94,9 @@ def _poll_scraper_config(ds) -> dict:
       which loses far more than this). A dataset may pin its own value.
     """
     cfg = dict(ds.scraper_config or {})
+    params = getattr(task, "params", None) or {}
+    if isinstance(params, dict):
+        cfg.update(params)
     cfg.setdefault("download_files", False)
     cfg.setdefault("max_missing_fraction", 0.25)
     return cfg
@@ -158,6 +171,16 @@ class PushVersionRequest(BaseModel):
     # ONE — reusing consolidate_dataset_versions — so a big bootstrap ends as a
     # single version + one deduped NEON table without a manual admin step.
     consolidate_dedup_key: str | None = None
+    # This run sampled a SUBSET of the corpus on purpose (a single file, the
+    # files at one status, only what is new — see scrape_tasks.params). The
+    # version is real history, but it is not a measurement of the whole corpus:
+    # the shrink guard must not compare it against a full pass, and no later
+    # full pass may be compared against it. Recorded on the version so both the
+    # guard and the UI can tell the two kinds apart.
+    partial_run: bool = False
+    # Which run mode produced it — free text, for the version's change_summary
+    # and the activity log ("only what's new", "status=נדונה בוועדת המשנה", …).
+    run_mode: str | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -538,12 +561,7 @@ async def poll_for_task(
     # GB-scale uploads for a partial that this server's shrink guard would
     # reject anyway. Same extraction the shrink guard itself uses.
     prev_total_rows = 0
-    latest_v = (await db.execute(
-        select(VersionIndex)
-        .where(VersionIndex.tracked_dataset_id == ds.id)
-        .order_by(VersionIndex.version_number.desc())
-        .limit(1)
-    )).scalar_one_or_none()
+    latest_v = await _shrink_baseline_version(db, ds.id)
     if latest_v is not None:
         try:
             prev_total_rows = int((latest_v.change_summary or {}).get("total_rows") or 0)
@@ -554,7 +572,7 @@ async def poll_for_task(
         "task_id": str(task.id),
         "tracked_dataset_id": str(ds.id),
         "source_url": ds.source_url,
-        "scraper_config": _poll_scraper_config(ds),
+        "scraper_config": _poll_scraper_config(ds, task),
         "callback_url": "/api/worker/push-version",
         "prev_total_rows": prev_total_rows,
         # How big the worker may make each attachment ZIP part. R2 datasets get
@@ -570,6 +588,92 @@ async def poll_for_task(
 # Keep references to fire-and-forget NEON-load tasks so the event loop
 # doesn't garbage-collect them mid-run.
 _NEON_BG_TASKS: set = set()
+
+
+@router.get("/dataset/{dataset_id}/keys")
+@limiter.limit("120/minute")
+async def dataset_item_keys(
+    dataset_id: str,
+    request: Request,
+    status: str | None = None,
+    limit: int = 5000,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    """The item keys OVER already holds for a dataset — the target list of a
+    re-sampling run.
+
+    A run launched as "only the files at status X" (see
+    app/services/sampling_runs.py) carries the SELECTOR, not the list: a status
+    can hold tens of thousands of items and a task row is no place for them. The
+    worker pulls the list here, paged, and re-samples exactly those items.
+
+    Read as ITEMS, not rows: the archive keeps every sample of every item, so
+    the status filter is applied to each item's LATEST sample. Asking for
+    "נדונה בוועדת המשנה" returns the files that are there now — not every file
+    that ever passed through it.
+
+    Worker-authenticated (this is the queue's own API), and read-only.
+    """
+    _verify_worker_key(request)
+    try:
+        uid = uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="dataset_id must be a UUID")
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    spec = sampling_runs.sampling_spec(ds)
+    if not spec:
+        raise HTTPException(status_code=409,
+                            detail="Dataset declares no sampling spec")
+    table = await sampling_runs.resolve_table(ds, db)
+    if not table:
+        raise HTTPException(status_code=409, detail="Dataset has no archive table yet")
+    keys, total = await append_store.latest_item_keys(
+        table,
+        key_col=spec["item_key"],
+        order_col=spec.get("sample_column"),
+        value_col=spec.get("status_column") if status else None,
+        value=status,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "dataset_id": str(ds.id),
+        "column": spec["item_key"],
+        "status": status,
+        "keys": keys,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def _shrink_baseline_version(db: AsyncSession, dataset_id: uuid.UUID):
+    """The newest version that is a FULL pass, for the shrink guard to measure
+    against — or None.
+
+    A partial run (``params.run_mode`` other than the whole corpus: one file, the
+    files at one status, only what is new) publishes a version holding just what
+    it sampled. Those versions are real history, but they are not a measurement
+    of the corpus, so using one as the baseline would defeat the guard for every
+    later run: after a single-file sample the baseline would read 1 row and any
+    collapse would pass. Skip them; if a dataset has only partial versions there
+    is nothing meaningful to compare against and the guard stays out of the way.
+    """
+    rows = (await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == dataset_id)
+        .order_by(VersionIndex.version_number.desc())
+        .limit(25)
+    )).scalars().all()
+    for v in rows:
+        if not (v.change_summary or {}).get("partial_run"):
+            return v
+    return None
 
 
 def worker_code_stamp(version: str | None, upstream: str | None = None) -> str:
@@ -892,11 +996,18 @@ async def push_version(
     if (
         latest is not None
         and not sc.get("allow_shrink")
-        and new_total_rows >= 0  # always true; keeps the guard explicit
+        # A deliberately partial run is not a measurement of the corpus, so
+        # there is nothing for the guard to measure: one file sampled against a
+        # 90k-file register is a 99.99% "shrink" and would be rejected every
+        # single time. The version records that it was partial, and no later
+        # full pass is measured against it (_shrink_baseline_version).
+        and not body.partial_run
     ):
         prev_total = 0
         try:
-            prev_total = int((latest.change_summary or {}).get("total_rows") or 0)
+            baseline = await _shrink_baseline_version(db, ds.id)
+            prev_total = int(((baseline.change_summary if baseline else None)
+                              or {}).get("total_rows") or 0)
         except (ValueError, TypeError):
             prev_total = 0
         # Only guard when the previous version actually had data, and the
@@ -1476,6 +1587,14 @@ async def push_version(
             "resources_removed": [],
             "resources_modified": [],
         }
+    if body.partial_run:
+        # Both flags live in change_summary because that is what the shrink
+        # guard, the versions API and the dataset page already read. Absent on
+        # a full pass rather than false, so nothing about existing versions
+        # changes meaning.
+        change_summary["partial_run"] = True
+        if body.run_mode:
+            change_summary["run_mode"] = body.run_mode
     version = VersionIndex(
         tracked_dataset_id=ds.id,
         version_number=next_version,

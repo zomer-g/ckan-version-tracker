@@ -8,11 +8,28 @@ every filter value is parameterized (see app/services/append_store.py).
 Endpoints (all under /api/append):
   GET /{dataset_id}/schema           → {dataset_title, table, tables, total, columns, key}
   GET /{dataset_id}/rows?…           → {columns, rows, total, limit, offset, sort, order}
+  GET /{dataset_id}/item?value=…     → every sample of ONE item, newest first
   GET /{dataset_id}/download.csv?…   → streaming CSV of the (filtered) table
 
 Filtering on rows/download: ``q`` does a free-text ILIKE across all columns;
 any query param whose name is a real column does a per-column ILIKE. Reserved
-params: limit, offset, sort, order, q, table/resource/resource_id.
+params: limit, offset, sort, order, q, latest, table/resource/resource_id.
+
+SAMPLING ARCHIVES. Some sources are sampled repeatedly rather than published
+whole: the Jerusalem building-licensing register is read file by file, and each
+reading appends a row stamped with when it was taken. Such a table holds SEVERAL
+rows per real-world item, which is the point (the history of a plan is the
+sequence of its samples) and also a trap for a consumer who reads rows as items.
+Two params make both readings available:
+
+  ``?latest=true``     one row per item — the newest sample of each. This is
+                       "the register as it stands now", and filters apply to
+                       that current state.
+  ``/item?value=…``    the opposite end: every sample of one item, in order.
+
+Which column identifies an item and which carries the sample time are declared
+by the source and published in /schema (``item_key`` / ``sample_column``), so a
+client can discover the shape instead of assuming it.
 
 MULTI-RESOURCE DATASETS. A dataset can hold one NEON table PER RESOURCE — a
 CKAN dataset archived as ``append_db_multi`` (one per datastore resource) or a
@@ -54,7 +71,41 @@ class SqlBody(BaseModel):
 # like limit/offset/sort/order/q so /rows and /download.csv never mistake the
 # selector for a per-column filter.
 _TABLE_PARAMS = ("table", "resource", "resource_id")
-_RESERVED = {"limit", "offset", "sort", "order", "q", *_TABLE_PARAMS}
+_RESERVED = {"limit", "offset", "sort", "order", "q", "latest", *_TABLE_PARAMS}
+
+
+def item_spec(ds) -> tuple[str | None, str | None]:
+    """``(item_key, sample_column)`` for a dataset, or (None, None).
+
+    An archive that appends a row per SAMPLING holds several rows per real-world
+    item — one per time it was looked at. Two things are then needed to read it
+    as items rather than as rows: which column identifies an item, and which
+    column says when a row was sampled. Both are declared by the source (see
+    app/services/sampling_runs.py); the item key falls back to the keys a
+    dataset may already carry for other reasons, and the sample column falls
+    back to ``first_seen``, which is when OVER first stored the row."""
+    sc = ds.scraper_config or {}
+    spec = sc.get("sampling") if isinstance(sc.get("sampling"), dict) else {}
+    key = spec.get("item_key") or sc.get("dedup_key") or sc.get("append_key")
+    return key, spec.get("sample_column")
+
+
+def _latest_key(ds, latest: bool) -> tuple[str | None, str | None]:
+    """Resolve ``?latest=`` into (latest_key, latest_order), or 400.
+
+    Refusing when the dataset declares no item key is deliberate: silently
+    serving the full history for ``latest=true`` would answer a different
+    question than the one asked, and the caller would have no way to tell."""
+    key, sample_col = item_spec(ds)
+    if not latest:
+        return None, None
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail=("latest=true needs an item key, and this dataset declares "
+                    "none (scraper_config.sampling.item_key)"),
+        )
+    return key, sample_col
 
 
 def _pick(tables: list[dict], selector: str | None) -> dict:
@@ -204,6 +255,14 @@ async def archive_schema(dataset_id: str, request: Request,
         "key": (ds.scraper_config or {}).get("append_key"),
         "capture_changes": bool((ds.scraper_config or {}).get("capture_changes")),
         "first_seen_column": "first_seen",
+        # How to read this table as ITEMS rather than rows. Present (non-null
+        # item_key) means the archive holds a sampling history: several rows per
+        # item, one per time it was sampled. Without publishing these a consumer
+        # can't tell that shape apart from an ordinary growing table, and would
+        # read N rows for one building file as N buildings.
+        "item_key": item_spec(ds)[0],
+        "sample_column": item_spec(ds)[1] or "first_seen",
+        "supports_latest": bool(item_spec(ds)[0]),
     }
 
 
@@ -245,14 +304,83 @@ async def archive_rows(
     order: str = "desc",
     q: str | None = None,
     table: str | None = None,
+    latest: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
+    """One page of the archive.
+
+    ``latest=true`` collapses it to the NEWEST sample per item — the register as
+    it stands now, one row per file — instead of every sample ever taken. Any
+    filter then applies to that current state (``?latest=true&סטטוס=…`` is "the
+    files at this status now", not "ever"). Without it you get the full sampling
+    history, which is what this archive is for."""
+    ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
+    latest_key, latest_order = _latest_key(ds, latest)
     return await append_store.query(
         tbl,
         limit=limit, offset=offset, sort=sort, order=order, q=q,
         filters=_filters_from(request, exclude=set()),
+        latest_key=latest_key, latest_order=latest_order,
     )
+
+
+@router.get("/{dataset_id}/item")
+@limiter.limit("60/minute")
+async def archive_item_history(
+    dataset_id: str,
+    request: Request,
+    value: str,
+    limit: int = 200,
+    offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
+    order: str = "desc",
+    table: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Every sample of ONE item, oldest or newest first — the history of a single
+    building file, plan or record.
+
+    ``value`` is an EXACT match on the dataset's item key (``מספר תיק`` for the
+    Jerusalem register), not the substring match the per-column filters do: a
+    file number is an identifier, and ``2024/012`` must not quietly return
+    ``2024/0120.00`` as well.
+
+    The response says which column was matched and how many samples exist, so a
+    consumer can page without guessing the schema.
+    """
+    ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
+    key, sample_col = item_spec(ds)
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail=("This dataset declares no item key "
+                    "(scraper_config.sampling.item_key)"),
+        )
+    cols = await append_store.user_columns(tbl)
+    if key not in cols:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"No column {key!r} in this table",
+                    "table": tbl, "columns": cols},
+        )
+    sort_col = sample_col if (sample_col and sample_col in cols) else "first_seen"
+    res = await append_store.datastore_search(
+        tbl, filters={key: value}, limit=limit, offset=offset,
+        sort=f"{sort_col} {'desc' if str(order).lower() != 'asc' else 'asc'}",
+    )
+    if res is None:
+        raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
+    return {
+        "dataset_id": str(ds.id),
+        "dataset_title": ds.title,
+        "table": tbl,
+        "item_key": key,
+        "item": value,
+        "sample_column": sort_col,
+        "samples": res["total"],
+        "rows": res["records"],
+        "limit": res["limit"],
+        "offset": res["offset"],
+    }
 
 
 @router.get("/{dataset_id}/download.csv")
@@ -264,9 +392,13 @@ async def archive_download(
     order: str = "desc",
     q: str | None = None,
     table: str | None = None,
+    latest: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
+    """The (filtered) archive as CSV. ``latest=true`` exports one row per item —
+    the newest sample of each — instead of the whole sampling history."""
     ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
+    latest_key, latest_order = _latest_key(ds, latest)
     filters = _filters_from(request, exclude=set())
     safe = (ds.ckan_name or "archive").replace("/", "_")[:60]
     if len(tables) > 1:
@@ -275,7 +407,12 @@ async def archive_download(
         chosen = next((t for t in tables if t["table"] == tbl), {})
         part = (chosen.get("resource_name") or tbl).replace("/", "_")[:40]
         safe = f"{safe}_{part}"
-    stream = append_store.iter_csv(tbl, sort=sort, order=order, q=q, filters=filters)
+    if latest_key:
+        # The file says which of the two it is — a "latest" export and a full
+        # history export of the same table are otherwise the same filename.
+        safe = f"{safe}_latest"
+    stream = append_store.iter_csv(tbl, sort=sort, order=order, q=q, filters=filters,
+                                   latest_key=latest_key, latest_order=latest_order)
     return StreamingResponse(
         stream,
         media_type="text/csv; charset=utf-8",
@@ -327,6 +464,7 @@ async def datastore_search(
     distinct: bool = False,
     include_total: bool = True,
     table: str | None = None,
+    latest: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """CKAN ``datastore_search``-style query over the dataset's NEON content.
@@ -339,8 +477,12 @@ async def datastore_search(
     limit, offset, _links}}``.
 
     ``table`` selects one table of a multi-resource dataset (name, resource id or
-    resource name); ``tables`` in the result says what else is there."""
+    resource name); ``tables`` in the result says what else is there.
+
+    OVER-specific: ``latest=true`` queries the newest sample per item instead of
+    every sample (see /rows)."""
     ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
+    latest_key, latest_order = _latest_key(ds, latest)
     field_list = [c.strip() for c in fields.split(",") if c.strip()] if fields else None
     filt: dict = {}
     if filters:
@@ -353,6 +495,7 @@ async def datastore_search(
     res = await append_store.datastore_search(
         tbl, fields=field_list, filters=filt, q=q, sort=sort,
         limit=limit, offset=offset, distinct=distinct, include_total=include_total,
+        latest_key=latest_key, latest_order=latest_order,
     )
     if res is None:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")

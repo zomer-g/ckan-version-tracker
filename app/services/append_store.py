@@ -1141,6 +1141,37 @@ async def user_columns(table: str) -> list[str]:
     return [r["column_name"] for r in rows if r["column_name"] not in _HIDDEN_COLS]
 
 
+def latest_source(
+    table: str, cols: list[str], *, key_col: str | None, order_col: str | None,
+) -> str:
+    """The FROM target for a query — the table itself, or one row per ITEM.
+
+    An archive that appends a row per sampling holds the whole history of every
+    item: N rows for one building file, one per time it was looked at. That is
+    the point of it, and it is also the wrong answer to "what does the register
+    look like now" — which needs the newest row per item and nothing else.
+
+    ``DISTINCT ON (key) … ORDER BY key, sampled DESC`` is that answer, wrapped
+    as a subquery ALIASED BACK TO THE TABLE NAME so every caller's WHERE, ORDER
+    BY and column list keep working untouched. Filters therefore apply to the
+    latest sample of each item, not to "any sample that ever matched" — asking
+    for status X returns the files that are at X *now*, which is what the
+    question means.
+
+    Falls back to the plain table when the dataset declares no item key or the
+    column isn't there (a renamed resource, an older table): serving the full
+    history is a visible, honest answer, while erroring is not.
+    """
+    if not key_col or key_col not in cols:
+        return _qi(table)
+    order = order_col if (order_col and order_col in cols) else (
+        "first_seen" if "first_seen" in cols else key_col)
+    return (
+        f'(SELECT DISTINCT ON ({_qi(key_col)}) * FROM {_qi(table)} '
+        f'ORDER BY {_qi(key_col)}, {_qi(order)} DESC NULLS LAST) AS {_qi(table)}'
+    )
+
+
 def _build_where(
     cols: list[str], q: str | None, filters: dict[str, str], start_param: int,
 ) -> tuple[str, list]:
@@ -1175,10 +1206,15 @@ async def query(
     order: str = "desc",
     q: str | None = None,
     filters: dict[str, str] | None = None,
+    latest_key: str | None = None,
+    latest_order: str | None = None,
 ) -> dict:
     """Paginated, filtered read for the UI. Returns
     {columns, rows, total, limit, offset}. Validates sort/filter columns
-    against the live schema; caps the page at MAX_PAGE."""
+    against the live schema; caps the page at MAX_PAGE.
+
+    ``latest_key`` collapses the archive to the newest sample per item — see
+    latest_source."""
     cols = await user_columns(table)
     if not cols:
         return {"columns": [], "rows": [], "total": 0, "limit": limit, "offset": offset}
@@ -1190,11 +1226,12 @@ async def query(
 
     where, params = _build_where(cols, q, filters, start_param=1)
     select_cols = ", ".join(_qi(c) for c in cols)
+    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order)
     pool = await get_pool()
     async with pool.acquire() as conn:
-        total = int(await conn.fetchval(f'SELECT count(*) FROM {_qi(table)}{where}', *params))
+        total = int(await conn.fetchval(f'SELECT count(*) FROM {source}{where}', *params))
         rows = await conn.fetch(
-            f'SELECT {select_cols} FROM {_qi(table)}{where} '
+            f'SELECT {select_cols} FROM {source}{where} '
             f'ORDER BY {_qi(sort_col)} {direction} NULLS LAST '
             f'LIMIT ${len(params)+1} OFFSET ${len(params)+2}',
             *params, limit, offset,
@@ -1277,6 +1314,8 @@ async def datastore_search(
     offset: int = 0,
     distinct: bool = False,
     include_total: bool = True,
+    latest_key: str | None = None,
+    latest_order: str | None = None,
 ) -> dict | None:
     """CKAN ``datastore_search``-style query over an append table. ``filters``
     are exact-match per column (scalar or list → IN); ``q`` is a substring match
@@ -1319,14 +1358,15 @@ async def datastore_search(
         ' ORDER BY "first_seen" DESC' if "first_seen" in colset else ""
     )
     select = ("SELECT DISTINCT " if distinct else "SELECT ") + ", ".join(_qi(c) for c in sel)
+    source = latest_source(table, all_cols, key_col=latest_key, order_col=latest_order)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         total = None
         if include_total:
-            total = int(await conn.fetchval(f"SELECT count(*) FROM {_qi(table)}{where}", *params))
+            total = int(await conn.fetchval(f"SELECT count(*) FROM {source}{where}", *params))
         recs = await conn.fetch(
-            f"{select} FROM {_qi(table)}{where}{order} "
+            f"{select} FROM {source}{where}{order} "
             f"LIMIT ${len(params)+1} OFFSET ${len(params)+2}",
             *params, limit, offset,
         )
@@ -1347,9 +1387,14 @@ async def iter_csv(
     order: str = "desc",
     q: str | None = None,
     filters: dict[str, str] | None = None,
+    latest_key: str | None = None,
+    latest_order: str | None = None,
 ):
     """Async generator yielding the filtered table as CSV (utf-8-sig) chunks,
-    server-side cursor so even multi-million-row exports stay memory-bounded."""
+    server-side cursor so even multi-million-row exports stay memory-bounded.
+
+    ``latest_key`` exports the newest sample per item instead of the whole
+    sampling history — see latest_source."""
     import csv as _csv
     import io as _io
 
@@ -1362,8 +1407,9 @@ async def iter_csv(
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
     where, params = _build_where(cols, q, filters, start_param=1)
     select_cols = ", ".join(_qi(c) for c in cols)
+    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order)
     sql = (
-        f'SELECT {select_cols} FROM {_qi(table)}{where} '
+        f'SELECT {select_cols} FROM {source}{where} '
         f'ORDER BY {_qi(sort_col)} {direction} NULLS LAST'
     )
 
@@ -1382,3 +1428,87 @@ async def iter_csv(
         async with conn.transaction():
             async for rec in conn.cursor(sql, *params):
                 yield _row_to_csv([rec[c] for c in cols])
+
+
+# ── Reading the archive as a set of ITEMS (see app/services/sampling_runs.py) ──
+# Three reads that answer "what does OVER already know", which is what decides
+# what a targeted re-sample should go and fetch. All three collapse the archive
+# to the latest sample per item first: an item's status is the status of its
+# most recent sample, never one it passed through two years ago.
+
+async def latest_value_counts(
+    table: str, *, key_col: str, value_col: str, order_col: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """``[{value, items}]`` — how many ITEMS currently sit at each value of
+    ``value_col`` (typically a status), most common first. Empty if either
+    column is missing."""
+    cols = await user_columns(table)
+    if key_col not in cols or value_col not in cols:
+        return []
+    source = latest_source(table, cols, key_col=key_col, order_col=order_col)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f'SELECT {_qi(value_col)} AS value, count(*) AS items FROM {source} '
+            f'GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT $1',
+            max(1, min(int(limit or 200), 1000)),
+        )
+    return [{"value": r["value"] or "", "items": int(r["items"])} for r in rows]
+
+
+async def latest_item_keys(
+    table: str, *, key_col: str, order_col: str | None = None,
+    value_col: str | None = None, value: str | None = None,
+    limit: int = 1000, offset: int = 0,
+) -> tuple[list[str], int]:
+    """``(keys, total)`` — the item keys, optionally only those whose latest
+    sample has ``value_col == value``. Paged, because the register this exists
+    for holds ~90k of them and the worker pulls the list it is about to
+    re-sample."""
+    cols = await user_columns(table)
+    if key_col not in cols:
+        return [], 0
+    source = latest_source(table, cols, key_col=key_col, order_col=order_col)
+    where, params = "", []
+    if value_col and value_col in cols and value is not None:
+        where = f' WHERE {_qi(value_col)}::text = $1'
+        params = [str(value)]
+    limit = max(1, min(int(limit or 1000), 20000))
+    offset = max(0, int(offset or 0))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = int(await conn.fetchval(
+            f'SELECT count(*) FROM {source}{where}', *params))
+        rows = await conn.fetch(
+            f'SELECT {_qi(key_col)} AS k FROM {source}{where} ORDER BY 1 '
+            f'LIMIT ${len(params)+1} OFFSET ${len(params)+2}',
+            *params, limit, offset,
+        )
+    return [str(r["k"]) for r in rows if r["k"] is not None], total
+
+
+async def key_frontier(table: str, *, key_col: str, separator: str = "/") -> dict:
+    """``{prefix: highest key seen}`` — the far end of each key series.
+
+    For a key that is issued in order within a period (``2026/0180.00``,
+    ``2026/0181.00``, …) the highest one OVER holds is where "what is new"
+    starts: the worker walks forward from it instead of re-sweeping the whole
+    city to discover the handful of files opened since the last run. Purely
+    lexicographic and therefore only meaningful for zero-padded keys — which is
+    exactly the shape this is declared for, and why it is opt-in per dataset
+    (``sampling.key_separator``) rather than assumed."""
+    cols = await user_columns(table)
+    if key_col not in cols:
+        return {}
+    sep = (separator or "/")[:1] or "/"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f'SELECT split_part({_qi(key_col)}::text, $1, 1) AS prefix, '
+            f'max({_qi(key_col)}::text) AS top FROM {_qi(table)} '
+            f'WHERE {_qi(key_col)} IS NOT NULL AND {_qi(key_col)}::text <> \'\' '
+            f'GROUP BY 1 ORDER BY 1',
+            sep,
+        )
+    return {str(r["prefix"]): str(r["top"]) for r in rows if r["prefix"]}

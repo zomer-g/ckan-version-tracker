@@ -2,6 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -70,3 +71,9 @@ class ScrapeTask(Base):
         nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Per-RUN overrides, merged OVER the dataset's scraper_config in the /poll
+    # response (migration 047). This is what makes one dataset samplable several
+    # ways — "only what's new", "only the files at status X", "just this one" —
+    # without forking it into several datasets or mutating its stored config.
+    # None means the routine full poll, which is what every task was before.
+    params: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
