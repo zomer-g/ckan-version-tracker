@@ -518,19 +518,18 @@ async def poll_for_task(
     # produces versions in an old shape. That is invisible from the queue unless
     # the SHA is shown: two machines on different SHAs is the tell, and it is
     # what a fleet-wide "did everyone pull?" check reads.
-    stamp = f"{worker_version[:7]}/{worker_upstream or 'unknown'}" if worker_version \
-        else "no version header"
-    task.message = (f"Assigned to worker {who} [{stamp}]" if who
-                    else f"Assigned to worker [{stamp}]")
+    stamp = worker_code_stamp(worker_version, worker_upstream)
+    task.message = (f"Assigned to worker {who} {stamp}" if who
+                    else f"Assigned to worker {stamp}")
     await db.commit()
 
     from app.services.activity_log import log_event
     await log_event(
         event="started", dataset=ds, status="info", actor="worker",
         message="גירוד התחיל (המשימה נמסרה ל-worker)",
-        # In the log rather than only in task.message, which the first progress
-        # report overwrites — this is the copy still there when a version turns
-        # out to have been produced by the wrong commit.
+        # In the log as well as on the task: the log is the copy still there
+        # after the task row is gone, when a version turns out to have been
+        # produced by the wrong commit.
         detail=f"worker={who or 'unknown'} code={stamp}",
     )
 
@@ -571,6 +570,27 @@ async def poll_for_task(
 # Keep references to fire-and-forget NEON-load tasks so the event loop
 # doesn't garbage-collect them mid-run.
 _NEON_BG_TASKS: set = set()
+
+
+def worker_code_stamp(version: str | None, upstream: str | None = None) -> str:
+    """``[3f9c1d2]`` — which commit the machine reporting this is running.
+
+    Rendered on EVERY task card, not just at assignment: the whole value is
+    seeing a mixed-SHA fleet at a glance, and a stamp present on one card and
+    absent on the others reads as "no information" rather than "same code".
+    The worker sends X-Worker-Version as a session-level header, so every
+    request it makes carries it — including the progress reports that overwrite
+    the assignment message.
+
+    The upstream verdict is appended only when it is NOT "current": an assigned
+    task's worker cannot be "behind" (dispatch refuses that), so printing the
+    normal case would be noise on every row, while "unknown" is worth seeing.
+    """
+    sha = (version or "").strip()[:7]
+    if not sha:
+        return "[no version]"
+    verdict = (upstream or "").strip().lower()
+    return f"[{sha}]" if verdict in ("", "current") else f"[{sha}/{verdict}]"
 
 
 def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> bool:
@@ -2376,7 +2396,15 @@ async def update_progress(
     # and strand the task mid-run.
     task.phase = (body.phase or "")[:50]
     task.progress = body.percentage
-    task.message = (body.message or "")[:500]
+    # Re-stamp the worker's commit onto every report. Without this the SHA is
+    # visible only until the first progress report overwrites the assignment
+    # message, so a running fleet shows it on whichever cards happen not to have
+    # reported yet — the one reading of the queue that is worse than not showing
+    # it at all. The header is a session default on the worker's HTTP client, so
+    # it rides along on progress reports for free; the upstream verdict does not
+    # (it is sent per-poll), hence the SHA alone here.
+    stamp = worker_code_stamp(request.headers.get("x-worker-version"))
+    task.message = f"{(body.message or '')[:500 - len(stamp) - 1]} {stamp}".strip()
     # Keep the running machine's identity current — the worker posting progress
     # IS the machine doing the work, and this backfills tasks assigned before
     # these fields existed.
