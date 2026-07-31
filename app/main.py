@@ -7,7 +7,6 @@ from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -56,7 +55,7 @@ from app.api.page_content import router as page_content_router
 from app.api.page_content import admin_router as admin_page_content_router
 from app.api.v1 import router as v1_router
 from app.config import settings
-from app.rate_limit import limiter
+from app.rate_limit import limiter, rate_limit_exceeded_handler
 from app.worker.scheduler import init_scheduler, shutdown_scheduler
 
 logging.basicConfig(
@@ -145,7 +144,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Per-IP data budget for the bulk public API (/api/v1, /api/append): blocks a
 # single client from siphoning an unreasonable VOLUME of data (cost guard) on
