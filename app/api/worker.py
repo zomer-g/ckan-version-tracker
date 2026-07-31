@@ -511,13 +511,27 @@ async def poll_for_task(
     # Prefer the explicit machine id (distinguishes workers behind a shared IP);
     # fall back to the IP for older workers that don't send X-Worker-Id.
     who = worker_id or (worker_ip if worker_ip and worker_ip != "unknown" else "")
-    task.message = f"Assigned to worker {who}" if who else "Assigned to worker"
+    # WHICH CODE the machine is running, next to which machine it is. Freshness
+    # is self-reported (the worker compares HEAD to origin itself) and only an
+    # explicit "behind" is refused, so a worker running an old commit while
+    # reporting "current" — or reporting nothing — is dispatched normally and
+    # produces versions in an old shape. That is invisible from the queue unless
+    # the SHA is shown: two machines on different SHAs is the tell, and it is
+    # what a fleet-wide "did everyone pull?" check reads.
+    stamp = f"{worker_version[:7]}/{worker_upstream or 'unknown'}" if worker_version \
+        else "no version header"
+    task.message = (f"Assigned to worker {who} [{stamp}]" if who
+                    else f"Assigned to worker [{stamp}]")
     await db.commit()
 
     from app.services.activity_log import log_event
     await log_event(
         event="started", dataset=ds, status="info", actor="worker",
         message="גירוד התחיל (המשימה נמסרה ל-worker)",
+        # In the log rather than only in task.message, which the first progress
+        # report overwrites — this is the copy still there when a version turns
+        # out to have been produced by the wrong commit.
+        detail=f"worker={who or 'unknown'} code={stamp}",
     )
 
     # Previous version's row count — lets the worker (a) fail FAST on heavy
