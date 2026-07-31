@@ -54,11 +54,13 @@ SAMPLING = {
 COLS = [ITEM_KEY, STATUS_COL, SAMPLE_COL, "first_seen"]
 
 
-def _ds(**cfg):
+def _ds(source_url=None, source_type="scraper", **cfg):
     """A dataset stub with just the attributes these paths touch."""
     return types.SimpleNamespace(
         id="00000000-0000-0000-0000-000000000001",
         title="עיריית ירושלים — תיקי רישוי ובנייה",
+        source_url=source_url,
+        source_type=source_type,
         scraper_config=cfg,
     )
 
@@ -201,6 +203,35 @@ def test_latest_falls_back_to_first_seen_and_to_the_plain_table():
         "append_t", ["a", "b"], key_col=ITEM_KEY, order_col=SAMPLE_COL) == '"append_t"'
     assert append_store.latest_source(
         "append_t", COLS, key_col=None, order_col=None) == '"append_t"'
+
+
+def test_an_existing_dataset_gets_the_spec_from_its_sources_manifest(monkeypatch):
+    """A stored scraper_config is a snapshot from creation time. Without this
+    fallback, a manifest that learns to declare sampling would apply only to
+    datasets created afterwards — and the ones with history worth reading are
+    exactly the old ones."""
+    from app.services import source_registry
+
+    manifest = source_registry.validate_manifest({
+        "manifest_version": 1,
+        "id": "toysrc",
+        "label_he": "מקור", "label_en": "Source",
+        "site_url": "https://toy.example.gov.il/",
+        "badge": {"bg": "#fff", "fg": "#000", "accent": "#123456"},
+        "default_config": {"sampling": SAMPLING},
+        "url_patterns": [{"regex": r"^https?://toy\.example\.gov\.il/.*$"}],
+    })
+    monkeypatch.setattr(source_registry, "cached_manifests", lambda: [manifest])
+
+    # Stored config predates the sampling block entirely.
+    ds = _ds(source_url="https://toy.example.gov.il/x", corpus="all")
+    assert sampling_runs.sampling_spec(ds) == SAMPLING
+
+    # A URL no manifest claims stays unsamplable, and so does a CKAN dataset.
+    assert sampling_runs.sampling_spec(
+        _ds(source_url="https://elsewhere.example.com/x")) is None
+    assert sampling_runs.sampling_spec(
+        _ds(source_url="https://toy.example.gov.il/x", source_type="ckan")) is None
 
 
 def test_item_key_is_discoverable_and_latest_is_a_reserved_param():

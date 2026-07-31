@@ -71,11 +71,47 @@ MAX_TARGETS = 20000
 
 
 def sampling_spec(ds) -> dict | None:
-    """The dataset's ``sampling`` block, or None if it declares none."""
+    """The dataset's ``sampling`` block, or None if it declares none.
+
+    Read from the dataset's stored config first, and from its source's MANIFEST
+    when the stored config has none. The fallback is what makes this work on the
+    datasets that already exist: a stored ``scraper_config`` is a snapshot taken
+    when the dataset was created, so without it a manifest that learns to
+    declare sampling would only ever apply to datasets created afterwards —
+    every existing one would need a config backfill, which is precisely the
+    drift the declarative registry exists to avoid.
+
+    Resolution goes through the same matcher OVER classifies a pasted URL with,
+    so a dataset gets the block its own corpus declares (the register's four
+    modes, the documents index's one) rather than the source's default. The
+    cache is warmed at startup and this is a pure lookup — no DB, so it is safe
+    inside response serialization.
+    """
     spec = (ds.scraper_config or {}).get("sampling")
+    if not isinstance(spec, dict) or not spec.get("item_key"):
+        spec = _manifest_spec(ds)
     if not isinstance(spec, dict) or not spec.get("item_key"):
         return None
     return spec
+
+
+def _manifest_spec(ds) -> dict | None:
+    """The ``sampling`` block this dataset's URL resolves to in the registry."""
+    url = getattr(ds, "source_url", None)
+    if not url or getattr(ds, "source_type", None) != "scraper":
+        return None
+    try:
+        from app.services import source_registry
+
+        match = source_registry.match_manifests(
+            url, source_registry.cached_manifests())
+    except Exception as e:  # noqa: BLE001 — never break a read path over this
+        logger.debug("sampling spec lookup failed for %s: %s", url, e)
+        return None
+    if match is None:
+        return None
+    spec = (match.scraper_config or {}).get("sampling")
+    return spec if isinstance(spec, dict) else None
 
 
 def available_modes(ds) -> list[str]:

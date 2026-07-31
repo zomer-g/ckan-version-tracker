@@ -84,8 +84,14 @@ def item_spec(ds) -> tuple[str | None, str | None]:
     app/services/sampling_runs.py); the item key falls back to the keys a
     dataset may already carry for other reasons, and the sample column falls
     back to ``first_seen``, which is when OVER first stored the row."""
+    from app.services import sampling_runs
+
     sc = ds.scraper_config or {}
-    spec = sc.get("sampling") if isinstance(sc.get("sampling"), dict) else {}
+    # Resolved through sampling_runs so the source's MANIFEST answers for a
+    # dataset created before it declared any of this — otherwise ?latest=true
+    # would be available on new datasets and quietly missing on the ones that
+    # have the history worth reading.
+    spec = sampling_runs.sampling_spec(ds) or {}
     key = spec.get("item_key") or sc.get("dedup_key") or sc.get("append_key")
     return key, spec.get("sample_column")
 
