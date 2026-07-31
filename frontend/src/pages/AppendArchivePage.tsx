@@ -56,10 +56,6 @@ export default function AppendArchivePage() {
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
-  // Sampling archives hold several rows per item — one per time it was sampled.
-  // ON = the register as it stands now (newest sample of each item); OFF = the
-  // full history. Only offered when the dataset declares an item key.
-  const [latest, setLatest] = useState(false);
 
   // SQL console
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
@@ -107,14 +103,14 @@ export default function AppendArchivePage() {
     if (!datasetId) return;
     setLoading(true);
     appendArchive
-      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, table, latest, filters: debounced.filters })
+      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, table, filters: debounced.filters })
       .then((r) => {
         setData(r);
         setError(null);
       })
       .catch((e) => setError(e?.message || "rows error"))
       .finally(() => setLoading(false));
-  }, [datasetId, limit, offset, sort, order, debounced, table, latest]);
+  }, [datasetId, limit, offset, sort, order, debounced, table]);
 
   useEffect(() => {
     load();
@@ -157,18 +153,15 @@ export default function AppendArchivePage() {
   const downloadHref = useMemo(
     () =>
       datasetId
-        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, table, latest, filters: debounced.filters })
+        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, table, filters: debounced.filters })
         : "#",
-    [datasetId, sort, order, debounced, table, latest],
+    [datasetId, sort, order, debounced, table],
   );
   const downloadAllHref = useMemo(
     // "הכל" means all of the table on screen — for a multi-resource dataset the
     // tables can have different schemas, so there is no one CSV of the dataset.
-    // It also follows the latest/history toggle: exporting the full sampling
-    // history while the screen shows one row per item would be a different
-    // dataset than the one being looked at.
-    () => (datasetId ? appendArchive.downloadUrl(datasetId, { table, latest }) : "#"),
-    [datasetId, table, latest],
+    () => (datasetId ? appendArchive.downloadUrl(datasetId, { table }) : "#"),
+    [datasetId, table],
   );
 
   if (error && !schema) {
@@ -189,29 +182,9 @@ export default function AppendArchivePage() {
             ארכיון מצטבר (APPEND) · {total.toLocaleString()} שורות
             {schema?.key ? <> · מפתח: <code>{schema.key}</code></> : <> · לכידת כל מצב</>}
             {" · עמודת "}<code>first_seen</code>{" = זמן הוספת השורה"}
-            {schema?.supports_latest && (
-              <> · ארכיון דגימות: <code>{schema.item_key}</code> = ישות, <code>{schema.sample_column}</code> = מועד הדגימה</>
-            )}
           </div>
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "0.6rem" }}>
-          {/* Several rows per item is the whole point of a sampling archive and
-              also the easiest thing to misread — without this toggle the grid
-              shows one building file as N files. */}
-          {schema?.supports_latest && (
-            <label
-              className="text-sm"
-              style={{ display: "flex", alignItems: "center", gap: "0.3rem", whiteSpace: "nowrap" }}
-              title="שורה אחת לכל ישות — הדגימה האחרונה שלה"
-            >
-              <input
-                type="checkbox"
-                checked={latest}
-                onChange={(e) => { setLatest(e.target.checked); setOffset(0); }}
-              />
-              רק הדגימה האחרונה
-            </label>
-          )}
           <a
             href={downloadAllHref}
             style={{
