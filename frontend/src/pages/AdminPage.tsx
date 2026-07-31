@@ -20,6 +20,7 @@ import {
   TagWithCount,
 } from "../api/client";
 import ArchiveChips from "../components/ArchiveChips";
+import SourceGoneNotice from "../components/SourceGoneNotice";
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
@@ -190,6 +191,7 @@ export default function AdminPage() {
   const [dsQ, setDsQ] = useState("");             // what's submitted
   const [dsStorage, setDsStorage] = useState("");
   const [dsSourceType, setDsSourceType] = useState("");
+  const [dsSourceGone, setDsSourceGone] = useState("");
   const [dsOffset, setDsOffset] = useState(0);
   const [dsLimit, setDsLimit] = useState(25);
   const [loading, setLoading] = useState(true);
@@ -266,7 +268,7 @@ export default function AdminPage() {
     loadDatasets();
     if (!sizes && !sizesLoading) loadSizes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dsQ, dsStorage, dsSourceType, dsOffset, dsLimit]);
+  }, [tab, dsQ, dsStorage, dsSourceType, dsSourceGone, dsOffset, dsLimit]);
 
   const loadTags = async () => {
     try {
@@ -531,6 +533,7 @@ export default function AdminPage() {
         q: dsQ || undefined,
         storage: dsStorage || undefined,
         source_type: dsSourceType || undefined,
+        source_gone: dsSourceGone || undefined,
         limit: dsLimit,
         offset: dsOffset,
       });
@@ -1627,6 +1630,17 @@ export default function AdminPage() {
           <option value="cbs">למ"ס</option>
         </select>
         <select
+          value={dsSourceGone}
+          onChange={(e) => { setDsOffset(0); setDsSourceGone(e.target.value); }}
+          aria-label="סינון לפי קיום המקור"
+          title="מאגרים שהמפרסם הסיר את המקור שלהם — מזוהה בוודאות בצד הסורק, לא מנוחש מכישלון גירוד"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+        >
+          <option value="">המקור: הכל</option>
+          <option value="only">⃠ רק מאגרים שהוסרו מהמקור</option>
+          <option value="exclude">רק מאגרים שהמקור שלהם קיים</option>
+        </select>
+        <select
           value={dsLimit}
           onChange={(e) => { setDsOffset(0); setDsLimit(Number(e.target.value)); }}
           aria-label="מאגרים בעמוד"
@@ -1682,7 +1696,7 @@ export default function AdminPage() {
         <div className="empty-state">
           {dsLoading
             ? "טוען…"
-            : dsQ || dsStorage || dsSourceType
+            : dsQ || dsStorage || dsSourceType || dsSourceGone
               ? "אין מאגרים התואמים לחיפוש"
               : "אין מאגרים פעילים"}
         </div>
@@ -1826,6 +1840,14 @@ export default function AdminPage() {
                       variant="admin"
                       plan={ds.storage_target}
                     />
+                    {/* Sits with the archive facts, above the per-source detail:
+                        whether the source still exists changes how every other
+                        line on this card should be read. */}
+                    {ds.source_gone_at && (
+                      <div style={{ marginTop: "0.3rem" }}>
+                        <SourceGoneNotice goneAt={ds.source_gone_at} variant="chip" />
+                      </div>
+                    )}
                     {isCkanLike(ds.source_type) && (
                       <div style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.3rem", flexWrap: "wrap", fontSize: "0.7rem" }}>
                         <span className="badge" style={{ fontSize: "0.65rem" }}>

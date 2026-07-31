@@ -32,6 +32,18 @@ class TrackedDataset(Base):
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_modified: Mapped[str | None] = mapped_column(String(50))
     last_error: Mapped[str | None] = mapped_column(Text)
+    # When the SOURCE was confirmed gone — the publisher retired the page/layer
+    # this dataset tracks. NULL means present (or never checked). Set only on a
+    # verdict the scraper reached with certainty (for GovMap: the catalog was
+    # fetched successfully AND the layer id is absent from it — a catalog
+    # timeout, or a layer that IS listed, produces a different, transient
+    # error), and cleared the moment a version lands again. Holds the FIRST
+    # detection, so the badge can say how long it has been gone.
+    #
+    # Deliberately NOT a `status` value: a removed source is the case where the
+    # archive matters MOST, so these datasets must stay listed and readable.
+    # `status='duplicate'` hides a row; this one is meant to be seen.
+    source_gone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Subset of source resource IDs to mirror. NULL = legacy "track all".
     resource_ids: Mapped[list[str] | None] = mapped_column(JSONB)
     # [{id,name,format}, …] resources that exist at the source but aren't

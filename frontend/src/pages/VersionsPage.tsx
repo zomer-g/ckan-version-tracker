@@ -12,6 +12,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import ArchiveChips from "../components/ArchiveChips";
+import SourceGoneNotice from "../components/SourceGoneNotice";
 import SourceChip from "../components/SourceChip";
 import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
@@ -424,6 +425,10 @@ export default function VersionsPage() {
               R2). That inference is silent when there is nothing to download and
               nothing to query, which is exactly the case worth stating. */}
           {dataset && <ArchiveChips archive={dataset.archive} variant="public" />}
+          {/* A source the publisher has removed. Placed with the archive facts,
+              not with the errors: it is not a malfunction on our side, it is
+              the reason this archive is now the only copy. */}
+          {dataset && <SourceGoneNotice goneAt={dataset.source_gone_at} />}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
           {isAppend && datasetId && (

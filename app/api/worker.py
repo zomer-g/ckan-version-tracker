@@ -841,6 +841,20 @@ def _is_doc_bundle(value: str) -> bool:
 _FILE_AGGREGATE_KEYS = ("_geojson", "_gpkg", "_parquet", "_zip", "_zip_parts")
 
 
+# The scraper's verdict that a source is GONE, not merely unreachable. For
+# GovMap it is reached only after the catalog was fetched successfully and the
+# layer id was absent from it; a catalog timeout, or a layer that IS listed,
+# raises a different, explicitly transient error (see the govmap legacy_engine).
+# So matching this string records a finding the scraper already made with
+# certainty — it does not infer one from a bare failure.
+# Keep in sync with migration 047.
+_SOURCE_GONE_MARKER = "is not in the catalog and returned 0"
+
+
+def _is_source_gone_error(error: str | None) -> bool:
+    return bool(error) and _SOURCE_GONE_MARKER in error
+
+
 def _landed_resource_count(resource_mappings: dict) -> int:
     """How many resources actually made it into this version — the counterpart
     to the push's `expected`. Counts every source-named resource plus the
@@ -1611,6 +1625,10 @@ async def push_version(
     ds.last_polled_at = datetime.now(timezone.utc)
     ds.last_modified = body.metadata_modified
     ds.last_error = "; ".join(push_errors)[:2000] if push_errors else None
+    # A version landed, so the source is demonstrably there — clear any
+    # "removed at the publisher" mark. Layer ids get renumbered and pages come
+    # back; the badge must not outlive the outage that produced it.
+    ds.source_gone_at = None
     await db.commit()
 
     # Refresh the ODATA package description so it carries current links back
@@ -2569,6 +2587,16 @@ async def report_failure(
     ds_row = (await db.execute(
         select(TrackedDataset).where(TrackedDataset.id == task.tracked_dataset_id)
     )).scalar_one_or_none()
+
+    # A source the publisher has REMOVED (not one that merely failed): record it
+    # on the dataset so the site can say so, instead of the archive just looking
+    # stale. Keep the FIRST detection — re-running a dead layer must not keep
+    # resetting "gone since" to today.
+    if ds_row is not None and _is_source_gone_error(body.error) and ds_row.source_gone_at is None:
+        ds_row.source_gone_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.info("Dataset %s (%s) marked source_gone", ds_row.id, ds_row.title)
+
     from app.services.activity_log import log_event
     await log_event(
         event="failed", dataset=ds_row,

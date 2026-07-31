@@ -72,6 +72,11 @@ class DatasetSummary(BaseModel):
     status: str
     storage_mode: str  # "full_snapshot" | "append_only"
     last_error: str | None  # last poll error if any
+    # ISO timestamp of when the PUBLISHER was confirmed to have removed this
+    # source (null = present). The archive stays fully available; this says no
+    # further versions are coming, and that what is here may be the last public
+    # copy. Set only on a certain verdict — see TrackedDataset.source_gone_at.
+    source_gone_at: str | None = None
     resource_ids: list[str] | None  # subset of source resources, null=all
     new_resources_at_source: list[dict] | None  # source resources not yet picked
     version_count: int
@@ -228,6 +233,7 @@ def _dataset_summary(
         status=ds.status,
         storage_mode=ds.storage_mode or "full_snapshot",
         last_error=ds.last_error,
+        source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,

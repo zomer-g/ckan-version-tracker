@@ -191,6 +191,10 @@ export interface TrackedDataset {
   // list endpoints; `fidelity` is null elsewhere.
   archive?: ArchiveState;
   last_error: string | null;
+  // ISO timestamp of when the PUBLISHER was confirmed to have removed the
+  // source this dataset tracks; null while it is present. The archive stays
+  // fully readable — this only means no further versions are coming.
+  source_gone_at?: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
   tags?: Tag[];
@@ -1662,12 +1666,18 @@ export const admin = {
   // to pull the entire catalog (~1,100 rows / 1MB) from the public /datasets on
   // every admin page load; filtering + slicing now happen in SQL.
   datasetsPage: (
-    opts: { q?: string; storage?: string; source_type?: string; limit?: number; offset?: number } = {},
+    opts: {
+      q?: string; storage?: string; source_type?: string;
+      /** "only" = just the datasets whose source the publisher removed; "exclude" = hide them. */
+      source_gone?: string;
+      limit?: number; offset?: number;
+    } = {},
   ) => {
     const p = new URLSearchParams();
     if (opts.q) p.set("q", opts.q);
     if (opts.storage) p.set("storage", opts.storage);
     if (opts.source_type) p.set("source_type", opts.source_type);
+    if (opts.source_gone) p.set("source_gone", opts.source_gone);
     if (opts.limit != null) p.set("limit", String(opts.limit));
     if (opts.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();

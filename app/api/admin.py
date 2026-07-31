@@ -1541,6 +1541,7 @@ async def admin_datasets(
     q: str | None = None,
     storage: str | None = None,
     source_type: str | None = None,
+    source_gone: str | None = None,
     limit: int = 25,
     offset: int = 0,
     user: User = Depends(get_admin_user),
@@ -1552,6 +1553,12 @@ async def admin_datasets(
     name, its organization (slug or title), any of its tags, or a storage-plan
     keyword ("neon", "r2", "מקומי", "תוספת", …). ``storage`` filters exactly on
     a storage target ("r2+neon") or a storage mode ("append_only").
+
+    ``source_gone`` narrows to datasets whose SOURCE the publisher has removed:
+    "only" for those alone, "exclude" to hide them. They stay `status='active'`
+    on purpose — the archive is still the point, and for a removed source it may
+    be the last public copy — so without this filter they are indistinguishable
+    from datasets that are merely between polls.
     """
     from sqlalchemy import exists, func, or_
     from sqlalchemy.orm import selectinload
@@ -1575,6 +1582,12 @@ async def admin_datasets(
     ]
     if source_type:
         conds.append(TrackedDataset.source_type == source_type)
+    if source_gone:
+        g = source_gone.strip().lower()
+        if g in ("only", "1", "true", "yes"):
+            conds.append(TrackedDataset.source_gone_at.isnot(None))
+        elif g in ("exclude", "0", "false", "no"):
+            conds.append(TrackedDataset.source_gone_at.is_(None))
     if storage:
         s = storage.strip()
         if s in ("append_only", "full_snapshot"):

@@ -370,6 +370,11 @@ class DatasetResponse(BaseModel):
     # already ~1MB over 1,090 rows, doesn't carry 1,090 useless placeholders.
     archive: ArchiveState | None = None
     last_error: str | None = None
+    # Set when the publisher has REMOVED the source this dataset tracks (see
+    # TrackedDataset.source_gone_at). The archive stays fully readable — this
+    # only tells the reader that no further versions are coming, and that what
+    # is here may be the last public copy.
+    source_gone_at: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
     tags: list[TagBrief] = []
@@ -439,6 +444,7 @@ def build_dataset_response(
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
+        source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,
@@ -1445,6 +1451,7 @@ async def update_tracked(
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
+        source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
@@ -2397,6 +2404,7 @@ async def get_tracked_public(
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
+        source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
