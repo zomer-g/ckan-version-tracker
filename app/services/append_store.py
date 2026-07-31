@@ -1289,17 +1289,29 @@ async def column_meta(table: str) -> list[dict]:
 
 def _parse_sort(sort: str | None, cols: set[str]) -> str:
     """CKAN-style ``sort`` ("col, col2 desc") → ORDER BY clause over known
-    columns only. Empty when nothing valid is given (caller may default)."""
+    columns only. Empty when nothing valid is given (caller may default).
+
+    The direction is stripped from the END, not taken as the second whitespace
+    token: these tables are full of Hebrew column names that contain spaces
+    ("תאריך דגימה", "מספר תיק", "שם מסמך"), and splitting on whitespace made the
+    first token a word rather than a column, so the sort silently did not
+    participate and the caller got the default order while believing otherwise.
+    Silently, because an unknown column is skipped by design — which is right
+    for a wrong name and wrong for a name that was never parsed."""
     out: list[str] = []
     for seg in str(sort or "").split(","):
         seg = seg.strip()
         if not seg:
             continue
-        toks = seg.split()
-        if toks[0] not in cols:
+        col, direction = seg, "ASC"
+        lowered = seg.lower()
+        for suffix in (" desc", " asc"):
+            if lowered.endswith(suffix):
+                col, direction = seg[: -len(suffix)].strip(), suffix.strip().upper()
+                break
+        if col not in cols:
             continue
-        direction = "DESC" if (len(toks) > 1 and toks[1].lower() == "desc") else "ASC"
-        out.append(f"{_qi(toks[0])} {direction}")
+        out.append(f"{_qi(col)} {direction}")
     return " ORDER BY " + ", ".join(out) if out else ""
 
 

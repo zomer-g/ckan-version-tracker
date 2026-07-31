@@ -234,6 +234,24 @@ def test_an_existing_dataset_gets_the_spec_from_its_sources_manifest(monkeypatch
         _ds(source_url="https://toy.example.gov.il/x", source_type="ckan")) is None
 
 
+def test_a_column_name_with_a_space_can_actually_be_sorted_on():
+    """These tables are full of Hebrew names that contain spaces, and the sample
+    column is one of them. Splitting the sort on whitespace made the first token
+    a word rather than a column, so the ORDER BY was dropped and the caller got
+    the default order while believing it had asked for another — which is
+    exactly what the item history asks for."""
+    cols = {ITEM_KEY, SAMPLE_COL, "first_seen"}
+    assert append_store._parse_sort(f"{SAMPLE_COL} desc", cols) == \
+        f' ORDER BY "{SAMPLE_COL}" DESC'
+    assert append_store._parse_sort(f"{SAMPLE_COL}", cols) == \
+        f' ORDER BY "{SAMPLE_COL}" ASC'
+    assert append_store._parse_sort(f"{ITEM_KEY} asc, {SAMPLE_COL} desc", cols) == \
+        f' ORDER BY "{ITEM_KEY}" ASC, "{SAMPLE_COL}" DESC'
+    # An unknown column is still skipped — that part was right.
+    assert append_store._parse_sort("nope desc", cols) == ""
+    assert append_store._parse_sort(None, cols) == ""
+
+
 def test_item_key_is_discoverable_and_latest_is_a_reserved_param():
     assert item_spec(_ds(sampling=SAMPLING)) == (ITEM_KEY, SAMPLE_COL)
     # Falls back to keys a dataset may already carry for other reasons.
