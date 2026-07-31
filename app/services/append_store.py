@@ -222,6 +222,25 @@ def table_name_for_resource(ds, resource_id: str) -> str:
     return f"append_{base}"[:63 - 18].rstrip("_") + f"_{dsid}_{rid}"
 
 
+def table_name_for_scraper_resource(ds, resource_name: str) -> str:
+    """Per-RESOURCE NEON table for a SCRAPER dataset that publishes several
+    tabular resources in one version (ykpubdata's building register and its
+    documents corpus: different grains, different columns, one version).
+
+    Same shape as ``table_name_for_resource``, but keyed by the resource NAME
+    rather than a datastore resource id — a scraper resource has no id, and the
+    r2 key it lands under is minted fresh every version. The name is hashed
+    rather than sanitized: it is Hebrew, and a Postgres identifier is clipped at
+    63 BYTES, so pasting it in would leave neither a legible nor a unique
+    suffix. Hashing makes the table STABLE ACROSS VERSIONS, which is the whole
+    point — a renamed resource starts a new table, which is the honest outcome
+    (its rows genuinely stopped being published under the old name)."""
+    base = re.sub(r"[^a-z0-9_]+", "_", (ds.ckan_name or "").lower()).strip("_") or "ds"
+    dsid = str(ds.id).replace("-", "")[:8]
+    rid = hashlib.sha1(str(resource_name).encode("utf-8")).hexdigest()[:8]
+    return f"append_{base}"[:63 - 18].rstrip("_") + f"_{dsid}_{rid}"
+
+
 def _qi(name: str) -> str:
     """Quote a SQL identifier (supports Hebrew/Unicode column names)."""
     return '"' + str(name).replace('"', '""') + '"'
@@ -321,9 +340,33 @@ def tables_from_mappings(ds, mappings: dict | None) -> list[dict]:
     iterating it would make "the dataset's first table" depend on how the
     resource UUIDs happen to sort. Callers default to the first entry, so that
     order is user-visible and has to be the order the resources were registered
-    in."""
+    in.
+
+    TWO SHAPES of ``_append_tables`` are accepted:
+
+      * ``{resource_id: table}`` — CKAN multi-resource datasets
+        (``append_db_multi``, written by delta_archiver), ordered by the
+        ``_resource_ids`` list beside it and named by ``_names``;
+      * ``[{"resource": name, "table": table}, …]`` — SCRAPER datasets, which
+        have no resource ids to order by. A jsonb ARRAY keeps its order, so the
+        shape carries its own answer instead of depending on a second key."""
     m = mappings or {}
     multi = m.get("_append_tables")
+    if isinstance(multi, list) and multi:
+        out: list[dict] = []
+        for entry in multi:
+            if not isinstance(entry, dict) or not entry.get("table"):
+                continue
+            name = entry.get("resource") or entry.get("resource_name")
+            out.append({
+                "table": entry["table"],
+                # A scraper resource has no id; its NAME is how a caller selects
+                # it (``?table=נתוני הסורק``) — see app/api/append.py::_pick.
+                "resource_id": None,
+                "resource_name": name,
+            })
+        if out:
+            return out
     if isinstance(multi, dict) and multi:
         names = m.get("_names") or {}
         order = [str(r) for r in (m.get("_resource_ids") or []) if str(r) in multi]

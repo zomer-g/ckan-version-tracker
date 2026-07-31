@@ -279,7 +279,9 @@ export const versions = {
 // Public read: browse, filter, and download the accumulated rows of a
 // data.gov.il datastore dataset that OVER archives append-only.
 // One physical NEON table of a dataset. A CKAN dataset archived as
-// append_db_multi has one per datastore resource.
+// append_db_multi has one per datastore resource; a scraper dataset that
+// publishes several tabular resources has one per resource (resource_id is
+// null there — a scraper resource is identified by its name).
 export interface AppendTableRef {
   table: string;
   resource_id: string | null;

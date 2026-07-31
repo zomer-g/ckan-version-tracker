@@ -53,8 +53,18 @@ _BOOKKEEPING_KEYS = frozenset({
 })
 
 # The NEON row-archive markers a version can carry: one table (``append_table``)
-# or one per datastore resource (``_append_tables``). See append_store.
-_ROW_KEYS = ("append_table", "_append_tables")
+# or one per resource (``_append_tables``). See append_store.
+#
+# Public because these are NOT files, and every reader that walks
+# resource_mappings looking for files has to skip them: their values are table
+# NAMES, and a "long string ⇒ a resource id" heuristic (used in app/api/v1.py,
+# app/api/versions.py and storage_client.enumerate_files) reads a table name as
+# an ODATA resource — offering a download link to nothing, and asking ODATA to
+# delete it when the version is deleted. That stayed invisible only because
+# every existing name was 27-29 chars against a >=30 threshold; a scraper's
+# per-resource name (``append_ykpubdata_documents_e68c8999_298ff0ab``) is 44.
+ROW_ARCHIVE_KEYS = frozenset({"append_table", "_append_tables"})
+_ROW_KEYS = tuple(sorted(ROW_ARCHIVE_KEYS))
 
 # The stub marker. Written ONLY by poll_job._poll_large_dataset, and carried
 # forward by metadata_only versions — so its presence is an exact signal that the

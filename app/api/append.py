@@ -14,9 +14,12 @@ Filtering on rows/download: ``q`` does a free-text ILIKE across all columns;
 any query param whose name is a real column does a per-column ILIKE. Reserved
 params: limit, offset, sort, order, q, table/resource/resource_id.
 
-MULTI-RESOURCE DATASETS. A CKAN dataset archived as ``append_db_multi`` has one
-NEON table PER datastore resource, and these endpoints are single-table by
-nature. So each accepts ``?table=`` — a physical table name, a resource id, or a
+MULTI-RESOURCE DATASETS. A dataset can hold one NEON table PER RESOURCE — a
+CKAN dataset archived as ``append_db_multi`` (one per datastore resource) or a
+scraper dataset that publishes several tabular resources per version (one per
+resource name; ykpubdata's building register and its documents corpus are
+different grains with different columns). These endpoints are single-table by
+nature, so each accepts ``?table=`` — a physical table name, a resource id, or a
 resource name — and defaults to the dataset's first resource. ``/schema`` lists
 them all (and ``/schema.txt`` emits every table's DDL when unselected), which is
 the only way a consumer learns there is more than one.

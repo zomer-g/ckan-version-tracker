@@ -5,8 +5,10 @@ and hands the JSONB to ``append_store.tables_from_mappings``, which is the pure
 function that interprets it. append_store itself stays ORM-free (asyncpg +
 config only), hence the split.
 
-THIS MODULE EXISTS BECAUSE THE ANSWER WAS BEING COMPUTED IN THREE PLACES. A CKAN
-dataset archived as ``append_db_multi`` has one table PER datastore resource, and
+THIS MODULE EXISTS BECAUSE THE ANSWER WAS BEING COMPUTED IN THREE PLACES. A
+dataset can have one table PER RESOURCE — a CKAN dataset archived as
+``append_db_multi`` (keyed by datastore resource id) or a scraper dataset
+publishing several tabular resources per version (keyed by resource name) — and
 of the three readers only data_catalog knew it:
 
   * app/api/append.py looked for the single-table ``append_table`` key and fell

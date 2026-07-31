@@ -903,14 +903,36 @@ async def _stream_r2_csv_to_neon(
             pass
 
 
+def _named_r2_files(mappings: dict | None) -> list[tuple[str, str]]:
+    """``[(resource_name, r2 value)]`` — a version's data files, in mapping
+    order, excluding the underscore-prefixed bookkeeping keys.
+
+    This used to be "the first one, break": a version publishing several CSVs
+    (a register AND its documents) had every file but one silently ignored by
+    the seed."""
+    out: list[tuple[str, str]] = []
+    for key, value in (mappings or {}).items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, str) and storage.is_storage_value(value):
+            out.append((key, value))
+    return out
+
+
 async def seed_neon_from_versions(
     db, ds_uuid: uuidlib.UUID, *, apply: bool, reset: bool = False
 ) -> dict:
-    """Replay a dataset's per-version R2 CSV snapshots into its NEON append table
-    with historical ``first_seen``, then enable the r2+neon dual-write going
-    forward. Idempotent (ON CONFLICT DO NOTHING). ``apply=False`` reports the plan
-    without writing to NEON or changing config. ``reset=True`` drops the table
-    first (clean re-seed after a schema fix).
+    """Replay a dataset's per-version R2 CSV snapshots into its NEON append
+    table(s) with historical ``first_seen``, then enable the r2+neon dual-write
+    going forward. Idempotent (ON CONFLICT DO NOTHING). ``apply=False`` reports
+    the plan without writing to NEON or changing config. ``reset=True`` drops the
+    table(s) first (clean re-seed after a schema fix).
+
+    A dataset that publishes SEVERAL tabular resources gets one table per
+    resource, the same ones push_version writes forward — so this is also the
+    repair path for a dataset whose rows were merged into a single table before
+    that split existed: ``?apply=true&reset=true`` rebuilds every grain into its
+    own table, with each row's first_seen taken from the version it appeared in.
 
     Each version's CSV is streamed in batches (memory-bounded) rather than parsed
     whole, so this is safe for large cumulative files. Append-only datasets point
@@ -934,74 +956,98 @@ async def seed_neon_from_versions(
         .order_by(VersionIndex.version_number.asc())  # oldest first → earliest first_seen wins
     )).scalars().all())
 
+    # ONE TABLE PER RESOURCE, matching what push_version writes forward (see
+    # app/api/worker.py). A version's named mapping entries are its separate
+    # CSVs on R2 — separate grains with separate column sets — so replaying them
+    # all into one table is what produced the merged table this rebuild exists
+    # to repair. The layout only ratchets to multi, never back, so a reseed can
+    # never re-merge what the forward path has already split.
+    per_resource = bool((ds.scraper_config or {}).get("neon_tables_per_resource")) or any(
+        len(_named_r2_files(v.resource_mappings)) > 1 for v in versions
+    )
+
+    def _table_for(resource_name: str) -> str:
+        return (
+            append_store.table_name_for_scraper_resource(ds, resource_name)
+            if per_resource else append_store.table_name(ds)
+        )
+
     table = append_store.table_name(ds)
     summary = {
         "dataset_id": str(ds_uuid), "title": ds.title, "apply": apply,
-        "table": table, "versions": len(versions),
+        "table": table, "per_resource": per_resource, "tables": {},
+        "versions": len(versions),
         "rows_inserted": 0, "per_version": [], "skipped": [],
         "archive_neon_enabled": False, "table_total": None, "committed": False,
         "reset": reset,
     }
+    for v in versions:
+        for name, _ in _named_r2_files(v.resource_mappings):
+            summary["tables"].setdefault(name, _table_for(name))
+
     if apply and reset:
-        await append_store.drop_table(table)
+        # Every table this dataset's rows could be in, including the merged one
+        # left behind by the single-table era — reset means "rebuild from R2",
+        # and leaving the merged table would leave a queryable wrong answer.
+        for tbl in {table, *summary["tables"].values()}:
+            await append_store.drop_table(tbl)
 
     seen_r2: set[str] = set()
     for v in versions:
-        m = v.resource_mappings or {}
-        # the single data file for this version (snapshot key → r2 value)
-        r2val = None
-        for k, val in m.items():
-            if k.startswith("_"):
-                continue
-            if isinstance(val, str) and storage.is_storage_value(val):
-                r2val = val
-                break
-        if not r2val:
+        files = _named_r2_files(v.resource_mappings)
+        if not files:
             summary["skipped"].append({"version": v.version_number, "reason": "no r2 file"})
             continue
         # first_seen = the version's archive date (the date it represents).
         # Pass a tz-aware datetime (NOT a string) — asyncpg binds it against the
         # timestamptz column and rejects a str.
         fs = v.detected_at.astimezone(timezone.utc)
-        # Append-only datasets repoint every version at the SAME cumulative
-        # object. Stream it once (versions are oldest-first, so the earliest
-        # first_seen wins); reuse by a later version is a recorded no-op.
-        if r2val in seen_r2:
-            summary["per_version"].append({
+        for res_name, r2val in files:
+            entry = {
                 "version": v.version_number, "date": fs.date().isoformat(),
-                "rows_in_file": None, "inserted": 0, "note": "same file as an earlier version",
-            })
-            continue
-        if not apply:
-            # Plan mode: don't download/parse (a big cumulative CSV would OOM
-            # just to count rows) — report the version→file mapping only.
-            summary["per_version"].append({
-                "version": v.version_number, "date": fs.date().isoformat(),
+                "resource": res_name, "table": _table_for(res_name),
                 "rows_in_file": None, "inserted": 0,
-            })
+            }
+            # Append-only datasets repoint every version at the SAME cumulative
+            # object. Stream it once (versions are oldest-first, so the earliest
+            # first_seen wins); reuse by a later version is a recorded no-op.
+            if r2val in seen_r2:
+                summary["per_version"].append({**entry, "note": "same file as an earlier version"})
+                continue
+            if not apply:
+                # Plan mode: don't download/parse (a big cumulative CSV would OOM
+                # just to count rows) — report the version→file mapping only.
+                summary["per_version"].append(entry)
+                seen_r2.add(r2val)
+                continue
+            try:
+                seen_rows, n, err = await _stream_r2_csv_to_neon(
+                    entry["table"], r2val, first_seen=fs,
+                )
+            except Exception as e:
+                logger.exception("seed_neon: version %d (%s) stream failed",
+                                 v.version_number, res_name)
+                summary["skipped"].append({
+                    "version": v.version_number, "resource": res_name,
+                    "reason": f"insert: {type(e).__name__}: {e}",
+                })
+                continue
+            if err:
+                summary["skipped"].append({
+                    "version": v.version_number, "resource": res_name, "reason": err,
+                })
+                continue
             seen_r2.add(r2val)
-            continue
-        try:
-            seen_rows, n, err = await _stream_r2_csv_to_neon(table, r2val, first_seen=fs)
-        except Exception as e:
-            logger.exception("seed_neon: version %d stream failed", v.version_number)
-            summary["skipped"].append(
-                {"version": v.version_number, "reason": f"insert: {type(e).__name__}: {e}"}
-            )
-            continue
-        if err:
-            summary["skipped"].append({"version": v.version_number, "reason": err})
-            continue
-        seen_r2.add(r2val)
-        summary["rows_inserted"] += n
-        summary["per_version"].append({
-            "version": v.version_number, "date": fs.date().isoformat(),
-            "rows_in_file": seen_rows, "inserted": n,
-        })
+            summary["rows_inserted"] += n
+            summary["per_version"].append({**entry, "rows_in_file": seen_rows, "inserted": n})
 
     if apply:
         try:
             summary["table_total"] = await append_store.table_count(table)
+            summary["table_totals"] = {
+                name: await append_store.table_count(tbl)
+                for name, tbl in summary["tables"].items()
+            }
         except Exception:
             pass
         # Enable r2+neon dual-write going forward (keep file snapshots on R2,
@@ -1019,6 +1065,11 @@ async def seed_neon_from_versions(
             if fresh_ds is not None:
                 sc = dict(fresh_ds.scraper_config or {})
                 sc["archive_neon"] = True
+                if per_resource:
+                    # Pin the layout so the next push_version writes to the same
+                    # tables this rebuild just filled, even if that scrape
+                    # happens to return a single resource.
+                    sc["neon_tables_per_resource"] = True
                 fresh_ds.scraper_config = sc
                 await fresh.commit()
                 summary["archive_neon_enabled"] = True

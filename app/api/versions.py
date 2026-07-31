@@ -13,6 +13,7 @@ from app.rate_limit import limiter
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.models.version_index import VersionIndex
+from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.diff_service import compute_metadata_diff
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
@@ -57,6 +58,10 @@ def _extract_resource_ids(mappings: dict | None) -> list[str]:
     for key, value in mappings.items():
         # Skip purely internal state dicts
         if key == "_hashes":
+            continue
+        # A NEON table name is not a resource id — deleting a version must not
+        # ask ODATA to delete a table (see archive_state.ROW_ARCHIVE_KEYS).
+        if key in ROW_ARCHIVE_KEYS:
             continue
         if key in ("_resource_ids", "_zip_parts") and isinstance(value, list):
             for v in value:

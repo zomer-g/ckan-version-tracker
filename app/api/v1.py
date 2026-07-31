@@ -22,6 +22,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services import storage_client as storage
+from app.services.archive_state import ROW_ARCHIVE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +307,12 @@ def _extract_version_resources(
     for key, value in mappings.items():
         if key in ("_hashes", "_resource_ids", "_appendonly_seen",
                    "_names", "_filedates", "_probes"):
+            continue
+        # NEON table names are not downloadable resources (see
+        # archive_state.ROW_ARCHIVE_KEYS) — a 44-char table name would otherwise
+        # clear the "len >= 30 ⇒ resource id" bar below and be published with a
+        # download URL that resolves to nothing.
+        if key in ROW_ARCHIVE_KEYS:
             continue
         # The aggregate keys are list-valued; emit one entry per id.
         if isinstance(value, list):

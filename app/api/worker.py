@@ -559,6 +559,21 @@ async def poll_for_task(
 _NEON_BG_TASKS: set = set()
 
 
+def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> bool:
+    """Whether this dataset's NEON rows go into one table PER RESOURCE.
+
+    Pure, so the rule is testable on its own. It RATCHETS: a dataset that has
+    ever published several tabular resources keeps per-resource tables forever,
+    recorded as ``scraper_config.neon_tables_per_resource``. Deciding per
+    version instead would send a partial scrape that happened to return one
+    resource back into the single merged table, quietly re-creating the mixed
+    grains the split exists to prevent."""
+    return bool(
+        (scraper_config or {}).get("neon_tables_per_resource")
+        or len(tabular_names) > 1
+    )
+
+
 async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
     """Stream a version's R2 CSV into the dataset's NEON table in batches.
 
@@ -890,6 +905,9 @@ async def push_version(
 
     # Push tabular resources to odata.org.il
     resource_mappings: dict[str, Any] = {}
+    # Which NEON table each tabular resource's rows went into, in resource
+    # order. Empty unless this dataset archives to NEON (see _record_neon_table).
+    _neon_layout: list[dict] = []
     odata_resource_ids = []
     push_errors: list[str] = []
 
@@ -924,6 +942,63 @@ async def push_version(
             and (ds.scraper_config or {}).get("archive_neon")
         )
 
+        # ONE NEON TABLE PER TABULAR RESOURCE, once a version carries more than
+        # one. A scraper version's resources are separate CSVs on R2 precisely
+        # because they are separate things — ykpubdata publishes a row per
+        # building file AND a row per document, different grains with different
+        # columns. Loading them all into ``table_name(ds)`` produced one table
+        # holding the union of both column sets, where neither grain is
+        # queryable: measured on prod as 199 rows and 65 columns across three
+        # resources.
+        #
+        # The layout is a property of the DATASET, not of the version, and it
+        # only ever ratchets: once a dataset has published several resources it
+        # keeps per-resource tables even if a later (e.g. partial) scrape
+        # returns one, which would otherwise dump that resource back into the
+        # merged table. Datasets that have only ever published a single resource
+        # — 52 of the 53 scraper NEON datasets on prod — keep the historical
+        # single-table name, so nothing they have accumulated moves.
+        #
+        # A dataset that CROSSES from one resource to several leaves its old
+        # merged table behind: the rows are still on R2, and
+        # ``POST /api/admin/datasets/{id}/seed-neon?apply=true&reset=true``
+        # replays every version's snapshots into the new per-resource tables
+        # with their historical first_seen (see r2_backfill).
+        _tabular_names = [
+            r.name for r in body.resources
+            if (r.records and r.fields) or csv_resource_ids.get(r.name)
+        ]
+        _neon_multi = neon_per_resource(ds.scraper_config, _tabular_names)
+        if _archive_neon and _neon_multi and not (
+            ds.scraper_config or {}
+        ).get("neon_tables_per_resource"):
+            ds.scraper_config = {
+                **(ds.scraper_config or {}), "neon_tables_per_resource": True,
+            }
+            logger.warning(
+                "NEON archive: %s now publishes %d tabular resources — switching "
+                "to one table per resource. Its previously merged table (%s) is "
+                "left in place; run seed-neon?reset=true to rebuild history.",
+                ds.ckan_name, len(_tabular_names), append_store.table_name(ds),
+            )
+
+        def _neon_table_for(res_name: str) -> str:
+            return (
+                append_store.table_name_for_scraper_resource(ds, res_name)
+                if _neon_multi else append_store.table_name(ds)
+            )
+
+        # _neon_layout (declared above, so the mapping-writing code below can
+        # see it) records where this version's rows went, in resource order —
+        # so every reader (the public /api/append endpoints, the /data catalog,
+        # MCP) resolves the same tables. Without it they fall back to the
+        # deterministic single-table name and see one table.
+        def _record_neon_table(res_name: str) -> str:
+            table = _neon_table_for(res_name)
+            if not any(e["resource"] == res_name for e in _neon_layout):
+                _neon_layout.append({"resource": res_name, "table": table})
+            return table
+
         async def _neon_load_from_csv(res_name: str, csv_bytes: bytes | None) -> None:
             if not (_archive_neon and csv_bytes):
                 return
@@ -943,7 +1018,7 @@ async def push_version(
                         {renamed.get(k, k): v for k, v in rec.items()}
                         for rec in n_records
                     ]
-                table = append_store.table_name(ds)
+                table = _record_neon_table(res_name)
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
                 n = await append_store.append_rows(
                     table, cols, n_records, key_col=None, keyless=True,
@@ -978,7 +1053,7 @@ async def push_version(
                 # idempotent (row_hash ON CONFLICT), so it's safe if a recycle
                 # interrupts it — the next poll resumes it.
                 if _archive_neon and storage.is_storage_value(pre_uploaded):
-                    _table = append_store.table_name(ds)
+                    _table = _record_neon_table(res.name)
                     _t = asyncio.create_task(
                         _neon_stream_load_r2(_table, pre_uploaded)
                     )
@@ -1285,6 +1360,15 @@ async def push_version(
 
     resource_mappings["_hashes"] = {"scraper": content_hash}
     resource_mappings["_resource_ids"] = []
+    # The NEON row-archive markers, in the two shapes every reader already
+    # understands (see append_store.tables_from_mappings). A jsonb ARRAY is used
+    # for the multi shape because jsonb does not preserve object key order, and
+    # the order here IS the order of the resources as scraped.
+    if _neon_layout:
+        if len(_neon_layout) > 1:
+            resource_mappings["_append_tables"] = _neon_layout
+        else:
+            resource_mappings["append_table"] = _neon_layout[0]["table"]
     if is_append:
         resource_mappings["_appendonly_seen"] = seen_keys
 

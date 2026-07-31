@@ -97,7 +97,10 @@ EXPECT = {
     "ckan": {"zip": None, "geojson": False},
 }
 
-_BOOKKEEPING = {"_hashes", "_resource_ids", "_appendonly_seen"}
+# "append_table"/"_append_tables" hold NEON table NAMES, not resources — without
+# them here a NEON-archived dataset reports a phantom ODATA-stored CSV.
+_BOOKKEEPING = {"_hashes", "_resource_ids", "_appendonly_seen",
+                "append_table", "_append_tables"}
 
 
 def _resource_storage(value):

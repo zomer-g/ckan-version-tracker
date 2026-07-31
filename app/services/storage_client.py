@@ -40,6 +40,7 @@ import uuid
 from typing import Any
 
 from app.config import settings
+from app.services.archive_state import ROW_ARCHIVE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,12 @@ def build_key(dataset_id: str, version_number: int, filename: str) -> str:
     return f"datasets/{dataset_id}/v{version_number}/{unique}_{_safe_filename(filename)}"
 
 
-# Mapping keys that are internal bookkeeping, not downloadable files.
-_NON_FILE_KEYS = {"_hashes", "_resource_ids", "_filedates", "_probes"}
+# Mapping keys that are internal bookkeeping, not downloadable files. The NEON
+# row-archive markers are in there because their values are TABLE NAMES, long
+# enough to pass the "len >= 30 ⇒ a stored file" test in _is_file below — a
+# Drive export would then try to fetch a table as if it were an object.
+_NON_FILE_KEYS = {"_hashes", "_resource_ids", "_filedates", "_probes",
+                  *ROW_ARCHIVE_KEYS}
 # A staged-object key's tail looks like ``<8 hex>_<original-name>`` (see
 # build_key). This strips the random prefix back to a human filename.
 _KEY_PREFIX_RE = re.compile(r"^[0-9a-f]{8}_(.+)$")
