@@ -146,7 +146,18 @@ def _build_request_url(request: Request, path: str) -> str:
 
 
 def _source_url(ds: TrackedDataset) -> str:
-    if ds.source_type == "scraper" and ds.source_url:
+    """Where this dataset actually comes from.
+
+    Only CKAN datasets live on data.gov.il, and only they lack a source_url —
+    their link is rebuilt from organization + package name. Every other source
+    stores the real page it tracks, and returning it is the whole point of the
+    field. Testing for ``== "scraper"`` meant govmap (897 datasets) and cbs got
+    a data.gov.il URL synthesized from their internal slug — a link to a
+    data.gov.il dataset that does not exist, in place of the govmap.gov.il
+    layer they are actually cut from. data.gov.il answers 200 for any path, so
+    the fabrication did not even fail loudly.
+    """
+    if ds.source_type != "ckan" and ds.source_url:
         return ds.source_url
     org = ds.organization or ""
     name = ds.ckan_name or ""

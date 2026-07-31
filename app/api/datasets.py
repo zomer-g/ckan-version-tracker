@@ -992,11 +992,19 @@ async def track_dataset(
         if not parsed:
             raise HTTPException(status_code=400, detail="Invalid govmap.gov.il layer URL (missing lay=<id>)")
 
-        existing = await db.execute(
-            select(TrackedDataset).where(TrackedDataset.source_url == body.source_url)
-        )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Dataset already tracked")
+        # Identity match, NOT string equality — same rule as the bulk-add path
+        # below and the scraper path above. The map writes the viewport into
+        # the URL and a copied link can carry several layers ("?c=...&lay=
+        # 228014,228013,228012&z=6"), so comparing strings lets a second copy
+        # of an already-tracked layer straight through. That is what created
+        # the duplicates migration 035 cleaned up, and this branch — the admin
+        # single-add — is where it kept happening afterwards (migration 046).
+        existing = await find_datasets_for_url(db, body.source_url, strict=True)
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset already tracked: {existing[0]['title']}",
+            )
 
         layer_id = parsed.layer_id
         unique_slug = scraper_url_slug(f"govmap-{layer_id}", body.source_url)

@@ -169,7 +169,7 @@ what changed and where to download the snapshot data on odata.org.il.
       {
         "name": "_zip",
         "storage": "r2",
-        "download_url": "https://files.over.org.il/datasets/9d4c.../v7/ab12cd34_attachments.zip",
+        "download_url": "https://pub-63c02556dabd4956af9500eb8fe7198c.r2.dev/datasets/9d4c.../v7/ab12cd34_attachments.zip",
         "odata_resource_id": null,
         "odata_resource_url": null,
         "format": null
@@ -193,6 +193,26 @@ what changed and where to download the snapshot data on odata.org.il.
   - `"r2"` — independent object store; `download_url` is the object's public
     URL and the two `odata_*` fields are `null`. (Newer versions land in R2;
     older ones remain on ODATA. Both are served transparently.)
+
+> **Send a User-Agent when downloading from the object store.** The R2 public
+> domain sits behind a bot filter that rejects the Python standard library's
+> default `Python-urllib/3.x` agent with **403**, on every file. `curl`, `wget`,
+> `requests`, browsers — and even a request with no User-Agent at all — are
+> served normally. This is worth knowing because the shortest possible snippet
+> is the one that fails:
+>
+> ```python
+> # 403
+> urllib.request.urlopen(resource["download_url"])
+>
+> # 200
+> req = urllib.request.Request(resource["download_url"],
+>                              headers={"User-Agent": "my-tool/1.0"})
+> urllib.request.urlopen(req)
+> ```
+>
+> Going through `/api/versions/{id}/download/{name}` does not help: it redirects
+> to the same domain, and the client re-sends the same agent.
 - `name` is either the source's own resource name, or one of the
   underscore keys for files OVER adds alongside the data:
 
