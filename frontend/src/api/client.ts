@@ -1292,12 +1292,25 @@ export const publicApi = {
     ckan_id: string;
     resource_id?: string;
     resource_ids?: string[];
+    // One independent dataset per picked file (own cadence + own SQL table)
+    // instead of a single dataset mirroring them together.
+    split_resources?: boolean;
     preferred_interval?: number;
     requester_name?: string;
     requester_notes?: string;
     requester_contact?: string;
   }) =>
-    request<{ message: string }>("/datasets/requests", {
+    request<{
+      message: string;
+      // Only split_resources requests carry a per-file breakdown.
+      status?: string;
+      created?: number;
+      results?: Array<{
+        resource_id: string;
+        name: string;
+        status: "pending" | "duplicate";
+      }>;
+    }>("/datasets/requests", {
       method: "POST",
       body: JSON.stringify(data),
     }),

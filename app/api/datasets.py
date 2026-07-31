@@ -1559,6 +1559,10 @@ class TrackingRequest(BaseModel):
     title: str | None = None
     resource_id: str | None = None
     resource_ids: list[str] | None = None
+    # CKAN only: give every picked resource its OWN TrackedDataset (own poll
+    # cadence, own versions page, own NEON table) instead of one dataset that
+    # mirrors them all together.
+    split_resources: bool = False
     # Null → the manifest's cadence for a registered source, else weekly.
     preferred_interval: int | None = None
     requester_name: str = ""
@@ -1567,7 +1571,10 @@ class TrackingRequest(BaseModel):
 
 
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
-@limiter.limit("10/hour")
+# 10/hour used to bite real users: a rejected submit (duplicate, bad resource)
+# costs quota just like an accepted one, so a few false starts locked someone
+# out of requesting for an hour.
+@limiter.limit("30/hour")
 async def submit_tracking_request(
     request: Request,
     body: TrackingRequest,
@@ -1978,13 +1985,104 @@ async def submit_tracking_request(
             status_code=400,
             detail="resource_ids must contain at least one resource id",
         )
+    if not resource_ids and body.resource_id:
+        resource_ids = [body.resource_id]
 
+    # Every dataset already pinned to this CKAN package — the dedup basis for
+    # both modes below.
+    existing_rows = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
+    )).scalars().all()
+
+    # ---- split mode: one independent dataset per picked resource ----
+    # A CKAN package is a folder, not a table: its CSVs are usually unrelated
+    # tables published on their own rhythms. One dataset per resource gives
+    # each its own poll interval, its own versions page and its own NEON table
+    # (a single tracked resource is what the SQL/append path wants anyway).
+    if body.split_resources:
+        try:
+            pkg = await ckan_client.package_show(body.ckan_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+
+        by_id = {r["id"]: r for r in pkg.get("resources", [])}
+        bad = [rid for rid in resource_ids if rid not in by_id]
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resource_ids not found on source: {bad}",
+            )
+
+        # A resource is taken if any existing dataset pins it — and a dataset
+        # that pins nothing at all mirrors the WHOLE package (legacy
+        # "track all"), which takes every resource with it.
+        taken: set[str] = set()
+        tracks_all = False
+        for d in existing_rows:
+            if d.resource_ids:
+                taken.update(d.resource_ids)
+            if d.resource_id:
+                taken.add(d.resource_id)
+            if not d.resource_ids and not d.resource_id:
+                tracks_all = True
+
+        org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
+        org_id = None
+        if org_name:
+            org_row = (await db.execute(
+                select(Organization).where(Organization.name == org_name)
+            )).scalar_one_or_none()
+            if org_row:
+                org_id = org_row.id
+        base_title = pkg.get("title", pkg["name"])
+
+        results: list[dict] = []
+        created_rows: list[TrackedDataset] = []
+        for rid in resource_ids:
+            res = by_id[rid]
+            res_name = res.get("name") or rid
+            if tracks_all or rid in taken:
+                results.append({"resource_id": rid, "name": res_name, "status": "duplicate"})
+                continue
+            ds = TrackedDataset(
+                ckan_id=body.ckan_id,
+                ckan_name=pkg["name"],
+                resource_id=rid,
+                resource_ids=[rid],
+                title=f"{base_title} — {res_name}",
+                organization=org_name,
+                organization_id=org_id,
+                poll_interval=interval,
+                status="pending",
+                created_by=None,
+                last_modified=None,
+            )
+            db.add(ds)
+            created_rows.append(ds)
+            results.append({"resource_id": rid, "name": res_name, "status": "pending"})
+
+        if created_rows:
+            await db.commit()
+            from app.services.activity_log import log_event
+            for created in created_rows:
+                await log_event(event="requested", dataset=created, status="info",
+                                actor="request",
+                                message="התקבלה בקשת גירוד (קובץ בודד, ממתינה לאישור)")
+
+        return {
+            "message": "Request submitted" if created_rows else "No new files added",
+            "status": "pending" if created_rows else "noop",
+            "created": len(created_rows),
+            "results": results,
+        }
+
+    # ---- combined mode: one dataset mirroring the picked resources ----
     # Check not already tracked
-    query = select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
-    if body.resource_id:
-        query = query.where(TrackedDataset.resource_id == body.resource_id)
-    existing = await db.execute(query)
-    if existing.scalar_one_or_none():
+    clash = [
+        d for d in existing_rows
+        if not body.resource_id or d.resource_id == body.resource_id
+    ]
+    if clash:
         raise HTTPException(status_code=400, detail="Already tracked or requested")
 
     # Fetch dataset info from data.gov.il
@@ -1993,16 +2091,13 @@ async def submit_tracking_request(
     except Exception:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    if resource_ids:
-        source_ids = {r["id"] for r in pkg.get("resources", [])}
-        bad = [rid for rid in resource_ids if rid not in source_ids]
-        if bad:
-            raise HTTPException(
-                status_code=400,
-                detail=f"resource_ids not found on source: {bad}",
-            )
-    elif body.resource_id:
-        resource_ids = [body.resource_id]
+    source_ids = {r["id"] for r in pkg.get("resources", [])}
+    bad = [rid for rid in resource_ids if rid not in source_ids]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=f"resource_ids not found on source: {bad}",
+        )
 
     # Find resource name if resource_id provided
     resource_name = ""

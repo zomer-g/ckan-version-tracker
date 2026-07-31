@@ -94,6 +94,16 @@ export default function RequestForm({
 
   const [selectedResources, setSelectedResources] = useState<Set<string>>(initialSelected);
 
+  // A CKAN package is a folder, not a table — its CSVs are usually unrelated
+  // tables on their own publishing rhythms. Default to one dataset per file so
+  // each gets its own update frequency, versions page and SQL table; the user
+  // can uncheck to get the old single combined dataset.
+  const [splitResources, setSplitResources] = useState(true);
+  // Per-file outcome of a split submit (some files may already be tracked).
+  const [splitResults, setSplitResults] = useState<
+    Array<{ resource_id: string; name: string; status: string }> | null
+  >(null);
+
   // Keep the selection in sync if the parent swaps in a different
   // dataset while the form is mounted (rare but happens when the user
   // changes their mind without closing the form).
@@ -135,10 +145,11 @@ export default function RequestForm({
           setSubmitting(false);
           return;
         }
-        await publicApi.request({
+        const res = await publicApi.request({
           ckan_id: ckanId!,
           resource_id: resourceId,
           resource_ids: ids.length > 0 ? ids : undefined,
+          split_resources: showResourcePicker && splitResources ? true : undefined,
           preferred_interval: interval,
           // CKAN keeps its own authoritative title; pass a user-supplied
           // name only when it differs from the prefill, so the admin sees
@@ -147,6 +158,16 @@ export default function RequestForm({
             trimmedName && trimmedName !== datasetTitle ? trimmedName : undefined,
           requester_notes: notes || undefined,
         });
+        if (res?.results) {
+          // Every file already tracked → nothing was created; say so instead of
+          // claiming success.
+          if (!res.created) {
+            setError(t("home.request_split_none"));
+            setSubmitting(false);
+            return;
+          }
+          setSplitResults(res.results);
+        }
       }
       setSuccess(true);
     } catch (err: any) {
@@ -169,8 +190,19 @@ export default function RequestForm({
         aria-live="polite"
       >
         <p style={{ color: "#166534", fontWeight: 500, margin: 0 }}>
-          {t("home.request_success")}
+          {splitResults
+            ? t("home.request_split_success", {
+                n: splitResults.filter((r) => r.status === "pending").length,
+              })
+            : t("home.request_success")}
         </p>
+        {splitResults && splitResults.some((r) => r.status === "duplicate") && (
+          <p className="text-sm" style={{ color: "#166534", margin: "0.5rem 0 0 0" }}>
+            {t("home.request_split_skipped", {
+              n: splitResults.filter((r) => r.status === "duplicate").length,
+            })}
+          </p>
+        )}
         <button
           onClick={onClose}
           className="btn-secondary"
@@ -336,6 +368,38 @@ export default function RequestForm({
                     total: availableResources!.length,
                   })}
             </div>
+
+            {/* One dataset per file, or one dataset for all of them. */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.5rem",
+                marginTop: "0.6rem",
+                paddingTop: "0.6rem",
+                borderTop: "1px solid var(--border)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={splitResources}
+                onChange={(e) => setSplitResources(e.target.checked)}
+                style={{ width: "1rem", height: "1rem", flexShrink: 0, marginTop: "0.15rem" }}
+              />
+              <span>
+                <span className="text-sm" style={{ fontWeight: 500 }}>
+                  {t("home.request_split_label")}
+                </span>
+                <span className="text-sm text-muted" style={{ display: "block" }}>
+                  {!splitResources
+                    ? t("home.request_split_off_hint")
+                    : selectedResources.size > 0
+                      ? t("home.request_split_hint", { n: selectedResources.size })
+                      : t("home.request_split_hint_empty")}
+                </span>
+              </span>
+            </label>
           </div>
         )}
 
