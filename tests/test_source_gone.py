@@ -60,13 +60,13 @@ def test_unrelated_failures_are_not_removed_sources():
 
 
 def test_marker_matches_the_migration():
-    # Migration 047 backfills with a LIKE on the same substring. If one drifts
+    # Migration 049 backfills with a LIKE on the same substring. If one drifts
     # the backfill and the live detection stop agreeing.
     import re
     from pathlib import Path
 
-    mig = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "047_source_gone_at.py"
+    mig = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "049_source_gone_at.py"
     text = mig.read_text(encoding="utf-8")
     m = re.search(r'_MARKER\s*=\s*"([^"]+)"', text)
-    assert m, "migration 047 no longer declares _MARKER"
+    assert m, "migration 049 no longer declares _MARKER"
     assert m.group(1) == worker._SOURCE_GONE_MARKER

@@ -24,8 +24,8 @@ The backfill takes each dataset's NEWEST terminal task and marks the dataset
 only if that task carries the verdict — a layer that failed this way once and
 was later scraped successfully is left alone.
 
-Revision ID: 047
-Revises: 046
+Revision ID: 049
+Revises: 048
 Create Date: 2026-08-01
 """
 from typing import Sequence, Union
@@ -34,8 +34,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "047"
-down_revision: Union[str, None] = "046"
+revision: str = "049"
+down_revision: Union[str, None] = "048"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

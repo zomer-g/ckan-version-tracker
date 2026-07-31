@@ -847,7 +847,7 @@ _FILE_AGGREGATE_KEYS = ("_geojson", "_gpkg", "_parquet", "_zip", "_zip_parts")
 # raises a different, explicitly transient error (see the govmap legacy_engine).
 # So matching this string records a finding the scraper already made with
 # certainty — it does not infer one from a bare failure.
-# Keep in sync with migration 047.
+# Keep in sync with migration 049.
 _SOURCE_GONE_MARKER = "is not in the catalog and returned 0"
 
 
