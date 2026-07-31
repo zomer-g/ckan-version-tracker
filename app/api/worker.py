@@ -679,6 +679,25 @@ def _is_doc_bundle(value: str) -> bool:
     return bool(_DOC_BUNDLE_RE.search(storage.key_of(value).rsplit("/", 1)[-1]))
 
 
+# Mapping keys that hold real, downloadable files despite the underscore. A
+# heavy GovMap layer publishes its features as _gpkg/_parquet INSTEAD of a named
+# CSV resource, so "did anything land?" cannot be answered by counting
+# human-named keys alone. `_symbology` is deliberately absent: a version
+# carrying the layer's SLD and no data is exactly the empty version the guard
+# below exists to catch.
+_FILE_AGGREGATE_KEYS = ("_geojson", "_gpkg", "_parquet", "_zip", "_zip_parts")
+
+
+def _landed_resource_count(resource_mappings: dict) -> int:
+    """How many resources actually made it into this version — the counterpart
+    to the push's `expected`. Counts every source-named resource plus the
+    underscore aggregates that hold files."""
+    return sum(
+        1 for k, v in (resource_mappings or {}).items()
+        if v and (not k.startswith("_") or k in _FILE_AGGREGATE_KEYS)
+    )
+
+
 def _split_doc_bundles(
     zip_ids: list[str], declared: list[str] | None,
 ) -> tuple[list[str], list[str]]:
@@ -1273,12 +1292,19 @@ async def push_version(
     # nothing actually landed on odata, don't pretend a version exists.
     # Surface the reason on the dataset and mark the task as failed so the
     # admin can see what happened.
+    #
+    # `successes` must count the underscore aggregates that hold files, not just
+    # source-named keys — see _landed_resource_count. A GPKG-only layer has no
+    # named key at all, so once the documentation bundle started arriving on
+    # every govmap push (making `expected` non-zero), this guard read a complete
+    # 241,586-feature scrape of layer 335 as "nothing landed", answered the
+    # worker 502, and discarded 2.2 hours of scraping.
     expected = (
         len([r for r in body.resources if r.records or (body.csv_resource_ids or {}).get(r.name)])
         + (1 if (body.zip_file or body.zip_resource_id or body.zip_resource_ids) else 0)
         + (1 if body.geojson_resource_ids else 0)
     )
-    successes = sum(1 for k in resource_mappings if not k.startswith("_"))
+    successes = _landed_resource_count(resource_mappings)
     if expected > 0 and successes == 0:
         msg = "; ".join(push_errors)[:2000] or "all scraper pushes failed (no detail)"
         ds.last_error = msg

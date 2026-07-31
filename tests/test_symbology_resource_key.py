@@ -129,3 +129,42 @@ def test_bookkeeping_keys_are_never_emitted():
         "נתוני הסורק": CSV,
     })
     assert set(got) == {"נתוני הסורק"}
+
+
+# ── the empty-version guard must not discard a GPKG-only layer ─────────
+
+def test_gpkg_only_layer_counts_as_landed():
+    # Layer 335's real shape: the features ARE the GeoPackage and the Parquet,
+    # and there is no source-named key at all. Counting only human-named keys
+    # read this as "nothing landed" and threw the scrape away.
+    assert worker._landed_resource_count({
+        "_gpkg": [f"r2:datasets/{DS}/v1/aabbccdd_layer.gpkg"],
+        "_parquet": [f"r2:datasets/{DS}/v1/eeff0011_layer.parquet"],
+        "_symbology": [SYMB],
+        "_hashes": {"scraper": "abc"},
+        "_resource_ids": [],
+    }) == 2
+
+
+def test_a_documentation_only_version_still_counts_as_empty():
+    # The guard's whole purpose: a push that landed the layer's SLD and no data
+    # is an empty version, and must stay one.
+    assert worker._landed_resource_count({
+        "_symbology": [SYMB],
+        "_hashes": {"scraper": "abc"},
+        "_resource_ids": [],
+    }) == 0
+
+
+def test_named_resources_still_count():
+    assert worker._landed_resource_count({
+        "נתוני הסורק": CSV,
+        "_geojson": [f"r2:datasets/{DS}/v1/5951d22f_geojson.gz"],
+        "_hashes": {"scraper": "abc"},
+    }) == 2
+
+
+def test_empty_aggregates_are_not_counted():
+    assert worker._landed_resource_count({
+        "_gpkg": [], "_parquet": None, "_hashes": {"scraper": "abc"},
+    }) == 0
