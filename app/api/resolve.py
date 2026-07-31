@@ -86,7 +86,17 @@ def rebuild_source_url(path_part: str, query: str) -> str:
         # is a second query fragment, not the start of one.
         url += ("&" if "?" in url else "?") + query
     # Some proxies collapse the "//" in "https://" when it sits inside a path.
-    return re.sub(r"^(https?):/+", r"\1://", url, flags=re.IGNORECASE)
+    url = re.sub(r"^(https?):/+", r"\1://", url, flags=re.IGNORECASE)
+    # A ROUTE FRAGMENT ONLY SURVIVES THE PERCENT-ENCODED SPELLING. Browsers
+    # never put anything after "#" on the wire, so a verbatim
+    # ``/direct/https://site/#/documents`` reaches us as ``https://site/`` — the
+    # route is gone before any of our code runs. Since a hash-routed SPA's route
+    # is part of its identity (see url_identity), a caller that wants the exact
+    # dataset must percent-encode the URL (``%23`` for the "#"), which arrives
+    # here decoded and intact. Without it the answer degrades to the path match:
+    # the /lookup chooser listing every dataset cut from that site, which is the
+    # right fallback but is not the same as a hit.
+    return url
 
 
 @direct_router.get("/direct/{path_part:path}")

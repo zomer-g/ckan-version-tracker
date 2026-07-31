@@ -18,10 +18,28 @@ So instead of comparing URLs we compare IDENTITIES:
   ``("govmap", "11")``      — a GovMap layer is its layer id, nothing else
   ``("ckan", "<name>")``    — a data.gov.il dataset is its package name
   ``("url", "<canonical>")``— everything else: host (no ``www.``) + path +
-                              sorted query, minus tracking params
+                              sorted query, minus tracking params, plus the
+                              fragment WHEN IT IS A ROUTE (see below)
 
 Two URLs with the same identity are the same thing. ``path_key()`` is a
 deliberately looser second chance used only when no identity matched.
+
+ROUTE FRAGMENTS. A fragment is normally an anchor — ``/about#contact`` is the
+same page as ``/about`` — so canonicalisation drops it. But a hash-routed SPA
+puts the whole route there, and ykpubdata.jerusalem.muni.il is one:
+
+    …/#/?SystemCode=26400046                     the register
+    …/#/documents                                a second corpus
+    …/#/Details?TikNum=2004/0196.00&…            one building file
+
+Dropping the fragment made all three the SAME identity, so the second dataset
+of that site could never be requested ("400 Already tracked") and a per-file
+dataset could never exist at all. So the fragment is kept when it LOOKS LIKE A
+ROUTE — it starts with ``/`` (or the hashbang ``!/``), which is the SPA
+convention and is never how an anchor is written — and dropped otherwise. It is
+then canonicalised exactly like a path+query, so param order and tracking params
+are noise inside the route too. A bare ``#/`` adds nothing to the path it
+follows and is treated as absent.
 """
 
 from __future__ import annotations
@@ -79,9 +97,47 @@ def _split(url: str | None):
     return parts
 
 
+def _sorted_query(query: str | None) -> str:
+    """``a=1&b=2`` — the query with tracking params dropped and keys sorted, so
+    the order a link happened to be written in is not part of the identity."""
+    pairs = [
+        (k, v)
+        for k, v in parse_qsl(query or "", keep_blank_values=True)
+        if k.lower() not in _NOISE_PARAMS and not k.lower().startswith("utm_")
+    ]
+    pairs.sort()
+    return "&".join(f"{k}={v}" for k, v in pairs)
+
+
+def route_fragment(fragment: str | None) -> str | None:
+    """The ROUTE a hash-routed SPA carries in its fragment, canonicalised the
+    same way a path+query is — or None when the fragment is an ordinary anchor.
+
+    The test is the leading slash (``#/…``, or the hashbang ``#!/…``): that is
+    how every hash router writes a route, and no anchor is written that way.
+    ``#contact``, ``#top`` and Chrome's ``#:~:text=…`` scroll-to-text therefore
+    all stay noise, which is what keeps ``…/about#contact`` and ``…/about`` one
+    dataset. A fragment that canonicalises to a bare ``/`` with no query adds
+    nothing to the URL it follows, so it is treated as absent — ``site/#/`` and
+    ``site/`` are the same page."""
+    frag = (fragment or "").strip()
+    if frag.startswith("!"):  # hashbang routes (#!/path) are the same convention
+        frag = frag[1:]
+    if not frag.startswith("/"):
+        return None
+    raw_path, _, raw_query = frag.partition("?")
+    path = re.sub(r"/+$", "", unquote(raw_path))
+    query = _sorted_query(raw_query)
+    if not path and not query:
+        return None
+    return f"{path or '/'}?{query}" if query else path
+
+
 def canonical_url(url: str | None) -> str | None:
-    """``host/path?sorted-query`` with scheme, ``www.``, trailing slashes and
-    tracking params removed. Returns None for anything that isn't a URL."""
+    """``host/path?sorted-query[#route]`` with scheme, ``www.``, trailing
+    slashes and tracking params removed. The fragment is included only when it
+    is a route (see route_fragment). Returns None for anything that isn't a
+    URL."""
     parts = _split(url)
     if parts is None:
         return None
@@ -89,14 +145,10 @@ def canonical_url(url: str | None) -> str | None:
     if host.startswith("www."):
         host = host[4:]
     path = re.sub(r"/+$", "", unquote(parts.path or "")) or "/"
-    pairs = [
-        (k, v)
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k.lower() not in _NOISE_PARAMS and not k.lower().startswith("utm_")
-    ]
-    pairs.sort()
-    query = "&".join(f"{k}={v}" for k, v in pairs)
-    return f"{host}{path}?{query}" if query else f"{host}{path}"
+    query = _sorted_query(parts.query)
+    canonical = f"{host}{path}?{query}" if query else f"{host}{path}"
+    route = route_fragment(parts.fragment)
+    return f"{canonical}#{route}" if route else canonical
 
 
 def path_key(url: str | None) -> str | None:
@@ -107,6 +159,12 @@ def path_key(url: str | None) -> str | None:
     its corpora from one page), so a path match may legitimately return more
     than one dataset. Callers must treat multiple hits as "ambiguous, show
     them all", never as "found it".
+
+    Deliberately fragment-BLIND, even though the identity is not: every route of
+    a hash-routed SPA is served from the same path, so all of them collapsing to
+    one key is this function doing its job. That is what makes a bare
+    ``ykpubdata.jerusalem.muni.il/`` link offer every dataset cut from that site
+    as a "did you mean", exactly as a bare ``jeden.co.il/`` link does.
     """
     parts = _split(url)
     if parts is None:
