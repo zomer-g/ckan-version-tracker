@@ -1,0 +1,553 @@
+<title>גרסאות לעם — ציר הזמן של הפרויקט</title>
+<style>
+  :root {
+    --paper: #F6F7FB;
+    --paper-2: #FFFFFF;
+    --ink: #101B33;
+    --ink-soft: #3A4A66;
+    --ink-faint: #6B7891;
+    --line: #DCE1EC;
+    --line-soft: #E8EBF3;
+    --accent: #1F6F8B;
+    --accent-deep: #155066;
+    --shadow: 12, 27, 51;
+
+    /* category hues */
+    --c-source: #C2410C;
+    --c-spatial: #0F766E;
+    --c-sql: #6D28D9;
+    --c-mcp: #1D4ED8;
+    --c-infra: #52607A;
+    --c-sec: #B4232C;
+    --c-product: #A16207;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0C1322;
+      --paper-2: #121C30;
+      --ink: #EAEFF9;
+      --ink-soft: #B7C2D8;
+      --ink-faint: #7C89A3;
+      --line: #24314C;
+      --line-soft: #1B2740;
+      --accent: #57B6D0;
+      --accent-deep: #8FD4E6;
+      --shadow: 0, 0, 0;
+      --c-source: #F08A4B;
+      --c-spatial: #3FC0AE;
+      --c-sql: #A985F0;
+      --c-mcp: #6E9BFF;
+      --c-infra: #93A2C0;
+      --c-sec: #F0757D;
+      --c-product: #E0B24B;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #F6F7FB; --paper-2: #FFFFFF; --ink: #101B33; --ink-soft: #3A4A66;
+    --ink-faint: #6B7891; --line: #DCE1EC; --line-soft: #E8EBF3; --accent: #1F6F8B;
+    --accent-deep: #155066; --shadow: 12,27,51;
+    --c-source:#C2410C; --c-spatial:#0F766E; --c-sql:#6D28D9; --c-mcp:#1D4ED8;
+    --c-infra:#52607A; --c-sec:#B4232C; --c-product:#A16207;
+  }
+  :root[data-theme="dark"] {
+    --paper: #0C1322; --paper-2: #121C30; --ink: #EAEFF9; --ink-soft: #B7C2D8;
+    --ink-faint: #7C89A3; --line: #24314C; --line-soft: #1B2740; --accent: #57B6D0;
+    --accent-deep: #8FD4E6; --shadow: 0,0,0;
+    --c-source:#F08A4B; --c-spatial:#3FC0AE; --c-sql:#A985F0; --c-mcp:#6E9BFF;
+    --c-infra:#93A2C0; --c-sec:#F0757D; --c-product:#E0B24B;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    direction: rtl;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    font-feature-settings: "kern" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---------- hero ---------- */
+  header.hero {
+    padding: 72px 0 40px;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 90% at 90% 0%, rgba(31,111,139,0.10), transparent 60%),
+      radial-gradient(120% 90% at 0% 0%, rgba(31,111,139,0.05), transparent 55%);
+  }
+  .eyebrow {
+    font-size: 12.5px; letter-spacing: 3px; font-weight: 700;
+    color: var(--accent-deep); text-transform: uppercase;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before {
+    content: ""; width: 26px; height: 2px; background: var(--accent); display: inline-block;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 58px);
+    line-height: 1.04; margin: 18px 0 0; font-weight: 800;
+    letter-spacing: -0.5px; text-wrap: balance;
+  }
+  h1 .sub { display:block; color: var(--accent); font-weight: 800; }
+  .lede {
+    margin: 20px 0 0; max-width: 60ch;
+    font-size: 18px; color: var(--ink-soft); line-height: 1.7;
+  }
+  .stats {
+    margin-top: 36px; display: grid; gap: 14px;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .stat {
+    background: var(--paper-2); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px 18px;
+  }
+  .stat .n {
+    font-size: 30px; font-weight: 800; color: var(--ink);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.5px;
+  }
+  .stat .l { font-size: 12.5px; color: var(--ink-faint); margin-top: 2px; }
+
+  /* ---------- legend ---------- */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 16px;
+    padding: 22px 0 4px;
+  }
+  .legend .tag { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-soft); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px rgba(var(--shadow),0.04); }
+  .d-source{background:var(--c-source)} .d-spatial{background:var(--c-spatial)}
+  .d-sql{background:var(--c-sql)} .d-mcp{background:var(--c-mcp)}
+  .d-infra{background:var(--c-infra)} .d-sec{background:var(--c-sec)}
+  .d-product{background:var(--c-product)}
+
+  /* ---------- chapters ---------- */
+  .chapter { padding: 30px 0 8px; }
+  .chapter-head {
+    display: flex; align-items: baseline; gap: 16px;
+    padding-bottom: 8px;
+  }
+  .chapter-num {
+    font-size: 13px; font-weight: 800; letter-spacing: 2px;
+    color: var(--accent); font-variant-numeric: tabular-nums;
+    border: 1.5px solid var(--accent); border-radius: 999px;
+    padding: 3px 12px; flex: none;
+  }
+  .chapter-head h2 {
+    font-size: clamp(21px, 3.4vw, 27px); margin: 0; font-weight: 800;
+    letter-spacing: -0.3px;
+  }
+  .chapter-when { color: var(--ink-faint); font-size: 14px; font-variant-numeric: tabular-nums; margin-inline-start: auto; white-space: nowrap; }
+  .chapter-lede { color: var(--ink-soft); font-size: 15.5px; margin: 2px 0 20px; max-width: 68ch; }
+
+  /* ---------- timeline rail ---------- */
+  .rail {
+    position: relative;
+    margin-inline-start: 6px;
+    padding-inline-start: 30px;
+    border-inline-start: 2px solid var(--line);
+  }
+  .entry { position: relative; padding: 0 0 22px; }
+  .entry:last-child { padding-bottom: 4px; }
+  .entry::before {
+    content: ""; position: absolute;
+    inset-inline-start: -37px; top: 6px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--paper); border: 2.5px solid var(--cat, var(--accent));
+    box-shadow: 0 0 0 4px var(--paper);
+  }
+  .entry.major::before {
+    width: 15px; height: 15px; inset-inline-start: -38.5px; top: 5px;
+    background: var(--cat, var(--accent));
+    box-shadow: 0 0 0 4px var(--paper), 0 0 0 6px color-mix(in srgb, var(--cat, var(--accent)) 22%, transparent);
+  }
+  .entry-card {
+    background: var(--paper-2); border: 1px solid var(--line);
+    border-radius: 13px; padding: 13px 16px 14px;
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .entry.major .entry-card {
+    border-inline-start: 3px solid var(--cat, var(--accent));
+  }
+  @media (hover: hover) {
+    .entry-card:hover { border-color: color-mix(in srgb, var(--cat, var(--accent)) 55%, var(--line)); transform: translateX(-2px); }
+  }
+  .entry-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .date {
+    font-size: 12.5px; font-weight: 700; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums; letter-spacing: .3px;
+    background: var(--paper); border: 1px solid var(--line-soft);
+    border-radius: 6px; padding: 1px 8px; flex: none;
+  }
+  .cat-label {
+    font-size: 11px; font-weight: 700; letter-spacing: .4px;
+    color: var(--cat, var(--accent));
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .cat-label .dot { width: 8px; height: 8px; box-shadow: none; background: var(--cat, var(--accent)); }
+  .entry h3 { margin: 8px 0 0; font-size: 16.5px; font-weight: 700; letter-spacing: -0.2px; line-height: 1.35; }
+  .entry.major h3 { font-size: 17.5px; }
+  .entry p { margin: 4px 0 0; font-size: 14px; color: var(--ink-soft); line-height: 1.6; }
+  .entry .firstof { display:inline-block; font-size: 11px; font-weight: 800; color: var(--paper-2); background: var(--cat, var(--accent)); border-radius: 5px; padding: 1px 7px; margin-inline-start: 6px; vertical-align: 1px; }
+
+  /* ---------- outro ---------- */
+  .outro { padding: 40px 0 72px; }
+  .outro-card {
+    background: linear-gradient(135deg, var(--accent-deep), var(--accent));
+    color: #fff; border-radius: 18px; padding: 32px 30px;
+  }
+  :root[data-theme="dark"] .outro-card, :root:not([data-theme="light"]) .outro-card { color: #06121c; }
+  @media (prefers-color-scheme: dark) { .outro-card { color: #06121c; } }
+  :root[data-theme="light"] .outro-card { color: #ffffff; }
+  .outro-card h2 { margin: 0 0 10px; font-size: 24px; font-weight: 800; }
+  .outro-card p { margin: 0; font-size: 16px; line-height: 1.7; opacity: .95; max-width: 64ch; }
+  .arc { display:flex; flex-wrap:wrap; gap: 10px; margin-top: 20px; }
+  .arc span { background: rgba(255,255,255,0.16); border-radius: 999px; padding: 5px 13px; font-size: 13px; font-weight: 600; }
+
+  footer.foot { padding: 0 0 60px; color: var(--ink-faint); font-size: 12.5px; text-align:center; }
+
+  @media (max-width: 620px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    header.hero { padding: 48px 0 30px; }
+    .chapter-when { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+  /* gentle load-in */
+  .entry, .chapter-head, .stat { animation: rise .5s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">סיפור התפתחות · over.org.il</div>
+    <h1>גרסאות לעם<span class="sub">ציר הזמן של הפרויקט</span></h1>
+    <p class="lede">איך כלי קטן שעוקב אחרי שינויים במאגר data.gov.il הפך, בתוך ארבעה חודשים, לתשתית שקיפות שמארכבת עשרות מקורות ממשלתיים, מגישה אותם ב‑SQL, במפות וב‑MCP — ושומרת כל גרסה היסטורית.</p>
+    <div class="stats">
+      <div class="stat"><div class="n">18.3–27.7</div><div class="l">מ‑2026, כ‑4 חודשי פיתוח</div></div>
+      <div class="stat"><div class="n">~22</div><div class="l">מקורות מידע נתמכים</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">שרתי MCP חיים</div></div>
+      <div class="stat"><div class="n">556</div><div class="l">קומיטים</div></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="legend" aria-label="מקרא קטגוריות">
+    <span class="tag"><span class="dot d-source"></span> מקור חדש</span>
+    <span class="tag"><span class="dot d-spatial"></span> מרחבי / מפות</span>
+    <span class="tag"><span class="dot d-sql"></span> SQL / נתונים</span>
+    <span class="tag"><span class="dot d-mcp"></span> MCP / AI</span>
+    <span class="tag"><span class="dot d-infra"></span> תשתית</span>
+    <span class="tag"><span class="dot d-sec"></span> אבטחה</span>
+    <span class="tag"><span class="dot d-product"></span> מוצר / חוויה</span>
+  </div>
+
+  <!-- ===================== CHAPTER 1 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 01</span>
+      <h2>הלידה</h2>
+      <span class="chapter-when">מרץ 2026</span>
+    </div>
+    <p class="chapter-lede">נקודת ההתחלה: עוקב גרסאות פשוט למאגרי CKAN, שרץ בעלות אפס. עוד לא "גרסאות לעם" — סתם כלי.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">18.03</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>השקה ראשונה — CKAN Dataset Version Tracker</h3>
+        <p>הגרסה הראשונה: מעקב אחרי שינויים במאגרי CKAN, עם התחברות SSO (Google + GitHub).</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">19.03</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>מעבר לעלות אפס</h3>
+        <p>Render (free) + Neon PostgreSQL — התשתית שתלווה את הפרויקט מכאן והלאה.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 2 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 02</span>
+      <h2>ממכשיר למוצר</h2>
+      <span class="chapter-when">אפריל 2026</span>
+    </div>
+    <p class="chapter-lede">מיתוג, זהות, וה‑Worker החיצוני שפתח את הדלת למקורות שאינם data.gov.il. כאן נולד "גרסאות לעם".</p>
+    <div class="rail">
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">10.04</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>תמיכה ב‑data.gov.il + דחיפה ל‑Datastore</h3>
+        <p>הדבקת קישור data.gov.il, עורך תדירות דגימה, והנתונים נעשים לניתן‑לשאילתה דרך ה‑API.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">11.04</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>מיתוג מחדש → «גרסאות לעם» / over.org.il</h3>
+        <p>עיצוב במשפחת «לעם», אתר ציבורי מול פאנל אדמין, אישור משתמשים, ואסטרטגיית מאגר‑ענק (גרסת מטא‑דאטה בלבד ל‑50K+ שורות).</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">12.04</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>אינטגרציית ה‑Worker (govil‑scraper)</h3>
+        <p>תור משימות + API דחיפה. זהו ה‑Worker החיצוני שיאפשר לגרד כל אתר — לא רק CKAN.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">16.04</span><span class="cat-label"><span class="dot"></span> מקור חדש</span><span class="firstof">האתר הראשון מעבר ל‑data.gov.il</span></div>
+        <h3>סורק gov.il — מאגרי אספנים</h3>
+        <p>מעקב אחרי datasets ישירות מ‑gov.il, צירוף ZIP, וממשק ניהול תור לגירוד.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">22.04</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>ישויות ארגונים</h3>
+        <p>עיון לפי משרד ממשלתי, היררכיית אב/בן מ‑gov.il, ושיוך datasets לארגון.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">25.04</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>תיוג חוצה‑ארגונים + API ציבורי /api/v1</h3>
+        <p>תגיות על datasets ממשרדים שונים, ולראשונה — API ציבורי לקריאה עם תיעוד.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">30.04</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>מצב אחסון per‑dataset</h3>
+        <p>בחירה בין snapshot מלא ל‑append_only — היסוד לארכוב הצטברותי בהמשך.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 3 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 03</span>
+      <h2>מפות ומקורות</h2>
+      <span class="chapter-when">מאי 2026</span>
+    </div>
+    <p class="chapter-lede">הפרויקט יוצא מגבולות הטבלה: המידע המרחבי נכנס, ומקורות חדשים (צה"ל) מצטרפים.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">02.05</span><span class="cat-label"><span class="dot"></span> מרחבי</span><span class="firstof">המקור המרחבי הראשון</span></div>
+        <h3>GovMap — מעקב שכבות מפה</h3>
+        <p>גירוד שכבות מ‑GovMap דרך ה‑Worker, כולל חשיפת GeoJSON וכותרות שכבה.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">07.05</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>נעילת גרסת Worker + עיצוב אדמין מחדש</h3>
+        <p>שער שמונע Worker מיושן מלדחוף נתונים, וניווט צד חדש בפאנל האדמין (טאב לכל פיצ'ר).</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">21.05</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>סורק צה"ל — הפרקליטות הצבאית (idf.il)</h3>
+        <p>סוג סורק חדש לעמודי הפרקליטות הצבאית, עם צ'יפ ירוק ייעודי. בהמשך נוסף גם פורטל הפקודות.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">22.05</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>מפה אינטראקטיבית בתוך עמוד ה‑dataset</h3>
+        <p>תצוגת מפה חיה עם פילטרים קטגוריאליים, מסך מלא, וזרימת נתונים — ישירות בעמוד המאגר.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">24.05</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>עמוד /growth — הדרים ואבוקדו</h3>
+        <p>תצוגה אוצרת של שכבות גידול על גבי תצלום אוויר, עם פאנל אבחון כיסוי.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 4 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 04</span>
+      <h2>R2, NEON וה‑SQL הראשון</h2>
+      <span class="chapter-when">יוני 2026</span>
+    </div>
+    <p class="chapter-lede">החודש שבו הארכיטקטורה התבגרה: אחסון קבצים משוחרר מ‑ODATA, מסד NEON ייעודי נולד, וקונסולת SQL ו‑MCP עולים לראשונה.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">09.06</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>practitioners.health.gov.il</h3>
+        <p>מאגרי בעלי מקצוע במשרד הבריאות — עם צ'יפ סגול ייעודי.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">10.06</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>avodata.labor.gov.il</h3>
+        <p>אינדקס העיסוקים וקורפוס ההשכלה ממשרד העבודה.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">23.06</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>מבקר המדינה (mevaker)</h3>
+        <p>דוחות מבקר המדינה כמקור נתמך, מאגר לכל סוג דוח.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">24.06</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>אחסון R2 — ניתוק הקבצים מ‑ODATA</h3>
+        <p>Cloudflare R2 כ‑backend אחסון עצמאי, יעד אחסון per‑dataset. באותו יום נוסף גם המקור <strong>חצב (geo.mot.gov.il)</strong>.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">26.06</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>מסד NEON ייעודי ל‑append + ייצוא לדרייב</h3>
+        <p>R2 הופך לברירת מחדל; משיכות datastore נשמרות ב‑Postgres נפרד; רישום טיסות ורכבים; "ייצוא לדרייב" server‑side; ו‑Worker שמעדכן את עצמו בין משימות.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">28.06</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span><span class="firstof">ה‑SQL הראשון</span></div>
+        <h3>קונסולת SQL לקריאה בלבד מעל טבלאות הארכיון</h3>
+        <p>ממשק שאילתות ציבורי מעל טבלאות ה‑NEON, כתיבה כפולה R2+NEON, לוג פעילות, ותקציב API per‑IP נגד גירוד המוני.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">29.06</span><span class="cat-label"><span class="dot"></span> MCP / AI</span><span class="firstof">ה‑MCP הראשון</span></div>
+        <h3>שרת MCP מרוחק עם Google OAuth</h3>
+        <p>חשיפת הנתונים ל‑Claude / ChatGPT דרך MCP, בגישה בהזמנה בלבד, עם טאב אדמין לניהול משתמשים.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 5 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 05</span>
+      <h2>הפיצוץ: למ"ס, כנסת וחיפוש עמוק</h2>
+      <span class="chapter-when">יולי 2026</span>
+    </div>
+    <p class="chapter-lede">קצב חסר תקדים: מקור חדש כמעט מדי כמה ימים, שלושה שרתי MCP ייעודיים, מראת מסד הכנסת, חיפוש טקסט‑מלא, קונסולת SQL מרכזית לכל האתר, PostGIS, ומחבר Looker.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">01.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>חוזרי מנכ"ל משרד החינוך (mankal)</h3>
+        <p>קורפוס שלם של חוזרי מנכ"ל, מפוצל לאוספים לפי סוג.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">03.07</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>עמוד /rationale — «פתוח כברירת מחדל»</h3>
+        <p>הסבר הרציונל של הפרויקט על בסיס החלטת ממשלה 1933.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">04.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>אינדקס תוכן הלמ"ס (cbs.gov.il)</h3>
+        <p>אינדקס תוכן HEAD‑only ללמ"ס. יתפתח לעמוד חיפוש ציבורי, חיפוש בשפה טבעית, ומשוב משתמשים.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">05.07</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>העלאות ישירות ל‑R2 + GPKG / GeoParquet</h3>
+        <p>העלאות presigned רב‑חלקיות ישירות ל‑R2, ופורמטים מרחביים כבדים לשכבות ענק.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">06.07</span><span class="cat-label"><span class="dot"></span> MCP / AI</span></div>
+        <h3>MCP ייעודי ללמ"ס + חיפוש בשפה טבעית</h3>
+        <p>/cbs/mcp נפרד, עמוד «מקורות», ו‑POST /api/cbs/ask — שאלה בשפה טבעית, תשובה אחת ממוקדת.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">07.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>JDA (רשות פיתוח ירושלים) + עדן (jeden.co.il)</h3>
+        <p>שני מקורות מכרזים חדשים ביום אחד, במודל ארכיון‑הצטברותי.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">10.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>מראת מסד הכנסת ב‑NEON + קונסולת SQL ב‑/knesset</h3>
+        <p>48 טבלאות ODATA‑v4 של הכנסת ממורות ל‑Neon עם עמודות מוקלדות. באותו יום נוספו גם <strong>פרוטוקולי ועדות הכנסת</strong> ו<strong>מחקרי ממ"מ</strong> כמקורות.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">11.07</span><span class="cat-label"><span class="dot"></span> MCP / AI</span></div>
+        <h3>MCP ייעודי לכנסת + טקסטים ניתנים לעריכה</h3>
+        <p>/knesset/mcp, מדריך SQL בעברית, וממשק אדמין לעריכת טקסטי «אודות» ו«רציונל» בזמן ריצה.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">13.07</span><span class="cat-label"><span class="dot"></span> MCP / AI</span></div>
+        <h3>חיפוש עמוק דרך TAG‑IT</h3>
+        <p>מצב חיפוש «עמוק» שמחפש טקסט מלא בתוך גוף המסמכים (ממ"מ ופרוטוקולים) דרך MCP חיצוני.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">15.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>registries.health.gov.il + ארכיון NEON רב‑משאבים</h3>
+        <p>מאגרי משרד הבריאות בכתיבה כפולה R2+NEON, וטבלת NEON נפרדת לכל משאב במאגר.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sec)">
+        <div class="entry-top"><span class="date">16–17.07</span><span class="cat-label"><span class="dot"></span> אבטחה</span></div>
+        <h3>קשיחות אבטחה</h3>
+        <p>קונסולות ה‑SQL הציבוריות עוברות לתפקיד DB לקריאה בלבד ובמסד נפרד מהסודות; ביטול JWT ב‑URL; rate‑limit על כל endpoint; ותקציב LLM גלובלי יומי.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">21.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>munidata (מצב השלטון המקומי) + מצפן השירותים</h3>
+        <p>נתוני רשויות מקומיות לפי מדד, ומצפן השירותים של gov.il — שניהם זמינים ל‑SQL.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">22.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>קונסולת /data מרכזית + תרשימים + גילוי אוטומטי</h3>
+        <p>SQL חוצה‑סכמות מעל כל טבלאות האתר, תרשימים (עוגה/עמודות/קו) עם בונה‑ללא‑SQL, גילוי אוטומטי של dataset אקראי מ‑data.gov.il כל 6 שעות, ומראת אינדקסים (idx) ל‑NEON.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">23.07</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>PostGIS, ניתוח מרחבי על מפה, ומחבר Looker</h3>
+        <p>עמודת geom (PostGIS) על שכבות GovMap וניתוח מרחבי מצויר על מפה; מחבר Looker Studio מעל ה‑append DB; המקור <strong>מערכת אמו"ן (emun)</strong>; ורישום מקורות דקלרטיבי — Worker מכריז על מקור חדש בלי קוד ב‑OVER.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">24.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>המפה הפכה לסוג תרשים</h3>
+        <p>בקונסולת /data המפה היא כעת סוג תרשים מן המניין, עם הגדרות משלה.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 6 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 06</span>
+      <h2>פרויקטים אחים ומידע לעם</h2>
+      <span class="chapter-when">סוף יולי 2026</span>
+    </div>
+    <p class="chapter-lede">גרסאות לעם מפסיק להיות פרויקט בודד: מחבר Looker יוצא לציבור, «מידע לעם» ו«יומן לעם» נכנסים כמקורות אחים, וה‑/api עובר למסגור של ארבעה מקורות.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">24.07</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>מחבר Looker Studio — שחרור ציבורי (v1)</h3>
+        <p>המחבר עולה לציבור עם קישור deployment בעמוד ה‑API, ולצדו כותרת/כותרת‑תחתונה דו‑שכבתית עם עמודים לפרויקטים האחים.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">25.07</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>איחוד גרסאות batch + טאב חיבור Google Drive</h3>
+        <p>גרסאות per‑batch של bootstrap מתאחדות לגרסה אחת; ובאדמין — טאב לחיבור/ניתוק חשבון Google Drive.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">26.07</span><span class="cat-label"><span class="dot"></span> מקור חדש</span></div>
+        <h3>מידע לעם — חיפוש מְשׁוּיָּךְ + ייבוא ל‑SQL</h3>
+        <p>חיפוש מבוסס פסאות (ארגונים + פורמטים) מעל «מידע לעם», וייבוא אוצר‑אדמין של משאבי datastore לטבלאות ניתנות‑לשאילתה, עם סימוני «נתונים מעובדים».</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">26.07</span><span class="cat-label"><span class="dot"></span> MCP / AI</span><span class="firstof">פרויקט אח שלם</span></div>
+        <h3>יומן לעם (ocal) — הגירה מלאה ל‑OVER</h3>
+        <p>יומני עבודה של נבחרי ציבור: מסד Neon ייעודי, API ‏/api/ocal, עמוד /projects/ocal (חיפוש/לוח‑שנה/יומנים), ‏MCP רביעי ‏/ocal/mcp, ייבוא‑אוטומטי + העשרה (ישויות, הצלבות), אדמין, ו‑AI‑NER מבוסס LLM.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">26.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>פילטרים מבוססי‑תוכן ב‑/data</h3>
+        <p>סימון וסינון «יישוב» (locality) בקטלוג, ופילטרי פסאות מונחי‑נתונים על כל דגלי‑התוכן והשכבות המרחביות.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">27.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>Table Profiler + מסגור ארבעה מקורות</h3>
+        <p>פרופיילר טבלאות SQL‑first עם העשרת LLM (שלב 1), ועמוד ה‑/api עובר להצגת ארבעת המקורות: data.gov.il, סורקים, מידע לעם ויומן לעם.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== OUTRO ===================== -->
+  <section class="outro">
+    <div class="outro-card">
+      <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
+      <p>הקו המנחה לאורך כל הדרך: כל מקור ממשלתי שנוסף נשמר, מגורסן, ונחשף בכמה שפות בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. הארכיטקטורה זזה מ‑ODATA ל‑R2+NEON, והוספת מקור חדש עברה מקוד ידני בשני repos להכרזה דקלרטיבית של ה‑Worker.</p>
+      <div class="arc">
+        <span>גרסון היסטורי</span>
+        <span>~22 מקורות</span>
+        <span>SQL ציבורי</span>
+        <span>4 שרתי MCP</span>
+        <span>מפות + PostGIS</span>
+        <span>מחבר Looker</span>
+        <span>פרויקטים אחים</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    נבנה מתוך היסטוריית ה‑git של over.org.il · 556 קומיטים, 18.03–27.07.2026
+  </footer>
+
+</main>

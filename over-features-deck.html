@@ -1,0 +1,451 @@
+<title>גרסאות לעם — מצגת פיצ'רים</title>
+<style>
+  :root {
+    --paper: #F6F7FB; --paper-2:#FFFFFF; --ink:#101B33; --ink-soft:#3A4A66;
+    --ink-faint:#6B7891; --line:#DCE1EC; --line-soft:#E8EBF3;
+    --accent:#1F6F8B; --accent-deep:#155066; --shadow:12,27,51;
+    --c-source:#C2410C; --c-spatial:#0F766E; --c-sql:#6D28D9; --c-mcp:#1D4ED8;
+    --c-infra:#52607A; --c-sec:#B4232C; --c-product:#A16207;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0C1322; --paper-2:#121C30; --ink:#EAEFF9; --ink-soft:#B7C2D8;
+      --ink-faint:#7C89A3; --line:#24314C; --line-soft:#1B2740;
+      --accent:#57B6D0; --accent-deep:#8FD4E6; --shadow:0,0,0;
+      --c-source:#F08A4B; --c-spatial:#3FC0AE; --c-sql:#A985F0; --c-mcp:#6E9BFF;
+      --c-infra:#93A2C0; --c-sec:#F0757D; --c-product:#E0B24B;
+    }
+  }
+  :root[data-theme="light"]{--paper:#F6F7FB;--paper-2:#FFFFFF;--ink:#101B33;--ink-soft:#3A4A66;--ink-faint:#6B7891;--line:#DCE1EC;--line-soft:#E8EBF3;--accent:#1F6F8B;--accent-deep:#155066;--shadow:12,27,51;--c-source:#C2410C;--c-spatial:#0F766E;--c-sql:#6D28D9;--c-mcp:#1D4ED8;--c-infra:#52607A;--c-sec:#B4232C;--c-product:#A16207;}
+  :root[data-theme="dark"]{--paper:#0C1322;--paper-2:#121C30;--ink:#EAEFF9;--ink-soft:#B7C2D8;--ink-faint:#7C89A3;--line:#24314C;--line-soft:#1B2740;--accent:#57B6D0;--accent-deep:#8FD4E6;--shadow:0,0,0;--c-source:#F08A4B;--c-spatial:#3FC0AE;--c-sql:#A985F0;--c-mcp:#6E9BFF;--c-infra:#93A2C0;--c-sec:#F0757D;--c-product:#E0B24B;}
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; direction: rtl; background: var(--paper); color: var(--ink);
+    font-family: "Segoe UI","Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .deck { max-width: 1060px; margin: 0 auto; padding: 16px 16px 8px; }
+
+  /* stage */
+  .stage {
+    position: relative;
+    height: min(84vh, 660px); min-height: 460px;
+    background: var(--paper-2);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px -30px rgba(var(--shadow), .35);
+  }
+  .slide {
+    position: absolute; inset: 0;
+    padding: clamp(28px, 4.5vw, 56px);
+    display: flex; flex-direction: column;
+    opacity: 0; visibility: hidden;
+    transform: translateX(-24px);
+    transition: opacity .38s ease, transform .38s ease, visibility .38s;
+    overflow-y: auto;
+  }
+  .slide.active { opacity: 1; visibility: visible; transform: none; }
+  @media (prefers-reduced-motion: reduce) { .slide { transition: opacity .2s; transform: none; } }
+
+  .eyebrow {
+    font-size: 12px; letter-spacing: 2.5px; font-weight: 800;
+    color: var(--accent-deep); text-transform: uppercase;
+    display: flex; align-items: center; gap: 9px; margin-bottom: 14px;
+  }
+  .eyebrow::before { content:""; width:22px; height:2px; background: var(--accent); }
+  .slide h2 {
+    font-size: clamp(24px, 4vw, 40px); margin: 0 0 6px; font-weight: 800;
+    letter-spacing: -0.5px; line-height: 1.1; text-wrap: balance;
+  }
+  .slide .kicker { font-size: clamp(15px, 2vw, 18px); color: var(--ink-soft); margin: 4px 0 20px; max-width: 62ch; line-height: 1.6; }
+
+  /* number chip in corner */
+  .pagenum { position: absolute; inset-inline-start: clamp(28px,4.5vw,56px); bottom: 18px; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; letter-spacing:1px; }
+
+  /* ---- title slide ---- */
+  .title-slide { justify-content: center; align-items: flex-start;
+    background:
+      radial-gradient(120% 80% at 90% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      radial-gradient(100% 80% at 0% 100%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 55%);
+  }
+  .title-slide h1 { font-size: clamp(40px, 8vw, 76px); margin: 10px 0 0; font-weight: 800; letter-spacing:-1.5px; line-height: 1; }
+  .title-slide .brandline { color: var(--accent); }
+  .title-slide .tag { font-size: clamp(16px,2.4vw,21px); color: var(--ink-soft); margin-top: 20px; max-width: 54ch; line-height: 1.6; }
+  .title-slide .url { margin-top: 26px; font-size: 14px; font-weight:700; letter-spacing:1px; color: var(--ink-faint); }
+
+  /* ---- generic content bits ---- */
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(2,1fr); }
+  .g3 { grid-template-columns: repeat(3,1fr); }
+  .g4 { grid-template-columns: repeat(4,1fr); }
+  .card {
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px 17px;
+    border-inline-start: 3px solid var(--cat, var(--accent));
+  }
+  .card h3 { margin: 0 0 5px; font-size: 16.5px; font-weight: 700; letter-spacing:-.2px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--ink-soft); line-height: 1.55; }
+  .card .tagname { font-size: 10.5px; font-weight:800; letter-spacing:.4px; color: var(--cat,var(--accent)); text-transform: uppercase; }
+
+  ul.feat { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  ul.feat li { position: relative; padding-inline-start: 26px; font-size: clamp(15px,2vw,17px); color: var(--ink); line-height: 1.5; }
+  ul.feat li::before { content:""; position:absolute; inset-inline-start:2px; top:.55em; width:9px; height:9px; border-radius:50%; background: var(--cat,var(--accent)); }
+  ul.feat li b { font-weight: 700; }
+  ul.feat li span { color: var(--ink-soft); font-size: .92em; }
+
+  /* stat row */
+  .statrow { display:grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-top: 8px; }
+  .statbox { background: var(--paper); border:1px solid var(--line); border-radius:14px; padding: 20px 16px; text-align:center; }
+  .statbox .n { font-size: clamp(30px,5vw,46px); font-weight:800; letter-spacing:-1px; font-variant-numeric: tabular-nums; }
+  .statbox .l { font-size: 13px; color: var(--ink-faint); margin-top: 4px; }
+
+  /* source chips grid */
+  .srcgrid { display:flex; flex-wrap:wrap; gap:9px; margin-top: 6px; }
+  .chip { display:inline-flex; align-items:center; gap:7px; background: var(--paper); border:1px solid var(--line); border-radius: 999px; padding: 6px 13px; font-size: 13.5px; font-weight:600; color: var(--ink); }
+  .chip::before { content:""; width:9px; height:9px; border-radius:50%; background: var(--cat,var(--accent)); }
+  .legendline { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top: 18px; font-size:12px; color: var(--ink-faint); }
+  .legendline span { display:inline-flex; align-items:center; gap:6px; }
+  .legendline i { width:9px;height:9px;border-radius:50%; display:inline-block; }
+
+  .lang-flow { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-top: 10px; }
+  .lang-flow .src { background: var(--accent); color: var(--paper-2); font-weight:800; border-radius: 12px; padding: 14px 20px; font-size: 17px; }
+  :root[data-theme="dark"] .lang-flow .src, :root:not([data-theme="light"]) .lang-flow .src { color:#06121c; }
+  @media (prefers-color-scheme: dark){ .lang-flow .src{color:#06121c;} }
+  :root[data-theme="light"] .lang-flow .src { color:#fff; }
+  .lang-flow .arrow { color: var(--ink-faint); font-size: 22px; }
+  .lang-flow .outs { display:flex; flex-wrap:wrap; gap:9px; }
+  .lang-flow .out { background: var(--paper); border:1.5px solid var(--line); border-radius:11px; padding: 11px 15px; font-size: 15px; font-weight:700; }
+
+  /* closing */
+  .closing { justify-content:center; background: linear-gradient(135deg, var(--accent-deep), var(--accent)); }
+  .closing * { color:#fff !important; }
+  :root:not([data-theme="light"]) .closing *, .closing.dark * { }
+  .closing h2 { font-size: clamp(28px,5vw,48px); }
+  .closing .kicker { color: rgba(255,255,255,.92) !important; max-width: 60ch; }
+  .closing .chips2 { display:flex; flex-wrap:wrap; gap:10px; margin-top: 22px; }
+  .closing .chips2 span { background: rgba(255,255,255,.18); border-radius:999px; padding:7px 15px; font-size:14px; font-weight:600; }
+
+  /* ---- controls ---- */
+  .controls { display:flex; align-items:center; justify-content:space-between; gap:14px; padding: 14px 6px 4px; }
+  .dots { display:flex; flex-wrap:wrap; gap:7px; }
+  .dot-btn { width:9px; height:9px; border-radius:50%; border:none; background: var(--line); cursor:pointer; padding:0; transition: background .2s, transform .2s; }
+  .dot-btn.on { background: var(--accent); transform: scale(1.3); }
+  .navbtns { display:flex; gap:8px; }
+  .navbtns button {
+    font-family: inherit; font-size: 14px; font-weight:700; cursor:pointer;
+    background: var(--paper-2); color: var(--ink); border:1px solid var(--line);
+    border-radius: 10px; padding: 9px 16px; transition: border-color .18s, background .18s;
+  }
+  .navbtns button:hover:not(:disabled){ border-color: var(--accent); }
+  .navbtns button:disabled { opacity:.4; cursor:default; }
+  .navbtns button:focus-visible, .dot-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .counter { font-size:13px; color: var(--ink-faint); font-variant-numeric: tabular-nums; align-self:center; }
+  .hint { text-align:center; font-size:11.5px; color: var(--ink-faint); padding: 2px 0 10px; }
+
+  @media (max-width: 640px){
+    .g2,.g3,.g4 { grid-template-columns: 1fr 1fr; }
+    .statrow { grid-template-columns: 1fr 1fr; }
+    .slide { padding: 24px 20px 40px; }
+    .stage { height: min(78vh, 560px); }
+  }
+</style>
+
+<div class="deck">
+  <div class="stage" id="stage">
+
+    <!-- 1 · TITLE -->
+    <section class="slide title-slide active">
+      <div class="eyebrow">מצגת פיצ'רים · over.org.il</div>
+      <h1>גרסאות לעם<br><span class="brandline">התשתית שרואה מה השתנה</span></h1>
+      <p class="tag">ארכיון גרסאות חי למאגרי המידע הממשלתיים בישראל — שומר כל גרסה, ומגיש אותה כקובץ, טבלה, מפה, API ו‑MCP.</p>
+      <div class="url">over.org.il</div>
+      <div class="pagenum">01</div>
+    </section>
+
+    <!-- 2 · MISSION -->
+    <section class="slide">
+      <div class="eyebrow">המשימה</div>
+      <h2>פתוח כברירת מחדל — ובאמת נשמר</h2>
+      <p class="kicker">מאגרים ממשלתיים משתנים ונמחקים בשקט. גרסאות לעם עוקב, מארכב ומנגיש — כדי שאף גרסה לא תיעלם, וכל שינוי יהיה ניתן לבדיקה.</p>
+      <ul class="feat">
+        <li style="--cat:var(--c-product)"><b>שקיפות ברת‑אימות</b> <span>— כל נתון מקושר חזרה למקור הממשלתי המקורי.</span></li>
+        <li style="--cat:var(--c-sql)"><b>היסטוריה שנשמרת</b> <span>— גרסה לכל שינוי, גם כשהמקור מוחק או דורס.</span></li>
+        <li style="--cat:var(--c-mcp)"><b>נגישות לכולם</b> <span>— מאדם שמחפש קובץ ועד סוכן AI ששואל שאלה.</span></li>
+      </ul>
+      <div class="pagenum">02</div>
+    </section>
+
+    <!-- 3 · BY THE NUMBERS -->
+    <section class="slide">
+      <div class="eyebrow">במספרים</div>
+      <h2>איפה הפרויקט היום</h2>
+      <div class="statrow">
+        <div class="statbox"><div class="n">~22</div><div class="l">מקורות מידע</div></div>
+        <div class="statbox"><div class="n">4</div><div class="l">שרתי MCP חיים</div></div>
+        <div class="statbox"><div class="n">3</div><div class="l">קונסולות SQL ציבוריות</div></div>
+        <div class="statbox"><div class="n">556</div><div class="l">קומיטים ב‑4 חודשים</div></div>
+      </div>
+      <p class="kicker" style="margin-top:22px">מ‑18.3 ל‑27.7.2026 — כלי מעקב CKAN בודד הפך לתשתית שקיפות רב‑מקורית.</p>
+      <div class="pagenum">03</div>
+    </section>
+
+    <!-- 4 · CORE IDEA -->
+    <section class="slide">
+      <div class="eyebrow">הרעיון המרכזי</div>
+      <h2>מקור אחד, חמש שפות הגשה</h2>
+      <p class="kicker">כל מקור שנוסף נשמר פעם אחת — ונחשף בו‑זמנית בכל דרך שבה מישהו עשוי לרצות אותו.</p>
+      <div class="lang-flow">
+        <div class="src">מקור ממשלתי</div>
+        <div class="arrow">←</div>
+        <div class="outs">
+          <div class="out">📄 קובץ / ZIP</div>
+          <div class="out">🗄️ טבלה + SQL</div>
+          <div class="out">🗺️ מפה</div>
+          <div class="out">🔌 API</div>
+          <div class="out">🤖 MCP</div>
+        </div>
+      </div>
+      <p class="kicker" style="margin-top:22px">מאחורי הקלעים: Worker חיצוני מגרד, האחסון ב‑R2, והנתונים הטבלאיים ב‑NEON — כך שכל צורת הגשה קוראת מאותו מקור אמת.</p>
+      <div class="pagenum">04</div>
+    </section>
+
+    <!-- 5 · VERSIONING -->
+    <section class="slide">
+      <div class="eyebrow">הליבה</div>
+      <h2>גרסון וארכיון היסטורי</h2>
+      <div class="grid g2">
+        <div class="card" style="--cat:var(--c-sql)"><span class="tagname">גרסה לכל שינוי</span><h3>דגימה תקופתית</h3><p>כל מאגר נדגם בתדירות שנקבעת לו; זוהה שינוי → נוצרת גרסה חדשה, ללא כפילויות.</p></div>
+        <div class="card" style="--cat:var(--c-sql)"><span class="tagname">Append / Snapshot</span><h3>שני מודלים</h3><p>snapshot מלא לכל גרסה, או ארכוב הצטברותי (append‑only) עם חותמת first_seen לכל שורה.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><span class="tagname">מאגרי ענק</span><h3>עמידות בקנה מידה</h3><p>סטרימינג לדיסק, דגימת דלתא, ושמירת מטא‑דאטה בלבד למיליוני שורות — בלי לקרוס.</p></div>
+        <div class="card" style="--cat:var(--c-product)"><span class="tagname">שקיפות</span><h3>מה השתנה</h3><p>עמוד גרסאות שמראה רק את הקבצים שהשתנו מול הגרסה הקודמת, עם קישור אימות למקור.</p></div>
+      </div>
+      <div class="pagenum">05</div>
+    </section>
+
+    <!-- 6 · SOURCES -->
+    <section class="slide">
+      <div class="eyebrow">המקורות · כ‑22</div>
+      <h2>מ‑data.gov.il לכל הממשלה</h2>
+      <div class="srcgrid">
+        <span class="chip" style="--cat:var(--c-source)">data.gov.il</span>
+        <span class="chip" style="--cat:var(--c-source)">סורק gov.il</span>
+        <span class="chip" style="--cat:var(--c-spatial)">GovMap</span>
+        <span class="chip" style="--cat:var(--c-source)">פרקליטות צה"ל</span>
+        <span class="chip" style="--cat:var(--c-source)">בעלי מקצוע · בריאות</span>
+        <span class="chip" style="--cat:var(--c-source)">avodata · עבודה</span>
+        <span class="chip" style="--cat:var(--c-source)">מבקר המדינה</span>
+        <span class="chip" style="--cat:var(--c-spatial)">חצב</span>
+        <span class="chip" style="--cat:var(--c-source)">חוזרי מנכ"ל חינוך</span>
+        <span class="chip" style="--cat:var(--c-source)">למ"ס</span>
+        <span class="chip" style="--cat:var(--c-source)">מכרזי JDA</span>
+        <span class="chip" style="--cat:var(--c-source)">עדן</span>
+        <span class="chip" style="--cat:var(--c-sql)">מסד הכנסת</span>
+        <span class="chip" style="--cat:var(--c-source)">פרוטוקולי ועדות</span>
+        <span class="chip" style="--cat:var(--c-source)">מחקרי ממ"מ</span>
+        <span class="chip" style="--cat:var(--c-source)">registries · בריאות</span>
+        <span class="chip" style="--cat:var(--c-source)">מצב השלטון המקומי</span>
+        <span class="chip" style="--cat:var(--c-source)">מצפן השירותים</span>
+        <span class="chip" style="--cat:var(--c-spatial)">מערכת אמו"ן</span>
+        <span class="chip" style="--cat:var(--c-source)">מידע לעם</span>
+        <span class="chip" style="--cat:var(--c-mcp)">יומן לעם</span>
+      </div>
+      <div class="legendline">
+        <span><i style="background:var(--c-source)"></i> מקור נתונים</span>
+        <span><i style="background:var(--c-spatial)"></i> מרחבי</span>
+        <span><i style="background:var(--c-sql)"></i> מראת DB</span>
+        <span><i style="background:var(--c-mcp)"></i> פרויקט אח</span>
+      </div>
+      <div class="pagenum">06</div>
+    </section>
+
+    <!-- 7 · SQL -->
+    <section class="slide">
+      <div class="eyebrow">SQL / נתונים</div>
+      <h2>שאילתות חופשיות על כל האתר</h2>
+      <p class="kicker">קונסולות SQL ציבוריות לקריאה בלבד, על תפקיד DB בעל הרשאות מינימום — עם השלמה אוטומטית, תיקון שגיאות והפניית סכימה ל‑AI.</p>
+      <div class="grid g3">
+        <div class="card" style="--cat:var(--c-sql)"><h3>/data מרכזי</h3><p>SQL חוצה‑סכמות מעל כל טבלאות האתר, עם בונה‑תרשימים ללא‑קוד.</p></div>
+        <div class="card" style="--cat:var(--c-sql)"><h3>/knesset</h3><p>48 טבלאות ODATA‑v4 של הכנסת ממורות ל‑Neon, עם עמודות מוקלדות.</p></div>
+        <div class="card" style="--cat:var(--c-sql)"><h3>לכל מאגר</h3><p>קונסולת ארכיון לכל dataset מבוסס‑NEON, עם ייצוא CSV.</p></div>
+      </div>
+      <p class="kicker" style="margin-top:18px">📊 תרשימים: עוגה / עמודות / קו / פיזור / מפה — עם ייצוא PNG/SVG ושיתוף בקישור.</p>
+      <div class="pagenum">07</div>
+    </section>
+
+    <!-- 8 · MAPS -->
+    <section class="slide">
+      <div class="eyebrow">מרחבי / מפות</div>
+      <h2>מהטבלה אל המפה</h2>
+      <div class="grid g2">
+        <div class="card" style="--cat:var(--c-spatial)"><h3>שכבות GovMap</h3><p>גירוד WFS מלא של מאות שכבות, כולל שכבות ענק בפורמט GPKG / GeoParquet.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><h3>מפה אינטראקטיבית</h3><p>תצוגת מפה חיה בעמוד המאגר: פילטרים קטגוריאליים, מסך מלא, זרימת נתונים.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><h3>PostGIS</h3><p>עמודת geom על שכבות ממורות — ST_* אמיתי, ניתוח מרחבי וחיתוכי פוליגונים.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><h3>ניתוח על מפה</h3><p>תוצאות SQL מרחביות מצוירות על מפה, צבועות לפי קטגוריה, ישר בקונסולה.</p></div>
+      </div>
+      <div class="pagenum">08</div>
+    </section>
+
+    <!-- 9 · MCP -->
+    <section class="slide">
+      <div class="eyebrow">MCP / AI</div>
+      <h2>ארבעה שרתי MCP חיים</h2>
+      <p class="kicker">הנתונים חשופים ישירות ל‑Claude / ChatGPT / Cursor דרך MCP — עם OAuth של Google, גישה בהזמנה בלבד ומדידת שימוש.</p>
+      <div class="grid g4">
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/mcp</h3><p>קטלוג המאגרים ושאילתות תוכן.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/cbs/mcp</h3><p>אינדקס התוכן של הלמ"ס.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/knesset/mcp</h3><p>פרוטוקולי ועדות ומחקרי ממ"מ.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/ocal/mcp</h3><p>יומני עבודה של נבחרי ציבור.</p></div>
+      </div>
+      <div class="pagenum">09</div>
+    </section>
+
+    <!-- 10 · API + LOOKER -->
+    <section class="slide">
+      <div class="eyebrow">אינטגרציות</div>
+      <h2>API ציבורי ומחבר Looker</h2>
+      <div class="grid g2">
+        <div class="card" style="--cat:var(--c-product)"><span class="tagname">/api/v1</span><h3>API קריאה מתועד</h3><p>גישה למאגרים, גרסאות ותוכן טבלאי; כולל פתרון UUID של data.gov.il ל‑OVER, וסינון לפי תגית.</p></div>
+        <div class="card" style="--cat:var(--c-product)"><span class="tagname">Looker Studio</span><h3>מחבר קהילתי ציבורי (v1)</h3><p>חיבור ישיר מ‑Looker Studio אל ה‑append DB, מגודר במפתח, עם תוויות בעברית.</p></div>
+        <div class="card" style="--cat:var(--c-sec)"><span class="tagname">הגנה</span><h3>תקציב נתונים per‑IP</h3><p>תקרת בייטים מתגלגלת נגד גירוד המוני, ותקציב LLM גלובלי יומי.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><span class="tagname">גילוי אוטומטי</span><h3>מאגר חדש כל 6 שעות</h3><p>onboarding אוטומטי של dataset אקראי לא‑מנוטר מ‑data.gov.il.</p></div>
+      </div>
+      <div class="pagenum">10</div>
+    </section>
+
+    <!-- 11 · SEARCH -->
+    <section class="slide">
+      <div class="eyebrow">חיפוש חכם</div>
+      <h2>שאלה בשפה טבעית, תשובה אחת</h2>
+      <div class="grid g2">
+        <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">למ"ס</span><h3>חיפוש בשפה טבעית</h3><p>POST /api/cbs/ask — שאלה חופשית, תשובה ממוקדת, כולל הבחנה כנה בין "יש ללמ"ס" ל"אין".</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">כנסת</span><h3>חיפוש עמוק (TAG‑IT)</h3><p>מצב "עמוק" שמחפש טקסט מלא בתוך גוף המסמכים — פרוטוקולים ומחקרי ממ"מ.</p></div>
+      </div>
+      <p class="kicker" style="margin-top:18px">חיפוש כלל‑אתרי בעמוד הבית מכסה גם את המאגרים המנוטרים, עם משוב לייק/דיסלייק שמכייל את הדירוג.</p>
+      <div class="pagenum">11</div>
+    </section>
+
+    <!-- 12 · SIBLING PROJECTS -->
+    <section class="slide">
+      <div class="eyebrow">פרויקטים אחים</div>
+      <h2>משפחת «לעם» מתאחדת</h2>
+      <div class="grid g2">
+        <div class="card" style="--cat:var(--c-source)"><span class="tagname">מידע לעם</span><h3>חיפוש מְשׁוּיָּךְ וייבוא ל‑SQL</h3><p>חיפוש לפי ארגונים ופורמטים, וייבוא אוצר‑אדמין של משאבים לטבלאות ניתנות‑לשאילתה, בסימון "נתונים מעובדים".</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">יומן לעם</span><h3>יומני עבודה של נבחרי ציבור</h3><p>הגירה מלאה ל‑OVER: מסד ייעודי, /api/ocal, עמוד /projects/ocal, MCP רביעי, ייבוא‑אוטומטי, העשרת ישויות ו‑AI‑NER.</p></div>
+      </div>
+      <p class="kicker" style="margin-top:18px">עמוד ה‑/api מציג כעת ארבעה מקורות: data.gov.il · סורקים · מידע לעם · יומן לעם.</p>
+      <div class="pagenum">12</div>
+    </section>
+
+    <!-- 13 · ARCHITECTURE -->
+    <section class="slide">
+      <div class="eyebrow">מתחת למכסה</div>
+      <h2>הארכיטקטורה</h2>
+      <div class="grid g4">
+        <div class="card" style="--cat:var(--c-infra)"><h3>Worker חיצוני</h3><p>govil‑scraper בתור משימות, מעדכן את עצמו בין ריצות, ריבוי‑מכונות.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><h3>אחסון R2</h3><p>Cloudflare R2 כ‑backend עצמאי, עם העלאות presigned ישירות.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><h3>NEON Postgres</h3><p>מסד append נפרד מהסודות, לטבלאות ניתנות‑לשאילתה.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><h3>מקורות דקלרטיביים</h3><p>ה‑Worker מכריז על מקור חדש דרך manifest — בלי קוד ב‑OVER.</p></div>
+      </div>
+      <p class="kicker" style="margin-top:18px">המסע: מ‑ODATA כאחסון בלעדי → ל‑R2+NEON; מהוספת מקור בשני repos → להכרזה דקלרטיבית אחת.</p>
+      <div class="pagenum">13</div>
+    </section>
+
+    <!-- 14 · OPS + SECURITY -->
+    <section class="slide">
+      <div class="eyebrow">ניהול ותפעול</div>
+      <h2>אדמין, תפעול ואבטחה</h2>
+      <div class="grid g3">
+        <div class="card" style="--cat:var(--c-product)"><h3>פאנל אדמין</h3><p>תור גירוד, ניהול אחסון per‑dataset, ייצוא לדרייב, ועריכת טקסטים בזמן ריצה.</p></div>
+        <div class="card" style="--cat:var(--c-product)"><h3>לוג פעילות</h3><p>יומן lifecycle append‑only לכל אירוע מאגר/גירוד.</p></div>
+        <div class="card" style="--cat:var(--c-sec)"><h3>אבטחה</h3><p>SQL על תפקיד read‑only במסד נפרד; בלי JWT ב‑URL; rate‑limit לכל endpoint.</p></div>
+      </div>
+      <p class="kicker" style="margin-top:18px">שער גרסת Worker מונע מ‑worker מיושן לדחוף נתונים; שומרי memory מגנים על dyno של 512MB.</p>
+      <div class="pagenum">14</div>
+    </section>
+
+    <!-- 15 · CLOSING -->
+    <section class="slide closing">
+      <div class="eyebrow" style="color:#fff">לסיכום</div>
+      <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
+      <p class="kicker">כל מקור ממשלתי נשמר, מגורסן, ונחשף בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. זו לא עוד ראי נתונים; זו זיכרון ציבורי שאפשר לאמת.</p>
+      <div class="chips2">
+        <span>~22 מקורות</span><span>גרסון היסטורי</span><span>3 קונסולות SQL</span>
+        <span>4 שרתי MCP</span><span>מפות + PostGIS</span><span>מחבר Looker</span><span>פרויקטים אחים</span>
+      </div>
+      <div class="pagenum" style="color:rgba(255,255,255,.7)">over.org.il</div>
+    </section>
+
+  </div>
+
+  <div class="controls">
+    <div class="navbtns">
+      <button id="prev" aria-label="שקופית קודמת">→ הקודם</button>
+      <button id="next" aria-label="שקופית הבאה">הבא ←</button>
+    </div>
+    <div class="dots" id="dots" role="tablist" aria-label="שקופיות"></div>
+    <div class="counter"><span id="cur">1</span> / <span id="total">15</span></div>
+  </div>
+  <div class="hint">חיצים ← → או רווח למעבר · F למסך מלא</div>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const dotsWrap = document.getElementById('dots');
+  const curEl = document.getElementById('cur');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  document.getElementById('total').textContent = slides.length;
+  let i = 0;
+
+  slides.forEach((_, n) => {
+    const b = document.createElement('button');
+    b.className = 'dot-btn' + (n === 0 ? ' on' : '');
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-label', 'שקופית ' + (n + 1));
+    b.addEventListener('click', () => go(n));
+    dotsWrap.appendChild(b);
+  });
+  const dots = Array.from(dotsWrap.children);
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    curEl.textContent = i + 1;
+    prevBtn.disabled = i === 0;
+    nextBtn.disabled = i === slides.length - 1;
+    slides[i].scrollTop = 0;
+  }
+  const next = () => go(i + 1);
+  const prev = () => go(i - 1);
+  nextBtn.addEventListener('click', next);
+  prevBtn.addEventListener('click', prev);
+
+  // RTL: ArrowLeft = forward, ArrowRight = back
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); next(); }
+    else if (e.key === 'ArrowRight' || e.key === 'PageUp') { e.preventDefault(); prev(); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(slides.length - 1);
+    else if (e.key.toLowerCase() === 'f') {
+      const el = document.getElementById('stage');
+      if (!document.fullscreenElement) el.requestFullscreen?.(); else document.exitFullscreen?.();
+    }
+  });
+
+  // touch swipe
+  let x0 = null;
+  const stage = document.getElementById('stage');
+  stage.addEventListener('touchstart', e => x0 = e.touches[0].clientX, { passive: true });
+  stage.addEventListener('touchend', e => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 45) { dx < 0 ? next() : prev(); } // RTL swipe-left = forward
+    x0 = null;
+  }, { passive: true });
+
+  go(0);
+</script>
