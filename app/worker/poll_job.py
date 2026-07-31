@@ -24,6 +24,7 @@ from app.services.snapshot_service import (
     create_version_snapshot,
 )
 from app.services import conditional_archiver
+from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.storage_client import (
     dataset_archives_neon,
     dataset_stores_files,
@@ -217,13 +218,6 @@ async def _poll_dataset(
             # re-scanning an unchanged source is a cheap no-op insert.
             is_append = ds.storage_mode == "append_only"
 
-            # Quick check: has anything changed? (Skipped on a forced retry.)
-            if not force and not is_append and not has_metadata_changed(ds.last_modified, new_modified):
-                logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
-                ds.last_polled_at = datetime.now(timezone.utc)
-                await db.commit()
-                return
-
             # Get the latest version to compare against
             latest_result = await db.execute(
                 select(VersionIndex)
@@ -233,14 +227,54 @@ async def _poll_dataset(
             )
             latest_version = latest_result.scalar_one_or_none()
 
+            # The plan says rows go to NEON, but no version carries a row-archive
+            # marker: the archive is BEHIND the plan. That happens whenever the
+            # plan changes after the last poll (an admin switching a dataset to
+            # r2+neon, migration 048) — and for a source that never changes
+            # again, "nothing changed at the source" would mean the NEON half
+            # never runs at all. Treat it as work to do, not as nothing to do.
+            #
+            # Gated on the source actually having a datastore behind a tracked
+            # resource, so a dataset whose files can't feed NEON (SHP/PDF, no
+            # datastore) keeps the cheap unchanged-skip instead of re-polling
+            # forever. Once the archive exists the flag clears itself.
+            tracked_only = set(ds.resource_ids or ([ds.resource_id] if ds.resource_id else []))
+            neon_pending = (
+                dataset_archives_neon(ds)
+                and not (ROW_ARCHIVE_KEYS & set((latest_version.resource_mappings or {})
+                                                if latest_version else {}))
+                and any(
+                    r.get("datastore_active")
+                    for r in pkg.get("resources", [])
+                    if not tracked_only or r.get("id") in tracked_only
+                )
+            )
+
+            # Quick check: has anything changed? (Skipped on a forced retry.)
+            if (
+                not force
+                and not is_append
+                and not neon_pending
+                and not has_metadata_changed(ds.last_modified, new_modified)
+            ):
+                logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
+                ds.last_polled_at = datetime.now(timezone.utc)
+                await db.commit()
+                return
+
             # Skip if a version already exists with this exact metadata_modified.
-            # Exception: when ds.last_modified was reset to NULL by the admin
-            # (e.g. they changed resource_ids), treat this as a forced re-poll
-            # — the existing version was created against a different tracked
-            # set and the admin's mental model is "I changed what's tracked,
-            # the mirror should reflect that now". Without this exception the
-            # forced poll silently no-ops on every run.
-            forced_repoll = ds.last_modified is None
+            # Exceptions, all meaning "the archive is behind what's configured,
+            # even though the source didn't move":
+            #   • force — the admin pressed דגום and is watching. This gate used
+            #     to ignore `force` (only the NULL-last_modified proxy below
+            #     bypassed it), so a manual re-poll of an unchanged dataset
+            #     returned "Poll triggered" and then did nothing at all.
+            #   • neon_pending — the plan gained its NEON half after the last
+            #     poll (see above).
+            #   • last_modified reset to NULL by the admin (e.g. they changed
+            #     resource_ids): the existing version was built against a
+            #     different tracked set.
+            forced_repoll = force or neon_pending or ds.last_modified is None
             if (
                 not is_append
                 and not forced_repoll
