@@ -12,15 +12,30 @@ One matcher, used by three callers so they can never disagree:
 Matching is by identity (see app/services/url_identity.py), not by string
 equality, so viewport/tracking params in a copied link don't hide an existing
 dataset.
+
+TWO IDENTITIES, not one. A URL's identity answers "is this the same LINK?", and
+for a site that spells one corpus several ways it answers no when the truth is
+yes: ykpubdata's search screen, its address-results grid and its bare root are
+four canonical URLs for one corpus, and tracking two of them means running the
+same ~10-hour sweep twice. So a URL that a MANIFEST classifies also carries a
+registry identity — (source, page_type, resolved config) — and two URLs sharing
+it are the same dataset however differently they are written. See
+source_registry.identity_of for why that is sound for manifest sources and
+wrong for the hardcoded ones.
 """
 
 from __future__ import annotations
+
+import logging
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tracked_dataset import TrackedDataset
+from app.services import source_registry
 from app.services.url_identity import host_of, path_key, url_identity
+
+logger = logging.getLogger(__name__)
 
 # Candidates are filtered by host first, so this only bites on a host with a
 # genuinely huge catalog. Rows are 7 short columns; the cap is a safety net
@@ -58,6 +73,8 @@ async def find_datasets_for_url(
     it: a path match is a "did you mean", and two datasets can legitimately be
     cut from one page (jeden.co.il's ``?category=tenders`` / ``=decisions``),
     so treating one as a duplicate of the other would block a valid request.
+    A registry match counts as an identity match and is reported as one — it
+    answers the same question the URL identity does, with better information.
     """
     target = url_identity(url)
     if target is None:
@@ -65,6 +82,38 @@ async def find_datasets_for_url(
     host = host_of(url)
     if not host:
         return []
+
+    # The registry identity, for the URL shapes that have one. Only consulted
+    # for a generic ("url") identity: a GovMap layer and a CKAN package are
+    # claimed by hardcoded parsers, which the registry runs behind and can never
+    # shadow (see RESERVED_SOURCE_IDS), so those paths pay nothing for this.
+    #
+    # Best-effort: this axis only ever ADDS matches, so when the registry can't
+    # be read the answer degrades to the URL identity — what every caller got
+    # before it existed — instead of failing a public lookup. Logged, because
+    # the failure mode of losing it silently is the duplicate it was added to
+    # prevent.
+    target_registry = None
+    manifests: list = []
+    if target[0] == "url":
+        try:
+            manifests = await source_registry.load_enabled(db)   # process-cached
+            target_registry = source_registry.identity_of(
+                source_registry.match_manifests(url, manifests)
+            )
+        except Exception:  # noqa: BLE001 — never break a lookup over this
+            logger.warning(
+                "dataset_lookup: source registry unavailable; falling back to "
+                "URL identity alone", exc_info=True,
+            )
+            manifests = []
+
+    def _registry_identity(source_url: str | None):
+        if target_registry is None or not source_url:
+            return None
+        return source_registry.identity_of(
+            source_registry.match_manifests(source_url, manifests)
+        )
 
     # A CKAN dataset is tracked per RESOURCE and carries no source_url — its
     # link back to data.gov.il is the package name in ``ckan_name``. So the
@@ -114,6 +163,13 @@ async def find_datasets_for_url(
             continue
         identity = url_identity(row.source_url, row.source_type, row.scraper_config)
         if identity is not None and identity == target:
+            exact.append((row, "identity"))
+        elif (
+            target_registry is not None
+            and _registry_identity(row.source_url) == target_registry
+        ):
+            # Same source, same page_type, same resolved config — the same
+            # corpus written a different way.
             exact.append((row, "identity"))
         elif (
             target[0] == "url"

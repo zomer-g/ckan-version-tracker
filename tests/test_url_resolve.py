@@ -35,6 +35,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test")
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
+from app.models.source_registry import SourceRegistry  # noqa: E402
 from app.models.tracked_dataset import TrackedDataset  # noqa: E402
 from app.models.version_index import VersionIndex  # noqa: E402
 from app.services.dataset_lookup import find_datasets_for_url  # noqa: E402
@@ -61,6 +62,11 @@ async def _seed(rows):
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: TrackedDataset.__table__.create(c))
         await conn.run_sync(lambda c: VersionIndex.__table__.create(c))
+        # Empty, but present: resolution consults the source registry for a
+        # second identity axis (see tests/test_registry_identity.py). With no
+        # manifests registered the answer is the URL identity alone, which is
+        # what this file is about.
+        await conn.run_sync(lambda c: SourceRegistry.__table__.create(c))
     Session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with Session() as db:
         for row in rows:

@@ -1699,7 +1699,15 @@ async def submit_tracking_request(
         # Duplicate check by source-URL identity — see the admin path above.
         existing = await find_datasets_for_url(db, body.source_url, strict=True)
         if existing:
-            raise HTTPException(status_code=400, detail="Already tracked or requested")
+            # Name the dataset, as the admin path does. "Already tracked" alone
+            # is indistinguishable from a bug when the URL the requester pasted
+            # is not the one the dataset is stored under — which is the normal
+            # case now that a manifest source recognises every spelling of its
+            # corpus, not just the stored one.
+            raise HTTPException(
+                status_code=400,
+                detail=f"Already tracked or requested: {existing[0]['title']}",
+            )
 
         unique_slug = scraper_url_slug(collector_name, body.source_url)
         sc: dict = {"download_files": False}

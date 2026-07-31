@@ -38,6 +38,7 @@ from app.database import get_db  # noqa: E402
 from app.models.source_registry import SourceRegistry  # noqa: E402
 from app.models.tag import Tag, dataset_tags  # noqa: E402
 from app.models.tracked_dataset import TrackedDataset  # noqa: E402
+from app.models.version_index import VersionIndex  # noqa: E402
 from app.rate_limit import limiter  # noqa: E402
 from app.services import source_registry as sr  # noqa: E402
 from tests.test_source_registry import TOY_MANIFEST  # noqa: E402
@@ -71,6 +72,9 @@ def stack(monkeypatch, tmp_path):
         async with engine.begin() as conn:
             await conn.run_sync(lambda c: SourceRegistry.__table__.create(c))
             await conn.run_sync(lambda c: TrackedDataset.__table__.create(c))
+            # A duplicate hit reports each match's version count, so resolving
+            # one reads this table even when no version exists.
+            await conn.run_sync(lambda c: VersionIndex.__table__.create(c))
             # TrackedDataset.tags is a selectin relationship, so reading a
             # dataset back touches these two even though nothing tags one here.
             await conn.run_sync(lambda c: Tag.__table__.create(c))
@@ -213,3 +217,90 @@ def test_the_worker_would_dispatch_this_dataset_to_its_engine(stack):
     ).json()
     assert config["source_id"] == "toysource"
     assert _registry_kind({"kind": "toysource"}) == "toysource"
+
+
+# --- one corpus, several spellings -----------------------------------------
+
+# Two URL shapes that a manifest resolves identically: the SPA's hash route and
+# the plain path the same board is served from. Different links, one corpus —
+# the shape that made ykpubdata trackable four times over.
+ALIAS_MANIFEST = {
+    "manifest_version": 1,
+    "id": "aliassource",
+    "label_he": "מקור עם שתי כתובות",
+    "label_en": "Two-spelling source",
+    "site_url": "https://alias.example.org/",
+    "badge": {"bg": "#e0f2fe", "fg": "#075985", "accent": "#0284c7"},
+    "default_poll_interval": 43200,
+    "default_config": {"download_files": False},
+    "url_patterns": [
+        {
+            "regex": r"^https?://alias\.example\.org/#/board/?(?:\?.*)?$",
+            "page_type": "aliassource_board",
+            "title_he": "מקור עם שתי כתובות — הלוח",
+            "config": {"corpus": "board"},
+        },
+        {
+            "regex": r"^https?://alias\.example\.org/board/?(?:\?.*)?$",
+            "page_type": "aliassource_board",
+            "title_he": "מקור עם שתי כתובות — הלוח",
+            "config": {"corpus": "board"},
+        },
+        {
+            "regex": r"^https?://alias\.example\.org/#/archive/?(?:\?.*)?$",
+            "page_type": "aliassource_archive",
+            "title_he": "מקור עם שתי כתובות — הארכיון",
+            "config": {"corpus": "archive"},
+        },
+    ],
+}
+
+HASH_SPELLING = "https://alias.example.org/#/board"
+PATH_SPELLING = "https://alias.example.org/board"
+OTHER_CORPUS = "https://alias.example.org/#/archive"
+
+
+def _request(client, url, title="בדיקה"):
+    return client.post("/api/datasets/requests", json={
+        "source_type": "scraper", "source_url": url, "title": title,
+    })
+
+
+def test_a_second_spelling_of_a_tracked_corpus_is_refused_by_name(stack):
+    """The end of the chain: the request endpoint refuses it, and says WHICH
+    dataset — "already tracked" alone is indistinguishable from a bug when the
+    URL you pasted is not the one the dataset is stored under."""
+    client, Session = stack
+    client.post("/api/worker/sources/sync",
+                json={"manifests": [ALIAS_MANIFEST], "worker_version": "deadbeef"},
+                headers={"Authorization": "Bearer workerkey"})
+
+    assert _request(client, HASH_SPELLING, "הלוח").status_code == 201
+
+    second = _request(client, PATH_SPELLING)
+    assert second.status_code == 400
+    assert "הלוח" in second.json()["detail"], second.text
+
+    async def _count():
+        async with Session() as db:
+            return len((await db.execute(select(TrackedDataset))).scalars().all())
+
+    assert _run(_count()) == 1, "one corpus, one dataset"
+
+
+def test_a_different_corpus_of_the_same_source_still_gets_through(stack):
+    """The guard must not become a wall."""
+    client, Session = stack
+    client.post("/api/worker/sources/sync",
+                json={"manifests": [ALIAS_MANIFEST], "worker_version": "deadbeef"},
+                headers={"Authorization": "Bearer workerkey"})
+
+    assert _request(client, HASH_SPELLING, "הלוח").status_code == 201
+    assert _request(client, OTHER_CORPUS, "הארכיון").status_code == 201
+
+    async def _titles():
+        async with Session() as db:
+            rows = (await db.execute(select(TrackedDataset))).scalars().all()
+            return sorted(r.title for r in rows)
+
+    assert _run(_titles()) == ["הארכיון", "הלוח"]

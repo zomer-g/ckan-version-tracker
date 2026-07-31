@@ -374,6 +374,39 @@ def match_manifests(url: str, manifests: list[SourceManifest]) -> RegistryMatch 
     return None
 
 
+def identity_of(match: RegistryMatch | None) -> tuple[str, str, str] | None:
+    """WHAT a registry-classified URL denotes: ``(source, page_type, config)``.
+
+    Two URLs with the same triple are the same dataset by construction — they
+    would be handed to the same engine with the same instructions, so scraping
+    both means scraping one corpus twice. That is not something the URL string
+    can be asked: ykpubdata's search screen (``#/?SystemCode=…``) and its
+    address-results grid (``#/TableData?TikNum=0&SystemCode=…``) are four
+    distinct canonical URLs for one ~10-hour sweep of one corpus.
+
+    The triple works because a manifest's config is URL-DERIVED: named groups
+    are substituted into it (``tik_num``, ``system_code``), so whatever the
+    author declared as distinguishing IS in the config, and whatever they left
+    out is by definition not. That is exactly what the hardcoded parsers cannot
+    offer — every gov.il ``/collectors/policies?officeId=…`` dataset resolves to
+    one page_type and one config while being 15 different ministries — which is
+    why this identity is only ever consulted for registry matches.
+
+    Config is compared as canonical JSON rather than by dict identity so the
+    result is hashable and order-insensitive. It is computed from the MANIFEST,
+    never from a stored ``scraper_config``: a stored one drifts (an admin tunes
+    a limit, push_version stamps ``neon_tables_per_resource``) and comparing
+    against it would stop recognising the dataset it belongs to.
+    """
+    if match is None:
+        return None
+    return (
+        match.source_id,
+        match.page_type,
+        json.dumps(match.scraper_config, sort_keys=True, ensure_ascii=False),
+    )
+
+
 async def classify_url(db: AsyncSession, url: str) -> RegistryMatch | None:
     """Match a pasted URL against every enabled manifest."""
     return match_manifests(url, await load_enabled(db))
