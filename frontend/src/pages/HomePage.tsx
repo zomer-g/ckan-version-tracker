@@ -411,19 +411,34 @@ export default function HomePage() {
       // dataset stored as "?lay=11".
       if (isAbsoluteUrl(trimmed)) {
         const hit = await resolve.lookup(trimmed).catch(() => null);
-        if (hit?.found && hit.matches.length === 1) {
+        // Only an IDENTITY match is a destination. A "path" match means "some
+        // dataset is cut from this same page" — which for a hash-routed SPA is
+        // every route of the site, since they all share one path. Treating a
+        // lone path match as the answer is how pasting the documents route of
+        // ykpubdata landed on its register and the request form became
+        // unreachable: the one corpus already tracked absorbed every other
+        // corpus on the host. See app/services/dataset_lookup.py, which labels
+        // the two kinds precisely for this reason.
+        const identityHits = (hit?.matches ?? []).filter((m) => m.match === "identity");
+        if (identityHits.length === 1) {
           // Unambiguous — go straight to the versions the user came for.
-          navigate(`/versions/${hit.matches[0].id}`, { replace: true });
+          navigate(`/versions/${identityHits[0].id}`, { replace: true });
           return;
         }
-        if (hit?.found && hit.matches.length > 1) {
-          // Several datasets are cut from this one page — let the user pick
-          // rather than guess, and don't offer to re-request any of them.
-          setResolvedMatches(hit.matches);
+        if (identityHits.length > 1) {
+          // Several datasets ARE this URL — let the user pick rather than
+          // guess, and don't offer to re-request any of them.
+          setResolvedMatches(identityHits);
           setResults([]);
           setCount(0);
           setLoading(false);
           return;
+        }
+        if (hit?.found) {
+          // Path-only. Show them as "did you mean", then fall through to the
+          // detectors so the pasted URL can still be requested — it is a
+          // different corpus of a site we happen to track something else from.
+          setResolvedMatches(hit.matches);
         }
       }
 

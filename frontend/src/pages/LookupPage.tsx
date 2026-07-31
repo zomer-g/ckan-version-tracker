@@ -61,19 +61,25 @@ export default function LookupPage() {
       .lookup(target)
       .then((res) => {
         if (cancelled) return;
-        if (res.found && res.matches.length === 1) {
+        // Only an IDENTITY match is what the link meant. A "path" match is
+        // "something else is cut from this same page" — and every route of a
+        // hash-routed SPA shares one path, so a single path match would send a
+        // deep link to a corpus it does not point at.
+        const identityHits = res.matches.filter((m) => m.match === "identity");
+        if (identityHits.length === 1) {
           // Tracked and unambiguous — this is the dataset the link meant.
-          navigate(`/versions/${res.matches[0].id}`, { replace: true });
+          navigate(`/versions/${identityHits[0].id}`, { replace: true });
           return;
         }
-        if (res.found) {
-          setMatches(res.matches);
+        if (identityHits.length > 1) {
+          setMatches(identityHits);
           setStatus("done");
           return;
         }
-        // Not tracked → the home search box, which runs the source detectors
-        // and opens the right collection request form for this URL. Replace
-        // so Back returns to wherever the link was clicked, not here.
+        // Not tracked, or tracked only by page — the home search box, which
+        // lists what IS tracked from this page as "did you mean" and still
+        // runs the source detectors, so the link can be requested. Replace so
+        // Back returns to wherever the link was clicked, not here.
         navigate(`/?q=${encodeURIComponent(target)}`, { replace: true });
       })
       .catch(() => {
