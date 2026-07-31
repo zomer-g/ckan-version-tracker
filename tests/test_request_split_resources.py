@@ -274,6 +274,50 @@ def test_a_pending_single_file_request_is_a_duplicate_not_a_supersede(stack):
     assert len(_rows(Session)) == 1
 
 
+def test_a_rejected_request_is_not_a_tombstone(stack):
+    """admin.reject_dataset keeps the row with its ckan_id and resource_ids.
+    Counting it as taken blocked the package forever — from a row that appears
+    in no public list, so the requester could never find what was holding the
+    files. It must block nothing, in either mode."""
+    client, Session = stack
+
+    client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1, _R2, _R3],
+    })
+
+    async def _reject():
+        async with Session() as db:
+            ds = (await db.execute(select(TrackedDataset))).scalars().one()
+            ds.status = "rejected"
+            await db.commit()
+
+    _run(_reject())
+
+    split = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID,
+        "resource_ids": [_R1, _R2, _R3],
+        "split_resources": True,
+    })
+    assert split.status_code == 201, split.text
+    assert split.json()["created"] == 3
+    # The rejected row is history — left in place, not superseded.
+    assert split.json()["superseded"] == 0
+    assert len(_rows(Session)) == 4
+
+    # ...and the combined path is no longer blocked by it either.
+    async def _reject_all():
+        async with Session() as db:
+            for ds in (await db.execute(select(TrackedDataset))).scalars().all():
+                ds.status = "rejected"
+            await db.commit()
+
+    _run(_reject_all())
+    again = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1],
+    })
+    assert again.status_code == 201, again.text
+
+
 def test_unknown_resource_is_rejected(stack):
     client, _ = stack
     r = client.post("/api/datasets/requests", json={

@@ -2110,9 +2110,21 @@ async def submit_tracking_request(
 
     # Every dataset already pinned to this CKAN package — the dedup basis for
     # both modes below.
-    existing_rows = (await db.execute(
-        select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
-    )).scalars().all()
+    #
+    # Only "active" and "pending" rows hold a resource. A REJECTED row is
+    # neither tracking nor a queued request: the admin turned that request down,
+    # and admin.reject_dataset keeps the row (with its ckan_id and resource_ids)
+    # as history. Counting it as taken made one rejection an invisible tombstone
+    # that blocked the whole package forever — it shows up in no list, so the
+    # requester just kept being told the files were "already tracked" by
+    # something they could never find. Asking again is allowed; the admin can
+    # reject again.
+    existing_rows = [
+        d for d in (await db.execute(
+            select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
+        )).scalars().all()
+        if d.status in ("active", "pending")
+    ]
 
     # ---- split mode: one independent dataset per picked resource ----
     # A CKAN package is a folder, not a table: its CSVs are usually unrelated
