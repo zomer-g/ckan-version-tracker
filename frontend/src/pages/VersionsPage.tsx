@@ -16,6 +16,7 @@ import SourceChip from "../components/SourceChip";
 import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
 import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
+import SamplingRunPanel from "../components/SamplingRunPanel";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
 // idf code paths. Only govmap pages that actually have a GeoJSON
@@ -515,6 +516,11 @@ export default function VersionsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Targeted re-sampling (admin, and only for a source that declares it):
+          re-read the whole register, only what is new, only the items at one
+          status, or a single item. Renders nothing for every other dataset. */}
+      {datasetId && <SamplingRunPanel datasetId={datasetId} />}
 
       {/* NEON append archive card. For append/NEON datasets the data lives in
           OVER's own Postgres (queryable at /archive/:id), NOT ODATA — so this

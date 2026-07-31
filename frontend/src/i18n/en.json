@@ -100,6 +100,7 @@
     "request_split_success": "{{n}} requests submitted — one dataset per file. We'll review and approve them soon.",
     "request_split_skipped": "{{n}} files are already tracked and were skipped.",
     "request_split_none": "Every picked file is already tracked or pending approval.",
+    "request_split_none_named": "Every picked file is already covered by the dataset \"{{title}}\".",
     "versions_count": "versions",
     "source_link": "Source on data.gov.il",
     "source_link_govil": "Source on gov.il",

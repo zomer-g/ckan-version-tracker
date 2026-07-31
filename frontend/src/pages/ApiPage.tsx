@@ -115,9 +115,41 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
           { name: "sort", desc: '"עמודה" או "עמודה desc, עמודה2 asc"' },
           { name: "limit / offset", desc: "עימוד (limit עד 500)" },
           { name: "distinct / include_total", desc: "boolean" },
+          { name: "latest", desc: "במאגר דגימות: שורה אחת לכל ישות — הדגימה האחרונה שלה (ראו למטה)" },
         ],
         example:
           '/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/datastore_search?limit=5&filters={"tozeret_nm":"קיה קוריאה"}',
+      },
+      {
+        path: "/api/append/{id}/rows",
+        description:
+          "עמוד שורות מהארכיון, עם סינון חופשי (q) וסינון לפי עמודה (כל פרמטר ששמו עמודה אמיתית). במאגרי דגימות — מאגרים שבהם כל ישות נדגמת שוב ושוב ולכל דגימה שורה משלה, למשל תיקי הרישוי של עיריית ירושלים — ברירת המחדל היא כל ההיסטוריה; latest=true מצמצם לשורה אחת לכל ישות, הדגימה האחרונה שלה, והסינון חל על המצב העדכני.",
+        params: [
+          { name: "latest", desc: "true = הדגימה האחרונה בלבד לכל ישות (דורש item_key — ראו /schema)" },
+          { name: "q / <עמודה>", desc: "חיפוש חופשי / סינון לפי עמודה" },
+          { name: "limit / offset / sort / order", desc: "עימוד ומיון" },
+          { name: "table", desc: "במאגר מרובה טבלאות: שם הטבלה או שם המשאב" },
+        ],
+        example: "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/rows?latest=true&limit=20",
+      },
+      {
+        path: "/api/append/{id}/item",
+        description:
+          "כל הדגימות של ישות אחת — ההיסטוריה המלאה של תיק/תוכנית/רשומה בודדת, מהחדשה לישנה. ההתאמה ל-value היא מדויקת (לא הכלה), כי מזהה הוא מזהה. התשובה מציינת את עמודת המזהה, את עמודת מועד הדגימה ואת מספר הדגימות.",
+        params: [
+          { name: "value", desc: "ערך המזהה, למשל מספר תיק (חובה)" },
+          { name: "order", desc: "desc (ברירת מחדל) או asc" },
+          { name: "limit / offset / table", desc: "עימוד ובחירת טבלה" },
+        ],
+        example:
+          "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/item?value=2026/0100.00",
+      },
+      {
+        path: "/api/append/{id}/download.csv",
+        description:
+          "כל הארכיון (או התוצאה המסוננת) כ-CSV בזרימה. latest=true מוריד שורה אחת לכל ישות במקום את היסטוריית הדגימות.",
+        params: [{ name: "latest / q / <עמודה> / table", desc: "כמו ב-/rows" }],
+        example: "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/download.csv?latest=true",
       },
       {
         path: "/api/append/{id}/datastore_search_sql",
@@ -130,7 +162,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/append/{id}/schema",
         description:
-          "סכמת תוכן המאגר ב-NEON: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה).",
+          "סכמת תוכן המאגר ב-NEON: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות.",
         example: "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/schema",
       },
     ],

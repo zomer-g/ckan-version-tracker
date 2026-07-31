@@ -100,6 +100,7 @@
     "request_split_success": "נשלחו {{n}} בקשות — מאגר נפרד לכל קובץ. נבדוק ונאשר בהקדם.",
     "request_split_skipped": "{{n}} קבצים כבר במעקב ולכן דולגו.",
     "request_split_none": "כל הקבצים שנבחרו כבר במעקב או ממתינים לאישור.",
+    "request_split_none_named": "כל הקבצים שנבחרו כבר מכוסים על-ידי המאגר \"{{title}}\".",
     "versions_count": "גרסאות",
     "source_link": "מקור ב-data.gov.il",
     "source_link_govil": "מקור ב-gov.il",

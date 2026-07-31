@@ -178,6 +178,102 @@ def test_already_tracked_files_are_skipped_not_duplicated(stack):
     assert len(_rows(Session)) == 2
 
 
+def test_a_pending_combined_request_is_superseded_by_the_split(stack):
+    """The bug this fixes: one "select all" submit in combined mode created a
+    pending dataset pinning every file — and then every per-file request read
+    back as a duplicate, locking the package out of splitting forever.
+
+    A pending request is not tracking; it's an earlier ask for the same files
+    at coarser granularity. Splitting the same selection replaces it.
+    """
+    client, Session = stack
+
+    combined = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1, _R2, _R3],
+    })
+    assert combined.status_code == 201, combined.text
+    assert len(_rows(Session)) == 1
+
+    split = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID,
+        "resource_ids": [_R1, _R2, _R3],
+        "split_resources": True,
+    })
+    assert split.status_code == 201, split.text
+    assert split.json()["created"] == 3
+    assert split.json()["superseded"] == 1
+
+    rows = _rows(Session)
+    assert len(rows) == 3, "the combined request should be gone, not kept alongside"
+    assert sorted(d.resource_id for d in rows) == sorted([_R1, _R2, _R3])
+
+
+def test_supersede_never_drops_a_file_the_requester_left_out(stack):
+    """A pending request covering MORE than this selection stays put — dropping
+    it would silently untrack the files that aren't being re-requested."""
+    client, Session = stack
+
+    client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1, _R2, _R3],
+    })
+    r = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1], "split_resources": True,
+    })
+
+    assert r.status_code == 201, r.text
+    assert r.json()["created"] == 0
+    assert r.json()["superseded"] == 0
+    dup = r.json()["results"][0]
+    # ...and the requester is told where the file went, not just "duplicate".
+    assert dup["status"] == "duplicate"
+    assert dup["dataset_title"] == "תוצאות בחירות"
+    assert dup["dataset_status"] == "pending"
+    assert len(_rows(Session)) == 1
+
+
+def test_an_approved_dataset_still_blocks_the_split(stack):
+    """Superseding is only for PENDING requests. An active dataset is real
+    tracking with real version history — never delete that from a public form.
+    """
+    client, Session = stack
+
+    client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1, _R2],
+    })
+
+    async def _approve():
+        async with Session() as db:
+            ds = (await db.execute(select(TrackedDataset))).scalars().one()
+            ds.status = "active"
+            await db.commit()
+
+    _run(_approve())
+
+    r = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1, _R2], "split_resources": True,
+    })
+    assert r.json()["created"] == 0
+    assert r.json()["superseded"] == 0
+    assert len(_rows(Session)) == 1
+
+
+def test_a_pending_single_file_request_is_a_duplicate_not_a_supersede(stack):
+    """Re-submitting one file must not fan out into a second pending row for
+    it — that's how a public form turns into a spam vector."""
+    client, Session = stack
+
+    client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1], "split_resources": True,
+    })
+    r = client.post("/api/datasets/requests", json={
+        "ckan_id": CKAN_ID, "resource_ids": [_R1], "split_resources": True,
+    })
+
+    assert r.json()["created"] == 0
+    assert r.json()["superseded"] == 0
+    assert len(_rows(Session)) == 1
+
+
 def test_unknown_resource_is_rejected(stack):
     client, _ = stack
     r = client.post("/api/datasets/requests", json={

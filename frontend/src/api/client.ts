@@ -225,7 +225,33 @@ export const datasets = {
     request<void>(`/datasets/${id}`, { method: "DELETE" }),
   poll: (id: string) =>
     request<{ message: string }>(`/datasets/${id}/poll`, { method: "POST" }),
+  // Targeted re-sampling (admin). `sampling` describes what this dataset can be
+  // asked for — the modes its source declares, the statuses its items are
+  // currently at, how far each key series has got; `sample` queues one run.
+  sampling: (id: string) =>
+    request<SamplingOptions>(`/datasets/${id}/sampling`),
+  sample: (id: string, body: { mode: string; status?: string; item?: string }) =>
+    request<{ message: string; task_id: string; mode: string; summary: string }>(
+      `/datasets/${id}/sample`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };
+
+export interface SamplingOptions {
+  enabled: boolean;
+  modes: string[];
+  mode_labels?: Record<string, string>;
+  item_key?: string | null;
+  status_column?: string | null;
+  sample_column?: string | null;
+  table?: string | null;
+  // One entry per status the register's items currently sit at, commonest
+  // first — `items` is how many files a "by status" run would re-sample.
+  statuses?: { value: string; items: number }[];
+  frontier?: Record<string, string>;
+  max_targets?: number;
+  error?: string;
+}
 
 // Versions
 export interface Version {
@@ -303,6 +329,13 @@ export interface AppendSchema {
   key: string | null;
   capture_changes?: boolean;
   first_seen_column: string;
+  // Set when the archive holds a SAMPLING HISTORY — several rows per real-world
+  // item, one per time it was sampled. `item_key` identifies the item,
+  // `sample_column` says when a row was taken, and `supports_latest` means
+  // ?latest=true collapses the table to the newest sample of each item.
+  item_key?: string | null;
+  sample_column?: string | null;
+  supports_latest?: boolean;
 }
 
 export interface AppendRows {
@@ -326,6 +359,9 @@ function appendQuery(opts: {
   // filters below and is a reserved name server-side, so it can never be
   // mistaken for a column filter.
   table?: string;
+  // One row per item (its newest sample) instead of the full sampling history.
+  // Reserved server-side, like `table`.
+  latest?: boolean;
   filters?: Record<string, string>;
 }): string {
   const p = new URLSearchParams();
@@ -335,11 +371,25 @@ function appendQuery(opts: {
   if (opts.order) p.set("order", opts.order);
   if (opts.q) p.set("q", opts.q);
   if (opts.table) p.set("table", opts.table);
+  if (opts.latest) p.set("latest", "true");
   for (const [k, v] of Object.entries(opts.filters || {})) {
     if (v) p.set(k, v);
   }
   const s = p.toString();
   return s ? `?${s}` : "";
+}
+
+export interface AppendItemHistory {
+  dataset_id: string;
+  dataset_title: string;
+  table: string;
+  item_key: string;
+  item: string;
+  sample_column: string;
+  samples: number;
+  rows: Array<Record<string, string | number | boolean | null>>;
+  limit: number;
+  offset: number;
 }
 
 export interface AppendSqlResult {
@@ -356,6 +406,13 @@ export const appendArchive = {
     ),
   rows: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
     request<AppendRows>(`/append/${datasetId}/rows${appendQuery(opts)}`),
+  // Every sample of ONE item, newest first — the history of a single building
+  // file / plan / record. Exact match on the dataset's item_key.
+  item: (datasetId: string, value: string, table?: string) =>
+    request<AppendItemHistory>(
+      `/append/${datasetId}/item?value=${encodeURIComponent(value)}` +
+        (table ? `&table=${encodeURIComponent(table)}` : ""),
+    ),
   // Direct browser download (streams server-side); not a fetch.
   downloadUrl: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
     `/api/append/${datasetId}/download.csv${appendQuery({ ...opts, limit: undefined, offset: undefined })}`,
@@ -1305,10 +1362,16 @@ export const publicApi = {
       // Only split_resources requests carry a per-file breakdown.
       status?: string;
       created?: number;
+      // Pending combined requests this submit replaced with per-file ones.
+      superseded?: number;
       results?: Array<{
         resource_id: string;
         name: string;
         status: "pending" | "duplicate";
+        // On "duplicate": the dataset already holding this file.
+        dataset_id?: string;
+        dataset_title?: string;
+        dataset_status?: string;
       }>;
     }>("/datasets/requests", {
       method: "POST",

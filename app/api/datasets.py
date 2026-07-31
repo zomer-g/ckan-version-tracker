@@ -1529,6 +1529,118 @@ async def trigger_poll(
     return {"message": "Poll triggered", "dataset_id": str(ds.id)}
 
 
+class SampleRequest(BaseModel):
+    """One targeted re-sampling run. See app/services/sampling_runs.py."""
+    mode: str = "all"          # all | new | status | item
+    status: str | None = None  # required for mode="status"
+    item: str | None = None    # required for mode="item" (e.g. a מספר תיק)
+
+
+@router.get("/{dataset_id}/sampling")
+async def sampling_options(
+    dataset_id: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What targeted sampling this dataset supports, and what to target.
+
+    Drives the admin panel's four buttons: the modes the source declares, the
+    statuses its items are currently at (with an item count each, so choosing a
+    status shows how much work it is), and how far each key series has got."""
+    from app.services import sampling_runs
+
+    uid = parse_uuid(dataset_id, "dataset_id")
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return await sampling_runs.options(ds, db)
+
+
+@router.post("/{dataset_id}/sample")
+async def trigger_sample(
+    dataset_id: str,
+    body: SampleRequest,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue ONE targeted run of this dataset — the whole register, only what's
+    new, only the items at a status, or a single item.
+
+    Unlike ``/poll`` this does not go through poll_job: the run's parameters are
+    the point, and they belong on the task (migration 047), where the worker
+    reads them merged over the dataset's config. Priority is the manual band —
+    a human clicked and is waiting.
+
+    At most one active task per dataset (uq_scrape_tasks_active_per_dataset), so
+    a PENDING task is RE-AIMED rather than duplicated: the admin's explicit
+    target supersedes whatever a routine poll queued. A RUNNING one is refused —
+    re-aiming a scrape already in flight would silently mislabel its version.
+    """
+    from app.models.scrape_task import PRIORITY_MANUAL, ScrapeTask
+    from app.services import sampling_runs
+    from app.services.activity_log import log_event
+
+    uid = parse_uuid(dataset_id, "dataset_id")
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not ds.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה",
+        )
+    try:
+        params, summary = await sampling_runs.build_params(
+            ds, db, mode=body.mode, status=body.status, item=body.item)
+    except sampling_runs.SamplingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    existing = (await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status.in_(["pending", "running"]),
+        )
+    )).scalar_one_or_none()
+    if existing and existing.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="כבר רצה עכשיו משימה על המאגר הזה — המתן לסיומה",
+        )
+    if existing:
+        existing.params = params
+        existing.priority = max(existing.priority or 0, PRIORITY_MANUAL)
+        existing.message = f"דגימה ממוקדת: {summary}"[:500]
+        task = existing
+    else:
+        task = ScrapeTask(
+            tracked_dataset_id=ds.id,
+            status="pending",
+            priority=PRIORITY_MANUAL,
+            phase="queued",
+            params=params,
+            message=f"דגימה ממוקדת: {summary}"[:500],
+        )
+        db.add(task)
+    await db.commit()
+    await log_event(
+        event="queued", dataset=ds, status="info", actor=user.email,
+        message=f"נוספה לתור דגימה ממוקדת — {summary}",
+        detail=str(params),
+    )
+    return {
+        "message": "Sampling run queued",
+        "dataset_id": str(ds.id),
+        "task_id": str(task.id),
+        "mode": params["run_mode"],
+        "summary": summary,
+        "params": params,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public endpoints (no auth required)
 # ---------------------------------------------------------------------------
@@ -2021,18 +2133,45 @@ async def submit_tracking_request(
                 detail=f"resource_ids not found on source: {bad}",
             )
 
-        # A resource is taken if any existing dataset pins it — and a dataset
-        # that pins nothing at all mirrors the WHOLE package (legacy
-        # "track all"), which takes every resource with it.
-        taken: set[str] = set()
-        tracks_all = False
-        for d in existing_rows:
-            if d.resource_ids:
-                taken.update(d.resource_ids)
+        # What each existing dataset pins. A row pinning nothing at all mirrors
+        # the WHOLE package (legacy "track all"), so its set is every resource
+        # at the source.
+        all_source_ids = set(by_id)
+        wanted = set(resource_ids)
+
+        def _pinned(d) -> set[str]:
+            ids = set(d.resource_ids or [])
             if d.resource_id:
-                taken.add(d.resource_id)
-            if not d.resource_ids and not d.resource_id:
-                tracks_all = True
+                ids.add(d.resource_id)
+            return ids or all_source_ids
+
+        # A PENDING combined request is not tracking — it's an earlier request
+        # for the very same files, at coarser granularity. Splitting the same
+        # selection must not be blocked by it, or the first "select all" submit
+        # locks the package forever: it takes every resource, and every later
+        # per-file request reads back as a duplicate. So supersede it — drop the
+        # pending combined row and let the per-file rows replace it.
+        #
+        # Only when its files are a SUBSET of this selection, so superseding
+        # never silently drops a file the requester didn't ask for. A pending
+        # row that already pins exactly one resource is left alone: that's the
+        # duplicate case, and re-submitting a file must not fan out into a
+        # second pending request for it.
+        superseded: list[TrackedDataset] = []
+        # rid → the dataset already holding it, so a "duplicate" result can say
+        # WHERE the file went instead of leaving the requester at a dead end.
+        taken: dict[str, TrackedDataset] = {}
+        for d in existing_rows:
+            pins = _pinned(d)
+            if (
+                d.status == "pending"
+                and len(pins) > 1
+                and pins <= wanted
+            ):
+                superseded.append(d)
+                continue
+            for rid in pins:
+                taken.setdefault(rid, d)
 
         org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
         org_id = None
@@ -2049,8 +2188,16 @@ async def submit_tracking_request(
         for rid in resource_ids:
             res = by_id[rid]
             res_name = res.get("name") or rid
-            if tracks_all or rid in taken:
-                results.append({"resource_id": rid, "name": res_name, "status": "duplicate"})
+            holder = taken.get(rid)
+            if holder is not None:
+                results.append({
+                    "resource_id": rid,
+                    "name": res_name,
+                    "status": "duplicate",
+                    "dataset_id": str(holder.id),
+                    "dataset_title": holder.title,
+                    "dataset_status": holder.status,
+                })
                 continue
             ds = TrackedDataset(
                 ckan_id=body.ckan_id,
@@ -2070,17 +2217,40 @@ async def submit_tracking_request(
             results.append({"resource_id": rid, "name": res_name, "status": "pending"})
 
         if created_rows:
+            # Drop the pending combined requests only once their files are
+            # actually re-covered one-per-dataset. A pending row is safe to
+            # delete outright: the ODATA mirror and the poll job are both
+            # created at approval, so there is nothing to clean up but the row
+            # (every FK into tracked_datasets is CASCADE or SET NULL).
+            dropped = [{"id": str(d.id), "title": d.title} for d in superseded]
+            # A statement-level DELETE, not session.delete(): the ORM cascade
+            # would lazy-load `versions` mid-request, which under asyncio raises
+            # MissingGreenlet. The FKs cascade in the DB anyway.
+            from sqlalchemy import delete as sql_delete
+            await db.execute(
+                sql_delete(TrackedDataset)
+                .where(TrackedDataset.id.in_([d.id for d in superseded]))
+                .execution_options(synchronize_session=False)
+            )
             await db.commit()
             from app.services.activity_log import log_event
             for created in created_rows:
                 await log_event(event="requested", dataset=created, status="info",
                                 actor="request",
                                 message="התקבלה בקשת גירוד (קובץ בודד, ממתינה לאישור)")
+            for d in dropped:
+                logger.info(
+                    "split request superseded pending combined request %s (%s)",
+                    d["id"], d["title"],
+                )
+        else:
+            dropped = []
 
         return {
             "message": "Request submitted" if created_rows else "No new files added",
             "status": "pending" if created_rows else "noop",
             "created": len(created_rows),
+            "superseded": len(dropped),
             "results": results,
         }
 

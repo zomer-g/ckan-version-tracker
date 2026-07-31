@@ -159,10 +159,15 @@ export default function RequestForm({
           requester_notes: notes || undefined,
         });
         if (res?.results) {
-          // Every file already tracked → nothing was created; say so instead of
-          // claiming success.
+          // Every file already tracked → nothing was created. Name the dataset
+          // that holds them; "already tracked" with no pointer is a dead end.
           if (!res.created) {
-            setError(t("home.request_split_none"));
+            const holder = res.results.find((r) => r.dataset_title)?.dataset_title;
+            setError(
+              holder
+                ? t("home.request_split_none_named", { title: holder })
+                : t("home.request_split_none"),
+            );
             setSubmitting(false);
             return;
           }
