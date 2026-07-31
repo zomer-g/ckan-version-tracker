@@ -194,6 +194,17 @@ async def approve_request(
             target = "r2+neon"
         else:
             target = "r2"
+    elif dataset_is_neon_eligible(ds):
+        # data.gov.il is TABULAR — the whole point of tracking it is that the
+        # rows end up queryable on /data. Defaulting it to the global file
+        # backend (R2) gave a dataset whose files were archived but which never
+        # appeared in the SQL console, and nothing in the approve flow said so.
+        # Dual-write instead: the file snapshot still lands in R2, and the rows
+        # stream to the NEON append DB. Resources with no datastore behind them
+        # (XLS/PDF attachments) simply keep the file half — the poll job gates
+        # the NEON path on `datastore_active`.
+        derived = storage_target_of(ds.scraper_config)
+        target = "r2+neon" if derived == "r2" else derived
     else:
         target = storage_target_of(ds.scraper_config)
     if "neon" in target and not dataset_is_neon_eligible(ds):

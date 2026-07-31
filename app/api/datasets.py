@@ -1203,6 +1203,12 @@ async def track_dataset(
         if body.seen_window_versions and body.seen_window_versions > 0:
             ckan_scraper_config["seen_window_versions"] = body.seen_window_versions
 
+    # data.gov.il is tabular: default a new CKAN dataset to the dual write so
+    # its rows reach the NEON append DB and the SQL console, not just its files.
+    # Same default as admin.approve_request — the two creation paths must agree.
+    if storage_target_of(ckan_scraper_config) == "r2":
+        ckan_scraper_config = apply_storage_target(ckan_scraper_config, "r2+neon")
+
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
         ckan_name=pkg["name"],

@@ -123,14 +123,25 @@ function versionFiles(
   return out;
 }
 
-// The archive date (YYYY-MM-DD, UTC) a version was captured on. The ODATA
-// resource names embed this same date, so it's the authoritative key for which
-// files belong to a version (see `_filedates` / ownDateKeys below).
-function versionDateUTC(detectedAt: string | null | undefined): string | null {
+// The archive date (YYYY-MM-DD) a version was captured on. ISRAEL time, not
+// UTC: `_filedates` and the "<title> — DD.MM.YYYY" labels are stamped in
+// Asia/Jerusalem (snapshot_service), so comparing against a UTC date hid every
+// file of every version detected between 21:00 and 24:00 UTC — the stamp said
+// tomorrow, the filter asked for today, and the page rendered a version with no
+// files at all. Explicit zone, not the viewer's locale, so the answer doesn't
+// depend on where the page is opened from.
+const _IL_DATE = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Jerusalem",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function versionDateIL(detectedAt: string | null | undefined): string | null {
   if (!detectedAt) return null;
   const d = new Date(detectedAt);
   if (isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10);
+  return _IL_DATE.format(d);
 }
 
 // Mapping KEYS that genuinely belong to THIS version, decided by the DATE in
@@ -690,7 +701,11 @@ export default function VersionsPage() {
                   // changed-vs-previous diff for versions without date info, and
                   // to the full set for the oldest version.
                   const mappings = v.resource_mappings as Record<string, unknown> | null;
-                  let keyset: Set<string> | null = ownDateKeys(mappings, versionDateUTC(v.detected_at));
+                  let keyset: Set<string> | null = ownDateKeys(mappings, versionDateIL(v.detected_at));
+                  // A date filter that matches NOTHING is a filter that's wrong,
+                  // not a version without files: fall through to the diff (or to
+                  // everything) rather than rendering an empty version.
+                  if (keyset && keyset.size === 0) keyset = null;
                   if (!keyset && olderVersion) {
                     keyset = changedKeys(
                       mappings,
