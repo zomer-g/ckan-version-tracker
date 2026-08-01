@@ -19,6 +19,7 @@ NOTE: no ``from __future__ import annotations`` — with the slowapi
 mis-reads ``body: QueryRequest`` as a query param (422). Same trap as cbs_ask.
 """
 import logging
+import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -45,6 +46,43 @@ class QueryRequest(BaseModel):
 def _require_enabled() -> None:
     if not append_store.is_configured():
         raise HTTPException(status_code=409, detail="Append archive DB is not configured")
+
+
+_HEB_RE = re.compile(r"[֐-׿]")
+# Catalog titles are often "<source> — <resource>", and the resource half
+# usually repeats the source ("תיקופי מסלקה — מאגר תיקופי מסלקה 2021"). For a
+# suggestion the shorter half is the readable one.
+_DASH_SPLIT = re.compile(r"\s+[—–-]\s+")
+
+
+def _clean_title(title: str) -> str:
+    parts = [p.strip() for p in _DASH_SPLIT.split(title) if p.strip()]
+    if len(parts) > 1:
+        # Prefer the half that is not a restatement of the other.
+        parts.sort(key=len)
+        head, tail = parts[0], parts[-1]
+        if head and head[:12] in tail:
+            return head
+    return (parts[0] if parts else title).strip()
+
+
+def _family_key(title: str) -> str:
+    """Group titles that differ only by a year or a serial, so a source with one
+    table per year contributes one suggestion rather than four."""
+    return re.sub(r"\d+", "", title).strip()[:24]
+
+
+def _dim_label(dim: dict) -> str:
+    """A short label for the "לפי X" half.
+
+    The profiler's LLM description is a SENTENCE ("תיאור סוג הפריט (למשל 'הצעת
+    חוק')") — right for the prompt, wrong for a UI label, where it turns the
+    suggestion into a paragraph. Fall back to the column name when the
+    description is long or parenthesised."""
+    title = (dim.get("title") or "").strip()
+    if title and len(title) <= 22 and "(" not in title and "," not in title:
+        return title
+    return dim["key"]
 
 
 def _candidates(cands: list) -> list[dict]:
@@ -175,17 +213,31 @@ async def examples(request: Request, db: AsyncSession = Depends(get_db)):
     # over a 30-row table teaches the shape but wastes the click.
     ranked = sorted(model, key=lambda e: -(e.get("rows") or 0))
     out: list[dict] = []
+    seen_families: set[str] = set()
     for ent in ranked:
+        title = _clean_title(ent.get("title") or "")
+        # An entity whose title is still a raw identifier (KNS_PlenumVoteResult,
+        # append_x_9f3a) has no Hebrew name in the catalog. Putting it in a
+        # Hebrew suggestion produces "כמה KNS_PlenumVoteResult לפי…", which
+        # reads as broken and teaches nothing.
+        if not title or not _HEB_RE.search(title):
+            continue
+        # One suggestion per dataset family. Ranking by row count alone put four
+        # years of the same source in a list of eight — technically the biggest
+        # tables, useless as a menu.
+        family = _family_key(title)
+        if family in seen_families:
+            continue
         dim = next((d for d in ent["dimensions"]
                     if d.get("groupable") and d["kind"] == "text" and d.get("samples")), None)
         if not dim:
             continue
-        label = dim.get("title") or dim["key"]
+        seen_families.add(family)
         out.append({
-            "question": f'כמה {ent["title"]} לפי {label}',
+            "question": f'כמה {title} לפי {_dim_label(dim)}',
             "table": ent["key"],
         })
-        if len(out) >= 8:
+        if len(out) >= 6:
             break
     cfg = await nl_query.get_config(db)
     ladder = nl_query.tiers(cfg)

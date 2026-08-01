@@ -354,3 +354,34 @@ def test_escalation_can_be_switched_off_entirely(monkeypatch):
     monkeypatch.setattr(nl_query.settings, "anthropic_api_key", "k")
     monkeypatch.setattr(nl_query.settings, "nl_query_escalate", False)
     assert [p for p, _ in _REAL_TIERS()] == ["deepseek"]
+
+
+# ── example suggestions ──────────────────────────────────────────────────────
+# These are the first thing anyone sees on the page, and the first live run
+# produced "כמה KNS_PlenumVoteResult לפי תיאור סוג הפריט (למשל 'הצעת חוק')"
+# four times over the same dataset family. Bad suggestions make the feature look
+# broken before a user types anything, so they get tests.
+
+def test_title_drops_the_restated_half():
+    from app.api.nl_query import _clean_title
+    assert _clean_title("תיקופי מסלקה — מאגר תיקופי מסלקה 2021") == "תיקופי מסלקה"
+    assert _clean_title("רישיונות עסק") == "רישיונות עסק"
+
+
+def test_year_variants_share_a_family_so_one_source_gives_one_suggestion():
+    from app.api.nl_query import _family_key
+    assert _family_key("תיקופי מסלקה 2021") == _family_key("תיקופי מסלקה 2026")
+    assert _family_key("רישיונות עסק") != _family_key("החלטות ממשלה")
+
+
+def test_a_sentence_description_is_not_used_as_a_label():
+    from app.api.nl_query import _dim_label
+    assert _dim_label({"key": "item_type",
+                       "title": "תיאור סוג הפריט (למשל 'הצעת חוק', 'שאילתה')"}) == "item_type"
+    assert _dim_label({"key": "mahoz", "title": "מחוז"}) == "מחוז"
+
+
+def test_a_raw_identifier_title_is_not_hebrew():
+    from app.api.nl_query import _HEB_RE
+    assert not _HEB_RE.search("KNS_PlenumVoteResult")
+    assert _HEB_RE.search("רישיונות עסק")
