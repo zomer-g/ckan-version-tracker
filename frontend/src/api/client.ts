@@ -1264,6 +1264,123 @@ export const dataCatalog = {
     `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
 };
 
+// ---- Free-text query over the semantic model (/api/nl) ----
+// A Hebrew question is compiled SERVER-SIDE into SQL: a language model may pick
+// the dataset and fields, but only out of a declared model, and its output is
+// validated before any SQL exists. So the SQL below was written by the server,
+// not by a model — which is why it is always shown to the user.
+export interface NlExample {
+  question: string;
+  table: string;
+}
+export interface NlQueryResponse {
+  answered: boolean;
+  // present when answered
+  sql?: string;
+  query?: Record<string, unknown>;
+  entity?: string;
+  explanation?: string;
+  // "template" (deterministic, free) | "deepseek" | "anthropic"
+  source?: string;
+  // The exact model id that answered, when a model did.
+  model?: string;
+  // True when the cheap tier was tried first and could not answer.
+  escalated?: boolean;
+  cached?: boolean;
+  result?: KnessetDbSqlResult;
+  error?: string;
+  // present when not answered — this is the semantic layer's designed failure
+  // mode, not an exception, so it arrives with HTTP 200.
+  reason?: string;
+  candidates?: Array<{ table: string; title: string; rows: number | null; page_url: string }>;
+}
+export const nlQuery = {
+  // `run: false` compiles without executing — the console then runs the SQL
+  // through its normal path, so the result table, charts and CSV export all
+  // work unchanged and the query is not executed twice.
+  query: (q: string, run = true) =>
+    request<NlQueryResponse>("/nl/query", {
+      method: "POST",
+      body: JSON.stringify({ q, run }),
+    }),
+  examples: () =>
+    request<{
+      examples: NlExample[];
+      model_size: number;
+      enabled: boolean;
+      llm: boolean;
+      // The escalation ladder as configured on this deployment, cheapest first.
+      tiers: Array<{ provider: string; model: string }>;
+    }>("/nl/examples"),
+};
+
+// ── Free-text query admin (requires an OVER admin JWT) — /api/admin/nl ──
+// The log holds raw user questions, so every endpoint here is admin-only and
+// the data lives in the app DB, never the publicly-queryable append DB.
+export interface NlAdminLogRow {
+  id: number;
+  created_at: string;
+  question: string;
+  answered: boolean;
+  // cache | template | deepseek | anthropic | refused | invalid | error
+  stage: string;
+  attempts: string | null;
+  model: string | null;
+  escalated: boolean;
+  entity: string | null;
+  sql: string | null;
+  reason: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number | null;
+}
+export interface NlAdminStats {
+  days: number;
+  total: number;
+  free_share: number | null;
+  by_stage: Array<{
+    stage: string; n: number; answered: number; escalated: number;
+    input_tokens: number; output_tokens: number; median_ms: number | null;
+  }>;
+  budget_today: {
+    calls: number; input_tokens: number; output_tokens: number;
+    call_budget: number; output_token_budget: number; enabled: boolean;
+  };
+}
+export interface NlAdminConfig {
+  config: {
+    enabled: boolean;
+    allow_deepseek: boolean;
+    allow_anthropic: boolean;
+    escalate_on_unanswerable: boolean;
+    daily_call_budget: number | null;
+    daily_output_token_budget: number | null;
+  };
+  active_tiers: Array<{ provider: string; model: string }>;
+  keys: { deepseek: boolean; anthropic: boolean };
+  defaults: { daily_call_budget: number; daily_output_token_budget: number };
+}
+export const adminNlQuery = {
+  log: (p: { limit?: number; offset?: number; stage?: string; answered?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (p.limit) qs.set("limit", String(p.limit));
+    if (p.offset) qs.set("offset", String(p.offset));
+    if (p.stage) qs.set("stage", p.stage);
+    if (p.answered !== undefined) qs.set("answered", String(p.answered));
+    return request<{ total: number; rows: NlAdminLogRow[] }>(
+      `/admin/nl/log${qs.toString() ? `?${qs}` : ""}`);
+  },
+  stats: (days = 7) => request<NlAdminStats>(`/admin/nl/stats?days=${days}`),
+  config: () => request<NlAdminConfig>("/admin/nl/config"),
+  setConfig: (patch: Record<string, unknown>) =>
+    request<NlAdminConfig>("/admin/nl/config", {
+      method: "POST", body: JSON.stringify(patch),
+    }),
+  prune: (days = 90) =>
+    request<{ deleted: number; older_than_days: number }>(
+      `/admin/nl/prune?days=${days}`, { method: "POST" }),
+};
+
 // ---- Settlement / authority normalizer ----
 export interface ResolvedName {
   input: string;

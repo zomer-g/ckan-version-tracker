@@ -33,9 +33,11 @@ class _FakeSession:
         self.committed = False
         self.rolled_back = False
         self.last_params = None
+        self.last_stmt = None
 
     async def execute(self, stmt, params=None):
         self.last_params = params
+        self.last_stmt = stmt
         if self._raise:
             raise RuntimeError("boom")
         return _FakeResult(self._row)
@@ -51,9 +53,10 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _configure(enabled=True, budget=2000):
+def _configure(enabled=True, budget=2000, token_budget=1_500_000):
     settings.llm_budget_enabled = enabled
     settings.cbs_ask_daily_budget = budget
+    settings.llm_daily_output_token_budget = token_budget
 
 
 def test_allows_when_upsert_returns_row():
@@ -61,7 +64,45 @@ def test_allows_when_upsert_returns_row():
     s = _FakeSession(row=(7,))
     assert _run(llm_budget.reserve_llm_call(s)) is True
     assert s.committed is True
+    assert s.last_params == {"budget": 2000, "token_budget": 1_500_000}
+
+
+def test_output_token_ceiling_is_part_of_the_reservation():
+    """A call count stopped bounding spend once /api/nl/query joined the same
+    budget: its prompt size varies by an order of magnitude and its output
+    includes thinking tokens, so 2,000 calls can mean $8 or $130. The token
+    ceiling is what makes the budget a budget (see migration 050)."""
+    _configure(enabled=True, budget=2000, token_budget=500_000)
+    s = _FakeSession(row=(7,))
+    _run(llm_budget.reserve_llm_call(s))
+    assert s.last_params["token_budget"] == 500_000
+    assert "output_tokens" in str(s.last_stmt)
+
+
+def test_token_budget_of_zero_keeps_only_the_call_ceiling():
+    _configure(enabled=True, budget=2000, token_budget=0)
+    s = _FakeSession(row=(7,))
+    assert _run(llm_budget.reserve_llm_call(s)) is True
+    # No token parameter is bound, and the clause is absent from the statement —
+    # binding an unused parameter would be a driver error, not a no-op.
     assert s.last_params == {"budget": 2000}
+    assert "output_tokens" not in str(s.last_stmt)
+
+
+def test_recording_tokens_never_breaks_a_successful_answer():
+    """Usage bookkeeping is best-effort by design: the answer already cost money
+    and is already correct, so losing the write must not turn it into an error."""
+    _configure(enabled=True, budget=2000)
+    s = _FakeSession(raise_on_execute=True)
+    _run(llm_budget.record_llm_tokens(s, 1000, 200))  # must not raise
+    assert s.rolled_back is True
+
+
+def test_recording_zero_tokens_skips_the_db():
+    _configure(enabled=True, budget=2000)
+    s = _FakeSession(row=(1,))
+    _run(llm_budget.record_llm_tokens(s, 0, 0))
+    assert s.last_params is None
 
 
 def test_blocks_when_upsert_returns_none():

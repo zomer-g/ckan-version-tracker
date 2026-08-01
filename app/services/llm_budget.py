@@ -29,21 +29,40 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def reserve_llm_call(db: AsyncSession) -> bool:
+async def reserve_llm_call(db: AsyncSession, *, call_budget: int | None = None,
+                           token_budget_override: int | None = None) -> bool:
     """Atomically reserve one LLM call against today's global budget.
 
     Returns ``True`` if the call is within budget (today's tally has been
     incremented and the caller may proceed to the LLM), ``False`` if the daily
     cap is already exhausted (caller must reject with 429 and NOT call the LLM).
 
+    Two independent ceilings, because a call count alone does not bound spend
+    once prompts vary in size (see migration 050): today's ``calls`` must be
+    under ``cbs_ask_daily_budget``, AND today's ``output_tokens`` must be under
+    ``llm_daily_output_token_budget``. Output tokens are the gate rather than
+    total tokens because output is billed ~5x input on every current model and
+    is the part a crafted question can inflate — long reasoning costs many times
+    a short answer while counting as one call either way.
+
     Disabled — always allows — when ``llm_budget_enabled`` is False or the
-    configured budget is <= 0.
+    configured budget is <= 0. A token budget of <= 0 disables only that half.
     """
     if not getattr(settings, "llm_budget_enabled", True):
         return True
-    budget = int(getattr(settings, "cbs_ask_daily_budget", 0) or 0)
+    # An admin override from nl_query_config wins over the deployed default, so
+    # a budget can be tightened during an incident without a redeploy. None
+    # means "no override"; 0 is a real value and disables that ceiling.
+    budget = int((call_budget if call_budget is not None
+                  else getattr(settings, "cbs_ask_daily_budget", 0)) or 0)
     if budget <= 0:
         return True
+    token_budget = int((token_budget_override if token_budget_override is not None
+                        else getattr(settings, "llm_daily_output_token_budget", 0)) or 0)
+    # A non-positive token budget means "no token ceiling"; express that as a
+    # condition that is always true rather than branching the SQL.
+    token_clause = ("AND llm_daily_usage.output_tokens < :token_budget"
+                    if token_budget > 0 else "")
 
     # One statement does everything atomically:
     #   * first call of the day     → INSERT (day, 1), RETURNING 1
@@ -53,6 +72,9 @@ async def reserve_llm_call(db: AsyncSession) -> bool:
     # The row lock the UPSERT takes serialises concurrent reservations, so the
     # ceiling can never be overshot; committing right away releases it before
     # the (slow) LLM call, so requests don't queue behind each other.
+    params: dict = {"budget": budget}
+    if token_budget > 0:
+        params["token_budget"] = token_budget
     try:
         row = (
             await db.execute(
@@ -62,9 +84,10 @@ async def reserve_llm_call(db: AsyncSession) -> bool:
                     "ON CONFLICT (day) DO UPDATE "
                     "SET calls = llm_daily_usage.calls + 1, updated_at = now() "
                     "WHERE llm_daily_usage.calls < :budget "
+                    f"{token_clause} "
                     "RETURNING calls"
                 ),
-                {"budget": budget},
+                params,
             )
         ).first()
         await db.commit()
@@ -79,3 +102,62 @@ async def reserve_llm_call(db: AsyncSession) -> bool:
         return True
 
     return row is not None
+
+
+async def record_llm_tokens(db: AsyncSession, input_tokens: int, output_tokens: int) -> None:
+    """Add one call's token usage to today's row, after the call returned.
+
+    Necessarily after the fact — the cost is not known until the response
+    arrives. That means the output-token ceiling is enforced with a one-call
+    lag: the request that crosses the line is paid for, and the next one is
+    refused. With a per-call output cap of ~1.5k tokens the overshoot is
+    bounded and small, which is the right trade against pre-charging an
+    estimate and refusing requests that would have been affordable.
+
+    Best-effort by design: usage bookkeeping must never fail a successful
+    answer, so an error here is logged and swallowed. The consequence of a lost
+    write is undercounting, so pair this with the call ceiling — which is
+    reserved up-front and cannot be lost — rather than relying on it alone.
+    """
+    if not getattr(settings, "llm_budget_enabled", True):
+        return
+    if input_tokens <= 0 and output_tokens <= 0:
+        return
+    try:
+        await db.execute(
+            text(
+                "INSERT INTO llm_daily_usage (day, calls, input_tokens, output_tokens) "
+                "VALUES (CURRENT_DATE, 0, :i, :o) "
+                "ON CONFLICT (day) DO UPDATE SET "
+                "input_tokens = llm_daily_usage.input_tokens + :i, "
+                "output_tokens = llm_daily_usage.output_tokens + :o, "
+                "updated_at = now()"
+            ),
+            {"i": max(0, int(input_tokens)), "o": max(0, int(output_tokens))},
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("record_llm_tokens: usage write failed")
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def usage_today(db: AsyncSession) -> dict:
+    """Today's tallies + the configured ceilings — for the admin card and for
+    telling a rate-limited user how long they have to wait."""
+    try:
+        row = (await db.execute(text(
+            "SELECT calls, input_tokens, output_tokens FROM llm_daily_usage "
+            "WHERE day = CURRENT_DATE"))).first()
+    except Exception:  # noqa: BLE001
+        row = None
+    return {
+        "calls": int(row[0]) if row else 0,
+        "input_tokens": int(row[1]) if row else 0,
+        "output_tokens": int(row[2]) if row else 0,
+        "call_budget": int(getattr(settings, "cbs_ask_daily_budget", 0) or 0),
+        "output_token_budget": int(getattr(settings, "llm_daily_output_token_budget", 0) or 0),
+        "enabled": bool(getattr(settings, "llm_budget_enabled", True)),
+    }

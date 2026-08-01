@@ -39,6 +39,8 @@ from app.api.eden import router as eden_router
 from app.api.knesset import router as knesset_router
 from app.api.knesset_protocols import router as knesset_protocols_router
 from app.api.knesset_db import router as knesset_db_router
+from app.api.admin_nl_query import router as admin_nl_query_router
+from app.api.nl_query import router as nl_query_router
 from app.api.tables import router as tables_router
 from app.api.settlements import router as settlements_router
 from app.api.connector import router as connector_router
@@ -201,6 +203,8 @@ app.include_router(sources_router)
 app.include_router(resolve_router)
 app.include_router(direct_router)
 app.include_router(tables_router)
+app.include_router(nl_query_router)
+app.include_router(admin_nl_query_router)
 app.include_router(settlements_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)

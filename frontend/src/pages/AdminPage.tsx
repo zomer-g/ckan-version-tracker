@@ -26,6 +26,7 @@ import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
 import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
+import NlQueryAdminPanel from "../components/NlQueryAdminPanel";
 import PageContentPanel from "../components/PageContentPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
@@ -151,7 +152,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "mcp" | "orgs" | "tags" | "content" | "drive" | "odata" | "ocal";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "drive" | "odata" | "ocal";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -160,6 +161,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "requests",  label: "בקשות ממתינות",     emoji: "📥" },
   { id: "datasets",  label: "מאגרים פעילים",    emoji: "📂" },
   { id: "log",       label: "לוג משימות",        emoji: "📜" },
+  { id: "nl",        label: "שאלות חופשיות",     emoji: "💬" },
   { id: "mcp",       label: "גישת MCP",          emoji: "🔌" },
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
@@ -1419,6 +1421,8 @@ export default function AdminPage() {
       {tab === "push_jobs" && <DatastorePushJobsPanel />}
 
       {tab === "log" && <ActivityLogPanel />}
+
+      {tab === "nl" && <NlQueryAdminPanel />}
 
       {tab === "mcp" && <McpUsersPanel />}
 

@@ -491,6 +491,52 @@ class Settings(BaseSettings):
     # See app/services/llm_budget.py.
     llm_budget_enabled: bool = True
     cbs_ask_daily_budget: int = 2000   # max LLM parses/day, summed over everyone
+    # Second ceiling, on OUTPUT tokens. A call count alone stopped bounding
+    # spend once /api/nl/query joined the same budget: its prompt carries a
+    # retrieved slice of the semantic model, so per-call cost varies by an order
+    # of magnitude, and output (billed ~5x input, and inflated by thinking) is
+    # both the dominant term and the one a crafted question can drive up. At the
+    # default 1.5M output tokens/day the worst case is roughly $37/day on an
+    # Opus-tier model — deliberately set near the whole site's monthly infra
+    # bill, not above it. 0 disables this half. See migration 050.
+    llm_daily_output_token_budget: int = 1_500_000
+
+    # Free-text query over the semantic model (/api/nl/query — see
+    # app/services/nl_query.py). Most questions never reach a model at all: the
+    # fingerprint cache and the deterministic template matcher answer first, for
+    # free. This is the model used when they don't.
+    #
+    # ESCALATION LADDER, cheapest first: deepseek-chat → the Anthropic model
+    # below. Built from whichever API keys are configured, so one key means one
+    # tier and no escalation. A question is attempted on the cheap model and
+    # promoted only when that model FAILS DETECTABLY — unparseable output, a
+    # query naming a field that is not in the declared model, or a provider
+    # error. See app/services/nl_query.py.
+    #
+    # What escalation does NOT catch: a cheap model emitting a query that
+    # validates cleanly and answers the wrong question. That failure is
+    # invisible to every check in the pipeline and only an eval set finds it.
+    # The ladder buys back COVERAGE, not accuracy.
+    nl_query_escalate: bool = True
+    # Whether a cheap model saying "I can't answer that" is worth a second,
+    # expensive opinion. This is the cost-driving switch, because out-of-scope
+    # is a COMMON outcome on a semantic layer, not a rare one — if it is ~30% of
+    # traffic, turning this on adds ~30% more expensive-tier calls. On:
+    # the cheapest model does not get to set the site's coverage ceiling.
+    # Off: cheaper, and the weakest model's judgement becomes final.
+    nl_query_escalate_on_unanswerable: bool = True
+    # The upper rung. Opus-tier because this path decides which dataset a public
+    # transparency answer comes from, and the refuse/answer judgement is exactly
+    # what degrades first on a smaller model. claude-sonnet-5 is roughly 40% of
+    # the cost per query if that trade is worth making; measure with an eval set
+    # before switching, not after.
+    nl_query_anthropic_model: str = "claude-opus-5"
+    # How many candidate entities are retrieved into the prompt. This is the
+    # schema-linking step, and it is not optional: with the full ~440-table
+    # catalog there is nothing to send, and published measurements put
+    # schema-linking recall at 0% without retrieval at this scale. Bigger k buys
+    # recall and costs input tokens linearly; 6 keeps the prompt around 4k.
+    nl_query_top_k: int = 6
 
     # Table profiler (app/services/table_profiler.py). When auto is on, a poll
     # that lands a new version for a NEON-backed dataset re-runs the (free) SQL

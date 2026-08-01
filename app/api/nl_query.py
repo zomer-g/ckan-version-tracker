@@ -1,0 +1,202 @@
+"""Free-text query API — Hebrew question → validated SQL → results.
+
+  POST /api/nl/query     question → {sql, explanation, result}
+  GET  /api/nl/examples  question suggestions derived from the live model
+
+Public and read-only. The SQL this returns was compiled by the server from a
+validated query object (app/services/semantic_model.py), never written by a
+language model, and it is executed through the SAME read-only path as the
+console (append_store.run_readonly_sql: least-privilege role, READ ONLY tx,
+statement_timeout, hard row cap).
+
+The response always carries the generated SQL, whether or not it ran. That is a
+product requirement, not a debugging affordance: on a transparency site an
+answer the reader cannot audit is worth less than no answer, and showing the
+query is what lets someone check that "כמה" counted what they meant.
+
+NOTE: no ``from __future__ import annotations`` — with the slowapi
+``@limiter.limit`` wrapper it stringifies the endpoint hints and FastAPI then
+mis-reads ``body: QueryRequest`` as a query param (422). Same trap as cbs_ask.
+"""
+import logging
+import time
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.rate_limit import limiter
+from app.services import append_store, data_catalog, nl_query, semantic_model
+from app.services.llm_budget import record_llm_tokens, reserve_llm_call
+from app.services.semantic_model import SemanticError
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/nl", tags=["nl"])
+
+MAX_QUESTION_CHARS = 400
+
+
+class QueryRequest(BaseModel):
+    q: str
+    run: bool = True
+
+
+def _require_enabled() -> None:
+    if not append_store.is_configured():
+        raise HTTPException(status_code=409, detail="Append archive DB is not configured")
+
+
+def _candidates(cands: list) -> list[dict]:
+    """The nearby datasets attached to a refusal.
+
+    A refusal that names what IS available turns a dead end into navigation —
+    the semantic layer's known failure mode is "out of scope", so this is the
+    path users will actually hit, and it has to be useful."""
+    return [{"table": c["key"], "title": c["title"], "rows": c.get("rows"),
+             "page_url": c.get("page_url") or ""} for c in cands[:5]]
+
+
+@router.post("/query")
+@limiter.limit("20/minute")
+async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends(get_db)):
+    """Hebrew question → compiled SQL (+ results unless ``run`` is false)."""
+    _require_enabled()
+    q = (body.q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="q is required")
+    if len(q) > MAX_QUESTION_CHARS:
+        # Bounds the input side of the prompt. A 400-char question is already
+        # far longer than anything the model helps with.
+        raise HTTPException(
+            status_code=400,
+            detail=f"השאלה ארוכה מדי (עד {MAX_QUESTION_CHARS} תווים)")
+
+    cfg = await nl_query.get_config(db)
+    started = time.monotonic()
+
+    async def _reserve() -> bool:
+        # Admin overrides from nl_query_config take precedence over config.py,
+        # so a budget can be tightened live during an incident.
+        return await reserve_llm_call(
+            db,
+            call_budget=cfg.get("daily_call_budget"),
+            token_budget_override=cfg.get("daily_output_token_budget"),
+        )
+
+    async def _usage(i: int, o: int) -> None:
+        await record_llm_tokens(db, i, o)
+
+    def _ms() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    try:
+        res = await nl_query.answer(db, q, reserve=_reserve, on_usage=_usage)
+    except nl_query.OutOfScope as e:
+        # 200, not 4xx: "אין לי את הנתון" is a real answer the UI renders, and
+        # the browser client treats non-2xx as an error banner. The shape is
+        # distinguishable by ``answered: false``.
+        #
+        # Logged as carefully as a success: a refusal can have run two paid
+        # tiers before concluding it could not answer, and an admin looking at
+        # the bill needs to see that.
+        await nl_query.log_query(
+            db, question=q, answered=False, stage="refused",
+            attempts=">".join(e.attempts) or None, reason=e.message,
+            input_tokens=e.usage[0], output_tokens=e.usage[1], duration_ms=_ms())
+        return {"answered": False, "reason": e.message, "candidates": _candidates(e.candidates)}
+    except SemanticError as e:
+        # The model produced a query naming something that is not in the model.
+        # Surfaced as a refusal for the same reason — it is one.
+        logger.info("nl/query rejected an invalid model output for %r: %s", q, e)
+        await nl_query.log_query(db, question=q, answered=False, stage="invalid",
+                                 reason=str(e), duration_ms=_ms())
+        return {"answered": False, "reason": f"לא הצלחתי לבנות שאילתה תקינה: {e}",
+                "candidates": []}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — provider/network failures
+        logger.warning("nl/query failed for %r: %s", q, e)
+        await nl_query.log_query(db, question=q, answered=False, stage="error",
+                                 reason=f"{type(e).__name__}: {e}", duration_ms=_ms())
+        raise HTTPException(status_code=502, detail="שגיאה בשירות המענה בשפה חופשית")
+
+    out = {
+        "answered": True,
+        "sql": res["sql"],
+        "query": res["query"],
+        "entity": res["entity"],
+        "explanation": res["explanation"],
+        # "template" / "deepseek" / "anthropic" — the UI labels a model-derived
+        # answer differently from a deterministic one, because the confidence
+        # genuinely differs and the reader deserves to know which they got.
+        "source": res["source"],
+        "model": res.get("model"),
+        # True when the cheap tier was tried first and could not answer. Exposed
+        # so escalation rate is observable from the outside rather than only
+        # visible on the invoice.
+        "escalated": bool(res.get("escalated")),
+        "cached": bool(res.get("cached")),
+    }
+    usage = res.get("usage") or (0, 0)
+    await nl_query.log_query(
+        db, question=q, answered=True, stage=res.get("stage") or res["source"],
+        attempts=">".join(res.get("attempts") or []) or None,
+        model=res.get("model"), escalated=bool(res.get("escalated")),
+        entity=res["entity"], sql=res["sql"],
+        input_tokens=usage[0], output_tokens=usage[1], duration_ms=_ms())
+    if not body.run:
+        return out
+
+    try:
+        out["result"] = await append_store.run_readonly_sql(
+            res["sql"], search_path=data_catalog.CONSOLE_SEARCH_PATH)
+    except ValueError as e:
+        # Compiled SQL that the DB rejects is a compiler bug, not user error —
+        # log it loudly, but still hand back the SQL so the user can fix and run
+        # it in the console rather than losing the work.
+        logger.error("nl/query compiled invalid SQL for %r: %s\n%s", q, e, res["sql"])
+        out["error"] = str(e)
+    return out
+
+
+@router.get("/examples")
+@limiter.limit("30/minute")
+async def examples(request: Request, db: AsyncSession = Depends(get_db)):
+    """Suggested questions, generated from the live model.
+
+    Free (no LLM) and grounded — every suggestion names a real table and a real
+    groupable column, so clicking one always produces an answer. A free-text box
+    with no examples reads as a search box and gets search queries; showing the
+    shape that works is most of the onboarding."""
+    _require_enabled()
+    model = await semantic_model.build_model(db)
+    # Biggest tables first: they are the ones people came for, and a suggestion
+    # over a 30-row table teaches the shape but wastes the click.
+    ranked = sorted(model, key=lambda e: -(e.get("rows") or 0))
+    out: list[dict] = []
+    for ent in ranked:
+        dim = next((d for d in ent["dimensions"]
+                    if d.get("groupable") and d["kind"] == "text" and d.get("samples")), None)
+        if not dim:
+            continue
+        label = dim.get("title") or dim["key"]
+        out.append({
+            "question": f'כמה {ent["title"]} לפי {label}',
+            "table": ent["key"],
+        })
+        if len(out) >= 8:
+            break
+    cfg = await nl_query.get_config(db)
+    ladder = nl_query.tiers(cfg)
+    return {
+        "examples": out,
+        "model_size": len(model),
+        "enabled": bool(cfg.get("enabled", True)),
+        "llm": bool(ladder),
+        # The escalation ladder as it is actually configured on this deployment,
+        # cheapest first. Reported because "which model answered me" is a fair
+        # question on a public transparency site, and because a mis-set key
+        # silently changing the ladder is otherwise invisible.
+        "tiers": [{"provider": p, "model": m} for p, m in ladder],
+    }

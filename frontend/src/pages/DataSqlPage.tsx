@@ -10,6 +10,8 @@ import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
+import FilterBuilder from "../components/FilterBuilder";
+import NlQueryBox from "../components/NlQueryBox";
 import ProfilePanel from "../components/ProfilePanel";
 import JoinBuilder from "../components/JoinBuilder";
 import DataTabs from "../components/DataTabs";
@@ -779,6 +781,9 @@ export default function DataSqlPage() {
             ))}
           </select>
         </div>
+        {/* Ask in Hebrew. Compiles server-side to the SQL below, which stays
+            visible and editable — the box is a way in, not a replacement. */}
+        <NlQueryBox onUseSql={useSql} />
         <SqlHelpNote casing="preserve" />
         <SchemaReference
           tables={sqlSchemaTables}
@@ -1247,6 +1252,12 @@ export default function DataSqlPage() {
 
               {/* No-SQL chart tool over the selected table */}
               <QuickChartBuilder key={selectedTable.table} table={selectedTable} onCreate={quickChart} />
+
+              {/* No-SQL filter/aggregate tool. Offers each column's REAL values
+                  with row counts (from the profiler), so a filter cannot return
+                  an unexplained zero. */}
+              <FilterBuilder key={`f-${selectedTable.table}`} table={selectedTable}
+                             profile={detail?.profile} onUseSql={useSql} />
 
               {/* Auto-computed profile: detected field types, min/max ranges,
                   date formats, recurring-entity classification, summary. */}
