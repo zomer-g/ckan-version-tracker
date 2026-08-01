@@ -529,7 +529,13 @@ def suggest(model: list[dict], question: str, k: int = 8) -> list[dict]:
             hits = _prefix_hits(cs, ent["title"])
             if hits:
                 out.append({
-                    "entity": ent, "score": 0.5, "approximate": True,
+                    # Tier-weighted like everything else: a curated public
+                    # dataset guess outranks an auto-derived idx layer guess.
+                    # Measured case — גרש is the root of both גירושין and מגרש,
+                    # and without the weight five idx "מגרש" map layers buried
+                    # the one public divorce table at the bottom of the list.
+                    "entity": ent, "score": round(0.5 * _tier_weight(ent), 3),
+                    "approximate": True,
                     "matched": {"title": hits, "summary": [], "columns": [], "values": []},
                 })
         out.sort(key=lambda r: (-r["score"], len(r["entity"]["title"])))
@@ -538,13 +544,51 @@ def suggest(model: list[dict], question: str, k: int = 8) -> list[dict]:
 
 _PREFIX_MIN = 4
 
+# Hebrew derivation moves letters at BOTH ends of the root, so a shared prefix
+# alone misses noun↔verb pairs entirely: "גירושין" (noun) and "התגרשו" (hitpael
+# verb) share the root ג-ר-ש and not a single leading character. Observed live —
+# a user searched "גירושין לפי יישוב" and the divorce-BY-LOCALITY table ("מספר
+# זוגות שהתגרשו לפי מקום מגורים") was invisible while a year-based one matched.
+#
+# The skeleton strips the movable material and keeps the consonantal core:
+# binyan prefixes (הת/מת/נ/ת/מ/ה), plural/derivational suffixes, and the vowel
+# letters י/ו inside the word. גירושין→גרש, התגרשו→גרש, שמאויות→שמא, שמאות→שמא.
+# Three consonants collide in Hebrew (root homonymy: גרש divorce/expel/lot), so
+# skeleton equality lives ONLY in the approximate tier — labelled a guess,
+# offered only when exact matches are scarce, for a human to reject.
+_VERB_PREFIXES_2 = ("הת", "מת")
+_VERB_PREFIXES_1 = ("מ", "נ", "ת", "ה")
+_STEM_SUFFIXES = ("יות", "ות", "ים", "ין", "י", "ו", "ה", "ם", "ן")
+
+
+def _skeleton(w: str) -> str:
+    for p in _VERB_PREFIXES_2:
+        if w.startswith(p) and len(w) - 2 >= 3:
+            w = w[2:]
+            break
+    else:
+        for p in _VERB_PREFIXES_1:
+            if w.startswith(p) and len(w) - 1 >= 3:
+                w = w[1:]
+                break
+    for s in sorted(_STEM_SUFFIXES, key=len, reverse=True):
+        if w.endswith(s) and len(w) - len(s) >= 2:
+            w = w[: -len(s)]
+            break
+    if not w:
+        return w
+    return w[0] + "".join(ch for ch in w[1:] if ch not in "יו")
+
 
 def _prefix_hits(content: set[str], title: str) -> list[str]:
-    """Title words sharing a >=4-char prefix with a question word.
+    """Title words that plausibly INFLECT a question word.
 
-    The cheapest thing that covers Hebrew's common inflections without a
-    morphological analyser. Both words must be at least that long, so short
-    words cannot collide their way into a match."""
+    Two deterministic signals, no morphological analyser:
+      * a shared >=4-char prefix (שמאויות ~ שמאות) — same-end inflection;
+      * an equal consonant skeleton of >=3 chars (גירושין ~ התגרשו) — the
+        noun↔verb case, where the shared material is the root, not a prefix.
+    Both words must be long enough that short words cannot collide their way in.
+    """
     out = []
     for w in set(tokens(title)):
         if len(w) < _PREFIX_MIN:
@@ -552,12 +596,16 @@ def _prefix_hits(content: set[str], title: str) -> list[str]:
         for c in content:
             if len(c) < _PREFIX_MIN or c == w:
                 continue
-            n = 0
+            shared = 0
             for a, b in zip(c, w):
                 if a != b:
                     break
-                n += 1
-            if n >= _PREFIX_MIN:
+                shared += 1
+            if shared >= _PREFIX_MIN:
+                out.append(w)
+                break
+            sk = _skeleton(c)
+            if len(sk) >= 3 and sk == _skeleton(w):
                 out.append(w)
                 break
     return sorted(out)

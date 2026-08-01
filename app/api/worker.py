@@ -27,6 +27,7 @@ from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services import append_store, sampling_runs, source_registry
+from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
@@ -63,6 +64,36 @@ def _verify_worker_key(request: Request):
 # worker-local call sites unchanged.
 _dataset_storage = storage.dataset_storage_target
 _use_r2 = storage.dataset_uses_r2
+
+
+def _require_file_backend(ds, kind: str) -> None:
+    """Refuse a FILE upload for a dataset that has nowhere to put one — saying
+    which of the two reasons it is.
+
+    A NEON-only dataset (storage plan ``neon``) archives its rows in the append
+    DB and writes no file snapshot, so ``odata_dataset_id`` is null BY DESIGN
+    and R2 is not its backend. The upload endpoints used to fold that into the
+    not-found check — ``404 "Dataset not found or no storage backend"`` for a
+    dataset that plainly exists — and the worker, which retries only on 5xx,
+    reported the instant 4xx to the operator as a probable server OOM or a
+    deploy in progress. Two conditions deserve two answers: the caller now gets
+    409 with the actual reason, and "not found" means not found.
+
+    Note that /upload-csv does NOT call this: rows are exactly what a NEON-only
+    dataset CAN take (see the neon branch there).
+    """
+    if ds.odata_dataset_id or _use_r2(ds):
+        return
+    if not storage.dataset_stores_files(ds):
+        raise HTTPException(status_code=409, detail=(
+            f"NEON-only dataset has no file store for {kind} — its archive is "
+            f"the queryable row table, not files. Switch the storage plan to "
+            f"r2 / r2+neon if this version needs to keep files."
+        ))
+    raise HTTPException(status_code=409, detail=(
+        f"Dataset has no storage backend for {kind}: no ODATA mirror, and R2 "
+        f"is not configured for it."
+    ))
 
 
 def _poll_scraper_config(ds, task=None) -> dict:
@@ -712,45 +743,35 @@ def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> 
     )
 
 
-async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
-    """Stream a version's R2 CSV into the dataset's NEON table in batches.
+async def _neon_stream_load_file(
+    table: str, path: str, *, delete_after: bool = False,
+) -> int:
+    """Stream a CSV file on local disk into ``table``, batch by batch. Returns
+    the number of rows appended.
 
-    Used for the >50MB out-of-band CSV path (e.g. registries Cosmetics,
-    ~60k rows / ~58MB CSV). Parsing the whole file into rows at once
-    (parse_csv → 60k dicts) OOMs / times out the 512MB OVER dyno inside
-    the push-version request — which surfaced as a 502. Instead: download
-    the object to a temp file, free the bytes, then csv.DictReader-stream
-    it in fixed batches, inserting each batch and dropping it. Memory stays
-    bounded to one batch. append_store stores everything as text and dedups
-    on row_hash (ON CONFLICT DO NOTHING), so a partial run interrupted by a
-    dyno recycle is safely resumed by the next poll. Best-effort throughout.
+    Parsing a whole file into rows at once (parse_csv → N dicts) OOMs / times
+    out the 512MB OVER dyno; csv-streaming it in fixed batches, inserting each
+    and dropping it, keeps memory bounded to one batch no matter the size —
+    which is what makes the multi-GB corpora (mavat entities: ~2.78M rows /
+    777MB plain CSV) survivable at all. append_store stores everything as text
+    and dedups on row_hash (ON CONFLICT DO NOTHING), so a run interrupted
+    halfway is safely re-run.
 
-    Runs off the request path (scheduled via asyncio.create_task) so
-    push-version returns immediately and the version is created regardless.
+    Raises on failure; the callers below decide how loud that is.
     """
     from app.services import append_store
-    tmp = None
     BATCH = 5000
     try:
-        fd, tmp = _tempfile.mkstemp(suffix=".csv", prefix="neon-load-")
-        _os.close(fd)
-        # Stream straight to disk (boto3 managed transfer, constant memory).
-        # get_object_bytes() would materialise the WHOLE object in RAM first —
-        # survivable for the ~58MB case this was written for, fatal on the
-        # multi-GB index CSVs (the largest in the corpus is 3.58 GB) on a 512MB
-        # dyno.
-        if not await storage_client.download_to_file(r2_key, tmp):
-            return
         cols: list[str] = []
         batch: list[dict] = []
         ensured = False
         total = 0
-        with open(tmp, "r", encoding="utf-8-sig", newline="") as fh:
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             reader = _csv.reader(fh)
             try:
                 header = next(reader)
             except StopIteration:
-                return
+                return 0
             # Clip + dedup on BYTE length: Postgres truncates identifiers at 63
             # bytes, so two long Hebrew headers sharing a prefix would otherwise
             # collapse into one column and fail the CREATE TABLE.
@@ -762,7 +783,7 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
                     if (raw or "").strip() and safe[i] != "_id"]
             cols = [safe[i] for i in keep]
             if not cols:
-                return
+                return 0
             for row in reader:
                 batch.append({safe[i]: (row[i] if i < len(row) else "") or ""
                               for i in keep})
@@ -780,6 +801,40 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
             total += await append_store.append_rows(
                 table, cols, batch, key_col=None, keyless=True,
             )
+        return total
+    finally:
+        if delete_after:
+            try:
+                _os.remove(path)
+            except OSError:
+                pass
+
+
+async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
+    """Stream a version's R2 CSV into the dataset's NEON table.
+
+    Used for the >50MB out-of-band CSV path (e.g. registries Cosmetics,
+    ~60k rows / ~58MB CSV) of a dataset that ALSO keeps files. Download the
+    object to a temp file, free the bytes, then stream it in (see
+    _neon_stream_load_file). Best-effort: this is the queryable MIRROR of an
+    archive whose authority is the R2 object, so a failure is a warning and the
+    next poll re-loads it.
+
+    Runs off the request path (scheduled via asyncio.create_task) so
+    push-version returns immediately and the version is created regardless.
+    """
+    tmp = None
+    try:
+        fd, tmp = _tempfile.mkstemp(suffix=".csv", prefix="neon-load-")
+        _os.close(fd)
+        # Stream straight to disk (boto3 managed transfer, constant memory).
+        # get_object_bytes() would materialise the WHOLE object in RAM first —
+        # survivable for the ~58MB case this was written for, fatal on the
+        # multi-GB index CSVs (the largest in the corpus is 3.58 GB) on a 512MB
+        # dyno.
+        if not await storage_client.download_to_file(r2_key, tmp):
+            return
+        total = await _neon_stream_load_file(table, tmp)
         logger.info("NEON stream-load: +%d rows into %s from %s", total, table, r2_key)
     except Exception as e:
         logger.warning("NEON stream-load failed for %s (non-fatal): %s", table, e)
@@ -789,6 +844,46 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
                 _os.remove(tmp)
             except OSError:
                 pass
+
+
+# A NEON-only dataset's out-of-band CSV, handed from /upload-csv to
+# /push-version. It is NOT a storage reference — there is no file store to put
+# it in — just the temp path the uploaded bytes were streamed to, which
+# push-version then streams into the append table and deletes. It never reaches
+# resource_mappings: a NEON-only version's content is its append_table key.
+_NEON_CSV_PREFIX = "neon-csv:"
+
+
+def _neon_csv_ref(path: str) -> str:
+    return f"{_NEON_CSV_PREFIX}{path}"
+
+
+def _is_neon_csv_ref(value) -> bool:
+    return isinstance(value, str) and value.startswith(_NEON_CSV_PREFIX)
+
+
+def _neon_csv_path(value: str) -> str:
+    return value[len(_NEON_CSV_PREFIX):]
+
+
+async def _neon_only_load_csv(table: str, path: str, res_name: str) -> None:
+    """Load a NEON-only dataset's uploaded CSV into its append table.
+
+    Unlike the R2 mirror above, this IS the archive: nothing else holds these
+    rows. So a failure is an error, not a warning — the version exists and its
+    table is empty or partial, and only the next poll (which re-scrapes and
+    re-uploads; the append is idempotent on row_hash) will fill it.
+    """
+    try:
+        total = await _neon_stream_load_file(table, path, delete_after=True)
+        logger.info("NEON-only archive: +%d rows into %s for %s",
+                    total, table, res_name)
+    except Exception as e:
+        logger.error(
+            "NEON-only archive FAILED for %s → %s: %s. The version exists but "
+            "its rows are missing or partial; the next poll re-loads them.",
+            res_name, table, e,
+        )
 
 
 async def _run_consolidate_bg(ds_id: uuid.UUID, dedup_key: str) -> None:
@@ -840,6 +935,14 @@ def _is_doc_bundle(value: str) -> bool:
 # below exists to catch.
 _FILE_AGGREGATE_KEYS = ("_geojson", "_gpkg", "_parquet", "_zip", "_zip_parts")
 
+# What counts as content having landed. The row archive is not a file, but for a
+# NEON-only dataset it is the ONLY thing a version holds — there is no named CSV
+# mapping to count, because there is no file store to put one in. Without this
+# the guard below reads a fully-loaded 36,784-row version as "nothing landed".
+# (``append_table`` was already counted, by accident of not starting with an
+# underscore; ``_append_tables`` — the multi-resource shape — was not.)
+_LANDED_KEYS = _FILE_AGGREGATE_KEYS + tuple(sorted(ROW_ARCHIVE_KEYS))
+
 
 # The scraper's verdict that a source is GONE, not merely unreachable. For
 # GovMap it is reached only after the catalog was fetched successfully and the
@@ -884,10 +987,10 @@ def _import_warning_for(new_engine: str | None, previous_engines: list[str],
 def _landed_resource_count(resource_mappings: dict) -> int:
     """How many resources actually made it into this version — the counterpart
     to the push's `expected`. Counts every source-named resource plus the
-    underscore aggregates that hold files."""
+    underscore aggregates that hold content (files, or the NEON row archive)."""
     return sum(
         1 for k, v in (resource_mappings or {}).items()
-        if v and (not k.startswith("_") or k in _FILE_AGGREGATE_KEYS)
+        if v and (not k.startswith("_") or k in _LANDED_KEYS)
     )
 
 
@@ -1104,7 +1207,13 @@ async def push_version(
     if is_append and latest is not None:
         seen_keys = list((latest.resource_mappings or {}).get("_appendonly_seen", []) or [])
 
-    if ds.odata_dataset_id or _use_r2(ds):
+    # A NEON-only dataset (storage plan 'neon') has no file backend at all — no
+    # ODATA mirror, not R2 — and its rows ARE the archive, so it has to enter
+    # this block too. It used not to: every tabular resource fell straight
+    # through to the empty-version guard below, which is why no NEON-only
+    # scraper dataset could publish a version, at any size.
+    _stores_files = storage.dataset_stores_files(ds)
+    if ds.odata_dataset_id or _use_r2(ds) or not _stores_files:
         from app.services.snapshot_service import _timestamp
         from app.services.csv_parser import (
             batch_records, records_to_csv_bytes, parse_csv,
@@ -1122,10 +1231,20 @@ async def push_version(
         # from the stored CSV bytes (parse_csv) so the row_hash dedup is
         # identical whether the rows arrived inline or as an out-of-band
         # >50MB CSV. Best-effort: a NEON failure must never fail the version.
+        # ``dataset_archives_neon`` — not the raw ``archive_neon`` flag — so the
+        # NEON-ONLY plan (storage_backend='neon', which sets no such flag) is
+        # covered by the same predicate the CKAN poll path and every reader use.
         _archive_neon = bool(
-            append_store.is_configured()
-            and (ds.scraper_config or {}).get("archive_neon")
+            append_store.is_configured() and storage.dataset_archives_neon(ds)
         )
+        if not _stores_files and not _archive_neon:
+            # Nothing else can hold this dataset's data. Say so here rather than
+            # letting the empty-version guard report "all pushes failed (no
+            # detail)".
+            push_errors.append(
+                "NEON-only dataset, but the append DB is unavailable "
+                "(APPEND_DATABASE_URL) — there is nowhere to put the rows"
+            )
 
         # ONE NEON TABLE PER TABULAR RESOURCE, once a version carries more than
         # one. A scraper version's resources are separate CSVs on R2 precisely

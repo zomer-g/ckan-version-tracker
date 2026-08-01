@@ -229,6 +229,13 @@
     {
       "q": "כמה מיטות אשפוז יש בכל בית חולים",
       "expect": "refused"
+    },
+    {
+      "q": "גירושין לפי יישוב",
+      "expect": "any",
+      "retrieval_title": "שהתגרשו",
+      "suggest_only": true,
+      "note": "REAL USER SEARCH 2026-08-02: found only the by-year divorce table; the by-locality one (מספר זוגות שהתגרשו) shares the root but no surface prefix. Covered by the consonant-skeleton fallback — a labelled guess, so it is asserted on the SHORTLIST (recall@5), not on top-1."
     }
   ]
 }

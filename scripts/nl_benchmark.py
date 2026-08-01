@@ -165,7 +165,9 @@ def run_retrieval(args) -> dict:
     model = [e for e in (sm._entity_from(r, None) for r in cat
                          if not r["table"].startswith("over_")) if e]
     spec = json.loads(Path(args.set).read_text(encoding="utf-8"))
-    cases = [c for c in spec.get("gold", []) if c.get("retrieval_title") or c.get("expect") == "refused"]
+    cases = [c for c in spec.get("gold", [])
+             if (c.get("retrieval_title") or c.get("expect") == "refused")
+             and not c.get("suggest_only")]
     cases += [{**c, "part": "structural"} for c in spec.get("structural", [])
               if c.get("expect") == "refused" and c.get("q")]
 
@@ -191,6 +193,7 @@ def run_retrieval(args) -> dict:
     # not "be right". Cases expecting a refusal are excluded — for a suggester
     # there is nothing to refuse, a person simply sees nothing they want.
     findable = [c for c in cases if c.get("retrieval_title")]
+    findable += [c for c in spec.get("gold", []) if c.get("suggest_only")]
     at5 = 0
     for c in findable:
         titles = [h["entity"]["title"] for h in sm.suggest(model, c["q"], k=5)]

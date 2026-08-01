@@ -642,3 +642,43 @@ def test_a_dataset_never_offers_to_join_with_itself():
 def test_a_dataset_without_a_locality_can_join_nothing():
     no_geo = {**ENTITY, "geo_dims": []}
     assert sm.joinable_with([no_geo], "append_business") == []
+
+
+# ── consonant-skeleton fallback (noun↔verb inflection) ───────────────────────
+# Found by a real user search: "גירושין לפי יישוב" missed "מספר זוגות שהתגרשו
+# לפי מקום מגורים" — the noun and the hitpael verb share the root ג-ר-ש and not
+# one leading character, so the 4-char-prefix rule cannot see the pair.
+
+def test_skeleton_strips_binyan_prefix_suffix_and_vowel_letters():
+    assert sm._skeleton("גירושין") == sm._skeleton("התגרשו") == "גרש"
+    assert sm._skeleton("שמאויות") == sm._skeleton("שמאות") == "שמא"
+
+
+def test_noun_and_verb_forms_of_a_root_match_as_a_guess():
+    ent = {**ENTITY, "key": "append_divorce", "geo_dims": [],
+           "title": "מספר זוגות שהתגרשו לפי מקום מגורים של הזוג",
+           "summary": "", "synonyms": []}
+    hits = sm.suggest([ent], "גירושין לפי יישוב")
+    assert hits and hits[0]["entity"]["key"] == "append_divorce"
+    assert hits[0]["approximate"] is True
+
+
+def test_root_homonyms_rank_by_tier_so_the_curated_guess_wins():
+    """גרש is the root of both גירושין (divorce) and מגרש (a lot). A skeleton
+    cannot tell them apart — root homonymy is real — so the tie is broken the
+    same way everything else is: a curated public dataset outranks an
+    auto-derived idx map layer. Measured live: without this, five מגרש layers
+    buried the one divorce table at the bottom of the guess tier."""
+    divorce = {**ENTITY, "key": "append_divorce", "geo_dims": [], "synonyms": [],
+               "title": "מספר זוגות שהתגרשו לפי מקום מגורים", "summary": ""}
+    lot = {**divorce, "key": "idx_lot", "schema": "idx", "title": "מגרש משחקים"}
+    hits = sm.suggest([lot, divorce], "גירושין")
+    assert [h["entity"]["key"] for h in hits[:2]] == ["append_divorce", "idx_lot"]
+
+
+def test_short_skeletons_cannot_collide_into_a_match():
+    """שנים → skeleton שנ (2 chars): below the 3-char minimum, so short words
+    cannot pull in unrelated tables through the fallback."""
+    ent = {**ENTITY, "key": "append_years", "title": "לוח שנים", "geo_dims": [],
+           "summary": "", "synonyms": []}
+    assert not sm.suggest([ent], "שניצל")
