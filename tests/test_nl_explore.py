@@ -22,7 +22,9 @@ from tests.test_semantic_model import ENTITY
 OTHER = {**ENTITY, "key": "append_springs", "title": "מעיינות - ספיקה מדודה",
          "summary": "", "synonyms": [], "rows": 900}
 NO_GEO = {**ENTITY, "key": "append_nogeo", "title": "בלי יישוב", "geo_dims": []}
-MODEL = [ENTITY, OTHER, NO_GEO]
+SHAMAUT = {**ENTITY, "key": "append_shamaut", "title": "מאגר נתוני שמאות מכריעה",
+           "summary": "", "synonyms": [], "geo_dims": []}
+MODEL = [ENTITY, OTHER, NO_GEO, SHAMAUT]
 
 
 @pytest.fixture(autouse=True)
@@ -68,12 +70,18 @@ def test_suggest_reaches_no_model_and_spends_no_budget(client, monkeypatch):
 
 def test_suggest_marks_a_prefix_guess_as_approximate(client):
     """Hebrew morphology gets a fallback so the flow is never a dead end — but
-    a guess shown as a match is how the previous version went wrong."""
-    r = client.post("/api/nl/suggest", json={"q": "כמה מעיינותיים"})
-    for s in r.json()["suggestions"]:
-        if s.get("approximate"):
-            assert s["score"] < 1.0
-            break
+    a guess shown as a match is how the previous version went wrong.
+
+    The first version of this test looped over suggestions and asserted inside
+    an `if s.get("approximate")` — so when the endpoint DROPPED the flag (the
+    actual launch bug, caught in live verification), the if never ran and the
+    test passed vacuously. Now it asserts the flagged entry exists."""
+    r = client.post("/api/nl/suggest", json={"q": "כמה שמאויות מכריעות היו"})
+    hits = r.json()["suggestions"]
+    approx = [s for s in hits if s["table"] == "append_shamaut"]
+    assert approx, "the prefix fallback should have surfaced the inflected match"
+    assert approx[0]["approximate"] is True
+    assert "דמיון בכתיב" in approx[0]["why"], "a guess must not read like an exact match"
 
 
 def test_suggest_rejects_empty_and_overlong_input(client):

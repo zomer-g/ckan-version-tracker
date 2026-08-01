@@ -235,6 +235,16 @@ async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Dep
 
     model = await semantic_model.build_model(db)
     hits = semantic_model.suggest(model, q, k=max(1, min(body.limit, 20)))
+
+    def _why(h: dict) -> str:
+        # A prefix-fallback hit is a GUESS, and its reason must say so — the
+        # generic wording ("בשם המאגר: שמאות") reads as an exact name match,
+        # which is precisely the overclaim the fallback must not make.
+        if h.get("approximate"):
+            words = ", ".join(h["matched"].get("title") or [])
+            return f"דמיון בכתיב בלבד ({words}) — ייתכן שאינו קשור"
+        return semantic_model.match_reason(h["matched"])
+
     return {
         "query": q,
         "total_entities": len(model),
@@ -247,7 +257,12 @@ async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Dep
                 "rows": h["entity"].get("rows"),
                 "score": h["score"],
                 "matched": h["matched"],
-                "why": semantic_model.match_reason(h["matched"]),
+                "why": _why(h),
+                # Found by spelling similarity, not by a real token match. The
+                # UI badges these; dropping the flag (the launch bug — caught in
+                # live verification, missed by a vacuous test) showed guesses as
+                # confident matches.
+                "approximate": bool(h.get("approximate")),
                 # Whether step 4 (cross with another dataset) is available at all
                 # for this one — shown up front so the path is discoverable
                 # before the user has invested in choosing.
