@@ -639,7 +639,7 @@ _SQL_DENY = _re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|merge|call|do|vacuum|reindex)\b",
     _re.IGNORECASE,
 )
-def _strip_sql_comments(s: str) -> str:
+def _strip_sql_comments(s: str, *, blank_literals: bool = False) -> str:
     """Return the statement with its comments blanked out.
 
     Every guard below runs against this, not the raw text: comments never
@@ -649,6 +649,12 @@ def _strip_sql_comments(s: str) -> str:
 
     Comment starts are recognized only outside single-quoted strings, so a
     literal like 'a--b' keeps its content. Block comments nest, as in Postgres.
+
+    With ``blank_literals`` the contents of single-quoted strings are dropped
+    too (the quotes stay, so `= 'a;b'` becomes `= ''`). That "skeleton" is code
+    with the data removed — what the guards want to inspect, since a semicolon
+    or the word "update" inside a value is data and must not be read as either
+    a second statement or a write. See validate_readonly_sql.
     """
     out, i, n = [], 0, len(s)
     in_string = False
@@ -662,12 +668,15 @@ def _strip_sql_comments(s: str) -> str:
                 depth -= 1; i += 2; continue
             i += 1; continue
         if in_string:
-            out.append(c)
             # '' inside a string is an escaped quote, not the end of it.
-            if c == "'":
-                if nxt == "'":
-                    out.append(nxt); i += 2; continue
-                in_string = False
+            if c == "'" and nxt == "'":
+                if not blank_literals:
+                    out.append(c); out.append(nxt)
+                i += 2; continue
+            if c == "'":                      # the closing quote is kept either way
+                out.append(c); in_string = False; i += 1; continue
+            if not blank_literals:
+                out.append(c)
             i += 1; continue
         if c == "'":
             in_string = True; out.append(c); i += 1; continue
@@ -679,6 +688,18 @@ def _strip_sql_comments(s: str) -> str:
             depth = 1; i += 2; continue
         out.append(c); i += 1
     return "".join(out)
+
+
+# Literal syntaxes whose quoting rules the scanner above does NOT model: the
+# escape strings E'…' / U&'…' (where a backslash escapes the next character, so
+# E'a\'b' is one literal and not two) and dollar quoting ($tag$…$tag$). Where
+# one appears the scanner can lose track of where a literal ends, so blanking
+# literal contents there could hide real code. The guards then fall back to
+# their older, stricter reading — literals are checked as if they were code —
+# which over-rejects but never under-rejects. The `(?<![\w$])` lookbehind keeps
+# ordinary text out: `date'2026-01-01'` and the `$` inside an identifier are not
+# escape strings.
+_LITERAL_SYNTAX_UNMODELLED = _re.compile(r"(?<![\w$])(?:[eu]&?'|\$[a-z0-9_]*\$)", _re.IGNORECASE)
 
 
 # ── Case-insensitive identifier help (shared by every Neon-backed SQL console) ─
@@ -853,15 +874,27 @@ def validate_readonly_sql(sql: str) -> str:
     message. Shared by run_readonly_sql and iter_sql_csv so both apply the exact
     same guards (single statement, SELECT/WITH only, no write/DDL keywords).
 
-    The guards inspect the statement with comments removed — comments never
-    execute, so prose inside them must not trip the ';' or write-keyword checks.
-    What is RETURNED (and run) is the original text, comments included."""
+    The guards inspect a SKELETON of the statement: comments removed, and the
+    contents of single-quoted literals blanked out. Neither is code — prose in a
+    comment never executes, and a value is data — so `WHERE "סטטוס" = 'update'`
+    and `WHERE "שם" = 'a;b'` are ordinary queries, not a write and not two
+    statements. What is RETURNED (and run) is the original text, comments and
+    values included.
+
+    A real ';' or write keyword still fails, because outside a literal it stays
+    in the skeleton. And the skeleton is not the security boundary: the READ
+    ONLY transaction and the SELECT-only DB role are — this only turns obvious
+    mistakes into a clear message early."""
     s = (sql or "").strip().rstrip(";").strip()
     if not s:
         raise ValueError("השאילתה ריקה")
     code = _strip_sql_comments(s).strip().rstrip(";").strip()
     if not code:
         raise ValueError("השאילתה ריקה")
+    # Values drop out of the skeleton only when their quoting is one this
+    # scanner understands; otherwise keep the stricter, literal-blind reading.
+    code = code if _LITERAL_SYNTAX_UNMODELLED.search(code) else (
+        _strip_sql_comments(s, blank_literals=True).strip().rstrip(";").strip())
     if ";" in code:
         raise ValueError("רק משפט יחיד מותר (ללא ';')")
     if not _SQL_STARTS_OK.match(code):

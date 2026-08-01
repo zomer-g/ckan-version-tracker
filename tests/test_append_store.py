@@ -165,3 +165,54 @@ def test_validate_readonly_sql_comments_cannot_smuggle_writes():
                 "-- only a comment\n"):
         with pytest.raises(ValueError):
             A.validate_readonly_sql(bad)
+
+
+def test_validate_readonly_sql_treats_string_literals_as_data():
+    # A value is not code. Real archive rows hold semicolons (free-text fields,
+    # multi-value cells) and words like "update" (status columns), and filtering
+    # on one used to be rejected with a message about statements or writes.
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE \"שם\" = 'a;b'")
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE \"סטטוס\" = 'update'")
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE x = 'drop; truncate'")
+    # '' is an escaped quote inside the literal, not its end — the rest of the
+    # value stays data (ג'ת and friends make this an everyday case here).
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE x = 'it''s; ok'")
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE x = 'ג''ת; delete'")
+    # the classic payload: escaped, it is entirely one literal and harmless
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE x = 'y''; DROP TABLE t; --'")
+
+
+def test_validate_readonly_sql_still_catches_code_outside_literals():
+    # Blanking literal contents must not blind the guards to the real thing:
+    # what sits OUTSIDE the quotes is still checked exactly as before.
+    import pytest
+    for bad in ("SELECT 'a;b'; DROP TABLE t",          # literal, then a real 2nd stmt
+                "SELECT * FROM t WHERE x = 'a' ; DELETE FROM t",
+                "SELECT 'update' FROM t; UPDATE t SET x = 1",
+                "SELECT * FROM t WHERE x = 'ok' AND y IN (SELECT 1) ; TRUNCATE t",
+                "UPDATE t SET x = 'select 1'",          # write keyword outside a literal
+                "SELECT * FROM t WHERE x = 'a' -- c\n; DROP TABLE t"):
+        with pytest.raises(ValueError):
+            A.validate_readonly_sql(bad)
+
+
+def test_validate_readonly_sql_keeps_the_strict_reading_for_unmodelled_quoting():
+    # E'…' and dollar quoting escape differently than the scanner models, so
+    # there the old literal-blind behaviour is kept: over-strict, never lax.
+    import pytest
+    for bad in (r"SELECT * FROM t WHERE x = E'a\'b; c'",
+                "SELECT * FROM t WHERE x = $$a;b$$"):
+        with pytest.raises(ValueError):
+            A.validate_readonly_sql(bad)
+    # …and an ordinary literal next to a typed one is not mistaken for E'…'
+    assert A.validate_readonly_sql("SELECT * FROM t WHERE d > date'2026-01-01' AND x = 'a;b'")
+
+
+def test_strip_sql_comments_blank_literals_skeleton():
+    # The skeleton keeps the quotes (so the SQL still reads as SQL) and drops
+    # only what is between them.
+    assert A._strip_sql_comments("SELECT 'a;b' /* c */ -- d", blank_literals=True).strip() \
+        == "SELECT ''"
+    assert A._strip_sql_comments("WHERE x = 'it''s'", blank_literals=True) == "WHERE x = ''"
+    # without the flag, literals are preserved verbatim (comment stripping only)
+    assert A._strip_sql_comments("SELECT 'a;b' -- d").strip() == "SELECT 'a;b'"
