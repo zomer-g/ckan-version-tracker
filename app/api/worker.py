@@ -2602,6 +2602,19 @@ async def update_progress(
     worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
     if worker_id:
         task.worker_id = worker_id
+    # Stamp the heartbeat EXPLICITLY. updated_at is what the stuck-task sweeper
+    # reads, and it is an ``onupdate`` — which fires only when an UPDATE is
+    # actually emitted. The worker's heartbeat thread posts an IDENTICAL payload
+    # every 30s (same phase, same percentage, same message), so between two
+    # progress messages SQLAlchemy sees an empty change set, emits nothing, and
+    # the timestamp freezes while the worker is demonstrably alive and calling.
+    #
+    # That is invisible while a scrape reports often. It becomes fatal on a long
+    # one: the Jerusalem register's plan axis takes ~5 minutes per chunk, so the
+    # message stood still past the 10-minute cutoff and a 13-hour run was about
+    # to be auto-failed as a crashed worker. The heartbeat exists precisely to
+    # prevent that, and it was being discarded by the ORM.
+    task.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
     return {"status": "ok"}
