@@ -355,3 +355,36 @@ def test_an_unprofiled_table_still_yields_a_usable_entity():
 def test_a_table_with_only_internal_columns_is_dropped():
     rec = {**CATALOG_REC, "columns": [{"name": "row_hash", "type": "text"}]}
     assert sm._entity_from(rec, None) is None
+
+
+# ── the refuse-vs-coerce line ────────────────────────────────────────────────
+# This module raises when a bad value could change WHICH rows are returned, and
+# coerces when it could only change how they are presented. Getting that line
+# wrong in either direction is a real failure: coercing a bad filter would
+# answer a different question silently, and refusing a bad sort order turns a
+# correct answer into "אין לי תשובה". The second one shipped and was caught in
+# production on the primary happy path.
+
+def test_an_unknown_sort_order_is_coerced_not_refused():
+    _, clean = sm.validate_query(MODEL, {
+        "entity": "append_business", "dimensions": ["יישוב"],
+        "order": {"by": "count", "dir": "desc"}})
+    assert clean["order"]["by"] == "measure"   # the sensible default for a grouping
+
+
+def test_an_unknown_sort_order_on_an_ungrouped_query_is_also_fine():
+    _, clean = sm.validate_query(MODEL, {
+        "entity": "append_business", "order": {"by": "whatever"}})
+    assert clean["order"]["by"] == ""
+
+
+@pytest.mark.parametrize("q", [
+    {"entity": "append_business", "dimensions": ["לא_קיים"]},
+    {"entity": "append_business", "filters": [{"field": "לא_קיים", "op": "=", "value": "x"}]},
+    {"entity": "append_business", "measures": ["sum:לא_קיים"]},
+])
+def test_things_that_change_the_answer_still_refuse(q):
+    """The other side of the line — coercion must not have leaked into the
+    fields whose value decides what gets counted."""
+    with pytest.raises(SemanticError):
+        sm.validate_query(MODEL, q)

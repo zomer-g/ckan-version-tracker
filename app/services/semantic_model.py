@@ -469,10 +469,19 @@ def validate_query(model: list[dict], q: dict) -> tuple[dict, dict]:
     if enrich and not ent.get("geo_dims"):
         raise SemanticError("אין בטבלה זו עמודת יישוב/רשות שניתן להעשיר לפיה")
 
+    # Sort order is COERCED, not validated. The line this module draws is
+    # whether a bad value could change the answer: an unknown field, filter or
+    # measure would, so those raise. A sort order only changes the order rows
+    # are displayed in — refusing the whole query over it converts a correct
+    # answer into "אין לי תשובה", which is the worse outcome. Observed live:
+    # a model returned order.by "count" and a perfectly good "כמה X לפי Y" was
+    # rejected outright.
     order = q.get("order") or {}
-    order_by = str(order.get("by") or ("measure" if measures else ""))
-    if order_by not in ("measure", "dimension", ""):
-        raise SemanticError("סדר המיון חייב להיות measure או dimension")
+    raw_by = str(order.get("by") or "").strip().lower()
+    if raw_by not in ("measure", "dimension", ""):
+        logger.info("semantic_model: coercing unknown order.by %r to the default", raw_by)
+        raw_by = ""
+    order_by = raw_by or ("measure" if group else "")
     order_dir = "asc" if str(order.get("dir") or "desc").lower() == "asc" else "desc"
 
     try:
