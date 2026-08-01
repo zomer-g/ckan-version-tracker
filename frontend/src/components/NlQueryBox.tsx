@@ -3,6 +3,20 @@ import { nlQuery } from "../api/client";
 import type { NlQueryResponse, NlExample } from "../api/client";
 
 /**
+ * ⚠ CURRENTLY UNMOUNTED. Nothing renders this component.
+ *
+ * The free-text ANSWER box was retired on 2026-08-01 after production
+ * measurement: it found the right dataset 87% of the time but correctly refused
+ * only 56% of the time when none fit, so out-of-scope questions came back as
+ * confident answers from unrelated datasets. /data/explore replaced it — same
+ * retrieval, used to suggest rather than to decide.
+ *
+ * The file is kept, not deleted, because the backend it talks to
+ * (/api/nl/query, the semantic layer, the escalation ladder, the budgets) is
+ * intact and re-enableable from /admin#nl. Deleting the only UI would make that
+ * switch meaningless. Re-mount it in DataSqlPage if the answer path is ever
+ * revived.
+ *
  * "שאלה בשפה חופשית" — ask in Hebrew, get a query.
  *
  * Sits above the SQL editor on /data and is the entry point for people who

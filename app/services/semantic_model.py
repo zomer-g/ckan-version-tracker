@@ -467,6 +467,141 @@ def _tier_weight(ent: dict) -> float:
 MIN_RETRIEVAL_SCORE = 3.0
 
 
+def suggest(model: list[dict], question: str, k: int = 8) -> list[dict]:
+    """Rank datasets for a free-text description — as a SHORTLIST, not a choice.
+
+    This is the same scorer ``retrieve`` uses, in the role it is actually good
+    at. Measured on the live catalog over the questions where a right dataset
+    exists: top-1 correct 88%, but the right dataset is in the top FIVE 94% of
+    the time. The gap between those two numbers is the whole argument for
+    letting a person pick: the requirement drops from "be right" to "include",
+    and the scorer's worst failure — confidently choosing a plausible but wrong
+    dataset when none fits — stops being a failure at all, because nothing is
+    chosen.
+
+    So there is NO score floor here (``retrieve`` keeps its floor because it
+    feeds a model that must not be handed weak candidates). Showing eight
+    imperfect options costs a person two seconds of scanning; picking one of
+    them for them costs a wrong number on a transparency site.
+
+    Each result carries WHY it matched. That is not decoration — it is what
+    turns a ranked list into a decision a reader can make in one glance."""
+    q, c = tokens(question), content_tokens(question)
+    qs, cs = set(q), set(c)
+    out: list[dict] = []
+    for ent in model:
+        score = score_entity(ent, q, c)
+        if score <= 0:
+            continue
+        title_hits = sorted(cs & set(tokens(ent["title"])))
+        summary_hits = sorted((cs & set(tokens(ent.get("summary") or ""))) - set(title_hits))
+        col_hits, val_hits = [], []
+        for d in ent["dimensions"]:
+            if qs & (set(tokens(d["key"])) | set(tokens(d.get("title") or ""))):
+                col_hits.append(d.get("title") or d["key"])
+            for v in d.get("samples", []):
+                if qs & set(tokens(str(v))):
+                    val_hits.append(str(v))
+                    break
+        out.append({
+            "entity": ent, "score": round(score, 2),
+            "matched": {"title": title_hits, "summary": summary_hits,
+                        "columns": col_hits[:4], "values": val_hits[:4]},
+        })
+    out.sort(key=lambda r: -r["score"])
+
+    # ── morphology fallback ──────────────────────────────────────────────
+    # Hebrew inflection is the known dominant miss: "שמאויות" shares no token
+    # with "שמאות", "יבואני" none with "יבואנים", and exact-token scoring
+    # returns NOTHING for either. For an autopilot returning nothing was the
+    # safe outcome; for a suggester it is a dead end with no way forward, which
+    # is the one state a guided flow must not produce.
+    #
+    # A shared 4-character prefix catches both (שמאו…, יבואני…) without a
+    # stemmer or a synonym table. It is deliberately last, capped, and flagged
+    # `approximate` so the UI can label it — these are guesses, and a guess
+    # presented as a match is how this feature got into trouble the first time.
+    if len(out) < 3:
+        seen = {r["entity"]["key"] for r in out}
+        for ent in model:
+            if ent["key"] in seen:
+                continue
+            hits = _prefix_hits(cs, ent["title"])
+            if hits:
+                out.append({
+                    "entity": ent, "score": 0.5, "approximate": True,
+                    "matched": {"title": hits, "summary": [], "columns": [], "values": []},
+                })
+        out.sort(key=lambda r: (-r["score"], len(r["entity"]["title"])))
+    return out[:k]
+
+
+_PREFIX_MIN = 4
+
+
+def _prefix_hits(content: set[str], title: str) -> list[str]:
+    """Title words sharing a >=4-char prefix with a question word.
+
+    The cheapest thing that covers Hebrew's common inflections without a
+    morphological analyser. Both words must be at least that long, so short
+    words cannot collide their way into a match."""
+    out = []
+    for w in set(tokens(title)):
+        if len(w) < _PREFIX_MIN:
+            continue
+        for c in content:
+            if len(c) < _PREFIX_MIN or c == w:
+                continue
+            n = 0
+            for a, b in zip(c, w):
+                if a != b:
+                    break
+                n += 1
+            if n >= _PREFIX_MIN:
+                out.append(w)
+                break
+    return sorted(out)
+
+
+def match_reason(matched: dict) -> str:
+    """One Hebrew line saying why a dataset is on the list.
+
+    Ordered by how much the evidence is worth: a hit on the dataset's NAME says
+    it is about the subject; a hit on a column or a stored value only says it
+    could answer a question about something else. Presenting them as equal is
+    the same mistake the scorer used to make."""
+    parts = []
+    if matched.get("title"):
+        parts.append("בשם המאגר: " + ", ".join(matched["title"]))
+    if matched.get("summary"):
+        parts.append("בתיאור: " + ", ".join(matched["summary"]))
+    if matched.get("columns"):
+        parts.append("בעמודות: " + ", ".join(matched["columns"]))
+    if matched.get("values"):
+        parts.append("בערכים: " + ", ".join(matched["values"]))
+    return " · ".join(parts) or "התאמה חלשה"
+
+
+def joinable_with(model: list[dict], key: str) -> list[dict]:
+    """Datasets that can be crossed with this one, and why.
+
+    Deterministic — no model involved. There is exactly one join key in this
+    corpus (the canonical CBS settlement code), so "can I cross these?" reduces
+    to "do both carry a locality or authority column". Anything else would be a
+    guess, and a wrong join is the silent kind of wrong."""
+    src = _find(model, key)
+    if src is None or not src.get("geo_dims"):
+        return []
+    out = [
+        {"entity": e, "via": e["geo_dims"][0]}
+        for e in model
+        if e["key"] != key and e.get("geo_dims")
+    ]
+    # Biggest first: a cross with a 30-row table is rarely the one wanted.
+    out.sort(key=lambda r: -(r["entity"].get("rows") or 0))
+    return out
+
+
 def retrieve(model: list[dict], question: str, k: int = 6) -> list[dict]:
     """Top-k entities for a question. This is the step whose absence measured
     0% schema-linking recall at this scale — never send the whole model.

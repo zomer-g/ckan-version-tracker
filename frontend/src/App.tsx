@@ -28,6 +28,7 @@ import CbsPage from "./pages/CbsPage";
 import CbsFeedbackPage from "./pages/CbsFeedbackPage";
 import KnessetDbPage from "./pages/KnessetDbPage";
 import DataSqlPage from "./pages/DataSqlPage";
+import DataExplorePage from "./pages/DataExplorePage";
 import DataGuidePage from "./pages/DataGuidePage";
 import SettlementNormalizePage from "./pages/SettlementNormalizePage";
 // Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
@@ -122,6 +123,7 @@ export default function App() {
             }
           />
           <Route path="/data" element={<DataSqlPage />} />
+          <Route path="/data/explore" element={<DataExplorePage />} />
           <Route path="/data/guide" element={<DataGuidePage />} />
           <Route path="/data/normalize" element={<SettlementNormalizePage />} />
           <Route path="/knesset" element={<KnessetDbPage />} />

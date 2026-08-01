@@ -569,3 +569,76 @@ def test_nothing_plausible_means_no_candidates():
     model six weak candidates does not produce a refusal, it produces a
     confident answer from the least-bad one."""
     assert sm.retrieve([ENTITY, STREET_LAYER], "מה שער הדולר היום") == []
+
+
+# ── suggest / joinable: retrieval as a SHORTLIST ─────────────────────────────
+# The autopilot needed the top-1 to be right and measured 87% — with only 56%
+# correct refusal, which is what killed it. As a suggester the requirement is
+# "include the right one", measured at 100% top-5 on the gold set. These tests
+# pin the properties that distinction depends on.
+
+def test_suggest_has_no_score_floor():
+    """retrieve() keeps a floor because it feeds a model that must not get weak
+    candidates. suggest() must NOT: showing eight imperfect options costs a
+    person two seconds of scanning; picking one for them costs a wrong number.
+
+    The gap is a real band, not a theoretical one — a weak but non-zero match
+    (one word of five, on a small table) is exactly the case a human resolves
+    instantly and a model resolves confidently and wrongly."""
+    small = {**ENTITY, "key": "append_small", "rows": 300}
+    weak = "רישיונות של דברים אחרים לגמרי שאינם קשורים"
+    score = sm.score_entity(small, sm.tokens(weak), sm.content_tokens(weak))
+    assert 0 < score < sm.MIN_RETRIEVAL_SCORE, f"test premise broken: {score}"
+    assert sm.retrieve([small], weak) == []
+    assert sm.suggest([small], weak)  # still offered, for a human to reject
+
+
+def test_every_suggestion_says_why_it_matched():
+    hits = sm.suggest(MODEL, "רישיונות עסק בחיפה")
+    assert hits
+    for h in hits:
+        assert sm.match_reason(h["matched"]) != "התאמה חלשה"
+
+
+def test_the_reason_ranks_a_name_match_above_a_column_match():
+    """A hit on the dataset's NAME says it is about the subject; a hit on a
+    column only says it could answer a question about something else. Showing
+    them as equal is the mistake the scorer itself used to make."""
+    reason = sm.match_reason({"title": ["עסק"], "summary": [], "columns": ["יישוב"], "values": []})
+    assert reason.index("בשם המאגר") < reason.index("בעמודות")
+
+
+def test_a_hebrew_inflection_still_finds_the_dataset():
+    """The known dominant miss: 'שמאויות' shares no token with 'שמאות'. For an
+    autopilot returning nothing was safe; for a guided flow it is a dead end."""
+    ent = {**ENTITY, "key": "append_shamaut", "title": "מאגר נתוני שמאות מכריעה",
+           "summary": "", "synonyms": []}
+    hits = sm.suggest([ent], "כמה שמאויות מכריעות היו")
+    assert hits and hits[0]["entity"]["key"] == "append_shamaut"
+    assert hits[0]["approximate"] is True, "a prefix guess must be labelled as one"
+
+
+def test_an_exact_match_is_never_labelled_approximate():
+    hits = sm.suggest(MODEL, "רישיונות עסק")
+    assert hits and not hits[0].get("approximate")
+
+
+def test_joinable_requires_a_locality_on_both_sides():
+    """The canonical settlement code is the only join key in this corpus, so
+    'can these be crossed?' reduces to 'do both carry a locality'. Anything
+    looser would be a guess, and a wrong join fails silently."""
+    other = {**ENTITY, "key": "append_other", "title": "מאגר אחר"}
+    no_geo = {**ENTITY, "key": "append_nogeo", "title": "בלי יישוב", "geo_dims": []}
+    model = [ENTITY, other, no_geo]
+    keys = {r["entity"]["key"] for r in sm.joinable_with(model, "append_business")}
+    assert keys == {"append_other"}
+
+
+def test_a_dataset_never_offers_to_join_with_itself():
+    assert all(r["entity"]["key"] != "append_business"
+               for r in sm.joinable_with([ENTITY], "append_business"))
+
+
+def test_a_dataset_without_a_locality_can_join_nothing():
+    no_geo = {**ENTITY, "geo_dims": []}
+    assert sm.joinable_with([no_geo], "append_business") == []

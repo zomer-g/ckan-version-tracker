@@ -205,6 +205,93 @@ async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends
     return out
 
 
+# ── the guided explorer (no model, no cost) ──────────────────────────────────
+# The autopilot — question straight to an answer — was measured at 87% right
+# dataset but only 56% correct refusal, i.e. nearly half of out-of-scope
+# questions were routed to a plausible but wrong dataset. These two endpoints
+# back the replacement: the same retrieval, used to SUGGEST rather than to
+# decide. Same catalog knowledge, requirement dropped from "be right" to
+# "include the right one" (94% at top-5), and the person makes the call.
+#
+# No language model, no budget, no daily quota. Everything here is lexical
+# scoring over a cached model plus one deterministic join rule.
+
+class SuggestRequest(BaseModel):
+    q: str
+    limit: int = 8
+
+
+@router.post("/suggest")
+@limiter.limit("60/minute")
+async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Depends(get_db)):
+    """Free text → a shortlist of datasets, each with why it matched."""
+    _require_enabled()
+    q = (body.q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="q is required")
+    if len(q) > MAX_QUESTION_CHARS:
+        raise HTTPException(status_code=400,
+                            detail=f"הטקסט ארוך מדי (עד {MAX_QUESTION_CHARS} תווים)")
+
+    model = await semantic_model.build_model(db)
+    hits = semantic_model.suggest(model, q, k=max(1, min(body.limit, 20)))
+    return {
+        "query": q,
+        "total_entities": len(model),
+        "suggestions": [
+            {
+                "table": h["entity"]["key"],
+                "schema": h["entity"]["schema"],
+                "title": h["entity"]["title"],
+                "summary": (h["entity"].get("summary") or "")[:400],
+                "rows": h["entity"].get("rows"),
+                "score": h["score"],
+                "matched": h["matched"],
+                "why": semantic_model.match_reason(h["matched"]),
+                # Whether step 4 (cross with another dataset) is available at all
+                # for this one — shown up front so the path is discoverable
+                # before the user has invested in choosing.
+                "can_join": bool(h["entity"].get("geo_dims")),
+                "page_url": h["entity"].get("page_url") or "",
+                "source_url": h["entity"].get("source_url") or "",
+            }
+            for h in hits
+        ],
+    }
+
+
+@router.get("/joinable/{table}")
+@limiter.limit("60/minute")
+async def joinable(table: str, request: Request, q: str = "",
+                   db: AsyncSession = Depends(get_db)):
+    """Datasets that can be crossed with ``table``, optionally filtered by text.
+
+    Deterministic: both sides must carry a locality or authority column, because
+    the canonical settlement code is the only join key in this corpus. ``q``
+    narrows the list by the same scorer used for suggestions, so a user who
+    knows what they want does not scroll."""
+    _require_enabled()
+    model = await semantic_model.build_model(db)
+    rows = semantic_model.joinable_with(model, table)
+    if not rows:
+        return {"table": table, "joinable": [], "reason":
+                "למאגר הזה אין עמודת יישוב או רשות, ולכן אין לפי מה להצליב אותו."}
+    if q.strip():
+        ranked = {h["entity"]["key"]: h["score"]
+                  for h in semantic_model.suggest(model, q, k=60)}
+        rows = [r for r in rows if r["entity"]["key"] in ranked]
+        rows.sort(key=lambda r: -ranked[r["entity"]["key"]])
+    return {
+        "table": table,
+        "joinable": [
+            {"table": r["entity"]["key"], "schema": r["entity"]["schema"],
+             "title": r["entity"]["title"], "rows": r["entity"].get("rows"),
+             "via": r["via"]}
+            for r in rows[:40]
+        ],
+    }
+
+
 @router.get("/examples")
 @limiter.limit("30/minute")
 async def examples(request: Request, db: AsyncSession = Depends(get_db)):

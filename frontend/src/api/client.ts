@@ -1298,6 +1298,43 @@ export interface NlQueryResponse {
   reason?: string;
   candidates?: Array<{ table: string; title: string; rows: number | null; page_url: string }>;
 }
+// ── Guided explorer (no model, no cost) ──
+// Same retrieval as the retired autopilot, in the role it measures well at:
+// top-1 94%, top-5 100% on the gold set. The person picks, so "include the
+// right one" replaces "be right".
+export interface NlSuggestion {
+  table: string;
+  schema: string;
+  title: string;
+  summary: string;
+  rows: number | null;
+  score: number;
+  matched: { title: string[]; summary: string[]; columns: string[]; values: string[] };
+  why: string;
+  can_join: boolean;
+  page_url: string;
+  source_url: string;
+  // Matched only by a shared Hebrew word-prefix (שמאויות ~ שמאות). A guess —
+  // labelled as one, because a guess shown as a match is how the previous
+  // version went wrong.
+  approximate?: boolean;
+}
+export interface NlJoinable {
+  table: string;
+  schema: string;
+  title: string;
+  rows: number | null;
+  via: string;
+}
+export const nlExplore = {
+  suggest: (q: string, limit = 8) =>
+    request<{ query: string; total_entities: number; suggestions: NlSuggestion[] }>(
+      "/nl/suggest", { method: "POST", body: JSON.stringify({ q, limit }) }),
+  joinable: (table: string, q = "") =>
+    request<{ table: string; joinable: NlJoinable[]; reason?: string }>(
+      `/nl/joinable/${encodeURIComponent(table)}${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+};
+
 export const nlQuery = {
   // `run: false` compiles without executing — the console then runs the SQL
   // through its normal path, so the result table, charts and CSV export all

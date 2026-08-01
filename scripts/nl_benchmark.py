@@ -186,7 +186,20 @@ def run_retrieval(args) -> dict:
     print("\n" + "-" * 62)
     print(f"retrieval top-1 correct: {passed}/{len(cases)}"
           f"  ({round(100 * passed / len(cases)) if cases else 0}%)")
+    # recall@5 is the number the guided explorer actually depends on: the user
+    # picks from a shortlist, so the requirement is "include the right one",
+    # not "be right". Cases expecting a refusal are excluded — for a suggester
+    # there is nothing to refuse, a person simply sees nothing they want.
+    findable = [c for c in cases if c.get("retrieval_title")]
+    at5 = 0
+    for c in findable:
+        titles = [h["entity"]["title"] for h in sm.suggest(model, c["q"], k=5)]
+        at5 += any(c["retrieval_title"] in t for t in titles)
+    if findable:
+        print(f"suggester recall@5     : {at5}/{len(findable)}"
+              f"  ({round(100 * at5 / len(findable))}%)   <- the metric the explorer needs")
     out = {"summary": {"mode": "retrieval", "cases": len(cases), "passed": passed,
+                       "recall_at_5": at5, "findable": len(findable),
                        "entities": len(model)}, "results": rows}
     if args.save:
         Path(args.save).parent.mkdir(parents=True, exist_ok=True)

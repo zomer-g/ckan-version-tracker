@@ -11,7 +11,6 @@ import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
 import QuickChartBuilder from "../components/QuickChartBuilder";
 import FilterBuilder from "../components/FilterBuilder";
-import NlQueryBox from "../components/NlQueryBox";
 import ProfilePanel from "../components/ProfilePanel";
 import JoinBuilder from "../components/JoinBuilder";
 import DataTabs from "../components/DataTabs";
@@ -781,9 +780,18 @@ export default function DataSqlPage() {
             ))}
           </select>
         </div>
-        {/* Ask in Hebrew. Compiles server-side to the SQL below, which stays
-            visible and editable — the box is a way in, not a replacement. */}
-        <NlQueryBox onUseSql={useSql} />
+        {/* The free-text ANSWER box that used to sit here is retired — it
+            found the right dataset 87% of the time but correctly refused only
+            56%, so out-of-scope questions came back as confident answers from
+            unrelated datasets. Its retrieval now powers the guided explorer,
+            where a person picks from a shortlist instead. */}
+        <div className="text-sm" style={{ marginBottom: "0.6rem", padding: "0.45rem 0.7rem",
+                                          background: "var(--bg-muted, #f8fafc)", borderRadius: 6 }}>
+          לא בטוחים באיזה מאגר להשתמש?{" "}
+          <Link to="/data/explore" style={{ color: "var(--primary, #0f766e)", fontWeight: 600 }}>
+            תארו מה אתם מחפשים ונציע מאגרים →
+          </Link>
+        </div>
         <SqlHelpNote casing="preserve" />
         <SchemaReference
           tables={sqlSchemaTables}
