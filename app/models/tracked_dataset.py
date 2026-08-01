@@ -44,6 +44,20 @@ class TrackedDataset(Base):
     # archive matters MOST, so these datasets must stay listed and readable.
     # `status='duplicate'` hides a row; this one is meant to be seen.
     source_gone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A reason to distrust the LATEST version's contents, in reader-facing
+    # Hebrew. NULL = no known problem. Set when a scrape "succeeds" by every
+    # count we have and still produces something a reader would be misled by —
+    # measured case: קווי גובה 50 ס"מ came back with 93,866 of 93,866 declared
+    # features, matching the source exactly, having replaced 93,436 contour
+    # LINES with points. Row counts cannot see that; a reader downloading it
+    # would not either.
+    #
+    # Two sources feed it: the worker can declare one in scrape_metadata
+    # (`quality_warning`), and push-version derives one from the version history
+    # when an engine downgrade happens. Cleared as soon as a version lands with
+    # neither.
+    import_warning: Mapped[str | None] = mapped_column(Text)
+    import_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Subset of source resource IDs to mirror. NULL = legacy "track all".
     resource_ids: Mapped[list[str] | None] = mapped_column(JSONB)
     # [{id,name,format}, …] resources that exist at the source but aren't

@@ -1542,6 +1542,7 @@ async def admin_datasets(
     storage: str | None = None,
     source_type: str | None = None,
     source_gone: str | None = None,
+    import_warning: str | None = None,
     limit: int = 25,
     offset: int = 0,
     user: User = Depends(get_admin_user),
@@ -1582,6 +1583,12 @@ async def admin_datasets(
     ]
     if source_type:
         conds.append(TrackedDataset.source_type == source_type)
+    if import_warning:
+        w = import_warning.strip().lower()
+        if w in ("only", "1", "true", "yes"):
+            conds.append(TrackedDataset.import_warning.isnot(None))
+        elif w in ("exclude", "0", "false", "no"):
+            conds.append(TrackedDataset.import_warning.is_(None))
     if source_gone:
         g = source_gone.strip().lower()
         if g in ("only", "1", "true", "yes"):

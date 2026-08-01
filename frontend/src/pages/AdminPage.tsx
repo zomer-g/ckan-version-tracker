@@ -21,6 +21,7 @@ import {
 } from "../api/client";
 import ArchiveChips from "../components/ArchiveChips";
 import SourceGoneNotice from "../components/SourceGoneNotice";
+import ImportWarningNotice from "../components/ImportWarningNotice";
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
@@ -194,6 +195,7 @@ export default function AdminPage() {
   const [dsStorage, setDsStorage] = useState("");
   const [dsSourceType, setDsSourceType] = useState("");
   const [dsSourceGone, setDsSourceGone] = useState("");
+  const [dsImportWarn, setDsImportWarn] = useState("");
   const [dsOffset, setDsOffset] = useState(0);
   const [dsLimit, setDsLimit] = useState(25);
   const [loading, setLoading] = useState(true);
@@ -270,7 +272,7 @@ export default function AdminPage() {
     loadDatasets();
     if (!sizes && !sizesLoading) loadSizes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dsQ, dsStorage, dsSourceType, dsSourceGone, dsOffset, dsLimit]);
+  }, [tab, dsQ, dsStorage, dsSourceType, dsSourceGone, dsImportWarn, dsOffset, dsLimit]);
 
   const loadTags = async () => {
     try {
@@ -536,6 +538,7 @@ export default function AdminPage() {
         storage: dsStorage || undefined,
         source_type: dsSourceType || undefined,
         source_gone: dsSourceGone || undefined,
+        import_warning: dsImportWarn || undefined,
         limit: dsLimit,
         offset: dsOffset,
       });
@@ -1645,6 +1648,17 @@ export default function AdminPage() {
           <option value="exclude">רק מאגרים שהמקור שלהם קיים</option>
         </select>
         <select
+          value={dsImportWarn}
+          onChange={(e) => { setDsOffset(0); setDsImportWarn(e.target.value); }}
+          aria-label="סינון לפי חשש לייבוא פגום"
+          title="מאגרים שהגרסה האחרונה שלהם חשודה כלא תקינה — למשל גאומטריה שהתנוונה למרות מספר רשומות מלא"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+        >
+          <option value="">איכות ייבוא: הכל</option>
+          <option value="only">⚠ רק חשודים לייבוא פגום</option>
+          <option value="exclude">רק ללא חשש</option>
+        </select>
+        <select
           value={dsLimit}
           onChange={(e) => { setDsOffset(0); setDsLimit(Number(e.target.value)); }}
           aria-label="מאגרים בעמוד"
@@ -1700,7 +1714,7 @@ export default function AdminPage() {
         <div className="empty-state">
           {dsLoading
             ? "טוען…"
-            : dsQ || dsStorage || dsSourceType || dsSourceGone
+            : dsQ || dsStorage || dsSourceType || dsSourceGone || dsImportWarn
               ? "אין מאגרים התואמים לחיפוש"
               : "אין מאגרים פעילים"}
         </div>
@@ -1847,9 +1861,10 @@ export default function AdminPage() {
                     {/* Sits with the archive facts, above the per-source detail:
                         whether the source still exists changes how every other
                         line on this card should be read. */}
-                    {ds.source_gone_at && (
-                      <div style={{ marginTop: "0.3rem" }}>
+                    {(ds.source_gone_at || ds.import_warning) && (
+                      <div style={{ marginTop: "0.3rem", display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
                         <SourceGoneNotice goneAt={ds.source_gone_at} variant="chip" />
+                        <ImportWarningNotice warning={ds.import_warning} variant="chip" />
                       </div>
                     )}
                     {isCkanLike(ds.source_type) && (

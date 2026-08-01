@@ -419,6 +419,12 @@ class DatasetResponse(BaseModel):
     # only tells the reader that no further versions are coming, and that what
     # is here may be the last public copy.
     source_gone_at: str | None = None
+    # Reader-facing reason to distrust the LATEST version's contents (see
+    # TrackedDataset.import_warning). A perfect row count is not proof of a
+    # faithful import — a contour layer can come back complete and flattened
+    # to points. Null when there is no known problem.
+    import_warning: str | None = None
+    import_warning_at: str | None = None
     resource_ids: list[str] | None = None
     new_resources_at_source: list[dict] | None = None
     tags: list[TagBrief] = []
@@ -489,6 +495,8 @@ def build_dataset_response(
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
+        import_warning=ds.import_warning,
+        import_warning_at=ds.import_warning_at.isoformat() if ds.import_warning_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,
@@ -1512,6 +1520,8 @@ async def update_tracked(
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
+        import_warning=ds.import_warning,
+        import_warning_at=ds.import_warning_at.isoformat() if ds.import_warning_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
@@ -2465,6 +2475,8 @@ async def get_tracked_public(
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
         source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
+        import_warning=ds.import_warning,
+        import_warning_at=ds.import_warning_at.isoformat() if ds.import_warning_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],

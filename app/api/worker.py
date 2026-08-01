@@ -855,6 +855,35 @@ def _is_source_gone_error(error: str | None) -> bool:
     return bool(error) and _SOURCE_GONE_MARKER in error
 
 
+# Engines, most faithful first. `quadtree` is the point-identify fallback: it
+# still enumerates a layer, but today it cannot return real geometry — a layer
+# that lands on it after having used `spatial-analysis` comes back with its
+# lines and polygons flattened to points, at a row count that looks perfect.
+_FULL_ENGINES = ("spatial-analysis", "wfs-paging", "wfs-bbox", "arcgis")
+_FALLBACK_ENGINE = "quadtree"
+
+_ENGINE_DOWNGRADE_WARNING = (
+    "הגרסה האחרונה נסרקה במנוע הנפילה (quadtree) אחרי שגרסאות קודמות נסרקו "
+    "במנוע המלא, ולכן ייתכן שהגאומטריה בה מנוונת — למשל קווים או פוליגונים "
+    "שנשמרו כנקודות. מספר הרשומות עשוי להיות תקין ובכל זאת הצורות שגויות."
+)
+
+
+def _import_warning_for(new_engine: str | None, previous_engines: list[str],
+                        declared: str | None) -> str | None:
+    """Why a reader should distrust the version just pushed, or None.
+
+    `declared` is the worker's own verdict (scrape_metadata.quality_warning) and
+    always wins — the scraper is the only side that sees geometry. Failing that,
+    an engine downgrade is the one degradation OVER can detect on its own.
+    """
+    if declared and str(declared).strip():
+        return str(declared).strip()[:2000]
+    if new_engine == _FALLBACK_ENGINE and any(e in _FULL_ENGINES for e in previous_engines):
+        return _ENGINE_DOWNGRADE_WARNING
+    return None
+
+
 def _landed_resource_count(resource_mappings: dict) -> int:
     """How many resources actually made it into this version — the counterpart
     to the push's `expected`. Counts every source-named resource plus the
@@ -1629,6 +1658,30 @@ async def push_version(
     # "removed at the publisher" mark. Layer ids get renumbered and pages come
     # back; the badge must not outlive the outage that produced it.
     ds.source_gone_at = None
+
+    # Is there a reason to distrust what just landed? Evaluated per push and
+    # CLEARED when there isn't, so a warning never outlives the version that
+    # earned it.
+    _prev_engines = [
+        (v.change_summary or {}).get("scrape_metadata", {}).get("engine")
+        for v in (await db.execute(
+            select(VersionIndex)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
+            .order_by(VersionIndex.version_number.desc())
+            .limit(12)
+        )).scalars().all()
+        if v.version_number != next_version
+    ]
+    _warn = _import_warning_for(
+        (body.scrape_metadata or {}).get("engine"),
+        [e for e in _prev_engines if e],
+        (body.scrape_metadata or {}).get("quality_warning"),
+    )
+    if _warn != ds.import_warning:
+        ds.import_warning = _warn
+        ds.import_warning_at = datetime.now(timezone.utc) if _warn else None
+        if _warn:
+            logger.warning("Dataset %s (%s) flagged: %s", ds.id, ds.title, _warn[:120])
     await db.commit()
 
     # Refresh the ODATA package description so it carries current links back

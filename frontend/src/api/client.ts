@@ -195,6 +195,10 @@ export interface TrackedDataset {
   // source this dataset tracks; null while it is present. The archive stays
   // fully readable — this only means no further versions are coming.
   source_gone_at?: string | null;
+  /** Reader-facing reason to distrust the LATEST version's contents; null when
+   *  none. A complete row count does not prove a faithful import. */
+  import_warning?: string | null;
+  import_warning_at?: string | null;
   resource_ids: string[] | null;
   new_resources_at_source: Array<{ id: string; name?: string | null; format?: string | null }> | null;
   tags?: Tag[];
@@ -1795,6 +1799,8 @@ export const admin = {
       q?: string; storage?: string; source_type?: string;
       /** "only" = just the datasets whose source the publisher removed; "exclude" = hide them. */
       source_gone?: string;
+      /** "only" = just the datasets suspected of a faulty import; "exclude" = hide them. */
+      import_warning?: string;
       limit?: number; offset?: number;
     } = {},
   ) => {
@@ -1803,6 +1809,7 @@ export const admin = {
     if (opts.storage) p.set("storage", opts.storage);
     if (opts.source_type) p.set("source_type", opts.source_type);
     if (opts.source_gone) p.set("source_gone", opts.source_gone);
+    if (opts.import_warning) p.set("import_warning", opts.import_warning);
     if (opts.limit != null) p.set("limit", String(opts.limit));
     if (opts.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();

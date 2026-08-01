@@ -77,6 +77,10 @@ class DatasetSummary(BaseModel):
     # further versions are coming, and that what is here may be the last public
     # copy. Set only on a certain verdict — see TrackedDataset.source_gone_at.
     source_gone_at: str | None = None
+    # Reader-facing reason to distrust the LATEST version's contents; null when
+    # none. A complete row count does not prove a faithful import.
+    import_warning: str | None = None
+    import_warning_at: str | None = None
     resource_ids: list[str] | None  # subset of source resources, null=all
     new_resources_at_source: list[dict] | None  # source resources not yet picked
     version_count: int
@@ -234,6 +238,8 @@ def _dataset_summary(
         storage_mode=ds.storage_mode or "full_snapshot",
         last_error=ds.last_error,
         source_gone_at=ds.source_gone_at.isoformat() if ds.source_gone_at else None,
+        import_warning=ds.import_warning,
+        import_warning_at=ds.import_warning_at.isoformat() if ds.import_warning_at else None,
         resource_ids=ds.resource_ids,
         new_resources_at_source=ds.new_resources_at_source,
         version_count=version_count,

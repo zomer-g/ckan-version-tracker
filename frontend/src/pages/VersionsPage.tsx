@@ -13,6 +13,7 @@ import { useAuth } from "../auth/AuthContext";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import ArchiveChips from "../components/ArchiveChips";
 import SourceGoneNotice from "../components/SourceGoneNotice";
+import ImportWarningNotice from "../components/ImportWarningNotice";
 import SourceChip from "../components/SourceChip";
 import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
@@ -429,6 +430,15 @@ export default function VersionsPage() {
               not with the errors: it is not a malfunction on our side, it is
               the reason this archive is now the only copy. */}
           {dataset && <SourceGoneNotice goneAt={dataset.source_gone_at} />}
+          {/* Suspected faulty import. Separate from the "source removed" notice
+              on purpose: that one says no NEW data is coming, this one says the
+              data already here may be wrong. */}
+          {dataset && (
+            <ImportWarningNotice
+              warning={dataset.import_warning}
+              at={dataset.import_warning_at}
+            />
+          )}
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "1rem" }}>
           {isAppend && datasetId && (
