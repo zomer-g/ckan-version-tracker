@@ -855,32 +855,29 @@ def _is_source_gone_error(error: str | None) -> bool:
     return bool(error) and _SOURCE_GONE_MARKER in error
 
 
-# Engines, most faithful first. `quadtree` is the point-identify fallback: it
-# still enumerates a layer, but today it cannot return real geometry — a layer
-# that lands on it after having used `spatial-analysis` comes back with its
-# lines and polygons flattened to points, at a row count that looks perfect.
-_FULL_ENGINES = ("spatial-analysis", "wfs-paging", "wfs-bbox", "arcgis")
-_FALLBACK_ENGINE = "quadtree"
-
-_ENGINE_DOWNGRADE_WARNING = (
-    "הגרסה האחרונה נסרקה במנוע הנפילה (quadtree) אחרי שגרסאות קודמות נסרקו "
-    "במנוע המלא, ולכן ייתכן שהגאומטריה בה מנוונת — למשל קווים או פוליגונים "
-    "שנשמרו כנקודות. מספר הרשומות עשוי להיות תקין ובכל זאת הצורות שגויות."
-)
-
-
 def _import_warning_for(new_engine: str | None, previous_engines: list[str],
                         declared: str | None) -> str | None:
     """Why a reader should distrust the version just pushed, or None.
 
-    `declared` is the worker's own verdict (scrape_metadata.quality_warning) and
-    always wins — the scraper is the only side that sees geometry. Failing that,
-    an engine downgrade is the one degradation OVER can detect on its own.
+    ONLY the worker's own verdict (`scrape_metadata.quality_warning`) counts.
+    OVER cannot see geometry — it stores files it never parses — and an attempt
+    to infer degradation from the engine name was measured wrong in both
+    directions on 1.8.2026:
+
+      * גני ילדים fell from spatial-analysis to quadtree and was flagged, while
+        both versions hold the identical 20,465 POINTs. A kindergarten layer IS
+        points; the engine changed and the data did not.
+      * קווי גובה 50 ס"מ, the case that motivated the whole feature, went
+        unflagged — it has only ever used quadtree, so there was no "downgrade"
+        to spot, even though its 93,436 contour LINES had just become points.
+
+    A warning that fires on healthy data and stays silent on erased data is
+    worse than none, so the inference is gone. `new_engine`/`previous_engines`
+    are kept in the signature: the scraper's geometry gate is what will supply
+    real verdicts here, and a future rule may want the history.
     """
     if declared and str(declared).strip():
         return str(declared).strip()[:2000]
-    if new_engine == _FALLBACK_ENGINE and any(e in _FULL_ENGINES for e in previous_engines):
-        return _ENGINE_DOWNGRADE_WARNING
     return None
 
 
