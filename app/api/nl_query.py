@@ -307,6 +307,49 @@ async def joinable(table: str, request: Request, q: str = "",
     }
 
 
+class CrossRequest(BaseModel):
+    left: str
+    right: str
+
+
+@router.post("/cross")
+@limiter.limit("30/minute")
+async def cross(request: Request, body: CrossRequest, db: AsyncSession = Depends(get_db)):
+    """Two dataset keys → the fan-trap-safe cross SQL, ready for the console.
+
+    This closes the explorer's step 4. The compiler existed and was tested from
+    the day joins shipped, but nothing invoked it — clicking a join candidate
+    only navigated to the other dataset, silently dropping the first one.
+
+    Deterministic end to end: the only join key is the canonical settlement
+    code, each side is aggregated to it BEFORE the join (a row-level join on a
+    shared locality multiplies the sides — 100 businesses and 5 springs in one
+    town would count as 500), and the result is FULL OUTER so a settlement
+    present in only one dataset survives, since that is usually the interesting
+    row. No model, no budget; validation raises SemanticError on any pair that
+    lacks a locality on either side."""
+    _require_enabled()
+    model = await semantic_model.build_model(db)
+    try:
+        entity, clean = semantic_model.validate_query(model, {
+            "entity": body.left,
+            "measures": ["count"],
+            "dimensions": [],
+            "filters": [],
+            "join": {"entity": body.right, "measures": ["count"]},
+        })
+        sql = semantic_model.compile_sql(entity, clean, model)
+    except SemanticError as e:
+        # Not an exception path in the UI — "these two cannot be crossed" is an
+        # ordinary answer with a stated reason.
+        return {"ok": False, "reason": str(e)}
+    return {
+        "ok": True,
+        "sql": sql,
+        "explanation": semantic_model.explain_query(entity, clean, model),
+    }
+
+
 @router.get("/examples")
 @limiter.limit("30/minute")
 async def examples(request: Request, db: AsyncSession = Depends(get_db)):

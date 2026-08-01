@@ -1327,6 +1327,12 @@ export interface NlJoinable {
   via: string;
 }
 export const nlExplore = {
+  // Two dataset keys -> the fan-trap-safe cross SQL (each side pre-aggregated
+  // to the canonical settlement code, FULL OUTER join). ok:false + reason when
+  // the pair has no join key.
+  cross: (left: string, right: string) =>
+    request<{ ok: boolean; sql?: string; explanation?: string; reason?: string }>(
+      "/nl/cross", { method: "POST", body: JSON.stringify({ left, right }) }),
   suggest: (q: string, limit = 8) =>
     request<{ query: string; total_entities: number; suggestions: NlSuggestion[] }>(
       "/nl/suggest", { method: "POST", body: JSON.stringify({ q, limit }) }),

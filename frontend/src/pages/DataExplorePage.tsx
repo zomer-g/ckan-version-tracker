@@ -79,6 +79,8 @@ export default function DataExplorePage() {
   const [joinReason, setJoinReason] = useState("");
   const [joinFilter, setJoinFilter] = useState("");
   const [showJoin, setShowJoin] = useState(false);
+  const [crossBusy, setCrossBusy] = useState("");
+  const [crossErr, setCrossErr] = useState("");
 
   const search = useCallback(async (q: string) => {
     const s = q.trim();
@@ -349,14 +351,39 @@ export default function DataExplorePage() {
                         <span style={{ fontSize: "0.85rem", flex: "1 1 240px" }}>{j.title}</span>
                         <span style={chip("#f1f5f9", "#475569")}>{fmt(j.rows)} שורות</span>
                         <span className="text-muted" style={{ fontSize: "0.72rem" }}>לפי {j.via}</span>
-                        <Link to={`/data/explore?t=${encodeURIComponent(j.table)}`}
-                              style={{ fontSize: "0.78rem", color: "var(--primary)" }}>
+                        {/* THE button this step exists for. The first version
+                            only navigated to the other dataset — dropping the
+                            one already chosen — because the join compiler was
+                            never invoked from the UI. */}
+                        <button type="button" disabled={!!crossBusy}
+                          onClick={async () => {
+                            setCrossBusy(j.table); setCrossErr("");
+                            try {
+                              const r = await nlExplore.cross(picked, j.table);
+                              if (r.ok && r.sql) runInConsole(r.sql);
+                              else setCrossErr(r.reason || "לא ניתן להצליב את הזוג הזה");
+                            } catch (e) {
+                              setCrossErr(e instanceof Error ? e.message : "שגיאה בהצלבה");
+                            } finally { setCrossBusy(""); }
+                          }}
+                          style={{ fontSize: "0.78rem", padding: "0.2rem 0.7rem", borderRadius: 4,
+                                   border: "none", fontWeight: 600, cursor: "pointer",
+                                   background: "var(--primary, #0f766e)", color: "#fff",
+                                   opacity: crossBusy === j.table ? 0.6 : 1 }}>
+                          {crossBusy === j.table ? "מרכיב…" : "הצלב ↔"}
+                        </button>
+                        <Link to={`/data/explore?t=${encodeURIComponent(j.table)}&q=${encodeURIComponent(text)}`}
+                              style={{ fontSize: "0.75rem", color: "var(--primary)" }}
+                              title="לעבור לחקור את המאגר הזה במקום הנוכחי">
                           פתח →
                         </Link>
                       </div>
                     ))}
                   </div>
                 </>
+              )}
+              {crossErr && (
+                <div style={{ color: "#b91c1c", fontSize: "0.8rem", margin: "0.4rem 0" }}>{crossErr}</div>
               )}
               {joinable && !joinable.length && !joinReason && (
                 <div className="text-muted" style={{ fontSize: "0.85rem" }}>

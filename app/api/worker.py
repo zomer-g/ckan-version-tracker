@@ -1303,9 +1303,13 @@ async def push_version(
                 _neon_layout.append({"resource": res_name, "table": table})
             return table
 
-        async def _neon_load_from_csv(res_name: str, csv_bytes: bytes | None) -> None:
+        async def _neon_load_from_csv(res_name: str, csv_bytes: bytes | None) -> bool:
+            """Load one resource's rows from its CSV bytes. Returns whether they
+            landed — which the NEON-only path needs (there it is the version's
+            whole content), while the dual-write callers ignore it and stay
+            best-effort."""
             if not (_archive_neon and csv_bytes):
-                return
+                return False
             try:
                 n_fields, n_records = parse_csv(csv_bytes)
                 raw_ids = [f["id"] for f in n_fields if f.get("id")]
@@ -1316,24 +1320,30 @@ async def push_version(
                 renamed = {r: s for r, s in zip(raw_ids, safe_ids) if r != s}
                 cols = [s for r, s in zip(raw_ids, safe_ids) if r != "_id"]
                 if not (cols and n_records):
-                    return
+                    return False
                 if renamed:
                     n_records = [
                         {renamed.get(k, k): v for k, v in rec.items()}
                         for rec in n_records
                     ]
-                table = _record_neon_table(res_name)
+                table = _neon_table_for(res_name)
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
                 n = await append_store.append_rows(
                     table, cols, n_records, key_col=None, keyless=True,
                 )
+                # Stamped only once the rows are actually in: a table key on a
+                # version whose load threw would point every reader at a table
+                # that holds nothing of this version.
+                _record_neon_table(res_name)
                 logger.info(
                     "NEON archive: +%d new rows into %s for %s", n, table, res_name,
                 )
+                return True
             except Exception as e:
                 logger.warning(
                     "NEON archive failed for %s (non-fatal): %s", res_name, e,
                 )
+                return False
 
         for res in body.resources:
             # Pre-uploaded CSV files bypass record-level handling. Append mode
@@ -1343,6 +1353,29 @@ async def push_version(
             # for >100MB JSON payloads, where append-only with diffing isn't
             # the intended path anyway).
             pre_uploaded = csv_resource_ids.get(res.name)
+            if _is_neon_csv_ref(pre_uploaded):
+                # NEON-only, out-of-band CSV: /upload-csv had no file store to
+                # put it in, so it left the bytes on disk and handed back a
+                # reference. Stream them into the append table OFF the request
+                # path — 36,784 rows for the mavat register, millions for its
+                # landuse/entities corpora, which no request should hold open.
+                # No file mapping is written (there is no file); the version's
+                # content is the append_table key stamped below.
+                if not _archive_neon:
+                    push_errors.append(f"neon {res.name}: append DB unavailable")
+                    continue
+                _table = _record_neon_table(res.name)
+                _t = asyncio.create_task(
+                    _neon_only_load_csv(_table, _neon_csv_path(pre_uploaded), res.name)
+                )
+                _NEON_BG_TASKS.add(_t)
+                _t.add_done_callback(_NEON_BG_TASKS.discard)
+                logger.info(
+                    "NEON-only: queued the row load for %s (%d rows) → %s",
+                    res.name, res.row_count, _table,
+                )
+                continue
+
             if pre_uploaded:
                 resource_mappings[res.name] = pre_uploaded
                 odata_resource_ids.append(pre_uploaded)
@@ -1381,6 +1414,27 @@ async def push_version(
                 continue
 
             if not (res.records and res.fields):
+                continue
+
+            # NEON-only, rows inline (under the worker's out-of-band threshold):
+            # the same archive, with no file to write alongside it.
+            #
+            # Note this runs ahead of the append-only branch below, so a
+            # NEON-only dataset does NOT maintain `_appendonly_seen`: the append
+            # store already dedups on row_hash, and a seen-set of millions of
+            # hashes in jsonb is the exact shape that OOMed the poll path.
+            if not _stores_files:
+                if not _archive_neon:
+                    push_errors.append(f"neon {res.name}: append DB unavailable")
+                    continue
+                try:
+                    csv_bytes = records_to_csv_bytes(res.fields, res.records)
+                except Exception as e:
+                    logger.error("Failed to serialise %s for NEON: %s", res.name, e)
+                    push_errors.append(f"neon {res.name}: {e}")
+                    continue
+                if not await _neon_load_from_csv(res.name, csv_bytes):
+                    push_errors.append(f"neon {res.name}: row load failed")
                 continue
 
             # R2 backend: object stores have no datastore, so tabular records
@@ -1620,6 +1674,18 @@ async def push_version(
             except Exception as e:
                 logger.warning("Failed to rename pre-uploaded ZIP %s to v%d: %s",
                                zip_single, next_version, e)
+    elif body.zip_file and not _stores_files:
+        # A NEON-only dataset has nowhere to put attachments. Say it, rather
+        # than dropping them silently — for a version that carried ONLY a ZIP
+        # this is the difference between a named reason and the guard's
+        # "all pushes failed (no detail)".
+        push_errors.append(
+            "attachments dropped: a NEON-only dataset stores rows, not files"
+        )
+        logger.warning(
+            "Dropped a %d-file ZIP for %s — NEON-only plan has no file store",
+            len(body.attachments), ds.ckan_name,
+        )
     elif body.zip_file and (ds.odata_dataset_id or _use_r2(ds)):
         try:
             zip_bytes = base64.b64decode(body.zip_file.content_base64)
@@ -2032,8 +2098,9 @@ async def upload_zip(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
-        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    _require_file_backend(ds, "a ZIP attachment")
 
     from app.services.snapshot_service import _timestamp
     ts_zip = _timestamp()
@@ -2218,8 +2285,11 @@ async def upload_geojson(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
-        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    # Geometry genuinely needs a file store — a GeoJSON is not rows — so a
+    # NEON-only dataset is refused here, but told why.
+    _require_file_backend(ds, "a GeoJSON file")
 
     body_bytes = await file.read()
     from app.services.snapshot_service import _timestamp
@@ -2324,8 +2394,18 @@ async def upload_csv(
         select(TrackedDataset).where(TrackedDataset.id == ds_id)
     )
     ds = result.scalar_one_or_none()
-    if not ds or not (ds.odata_dataset_id or _use_r2(ds)):
-        raise HTTPException(status_code=404, detail="Dataset not found or no storage backend")
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    # NEON-only datasets ARE accepted here — rows are exactly what they archive,
+    # and this endpoint's real job for them is the load below. Only a dataset
+    # that stores files yet has no file store to store them in is refused.
+    if storage.dataset_stores_files(ds):
+        _require_file_backend(ds, "a CSV file")
+    elif not append_store.is_configured():
+        raise HTTPException(status_code=409, detail=(
+            "NEON-only dataset, but the append DB is unavailable "
+            "(APPEND_DATABASE_URL) — there is nowhere to put the rows."
+        ))
 
     is_gzip = (compression or "").lower() == "gzip"
 
@@ -2340,6 +2420,7 @@ async def upload_csv(
 
     tmp_dir = "/tmp/upload_csv"
     os.makedirs(tmp_dir, exist_ok=True)
+    _sweep_stale_uploads(tmp_dir)
     upload_id = _uuid.uuid4().hex[:8]
     gz_path = os.path.join(tmp_dir, f"{upload_id}.in.gz") if is_gzip else None
     csv_path = os.path.join(tmp_dir, f"{upload_id}.csv")
@@ -2400,6 +2481,30 @@ async def upload_csv(
             logger.warning("Bad fields_json — falling back to header inference")
     if not fields:
         fields = [{"id": col, "type": "text"} for col in header]
+
+    # ---- NEON-only: no file store, so the CSV stays on disk for push-version -
+    # There is no object to upload and no CKAN datastore to stream into: the
+    # rows are the archive. The load itself is deferred to push-version because
+    # only IT knows the full set of tabular resources this version carries, and
+    # that set decides whether the rows go into the dataset's merged table or
+    # its per-resource one (see neon_per_resource). Returning a path rather than
+    # loading here also keeps a multi-GB corpus off the request clock.
+    if not storage.dataset_stores_files(ds):
+        csv_size = os.path.getsize(csv_path)
+        _cleanup_paths(gz_path, None)  # the plain CSV is deliberately kept
+        logger.info(
+            "Held CSV (%d KB, ~%d rows) on disk for %s — NEON-only dataset, "
+            "rows load at push-version",
+            csv_size // 1024, row_count, ds.ckan_name,
+        )
+        return {
+            "resource_id": _neon_csv_ref(csv_path),
+            "size": csv_size,
+            "rows": row_count,
+            "compression": compression or "none",
+            "datastore": "deferred — rows stream into NEON at push-version",
+            "upload_mode": "neon",
+        }
 
     # ---- R2 backend: store the CSV as a downloadable object and return ----
     # Object stores have no datastore, so the CSV is served as a file (direct
@@ -2672,6 +2777,37 @@ def _cleanup_paths(*paths: str | None) -> None:
             continue
         try:
             os.remove(p)
+        except OSError:
+            pass
+
+
+# How long an upload temp file may sit unclaimed before it is swept.
+_UPLOAD_TMP_MAX_AGE_S = 6 * 3600
+
+
+def _sweep_stale_uploads(tmp_dir: str) -> None:
+    """Drop /upload-csv temp files nobody came back for.
+
+    Both deferred paths leave a file here on purpose — the datastore push runner
+    reads it on its next tick, and a NEON-only upload waits for push-version to
+    stream it in. If that second call never arrives (the worker died mid-run)
+    the file would sit until the dyno recycles, and these are not small files:
+    the mavat entities corpus is a 777MB plain CSV. Six hours is far longer than
+    any legitimate upload→claim gap, so nothing in flight is ever swept.
+    """
+    import os
+    import time
+    cutoff = time.time() - _UPLOAD_TMP_MAX_AGE_S
+    try:
+        names = os.listdir(tmp_dir)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(tmp_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                logger.info("Swept stale upload temp file %s", path)
         except OSError:
             pass
 

@@ -124,3 +124,39 @@ def test_every_joinable_row_names_the_column_it_joins_on(client):
     do is say which field on the other side it is matching."""
     for j in client.get("/api/nl/joinable/append_business").json()["joinable"]:
         assert j["via"]
+
+
+# ── /api/nl/cross: the button step 4 exists for ──────────────────────────────
+
+def test_cross_compiles_the_fan_trap_safe_join(client):
+    r = client.post("/api/nl/cross",
+                    json={"left": "append_business", "right": "append_springs"})
+    body = r.json()
+    assert body["ok"] is True
+    sql = body["sql"]
+    # The two invariants that make a locality cross honest: each side is
+    # aggregated to the canonical code BEFORE the join, and the join is FULL
+    # OUTER so a settlement present on one side only survives.
+    assert sql.count("GROUP BY 1") == 2
+    assert "FULL JOIN" in sql
+    assert sql.count("over_settlement_code") == 2
+    from app.services.append_store import validate_readonly_sql
+    validate_readonly_sql(sql)
+    assert body["explanation"]
+
+
+def test_cross_refuses_a_pair_without_a_join_key_with_a_reason(client):
+    body = client.post("/api/nl/cross",
+                       json={"left": "append_business", "right": "append_nogeo"}).json()
+    assert body["ok"] is False
+    assert body["reason"]
+
+
+def test_cross_reaches_no_model_and_spends_no_budget(client, monkeypatch):
+    called = []
+    monkeypatch.setattr("app.services.nl_query._ask_deepseek",
+                        lambda *a, **k: called.append("deepseek"))
+    monkeypatch.setattr("app.services.llm_budget.reserve_llm_call",
+                        lambda *a, **k: called.append("budget"))
+    client.post("/api/nl/cross", json={"left": "append_business", "right": "append_springs"})
+    assert called == []
