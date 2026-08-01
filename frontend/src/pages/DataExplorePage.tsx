@@ -65,6 +65,7 @@ export default function DataExplorePage() {
   // ── step 1: describe ──
   const [text, setText] = useState(params.get("q") || "");
   const [suggestions, setSuggestions] = useState<NlSuggestion[] | null>(null);
+  const [suggestId, setSuggestId] = useState<number | null>(null);
   const [searching, setSearching] = useState(false);
   const [err, setErr] = useState("");
 
@@ -89,6 +90,7 @@ export default function DataExplorePage() {
     try {
       const r = await nlExplore.suggest(s, 8);
       setSuggestions(r.suggestions);
+      setSuggestId(r.suggest_id);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "שגיאה בחיפוש");
     } finally { setSearching(false); }
@@ -126,6 +128,16 @@ export default function DataExplorePage() {
   }, [showJoin, picked, joinFilter]);
 
   function choose(table: string) {
+    // Report the pick before anything else: this row is the wild-recall metric
+    // and the synonym-candidate stream. Fire-and-forget — a logging failure
+    // must never interrupt the user's flow.
+    if (suggestId != null && suggestions) {
+      const idx = suggestions.findIndex((s) => s.table === table);
+      if (idx >= 0) {
+        void nlExplore.picked(suggestId, table, idx + 1,
+                              !!suggestions[idx].approximate);
+      }
+    }
     setPicked(table);
     setShowJoin(false); setJoinable(null);
     setParams((prev) => {

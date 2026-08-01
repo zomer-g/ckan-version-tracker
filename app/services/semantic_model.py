@@ -303,9 +303,38 @@ async def build_model(db: AsyncSession, *, use_cache: bool = True) -> list[dict]
     return await _build_uncached(db)
 
 
+async def _learned_synonyms(db: AsyncSession) -> dict[str, list[str]]:
+    """Admin-adopted synonyms, {table_key: [word, ...]}.
+
+    The learning loop for Hebrew morphology: a user types "גירושין", the
+    consonant-skeleton guess surfaces the "התגרשו" table, they pick it, an
+    admin adopts the pair from the click log — and from then on the word is an
+    EXACT subject match here, not a labelled guess. Adoption is manual so one
+    misclick cannot teach the scorer a wrong association silently."""
+    try:
+        from sqlalchemy import text as _sqltext
+        rows = (await db.execute(_sqltext(
+            "SELECT table_key, word FROM nl_synonyms"))).all()
+    except Exception:  # noqa: BLE001 — pre-migration ⇒ no learned synonyms yet
+        await _quiet_rollback(db)
+        return {}
+    out: dict[str, list[str]] = {}
+    for table_key, word in rows:
+        out.setdefault(table_key, []).append(word)
+    return out
+
+
+async def _quiet_rollback(db: AsyncSession) -> None:
+    try:
+        await db.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _build_uncached(db: AsyncSession) -> list[dict]:
     catalog = await data_catalog.build_catalog(db)
     profiles = await _all_profiles()
+    learned = await _learned_synonyms(db)
     out: list[dict] = []
     for rec in catalog:
         # OVER's own index tables are the JOIN target, not a question subject.
@@ -313,6 +342,9 @@ async def _build_uncached(db: AsyncSession) -> list[dict]:
             continue
         ent = _entity_from(rec, profiles.get((rec.get("schema") or "public", rec["table"])))
         if ent:
+            extra = learned.get(ent["key"])
+            if extra:
+                ent["synonyms"] = list(ent["synonyms"]) + extra
             out.append(ent)
     return out
 

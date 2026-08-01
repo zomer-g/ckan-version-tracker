@@ -160,3 +160,43 @@ def test_cross_reaches_no_model_and_spends_no_budget(client, monkeypatch):
                         lambda *a, **k: called.append("budget"))
     client.post("/api/nl/cross", json={"left": "append_business", "right": "append_springs"})
     assert called == []
+
+
+# ── click-through logging + learned synonyms ─────────────────────────────────
+# Every explorer use is a labelled example: the person who typed the words says
+# which dataset they meant. These tests pin the loop's safety properties — a
+# broken log must never break a search, and a pick cannot inject text.
+
+def test_a_logging_failure_never_fails_the_search(client, monkeypatch):
+    """The stub DB has no nl_suggest_log table, so the INSERT raises — and the
+    search must still return its suggestions, with suggest_id null."""
+    r = client.post("/api/nl/suggest", json={"q": "רישיונות עסק"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["suggestions"]
+    assert body["suggest_id"] is None
+
+
+def test_picked_is_update_only_and_never_errors(client):
+    """UPDATE against a row /suggest created: a bogus id writes nothing, and
+    the endpoint stays 200 — pick reporting is fire-and-forget by contract, so
+    the UI never has to handle its failure."""
+    r = client.post("/api/nl/picked",
+                    json={"suggest_id": 999999, "table": "append_x", "rank": 1})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
+def test_learned_synonyms_become_exact_subject_matches():
+    """The loop's payoff, at the scorer level: an adopted word ranks the dataset
+    as an EXACT match (score >= floor, not approximate) — where before adoption
+    the same word only surfaced it as a labelled skeleton guess."""
+    base = {**ENTITY, "key": "append_divorce", "geo_dims": [], "synonyms": [],
+            "title": "מספר זוגות שהתגרשו לפי מקום מגורים", "summary": ""}
+    before = sm.suggest([base], "גירושין")
+    assert before and before[0]["approximate"] is True
+
+    adopted = {**base, "synonyms": ["גירושין"]}
+    after = sm.suggest([adopted], "גירושין")
+    assert after and not after[0].get("approximate")
+    assert after[0]["score"] > before[0]["score"]

@@ -2418,7 +2418,7 @@ async def upload_csv(
     import tempfile
     import uuid as _uuid
 
-    tmp_dir = "/tmp/upload_csv"
+    tmp_dir = _UPLOAD_TMP_DIR
     os.makedirs(tmp_dir, exist_ok=True)
     _sweep_stale_uploads(tmp_dir)
     upload_id = _uuid.uuid4().hex[:8]
@@ -2780,6 +2780,10 @@ def _cleanup_paths(*paths: str | None) -> None:
         except OSError:
             pass
 
+
+# Where /upload-csv stages the uploaded bytes. Mirrored by the datastore push
+# runner (its TMP_DIR), which recovers a job's CSV from the same place.
+_UPLOAD_TMP_DIR = "/tmp/upload_csv"
 
 # How long an upload temp file may sit unclaimed before it is swept.
 _UPLOAD_TMP_MAX_AGE_S = 6 * 3600

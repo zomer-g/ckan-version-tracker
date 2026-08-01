@@ -1334,8 +1334,16 @@ export const nlExplore = {
     request<{ ok: boolean; sql?: string; explanation?: string; reason?: string }>(
       "/nl/cross", { method: "POST", body: JSON.stringify({ left, right }) }),
   suggest: (q: string, limit = 8) =>
-    request<{ query: string; total_entities: number; suggestions: NlSuggestion[] }>(
+    request<{ query: string; suggest_id: number | null; total_entities: number;
+              suggestions: NlSuggestion[] }>(
       "/nl/suggest", { method: "POST", body: JSON.stringify({ q, limit }) }),
+  // Fire-and-forget: which suggestion was chosen, at what rank. Every pick is a
+  // labelled example — the ground truth the hand-written benchmark cannot be.
+  picked: (suggest_id: number, table: string, rank: number, approximate = false) =>
+    request<{ ok: boolean }>("/nl/picked", {
+      method: "POST",
+      body: JSON.stringify({ suggest_id, table, rank, approximate }),
+    }).catch(() => undefined),
   joinable: (table: string, q = "") =>
     request<{ table: string; joinable: NlJoinable[]; reason?: string }>(
       `/nl/joinable/${encodeURIComponent(table)}${q ? `?q=${encodeURIComponent(q)}` : ""}`),

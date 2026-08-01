@@ -282,6 +282,74 @@ async def try_question(
     return out
 
 
+@router.get("/suggest-log")
+async def suggest_log(
+    request: Request,
+    limit: int = 100,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The explorer's click-through log, newest first, with the wild-recall
+    numbers derived from it: how often anything was picked at all, and at what
+    rank. This is the measurement loop the hand-written gold set cannot be —
+    every row is a real person saying (or declining to say) which dataset they
+    meant."""
+    rows = (await db.execute(text(
+        "SELECT id, created_at, query, suggestions_count, approximate_count, "
+        "top_table, picked_table, picked_rank, picked_approximate, picked_at "
+        "FROM nl_suggest_log ORDER BY id DESC LIMIT :limit"),
+        {"limit": max(1, min(limit, 500))})).mappings().all()
+    agg = (await db.execute(text(
+        "SELECT count(*) AS searches, "
+        "count(*) FILTER (WHERE picked_table IS NOT NULL) AS picked, "
+        "count(*) FILTER (WHERE picked_rank = 1) AS picked_at_1, "
+        "count(*) FILTER (WHERE suggestions_count = 0) AS empty "
+        "FROM nl_suggest_log"))).mappings().first()
+    # Synonym candidates: an APPROXIMATE suggestion that a user then picked is
+    # the scorer confessing it only guessed — and the user confirming the
+    # guess. Grouped so one admin click adopts the pair.
+    cands = (await db.execute(text(
+        "SELECT query, picked_table, count(*) AS n "
+        "FROM nl_suggest_log WHERE picked_approximate "
+        "GROUP BY query, picked_table ORDER BY n DESC LIMIT 40"))).mappings().all()
+    return {"rows": [dict(r) for r in rows], "totals": dict(agg or {}),
+            "synonym_candidates": [dict(c) for c in cands]}
+
+
+class AdoptSynonymBody(BaseModel):
+    word: str
+    table: str
+
+
+@router.post("/synonyms")
+async def adopt_synonym(
+    request: Request,
+    body: AdoptSynonymBody,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Adopt a typed-word → dataset pair as a permanent subject synonym.
+
+    From the next model rebuild (≤5 min TTL) the word is an exact match for
+    that dataset instead of a labelled guess. Manual by design: auto-learning
+    from clicks would let one misclick silently teach a wrong association."""
+    word = (body.word or "").strip()[:120]
+    if not word or not (body.table or "").strip():
+        raise HTTPException(status_code=400, detail="word and table are required")
+    await db.execute(text(
+        "INSERT INTO nl_synonyms (word, table_key, source) VALUES (:w, :t, 'admin') "
+        "ON CONFLICT (word, table_key) DO NOTHING"),
+        {"w": word, "t": body.table.strip()[:255]})
+    await db.commit()
+    from app.services import semantic_model
+    semantic_model.invalidate_model_cache()
+    logger.info("admin %s adopted synonym %r -> %s", user.email, word, body.table)
+    rows = (await db.execute(text(
+        "SELECT word, table_key, created_at FROM nl_synonyms ORDER BY id DESC LIMIT 50"
+    ))).mappings().all()
+    return {"synonyms": [dict(r) for r in rows]}
+
+
 @router.post("/prune")
 async def prune_log(
     request: Request,

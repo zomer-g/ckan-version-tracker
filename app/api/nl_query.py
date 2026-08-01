@@ -236,6 +236,26 @@ async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Dep
     model = await semantic_model.build_model(db)
     hits = semantic_model.suggest(model, q, k=max(1, min(body.limit, 20)))
 
+    # Best-effort click-through logging: every search is a labelled example
+    # waiting for its pick. A logging failure must never fail the search.
+    suggest_id = None
+    try:
+        from sqlalchemy import text as _sqltext
+        suggest_id = (await db.execute(_sqltext(
+            "INSERT INTO nl_suggest_log "
+            "(query, suggestions_count, approximate_count, top_table) "
+            "VALUES (:q, :n, :a, :top) RETURNING id"),
+            {"q": q, "n": len(hits),
+             "a": sum(1 for h in hits if h.get("approximate")),
+             "top": hits[0]["entity"]["key"] if hits else None})).scalar_one()
+        await db.commit()
+    except Exception:  # noqa: BLE001 — pre-migration or a DB blip
+        logger.debug("nl/suggest: log write failed", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _why(h: dict) -> str:
         # A prefix-fallback hit is a GUESS, and its reason must say so — the
         # generic wording ("בשם המאגר: שמאות") reads as an exact name match,
@@ -247,6 +267,7 @@ async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Dep
 
     return {
         "query": q,
+        "suggest_id": suggest_id,
         "total_entities": len(model),
         "suggestions": [
             {
@@ -305,6 +326,41 @@ async def joinable(table: str, request: Request, q: str = "",
             for r in rows[:40]
         ],
     }
+
+
+class PickRequest(BaseModel):
+    suggest_id: int
+    table: str
+    rank: int
+    approximate: bool = False
+
+
+@router.post("/picked")
+@limiter.limit("60/minute")
+async def picked(request: Request, body: PickRequest, db: AsyncSession = Depends(get_db)):
+    """Record which suggestion the user chose, and where it sat on the list.
+
+    This is the ground truth the benchmark cannot write for itself: the person
+    who typed the description saying which dataset they meant. From it the
+    admin panel derives recall-in-the-wild and synonym candidates. UPDATE-only
+    against a row /suggest created — an id that does not exist writes nothing,
+    so the endpoint cannot be used to inject free text."""
+    from sqlalchemy import text as _sqltext
+    try:
+        await db.execute(_sqltext(
+            "UPDATE nl_suggest_log SET picked_table = :t, picked_rank = :r, "
+            "picked_approximate = :a, picked_at = now() "
+            "WHERE id = :id AND picked_table IS NULL"),
+            {"t": body.table[:255], "r": max(1, min(body.rank, 50)),
+             "a": body.approximate, "id": body.suggest_id})
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.debug("nl/picked: write failed", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True}
 
 
 class CrossRequest(BaseModel):
