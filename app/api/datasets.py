@@ -81,11 +81,55 @@ class UpdateRequest(BaseModel):
     # now-fixed reason (e.g. an IAP-blocked attachment) without changing the
     # tracked-resource set or deleting version history.
     force_repoll: bool | None = None
+    # Re-point the dataset at a different source page. The reason this exists:
+    # GovMap renumbers layer ids, and its own failure message tells the admin to
+    # "update the dataset's lay= id" — an instruction the API had no way to
+    # carry out. Re-pointing keeps the dataset and its whole version history;
+    # only where the next scrape looks changes.
+    source_url: str | None = None
     # Admin escape hatch: merge arbitrary keys into scraper_config for
     # per-dataset engine tuning that has no dedicated field yet (e.g.
     # idf_recursion_root for a hub whose children sit under a sibling path).
     # Keys with a null value are removed. Shallow merge; other keys untouched.
     scraper_config_merge: dict | None = None
+
+
+async def _apply_source_url(ds: TrackedDataset, raw: str, db) -> str:
+    """Validate a re-point and return the URL to store.
+
+    Refuses to leave the dataset pointing at nothing (empty), and refuses a
+    GovMap URL with no parseable ``lay=`` — that would silently turn every
+    future scrape into "No 'lay' param in URL". CKAN datasets are addressed by
+    package name, not by a stored URL, so re-pointing them here is meaningless
+    and is rejected rather than quietly ignored.
+    """
+    url = (raw or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="source_url cannot be empty")
+    if ds.source_type == "ckan":
+        raise HTTPException(
+            status_code=400,
+            detail="A CKAN dataset is addressed by its package name, not by source_url",
+        )
+    if ds.source_type == "govmap":
+        from app.api.govmap import parse_govmap_url
+        if not parse_govmap_url(url):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid govmap.gov.il layer URL (missing lay=<id>)",
+            )
+    # Re-pointing at a layer some OTHER dataset already tracks would recreate
+    # exactly the duplicates migration 046 had to merge. Identity match, not
+    # string equality — for GovMap that means the layer id, however the URL
+    # around it is written.
+    existing = await find_datasets_for_url(db, url, strict=True)
+    clash = [d for d in existing if str(d["id"]) != str(ds.id)]
+    if clash:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That source is already tracked by: {clash[0]['title']}",
+        )
+    return url
 
 
 def _validate_storage_mode(mode: str) -> str:
@@ -1286,6 +1330,22 @@ async def update_tracked(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if body.source_url is not None:
+        ds.source_url = await _apply_source_url(ds, body.source_url, db)
+        # The layer id is what the scraper resolves from the URL, and what
+        # OVER's identity resolver keys on — they must not drift apart.
+        if ds.source_type == "govmap":
+            from app.api.govmap import parse_govmap_url
+            parsed = parse_govmap_url(ds.source_url)
+            if parsed:
+                cfg = dict(ds.scraper_config or {})
+                cfg["layer_id"] = parsed.layer_id
+                ds.scraper_config = cfg
+        # A re-point is only meaningful if the next poll actually runs: clear
+        # the guards that would short-circuit it on unchanged metadata.
+        ds.last_modified = None
+        ds.last_error = None
 
     if body.poll_interval is not None:
         ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
