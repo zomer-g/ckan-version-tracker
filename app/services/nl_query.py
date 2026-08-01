@@ -73,6 +73,16 @@ QUERY_SCHEMA = {
                            "dir": {"type": "string", "enum": ["asc", "desc"]}},
             "additionalProperties": False,
         },
+        "join": {
+            "type": "object",
+            "description": "הצלבה עם מאגר שני לפי יישוב. רק אם השאלה משווה בין שני מאגרים.",
+            "properties": {
+                "entity": {"type": "string", "description": "מפתח הטבלה השנייה"},
+                "measures": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["entity"],
+            "additionalProperties": False,
+        },
         "limit": {"type": "integer"},
         "unanswerable": {"type": "string",
                          "description": "אם אף טבלה במודל אינה יכולה לענות — הסבר קצר בעברית "
@@ -103,7 +113,16 @@ _SYSTEM = (
     "מדובר במספר או בתאריך. אם המשתמש כתב ניסוח שונה מעט מהערך במאגר — בחר את "
     "הערך מהמאגר.\n"
     "3. אם השאלה מבקשת מספר יחיד ('כמה…') — dimensions ריק. אם היא מבקשת פילוח "
-    "('לפי…', 'בכל…') — שים את עמודת הפילוח ב-dimensions.\n"
+    "('לפי…', 'בכל…') — שים את עמודת הפילוח ב-dimensions. מותר לקבץ אך ורק "
+    "לפי עמודה שמופיעה תחת 'עמודות לקיבוץ'. עמודה תחת 'לסינון בלבד' היא מזהה "
+    "ייחודי — קיבוץ לפיה יחזיר שורה לכל רשומה ולכן ייפסל.\n"
+    "3א. אם מבקשים פילוח לפי מחוז / נפה / רשות מקומית / אוכלוסייה ואין עמודה כזו "
+    "בטבלה — אבל יש בה עמודת יישוב — השתמש ב-enrich. אל תיפול חזרה לעמודה אחרת "
+    "ואל תוותר. למשל 'כמה מעיינות לפי מחוז' על טבלה עם עמודת יישוב: "
+    'enrich=["district"] ו-dimensions ריק.\n'
+    "3ב. אם השאלה משווה בין שני מאגרים ('כמה X וכמה Y בכל יישוב', 'איפה יש גם וגם') "
+    "ולשניהם יש עמודת יישוב — מלא join עם מפתח הטבלה השנייה. הקיבוץ בהצלבה הוא "
+    "תמיד לפי היישוב, ולכן dimensions נשאר ריק.\n"
     "4. אם אף טבלה מהמודל אינה יכולה לענות על השאלה — מלא unanswerable בהסבר קצר "
     "בעברית והשאר את שאר השדות ריקים. עדיף להשיב 'אין לי את הנתון' מאשר לענות "
     "מטבלה שאינה מתאימה. זהו אתר שקיפות: מספר שגוי גרוע ממספר חסר.\n"
@@ -299,13 +318,27 @@ def tiers(cfg: dict | None = None) -> list[tuple[str, str]]:
     return out
 
 
-def _user_prompt(question: str, entities: list[dict]) -> str:
-    return (f"השאלה: {question}\n\n"
+def _user_prompt(question: str, entities: list[dict], *,
+                 correction: str | None = None, previous: dict | None = None) -> str:
+    base = (f"השאלה: {question}\n\n"
             f"הטבלאות המועמדות:\n{semantic_model.model_prompt(entities)}")
+    if not correction:
+        return base
+    # The correction turn shows the model its own rejected output NEXT TO the
+    # validator's exact complaint. Both halves matter: the error alone leaves it
+    # guessing which field was wrong, and the output alone is the intrinsic
+    # self-correction setup that measures at only 1-3 points.
+    return (base + "\n\nניסיון קודם שנפסל:\n"
+            + json.dumps(previous or {}, ensure_ascii=False)
+            + f"\n\nהסיבה לפסילה: {correction}\n"
+            "תקן אך ורק את מה שנפסל, והשתמש בשמות מהמודל שלמעלה אות-באות. "
+            "אם אין דרך תקינה לענות — מלא unanswerable.")
 
 
 async def _ask_anthropic(question: str, entities: list[dict],
-                         model: str | None = None) -> tuple[dict | None, tuple[int, int]]:
+                         model: str | None = None, *,
+                         correction: str | None = None,
+                         previous: dict | None = None) -> tuple[dict | None, tuple[int, int]]:
     from anthropic import AsyncAnthropic
 
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -319,7 +352,9 @@ async def _ask_anthropic(question: str, entities: list[dict],
         system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         tools=[_TOOL],
         tool_choice={"type": "tool", "name": "over_query"},
-        messages=[{"role": "user", "content": _user_prompt(question, entities)}],
+        messages=[{"role": "user",
+                   "content": _user_prompt(question, entities,
+                                            correction=correction, previous=previous)}],
     )
     usage = (int(getattr(resp.usage, "input_tokens", 0) or 0),
              int(getattr(resp.usage, "output_tokens", 0) or 0))
@@ -328,7 +363,9 @@ async def _ask_anthropic(question: str, entities: list[dict],
 
 
 async def _ask_deepseek(question: str, entities: list[dict],
-                        model: str | None = None) -> tuple[dict | None, tuple[int, int]]:
+                        model: str | None = None, *,
+                        correction: str | None = None,
+                        previous: dict | None = None) -> tuple[dict | None, tuple[int, int]]:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=settings.deepseek_api_key, base_url="https://api.deepseek.com")
@@ -340,7 +377,9 @@ async def _ask_deepseek(question: str, entities: list[dict],
         model=model or DEEPSEEK_MODEL, temperature=0, max_tokens=1500,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": _SYSTEM + "\n" + hint},
-                  {"role": "user", "content": _user_prompt(question, entities)}],
+                  {"role": "user",
+                   "content": _user_prompt(question, entities,
+                                            correction=correction, previous=previous)}],
     )
     u = getattr(resp, "usage", None)
     usage = (int(getattr(u, "prompt_tokens", 0) or 0), int(getattr(u, "completion_tokens", 0) or 0))
@@ -439,8 +478,8 @@ async def answer(
             res = {
                 "entity": entity["key"],
                 "query": clean,
-                "sql": semantic_model.compile_sql(entity, clean),
-                "explanation": semantic_model.explain_query(entity, clean),
+                "sql": semantic_model.compile_sql(entity, clean, model),
+                "explanation": semantic_model.explain_query(entity, clean, model),
                 "source": "template",
             }
             await cache_put(db, fp, question, res)
@@ -482,6 +521,7 @@ async def answer(
     # it did cost twice.
     refusal: str | None = None
     attempted: list[str] = []
+    retried = False  # one correction retry per QUESTION, not per tier
     spent = [0, 0]  # accumulated (input, output) across every tier that ran
     for i, (name, model_id) in enumerate(ladder):
         is_last = i == len(ladder) - 1
@@ -535,23 +575,66 @@ async def answer(
             raise OutOfScope(said_no, candidates,
                              attempts=attempted, usage=tuple(spent))
 
-        try:
-            entity, clean = semantic_model.validate_query(model, parsed)
-        except SemanticError as e:
-            # The model named something undeclared. On a cheap tier that is a
-            # capability signal worth escalating on; on the last tier it is the
-            # honest answer.
+        # ── validate, and on failure spend ONE retry that sees the error ──
+        # Removing the equivalent refine step cost -4.63 points in the MAC-SQL
+        # ablation on BIRD dev — more than removing schema selection (-2.11).
+        # The error text is what does the work: intrinsic self-correction
+        # ("check your answer again", no error shown) measures at only 1-3
+        # points. Exactly one retry — later passes decay sharply and each is a
+        # full-price call.
+        entity = clean = None
+        err: SemanticError | None = None
+        for attempt_parsed, is_retry in ((parsed, False), (None, True)):
+            if is_retry:
+                if err is None or retried:
+                    break
+                retried = True
+                logger.info("nl_query: retrying %s after: %s", name, err)
+                if reserve is not None and not await reserve():
+                    break
+                try:
+                    raw2, usage2 = await ask(question, candidates, model_id,
+                                             correction=str(err), previous=parsed)
+                except Exception:  # noqa: BLE001 — a retry is a bonus, not a promise
+                    logger.warning("nl_query: retry call failed", exc_info=True)
+                    break
+                spent[0] += usage2[0]
+                spent[1] += usage2[1]
+                if on_usage is not None and any(usage2):
+                    await on_usage(*usage2)
+                attempt_parsed = _coerce(raw2)
+                if not attempt_parsed or (attempt_parsed.get("unanswerable") or "").strip():
+                    break
+            try:
+                entity, clean = semantic_model.validate_query(model, attempt_parsed)
+                err = None
+                break
+            except SemanticError as e:
+                err = e
+                entity = clean = None
+
+        if err is not None:
+            # The model named something undeclared, twice. On a cheap tier that
+            # is a capability signal worth escalating on; on the last tier it is
+            # the honest answer.
             if not is_last:
-                logger.info("nl_query: escalating past %s — invalid query: %s", name, e)
-                refusal = refusal or str(e)
+                logger.info("nl_query: escalating past %s — invalid query: %s", name, err)
+                refusal = refusal or str(err)
                 continue
-            raise
+            # Carry the cost out with the exception. Without this the admin log
+            # records an invalid-output row as free — but the model DID run and
+            # was billed, so the panel's per-stage token columns understate the
+            # most expensive failure mode there is: paying for output that could
+            # not be used.
+            err.attempts = attempted
+            err.usage = tuple(spent)
+            raise err
 
         res = {
             "entity": entity["key"],
             "query": clean,
-            "sql": semantic_model.compile_sql(entity, clean),
-            "explanation": semantic_model.explain_query(entity, clean),
+            "sql": semantic_model.compile_sql(entity, clean, model),
+            "explanation": semantic_model.explain_query(entity, clean, model),
             "source": name,
             "model": model_id,
             # True when a cheaper tier was tried first and could not answer.

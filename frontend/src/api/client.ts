@@ -1338,6 +1338,14 @@ export interface NlAdminStats {
   days: number;
   total: number;
   free_share: number | null;
+  answered_share: number | null;
+  // Calls that consumed tokens — includes refusals and unusable output, which
+  // the per-stage buckets alone would not count as paid.
+  paid: number;
+  // Of those, the ones that produced nothing usable. This is the number that
+  // says whether the cheap model is good enough.
+  wasted: number;
+  wasted_share: number | null;
   by_stage: Array<{
     stage: string; n: number; answered: number; escalated: number;
     input_tokens: number; output_tokens: number; median_ms: number | null;

@@ -110,12 +110,31 @@ async def query_stats(
     by_stage = [dict(r) for r in rows]
     total = sum(r["n"] for r in by_stage) or 0
     free = sum(r["n"] for r in by_stage if r["stage"] in ("cache", "template"))
+    # Counting only the stages NAMED after a provider undercounts spend: a
+    # refusal or an unusable output also ran a model and was billed. What makes
+    # a row paid is that it consumed tokens, not which bucket it landed in.
+    paid = (await db.execute(text(
+        "SELECT count(*) FROM nl_query_log "
+        "WHERE created_at >= now() - make_interval(days => :days) "
+        "AND input_tokens + output_tokens > 0"), {"days": days})).scalar_one()
+    # The share of PAID calls that produced nothing usable. This is the number
+    # that says whether the cheap model is good enough — a high value means
+    # money spent on output that was thrown away.
+    wasted = (await db.execute(text(
+        "SELECT count(*) FROM nl_query_log "
+        "WHERE created_at >= now() - make_interval(days => :days) "
+        "AND input_tokens + output_tokens > 0 AND NOT answered"), {"days": days})).scalar_one()
     return {
         "days": days,
         "total": total,
         # The headline: what fraction of questions cost nothing. Every point
         # here is a point off the bill.
         "free_share": round(free / total, 3) if total else None,
+        "answered_share": round(
+            sum(r["answered"] for r in by_stage) / total, 3) if total else None,
+        "paid": int(paid),
+        "wasted": int(wasted),
+        "wasted_share": round(int(wasted) / int(paid), 3) if paid else None,
         "by_stage": by_stage,
         "budget_today": await usage_today(db),
     }

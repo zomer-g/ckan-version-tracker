@@ -147,8 +147,15 @@ async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends
         # The model produced a query naming something that is not in the model.
         # Surfaced as a refusal for the same reason — it is one.
         logger.info("nl/query rejected an invalid model output for %r: %s", q, e)
-        await nl_query.log_query(db, question=q, answered=False, stage="invalid",
-                                 reason=str(e), duration_ms=_ms())
+        # The tiers that ran are attached by answer() — an unusable output was
+        # still paid for, and a log row that omits its cost makes the most
+        # wasteful failure mode look like the cheapest.
+        usage = getattr(e, "usage", (0, 0))
+        await nl_query.log_query(
+            db, question=q, answered=False, stage="invalid",
+            attempts=">".join(getattr(e, "attempts", []) or []) or None,
+            reason=str(e), input_tokens=usage[0], output_tokens=usage[1],
+            duration_ms=_ms())
         return {"answered": False, "reason": f"לא הצלחתי לבנות שאילתה תקינה: {e}",
                 "candidates": []}
     except HTTPException:

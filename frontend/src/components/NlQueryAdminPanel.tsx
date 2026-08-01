@@ -71,8 +71,6 @@ export default function NlQueryAdminPanel() {
     finally { setBusy(false); }
   }
 
-  const paid = (stats?.by_stage || []).filter((s) => s.stage === "deepseek" || s.stage === "anthropic");
-  const paidCount = paid.reduce((a, s) => a + s.n, 0);
 
   return (
     <div dir="rtl">
@@ -168,8 +166,21 @@ export default function NlQueryAdminPanel() {
                 </div>
               </div>
               <div>
+                <div className="text-muted" style={{ fontSize: "0.75rem" }}>נענו</div>
+                <div style={{ fontSize: "1.3rem", fontWeight: 600 }}>
+                  {stats.answered_share == null ? "—" : `${Math.round(stats.answered_share * 100)}%`}
+                </div>
+              </div>
+              <div>
                 <div className="text-muted" style={{ fontSize: "0.75rem" }}>הגיעו למודל בתשלום</div>
-                <div style={{ fontSize: "1.3rem", fontWeight: 600 }}>{fmt(paidCount)}</div>
+                <div style={{ fontSize: "1.3rem", fontWeight: 600 }}>{fmt(stats.paid)}</div>
+              </div>
+              <div title="קריאות ששילמנו עליהן ולא יצאה מהן תשובה — סירוב או פלט לא תקין. זה המדד שאומר אם המודל הזול מספיק טוב.">
+                <div className="text-muted" style={{ fontSize: "0.75rem" }}>מהן בזבוז</div>
+                <div style={{ fontSize: "1.3rem", fontWeight: 600,
+                              color: (stats.wasted_share ?? 0) > 0.4 ? "#b91c1c" : "#a16207" }}>
+                  {stats.wasted_share == null ? "—" : `${Math.round(stats.wasted_share * 100)}%`}
+                </div>
               </div>
               <div>
                 <div className="text-muted" style={{ fontSize: "0.75rem" }}>מכסת היום (קריאות)</div>

@@ -388,3 +388,109 @@ def test_things_that_change_the_answer_still_refuse(q):
     fields whose value decides what gets counted."""
     with pytest.raises(SemanticError):
         sm.validate_query(MODEL, q)
+
+
+# ── cross-dataset join ───────────────────────────────────────────────────────
+# The model names the other DATASET, never a join path — there is exactly one
+# (the canonical settlement code), which is what makes this safe to hand a cheap
+# model. The compiler's job is to keep the fan trap from turning a join into a
+# confidently wrong count.
+
+OTHER = {
+    "key": "append_springs", "schema": "public", "title": "מעיינות",
+    "summary": "", "rows": 900, "synonyms": [],
+    "dimensions": [
+        {"key": "יישוב", "kind": "text", "title": "יישוב", "entity_type": "locality",
+         "samples": ["חיפה"], "groupable": True},
+        {"key": "ספיקה", "kind": "number", "title": "ספיקה", "min": 0, "max": 90,
+         "samples": [], "groupable": True},
+    ],
+    "measures": [{"key": "count", "title": "מספר שורות"},
+                 {"key": "sum:ספיקה", "title": "סכום ספיקה"},
+                 {"key": "avg:ספיקה", "title": ""}, {"key": "min:ספיקה", "title": ""},
+                 {"key": "max:ספיקה", "title": ""}],
+    "geo_dims": ["יישוב"], "source_url": "", "page_url": "",
+}
+JOIN_MODEL = [ENTITY, OTHER]
+
+
+def _join_sql(q):
+    ent, clean = sm.validate_query(JOIN_MODEL, q)
+    return sm.compile_sql(ent, clean, JOIN_MODEL)
+
+
+BASIC_JOIN = {"entity": "append_business", "measures": ["count"],
+              "join": {"entity": "append_springs", "measures": ["count"]}}
+
+
+def test_each_side_is_aggregated_before_the_join():
+    """THE fan trap. A row-level join on a shared locality multiplies the sides —
+    100 businesses and 5 springs in one town make 500 rows, and count(*) says
+    500. Pre-aggregating each side makes the join 1:1 per settlement."""
+    sql = _join_sql(BASIC_JOIN)
+    assert sql.count("GROUP BY 1") == 2          # both sides aggregated
+    assert "WITH a AS (" in sql and "), b AS (" in sql
+    # The join itself must sit BETWEEN the two aggregates, not before them.
+    assert sql.index("GROUP BY 1") < sql.index("FULL JOIN")
+
+
+def test_the_join_key_is_the_canonical_code_never_the_raw_text():
+    """Joining on raw Hebrew place strings silently under-matches ('תל אביב יפו'
+    vs 'תל אביב-יפו') and no validator catches a join that dropped half the
+    rows. over_settlement_code resolves both sides through the alias index."""
+    sql = _join_sql(BASIC_JOIN)
+    assert sql.count("over_settlement_code") == 2
+    assert "a._code = b._code" in sql
+
+
+def test_a_settlement_present_on_only_one_side_survives():
+    """FULL JOIN, not INNER: 'where is there one but not the other' is usually
+    the interesting row, and an inner join deletes it silently."""
+    assert "FULL JOIN" in _join_sql(BASIC_JOIN)
+
+
+def test_join_passes_the_console_guard():
+    from app.services.append_store import validate_readonly_sql
+    validate_readonly_sql(_join_sql(BASIC_JOIN))
+    validate_readonly_sql(_join_sql({
+        **BASIC_JOIN, "measures": ["count", "avg:שנה"],
+        "filters": [{"field": "שנה", "op": ">=", "value": 2020}],
+        "join": {"entity": "append_springs", "measures": ["count", "sum:ספיקה"]}}))
+
+
+def test_a_filter_applies_to_the_left_side_before_it_is_aggregated():
+    sql = _join_sql({**BASIC_JOIN,
+                     "filters": [{"field": "סוג_עסק", "op": "=", "value": "מסעדה"}]})
+    assert sql.index("WHERE") < sql.index("), b AS (")
+
+
+@pytest.mark.parametrize("bad, why", [
+    ({**BASIC_JOIN, "join": {"entity": "append_nope", "measures": ["count"]}}, "unknown entity"),
+    ({**BASIC_JOIN, "join": {"entity": "append_business", "measures": ["count"]}}, "self join"),
+    ({**BASIC_JOIN, "join": {"entity": "append_springs", "measures": ["sum:לא_קיים"]}}, "unknown measure"),
+    ({**BASIC_JOIN, "dimensions": ["יישוב"]}, "grouping is fixed to the settlement"),
+    ({**BASIC_JOIN, "join": {"entity": "append_springs", "dimensions": ["יישוב"]}}, "no per-side grouping"),
+])
+def test_invalid_joins_are_refused(bad, why):
+    with pytest.raises(SemanticError):
+        sm.validate_query(JOIN_MODEL, bad)
+
+
+def test_a_join_needs_a_locality_column_on_both_sides():
+    no_geo = {**OTHER, "geo_dims": []}
+    with pytest.raises(SemanticError):
+        sm.validate_query([ENTITY, no_geo], BASIC_JOIN)
+
+
+def test_the_explanation_names_both_datasets():
+    ent, clean = sm.validate_query(JOIN_MODEL, BASIC_JOIN)
+    text = sm.explain_query(ent, clean, JOIN_MODEL)
+    assert "רישיונות עסק" in text and "מעיינות" in text
+
+
+def test_enrichment_grouping_is_sorted_by_the_measure():
+    """'כמה מעיינות לפי מחוז' is enrich=['district'] with no dimensions — still
+    a grouped query, so it must come back ordered like any other."""
+    _, clean = sm.validate_query(MODEL, {"entity": "append_business", "enrich": ["district"]})
+    assert clean["order"]["by"] == "measure"
+    assert "ORDER BY" in sm.compile_sql(ENTITY, clean, MODEL)

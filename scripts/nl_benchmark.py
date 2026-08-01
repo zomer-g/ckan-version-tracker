@@ -81,8 +81,9 @@ def _get(base: str, path: str, token: str = "") -> dict:
 
 def build_cases(spec: dict, base: str, token: str, discover: bool) -> list[dict]:
     cases: list[dict] = []
-    for c in spec.get("structural", []):
-        cases.append({**c, "part": "structural"})
+    for part in ("structural", "regression", "capability"):
+        for c in spec.get(part, []):
+            cases.append({**c, "part": part})
     for c in spec.get("gold", []):
         cases.append({**c, "part": "gold", "expect": c.get("expect", "answered")})
     if discover:
@@ -168,8 +169,13 @@ def run(args) -> dict:
         print(f"  cache pair: {'ok' if hit else 'FAIL — variants did not share a key'}")
 
     stages: dict[str, int] = {}
+    by_part: dict[str, dict] = {}
     for r in results:
         stages[r["stage"] or "?"] = stages.get(r["stage"] or "?", 0) + 1
+        p_ = by_part.setdefault(r["part"] or "?", {"n": 0, "passed": 0, "answered": 0})
+        p_["n"] += 1
+        p_["passed"] += 1 if r["ok"] else 0
+        p_["answered"] += 1 if r["answered"] else 0
     durations = [r["duration_ms"] for r in results if r["duration_ms"]]
     summary = {
         "base_url": args.base_url,
@@ -184,6 +190,7 @@ def run(args) -> dict:
         "output_tokens": sum(r["output_tokens"] for r in results),
         "median_ms": int(statistics.median(durations)) if durations else None,
         "cache_pairs_ok": all(p["cache_hit"] for p in pairs) if pairs else None,
+        "by_part": by_part,
     }
 
     print("\n" + "─" * 62)
@@ -193,6 +200,8 @@ def run(args) -> dict:
     print(f"escalated     {summary['escalated']}")
     print(f"tokens        {summary['input_tokens']} in / {summary['output_tokens']} out")
     print(f"median        {summary['median_ms']} ms")
+    for part, v in sorted(summary["by_part"].items()):
+        print(f"  {part:<12} {v['passed']}/{v['n']} passed, {v['answered']} answered")
     if pairs:
         print(f"cache pairs   {'ok' if summary['cache_pairs_ok'] else 'FAIL'}")
 

@@ -373,20 +373,43 @@ def model_prompt(entities: list[dict]) -> str:
             head += f' (~{int(e["rows"]):,} שורות)'
         lines.append(head)
         if e.get("summary"):
-            lines.append(f'   {e["summary"][:300]}')
-        for d in e["dimensions"]:
-            bits = [f'   - {d["key"]} ({d["kind"]}'
-                    + (", ניתן לקיבוץ" if d.get("groupable") else ", לסינון בלבד") + ")"]
+            lines.append(f'   {e["summary"][:200]}')
+
+        def render(d: dict) -> str:
+            bits = [f'   - {d["key"]} ({d["kind"]})']
             if d.get("title") and d["title"] != d["key"]:
-                bits.append(f' — {d["title"]}')
+                bits.append(f' — {d["title"][:60]}')
             if d.get("samples"):
                 bits.append(" | ערכים: " + ", ".join(str(s) for s in d["samples"][:_SAMPLES_IN_PROMPT]))
             elif d["kind"] in ("number", "date") and d.get("min") is not None:
                 bits.append(f' | טווח: {d["min"]}..{d["max"]}')
             if d.get("entity_type") in ("locality", "municipality"):
-                bits.append("  [יישוב/רשות — ניתן להעשרה]")
-            lines.append("".join(bits))
+                bits.append("  [יישוב/רשות]")
+            return "".join(bits)
+
+        # Groupable and filter-only columns go in SEPARATE, LABELLED lists
+        # rather than sharing one list with a parenthetical marker. Observed in
+        # production: a cheap model read past "(text, לסינון בלבד)" and grouped
+        # by a unique name column anyway, and the query was rejected. A heading
+        # the wrong columns are not under is a much stronger signal than a
+        # qualifier inside a line the model is skimming.
+        groupable = [d for d in e["dimensions"] if d.get("groupable")]
+        filter_only = [d for d in e["dimensions"] if not d.get("groupable")]
+        if groupable:
+            lines.append("   עמודות לקיבוץ (dimensions):")
+            lines.extend(render(d) for d in groupable)
+        if filter_only:
+            lines.append("   עמודות לסינון בלבד — אסור לקבץ לפיהן:")
+            lines.extend(render(d) for d in filter_only)
         lines.append("   מדדים: " + ", ".join(m["key"] for m in e["measures"]))
+        if e.get("geo_dims"):
+            # Spelled out per entity, next to the column it applies to. The
+            # capability existed and went unused: asked for a breakdown by
+            # מחוז on a table that has no such column, the model grouped by a
+            # name column instead of enriching from the settlement index.
+            lines.append(
+                f'   העשרה: לטבלה יש עמודת יישוב ({e["geo_dims"][0]}), ולכן אפשר '
+                f'לבקש ב-enrich את {", ".join(ENRICH_FIELDS)} גם אם אין להם עמודה משלהם.')
     return "\n".join(lines)
 
 
@@ -462,6 +485,49 @@ def validate_query(model: list[dict], q: dict) -> tuple[dict, dict]:
                 f'לא ניתן להשוות טווח על העמודה הטקסטואלית {field!r}')
         filters.append({"field": field, "op": op, "value": value})
 
+    # ── cross-dataset join ───────────────────────────────────────────────
+    # Shape: {"entity": "<key>", "measures": [...]}. The model names the OTHER
+    # DATASET and what to measure in it — never a join path, because there is
+    # only one: the canonical CBS settlement code. That is the design every
+    # production semantic layer converges on (Cube, MetricFlow, Malloy all
+    # derive joins from the fields requested and refuse to let a query express
+    # a path), and it is what keeps the decision inside a cheap model's reach.
+    #
+    # THE FAN TRAP is why this form is restricted. Joining two datasets row-to-
+    # row on a shared locality multiplies them: 100 businesses and 5 springs in
+    # one town produce 500 rows, and count(*) returns 500 — a plausible,
+    # completely wrong number, which is the exact failure this whole layer
+    # exists to prevent. So each side is aggregated to the settlement FIRST and
+    # the join happens between two already-aggregated results. That makes the
+    # grouping key fixed (the settlement) and per-side `dimensions` meaningless,
+    # so they are not accepted.
+    join = None
+    jspec = q.get("join")
+    if jspec:
+        if not isinstance(jspec, dict):
+            raise SemanticError("join בפורמט שגוי")
+        jent = _find(model, str(jspec.get("entity") or ""))
+        if jent is None:
+            raise SemanticError(f'הטבלה {jspec.get("entity")!r} אינה חלק מהמודל')
+        if jent["key"] == ent["key"]:
+            raise SemanticError("לא ניתן להצליב טבלה עם עצמה")
+        if not ent.get("geo_dims") or not jent.get("geo_dims"):
+            raise SemanticError(
+                "הצלבה בין מאגרים אפשרית רק כששניהם מכילים עמודת יישוב או רשות")
+        jmeasure_keys = {m["key"] for m in jent["measures"]}
+        jmeasures = [str(m) for m in (jspec.get("measures") or ["count"])] or ["count"]
+        for m in jmeasures:
+            if m not in jmeasure_keys:
+                raise SemanticError(f'המדד {m!r} אינו קיים בטבלה {jent["key"]}')
+        if jspec.get("dimensions") or jspec.get("filters"):
+            raise SemanticError(
+                "בהצלבה בין מאגרים הפילוח הוא לפי יישוב בלבד — אין פילוח או סינון נפרד "
+                "לצד השני")
+        if group:
+            raise SemanticError(
+                "בהצלבה בין מאגרים לא ניתן לקבץ לפי עמודה — הקיבוץ הוא לפי היישוב הקנוני")
+        join = {"entity": jent["key"], "measures": jmeasures}
+
     enrich = [str(e) for e in (q.get("enrich") or [])]
     for e in enrich:
         if e not in ENRICH_FIELDS:
@@ -481,7 +547,11 @@ def validate_query(model: list[dict], q: dict) -> tuple[dict, dict]:
     if raw_by not in ("measure", "dimension", ""):
         logger.info("semantic_model: coercing unknown order.by %r to the default", raw_by)
         raw_by = ""
-    order_by = raw_by or ("measure" if group else "")
+    # Enrichment fields are grouping keys too (compile_sql puts them in the
+    # GROUP BY), so "כמה מעיינות לפי מחוז" — enrich=["district"], dimensions=[]
+    # — is a grouped query and should come back sorted by the measure like any
+    # other. Keying the default off `dimensions` alone left it unordered.
+    order_by = raw_by or ("measure" if (group or enrich or join) else "")
     order_dir = "asc" if str(order.get("dir") or "desc").lower() == "asc" else "desc"
 
     try:
@@ -492,7 +562,7 @@ def validate_query(model: list[dict], q: dict) -> tuple[dict, dict]:
 
     return ent, {
         "entity": ent["key"], "measures": measures, "dimensions": group,
-        "filters": filters, "enrich": enrich,
+        "filters": filters, "enrich": enrich, "join": join,
         "order": {"by": order_by, "dir": order_dir}, "limit": limit,
     }
 
@@ -571,7 +641,85 @@ def _measure_sql(key: str) -> tuple[str, str]:
     return f"{op}({_numeric(f't.{_qi(col)}')})", f"{label} {col}"
 
 
-def compile_sql(entity: dict, q: dict) -> str:
+def _code_expr(alias: str, geo_col: str) -> str:
+    """The canonical settlement/authority code for a dirty free-text place value.
+
+    The ONLY join key this layer will use. Joining two datasets on their raw
+    Hebrew locality strings would silently under-match — "תל אביב יפו" against
+    "תל אביב-יפו" — and no validator catches a join that quietly dropped half
+    the rows. over_settlement_code() resolves through the ~30.8k-inflection
+    alias index, so both sides land on the same integer or on NULL."""
+    ref = f"{alias}.{_qi(geo_col)}"
+    return f"COALESCE(over_settlement_code({ref}), over_authority_code({ref}))"
+
+
+def compile_join_sql(left: dict, right: dict, q: dict) -> str:
+    """Two datasets compared side by side, per locality.
+
+    Each side is aggregated to the canonical code BEFORE the join. That is not a
+    stylistic choice — a row-level join on a shared locality is a fan trap: 100
+    businesses and 5 springs in one town make 500 rows, and count(*) reports
+    500. Pre-aggregating makes each side exactly one row per settlement, so the
+    join is 1:1 and every measure keeps its meaning.
+
+    FULL OUTER JOIN, not INNER: a settlement present in one dataset and absent
+    from the other is usually the most interesting row in the answer, and an
+    inner join would delete it without saying so."""
+    lq, rq = _qi(left["key"]), _qi(right["key"])
+    lref = lq if (left.get("schema") or "public") == "public" else f'{left["schema"]}.{lq}'
+    rref = rq if (right.get("schema") or "public") == "public" else f'{right["schema"]}.{rq}'
+    lgeo, rgeo = left["geo_dims"][0], right["geo_dims"][0]
+    ldims = {d["key"]: d for d in left["dimensions"]}
+
+    def side(measures: list[str], title: str) -> list[tuple[str, str]]:
+        """(expression, alias) per measure. Kept as pairs rather than rendered
+        strings so the outer SELECT can reference the aliases directly — parsing
+        them back out of "expr AS alias" breaks the moment a label contains the
+        separator, and these labels are Hebrew free text."""
+        out, used = [], set()
+        for m in measures:
+            expr, label = _measure_sql(m)
+            alias = f"{label} — {title[:24]}"
+            while alias in used:
+                alias += " "
+            used.add(alias)
+            out.append((expr, alias))
+        return out
+
+    lm = side(q["measures"], left["title"])
+    rm = side(q["join"]["measures"], right["title"])
+    where = [_where(f, ldims[f["field"]]) for f in q["filters"]]
+
+    lines = [
+        "-- הצלבה בין שני מאגרים לפי סמל היישוב הקנוני",
+        f'-- {left["title"]}  X  {right["title"]}',
+        "-- כל צד מסוכם לפי יישוב לפני ההצלבה, כדי שספירה לא תוכפל",
+        "WITH a AS (",
+        f"  SELECT {_code_expr('t', lgeo)} AS _code, "
+        + ", ".join(f"{e} AS {_qi(a)}" for e, a in lm),
+        f"  FROM {lref} t",
+    ]
+    if where:
+        lines.append("  WHERE " + "\n    AND ".join(where))
+    lines += [
+        "  GROUP BY 1",
+        "), b AS (",
+        f"  SELECT {_code_expr('t', rgeo)} AS _code, "
+        + ", ".join(f"{e} AS {_qi(a)}" for e, a in rm),
+        f"  FROM {rref} t",
+        "  GROUP BY 1",
+        ")",
+        "SELECT COALESCE(s.name, '(לא זוהה יישוב)') AS " + _qi("יישוב") + ",",
+        "       " + ", ".join([f"a.{_qi(a)}" for _, a in lm] + [f"b.{_qi(a)}" for _, a in rm]),
+        "FROM a FULL JOIN b ON a._code = b._code",
+        "LEFT JOIN over_settlements s ON s.code = COALESCE(a._code, b._code)",
+        f'ORDER BY a.{_qi(lm[0][1])} {q["order"]["dir"].upper()} NULLS LAST',
+        f'LIMIT {q["limit"]}',
+    ]
+    return "\n".join(lines)
+
+
+def compile_sql(entity: dict, q: dict, model: list[dict] | None = None) -> str:
     """Validated query → SQL. Pure string building over checked identifiers.
 
     Every name here came out of ``validate_query``, i.e. out of the declared
@@ -579,6 +727,14 @@ def compile_sql(entity: dict, q: dict) -> str:
     The result is still handed to append_store.validate_readonly_sql before it
     runs; this function being correct is not the only thing standing between a
     bad query and the database."""
+    if q.get("join"):
+        if not model:
+            raise SemanticError("הצלבה דורשת את המודל המלא")
+        right = _find(model, q["join"]["entity"])
+        if right is None:
+            raise SemanticError("טבלת ההצלבה לא נמצאה")
+        return compile_join_sql(entity, right, q)
+
     dims = {d["key"]: d for d in entity["dimensions"]}
     schema = entity.get("schema") or "public"
     ref = _qi(entity["key"]) if schema == "public" else f'{schema}.{_qi(entity["key"])}'
@@ -648,7 +804,7 @@ def compile_sql(entity: dict, q: dict) -> str:
     return "\n".join(lines)
 
 
-def explain_query(entity: dict, q: dict) -> str:
+def explain_query(entity: dict, q: dict, model: list[dict] | None = None) -> str:
     """One Hebrew sentence describing what was actually run.
 
     Rendered next to the number. The model does not write this — it is derived
@@ -656,6 +812,12 @@ def explain_query(entity: dict, q: dict) -> str:
     applied, which is exactly the failure a model-written explanation invites."""
     dims = {d["key"]: d for d in entity["dimensions"]}
     parts = [", ".join(_measure_sql(m)[1] for m in q["measures"]), f'מתוך {entity["title"]}']
+    if q.get("join"):
+        other = _find(model or [], q["join"]["entity"])
+        parts.append(
+            f'בהצלבה עם {other["title"] if other else q["join"]["entity"]} '
+            f'({", ".join(_measure_sql(m)[1] for m in q["join"]["measures"])}) '
+            "— לפי סמל היישוב הקנוני, כל צד מסוכם בנפרד")
     if q["dimensions"]:
         parts.append("בפילוח לפי " + ", ".join(dims[d].get("title") or d for d in q["dimensions"]))
     for f in q["filters"]:

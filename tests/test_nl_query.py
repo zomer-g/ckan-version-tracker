@@ -385,3 +385,71 @@ def test_a_raw_identifier_title_is_not_hebrew():
     from app.api.nl_query import _HEB_RE
     assert not _HEB_RE.search("KNS_PlenumVoteResult")
     assert _HEB_RE.search("רישיונות עסק")
+
+
+# ── the one-retry correction loop ────────────────────────────────────────────
+# Highest-value single accuracy change available: removing the equivalent step
+# cost -4.63 points in the MAC-SQL BIRD ablation, more than removing schema
+# selection. The error text is what does the work — self-correction WITHOUT the
+# error measures at 1-3 points — so these tests pin that the validator's actual
+# complaint reaches the model, and that it happens exactly once.
+
+class _Retrying:
+    """First answer invalid, second valid. Records what the retry was told."""
+
+    def __init__(self, first, second):
+        self.calls = 0
+        self.corrections = []
+        self._first, self._second = first, second
+
+    async def ask(self, question, entities, model=None, *, correction=None, previous=None):
+        self.calls += 1
+        self.corrections.append(correction)
+        return (self._first if self.calls == 1 else self._second), (100, 20)
+
+
+BAD = {"entity": "append_business", "measures": ["count"],
+       "dimensions": ["עמודה_מומצאת"], "filters": [], "unanswerable": ""}
+
+
+def test_an_invalid_query_is_retried_once_with_the_validator_error(monkeypatch):
+    t = _Retrying(BAD, GOOD)
+    monkeypatch.setattr(nl_query, "tiers", lambda cfg=None: [("anthropic", "claude-opus-5")])
+    monkeypatch.setattr(nl_query, "_ask_anthropic", t.ask)
+    res = _run(nl_query.answer(None, Q))
+    assert res["answered"] if "answered" in res else res["entity"] == "append_business"
+    assert t.calls == 2
+    assert t.corrections[0] is None
+    # The retry must carry the validator's real complaint, not a generic nudge.
+    assert "עמודה_מומצאת" in (t.corrections[1] or "")
+
+
+def test_the_retry_happens_at_most_once_per_question(monkeypatch):
+    """Two tiers each retrying would be four paid calls for one question."""
+    t = _Retrying(BAD, BAD)
+    monkeypatch.setattr(nl_query, "tiers",
+                        lambda cfg=None: [("deepseek", "deepseek-chat"),
+                                          ("anthropic", "claude-opus-5")])
+    monkeypatch.setattr(nl_query, "_ask_deepseek", t.ask)
+    monkeypatch.setattr(nl_query, "_ask_anthropic", t.ask)
+    with pytest.raises((nl_query.OutOfScope, SemanticError)):
+        _run(nl_query.answer(None, Q))
+    assert t.calls == 3, f"expected cheap + retry + expensive, got {t.calls}"
+
+
+def test_the_retry_is_paid_for(monkeypatch):
+    t = _Retrying(BAD, GOOD)
+    monkeypatch.setattr(nl_query, "tiers", lambda cfg=None: [("anthropic", "claude-opus-5")])
+    monkeypatch.setattr(nl_query, "_ask_anthropic", t.ask)
+    spy = _Spy()
+    res = _run(nl_query.answer(None, Q, reserve=spy.reserve, on_usage=spy.on_usage))
+    assert spy.reserved == 2          # the correction call is a real call
+    assert res["usage"] == (200, 40)  # and its tokens are attributed
+
+
+def test_a_correction_prompt_shows_the_rejected_output_and_the_reason():
+    from app.services.nl_query import _user_prompt
+    p = _user_prompt("שאלה", [ENTITY], correction="העמודה 'x' אינה קיימת",
+                     previous={"entity": "append_business", "dimensions": ["x"]})
+    assert "העמודה 'x' אינה קיימת" in p
+    assert '"dimensions"' in p or "dimensions" in p
