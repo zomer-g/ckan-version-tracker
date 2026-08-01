@@ -43,6 +43,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SET = ROOT / "benchmarks" / "nl_queries.json"
 
+# Every line this tool prints contains Hebrew, and the default Windows console
+# encoding (cp1252) cannot encode it — the run dies mid-report with a
+# UnicodeEncodeError after the model calls have already been paid for. Force
+# UTF-8 on the streams rather than stripping the text.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # non-reconfigurable stream (a pipe in some shells)
+        pass
+
 # Stages that cost nothing. The share of cases landing here is the headline.
 FREE_STAGES = {"cache", "template"}
 
@@ -86,6 +96,9 @@ def build_cases(spec: dict, base: str, token: str, discover: bool) -> list[dict]
             cases.append({**c, "part": part})
     for c in spec.get("gold", []):
         cases.append({**c, "part": "gold", "expect": c.get("expect", "answered")})
+    # `retrieval_title` is checked in retrieval-only mode; in the full pipeline
+    # the equivalent assertion is on the returned entity, which the runner
+    # cannot map to a title without the catalog.
     if discover:
         # Questions generated from the LIVE model, so the set reflects the
         # datasets this deployment actually has rather than ones we guessed at.
@@ -125,6 +138,62 @@ def check(case: dict, res: dict, http: int) -> tuple[bool, str]:
         if field not in fields:
             return False, f"missing filter on {field}"
     return True, ""
+
+
+def run_retrieval(args) -> dict:
+    """OFFLINE mode: measure RETRIEVAL only, against the live catalog.
+
+    Why this exists as a separate mode: retrieval is the layer that produced the
+    worst failure this feature has had — questions answered confidently from an
+    unrelated dataset — and it is the one layer that can be measured without
+    spending a cent or having any model enabled. It pulls /api/tables (public),
+    rebuilds the semantic model locally, and checks which entity each question
+    would land on. Run it on every change to the scorer; run the full mode when
+    you need the end-to-end number.
+
+    A case passes if `retrieval_title` appears in the top-1 entity's title, or —
+    for a case marked expect "refused" — if nothing clears the score floor."""
+    import os as _os
+    _os.environ.setdefault("JWT_SECRET_KEY", "benchmark")
+    sys.path.insert(0, str(ROOT))
+    from app.services import semantic_model as sm
+
+    cat = _get(args.base_url, "/api/tables").get("tables") or []
+    if not cat:
+        print("could not fetch /api/tables", file=sys.stderr)
+        return {}
+    model = [e for e in (sm._entity_from(r, None) for r in cat
+                         if not r["table"].startswith("over_")) if e]
+    spec = json.loads(Path(args.set).read_text(encoding="utf-8"))
+    cases = [c for c in spec.get("gold", []) if c.get("retrieval_title") or c.get("expect") == "refused"]
+    cases += [{**c, "part": "structural"} for c in spec.get("structural", [])
+              if c.get("expect") == "refused" and c.get("q")]
+
+    print(f"retrieval-only: {len(cases)} cases against {len(model)} entities "
+          f"(catalog from {args.base_url})\n")
+    rows, passed = [], 0
+    for c in cases:
+        top = sm.retrieve(model, c["q"], k=3)
+        names = [e["title"] for e in top]
+        want = c.get("retrieval_title")
+        ok = (not names) if c.get("expect") == "refused" else (
+            bool(names) and bool(want) and want in names[0])
+        passed += ok
+        rows.append({"q": c["q"], "ok": ok, "want": want,
+                     "got": names[0] if names else None, "candidates": names})
+        print(f"  {'ok  ' if ok else 'FAIL'} {c['q'][:44]:<44} -> "
+              + (names[0][:40] if names else "(refuses)"))
+    print("\n" + "-" * 62)
+    print(f"retrieval top-1 correct: {passed}/{len(cases)}"
+          f"  ({round(100 * passed / len(cases)) if cases else 0}%)")
+    out = {"summary": {"mode": "retrieval", "cases": len(cases), "passed": passed,
+                       "entities": len(model)}, "results": rows}
+    if args.save:
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.save).write_text(json.dumps(out, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+        print(f"saved -> {args.save}")
+    return out
 
 
 def run(args) -> dict:
@@ -260,7 +329,17 @@ def main() -> int:
                         "validates but fails on real data)")
     p.add_argument("--save", default="")
     p.add_argument("--baseline", default="", help="a previous --save file to diff against")
+    p.add_argument("--retrieval-only", action="store_true",
+                   help="measure RETRIEVAL offline against the live catalog. Free, needs "
+                        "no admin token and no model enabled — this is the layer that "
+                        "produced the worst failure the feature has had.")
     args = p.parse_args()
+
+    if args.retrieval_only:
+        out = run_retrieval(args)
+        if not out:
+            return 1
+        return 0 if out["summary"]["passed"] == out["summary"]["cases"] else 1
 
     import os
     args.token = args.token or os.environ.get("OVER_ADMIN_JWT", "")

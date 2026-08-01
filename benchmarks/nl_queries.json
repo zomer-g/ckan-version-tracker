@@ -28,7 +28,6 @@
     "  costs money, because a template that stops matching quietly promotes its",
     "  questions to a paid tier with no other symptom."
   ],
-
   "structural": [
     {
       "q": "מה מזג האוויר מחר בתל אביב",
@@ -61,7 +60,6 @@
       "note": "Empty question — must 400, not reach a model."
     }
   ],
-
   "regression": [
     {
       "q": "כמה עסקים יש בכל יישוב",
@@ -84,7 +82,6 @@
       "note": "PROD: the ONE question that worked. Pinned so it stays working."
     }
   ],
-
   "capability": [
     {
       "q": "כמה רישיונות עסק לפי מחוז",
@@ -117,7 +114,6 @@
       "note": "Range filter + grouping in one question."
     }
   ],
-
   "cache_pairs": [
     {
       "a": "כמה מאגרים יש לפי משרד",
@@ -130,6 +126,105 @@
       "note": "The Hebrew clitic is emitted as both readings during tokenization, so a written-together and written-apart preposition should share a key."
     }
   ],
-
-  "gold": []
+  "gold": [
+    {
+      "q": "כמה מעיינות לפי מחוז",
+      "expect": "answered",
+      "retrieval_title": "מעיינות",
+      "note": "PROD: answered from a CRIME dataset. Subject-dominant scoring fixes it."
+    },
+    {
+      "q": "כמה עמותות רשומות יש",
+      "expect": "answered",
+      "retrieval_title": "עמותות"
+    },
+    {
+      "q": "כמה החלטות ממשלה לפי שנה",
+      "expect": "answered",
+      "retrieval_title": "החלטות"
+    },
+    {
+      "q": "כמה טיסות יש",
+      "expect": "answered",
+      "retrieval_title": "טיסות"
+    },
+    {
+      "q": "כמה חברות רשומות ברשם החברות",
+      "expect": "answered",
+      "retrieval_title": "רשם החברות"
+    },
+    {
+      "q": "כמה תיקי פשיעה לפי מחוז",
+      "expect": "answered",
+      "retrieval_title": "פשיעה"
+    },
+    {
+      "q": "כמה רוקחים בעלי רשיון",
+      "expect": "answered",
+      "retrieval_title": "רוקחים",
+      "note": "Lives in the idx schema — pins that the tier penalty does not bury it."
+    },
+    {
+      "q": "כמה אמבולנסים יש",
+      "expect": "answered",
+      "retrieval_title": "אמבולנס"
+    },
+    {
+      "q": "כמה הסכמים קיבוציים נחתמו",
+      "expect": "answered",
+      "retrieval_title": "הסכמים"
+    },
+    {
+      "q": "כמה מכרזים פורסמו",
+      "expect": "answered",
+      "retrieval_title": "מכרז"
+    },
+    {
+      "q": "כמה שמאויות מכריעות היו",
+      "expect": "any",
+      "retrieval_title": "שמאות",
+      "note": "KNOWN MISS: Hebrew morphology. 'שמאויות' does not token-match 'שמאות'. Needs a stem/synonym layer; kept as the marker for that work."
+    },
+    {
+      "q": "כמה יבואני רכב יש",
+      "expect": "any",
+      "retrieval_title": "יבואנים"
+    },
+    {
+      "q": "כמה כלי רכב היסטוריים יש",
+      "expect": "any",
+      "retrieval_title": "רכב"
+    },
+    {
+      "q": "כמה תיקים נפתחו ביחידות הסיוע",
+      "expect": "any",
+      "retrieval_title": "יחידות הסיוע"
+    },
+    {
+      "q": "כמה עסקי מזון מן החי יש לפי מחוז",
+      "expect": "any",
+      "retrieval_title": "מזון מן החי"
+    },
+    {
+      "q": "כמה עסקים יש בכל יישוב",
+      "expect": "refused",
+      "note": "PROD: answered from a GovMap STREET layer. There is no general business register in the catalog — refusing is the correct answer."
+    },
+    {
+      "q": "מה מחיר הדירה הממוצע בתל אביב",
+      "expect": "refused"
+    },
+    {
+      "q": "כמה תלמידים יש בכל בית ספר",
+      "expect": "refused"
+    },
+    {
+      "q": "מה שער הדולר היום",
+      "expect": "refused"
+    },
+    {
+      "q": "כמה מיטות אשפוז יש בכל בית חולים",
+      "expect": "refused"
+    }
+  ]
 }

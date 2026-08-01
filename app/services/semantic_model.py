@@ -319,44 +319,163 @@ async def _build_uncached(db: AsyncSession) -> list[dict]:
 
 # ── retrieval ────────────────────────────────────────────────────────────────
 
-def score_entity(ent: dict, q_tokens: list[str]) -> float:
+# Question scaffolding: interrogatives, prepositions, connectives, and the
+# words that name a BREAKDOWN rather than a subject. None of these say what the
+# question is about, and counting them as subject evidence is how "כמה מעיינות
+# לפי מחוז" retrieved "משטרת ישראל — מקרי רצח לפי מחוז": the crime dataset's
+# title contains "לפי" and "מחוז", so it matched the question's grammar instead
+# of its topic.
+#
+# The grouping cues (מחוז, יישוב, שנה…) stay eligible as ATTRIBUTE evidence —
+# matching a column called מחוז is a real signal about which dataset can answer
+# — they are only barred from deciding what the subject is.
+_STOPWORDS = {
+    "כמה", "מה", "מהו", "מהי", "מי", "איפה", "איזה", "אילו", "האם", "יש", "ישנם",
+    "כל", "של", "את", "עם", "לפי", "בפילוח", "פילוח", "לכל", "הכי", "ביותר",
+    "רשימה", "רשימת", "הצג", "תן", "תני", "תראה", "מספר", "כמות", "סך", "סהכ",
+    "הכול", "הכל", "בשנת", "בשנה", "בין", "או", "וגם", "גם", "היו", "היה",
+    "הם", "הן", "זה", "זו", "אלה", "נא", "בבקשה", "טבלה", "טבלת", "נתונים",
+    "מידע", "מאגר", "מאגרי", "רשומות", "שורות", "ממוצע", "סכום", "בכל",
+    "how", "many", "what", "which", "show", "list", "the", "of", "by", "in",
+    "for", "and", "count", "total", "average",
+}
+_GROUPING_CUES = {
+    "מחוז", "מחוזות", "נפה", "יישוב", "ישוב", "יישובים", "עיר", "ערים",
+    "רשות", "רשויות", "שנה", "שנים", "חודש", "אזור", "אזורים", "סוג", "סוגים",
+    "קטגוריה", "מין", "גיל", "אוכלוסייה",
+}
+
+
+def content_tokens(question: str) -> list[str]:
+    """The question's tokens with scaffolding and breakdown words removed.
+
+    Filtering happens BEFORE clitic expansion, and the expanded form is checked
+    too. Both matter: filtering the expanded list alone let "לפי" be dropped
+    while its stripped form "פי" survived — and "פי" then matched "פיענוח" in a
+    crime dataset's title, which is how "כמה מעיינות לפי מחוז" retrieved
+    "משטרת ישראל — מקרי רצח לפי מחוז" ahead of the springs dataset. The same
+    leak turned "מחוז" into "חוז".
+
+    Falls back to the full token list when stripping leaves nothing, so a
+    question made entirely of cue words still retrieves something."""
+    out: list[str] = []
+    for raw in _TOKEN_RE.findall(question or ""):
+        n = norm_token(raw)
+        if len(n) < 2 or n in _STOPWORDS or n in _GROUPING_CUES:
+            continue
+        out.append(n)
+        if len(n) >= 3 and n[0] in _HEB_PREFIXES:
+            stripped = n[1:]
+            if stripped not in _STOPWORDS and stripped not in _GROUPING_CUES:
+                out.append(stripped)
+    return out or tokens(question)
+
+
+def score_entity(ent: dict, q_tokens: list[str],
+                 subject_tokens: list[str] | None = None) -> float:
     """Lexical relevance of one entity to a tokenized question.
 
-    Deliberately not embeddings. A vector index is another service to run and
-    keep fresh, and the failure it fixes (paraphrase) is not the failure this
-    corpus has — the miss here is lexical/morphological, which normalized token
-    overlap addresses directly. Weighting reflects how specific a match is:
-    hitting a stored VALUE ("מאושר") is the strongest signal that a table is the
-    right one, hitting a column name is next, the title after that."""
+    Two kinds of evidence, and the distinction between them is the whole point:
+
+      SUBJECT evidence — the question's topic appears in the entity's title,
+        summary or synonyms. "עסקים" matching a dataset called "רישיונות עסק".
+      ATTRIBUTE evidence — a question word appears in a column name or a stored
+        value. "יישוב" matching a `setl_name` column.
+
+    Attribute evidence alone is NOT evidence that this is the right dataset, and
+    treating it as such is how the first production version answered "כמה עסקים
+    יש בכל יישוב" from a GovMap street layer for one municipality: the layer had
+    a locality column, matched "יישוב" twice, and outscored every actual business
+    dataset. So an entity with no subject evidence scores zero, and attribute
+    evidence is capped at the subject score — it can sharpen a ranking between
+    plausible datasets, never decide which subject the question is about.
+
+    Deliberately not embeddings: a vector index is another service to keep
+    fresh, and the failure this corpus has is lexical/morphological, which
+    normalized token overlap addresses directly."""
     if not q_tokens:
         return 0.0
     qs = set(q_tokens)
-    score = 0.0
-    title_t = set(tokens(ent["title"]))
-    score += 3.0 * len(qs & title_t)
-    score += 1.5 * len(qs & set(tokens(ent.get("summary") or "")))
-    score += 1.0 * len(qs & {t for s in ent.get("synonyms", []) for t in tokens(s)})
+    # Subject evidence is judged on CONTENT words only — see _STOPWORDS.
+    cs = set(subject_tokens if subject_tokens is not None else q_tokens)
+
+    subject = (
+        3.0 * len(cs & set(tokens(ent["title"])))
+        + 1.5 * len(cs & set(tokens(ent.get("summary") or "")))
+        + 1.0 * len(cs & {t for s in ent.get("synonyms", []) for t in tokens(s)})
+    )
+    if subject <= 0:
+        return 0.0
+
+    attribute = 0.0
     for d in ent["dimensions"]:
         dt = set(tokens(d["key"])) | set(tokens(d.get("title") or ""))
-        score += 2.0 * len(qs & dt)
+        attribute += 2.0 * len(qs & dt)
         for v in d.get("samples", []):
             if qs & set(tokens(v)):
-                score += 2.5
+                attribute += 2.5
                 break
+
+    # How much of the question's topic this entity actually accounts for. One
+    # word out of four matching is much weaker evidence than one out of one, and
+    # the raw score cannot tell them apart — which is how "מה שער הדולר היום"
+    # retrieved "שער הירדן" (a river crossing) on the strength of a single
+    # homonym. Scaled, not gated: a hard coverage floor also refused
+    # "כמה תיקי פשיעה" for matching only "פשיעה", which is a correct answer.
+    matched = len({t for t in cs if t in set(tokens(ent["title"]))
+                   | set(tokens(ent.get("summary") or ""))})
+    coverage = matched / len(cs) if cs else 0.0
+    score = (subject + min(attribute, subject)) * (0.5 + 0.5 * coverage)
     # Tie-break toward tables people can actually get answers out of. log-ish,
     # so a 4M-row registry does not outrank a well-matched 300-row table.
     rows = ent.get("rows") or 0
-    if rows and score:
+    if rows:
         score += min(1.0, (len(str(int(rows))) - 2) * 0.15)
-    return score
+    return score * _tier_weight(ent)
+
+
+# The `idx` schema is 904 of the catalog's 1,124 tables — mirrored GovMap layers
+# and collection indexes with auto-derived titles ("אבני ק\"מ", "אגרומוזאיק",
+# "אנדרטאות מ.א. רמת הנגב"), no descriptions and no curation. They are a
+# lower-quality tier for free-text retrieval, but NOT worthless: the licensed-
+# doctors and licensed-pharmacists registers live there too.
+#
+# So they are penalised, not excluded. Measured against the live catalog on a
+# 14-question gold set, top-1 correct:
+#     no penalty        11/14   (matched "נתוני פליטות לאוויר" for a weather question)
+#     penalty x0.75     12/14   ← chosen: mildest penalty that reaches the best score
+#     excluded entirely 10/14   (lost both health registers)
+# The failures that remain at x0.75 are refusals, not wrong answers.
+_IDX_TIER_PENALTY = 0.75
+
+
+def _tier_weight(ent: dict) -> float:
+    if ent.get("schema") != "idx":
+        return 1.0
+    return 1.0 if _OVERLAY.get(ent["key"], {}).get("nl") else _IDX_TIER_PENALTY
+
+
+# An entity has to clear this before a paid model is asked about it. Below it,
+# nothing in the catalog is plausibly about the question and the honest answer
+# is "אין לי את הנתון" — handing six weak candidates to a model does not produce
+# a refusal, it produces a confident answer from the least-bad one.
+#
+# Calibrated against the live catalog: ONE content word matching a title scores
+# 3.0 plus a row-size tie-break of up to 1.0, so a correct single-word match
+# ("כמה טיסות" → "מאגר טיסות") lands at ~3.5. A threshold of 4.0 rejected those,
+# which trades wrong answers for false refusals rather than fixing anything.
+MIN_RETRIEVAL_SCORE = 3.0
 
 
 def retrieve(model: list[dict], question: str, k: int = 6) -> list[dict]:
     """Top-k entities for a question. This is the step whose absence measured
-    0% schema-linking recall at this scale — never send the whole model."""
-    q = tokens(question)
-    scored = [(score_entity(e, q), e) for e in model]
-    scored = [(s, e) for s, e in scored if s > 0]
+    0% schema-linking recall at this scale — never send the whole model.
+
+    Returns [] when nothing clears MIN_RETRIEVAL_SCORE. That empty list is a
+    feature: the caller turns it into a refusal without spending a call."""
+    q, c = tokens(question), content_tokens(question)
+    scored = [(score_entity(e, q, c), e) for e in model]
+    scored = [(s, e) for s, e in scored if s >= MIN_RETRIEVAL_SCORE]
     scored.sort(key=lambda p: -p[0])
     return [e for _, e in scored[:k]]
 

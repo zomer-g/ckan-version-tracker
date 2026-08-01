@@ -494,3 +494,78 @@ def test_enrichment_grouping_is_sorted_by_the_measure():
     _, clean = sm.validate_query(MODEL, {"entity": "append_business", "enrich": ["district"]})
     assert clean["order"]["by"] == "measure"
     assert "ORDER BY" in sm.compile_sql(ENTITY, clean, MODEL)
+
+
+# ── retrieval scoring: subject vs attribute ──────────────────────────────────
+# The worst failure this feature has had, reproduced as unit tests. In
+# production "כמה עסקים יש בכל יישוב" was answered from a GovMap STREET layer
+# for one municipality: the layer had a locality column, matched "יישוב" twice,
+# and outscored every real dataset. Everything below pins the rule that fixes
+# it — an entity's SUBJECT decides what a question is about; its columns and
+# values can only sharpen a ranking between plausible subjects.
+
+STREET_LAYER = {
+    "key": "govmap_streets", "schema": "idx", "title": "רחובות — עיריית מגדל העמק",
+    "summary": "", "rows": 40000, "synonyms": [],
+    "dimensions": [{"key": "setl_name", "kind": "text", "title": "שם יישוב בעברית",
+                    "entity_type": "locality", "samples": ["מגדל העמק", "חיפה"],
+                    "groupable": True}],
+    "measures": [{"key": "count", "title": "מספר שורות"}],
+    "geo_dims": ["setl_name"], "source_url": "", "page_url": "",
+}
+
+
+def test_a_column_match_alone_is_not_evidence_of_the_subject():
+    """The production bug, exactly. A layer whose only relation to the question
+    is a locality column must score zero, not win."""
+    q, c = sm.tokens("כמה עסקים יש בכל יישוב"), sm.content_tokens("כמה עסקים יש בכל יישוב")
+    assert sm.score_entity(STREET_LAYER, q, c) == 0.0
+
+
+def test_the_subject_dataset_outranks_a_column_match():
+    q = "כמה רישיונות עסק יש בכל יישוב"
+    tk, ct = sm.tokens(q), sm.content_tokens(q)
+    assert sm.score_entity(ENTITY, tk, ct) > sm.score_entity(STREET_LAYER, tk, ct)
+
+
+def test_question_scaffolding_is_not_subject_evidence():
+    """'מקרי רצח לפי מחוז' matched 'כמה מעיינות לפי מחוז' on the words לפי and
+    מחוז — the question's grammar, not its topic."""
+    ct = set(sm.content_tokens("כמה מעיינות לפי מחוז"))
+    assert "מעיינות" in ct
+    for cue in ("לפי", "מחוז", "כמה"):
+        assert cue not in ct
+
+
+def test_the_clitic_form_of_a_stopword_is_also_dropped():
+    """The leak that made the fix ineffective the first time: 'לפי' was
+    filtered but its stripped form 'פי' survived and matched 'פיענוח'."""
+    ct = set(sm.content_tokens("כמה מעיינות לפי מחוז"))
+    assert "פי" not in ct and "חוז" not in ct
+
+
+def test_partial_topic_coverage_scores_below_full_coverage():
+    """One word out of four matching is weaker evidence than one out of one.
+    Without this, 'מה שער הדולר היום' retrieved 'שער הירדן' on one homonym."""
+    full = sm.score_entity(ENTITY, sm.tokens("רישיונות עסק"),
+                           sm.content_tokens("רישיונות עסק"))
+    partial = sm.score_entity(ENTITY, sm.tokens("רישיונות של דברים אחרים לגמרי"),
+                              sm.content_tokens("רישיונות של דברים אחרים לגמרי"))
+    assert partial < full
+
+
+def test_the_idx_tier_is_penalised_not_excluded():
+    """904 of the catalog's 1,124 tables are auto-derived GovMap layers, but the
+    licensed-doctors and licensed-pharmacists registers live there too.
+    Measured on the live catalog: penalty 12/14, no penalty 11/14, excluded
+    10/14."""
+    idx_ent = {**ENTITY, "schema": "idx", "key": "idx_thing"}
+    q, c = sm.tokens("רישיונות עסק"), sm.content_tokens("רישיונות עסק")
+    assert 0 < sm.score_entity(idx_ent, q, c) < sm.score_entity(ENTITY, q, c)
+
+
+def test_nothing_plausible_means_no_candidates():
+    """An empty candidate list is the refusal path, and it is free — handing a
+    model six weak candidates does not produce a refusal, it produces a
+    confident answer from the least-bad one."""
+    assert sm.retrieve([ENTITY, STREET_LAYER], "מה שער הדולר היום") == []
