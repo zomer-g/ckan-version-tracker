@@ -2382,6 +2382,11 @@ async def upload_csv(
     `fields_json` is a JSON-encoded list of {id, type} dicts describing the
     CSV columns (used for datastore schema). If absent, columns are inferred
     from the CSV header row with type=text.
+
+    A NEON-only dataset has no file store to upload to and no CKAN datastore to
+    stream into — its archive IS the append table — so it takes a third path:
+    the CSV is held on disk and returned as a ``neon-csv:<path>`` reference that
+    push-version streams into that table. See the branch below.
     """
     _verify_worker_key(request)
 
@@ -2396,9 +2401,9 @@ async def upload_csv(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    # NEON-only datasets ARE accepted here — rows are exactly what they archive,
-    # and this endpoint's real job for them is the load below. Only a dataset
-    # that stores files yet has no file store to store them in is refused.
+    # NEON-only datasets ARE accepted here: rows are exactly what they archive,
+    # and this endpoint's whole job for them is to take those rows in. Only a
+    # dataset that stores FILES yet has nowhere to put them is refused.
     if storage.dataset_stores_files(ds):
         _require_file_backend(ds, "a CSV file")
     elif not append_store.is_configured():
