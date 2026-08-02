@@ -13,10 +13,15 @@
  * never describe the same dataset differently:
  *
  *   • `variant="admin"` — states the reality AND flags where it contradicts the
- *     plan. This is a working surface; it should be blunt.
+ *     plan, down to the bucket the bytes are in (R2 / NEON / ODATA), because
+ *     that is the vocabulary the storage plan is configured in. This is a
+ *     working surface; it should be blunt.
  *   • `variant="public"` — one chip plus, only when there is genuinely less data
  *     than the page implies, a short factual note. Deliberately quiet: a visitor
- *     needs to know what they can download, not to read an internal audit.
+ *     needs to know what they can download, not to read an internal audit — and
+ *     never the vendor names, which are meaningless outside this repo. The
+ *     shared FIDELITY label carries the distinction that DOES matter to them:
+ *     files kept per version vs. a queryable table of rows.
  *
  * `fidelity: null` means the endpoint didn't compute it (the unpaginated public
  * catalog skips it on purpose — see ArchiveState in app/api/datasets.py). Null
@@ -27,21 +32,25 @@ import type { ArchiveState } from "../api/client";
 
 type Tone = "good" | "info" | "warn" | "bad";
 
+// The labels answer the visitor's actual question — "what do I get here?" —
+// in the only two forms this system stores: whole FILES kept per version, and
+// a queryable TABLE of rows. Vendor names (R2 / NEON / ODATA) say nothing to
+// someone outside the project, so they appear in the admin variant only.
 const FIDELITY: Record<string, { label: string; tone: Tone; hint: string }> = {
   full: {
-    label: "נתונים מלאים",
+    label: "קבצים + טבלה לתשאול",
     tone: "good",
-    hint: "הקבצים נשמרים וגם השורות נטענות למסד לתשאול",
+    hint: "כל קובץ של כל גרסה נשמר להורדה, והשורות טעונות גם לטבלה שאפשר לסנן ולתשאל",
   },
   rows: {
-    label: "שורות לתשאול",
+    label: "טבלה לתשאול",
     tone: "good",
-    hint: "השורות נשמרות במסד ואפשר לתשאל אותן ב-SQL; אין קובץ סנפשוט לגרסה",
+    hint: "השורות שמורות בטבלה שאפשר לסנן, לתשאל ב-SQL ולייצא; אין קובץ סנפשוט לכל גרסה",
   },
   files: {
     label: "קבצים שמורים",
     tone: "good",
-    hint: "הקבצים נשמרים במלואם לכל גרסה",
+    hint: "כל קובץ של כל גרסה נשמר במלואו וניתן להורדה",
   },
   sample: {
     label: "מטא־דאטה בלבד",
@@ -165,13 +174,12 @@ export default function ArchiveChips(props: {
           >
             מה נשמר כאן:
           </span>
+          {/* No store chip here on purpose. The label above already says which
+              of the two forms exist; naming the bucket they sit in (R2 / NEON)
+              only asks the visitor to learn our infrastructure. */}
           <Chip tone={f.tone} title={f.hint}>
             {f.label}
           </Chip>
-          {store && <StoreChip title="אחסון הקבצים">{store}</StoreChip>}
-          {a.row_store === "neon" && (
-            <StoreChip title="השורות ניתנות לתשאול ב-SQL">NEON</StoreChip>
-          )}
           {a.sample_of != null && (
             <span className="text-muted" style={{ fontSize: "0.72rem" }}>
               {rowsLabel(a.sample_of)}

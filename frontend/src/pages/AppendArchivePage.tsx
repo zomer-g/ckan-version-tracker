@@ -175,7 +175,7 @@ export default function AppendArchivePage() {
     return (
       <div className="container mt-3">
         <div className="empty-state">{error}</div>
-        <Link to="/" style={{ color: "var(--primary)" }}>&larr; חזרה</Link>
+        <Link to="/" style={{ color: "var(--primary)" }}>&larr; כל המאגרים</Link>
       </div>
     );
   }
@@ -237,13 +237,25 @@ export default function AppendArchivePage() {
               &#8595; CSV — מסונן
             </a>
           )}
+          {/* Both of these used to be one word — "גרסאות" and "חזרה" — which
+              named neither destination: this page is reached FROM the dataset
+              page, so "חזרה" reads like it goes there while it actually goes to
+              the catalog. Spell out where each one lands. */}
           {datasetId && (
-            <Link to={`/versions/${datasetId}`} style={{ fontSize: "0.85rem", color: "var(--text-muted)", textDecoration: "none" }}>
-              גרסאות &rarr;
+            <Link
+              to={`/versions/${datasetId}`}
+              style={{ fontSize: "0.85rem", color: "var(--text-muted)", textDecoration: "none" }}
+              title="היסטוריית הגרסאות והקבצים של המאגר הזה"
+            >
+              &larr; חזרה לעמוד המאגר
             </Link>
           )}
-          <Link to="/" style={{ fontSize: "0.85rem", color: "var(--text-muted)", textDecoration: "none" }}>
-            &larr; חזרה
+          <Link
+            to="/"
+            style={{ fontSize: "0.85rem", color: "var(--text-muted)", textDecoration: "none" }}
+            title="הקטלוג — כל המאגרים במעקב"
+          >
+            כל המאגרים
           </Link>
         </div>
       </div>
@@ -544,7 +556,7 @@ function StorageExplainBox({ schema }: { schema: AppendSchema }) {
         {diff ? "⚠ אופן שמירה מיוחד — מצב DIFF (לכידת שינויים)" : "אופן שמירת הנתונים"}
       </h2>
       <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.65, color: "var(--text)" }}>
-        <li><strong>שמירה:</strong> כל סריקה מוסיפה שורות (APPEND) לטבלה ב-PostgreSQL (NEON) בתוך OVER — נתונים ניתנים-לתשאול, לא קובץ.</li>
+        <li><strong>שמירה:</strong> כל סריקה מוסיפה שורות (APPEND) לטבלה שמורה כאן באתר — נתונים ניתנים-לתשאול, לא קובץ.</li>
         <li><strong>נקודת עוגן:</strong> {anchor}</li>
         <li><strong>תיעוד שינויים:</strong> {changes}</li>
         <li><strong>חותמת זמן:</strong> לכל רשומה עמודת <code>first_seen</code> — מתי נקלטה לראשונה לארכיון.</li>
