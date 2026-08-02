@@ -28,8 +28,8 @@ PRIVACY: search text is user-authored, same rules as nl_query_log — app DB
 only (never the publicly-queryable append DB), admin-only endpoints, prunable
 (index on created_at).
 
-Revision ID: 052
-Revises: 051
+Revision ID: 054
+Revises: 053
 Create Date: 2026-08-02
 """
 from typing import Sequence, Union
@@ -37,8 +37,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "052"
-down_revision: Union[str, None] = "051"
+revision: str = "054"
+down_revision: Union[str, None] = "053"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
