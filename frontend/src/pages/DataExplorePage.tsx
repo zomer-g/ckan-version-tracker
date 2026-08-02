@@ -231,6 +231,12 @@ export default function DataExplorePage() {
                       התאמה משוערת
                     </span>
                   )}
+                  {!s.official && (
+                    <span style={chip("#fef3c7", "#92400e")}
+                          title={`מקור מעובד או תרומת ציבור${s.organization ? ` (${s.organization})` : ""} — לא פרסום ממשלתי רשמי. מאגרים רשמיים מדורגים לפניו.`}>
+                      לא רשמי
+                    </span>
+                  )}
                   {s.schema === "idx" && (
                     <span style={chip("#f1f5f9", "#64748b")}
                           title="שכבת אינדקס/מיפוי — כותרת שנגזרה אוטומטית, בלי תיאור מוגה.">
@@ -362,6 +368,9 @@ export default function DataExplorePage() {
                                  padding: "0.35rem 0", borderTop: "1px solid var(--border, #f1f5f9)" }}>
                         <span style={{ fontSize: "0.85rem", flex: "1 1 240px" }}>{j.title}</span>
                         <span style={chip("#f1f5f9", "#475569")}>{fmt(j.rows)} שורות</span>
+                        {!j.official && (
+                          <span style={chip("#fef3c7", "#92400e")} title="מקור מעובד או תרומת ציבור">לא רשמי</span>
+                        )}
                         <span className="text-muted" style={{ fontSize: "0.72rem" }}>לפי {j.via}</span>
                         {/* THE button this step exists for. The first version
                             only navigated to the other dataset — dropping the

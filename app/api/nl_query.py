@@ -279,6 +279,13 @@ async def suggest(request: Request, body: SuggestRequest, db: AsyncSession = Dep
                 "score": h["score"],
                 "matched": h["matched"],
                 "why": _why(h),
+                # Provenance, shown as a chip. On a transparency site an
+                # official publication and a citizen's FOI upload are not
+                # interchangeable sources for the same question, so the
+                # distinction is surfaced rather than only applied to the rank.
+                "official": semantic_model.is_official(h["entity"]),
+                "source_type": h["entity"].get("source_type") or "",
+                "organization": h["entity"].get("organization") or "",
                 # Found by spelling similarity, not by a real token match. The
                 # UI badges these; dropping the flag (the launch bug — caught in
                 # live verification, missed by a vacuous test) showed guesses as
@@ -322,7 +329,7 @@ async def joinable(table: str, request: Request, q: str = "",
         "joinable": [
             {"table": r["entity"]["key"], "schema": r["entity"]["schema"],
              "title": r["entity"]["title"], "rows": r["entity"].get("rows"),
-             "via": r["via"]}
+             "via": r["via"], "official": semantic_model.is_official(r["entity"])}
             for r in rows[:40]
         ],
     }

@@ -219,6 +219,10 @@ def _entity_from(rec: dict, profile: dict | None) -> dict | None:
     return {
         "key": table,
         "schema": rec.get("schema") or "public",
+        # Provenance, for source ranking: official publication vs contributed
+        # ("מידע לעם") vs OVER-processed. See _tier_weight.
+        "source_type": rec.get("source_type") or "",
+        "organization": rec.get("organization") or "",
         "title": over.get("title") or rec.get("title") or table,
         "summary": (profile or {}).get("summary_he") or rec.get("description") or "",
         "rows": rec.get("est_rows"),
@@ -466,25 +470,53 @@ def score_entity(ent: dict, q_tokens: list[str],
     return score * _tier_weight(ent)
 
 
-# The `idx` schema is 904 of the catalog's 1,124 tables — mirrored GovMap layers
-# and collection indexes with auto-derived titles ("אבני ק\"מ", "אגרומוזאיק",
-# "אנדרטאות מ.א. רמת הנגב"), no descriptions and no curation. They are a
-# lower-quality tier for free-text retrieval, but NOT worthless: the licensed-
-# doctors and licensed-pharmacists registers live there too.
+# ── source ranking ───────────────────────────────────────────────────────────
+# Two independent things make a dataset a weaker suggestion, and they are kept
+# separate because they mean different things to a reader.
 #
-# So they are penalised, not excluded. Measured against the live catalog on a
-# 14-question gold set, top-1 correct:
-#     no penalty        11/14   (matched "נתוני פליטות לאוויר" for a weather question)
-#     penalty x0.75     12/14   ← chosen: mildest penalty that reaches the best score
-#     excluded entirely 10/14   (lost both health registers)
-# The failures that remain at x0.75 are refusals, not wrong answers.
+# PROVENANCE — who published it. On a transparency site an OFFICIAL government
+# publication and a citizen's FOI upload are not interchangeable sources for the
+# same question, and the official one should be offered first. The catalog's
+# `source_type` says which:
+#     ckan / scraper / knesset / cbs   official publication or a scrape of one
+#     govmap                           official (the government mapping service)
+#     odata                            "מידע לעם" — FOI data contributed by
+#                                      individuals and NGOs (organizations in
+#                                      prod: גיא זומר, התנועה לחופש המידע)
+#     ocal                             יומן לעם — OVER's own processed project
+#
+# TITLE QUALITY — the `idx` schema is 904 of the catalog's 1,124 tables:
+# mirrored map layers with auto-derived titles ("אבני ק\"מ", "אגרומוזאיק"), no
+# descriptions, no curation. Officially sourced, but poor retrieval material.
+# NOT worthless — the licensed-doctors and licensed-pharmacists registers live
+# there — so penalised rather than excluded. Measured on a 14-question gold set,
+# top-1 correct: no penalty 11/14, x0.75 12/14 (chosen), excluded 10/14.
+#
+# Both are MULTIPLIERS, not a hard tier sort. A processed dataset needs roughly
+# twice the lexical evidence to outrank an official one, which settles every
+# same-topic case in favour of the official source — while still letting someone
+# searching a FOI dataset by its actual name find it. A strict sort would bury
+# an exact title match under weak official matches, which is a worse answer.
 _IDX_TIER_PENALTY = 0.75
+_PROCESSED_SOURCE_PENALTY = 0.5
+_PROCESSED_SOURCES = {"odata", "ocal", "over"}
+
+
+def is_official(ent: dict) -> bool:
+    """Is this an official publication (or a scrape of one), rather than
+    contributed or OVER-processed data?"""
+    return (ent.get("source_type") or "") not in _PROCESSED_SOURCES
 
 
 def _tier_weight(ent: dict) -> float:
-    if ent.get("schema") != "idx":
+    if _OVERLAY.get(ent["key"], {}).get("nl"):
         return 1.0
-    return 1.0 if _OVERLAY.get(ent["key"], {}).get("nl") else _IDX_TIER_PENALTY
+    w = 1.0
+    if not is_official(ent):
+        w *= _PROCESSED_SOURCE_PENALTY
+    if ent.get("schema") == "idx":
+        w *= _IDX_TIER_PENALTY
+    return w
 
 
 # An entity has to clear this before a paid model is asked about it. Below it,

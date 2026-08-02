@@ -682,3 +682,52 @@ def test_short_skeletons_cannot_collide_into_a_match():
     ent = {**ENTITY, "key": "append_years", "title": "לוח שנים", "geo_dims": [],
            "summary": "", "synonyms": []}
     assert not sm.suggest([ent], "שניצל")
+
+
+# ── source ranking: official publication over contributed data ───────────────
+# On a transparency site an official government publication and a citizen's FOI
+# upload are not interchangeable sources for the same question. In this catalog
+# `odata` is "מידע לעם" — 31 datasets contributed by individuals and NGOs — and
+# `ocal` is OVER's own processed project; everything else is official or a
+# scrape of an official site.
+
+OFFICIAL = {**ENTITY, "key": "append_official", "source_type": "scraper",
+            "title": "רישיונות עסק", "summary": "", "synonyms": []}
+CONTRIBUTED = {**OFFICIAL, "key": "odata_x", "schema": "odata",
+               "source_type": "odata", "organization": "התנועה לחופש המידע"}
+
+
+def test_contributed_data_is_marked_unofficial():
+    assert sm.is_official(OFFICIAL) is True
+    assert sm.is_official(CONTRIBUTED) is False
+    assert sm.is_official({**OFFICIAL, "source_type": "ocal"}) is False
+    for src in ("ckan", "scraper", "knesset", "cbs", "govmap"):
+        assert sm.is_official({**OFFICIAL, "source_type": src}) is True
+
+
+def test_an_official_source_outranks_a_contributed_one_on_equal_evidence():
+    """The user-visible rule: same topic, same words → the official dataset is
+    offered first."""
+    hits = sm.suggest([CONTRIBUTED, OFFICIAL], "רישיונות עסק")
+    assert [h["entity"]["key"] for h in hits] == ["append_official", "odata_x"]
+
+
+def test_the_preference_is_a_multiplier_not_a_hard_tier():
+    """Deliberate: a hard tier sort would bury an EXACT title match on a
+    contributed dataset under weak official matches. Someone searching a FOI
+    dataset by its real name must still find it — the penalty only settles
+    same-topic ties, which is what "prefer official" actually means."""
+    exact = {**CONTRIBUTED, "key": "odata_foi", "title": "עתירות חופש מידע בפרקליטות"}
+    weak = {**OFFICIAL, "key": "append_weak", "title": "הנחיות היחידה לחופש המידע"}
+    hits = sm.suggest([weak, exact], "עתירות חופש מידע בפרקליטות")
+    assert hits[0]["entity"]["key"] == "odata_foi"
+
+
+def test_the_two_penalties_compound():
+    """Provenance and title quality are independent axes: an auto-derived index
+    layer from a processed source is worse than either alone."""
+    both = {**CONTRIBUTED, "key": "idx_proc", "schema": "idx"}
+    q, c = sm.tokens("רישיונות עסק"), sm.content_tokens("רישיונות עסק")
+    assert (sm.score_entity(both, q, c)
+            < sm.score_entity(CONTRIBUTED, q, c)
+            < sm.score_entity(OFFICIAL, q, c))

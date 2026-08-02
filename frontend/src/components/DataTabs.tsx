@@ -23,8 +23,8 @@ export default function DataTabs({ active }: { active: "console" | "explore" | "
   };
   return (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border, #e5e7eb)", marginBottom: "1rem", flexWrap: "wrap" }}>
-      {tab("/data/explore", "🔎 מצא נתונים", "explore")}
       {tab("/data", "</> קונסולת SQL", "console")}
+      {tab("/data/explore", "🔎 מצא נתונים", "explore")}
       {tab("/data/normalize", "🧹 נרמול רשימת שמות", "normalize")}
       {tab("/data/guide", "📖 מדריך — הצלבה מתוקנת", "guide")}
     </div>

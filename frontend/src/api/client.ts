@@ -1312,6 +1312,12 @@ export interface NlSuggestion {
   matched: { title: string[]; summary: string[]; columns: string[]; values: string[] };
   why: string;
   can_join: boolean;
+  // Official publication (or a scrape of one) vs contributed / OVER-processed
+  // data such as מידע לעם. Official sources rank ahead of processed ones and
+  // are badged, because for the same question they are not interchangeable.
+  official: boolean;
+  source_type: string;
+  organization: string;
   page_url: string;
   source_url: string;
   // Matched only by a shared Hebrew word-prefix (שמאויות ~ שמאות). A guess —
@@ -1325,6 +1331,7 @@ export interface NlJoinable {
   title: string;
   rows: number | null;
   via: string;
+  official: boolean;
 }
 export const nlExplore = {
   // Two dataset keys -> the fan-trap-safe cross SQL (each side pre-aggregated
