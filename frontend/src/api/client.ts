@@ -1423,7 +1423,31 @@ export interface NlAdminConfig {
   keys: { deepseek: boolean; anthropic: boolean };
   defaults: { daily_call_budget: number; daily_output_token_budget: number };
 }
+export interface NlSuggestLogRow {
+  id: number;
+  created_at: string;
+  query: string;
+  suggestions_count: number;
+  approximate_count: number;
+  top_table: string | null;
+  picked_table: string | null;
+  picked_rank: number | null;
+  picked_approximate: boolean | null;
+  picked_at: string | null;
+}
 export const adminNlQuery = {
+  // The explorer's click-through log. `totals` gives recall-in-the-wild;
+  // `synonym_candidates` are approximate suggestions users then picked — the
+  // scorer admitting it guessed and the user confirming the guess.
+  suggestLog: (limit = 100) =>
+    request<{
+      rows: NlSuggestLogRow[];
+      totals: { searches: number; picked: number; picked_at_1: number; empty: number };
+      synonym_candidates: Array<{ query: string; picked_table: string; n: number }>;
+    }>(`/admin/nl/suggest-log?limit=${limit}`),
+  adoptSynonym: (word: string, table: string) =>
+    request<{ synonyms: Array<{ word: string; table_key: string; created_at: string }> }>(
+      "/admin/nl/synonyms", { method: "POST", body: JSON.stringify({ word, table }) }),
   log: (p: { limit?: number; offset?: number; stage?: string; answered?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (p.limit) qs.set("limit", String(p.limit));

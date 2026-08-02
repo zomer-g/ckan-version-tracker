@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { adminNlQuery } from "../api/client";
-import type { NlAdminConfig, NlAdminLogRow, NlAdminStats } from "../api/client";
+import type { NlAdminConfig, NlAdminLogRow, NlAdminStats, NlSuggestLogRow } from "../api/client";
 
 /**
  * Admin panel for the free-text query feature: what people asked, which stage
@@ -47,6 +47,12 @@ export default function NlQueryAdminPanel() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [openSql, setOpenSql] = useState<number | null>(null);
+  const [sug, setSug] = useState<{
+    rows: NlSuggestLogRow[];
+    totals: { searches: number; picked: number; picked_at_1: number; empty: number };
+    synonym_candidates: Array<{ query: string; picked_table: string; n: number }>;
+  } | null>(null);
+  const [adopting, setAdopting] = useState("");
 
   const load = useCallback(async () => {
     setErr("");
@@ -57,6 +63,10 @@ export default function NlQueryAdminPanel() {
         adminNlQuery.log({ limit: 100, stage: stage || undefined }),
       ]);
       setCfg(c); setStats(s); setRows(l.rows); setTotal(l.total);
+      // The explorer's log is a different question from the answer box's
+      // ("was the right dataset offered?" vs "what did the model cost?"), so a
+      // failure here must not blank the cost panel beside it.
+      adminNlQuery.suggestLog(100).then(setSug).catch(() => setSug(null));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "שגיאה בטעינה");
     }
@@ -221,6 +231,110 @@ export default function NlQueryAdminPanel() {
           </>
         )}
       </div>
+
+      {/* ── explorer: searches, picks, synonym candidates ──────────── */}
+      {sug && (
+        <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+          <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>
+            מצא נתונים — חיפושים ובחירות
+          </div>
+          <div className="flex" style={{ gap: "1.5rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+            <div>
+              <div className="text-muted" style={{ fontSize: "0.75rem" }}>חיפושים</div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 600 }}>{fmt(sug.totals.searches)}</div>
+            </div>
+            <div title="באיזה חלק מהחיפושים המשתמש בחר מאגר מהרשימה. זהו recall בשטח — המדד שהמסך תלוי בו, על שאלות אמיתיות ולא על סט שנכתב ביד.">
+              <div className="text-muted" style={{ fontSize: "0.75rem" }}>נבחר מאגר</div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 600, color: "#15803d" }}>
+                {sug.totals.searches
+                  ? `${Math.round((sug.totals.picked / sug.totals.searches) * 100)}%` : "—"}
+              </div>
+            </div>
+            <div title="מתוך הבחירות — כמה היו בהצעה הראשונה.">
+              <div className="text-muted" style={{ fontSize: "0.75rem" }}>מהן במקום 1</div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 600 }}>
+                {sug.totals.picked
+                  ? `${Math.round((sug.totals.picked_at_1 / sug.totals.picked) * 100)}%` : "—"}
+              </div>
+            </div>
+            <div title="חיפושים שלא החזירו כלום — הפער האמיתי בכיסוי הקטלוג.">
+              <div className="text-muted" style={{ fontSize: "0.75rem" }}>ללא הצעות</div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 600,
+                            color: sug.totals.empty ? "#a16207" : undefined }}>
+                {fmt(sug.totals.empty)}
+              </div>
+            </div>
+          </div>
+
+          {!!sug.synonym_candidates.length && (
+            <div style={{ marginBottom: "0.6rem" }}>
+              <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: 4 }}>
+                מועמדים למילים נרדפות
+              </div>
+              <div className="text-muted" style={{ fontSize: "0.75rem", marginBottom: 6 }}>
+                המשתמש חיפש מילה, המערכת רק ניחשה לפי דמיון כתיב, והוא בחר בכל זאת.
+                אימוץ הופך את הצמד להתאמה מדויקת — זה התיקון השיטתי למורפולוגיה העברית.
+              </div>
+              {sug.synonym_candidates.map((c) => (
+                <div key={`${c.query}|${c.picked_table}`} className="flex"
+                     style={{ gap: 8, alignItems: "center", flexWrap: "wrap", padding: "0.25rem 0",
+                              borderTop: "1px solid var(--border, #f1f5f9)", fontSize: "0.82rem" }}>
+                  <b>{c.query}</b>
+                  <span className="text-muted">← {c.picked_table}</span>
+                  <span style={chip("cache")}>{c.n}</span>
+                  <button disabled={!!adopting}
+                    onClick={async () => {
+                      setAdopting(c.query);
+                      try { await adminNlQuery.adoptSynonym(c.query, c.picked_table); await load(); }
+                      catch (e) { setErr(e instanceof Error ? e.message : "שגיאה באימוץ"); }
+                      finally { setAdopting(""); }
+                    }}
+                    style={{ ...box, cursor: "pointer", fontWeight: 600 }}>
+                    {adopting === c.query ? "מאמץ…" : "אמץ"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <details>
+            <summary style={{ cursor: "pointer", fontSize: "0.85rem", fontWeight: 600 }}>
+              חיפושים אחרונים ({sug.rows.length})
+            </summary>
+            <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse", marginTop: 6 }}>
+              <thead>
+                <tr style={{ color: "var(--text-muted, #64748b)" }}>
+                  <th style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
+                  <th style={{ textAlign: "start" }}>חיפוש</th>
+                  <th style={{ textAlign: "start" }}>הצעות</th>
+                  <th style={{ textAlign: "start" }}>נבחר</th>
+                  <th style={{ textAlign: "start" }}>מיקום</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sug.rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: "1px solid var(--border, #f1f5f9)" }}>
+                    <td className="text-muted" style={{ padding: "0.22rem 0", whiteSpace: "nowrap" }}>
+                      {new Date(r.created_at).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })}
+                    </td>
+                    <td>{r.query}</td>
+                    <td className="text-muted">
+                      {r.suggestions_count}{r.approximate_count ? ` (${r.approximate_count} משוער)` : ""}
+                    </td>
+                    <td className="text-muted">{r.picked_table || "—"}</td>
+                    <td className="text-muted">{r.picked_rank ?? "—"}</td>
+                  </tr>
+                ))}
+                {!sug.rows.length && (
+                  <tr><td colSpan={5} className="text-muted" style={{ padding: "0.6rem 0" }}>
+                    אין חיפושים עדיין
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </details>
+        </div>
+      )}
 
       {/* ── log ────────────────────────────────────────────────────── */}
       <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem" }}>
