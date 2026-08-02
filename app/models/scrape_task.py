@@ -15,6 +15,15 @@ from app.database import Base
 # preempted. A heavy GovMap layer holds its worker for up to ~75 min, so when
 # every live worker happens to be mid-backfill a routine poll still waits for
 # one of them to finish. Priority governs the queue, not the fleet.
+#
+# PROMOTED is the band the admin queue panel writes by hand (the "⬆ לראש התור"
+# button), and nothing else writes it — that is what makes it a reliable "next
+# out": no scheduled job can ever land alongside it. It sits above MANUAL so a
+# hand-picked row also beats a "דגום" click someone made an hour ago. Inside
+# the band the ordinary rule still applies, oldest-queued first: promote three
+# rows and all three go before everything else, among themselves in the order
+# they entered the queue.
+PRIORITY_PROMOTED = 300    # admin picked this row OUT of the queue: strictly next
 PRIORITY_MANUAL = 200      # admin "דגום" — a human is watching, jump the queue
 PRIORITY_ROUTINE = 100     # scheduled polls: the normal cadence of the system
 PRIORITY_COVERAGE = 10     # GovMap coverage rollout's routine quarterly refresh

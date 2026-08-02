@@ -9,7 +9,7 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid, sanitize_ckan_name
@@ -835,6 +835,92 @@ async def cancel_scrape_task(
         return {"status": "deleted", "was": "failed"}
     else:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
+
+
+class PromoteTaskRequest(BaseModel):
+    # False restores the task to the routine band — an "undo" for a promotion
+    # made in error, which matters because promoting a heavy layer can hold a
+    # worker for over an hour once it is claimed.
+    promote: bool = True
+
+
+@router.post("/scrape-tasks/{task_id}/promote")
+@limiter.limit("30/minute")
+async def promote_scrape_task(
+    request: Request,
+    task_id: str,
+    payload: PromoteTaskRequest | None = None,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move one pending task to the head of the scrape queue (or back).
+
+    The queue is drained by band, then oldest-first (app/api/worker.py
+    ``next_pending_task_q``), so jumping the queue is a band change and nothing
+    more: PRIORITY_PROMOTED, which only this endpoint ever writes.
+
+    Two things this deliberately does NOT do, both reported back so the panel
+    can say them out loud rather than let the admin infer a lie from a green
+    toast:
+
+    * It cannot preempt a RUNNING task — hence the 400 on one. Under load every
+      worker may be mid-scrape, and the promoted task waits for a free one just
+      like everything else; ``running`` in the response is how many it's behind.
+    * It does not make the task *unique*ly first — ``ahead`` counts the pending
+      tasks that still outrank it (other promotions), which is 0 for the common
+      case of promoting a single row.
+    """
+    from app.models.scrape_task import PRIORITY_PROMOTED, PRIORITY_ROUTINE, ScrapeTask
+
+    promote = payload.promote if payload else True
+    tid = parse_uuid(task_id, "task_id")
+    result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "רק משימה שממתינה בתור אפשר להעלות לראש התור — "
+                f"המשימה הזו בסטטוס '{task.status}'"
+            ),
+        )
+
+    task.priority = PRIORITY_PROMOTED if promote else PRIORITY_ROUTINE
+    await db.commit()
+    logger.info(
+        "Scrape task %s %s by %s (priority=%d)",
+        tid, "promoted to head of queue" if promote else "restored to routine band",
+        user.email, task.priority,
+    )
+
+    # Where it actually lands, in the worker's own claim order — the same
+    # (priority DESC, created_at ASC) comparison, expressed as a count.
+    ahead = await db.scalar(
+        select(func.count())
+        .select_from(ScrapeTask)
+        .where(
+            ScrapeTask.status == "pending",
+            ScrapeTask.id != task.id,
+            or_(
+                ScrapeTask.priority > task.priority,
+                and_(
+                    ScrapeTask.priority == task.priority,
+                    ScrapeTask.created_at < task.created_at,
+                ),
+            ),
+        )
+    )
+    running = await db.scalar(
+        select(func.count()).select_from(ScrapeTask).where(ScrapeTask.status == "running")
+    )
+    return {
+        "status": "promoted" if promote else "restored",
+        "priority": task.priority,
+        "ahead": ahead or 0,
+        "running": running or 0,
+    }
 
 
 @router.get("/datasets/{dataset_id}/scrape-tasks")

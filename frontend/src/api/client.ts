@@ -1691,6 +1691,15 @@ export interface ScrapeQueueFailed {
   completed_at: string | null;
 }
 
+export interface PromoteTaskResult {
+  status: "promoted" | "restored";
+  priority: number;
+  /** Pending tasks still claimed before this one — 0 when it is genuinely next. */
+  ahead: number;
+  /** Tasks occupying a worker right now. Promotion cannot preempt these. */
+  running: number;
+}
+
 export interface ScrapeQueueResponse {
   running: ScrapeQueueRunning[];
   pending: ScrapeQueuePending[];
@@ -1945,6 +1954,16 @@ export const admin = {
   cancelScrapeTask: (taskId: string) =>
     request<{ status: string; was: string }>(`/admin/scrape-tasks/${taskId}`, {
       method: "DELETE",
+    }),
+  /**
+   * Move one pending task to the head of the queue, or (promote=false) put it
+   * back in the routine band. Only affects the CLAIM order — a task already
+   * running keeps its worker, which is why the response reports `running`.
+   */
+  promoteScrapeTask: (taskId: string, promote = true) =>
+    request<PromoteTaskResult>(`/admin/scrape-tasks/${taskId}/promote`, {
+      method: "POST",
+      body: JSON.stringify({ promote }),
     }),
   scheduledJobs: () => request<ScheduledJobsResponse>("/admin/scheduled-jobs"),
   // `summary` drops the per-version breakdown (~10,800 rows catalog-wide) —

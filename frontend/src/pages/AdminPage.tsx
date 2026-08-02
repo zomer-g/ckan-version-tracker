@@ -103,9 +103,11 @@ function workerLabel(t: { worker_id?: string | null; worker_ip?: string | null }
 // a whole-catalog GovMap backfill), and without a visible band the panel looks
 // like a mysteriously out-of-order FIFO.
 const PRIORITY_ROUTINE = 100;
+const PRIORITY_PROMOTED = 300;
 
 function priorityChip(priority: number | undefined): { label: string; bg: string; fg: string } | null {
   if (priority === undefined || priority === PRIORITY_ROUTINE) return null;  // the norm needs no label
+  if (priority >= PRIORITY_PROMOTED) return { label: "⬆ הועלה לראש התור", bg: "#dbeafe", fg: "#1e40af" };
   if (priority > PRIORITY_ROUTINE) return { label: "ידני — קופץ בראש התור", bg: "#dcfce7", fg: "#166534" };
   if (priority <= 0) return { label: "השלמת GovMap — רק כשהתור פנוי", bg: "#f1f5f9", fg: "#475569" };
   return { label: "כיסוי GovMap שוטף", bg: "#f1f5f9", fg: "#475569" };
@@ -215,6 +217,10 @@ export default function AdminPage() {
   >(null);
   // Scrape queue state
   const [queue, setQueue] = useState<ScrapeQueueResponse | null>(null);
+  // Per-task feedback for the queue panel's reorder controls, keyed by task_id
+  // (the same inline-toast pattern the datasets tab uses for "דגום").
+  const [queueToast, setQueueToast] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
+  const [queueBusy, setQueueBusy] = useState<Set<string>>(new Set());
   // GovMap rollout + engine-epoch backfill progress, shown above the queue —
   // the backfill runs for about a day at the bottom priority band, so the
   // queue panel alone (6 tasks at a time) gives no sense of where it's up to.
@@ -665,6 +671,37 @@ export default function AdminPage() {
     } catch (e: any) {
       alert(`שגיאה: ${e?.message || e}`);
     }
+  };
+
+  // Move a waiting task to the head of the queue — the answer to "the queue is
+  // backed up and I need THIS one now". The toast reports what actually
+  // happened rather than a flat "done": promotion reorders the queue, it can't
+  // take a worker away from a scrape already in flight, so with every worker
+  // busy the honest message is "next one free takes it".
+  const handlePromoteTask = async (taskId: string, promote: boolean) => {
+    setQueueBusy((prev) => new Set(prev).add(taskId));
+    try {
+      const r = await adminApi.promoteScrapeTask(taskId, promote);
+      let msg: string;
+      if (!promote) {
+        msg = "הוחזר לתור הרגיל";
+      } else if (r.ahead > 0) {
+        // Only reachable when several rows are promoted; inside the band the
+        // older one still goes first, so don't promise "next".
+        msg = `הועלה — ${r.ahead} משימות מועלות עדיין לפניו`;
+      } else if (r.running > 0) {
+        msg = `ראשון בתור — ימתין ל-worker פנוי (${r.running} בעבודה)`;
+      } else {
+        msg = "ראשון בתור — יילקח בדגימה הבאה";
+      }
+      setQueueToast({ id: taskId, ok: true, msg });
+      setTimeout(() => setQueueToast((t) => (t?.id === taskId ? null : t)), 6000);
+      await loadQueue();
+    } catch (e: any) {
+      setQueueToast({ id: taskId, ok: false, msg: e?.message || "שגיאה" });
+      setTimeout(() => setQueueToast((t) => (t?.id === taskId ? null : t)), 6000);
+    }
+    setQueueBusy((prev) => { const n = new Set(prev); n.delete(taskId); return n; });
   };
 
   const handleDismissFailed = async (taskId: string, title: string) => {
@@ -1173,6 +1210,7 @@ export default function AdminPage() {
                     // as a problem during a day-long GovMap sweep.
                     const isOld = ageMs > 60 * 60 * 1000 && t.priority >= PRIORITY_ROUTINE;
                     const chip = priorityChip(t.priority);
+                    const isPromoted = t.priority >= PRIORITY_PROMOTED;
                     return (
                       <li key={t.task_id} style={{
                         padding: "0.4rem 0.6rem",
@@ -1202,6 +1240,38 @@ export default function AdminPage() {
                         <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                           נוסף {formatRelative(t.created_at)}
                         </span>
+                        {queueToast?.id === t.task_id && (
+                          <span style={{
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            background: queueToast.ok ? "#dbeafe" : "#fee2e2",
+                            color: queueToast.ok ? "#1e40af" : "#991b1b",
+                            whiteSpace: "nowrap",
+                          }}>
+                            {queueToast.msg}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => handlePromoteTask(t.task_id, !isPromoted)}
+                          disabled={queueBusy.has(t.task_id)}
+                          title={isPromoted
+                            ? "החזר לתור הרגיל"
+                            : "העלה לראש התור — יילקח על ידי ה-worker הפנוי הבא"}
+                          style={{
+                            background: isPromoted ? "#dbeafe" : "none",
+                            border: "1px solid #1e40af",
+                            color: "#1e40af",
+                            cursor: queueBusy.has(t.task_id) ? "default" : "pointer",
+                            opacity: queueBusy.has(t.task_id) ? 0.5 : 1,
+                            fontSize: "0.7rem",
+                            padding: "0.15rem 0.4rem",
+                            borderRadius: "4px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {isPromoted ? "↩ בטל" : "⬆ לראש התור"}
+                        </button>
                         <button
                           onClick={() => handleCancelTask(t.task_id, t.dataset_title, "pending")}
                           title="הסר מהתור"
