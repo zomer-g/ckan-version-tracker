@@ -233,6 +233,10 @@ export const datasets = {
     request<void>(`/datasets/${id}`, { method: "DELETE" }),
   poll: (id: string) =>
     request<{ message: string }>(`/datasets/${id}/poll`, { method: "POST" }),
+  // Live progress of a running collection — PUBLIC (/api/v1), no credentials.
+  // A collection that runs for days publishes nothing until it finishes, so
+  // without this the only evidence it is alive is an admin token.
+  scrapeStatus: (id: string) => request<ScrapeStatus>(`/v1/datasets/${id}/status`),
   // Targeted re-sampling (admin). `sampling` describes what this dataset can be
   // asked for — the modes its source declares, the statuses its items are
   // currently at, how far each key series has got; `sample` queues one run.
@@ -244,6 +248,21 @@ export const datasets = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 };
+
+export interface ScrapeStatus {
+  dataset_id: string;
+  running: boolean;
+  phase?: string | null;
+  message?: string | null;
+  percentage?: number | null;
+  started_at?: string | null;
+  updated_at?: string | null;
+  elapsed_seconds?: number | null;
+  /** The worker heartbeats every 30s; a climbing value means the run is in trouble. */
+  seconds_since_heartbeat?: number | null;
+  last_outcome?: string | null;
+  last_finished_at?: string | null;
+}
 
 export interface SamplingOptions {
   enabled: boolean;

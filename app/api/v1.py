@@ -6,6 +6,8 @@ See `docs/API.md` for the human-readable reference.
 """
 
 import logging
+import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
@@ -544,6 +546,96 @@ async def get_dataset(
         )
     ).scalar() or 0
     return _dataset_summary(ds, org, version_count, request)
+
+
+class ScrapeStatus(BaseModel):
+    """What a dataset's collection is doing right now."""
+    dataset_id: str
+    running: bool
+    phase: str | None = None
+    message: str | None = None
+    percentage: int | None = None
+    started_at: str | None = None
+    updated_at: str | None = None
+    elapsed_seconds: int | None = None
+    # Seconds since the worker last reported. It heartbeats every 30s, so a
+    # value climbing past a few minutes means the run is in trouble — which is
+    # the one thing this endpoint exists to make visible without credentials.
+    seconds_since_heartbeat: int | None = None
+    # Set when nothing is running: how the last attempt ended.
+    last_outcome: str | None = None
+    last_finished_at: str | None = None
+
+
+# The worker stamps its commit onto every progress message ("… [3f9c1d2]").
+# That is an internal build identifier and it is stripped here — the public
+# answer is what the collection is doing, not which commit is doing it.
+_WORKER_STAMP = re.compile(r"\s*\[[0-9a-f]{7,40}(?:/[a-z]+)?\]\s*$")
+
+
+@router.get("/datasets/{dataset_id}/status", response_model=ScrapeStatus)
+@limiter.limit("60/minute")
+async def get_scrape_status(
+    dataset_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Live progress of this dataset's collection — public and credential-free.
+
+    A long collection publishes nothing until it finishes: the Jerusalem
+    building-licensing register runs for ~50 hours and produces its single
+    version at the very end. Until this existed the only way to tell a healthy
+    run from a dead one was an admin token, which expires every couple of hours
+    — so the question "is it still working?" was unanswerable exactly when it
+    mattered most, on the runs that take days.
+
+    Deliberately narrow: phase, message, how long it has been going, and how
+    long since the worker last reported. No worker identity, no IP, no build
+    stamp — none of that is anyone's business but the operator's, and none of it
+    answers the question.
+    """
+    from app.models.scrape_task import ScrapeTask
+
+    ds = await _get_dataset_or_404(dataset_id, db)
+    now = datetime.now(timezone.utc)
+
+    task = (await db.execute(
+        select(ScrapeTask)
+        .where(ScrapeTask.tracked_dataset_id == ds.id,
+               ScrapeTask.status.in_(["running", "pending"]))
+        .order_by(ScrapeTask.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+    if task is not None:
+        message = _WORKER_STAMP.sub("", task.message or "").strip() or None
+        return ScrapeStatus(
+            dataset_id=str(ds.id),
+            running=True,
+            phase=task.phase,
+            message=message,
+            percentage=task.progress,
+            started_at=task.created_at.isoformat() if task.created_at else None,
+            updated_at=task.updated_at.isoformat() if task.updated_at else None,
+            elapsed_seconds=(int((now - task.created_at).total_seconds())
+                             if task.created_at else None),
+            seconds_since_heartbeat=(int((now - task.updated_at).total_seconds())
+                                     if task.updated_at else None),
+        )
+
+    last = (await db.execute(
+        select(ScrapeTask)
+        .where(ScrapeTask.tracked_dataset_id == ds.id)
+        .order_by(ScrapeTask.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    return ScrapeStatus(
+        dataset_id=str(ds.id),
+        running=False,
+        last_outcome=last.status if last else None,
+        last_finished_at=(last.completed_at.isoformat()
+                          if last and last.completed_at else None),
+    )
 
 
 async def _get_dataset_or_404(dataset_id: str, db: AsyncSession) -> TrackedDataset:

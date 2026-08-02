@@ -19,6 +19,7 @@ import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
 import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
 import SamplingRunPanel from "../components/SamplingRunPanel";
+import ScrapeStatusBanner from "../components/ScrapeStatusBanner";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
 // idf code paths. Only govmap pages that actually have a GeoJSON
@@ -542,6 +543,10 @@ export default function VersionsPage() {
           </Link>
         </div>
       </div>
+
+      {/* A collection in flight. Public, and only rendered while one is running
+          — a dataset that takes days to collect otherwise looks abandoned. */}
+      {datasetId && <ScrapeStatusBanner datasetId={datasetId} />}
 
       {/* Targeted re-sampling (admin, and only for a source that declares it):
           re-read the whole register, only what is new, only the items at one
