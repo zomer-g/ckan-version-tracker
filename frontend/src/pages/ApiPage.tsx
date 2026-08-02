@@ -46,7 +46,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
   {
     id: "over",
     title: "OVER — מאגרי מידע ממשלתיים",
-    note: "מעקב גרסאות אחרי מאגרי data.gov.il ומקורות ממשלתיים נוספים. כתובת בסיס: /api/v1 (מטא-דאטה) ו-/api/append (תוכן השורות).",
+    note: "מעקב גרסאות אחרי מאגרי data.gov.il ומקורות ממשלתיים נוספים. כתובת בסיס: /api/v1 (מטא-דאטה) ו-/api/append (תוכן השורות). · מאגרי דגימות: בחלק מהמאגרים כל ישות (תוכנית בנייה, תיק, רשומה) נדגמת שוב ושוב, ולכל דגימה שורה משלה עם חותמת זמן — כך שהטבלה היא ההיסטוריה של כל ישות ולא תמונת מצב. שתי השאלות שאפשר לשאול בה: \"מה המצב העדכני של כל הישויות\" (rows?latest=true) ו-\"מה ההיסטוריה של ישות אחת\" (item?value=…). מאגר כזה מזוהה לפי supports_latest ב-/schema.",
     endpoints: [
       {
         path: "/api/v1/datasets",
@@ -130,7 +130,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
           { name: "limit / offset / sort / order", desc: "עימוד ומיון" },
           { name: "table", desc: "במאגר מרובה טבלאות: שם הטבלה או שם המשאב" },
         ],
-        example: "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/rows?latest=true&limit=20",
+        example: "/api/append/76f0e069-f269-46fc-bcc8-f704ebbf17ff/rows?latest=true&limit=20",
       },
       {
         path: "/api/append/{id}/item",
@@ -142,14 +142,14 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
           { name: "limit / offset / table", desc: "עימוד ובחירת טבלה" },
         ],
         example:
-          "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/item?value=2026/0100.00",
+          "/api/append/76f0e069-f269-46fc-bcc8-f704ebbf17ff/item?value=2026/0100.00",
       },
       {
         path: "/api/append/{id}/download.csv",
         description:
           "כל הארכיון (או התוצאה המסוננת) כ-CSV בזרימה. latest=true מוריד שורה אחת לכל ישות במקום את היסטוריית הדגימות.",
         params: [{ name: "latest / q / <עמודה> / table", desc: "כמו ב-/rows" }],
-        example: "/api/append/e979a21b-2d7d-4f02-bf90-76fdc5a21904/download.csv?latest=true",
+        example: "/api/append/76f0e069-f269-46fc-bcc8-f704ebbf17ff/download.csv?latest=true",
       },
       {
         path: "/api/append/{id}/datastore_search_sql",
