@@ -67,6 +67,11 @@ class UrlPattern(BaseModel):
     Named groups in ``regex`` (Python ``(?P<name>…)`` syntax) are substituted
     into ``title_he`` and into any string value of ``config``, so a single
     pattern can cover a whole family of URLs (per-year, per-committee, …).
+
+    A placeholder may carry a modifier — ``{channel|lower}`` — which matters
+    when the captured value is case-insensitive at the source. The config is
+    what a dataset's identity is computed from, so a group left un-normalised
+    there turns two spellings of one page into two datasets. See _MODIFIERS.
     """
 
     regex: str
@@ -302,16 +307,39 @@ class RegistryMatch:
     manifest: SourceManifest
 
 
-def _render(template: str, groups: dict[str, str]) -> str:
-    """Substitute {name} placeholders from the regex's named groups.
+# {name} or {name|modifier}. Only word characters, so a literal brace in a
+# title can never be mistaken for a placeholder.
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)(?:\|(\w+))?\}")
 
-    Unknown placeholders are left as-is rather than raising — a title with a
-    literal brace is a cosmetic problem, a 500 on paste is not. Double spaces
-    left by an empty optional group are collapsed.
+# Case folding for a group whose value is case-INSENSITIVE at the source. A
+# regex can match case-insensitively but cannot normalise what it captured, so
+# without this a site where /Foo and /foo are the same page yields two configs,
+# two identities and two datasets for one corpus. Telegram usernames are the
+# worked case: t.me serves any casing and echoes back whichever was asked for,
+# so nothing downstream can canonicalise it either.
+_MODIFIERS = {"lower": str.lower, "upper": str.upper}
+
+
+def _render(template: str, groups: dict[str, str]) -> str:
+    """Substitute {name} / {name|modifier} placeholders from the named groups.
+
+    Unknown placeholders and unknown modifiers are left as-is rather than
+    raising — a title with a literal brace is a cosmetic problem, a 500 on paste
+    is not. Double spaces left by an empty optional group are collapsed.
     """
-    out = template
-    for key, value in groups.items():
-        out = out.replace("{" + key + "}", value)
+    def _substitute(match: re.Match) -> str:
+        name, modifier = match.group(1), match.group(2)
+        if name not in groups:
+            return match.group(0)
+        if modifier is None:
+            return groups[name]
+        fold = _MODIFIERS.get(modifier)
+        # An unrecognised modifier leaves the placeholder visible instead of
+        # silently dropping the fold — a config that quietly stopped
+        # normalising would show up only as duplicate datasets, much later.
+        return fold(groups[name]) if fold else match.group(0)
+
+    out = _PLACEHOLDER_RE.sub(_substitute, template)
     return re.sub(r"\s{2,}", " ", out).strip(" -—–,")
 
 

@@ -429,3 +429,98 @@ def test_registry_endpoint_lists_display_views_without_regexes(worker_key):
     # Regexes are Python-flavoured — the browser must never try to evaluate one.
     assert "url_patterns" not in sources[0]
     assert "regex" not in str(sources[0])
+
+
+# ── case-insensitive groups ─────────────────────────────────────────────────
+
+CASEFOLD_MANIFEST = {
+    "manifest_version": 1,
+    "id": "toycase",
+    "label_he": "מקור צעצוע — רישיות",
+    "label_en": "Toy Source (case)",
+    "site_url": "https://toy.example.org/",
+    "badge": {"bg": "#e0f2fe", "fg": "#075985", "accent": "#0ea5e9"},
+    "url_patterns": [
+        {
+            "regex": r"^https?://toy\.example\.org/u/(?P<who>[A-Za-z0-9_]+)/?$",
+            "page_type": "toycase_user",
+            # The title keeps the casing that was pasted — it is cosmetic and
+            # not part of a dataset's identity. The CONFIG is folded, because
+            # it is.
+            "title_he": "צעצוע — @{who}",
+            "config": {"who": "{who|lower}"},
+        },
+    ],
+}
+
+
+def _casefold_manifest():
+    return sr.validate_manifest(CASEFOLD_MANIFEST)
+
+
+@pytest.mark.parametrize("url", [
+    "https://toy.example.org/u/MOHreport",
+    "https://toy.example.org/u/mohreport",
+    "https://toy.example.org/u/MOHREPORT",
+])
+def test_a_folded_group_normalises_the_config(url):
+    """A source whose ids are case-insensitive must not yield a different
+    config per spelling — the config is what identity is computed from."""
+    match = sr.match_manifests(url, [_casefold_manifest()])
+    assert match.scraper_config["who"] == "mohreport"
+
+
+def test_spellings_that_differ_only_in_case_are_one_dataset():
+    manifests = [_casefold_manifest()]
+    identities = {
+        sr.identity_of(sr.match_manifests(u, manifests))
+        for u in ("https://toy.example.org/u/MOHreport",
+                  "https://toy.example.org/u/mohreport",
+                  "https://toy.example.org/u/MOHREPORT")
+    }
+    assert len(identities) == 1
+
+
+def test_folding_does_not_collapse_genuinely_different_values():
+    manifests = [_casefold_manifest()]
+    assert (sr.identity_of(sr.match_manifests("https://toy.example.org/u/alpha", manifests))
+            != sr.identity_of(sr.match_manifests("https://toy.example.org/u/beta", manifests)))
+
+
+def test_the_title_keeps_the_casing_that_was_pasted():
+    """Only the config is folded. The title is display, and @MOHreport is how
+    the channel writes itself."""
+    match = sr.match_manifests("https://toy.example.org/u/MOHreport",
+                               [_casefold_manifest()])
+    assert match.title == "צעצוע — @MOHreport"
+
+
+def test_an_unmodified_placeholder_still_substitutes_verbatim():
+    """The existing manifests use bare {name} and must be untouched by this."""
+    match = sr.match_manifests("https://toy.example.org/מכרזים/2024",
+                               [sr.validate_manifest(TOY_MANIFEST)])
+    assert match.scraper_config["year"] == "2024"
+    assert match.title == "מקור צעצוע — מכרזים 2024"
+
+
+def test_an_unknown_placeholder_or_modifier_is_left_visible():
+    """Left as-is rather than raising: a stray brace in a title is cosmetic,
+    a 500 on paste is not. A bad modifier stays visible so a config that
+    stopped normalising is noticed here, not months later as duplicates."""
+    assert sr._render("{nope} {who|shout}", {"who": "X"}) == "{nope} {who|shout}"
+
+
+def test_a_folded_optional_group_that_did_not_match_is_dropped():
+    """An empty fold renders empty, which must still drop the key rather than
+    hand the worker a blank string it would treat as a real value."""
+    manifest = sr.validate_manifest({
+        **CASEFOLD_MANIFEST, "id": "toycase2",
+        "url_patterns": [{
+            "regex": r"^https?://toy\.example\.org/o(?:/(?P<who>[A-Za-z]+))?/?$",
+            "page_type": "toycase2_o",
+            "config": {"who": "{who|lower}", "corpus": "all"},
+        }],
+    })
+    match = sr.match_manifests("https://toy.example.org/o", [manifest])
+    assert "who" not in match.scraper_config
+    assert match.scraper_config["corpus"] == "all"
