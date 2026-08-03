@@ -265,6 +265,15 @@ const PLACEHOLDER_SQL =
 // dataset can answer. Every one of these is verified to return rows live.
 // The dataset tables are all-text with Hebrew column names (quoted, and note
 // the gershayim ״ U+05F4 in "סה״כ"); the knesset tables are lower-case + typed.
+//
+// GovMap layers (idx.govmap_*) are the exception: they carry the source's
+// MACHINE field names (shem_yishuv, pop_total, ata_shem), not the Hebrew
+// display captions. The scraper switched to publishing fieldName rather than
+// GovMap's alias — a Hebrew caption is not a joinable identifier — and every
+// layer re-scraped into the mirror under the new names, which is what silently
+// broke the four spatial examples here. If a layer example errors with
+// `column "..." does not exist`, read the live column list rather than trusting
+// the caption on GovMap's own map.
 const EXAMPLES: { label: string; group: string; sql: string }[] = [
   // ── צעדים ראשונים ────────────────────────────────────────────────────────
   {
@@ -412,27 +421,28 @@ ORDER BY v.yr`,
   // ── שאילתות מרחביות (PostGIS) ─────────────────────────────────────────────
   {
     group: "שאילתות מרחביות (מפה)",
-    label: "מפה: אתרי מורשת לאומיים",
+    label: "מפה: אתרים לאומיים",
     sql: `-- שכבות ה-ממ"ג נושאות עמודת geom. כשהתוצאה כוללת גיאומטריה,
--- מופיע כפתור "הצג על מפה" מתחת לתוצאה. כאן: כל אתרי המורשת.
-SELECT "שם האתר", "ישוב", geometry_wkt
+-- מופיע כפתור "הצג על מפה" מתחת לתוצאה. כאן: כל האתרים הלאומיים.
+-- שמות העמודות בשכבות המפה הם שמות המכונה של המקור, לא הכיתוב בעברית.
+SELECT name AS "שם האתר", city AS "יישוב", address AS "כתובת", geometry_wkt
 FROM idx.govmap_286_0f8ac82b_796b6664`,
   },
   {
     group: "שאילתות מרחביות (מפה)",
-    label: "פוליגונים: תחומי רשויות + אתרי המורשת שבתוכם",
-    sql: `-- בוחרים את הפוליגונים של כמה רשויות, ומוצאים אילו אתרי מורשת נופלים
--- בתוכם. אין עמודה שמקשרת בין שני המאגרים — הקישור גיאומטרי בלבד.
+    label: "פוליגונים: אזורים סטטיסטיים + האתרים שבתוכם",
+    sql: `-- בוחרים את הפוליגונים של כמה יישובים, ומוצאים אילו אתרים לאומיים
+-- נופלים בתוכם. אין עמודה שמקשרת בין שני המאגרים — הקישור גיאומטרי בלבד.
 -- ה-UNION מחזיר גם את הפוליגונים וגם את הנקודות, ולכן המפה מציירת את שניהם.
 WITH areas AS (
-  SELECT "ישוב" AS muni, geom
+  SELECT shem_yishuv AS muni, geom
   FROM idx.govmap_23_d882fbdb_493df16d
-  WHERE "ישוב" IN ('ירושלים','באר שבע','חדרה','רחובות','לוד','מזכרת בתיה')
+  WHERE shem_yishuv IN ('ירושלים','באר שבע','חדרה','רחובות','לוד','מזכרת בתיה')
 )
-SELECT 'תחום הרשות' AS סוג, a.muni AS שם, ST_AsText(a.geom) AS geometry_wkt
+SELECT 'אזור סטטיסטי' AS סוג, a.muni AS שם, ST_AsText(a.geom) AS geometry_wkt
 FROM areas a
 UNION ALL
-SELECT 'אתר מורשת', h."שם האתר" || ' (' || a.muni || ')', h.geometry_wkt
+SELECT 'אתר לאומי', h.name || ' (' || a.muni || ')', h.geometry_wkt
 FROM idx.govmap_286_0f8ac82b_796b6664 h
 JOIN areas a ON ST_Intersects(a.geom, h.geom)`,
   },
@@ -453,7 +463,7 @@ SELECT 'טווח 45 ק"מ', NULL, NULL,
        ST_AsText(ST_Boundary(ST_Buffer(p, 45000)::geometry))
 FROM tlv
 UNION ALL
-SELECT 'אתר מורשת', h."שם האתר",
+SELECT 'אתר לאומי', h.name,
        round((ST_Distance(h.geom::geography, p) / 1000)::numeric, 1),
        h.geometry_wkt
 FROM idx.govmap_286_0f8ac82b_796b6664 h, tlv
@@ -463,21 +473,257 @@ ORDER BY 3 NULLS FIRST`,
   },
   {
     group: "שאילתות מרחביות (מפה)",
-    label: "חיתוך: אתרי מורשת בתוך אזורים סטטיסטיים",
-    sql: `-- JOIN מרחבי: כל אתר מורשת + האזור הסטטיסטי (למ"ס) שהוא נופל בתוכו,
+    label: "חיתוך: אתרים לאומיים בתוך אזורים סטטיסטיים",
+    sql: `-- JOIN מרחבי: כל אתר לאומי + האזור הסטטיסטי (למ"ס) שהוא נופל בתוכו,
 -- בלי שאף עמודה תקשר ביניהם — הקישור גיאומטרי בלבד (ST_Intersects).
-SELECT h."שם האתר" AS אתר, s."ישוב",
-       NULLIF(s."אוכלוסיה",'')::numeric AS אוכלוסיה,
+-- NULLIF שומר מקריסה: באזורים בלי נתון אוכלוסייה הערך הוא מחרוזת ריקה.
+SELECT h.name AS אתר, s.shem_yishuv AS יישוב, s.stat11 AS אזור_סטטיסטי,
+       NULLIF(s.pop_total, '')::numeric AS אוכלוסיית_האזור,
        h.geometry_wkt
 FROM idx.govmap_286_0f8ac82b_796b6664 h
 JOIN idx.govmap_23_d882fbdb_493df16d  s
      ON ST_Intersects(s.geom, h.geom)
-ORDER BY 3 DESC NULLS LAST`,
+ORDER BY 4 DESC NULLS LAST`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "השכן הקרוב: תחנת האוטובוס הקרובה לכל אתר לאומי",
+    sql: `-- LATERAL + האופרטור <-> = "השכן הקרוב ביותר": לכל אתר, Postgres סורק
+-- את 35 אלף התחנות לפי מרחק ועוצר בראשונה. בלי זה היה צריך להשוות כל
+-- אתר לכל תחנה. ST_Distance על ::geography מחזיר מטרים אמיתיים.
+SELECT n.name AS אתר, n.city AS יישוב,
+       s.stop_name AS תחנה_קרובה,
+       round((ST_Distance(n.geom::geography, s.geom::geography))::numeric) AS מרחק_מטר,
+       n.geometry_wkt
+FROM idx.govmap_286_0f8ac82b_796b6664 n
+CROSS JOIN LATERAL (
+  SELECT stop_name, geom
+  FROM idx.govmap_20_42de706b_41734d96
+  ORDER BY geom <-> n.geom
+  LIMIT 1
+) s
+ORDER BY מרחק_מטר DESC`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: "מקלטים לכל 1,000 תושבים, לפי אזור סטטיסטי בחיפה",
+    sql: `-- ספירת נקודות בתוך פוליגון: כמה מקלטים של פיקוד העורף נופלים בכל
+-- אזור סטטיסטי, מחולק באוכלוסיית האזור. LEFT JOIN כדי שגם אזור בלי
+-- מקלטים יופיע — הוא בדיוק הממצא המעניין. התוצאה נצבעת על המפה.
+SELECT a.shem_yishuv AS יישוב, a.stat11 AS אזור_סטטיסטי,
+       NULLIF(a.pop_total, '')::numeric AS תושבים,
+       count(sh.*) AS מקלטים,
+       round(1000.0 * count(sh.*) / NULLIF(NULLIF(a.pop_total, '')::numeric, 0), 1) AS מקלטים_ל1000,
+       ST_AsText(a.geom) AS geometry_wkt
+FROM idx.govmap_23_d882fbdb_493df16d a
+LEFT JOIN idx.govmap_417_bbd1243d_ece1cf3b sh ON ST_Intersects(a.geom, sh.geom)
+WHERE a.shem_yishuv = 'חיפה'
+GROUP BY 1, 2, 3, a.geom
+ORDER BY מקלטים_ל1000 DESC NULLS LAST`,
+  },
+
+  // ── הצלבה לפי יישוב ──────────────────────────────────────────────────────
+  // Every register spells the same settlement differently, and some key it by
+  // CBS code instead of by name at all. over_settlement()/over_settlement_code()
+  // are the site's own index (CBS list + ~30.8k inflections) — they are what
+  // makes a name from one source joinable to a code from another.
+  {
+    group: "הצלבה לפי יישוב",
+    label: "מפתח היישובים: איך שם הופך לסמל למ\"ס",
+    sql: `-- כל מאגר כותב את שם היישוב אחרת: קיצור, מקף, שם שהוחלף מאז.
+-- over_settlement מחזיר את השם הקנוני של הלמ"ס, ו-over_settlement_code
+-- את הסמל — וזה המפתח שמאפשר לחבר מאגר לפי שם למאגר לפי קוד.
+SELECT v.raw                       AS "כפי שנכתב במאגר",
+       over_settlement(v.raw)      AS "השם לפי הלמ״ס",
+       over_settlement_code(v.raw) AS "סמל יישוב"
+FROM (VALUES ('פ"ת'), ('תל אביב - יפו'), ('נצרת עילית'),
+             ('מודיעין מכבים רעות'), ('קרית שמונה'), ('בית שאן'),
+             ('אלעד'), ('מעלה אדומים')) v(raw)`,
+  },
+  {
+    group: "הצלבה לפי יישוב",
+    label: "עמותות וחברות לכל 1,000 תושבים",
+    sql: `-- שלושה מקורות: רשם החברות (מזוהה בקוד יישוב), רשם העמותות (מזוהה
+-- בשם חופשי) וקובץ היישובים של הלמ"ס. הקוד והשם נפגשים רק דרך המפתח.
+WITH co AS (
+  SELECT "קוד ישוב"::int AS code, count(*) AS companies
+  FROM public.append_ica_companies_cc6286ac
+  WHERE "סטטוס חברה" = 'פעילה' AND "קוד ישוב" IS NOT NULL
+  GROUP BY 1
+),
+am AS (
+  SELECT over_settlement_code("כתובת - ישוב") AS code, count(*) AS amutot
+  FROM public.append_moj_amutot_73f3cd78
+  WHERE "סטטוס עמותה" = 'רשומה'
+  GROUP BY 1
+)
+SELECT s.name AS יישוב, s.population AS אוכלוסייה,
+       co.companies AS חברות, am.amutot AS עמותות,
+       round(1000.0 * am.amutot / s.population, 1) AS עמותות_ל1000,
+       round(1000.0 * co.companies / s.population, 1) AS חברות_ל1000
+FROM public.over_settlements s
+JOIN co USING (code)
+JOIN am USING (code)
+WHERE s.population >= 20000
+ORDER BY עמותות_ל1000 DESC`,
+  },
+  {
+    group: "הצלבה לפי יישוב",
+    label: "אחוז הצבעה מול הכנסות הרשות לתושב",
+    sql: `-- ועדת הבחירות מפרסמת סמל יישוב, "מצב השלטון המקומי" מפרסם שם רשות,
+-- והלמ"ס מחזיקה את האוכלוסייה. שלושתם נפגשים על הסמל: בצד הבחירות הוא
+-- כבר בנתונים, ובצד התקציב הוא מחושב מהשם ע"י over_settlement_code.
+WITH v AS (
+  SELECT "סמל ישוב"::int AS code,
+         sum("בזב"::numeric) AS bazab, sum("מצביעים"::numeric) AS voters
+  FROM public.append_votes_knesset_0dd87a75
+  WHERE "סמל ישוב" ~ '^[0-9]+$'
+  GROUP BY 1
+),
+inc AS (
+  SELECT over_settlement_code("רשות") AS code,
+         max("סה״כ הכנסות"::numeric) AS income
+  FROM public.append_munidata_budget_economy_total_income_6af4bfbf_757f42fe
+  WHERE "שנה" = '2024'
+  GROUP BY 1
+)
+SELECT s.name AS יישוב, s.population AS אוכלוסייה,
+       round(100.0 * v.voters / v.bazab, 1) AS אחוז_הצבעה,
+       round(inc.income / s.population)      AS הכנסה_לתושב
+FROM v
+JOIN inc USING (code)
+JOIN public.over_settlements s ON s.code = v.code
+WHERE s.population >= 20000
+ORDER BY אחוז_הצבעה DESC`,
+  },
+  {
+    group: "הצלבה לפי יישוב",
+    label: "איך המאגרים כותבים את שם היישוב",
+    sql: `-- למה בכלל צריך מפתח: אלה כל הכתיבים במאגר העמותות שאינם זהים לשם
+-- הרשמי — כתיב מלא/חסר, רווחים תלושים, ושמות שהיישוב כבר החליף.
+-- כל שורה כאן היא JOIN שהיה נכשל בהשוואת טקסט פשוטה.
+SELECT "כתובת - ישוב"                     AS "כפי שכתוב במאגר העמותות",
+       over_settlement("כתובת - ישוב")    AS "השם לפי הלמ״ס",
+       count(*)                            AS עמותות
+FROM public.append_moj_amutot_73f3cd78
+WHERE over_settlement("כתובת - ישוב") IS NOT NULL
+  AND over_settlement("כתובת - ישוב") <> "כתובת - ישוב"
+GROUP BY 1, 2
+ORDER BY עמותות DESC`,
+  },
+  {
+    group: "הצלבה לפי יישוב",
+    label: "מרפאות לכל 10,000 תושבים",
+    sql: `-- הצלבה בין שכבת מפה למאגר טבלאי, בלי גיאומטריה בכלל: שכבת המרפאות
+-- מחזיקה שם עיר, קובץ הלמ"ס מחזיק אוכלוסייה, והמפתח מחבר ביניהם.
+WITH clinics AS (
+  SELECT over_settlement_code(city_desc) AS code, count(*) AS clinics
+  FROM idx.govmap_96_2837ebca_9bf332ee
+  WHERE city_desc IS NOT NULL
+  GROUP BY 1
+)
+SELECT s.name AS יישוב, s.district AS מחוז, s.population AS אוכלוסייה,
+       c.clinics AS מרפאות,
+       round(10000.0 * c.clinics / s.population, 1) AS מרפאות_ל10000
+FROM clinics c
+JOIN public.over_settlements s USING (code)
+WHERE s.population >= 20000
+ORDER BY מרפאות_ל10000 DESC`,
+  },
+
+  // ── מרחב על מאגרים שאינם מפות ────────────────────────────────────────────
+  // A register with no coordinates still has a place in it: the settlement.
+  // Resolve that to a CBS code, borrow the settlement's geometry from a map
+  // layer, and an ordinary table answers a distance question.
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "חברות שנפתחו ברדיוס 20 ק\"מ מת\"א, במחצית השנייה של 2024",
+    sql: `-- לרשם החברות אין קואורדינטות — יש לו קוד יישוב. כאן שואלים את
+-- שכבת האזורים הסטטיסטיים אילו יישובים נמצאים ברדיוס 20 ק"מ מהנקודה,
+-- ואז סופרים כמה חברות נפתחו בהם בחלון התאריכים. הסינון על התאריך נעשה
+-- קודם כטקסט (LIKE) ורק אז ממירים ל-date — פי כמה מהיר על 727 אלף שורות.
+WITH pt AS (
+  SELECT ST_SetSRID(ST_MakePoint(34.7818, 32.0853), 4326)::geography AS p
+),
+near AS (
+  SELECT over_settlement_code(a.shem_yishuv) AS code,
+         round((min(ST_Distance(a.geom::geography, pt.p)) / 1000)::numeric, 1) AS km
+  FROM idx.govmap_23_d882fbdb_493df16d a, pt
+  WHERE ST_DWithin(a.geom::geography, pt.p, 20000)
+  GROUP BY 1
+),
+new_co AS (
+  SELECT "קוד ישוב"::int AS code, count(*) AS companies
+  FROM public.append_ica_companies_cc6286ac
+  WHERE "תאריך התאגדות" LIKE '%/2024'
+    AND to_date("תאריך התאגדות", 'DD/MM/YYYY') >= DATE '2024-07-01'
+  GROUP BY 1
+)
+SELECT s.name AS יישוב, n.km AS מרחק_קמ, c.companies AS חברות_חדשות
+FROM near n
+JOIN new_co c USING (code)
+JOIN public.over_settlements s ON s.code = n.code
+ORDER BY חברות_חדשות DESC`,
+  },
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "החברות עצמן: 15 ק\"מ מהכנסת, שנפתחו ב-2025",
+    sql: `-- אותה שאלה, אבל ברזולוציית השורה: שמות החברות עצמן ולא ספירה.
+-- MATERIALIZED מכריח את Postgres לסרוק את מאגר החברות פעם אחת ולסנן,
+-- במקום לחזור אליו לכל יישוב בנפרד — בלעדיו השאילתה חורגת מהזמן הקצוב.
+WITH pt AS (
+  SELECT ST_SetSRID(ST_MakePoint(35.2048, 31.7767), 4326)::geography AS p
+),
+near AS (
+  SELECT over_settlement_code(a.shem_yishuv) AS code,
+         round((min(ST_Distance(a.geom::geography, pt.p)) / 1000)::numeric, 1) AS km
+  FROM idx.govmap_23_d882fbdb_493df16d a, pt
+  WHERE ST_DWithin(a.geom::geography, pt.p, 15000)
+  GROUP BY 1
+),
+co AS MATERIALIZED (
+  SELECT "שם חברה" AS name, "תאור חברה" AS descr, "קוד ישוב"::int AS code,
+         to_date("תאריך התאגדות", 'DD/MM/YYYY') AS dt
+  FROM public.append_ica_companies_cc6286ac
+  WHERE "תאריך התאגדות" LIKE '%/2025' AND "קוד ישוב" IS NOT NULL
+)
+SELECT co.name AS חברה, s.name AS יישוב, n.km AS מרחק_קמ,
+       co.dt AS תאריך_התאגדות, co.descr AS תיאור
+FROM co
+JOIN near n USING (code)
+JOIN public.over_settlements s ON s.code = n.code
+ORDER BY co.dt DESC`,
+  },
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "מפה: היישובים שבהם נפתחו הכי הרבה חברות ב-2025",
+    sql: `-- הכיוון ההפוך: לוקחים ספירה ממאגר טבלאי ומחזירים אותה כפוליגונים,
+-- כדי לצייר אותה על המפה. ST_Union מאחד את האזורים הסטטיסטיים של כל
+-- יישוב לצורה אחת, כך שכל יישוב הוא שורה אחת ומצוירת פעם אחת.
+WITH new_co AS (
+  SELECT "קוד ישוב"::int AS code, count(*) AS companies
+  FROM public.append_ica_companies_cc6286ac
+  WHERE "תאריך התאגדות" LIKE '%/2025'
+  GROUP BY 1
+),
+areas AS (
+  SELECT over_settlement_code(shem_yishuv) AS code, shem_yishuv AS name,
+         ST_AsText(ST_Union(geom)) AS geometry_wkt
+  FROM idx.govmap_23_d882fbdb_493df16d
+  WHERE over_settlement_code(shem_yishuv) IN (
+    SELECT code FROM new_co ORDER BY companies DESC LIMIT 15
+  )
+  GROUP BY 1, 2
+)
+SELECT a.name AS יישוב, c.companies AS חברות_חדשות_2025, a.geometry_wkt
+FROM areas a JOIN new_co c USING (code)
+ORDER BY חברות_חדשות_2025 DESC`,
   },
 ];
 
 // Dropdown groups, in the learning order above.
-const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש וקיבוץ", "JOIN בין מאגרים שונים", "שאילתות מרחביות (מפה)"];
+const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש וקיבוץ", "JOIN בין מאגרים שונים",
+                        "שאילתות מרחביות (מפה)", "הצלבה לפי יישוב", "מרחב על מאגרים שאינם מפות"];
 
 export default function DataSqlPage() {
   const [searchParams, setSearchParams] = useSearchParams();
