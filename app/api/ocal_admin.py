@@ -468,3 +468,129 @@ async def put_content(request: Request, key: str, body: ContentBody,
         key, body.value)
     logger.info("ocal admin: content %s updated by %s", key, user.email)
     return {"updated": True}
+
+
+# ── entities (extracted event_entities — global curation) ──────────────────────
+
+@router.get("/entities")
+@limiter.limit("60/minute")
+async def list_entities(request: Request, type: str | None = Query(None),
+                        q: str | None = Query(None),
+                        limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                        user: User = Depends(get_admin_user)):
+    """Unique entities aggregated across ALL sources (name+type), heaviest first.
+
+    Reads the pre-aggregated ``mv_entity_counts`` matview (fast; ~160ms vs a ~7s
+    live GROUP BY over event_entities) and collapses to (name,type) — robust to
+    whether the matview's grain includes entity_id. Curation edits below refresh
+    the matview so the list stays current."""
+    where, args = ["TRUE"], []
+    if type:
+        args.append(type); where.append(f"entity_type = ${len(args)}")
+    if q and q.strip():
+        args.append(f"%{q.strip()}%"); where.append(f"entity_name ILIKE ${len(args)}")
+    w = " AND ".join(where)
+    page_args = args + [limit, offset]
+    rows = await ocal_db.fetch(f"""
+        SELECT entity_name, entity_type, sum(event_count)::bigint AS event_count,
+               bool_or(entity_id IS NOT NULL) AS matched
+        FROM mv_entity_counts WHERE {w}
+        GROUP BY entity_name, entity_type
+        ORDER BY event_count DESC, entity_name
+        LIMIT ${len(page_args) - 1} OFFSET ${len(page_args)}
+    """, *page_args)
+    total = await ocal_db.fetchval(
+        f"SELECT count(*) FROM (SELECT 1 FROM mv_entity_counts WHERE {w} "
+        f"GROUP BY entity_name, entity_type) t", *args)
+    stats = await ocal_db.fetchrow("""
+        SELECT COUNT(*) AS total_unique,
+               COUNT(*) FILTER (WHERE entity_type='person') AS person_count,
+               COUNT(*) FILTER (WHERE entity_type='organization') AS org_count,
+               COUNT(*) FILTER (WHERE entity_type='place') AS place_count
+        FROM (SELECT DISTINCT entity_name, entity_type FROM mv_entity_counts) u""")
+    return {"entities": _rows(rows), "total": int(total or 0), "stats": dict(stats)}
+
+
+class EntityNameBody(BaseModel):
+    entity_name: str
+    entity_type: str
+
+
+@router.post("/entities/delete-by-name")
+@limiter.limit("20/minute")
+async def delete_entity_by_name(request: Request, body: EntityNameBody,
+                                user: User = Depends(get_admin_user)):
+    """Delete every event_entities row for one name+type."""
+    status = await ocal_db.execute(
+        "DELETE FROM event_entities WHERE entity_name=$1 AND entity_type=$2",
+        body.entity_name.strip(), body.entity_type)
+    deleted = int(status.split()[-1]) if status.upper().startswith("DELETE") else 0
+    from app.services import ocal_enrich
+    await ocal_enrich.refresh_entity_matview()
+    return {"deleted": deleted}
+
+
+async def _rename_and_dedup(conn, names: list[str], target: str, etype: str | None) -> None:
+    """Repoint a set of entity names to ``target`` then drop rows that now collide
+    on (event_id, entity_type, entity_name, role), keeping the most confident."""
+    if etype:
+        await conn.execute(
+            "UPDATE event_entities SET entity_name=$1 WHERE entity_name=ANY($2::text[]) AND entity_type=$3",
+            target, names, etype)
+    else:
+        await conn.execute(
+            "UPDATE event_entities SET entity_name=$1 WHERE entity_name=ANY($2::text[])", target, names)
+    await conn.execute("""
+        DELETE FROM event_entities WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY event_id, entity_type, entity_name, role
+              ORDER BY confidence DESC NULLS LAST, id) AS rn
+            FROM event_entities WHERE entity_name=$1) s WHERE rn > 1)
+    """, target)
+
+
+class EntityRenameBody(BaseModel):
+    old_name: str
+    new_name: str
+    entity_type: str | None = None
+
+
+@router.post("/entities/rename")
+@limiter.limit("30/minute")
+async def rename_entity(request: Request, body: EntityRenameBody,
+                        user: User = Depends(get_admin_user)):
+    new = (body.new_name or "").strip()
+    if not new:
+        raise HTTPException(400, "new_name is required")
+    pool = await ocal_db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await _rename_and_dedup(conn, [body.old_name.strip()], new, body.entity_type)
+    from app.services import ocal_enrich
+    await ocal_enrich.refresh_entity_matview()
+    return {"renamed": True}
+
+
+class EntityMergeBody(BaseModel):
+    names: list[str]
+    target_name: str
+    entity_type: str | None = None
+
+
+@router.post("/entities/merge")
+@limiter.limit("20/minute")
+async def merge_entities(request: Request, body: EntityMergeBody,
+                         user: User = Depends(get_admin_user)):
+    target = (body.target_name or "").strip()
+    names = [n.strip() for n in body.names if n and n.strip()]
+    if not target or len(names) < 1:
+        raise HTTPException(400, "names and target_name are required")
+    pool = await ocal_db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await _rename_and_dedup(conn, names, target, body.entity_type)
+    from app.services import ocal_enrich
+    await ocal_enrich.refresh_entity_matview()
+    logger.info("ocal admin: merged %d entities into '%s' by %s", len(names), target, user.email)
+    return {"merged": len(names), "target_name": target}

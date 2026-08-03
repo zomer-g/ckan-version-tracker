@@ -2397,6 +2397,12 @@ export interface OcalAdminOrg {
   website: string | null;
   description: string | null;
 }
+export interface OcalEntity {
+  entity_name: string;
+  entity_type: string;
+  event_count: number;
+  matched: boolean;
+}
 export interface OcalCandidate {
   resource_id: string;
   resource_name: string | null;
@@ -2470,4 +2476,13 @@ export const ocalAdmin = {
   content: () => request<{ content: { key: string; value: string; updated_at: string }[] }>(`/admin/ocal/content`),
   putContent: (key: string, value: string) =>
     request(`/admin/ocal/content/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+  // entities (extracted event_entities — global curation)
+  entities: (params: { type?: string; q?: string; limit?: number; offset?: number } = {}) =>
+    request<{ entities: OcalEntity[]; total: number; stats: { total_unique: number; person_count: number; org_count: number; place_count: number } }>(`/admin/ocal/entities${aqs(params)}`),
+  deleteEntityByName: (entity_name: string, entity_type: string) =>
+    request<{ deleted: number }>(`/admin/ocal/entities/delete-by-name`, { method: "POST", body: JSON.stringify({ entity_name, entity_type }) }),
+  renameEntity: (old_name: string, new_name: string, entity_type?: string) =>
+    request<{ renamed: boolean }>(`/admin/ocal/entities/rename`, { method: "POST", body: JSON.stringify({ old_name, new_name, entity_type }) }),
+  mergeEntities: (names: string[], target_name: string, entity_type?: string) =>
+    request<{ merged: number }>(`/admin/ocal/entities/merge`, { method: "POST", body: JSON.stringify({ names, target_name, entity_type }) }),
 };

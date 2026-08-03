@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ocalAdmin, OcalAdminSource, OcalAdminPerson, OcalAdminOrg,
-  OcalCandidate, OcalException,
+  OcalCandidate, OcalException, OcalEntity,
 } from "../api/client";
 
-type Section = "sources" | "candidates" | "people" | "orgs" | "content" | "exceptions";
+type Section = "sources" | "candidates" | "people" | "orgs" | "entities" | "content" | "exceptions";
 const SECTIONS: [Section, string][] = [
   ["sources", "יומנים"],
   ["candidates", "מועמדים חדשים"],
   ["exceptions", "נדחו"],
+  ["entities", "ישויות"],
   ["people", "אנשים"],
   ["orgs", "ארגונים"],
   ["content", "טקסטים"],
@@ -432,6 +433,102 @@ function OrgsSection() {
   );
 }
 
+// ── Entities (extracted event_entities) ────────────────────────────────────
+const ETYPES: [string, string][] = [["", "הכל"], ["person", "אנשים"], ["organization", "ארגונים"], ["place", "מקומות"]];
+const ETYPE_HE: Record<string, string> = { person: "אדם", organization: "ארגון", place: "מקום" };
+function EntitiesSection() {
+  const { node, ok, fail } = useMsg();
+  const [rows, setRows] = useState<OcalEntity[]>([]);
+  const [stats, setStats] = useState<{ total_unique: number; person_count: number; org_count: number; place_count: number } | null>(null);
+  const [total, setTotal] = useState(0);
+  const [type, setType] = useState("");
+  const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const LIMIT = 100;
+  const key = (e: OcalEntity) => `${e.entity_name} ${e.entity_type}`;
+
+  const load = useCallback(() => {
+    setBusy(true);
+    ocalAdmin.entities({ type: type || undefined, q: q || undefined, limit: LIMIT, offset })
+      .then((r) => { setRows(r.entities); setTotal(r.total); setStats(r.stats); })
+      .catch(fail).finally(() => setBusy(false));
+  }, [type, q, offset]); // eslint-disable-line
+  useEffect(() => { load(); }, [load]);
+
+  const tile = (label: string, val: number) => (
+    <div style={{ padding: "0.4rem 0.9rem", background: "var(--bg-muted,#f1f5f9)", borderRadius: 6, textAlign: "center", minWidth: 90 }}>
+      <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>{(val || 0).toLocaleString()}</div>
+      <div className="text-sm text-muted">{label}</div>
+    </div>
+  );
+  const toggle = (k: string) => setSel((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const rename = async (e: OcalEntity) => {
+    const nn = prompt(`שם חדש ל"${e.entity_name}":`, e.entity_name);
+    if (!nn || nn.trim() === e.entity_name) return;
+    try { await ocalAdmin.renameEntity(e.entity_name, nn.trim(), e.entity_type); ok("שונה שם"); load(); } catch (x) { fail(x); }
+  };
+  const del = async (e: OcalEntity) => {
+    if (!confirm(`למחוק את כל ${e.event_count} השיוכים של "${e.entity_name}"?`)) return;
+    try { const r = await ocalAdmin.deleteEntityByName(e.entity_name, e.entity_type); ok(`נמחקו ${r.deleted}`); load(); } catch (x) { fail(x); }
+  };
+  const merge = async () => {
+    const chosen = rows.filter((e) => sel.has(key(e)));
+    if (chosen.length < 2) return;
+    if (new Set(chosen.map((e) => e.entity_type)).size > 1) { fail(new Error("אפשר למזג רק ישויות מאותו סוג")); return; }
+    const target = chosen[0].entity_name;
+    if (!confirm(`למזג ${chosen.length - 1} ישויות לתוך "${target}"?`)) return;
+    try { await ocalAdmin.mergeEntities(chosen.slice(1).map((e) => e.entity_name), target, chosen[0].entity_type); ok(`מוזגו → ${target}`); setSel(new Set()); load(); } catch (x) { fail(x); }
+  };
+
+  return (
+    <div>
+      {stats && <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.7rem" }}>
+        {tile("סה\"כ ייחודיות", stats.total_unique)}{tile("אנשים", stats.person_count)}{tile("ארגונים", stats.org_count)}{tile("מקומות", stats.place_count)}
+      </div>}
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.6rem" }}>
+        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ישות…" value={q}
+          onChange={(e) => { setOffset(0); setQ(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && load()} />
+        <select style={inp} value={type} onChange={(e) => { setOffset(0); setType(e.target.value); }}>
+          {ETYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <button style={btn} onClick={load}>רענן</button>
+        {sel.size >= 2 && <button className="btn-primary" onClick={merge}>מזג {sel.size} → הראשון</button>}
+        <span className="text-sm text-muted">{total.toLocaleString()} ישויות</span>
+      </div>
+      {node}
+      <div style={{ overflowX: "auto", maxHeight: 500, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <thead><tr><th style={th}></th><th style={th}>ישות</th><th style={th}>סוג</th><th style={{ ...th, textAlign: "end" }}>אירועים</th><th style={th}>מקושר</th><th style={th}></th></tr></thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={key(e)} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", background: sel.has(key(e)) ? "var(--bg-muted,#eef2ff)" : undefined }}>
+                <td style={td}><input type="checkbox" checked={sel.has(key(e))} onChange={() => toggle(key(e))} /></td>
+                <td style={td}>{e.entity_name}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>{ETYPE_HE[e.entity_type] || e.entity_type}</td>
+                <td style={{ ...td, textAlign: "end" }}>{e.event_count.toLocaleString()}</td>
+                <td style={td} title="מקושר לרשומת אדם/ארגון">{e.matched ? "✓" : "—"}</td>
+                <td style={td}>
+                  <button style={btn} onClick={() => rename(e)}>שנה שם</button>
+                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={() => del(e)}>מחק</button>
+                </td>
+              </tr>
+            ))}
+            {!busy && rows.length === 0 && <tr><td style={td} colSpan={6}>אין ישויות עדיין — הרץ "חילוץ AI" או "העשר" על יומן בלשונית "יומנים".</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", alignItems: "center" }}>
+        <button style={btn} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>הקודם</button>
+        <button style={btn} disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}>הבא</button>
+        <span className="text-sm text-muted">{total ? `${offset + 1}–${Math.min(offset + LIMIT, total)}` : "0"}</span>
+      </div>
+      <p className="text-sm text-muted" style={{ marginTop: 6 }}>סמן ≥2 (מאותו סוג) כדי למזג — הראשון הוא היעד. שינוי‑שם/מיזוג מאחדים את השיוכים בכל היומנים.</p>
+    </div>
+  );
+}
+
 // ── Content ───────────────────────────────────────────────────────────────
 function ContentSection() {
   const { node, ok, fail } = useMsg();
@@ -486,6 +583,7 @@ export default function OcalAdminPanel() {
       {sec === "exceptions" && <ExceptionsSection />}
       {sec === "people" && <PeopleSection />}
       {sec === "orgs" && <OrgsSection />}
+      {sec === "entities" && <EntitiesSection />}
       {sec === "content" && <ContentSection />}
     </div>
   );
