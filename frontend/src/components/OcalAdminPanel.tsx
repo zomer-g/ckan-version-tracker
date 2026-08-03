@@ -163,9 +163,9 @@ function CandidatesSection() {
         <button style={btn} onClick={load} disabled={loading}>{loading ? "טוען…" : "רענן מועמדים"}</button>
         <button className="btn-primary" onClick={async () => {
           setBusy("scan");
-          try { const r = await ocalAdmin.scan(5); ok(`סריקה: יובאו ${r.imported}, נדחו ${r.skipped}`); load(); }
+          try { const r = await ocalAdmin.scan(5); ok(r.message || "הסריקה החלה ברקע — רענן בעוד דקה."); }
           catch (e) { fail(e); } finally { setBusy(null); }
-        }} disabled={busy === "scan"}>{busy === "scan" ? "סורק…" : "סרוק וייבא (עד 5)"}</button>
+        }} disabled={busy === "scan"}>{busy === "scan" ? "מתחיל…" : "סרוק וייבא (עד 5)"}</button>
         <span className="text-sm text-muted">{rows.length} מועמדים חדשים (לא יובאו / נדחו)</span>
       </div>
       {node}

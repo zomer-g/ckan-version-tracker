@@ -2440,7 +2440,7 @@ export const ocalAdmin = {
   // candidates / scan / import (in admin.py)
   candidates: (limit = 50) => request<{ candidates: OcalCandidate[]; count: number }>(`/admin/ocal/candidates${aqs({ limit })}`),
   scan: (max_import = 5) =>
-    request<{ candidates: number; imported: number; skipped: number; errors: number }>(`/admin/ocal/scan${aqs({ max_import })}`, { method: "POST" }),
+    request<{ started: boolean; max_import: number; message: string }>(`/admin/ocal/scan${aqs({ max_import })}`, { method: "POST" }),
   importOne: (resource_id: string) =>
     request<{ events_upserted: number; source_id: string; rows_parsed: number }>(`/admin/ocal/import`, { method: "POST", body: JSON.stringify({ resource_id }) }),
   // exceptions

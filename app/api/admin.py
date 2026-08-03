@@ -1,5 +1,6 @@
 """Admin endpoints for approving/rejecting dataset tracking requests."""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -2362,12 +2363,29 @@ async def ocal_import_scan(
     max_import: int = 5,
     user: User = Depends(get_admin_user),
 ):
-    """Run the diary discovery+import scan once, now (honours the auto gate)."""
+    """Kick off the diary discovery+import scan in the BACKGROUND, return at once.
+
+    A full scan (discover hundreds of candidates on odata + import up to N, each a
+    download + parse + LLM field-map + enrich + matview refresh) runs for minutes —
+    well past the Cloudflare/gateway request timeout — so running it inline returned
+    a 504 surfaced as 500. We fire it as a background task instead; results appear in
+    the יומנים / נדחו tabs (refresh to see them). The scheduler runs the same scan
+    automatically every few hours."""
     from app.services import ocal_import
-    res = await ocal_import.scan_once(max_import=max(1, min(max_import, 20)))
-    logger.info("ocal diary scan by %s: %s", user.email,
-                {k: res.get(k) for k in ("candidates", "imported", "skipped", "errors")})
-    return res
+    cap = max(1, min(max_import, 20))
+    email = user.email
+
+    async def _run() -> None:
+        try:
+            r = await ocal_import.scan_once(max_import=cap)
+            logger.info("ocal diary scan (bg) by %s: %s", email,
+                        {k: r.get(k) for k in ("candidates", "imported", "skipped", "errors")})
+        except Exception:  # noqa: BLE001 — background task must swallow its own errors
+            logger.exception("ocal diary scan (bg) failed")
+
+    asyncio.create_task(_run())
+    return {"started": True, "max_import": cap,
+            "message": f"הסריקה רצה ברקע (עד {cap} יבואים) — רענן בעוד דקה לראות תוצאות."}
 
 
 class FieldFlagsRecomputeRequest(BaseModel):
