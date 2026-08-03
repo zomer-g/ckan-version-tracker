@@ -25,7 +25,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -86,6 +86,20 @@ class UrlPattern(BaseModel):
     # reads, its "newest messages" feed is one — and a single default has to
     # be wrong for one of them. Still floored by settings.min_poll_interval.
     poll_interval: int | None = Field(default=None, ge=1)
+    # Other datasets that belong WITH this one, as URL templates rendered from
+    # the same named groups (e.g. "https://t.me/{channel}#/feed"). Tracking a
+    # URL of this shape also opens each companion.
+    #
+    # For a source whose one corpus is genuinely two datasets — a Telegram
+    # channel is its history AND the five-minute feed of what it just posted —
+    # the alternative is asking a user to paste the same channel twice in two
+    # spellings, and to know the second spelling exists at all.
+    #
+    # A companion is classified by the registry like any pasted URL, so it
+    # picks up its own page_type, config, title and cadence with nothing
+    # special-cased. Companions are NOT followed recursively: one level only,
+    # so two patterns naming each other cannot loop.
+    companions: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("regex")
     @classmethod
@@ -323,6 +337,10 @@ class RegistryMatch:
 
     # Set from the matched UrlPattern; None means "use the manifest default".
     pattern_poll_interval: int | None = None
+    # Rendered from the matched pattern's ``companions`` templates: other URLs
+    # that should be tracked alongside this one. Already substituted, so a
+    # caller just classifies and creates each. See UrlPattern.companions.
+    companion_urls: list[str] = field(default_factory=list)
 
 
 # {name} or {name|modifier}. Only word characters, so a literal brace in a
@@ -417,6 +435,10 @@ def match_manifests(url: str, manifests: list[SourceManifest]) -> RegistryMatch 
                 scraper_config=config,
                 manifest=man,
                 pattern_poll_interval=pattern.poll_interval,
+                companion_urls=[
+                    rendered for template in pattern.companions
+                    if (rendered := _render(template, groups))
+                ],
             )
     return None
 

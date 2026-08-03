@@ -1791,6 +1791,71 @@ class TrackingRequest(BaseModel):
     requester_contact: str = ""
 
 
+async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
+    """Open the datasets a matched pattern declares as belonging with it.
+
+    A source can hold one corpus that is honestly two datasets — a Telegram
+    channel is its whole history AND the five-minute feed of what it just
+    posted, which differ in cadence, in cost and in what a reader wants from
+    them. Without this, tracking a channel means pasting it twice, in two
+    spellings, one of which the user has to know exists.
+
+    Each companion URL is classified by the registry exactly like a pasted one,
+    so its page_type, config, title and cadence come from its own pattern with
+    nothing special-cased here. Companions of a companion are NOT followed:
+    ``match_manifests`` fills ``companion_urls`` for whatever it matched, and
+    this never recurses, so two patterns naming each other cannot loop.
+
+    Never fatal. The dataset the user actually asked for is already committed
+    by the time this runs, and a companion that can't be opened — already
+    tracked, or a template that renders to something unrecognised — is
+    reported, not raised.
+    """
+    from app.services.activity_log import log_event
+
+    created: list[dict] = []
+    for url in getattr(match, "companion_urls", None) or []:
+        try:
+            companion = await source_registry.classify_url(db, url)
+            if companion is None:
+                logger.warning("Companion URL %s matches no pattern — skipped", url)
+                continue
+            if await find_datasets_for_url(db, url, strict=True):
+                continue  # already tracked; nothing to open
+            sc = dict(companion.scraper_config)
+            sc.setdefault("download_files", False)
+            if companion.manifest.neon_eligible:
+                sc.setdefault("archive_neon", True)
+            slug = scraper_url_slug(companion.collector_name, url)
+            ds = TrackedDataset(
+                ckan_id=f"{companion.manifest.slug_prefix}-{slug}",
+                ckan_name=slug,
+                title=companion.title,
+                organization=companion.manifest.resolved_origin,
+                source_type="scraper",
+                source_url=url,
+                scraper_config=sc,
+                poll_interval=max(
+                    companion.poll_interval, settings.min_poll_interval,
+                ),
+                status="pending",
+                created_by=None,
+                last_modified=None,
+            )
+            db.add(ds)
+            await db.commit()
+            await log_event(
+                event="requested", dataset=ds, status="info", actor="request",
+                message="נפתח יחד עם המאגר המשויך (ממתין לאישור)",
+            )
+            created.append({"url": url, "title": companion.title,
+                            "poll_interval": ds.poll_interval})
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not open companion %s", url, exc_info=True)
+            await db.rollback()
+    return created
+
+
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
 # 10/hour used to bite real users: a rejected submit (duplicate, bad resource)
 # costs quota just like an accepted one, so a few false starts locked someone
@@ -2119,6 +2184,13 @@ async def submit_tracking_request(
         from app.services.activity_log import log_event
         await log_event(event="requested", dataset=ds, status="info", actor="request",
                         message="התקבלה בקשת גירוד (ממתינה לאישור)")
+
+        companions = await _create_companion_requests(db, registry_match)
+        if companions:
+            return {
+                "message": "Request submitted", "status": "pending",
+                "companions": companions,
+            }
         return {"message": "Request submitted", "status": "pending"}
 
     # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
