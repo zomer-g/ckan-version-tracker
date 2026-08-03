@@ -27,6 +27,13 @@ const inp: React.CSSProperties = {
   padding: "0.35rem 0.5rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.85rem",
 };
 
+// CKAN resource last-modified/upload timestamp → readable he-IL date (or —).
+function fmtDate(s: string | null | undefined): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("he-IL", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
 function useMsg() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -171,12 +178,13 @@ function CandidatesSection() {
       {node}
       <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
-          <thead><tr><th style={th}>יומן (dataset)</th><th style={th}>פורמט</th><th style={th}>גוף</th><th style={th}></th></tr></thead>
+          <thead><tr><th style={th}>יומן (dataset)</th><th style={th}>פורמט</th><th style={th}>הועלה / עודכן</th><th style={th}>גוף</th><th style={th}></th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.resource_id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
                 <td style={td}>{c.dataset_title || c.resource_name || c.resource_id}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{c.format || "—"}</td>
+                <td style={{ ...td, color: "var(--text-muted)", whiteSpace: "nowrap" }} title={c.last_modified || ""}>{fmtDate(c.last_modified)}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{c.organization || "—"}</td>
                 <td style={td}>
                   <button style={btn} disabled={busy === c.resource_id} onClick={async () => {
@@ -187,7 +195,7 @@ function CandidatesSection() {
                 </td>
               </tr>
             ))}
-            {!loading && rows.length === 0 && <tr><td style={td} colSpan={4}>אין מועמדים חדשים.</td></tr>}
+            {!loading && rows.length === 0 && <tr><td style={td} colSpan={5}>אין מועמדים חדשים.</td></tr>}
           </tbody>
         </table>
       </div>
