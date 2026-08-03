@@ -50,6 +50,10 @@ class ValidateResponse(BaseModel):
     source_link_he: str | None = None
     source_link_en: str | None = None
     default_poll_interval: int | None = None
+    # Other datasets this URL will open alongside the one it names — a channel
+    # brings its feed. Surfaced so the form can say so before the user submits:
+    # one paste creating two datasets is a surprise worth spending a line on.
+    companions: list[dict] | None = None
 
 
 @router.post("/validate", response_model=ValidateResponse)
@@ -98,6 +102,21 @@ async def validate_source_url(
         default_poll_interval=max(
             match.poll_interval, settings.min_poll_interval,
         ),
+        companions=[
+            {
+                "url": companion_url,
+                "title": companion.title,
+                "page_type": companion.page_type,
+                "poll_interval": max(
+                    companion.poll_interval, settings.min_poll_interval,
+                ),
+            }
+            for companion_url in match.companion_urls
+            # Resolve each through the registry, exactly as the creation path
+            # will, so what is shown is what will actually be opened rather
+            # than a template rendered hopefully.
+            if (companion := await source_registry.classify_url(db, companion_url))
+        ] or None,
     )
 
 

@@ -643,3 +643,60 @@ def test_a_pattern_cadence_below_the_floor_is_raised_to_it():
     match = sr.match_manifests("https://toy.example.org/y", [manifest])
     assert max(match.poll_interval, settings.min_poll_interval) == \
         settings.min_poll_interval
+
+
+COMPANION_MANIFEST = {
+    "manifest_version": 1,
+    "id": "toycomp",
+    "label_he": "מקור צעצוע — נלווים",
+    "label_en": "Toy Source (companions)",
+    "site_url": "https://toy.example.org/",
+    "badge": {"bg": "#e0f2fe", "fg": "#075985", "accent": "#0ea5e9"},
+    "default_poll_interval": 86400,
+    "url_patterns": [
+        {"regex": r"^https?://toy\.example\.org/c/(?P<who>\w+)/?#/feed/?$",
+         "page_type": "toycomp_feed", "poll_interval": 300,
+         "title_he": "צעצוע — {who} (פיד)"},
+        {"regex": r"^https?://toy\.example\.org/c/(?P<who>\w+)/?$",
+         "page_type": "toycomp_all", "title_he": "צעצוע — {who}",
+         "companions": ["https://toy.example.org/c/{who}#/feed"]},
+    ],
+}
+
+
+def test_validate_announces_the_companions_a_paste_will_open(worker_key):
+    """One paste creating two datasets is a surprise worth telling the user
+    about before they submit. Each companion is resolved through the registry,
+    so what is announced is what the creation path will actually open — not a
+    template rendered hopefully."""
+    row = SourceRegistry(
+        id="toycomp", manifest=COMPANION_MANIFEST, manifest_hash="h", enabled=True,
+    )
+    db = _FakeDB([row])
+    db.lookup_id = None
+    client = _client(db)
+
+    body = client.post("/api/sources/validate",
+                       json={"url": "https://toy.example.org/c/Abc"}).json()
+    assert body["page_type"] == "toycomp_all"
+    assert body["companions"] == [{
+        "url": "https://toy.example.org/c/Abc#/feed",
+        "title": "צעצוע — Abc (פיד)",
+        "page_type": "toycomp_feed",
+        "poll_interval": 300,
+    }]
+
+
+def test_a_url_with_no_companions_says_so_with_null_not_an_empty_list(worker_key):
+    """So the frontend can branch on presence without special-casing []."""
+    row = SourceRegistry(
+        id="toycomp", manifest=COMPANION_MANIFEST, manifest_hash="h", enabled=True,
+    )
+    db = _FakeDB([row])
+    db.lookup_id = None
+    client = _client(db)
+
+    body = client.post("/api/sources/validate",
+                       json={"url": "https://toy.example.org/c/Abc#/feed"}).json()
+    assert body["page_type"] == "toycomp_feed"
+    assert body["companions"] is None
