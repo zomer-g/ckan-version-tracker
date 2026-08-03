@@ -83,15 +83,34 @@ def test_the_real_telegram_manifest_is_neon_eligible():
 
 
 def _telegram_manifest():
+    """The real telegram manifest, read in a SUBPROCESS.
+
+    Same reason as tests/test_registry_identity.py: the govscraper repo has an
+    ``app.py`` at its root and this one has an ``app/`` package, so putting it
+    on sys.path hijacks ``import app`` for every test that follows.
+    """
+    import json
     import os.path
+    import subprocess
     import sys
 
-    root = os.path.join(os.path.dirname(__file__), "..", "..", "GOV scraper")
+    root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "GOV scraper")
+    )
     if not os.path.isdir(root):
         return None
-    sys.path.insert(0, os.path.abspath(root))
+    code = (
+        "import json;"
+        "from govscraper.scrapers.telegram.manifest import MANIFEST;"
+        "print(json.dumps(MANIFEST))"
+    )
     try:
-        from govscraper.scrapers.telegram.manifest import MANIFEST
+        out = subprocess.run(
+            [sys.executable, "-c", code], cwd=root, capture_output=True,
+            text=True, encoding="utf-8", timeout=120,
+        )
     except Exception:
         return None
-    return sr.validate_manifest(MANIFEST)
+    if out.returncode != 0 or not (out.stdout or "").strip():
+        return None
+    return sr.validate_manifest(json.loads(out.stdout))

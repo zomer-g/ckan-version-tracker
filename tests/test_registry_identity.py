@@ -378,3 +378,83 @@ def test_a_source_with_no_manifest_registered_behaves_as_before():
     grid, same = _run(go())
     assert grid == []
     assert [h["title"] for h in same] == ["המרשם"]
+
+
+# ── synthetic fragment routes ───────────────────────────────────────────────
+
+def test_a_manifest_route_fragment_must_survive_url_identity():
+    """A manifest that splits one site into two datasets with a fragment must
+    write it as a ROUTE (``#/x``), not an anchor (``#x``).
+
+    Registry identity is only half the duplicate check. find_datasets_for_url
+    ALSO compares url_identity, and url_identity keeps a fragment only when it
+    starts with "/" — that is what keeps "…/about#contact" and "…/about" one
+    dataset. So a manifest using a bare anchor produces two page_types whose
+    URLs canonicalise identically: pasting the second route resolves straight
+    to the first's dataset, which can therefore never be created.
+
+    The telegram source shipped exactly that bug with "#feed" and was moved to
+    "#/feed". ykpubdata's "#/documents" had the slash from the start.
+    """
+    from app.services.url_identity import url_identity
+
+    assert url_identity("https://t.me/MOHreport#feed") == \
+        url_identity("https://t.me/MOHreport")          # the bug: indistinguishable
+    assert url_identity("https://t.me/MOHreport#/feed") != \
+        url_identity("https://t.me/MOHreport")          # the fix
+
+
+def test_every_registered_manifest_uses_route_shaped_fragments():
+    """Guards the whole registry, not just telegram: a future manifest that
+    reaches for "#something" to split a corpus gets caught here."""
+    import re as _re
+
+    manifests = _load_repo_manifests()
+    assert manifests, "govscraper checkout not readable — the guard would pass vacuously"
+    for manifest in manifests:
+        for pattern in manifest.url_patterns:
+            for anchor in _re.findall(r"#(?!/)([A-Za-z][\w-]*)", pattern.regex):
+                raise AssertionError(
+                    f"{manifest.id}: pattern fragment '#{anchor}' is an anchor, "
+                    "not a route — url_identity drops it, so this route shares "
+                    f"an identity with the same URL without it. Use '#/{anchor}'."
+                )
+
+
+def _load_repo_manifests():
+    """Every manifest in the sibling govscraper checkout, or nothing.
+
+    Collected in a SUBPROCESS, deliberately. That repo has an ``app.py`` at its
+    root while this one has an ``app/`` package, so putting it on sys.path makes
+    ``import app`` resolve to the wrong project for every test that runs
+    afterwards — which is exactly what happened when this was written in-process
+    (nine unrelated worker tests failed). A child process cannot leak sys.path
+    or sys.modules back here.
+    """
+    import json
+    import os.path
+    import subprocess
+    import sys
+
+    root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "GOV scraper")
+    )
+    if not os.path.isdir(root):
+        return []
+    code = (
+        "import json;"
+        "from govscraper.scrapers.manifests import all_manifests;"
+        "print(json.dumps(all_manifests()))"
+    )
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", code], cwd=root, capture_output=True,
+            text=True, encoding="utf-8", timeout=120,
+        )
+    except Exception:
+        return []
+    if out.returncode != 0 or not (out.stdout or "").strip():
+        return []
+    from app.services import source_registry as _sr
+
+    return [_sr.validate_manifest(m) for m in json.loads(out.stdout)]
