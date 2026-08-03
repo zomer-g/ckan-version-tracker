@@ -76,12 +76,17 @@ export default function SqlMapLeaflet({
   fillOpacity = 0.2,
   pointRadius = 6,
   height = 460,
+  strokeColor,
 }: {
   fc: MapFeatureCollection;
   basemap?: Basemap;
   fillOpacity?: number;
   pointRadius?: number;
   height?: number;
+  /** Outline for polygons/lines, when it must NOT follow the fill. A choropleth
+   *  needs this: its lightest step is meant to recede toward the surface, which
+   *  over a street basemap means the shape loses its boundary entirely. */
+  strokeColor?: string;
 }) {
   const tiles = basemap === "none" ? null : TILES[basemap];
   return (
@@ -96,13 +101,14 @@ export default function SqlMapLeaflet({
       <GeoJSON
         // Remount when the data or the styling knobs change — Leaflet's GeoJSON
         // layer reads style/pointToLayer once, at creation.
-        key={`${fc.features.length}:${fillOpacity}:${pointRadius}:${
+        key={`${fc.features.length}:${fillOpacity}:${pointRadius}:${strokeColor || ""}:${
           fc.features.map((f) => f.properties.__color).join("")
         }`}
         data={fc as unknown as GeoJSON.GeoJsonObject}
         style={(f) => {
           const c = colorOf(f?.properties as Record<string, unknown>);
-          return { color: c, weight: 1.6, fillColor: c, fillOpacity };
+          return { color: strokeColor || c, weight: strokeColor ? 0.8 : 1.6,
+                   fillColor: c, fillOpacity };
         }}
         pointToLayer={(f, latlng) => {
           const c = colorOf(f?.properties as Record<string, unknown>);

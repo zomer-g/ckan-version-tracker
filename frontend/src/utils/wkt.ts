@@ -134,8 +134,28 @@ export function wktToGeoJson(value: unknown): GeoJsonGeometry | null {
           .filter((p) => p.length);
         return polys.length ? { type: "MultiPolygon", coordinates: polys } : null;
       }
+      case "GEOMETRYCOLLECTION": {
+        // ST_Collect over mixed inputs (a settlement whose statistical areas
+        // are some POLYGON and some MULTIPOLYGON) returns one of these, so it
+        // is a perfectly ordinary result of grouping shapes — it used to fall
+        // to `default` and vanish, leaving a map that drew nothing and said
+        // nothing. Members are split at the TOP level and parsed recursively.
+        const members: GeoJsonGeometry[] = [];
+        let depth = 0, start = 0;
+        for (let i = 0; i <= body.length; i++) {
+          const ch = body[i];
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          if (i === body.length || (ch === "," && depth === 0)) {
+            const g = wktToGeoJson(body.slice(start, i).trim());
+            if (g) members.push(g);
+            start = i + 1;
+          }
+        }
+        return members.length ? { type: "GeometryCollection", geometries: members } : null;
+      }
       default:
-        return null; // GEOMETRYCOLLECTION and unknowns: not drawn
+        return null;
     }
   } catch {
     return null;

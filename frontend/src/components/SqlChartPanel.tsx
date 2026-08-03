@@ -2,7 +2,9 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   findGeomColumn, categoryColumns, categoryValues, buildFeatures, SIMPLIFY_ABOVE,
+  numericColumns, numericScale, scaleColor, scaleBreaks, SEQUENTIAL_RAMP, NO_VALUE_COLOR,
 } from "../utils/mapFeatures";
+import type { ScaleMode } from "../utils/mapFeatures";
 import { simplifyFeatureCollection } from "../utils/geoSimplify";
 import type { Basemap } from "./SqlMapLeaflet";
 
@@ -310,13 +312,22 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   const [showVals, setShowVals] = useState(false);
   const [title, setTitle] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  // The chart type a user asked for that this result cannot draw — set by
+  // clicking its greyed chip, so the answer to "why not?" is on screen.
+  const [why, setWhy] = useState<(typeof REQS)[number] | null>(null);
   const [colorOverrides, setColorOverrides] = useState<Record<string, string>>({});
   const [dualY, setDualY] = useState(false);
   const [axisOf, setAxisOf] = useState<Record<string, Axis>>({});
   const chartWrapRef = useRef<HTMLDivElement>(null);
 
   // ── map view state ────────────────────────────────────────────────────────
+  // Three ways to colour, one control. `mapCat` names a category column (a
+  // colour per value); `mapNum` names a MEASURE (a step on the sequential ramp
+  // per value, stretched over that column's own range); both empty = one colour.
+  // They are mutually exclusive — picking one clears the other.
   const [mapCat, setMapCat] = useState<string>("");        // "" = single colour
+  const [mapNum, setMapNum] = useState<string>("");        // "" = not by measure
+  const [scaleMode, setScaleMode] = useState<ScaleMode>("linear");
   const [basemap, setBasemap] = useState<Basemap>("streets");
   const [fillOpacity, setFillOpacity] = useState(0.2);
   const [pointRadius, setPointRadius] = useState(6);
@@ -326,9 +337,17 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     () => (geomCol ? categoryColumns(columns, rows, geomCol) : []),
     [columns, rows, geomCol],
   );
+  const mapNumOptions = useMemo(
+    () => (geomCol ? numericColumns(columns, rows, geomCol) : []),
+    [columns, rows, geomCol],
+  );
   const mapCatValues = useMemo(
     () => (mapCat ? categoryValues(rows, mapCat) : []),
     [rows, mapCat],
+  );
+  const mapScale = useMemo(
+    () => (mapNum ? numericScale(rows, mapNum, scaleMode) : null),
+    [rows, mapNum, scaleMode],
   );
 
   const xKind: ColKind = cols.find((c) => c.name === xCol)?.kind || "text";
@@ -349,10 +368,18 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     if (t === "map") {
       // Default to colouring by the most selective category column, since a
       // mixed result (areas + the points inside them) is the case the map is
-      // most often opened for and is unreadable in one colour.
-      setMapCat(mapCatOptions[0] || "");
+      // most often opened for and is unreadable in one colour. With no category
+      // to split by, a result that carries a MEASURE is a choropleth waiting to
+      // happen — open it already shaded rather than in one flat colour.
+      const cat = mapCatOptions[0] || "";
+      const num = cat ? "" : (mapNumOptions[0] || "");
+      setMapCat(cat);
+      setMapNum(num);
+      setScaleMode("linear");
       setBasemap("streets");
-      setFillOpacity(0.2);
+      // A choropleth's encoding IS the fill, so it opens readable rather than
+      // at the see-through default that suits overlapping reference shapes.
+      setFillOpacity(num ? 0.6 : 0.2);
       setPointRadius(6);
     }
   }
@@ -371,6 +398,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   }
 
   function openChart(t: ChartType, over?: Partial<{ x: string; y: string[] }>) {
+    setWhy(null);
     applyDefaults(t);
     const def = defaultMapping(t);
     // Switching between chart types keeps the current X/Y mapping when it still
@@ -416,6 +444,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   useEffect(() => {
     if (prevSig.current === sig) return;
     prevSig.current = sig;
+    setWhy(null);                       // a new result answers the old question
     const t = searchParams.get("chart") as ChartType | null;
     if (!t || !REQS.some((r) => r.type === t) || !applicableType(t, cols, rows.length, !!geomCol)) {
       setType(null);
@@ -505,23 +534,35 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
 
   // Map features. Colours come from the SAME colorOverrides the series pickers
   // write to, so "colour by category" on the map and per-series colours on a
-  // chart are one mechanism with one settings UI.
+  // chart are one mechanism with one settings UI. Colouring by a MEASURE is the
+  // third mode and the only one that isn't a lookup: it reads the row's number
+  // and places it on the sequential ramp (see mapScale).
   const mapData = useMemo(() => {
     if (type !== "map" || !geomCol) return null;
     const idxOf = new Map(mapCatValues.map((v, i) => [v, i]));
-    const pick = (cat: string | null) => {
-      if (cat === null) return colorOverrides.__map || PALETTE[1];
+    const pick = (r: Record<string, unknown>) => {
+      if (mapScale) return scaleColor(r[mapScale.col], mapScale);
+      if (!mapCat) return colorOverrides.__map || PALETTE[1];
+      const cat = String(r[mapCat] ?? "—");
       const i = idxOf.get(cat) ?? idxOf.size;
       return colorOverrides[cat] || PALETTE[i % MAX_SERIES];
     };
-    const built = buildFeatures(columns, rows, geomCol, mapCat || null, pick);
+    const built = buildFeatures(columns, rows, geomCol, pick);
     if (built.fc && built.drawn > SIMPLIFY_ABOVE) {
       // No-op on point-only sets and on very large ones — safe above the bar.
       built.fc = simplifyFeatureCollection(built.fc as never) as unknown as typeof built.fc;
     }
     return built;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, geomCol, columns, rows, mapCat, mapCatValues, colorOverrides]);
+  }, [type, geomCol, columns, rows, mapCat, mapCatValues, colorOverrides, mapScale]);
+  // How many DRAWN shapes fell outside the scale (no value, or not a number).
+  // Counted from the built features rather than from the rows, so it matches
+  // what is actually on screen — and it is what the legend admits to.
+  const missingOnMap = useMemo(() => {
+    if (!mapScale || !mapData?.fc) return 0;
+    return mapData.fc.features.filter((f) => f.properties.__color === NO_VALUE_COLOR).length;
+  }, [mapData, mapScale]);
+
   const setColor = (name: string, hex: string) => setColorOverrides((p) => ({ ...p, [name]: hex }));
   const resetColor = (name: string) => setColorOverrides((p) => { const n = { ...p }; delete n[name]; return n; });
 
@@ -572,8 +613,11 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
             <button
               key={r.type}
               type="button"
-              onClick={() => ok && openChart(r.type)}
-              disabled={!ok}
+              // A greyed chip used to be `disabled`, which swallows the click —
+              // so "why can't I put this on a map?" had no answer anywhere on
+              // screen except a hover tooltip. It now answers when clicked.
+              onClick={() => (ok ? openChart(r.type) : setWhy(r))}
+              aria-disabled={!ok}
               title={r.req}
               style={{
                 padding: "0.35rem 0.7rem", borderRadius: 999, fontSize: "0.84rem",
@@ -591,7 +635,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
         {type && (
           <button
             type="button"
-            onClick={() => setType(null)}
+            onClick={() => { setType(null); setWhy(null); }}
             title="סגירת התרשים"
             style={{
               marginInlineStart: "auto", fontSize: "0.78rem", padding: "0.25rem 0.6rem", borderRadius: 4,
@@ -603,7 +647,9 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
         )}
       </div>
       <div className="text-sm text-muted" style={{ fontSize: "0.75rem", marginBottom: "0.6rem", lineHeight: 1.5 }}>
-        {activeReq || "כל כפתור מציג בריחוף את מבנה הנתונים שהוא צריך; כפתור אפור = התוצאה הנוכחית לא מתאימה לסוג הזה."}
+        {why
+          ? <><strong>{why.icon} {why.label}</strong> — התוצאה הנוכחית לא מתאימה. צריך: {why.req}</>
+          : activeReq || "כל כפתור מציג בריחוף את מבנה הנתונים שהוא צריך; כפתור אפור = התוצאה הנוכחית לא מתאימה לסוג הזה."}
       </div>
 
       {type && !hasSeries && type !== "stat" && type !== "map" && (
@@ -618,14 +664,46 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
             <label className="text-sm text-muted">
               צבע לפי:{" "}
               <select
-                value={mapCat}
-                onChange={(e) => { setMapCat(e.target.value); setColorOverrides({}); }}
+                value={mapNum ? `n:${mapNum}` : mapCat}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  // One control, two encodings: a "n:" prefix marks a measure.
+                  const isNum = v.startsWith("n:");
+                  setMapNum(isNum ? v.slice(2) : "");
+                  setMapCat(isNum ? "" : v);
+                  setColorOverrides({});
+                  // Each mode's fill default (see applyDefaults). Still a knob.
+                  setFillOpacity(isNum ? 0.6 : 0.2);
+                }}
                 style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
               >
                 <option value="">צבע אחיד</option>
-                {mapCatOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                {mapCatOptions.length > 0 && (
+                  <optgroup label="קטגוריה — צבע לכל ערך">
+                    {mapCatOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </optgroup>
+                )}
+                {mapNumOptions.length > 0 && (
+                  <optgroup label="ערך מספרי — סולם רציף">
+                    {mapNumOptions.map((c) => <option key={`n:${c}`} value={`n:${c}`}>{c}</option>)}
+                  </optgroup>
+                )}
               </select>
             </label>
+            {mapScale && (
+              <label className="text-sm text-muted">
+                מתיחת הסולם:{" "}
+                <select
+                  value={scaleMode}
+                  onChange={(e) => setScaleMode(e.target.value as ScaleMode)}
+                  title="קווי מותח בין המינימום למקסימום. לפי התפלגות נותן לכל גוון אותו מספר שורות — קריא יותר כשערך אחד חריג ומשטח את כל השאר."
+                  style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                >
+                  <option value="linear">קווי (מינימום–מקסימום)</option>
+                  <option value="quantile">לפי התפלגות</option>
+                </select>
+              </label>
+            )}
             <label className="text-sm text-muted">
               רקע:{" "}
               <select
@@ -672,7 +750,10 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                 </label>
               </div>
 
-              <div style={{ marginTop: "0.6rem" }}>
+              {/* A continuous scale has no per-value colours to pick: the ramp
+                  is one hue by design, and letting each step be recoloured is
+                  how a magnitude scale turns into a rainbow. */}
+              <div style={{ marginTop: "0.6rem", display: mapScale ? "none" : undefined }}>
                 <div className="text-sm text-muted" style={{ marginBottom: "0.35rem" }}>
                   {mapCat ? "צבע לכל ערך:" : "צבע הצורות:"}
                 </div>
@@ -715,9 +796,18 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
             </div>
           )}
 
+          {/* Scale legend. A continuous ramp is unreadable without one: the map
+              shows shades, and only this says which number each shade means. */}
+          {mapScale && <ScaleLegend scale={mapScale} missing={missingOnMap} />}
+
           <Suspense fallback={<div className="text-sm text-muted" style={{ padding: "1rem" }}>טוען מפה…</div>}>
+            {/* On a measure scale the FILL carries the number, so it is opaque
+                enough to read and the outline stops following it — otherwise the
+                lightest step, which is meant to recede, takes the shape's whole
+                boundary with it. */}
             <SqlMapLeaflet fc={mapData.fc} basemap={basemap}
-                           fillOpacity={fillOpacity} pointRadius={pointRadius} />
+                           fillOpacity={fillOpacity} pointRadius={pointRadius}
+                           strokeColor={mapScale ? "#52514e" : undefined} />
           </Suspense>
         </>
       )}
@@ -1445,6 +1535,54 @@ function AreaChart({ prep, colors }: { prep: Prepared; colors: string[] }) {
       </svg>
       <Legend names={names} colors={colors} />
     </>
+  );
+}
+
+// ── Map scale legend ─────────────────────────────────────────────────────────
+// The ramp, the number at each step boundary, and an honest note about the
+// shapes that carry no value. Without it the map is shades with no units.
+
+function ScaleLegend({ scale, missing }: {
+  scale: { col: string; min: number; max: number; mode: string };
+  missing: number;
+}) {
+  const breaks = scaleBreaks(scale as never);
+  return (
+    <div style={{ marginBottom: "0.5rem" }}>
+      <div className="text-sm text-muted" style={{ marginBottom: "0.25rem" }}>
+        {scale.col}
+        {scale.mode === "quantile" ? " — סולם לפי התפלגות" : ""}
+      </div>
+      <div style={{ display: "inline-block", maxWidth: "100%" }}>
+        <div style={{ display: "flex", gap: 2 }}>
+          {SEQUENTIAL_RAMP.map((c, i) => (
+            <span
+              key={c}
+              aria-hidden
+              title={`${fmtNum(breaks[i])} – ${fmtNum(breaks[i + 1])}`}
+              style={{ width: 34, height: 12, background: c, borderRadius: i === 0 ? "3px 0 0 3px"
+                       : i === SEQUENTIAL_RAMP.length - 1 ? "0 3px 3px 0" : 0 }}
+            />
+          ))}
+        </div>
+        {/* Only the two ends and the middle are labelled — a number under every
+            step is unreadable at this width, and the ends are what the scale
+            actually promises. */}
+        <div className="text-sm text-muted" dir="ltr"
+             style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginTop: 2 }}>
+          <span>{fmtNum(breaks[0])}</span>
+          <span>{fmtNum(breaks[Math.floor(breaks.length / 2)])}</span>
+          <span>{fmtNum(breaks[breaks.length - 1])}</span>
+        </div>
+      </div>
+      {missing > 0 && (
+        <span className="text-sm text-muted" style={{ display: "inline-flex", gap: "0.3rem",
+                                                      alignItems: "center", marginInlineStart: "0.9rem" }}>
+          <span aria-hidden style={{ width: 11, height: 11, borderRadius: 3, background: NO_VALUE_COLOR }} />
+          אין ערך ({missing.toLocaleString("he-IL")})
+        </span>
+      )}
+    </div>
   );
 }
 

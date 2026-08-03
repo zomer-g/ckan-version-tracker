@@ -70,6 +70,118 @@ export function categoryColumns(columns: string[], rows: Row[], geomCol: string,
   return out.map((o) => o.col);
 }
 
+// ── colouring by a measure (choropleth) ──────────────────────────────────────
+
+/** One hue, light→dark — the sequential ramp for magnitude. Seven steps of the
+ *  same blue: the lightest means "near the low end" and is allowed to recede
+ *  toward the map, the darkest is the high end. Never a rainbow: a multi-hue
+ *  ramp reads as identity, not as more-vs-less.
+ *
+ *  Kept on the LIGHT steps in both site themes on purpose — what these marks sit
+ *  on is the basemap, not the page surface, and the basemap is light in every
+ *  option that draws anything. */
+export const SEQUENTIAL_RAMP = [
+  "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b",
+];
+/** Rows whose value is missing or not a number. Drawn, but visibly outside the
+ *  scale — dropping them would silently shrink the answer. */
+export const NO_VALUE_COLOR = "#9ca3af";
+
+export type ScaleMode = "linear" | "quantile";
+
+export interface NumericScale {
+  col: string;
+  min: number;
+  max: number;
+  /** Ascending values, for the quantile mode's breaks. */
+  sorted: number[];
+  mode: ScaleMode;
+}
+
+export function toNumber(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const s = v.trim().replace(/,/g, "");
+    if (s === "" || !/^-?\d+(\.\d+)?$/.test(s)) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Columns worth offering as a colour SCALE: at least two distinct numbers, and
+ *  numeric in the large majority of non-empty rows (a stray "—" must not
+ *  disqualify a measure). Ordered as the result presents them, so the first
+ *  offer is usually the measure the query was written to produce. */
+export function numericColumns(columns: string[], rows: Row[], geomCol: string): string[] {
+  const out: string[] = [];
+  for (const c of columns) {
+    if (c === geomCol) continue;
+    let nonEmpty = 0, numeric = 0;
+    const seen = new Set<number>();
+    for (const r of rows) {
+      const v = r[c];
+      if (v === null || v === undefined || v === "") continue;
+      nonEmpty++;
+      const n = toNumber(v);
+      if (n !== null) { numeric++; seen.add(n); }
+    }
+    if (nonEmpty && numeric >= nonEmpty * 0.8 && seen.size >= 2) out.push(c);
+  }
+  return out;
+}
+
+export function numericScale(rows: Row[], col: string, mode: ScaleMode): NumericScale | null {
+  const vals: number[] = [];
+  for (const r of rows) {
+    const n = toNumber(r[col]);
+    if (n !== null) vals.push(n);
+  }
+  if (vals.length < 2) return null;
+  const sorted = [...vals].sort((a, b) => a - b);
+  return { col, min: sorted[0], max: sorted[sorted.length - 1], sorted, mode };
+}
+
+/** Which ramp step a value lands on.
+ *
+ *  `linear` stretches min→max, which is what "normalised to its own extremes"
+ *  means and what a reader assumes a colour scale does. `quantile` gives each
+ *  step an equal SHARE OF THE ROWS instead — the honest option for counts, where
+ *  one Tel Aviv puts every other settlement in the lightest bucket and the map
+ *  goes blank. Both are offered because they answer different questions. */
+export function scaleStep(value: number, s: NumericScale): number {
+  const last = SEQUENTIAL_RAMP.length - 1;
+  if (s.mode === "quantile") {
+    // Rank among the values, so equal counts land in each step.
+    let lo = 0, hi = s.sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (s.sorted[mid] < value) lo = mid + 1; else hi = mid;
+    }
+    const frac = s.sorted.length > 1 ? lo / (s.sorted.length - 1) : 0;
+    return Math.min(last, Math.floor(frac * SEQUENTIAL_RAMP.length));
+  }
+  if (s.max === s.min) return Math.floor(last / 2);
+  const t = (value - s.min) / (s.max - s.min);
+  return Math.min(last, Math.max(0, Math.floor(t * SEQUENTIAL_RAMP.length)));
+}
+
+export function scaleColor(value: unknown, s: NumericScale): string {
+  const n = toNumber(value);
+  if (n === null) return NO_VALUE_COLOR;
+  return SEQUENTIAL_RAMP[scaleStep(n, s)];
+}
+
+/** The value at each step boundary — what the legend prints under the ramp. */
+export function scaleBreaks(s: NumericScale): number[] {
+  const n = SEQUENTIAL_RAMP.length;
+  if (s.mode === "quantile") {
+    return Array.from({ length: n + 1 }, (_, i) =>
+      s.sorted[Math.min(s.sorted.length - 1, Math.round((i / n) * (s.sorted.length - 1)))]);
+  }
+  return Array.from({ length: n + 1 }, (_, i) => s.min + ((s.max - s.min) * i) / n);
+}
+
 /** Distinct values of a category column, in first-seen order (so colours are
  *  assigned in the order the result presents them). */
 export function categoryValues(rows: Row[], col: string, max = 8): string[] {
@@ -86,14 +198,17 @@ export function categoryValues(rows: Row[], col: string, max = 8): string[] {
   return seen;
 }
 
-/** Build the FeatureCollection. `colorFor` receives the row's category value
- *  (or null when not colouring by a column) and returns the colour to draw. */
+/** Build the FeatureCollection.
+ *
+ *  `colorFor` receives the whole row and returns the colour to draw it in —
+ *  which is what lets one call site serve all three colouring modes (one
+ *  colour, a colour per category value, a ramp step per measure) without this
+ *  function knowing which is in play. */
 export function buildFeatures(
   columns: string[],
   rows: Row[],
   geomCol: string,
-  catCol: string | null,
-  colorFor: (category: string | null) => string,
+  colorFor: (row: Row) => string,
 ): { fc: MapFeatureCollection | null; drawn: number; total: number } {
   const propCols = columns.filter((c) => c !== geomCol);
   const features: MapFeature[] = [];
@@ -105,8 +220,7 @@ export function buildFeatures(
     if (features.length >= MAX_FEATURES) continue;
     const properties: Record<string, unknown> = {};
     for (const c of propCols) properties[c] = r[c];
-    const cat = catCol ? String(r[catCol] ?? "—") : null;
-    properties.__color = colorFor(cat);
+    properties.__color = colorFor(r);
     features.push({ type: "Feature", geometry: g as Record<string, unknown>, properties });
   }
   if (!features.length) return { fc: null, drawn: 0, total: 0 };
