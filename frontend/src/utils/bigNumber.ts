@@ -6,9 +6,22 @@
  * noise: nobody reads them, and they change on every poll. So the scale gets a
  * WORD and the value gets at most one decimal.
  *
+ * The value and the scale word are returned SEPARATELY so the caller can style
+ * them differently. Set as one string they read as a different kind of thing
+ * from the plain counts beside them ("33 מיליון" next to "12,579"), and the
+ * stat row stops scanning as a row of numbers. Rendered as a big value plus a
+ * small unit, the digits stay the same size across every stat and the word
+ * demotes to the unit it actually is.
+ *
  * Below the first scale word (1,000) the exact number is still readable, so it
- * is kept exact and locale-grouped.
+ * is kept exact and locale-grouped — and has no unit.
  */
+
+export interface BigNumberParts {
+  value: string;
+  /** The scale word ("מיליון"), or null when the value is exact. */
+  unit: string | null;
+}
 
 // [threshold, he word, en word]. Ordered biggest first.
 const SCALES: Array<[number, string, string]> = [
@@ -27,13 +40,14 @@ function mantissa(value: number, scale: number): string {
   return n < 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n));
 }
 
-export function formatBigNumber(value: number, lang: string): string {
-  const locale = lang.startsWith("he") ? "he-IL" : "en-US";
+export function splitBigNumber(value: number, lang: string): BigNumberParts {
+  const he = lang.startsWith("he");
+  const locale = he ? "he-IL" : "en-US";
   const n = Math.max(0, Math.round(value));
-  for (const [scale, he, en] of SCALES) {
+  for (const [scale, heWord, enWord] of SCALES) {
     if (n >= scale) {
-      return `${mantissa(n, scale)} ${locale === "he-IL" ? he : en}`;
+      return { value: mantissa(n, scale), unit: he ? heWord : enWord };
     }
   }
-  return n.toLocaleString(locale);
+  return { value: n.toLocaleString(locale), unit: null };
 }

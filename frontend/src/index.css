@@ -1656,16 +1656,26 @@ label {
 }
 
 .home-stat-number {
-  /* Scales down on narrow phones because the widest values here are WORDS, not
-     digits ("1.4 מיליארד"): at a fixed 1.75rem they no longer fit a third of a
-     375px screen. Past that they are allowed to break at the space (number on
-     one line, scale word on the next) rather than spill over the neighbouring
-     stat — which is what a nowrap would do once the row total passes a
-     billion. */
+  /* Scales down on narrow phones: a third of a 375px screen is ~98px, and the
+     widest values here carry a unit word after the digits. */
   font-size: clamp(1.25rem, 6.5vw, 1.75rem);
   font-weight: 700;
   color: white;
   line-height: 1.15;
+  /* Same-width digits, so the six values sit on a common rhythm instead of
+     each one being as wide as its particular digits happen to be. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The scale word of a big number ("33 מיליון"). Deliberately NOT the size of
+   the value: it is a unit, and at full size it made the two worded stats read
+   as a different kind of thing from the plain counts next to them. */
+.home-stat-unit {
+  font-size: 0.5em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--primary-100);
+  margin-inline-start: 0.35em;
 }
 
 .home-stat-label {

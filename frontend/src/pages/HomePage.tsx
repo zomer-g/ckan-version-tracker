@@ -10,7 +10,7 @@ import GovmapRequestForm from "../components/GovmapRequestForm";
 import ResolvedMatches from "../components/ResolvedMatches";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 // Site-wide totals are written in words ("67 מיליון") — see utils/bigNumber.ts.
-import { formatBigNumber } from "../utils/bigNumber";
+import { splitBigNumber, BigNumberParts } from "../utils/bigNumber";
 // idf.il section pattern lives in utils/idfPattern.ts so the
 // HomePage and SearchPage versions can never drift when we add new
 // sections.
@@ -119,7 +119,9 @@ function trackedHaystack(ds: TrackedDataset): string {
  * so the user doesn't read a zero for a few hundred ms.
  *
  * Row counts and file counts run into the tens of millions, where exact digits
- * are unreadable noise — those are written in words ("67 מיליון").
+ * are unreadable noise — those are written in words ("67 מיליון"), with the
+ * scale word rendered as a small UNIT beside the value rather than as part of
+ * it, so all six stats still scan as one row of same-size numbers.
  */
 function HomeStats({
   datasets,
@@ -147,15 +149,29 @@ function HomeStats({
   const fmt = (n: number) => n.toLocaleString("he-IL");
   // A site total is shown when we have it; still loading → "—"; failed on the
   // server (null) → the stat is dropped from the row entirely.
-  const big = (n: number | null | undefined) =>
-    siteStatsLoading ? "—" : n == null ? null : formatBigNumber(n, lang);
-  const tablesText = siteStatsLoading
-    ? "—"
+  const big = (n: number | null | undefined): BigNumberParts | null =>
+    siteStatsLoading
+      ? { value: "—", unit: null }
+      : n == null
+        ? null
+        : splitBigNumber(n, lang);
+  // Tables stay exact: a four-digit count is perfectly readable, and "1.1 אלף"
+  // would round away a number that is meaningful to the digit. Only the totals
+  // that run past a million (rows, files) get the word treatment.
+  const tables = siteStatsLoading
+    ? { value: "—", unit: null }
     : siteStats?.tables == null
       ? null
-      : fmt(siteStats.tables);
-  const rowsText = big(siteStats?.rows);
-  const filesText = big(siteStats?.files);
+      : { value: fmt(siteStats.tables), unit: null };
+  const rows = big(siteStats?.rows);
+  const files = big(siteStats?.files);
+
+  const statNumber = (parts: BigNumberParts) => (
+    <div className="home-stat-number">
+      {parts.value}
+      {parts.unit && <span className="home-stat-unit">{parts.unit}</span>}
+    </div>
+  );
 
   return (
     <div className="home-stats" aria-label="סטטיסטיקות">
@@ -171,21 +187,21 @@ function HomeStats({
         <div className="home-stat-number">{loading ? "—" : fmt(orgCount)}</div>
         <div className="home-stat-label">{t("home.stats_organizations")}</div>
       </div>
-      {tablesText !== null && (
+      {tables && (
         <div className="home-stat">
-          <div className="home-stat-number">{tablesText}</div>
+          {statNumber(tables)}
           <div className="home-stat-label">{t("home.stats_tables")}</div>
         </div>
       )}
-      {rowsText !== null && (
+      {rows && (
         <div className="home-stat">
-          <div className="home-stat-number">{rowsText}</div>
+          {statNumber(rows)}
           <div className="home-stat-label">{t("home.stats_rows")}</div>
         </div>
       )}
-      {filesText !== null && (
+      {files && (
         <div className="home-stat">
-          <div className="home-stat-number">{filesText}</div>
+          {statNumber(files)}
           <div className="home-stat-label">{t("home.stats_files")}</div>
         </div>
       )}
