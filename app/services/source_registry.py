@@ -80,6 +80,12 @@ class UrlPattern(BaseModel):
     title_en: str | None = None
     # Merged over the manifest's default_config for URLs matching this pattern.
     config: dict[str, Any] = Field(default_factory=dict)
+    # Cadence for datasets of THIS shape, overriding the manifest's
+    # source-wide default. One source can hold corpora whose costs differ by
+    # orders of magnitude — a Telegram channel's full history is ~680 page
+    # reads, its "newest messages" feed is one — and a single default has to
+    # be wrong for one of them. Still floored by settings.min_poll_interval.
+    poll_interval: int | None = Field(default=None, ge=1)
 
     @field_validator("regex")
     @classmethod
@@ -306,6 +312,18 @@ class RegistryMatch:
     scraper_config: dict[str, Any]
     manifest: SourceManifest
 
+    @property
+    def poll_interval(self) -> int:
+        """Cadence for a dataset created from this URL.
+
+        The matched pattern's own interval when it declares one, else the
+        source-wide default. Callers still floor it with min_poll_interval.
+        """
+        return self.pattern_poll_interval or self.manifest.default_poll_interval
+
+    # Set from the matched UrlPattern; None means "use the manifest default".
+    pattern_poll_interval: int | None = None
+
 
 # {name} or {name|modifier}. Only word characters, so a literal brace in a
 # title can never be mistaken for a placeholder.
@@ -398,6 +416,7 @@ def match_manifests(url: str, manifests: list[SourceManifest]) -> RegistryMatch 
                 title=title,
                 scraper_config=config,
                 manifest=man,
+                pattern_poll_interval=pattern.poll_interval,
             )
     return None
 

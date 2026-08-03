@@ -524,3 +524,64 @@ def test_a_folded_optional_group_that_did_not_match_is_dropped():
     match = sr.match_manifests("https://toy.example.org/o", [manifest])
     assert "who" not in match.scraper_config
     assert match.scraper_config["corpus"] == "all"
+
+
+# ── per-pattern cadence ─────────────────────────────────────────────────────
+
+CADENCE_MANIFEST = {
+    "manifest_version": 1,
+    "id": "toycadence",
+    "label_he": "מקור צעצוע — קצב",
+    "label_en": "Toy Source (cadence)",
+    "site_url": "https://toy.example.org/",
+    "badge": {"bg": "#e0f2fe", "fg": "#075985", "accent": "#0ea5e9"},
+    "default_poll_interval": 604800,
+    "url_patterns": [
+        {
+            # The cheap corpus: one request, so it can be read constantly.
+            "regex": r"^https?://toy\.example\.org/c/(?P<who>\w+)#feed$",
+            "page_type": "toycadence_feed",
+            "poll_interval": 300,
+            "config": {"corpus": "feed"},
+        },
+        {
+            # The expensive one: hundreds of requests, read weekly.
+            "regex": r"^https?://toy\.example\.org/c/(?P<who>\w+)$",
+            "page_type": "toycadence_all",
+            "config": {"corpus": "all"},
+        },
+    ],
+}
+
+
+def test_a_pattern_may_set_its_own_cadence():
+    """One source can hold corpora whose costs differ by orders of magnitude,
+    so a single source-wide default has to be wrong for one of them."""
+    manifests = [sr.validate_manifest(CADENCE_MANIFEST)]
+    feed = sr.match_manifests("https://toy.example.org/c/x#feed", manifests)
+    whole = sr.match_manifests("https://toy.example.org/c/x", manifests)
+    assert feed.poll_interval == 300
+    assert whole.poll_interval == 604800   # falls back to the manifest default
+
+
+def test_the_manifest_default_still_applies_without_a_pattern_interval():
+    manifests = [sr.validate_manifest(TOY_MANIFEST)]
+    match = sr.match_manifests("https://toy.example.org/decisions", manifests)
+    assert match.pattern_poll_interval is None
+    assert match.poll_interval == TOY_MANIFEST["default_poll_interval"]
+
+
+def test_a_pattern_cadence_does_not_leak_into_the_scraper_config():
+    """It is a property of the dataset, not an instruction to the engine."""
+    manifests = [sr.validate_manifest(CADENCE_MANIFEST)]
+    match = sr.match_manifests("https://toy.example.org/c/x#feed", manifests)
+    assert "poll_interval" not in match.scraper_config
+
+
+def test_a_nonsense_pattern_interval_is_rejected():
+    with pytest.raises(Exception):
+        sr.validate_manifest({
+            **CADENCE_MANIFEST, "id": "toycadence2",
+            "url_patterns": [{"regex": r"^https?://toy\.example\.org/z$",
+                              "poll_interval": 0}],
+        })

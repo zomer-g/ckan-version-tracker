@@ -273,9 +273,21 @@ def _apply_registry_match(match, sc: dict) -> dict:
 
     Caller keys win: an admin tuning a single dataset (via scraper_config on
     the request) must not be overwritten by the manifest default.
+
+    A manifest that declares ``neon_eligible`` also gets ``archive_neon`` — the
+    dual R2+NEON write — turned on here, which is what every hardcoded tabular
+    kind (registries, munidata, emun, servicescompass) does in its own branch
+    above. Without it a manifest source declared itself SQL-queryable and then
+    silently wasn't: approve_request defaults a scraper dataset to plain R2
+    unless its config already carries the opt-in, so the rows were archived as
+    files and never reached the SQL console, and nothing in the approval flow
+    said so. (The same trap the hardcoded kinds hit — see the note on
+    TABULAR_SCRAPER_KINDS.) An admin choosing a plan on approve still wins.
     """
     merged = dict(match.scraper_config)
     merged.update(sc)
+    if getattr(match.manifest, "neon_eligible", False):
+        merged.setdefault("archive_neon", True)
     return merged
 
 
@@ -692,8 +704,13 @@ async def track_dataset(
                 slug_prefix = registry_match.manifest.slug_prefix
                 mirror_prefix = registry_match.manifest.mirror_prefix
                 if requested_interval is None:
+                    # The matched PATTERN's cadence when it declares one: a
+                    # source's corpora can differ enormously in cost (a whole
+                    # channel history is ~680 page reads, its newest-messages
+                    # feed is one), and one source-wide default has to be
+                    # wrong for one of them.
                     interval = max(
-                        registry_match.manifest.default_poll_interval,
+                        registry_match.poll_interval,
                         settings.min_poll_interval,
                     )
         if not collector_name:
@@ -1893,8 +1910,10 @@ async def submit_tracking_request(
                 origin = registry_match.manifest.resolved_origin
                 slug_prefix = registry_match.manifest.slug_prefix
                 if body.preferred_interval is None:
+                    # Pattern cadence over source default — see the twin of
+                    # this branch in the tracking path above.
                     interval = max(
-                        registry_match.manifest.default_poll_interval,
+                        registry_match.poll_interval,
                         settings.min_poll_interval,
                     )
         if not collector_name:
@@ -2076,6 +2095,12 @@ async def submit_tracking_request(
             # caller input, so the manifest wins outright.
             sc = dict(registry_match.scraper_config)
             sc.setdefault("download_files", False)
+            # Same NEON opt-in the admin path applies — see
+            # _apply_registry_match for why a manifest that calls itself
+            # neon_eligible must carry it into the config, and what silently
+            # broke when it didn't.
+            if registry_match.manifest.neon_eligible:
+                sc.setdefault("archive_neon", True)
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,
