@@ -31,12 +31,17 @@ tests/test_source_load.py. Deriving the key in SQL instead would need
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.scrape_task import ScrapeTask
 from app.models.source_limit import SourceLimit
 from app.models.tracked_dataset import TrackedDataset
+
+logger = logging.getLogger(__name__)
 
 _SCRAPER_MARK = "-scraper-"
 
@@ -95,9 +100,31 @@ async def running_by_source(db: AsyncSession) -> dict[str, int]:
 
 
 async def limits(db: AsyncSession) -> dict[str, int]:
-    """Configured caps, keyed by source. Absent = uncapped."""
-    rows = await db.execute(select(SourceLimit.source_key, SourceLimit.max_workers))
-    return {k: v for k, v in rows.all()}
+    """Configured caps, keyed by source. Absent = uncapped.
+
+    Fails OPEN, and this is the important part: ``saturated_sources`` runs on
+    every worker poll, so if this query raises — the table missing because the
+    app deployed ahead of its migration is the realistic case — an uncaught
+    error here would 500 the claim path and stop the ENTIRE fleet from getting
+    work. A load-control feature must never be able to do that. Losing the caps
+    degrades to the behaviour we had before they existed; losing dispatch is an
+    outage. The warning is what makes the degradation visible, and it heals by
+    itself the moment the table appears.
+
+    The rollback is not optional: a failed statement poisons the transaction, so
+    without it the claim query immediately after would fail too — turning the
+    fail-open back into the outage it exists to prevent.
+    """
+    try:
+        rows = await db.execute(select(SourceLimit.source_key, SourceLimit.max_workers))
+        return {k: v for k, v in rows.all()}
+    except SQLAlchemyError as e:  # noqa: BLE001 — see docstring: dispatch outranks caps
+        await db.rollback()
+        logger.warning(
+            "source_limits unreadable (%s: %s) — dispatching with no per-source "
+            "caps until it is back", type(e).__name__, e,
+        )
+        return {}
 
 
 async def saturated_sources(db: AsyncSession) -> dict[str, tuple[int, int]]:

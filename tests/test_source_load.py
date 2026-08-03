@@ -277,6 +277,82 @@ def test_source_load_reports_counts_per_source():
     _run(go())
 
 
+def test_missing_table_degrades_to_uncapped_instead_of_stopping_dispatch():
+    """saturated_sources runs on EVERY worker poll. If the app deploys ahead of
+    its migration, an uncaught error here would 500 the claim path and halt the
+    whole fleet — so the caps are what gets lost, never dispatch.
+
+    The transaction must also stay usable afterwards: a poisoned session would
+    fail the claim query right after, which is the outage this prevents."""
+    async def go():
+        engine = create_async_engine("sqlite+aiosqlite://")
+        async with engine.begin() as conn:
+            # Every table EXCEPT source_limits — prod, mid-deploy.
+            for table in (Tag.__table__, dataset_tags, TrackedDataset.__table__,
+                          ScrapeTask.__table__):
+                await conn.run_sync(lambda c, t=table: t.create(c))
+        Session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as db:
+            await _queue(db, [
+                ("layer-1", "govmap", "running", 30),
+                ("layer-3", "govmap", "pending", 20),
+            ])
+
+            assert await saturated_sources(db) == {}, "no caps, but no crash"
+
+            # The claim still works — this is the assertion that matters.
+            _, ds = (await db.execute(next_pending_task_q())).first()
+            assert ds.ckan_id == "layer-3"
+    _run(go())
+
+
+# ── 4. the claim lock ─────────────────────────────────────────────────────
+#
+# The cap is only exact because claims serialize on a Postgres advisory lock.
+# Every test above runs on SQLite, where that branch is skipped — so the branch
+# that actually runs in prod would otherwise be the one nothing covers, and a
+# mistake in it (an AttributeError on `db.bind`, say) would stop task dispatch
+# fleet-wide rather than fail a test.
+
+class _FakeBind:
+    def __init__(self, name):
+        self.dialect = type("D", (), {"name": name})()
+
+
+class _FakeSession:
+    def __init__(self, dialect, lock_result=True):
+        self.bind = _FakeBind(dialect)
+        self._lock_result = lock_result
+        self.calls = []
+
+    async def scalar(self, stmt, params=None):
+        self.calls.append((str(stmt), params))
+        return self._lock_result
+
+
+def test_claim_lock_is_a_noop_off_postgres():
+    """SQLite has no advisory locks — and no concurrency to protect against."""
+    from app.api.worker import _acquire_claim_lock
+
+    db = _FakeSession("sqlite")
+    assert _run(_acquire_claim_lock(db)) is True
+    assert db.calls == [], "must not send Postgres-only SQL to SQLite"
+
+
+def test_claim_lock_asks_postgres_and_reports_the_answer():
+    from app.api.worker import _CLAIM_LOCK_KEY, _acquire_claim_lock
+
+    got = _FakeSession("postgresql", lock_result=True)
+    assert _run(_acquire_claim_lock(got)) is True
+    sql, params = got.calls[0]
+    assert "pg_try_advisory_xact_lock" in sql, "must not use the BLOCKING variant"
+    assert params == {"k": _CLAIM_LOCK_KEY}
+
+    # Lock held by another poll → this one claims nothing and answers 204.
+    lost = _FakeSession("postgresql", lock_result=False)
+    assert _run(_acquire_claim_lock(lost)) is False
+
+
 def test_running_by_source_counts_workers_not_datasets():
     async def go():
         Session = await _session_factory()
