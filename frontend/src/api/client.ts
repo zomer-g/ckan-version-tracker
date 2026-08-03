@@ -1719,6 +1719,38 @@ export interface ScrapeQueueFailed {
   completed_at: string | null;
 }
 
+/** What a worker is holding right now, if anything. */
+export interface WorkerCurrentTask {
+  task_id: string;
+  dataset_id: string;
+  dataset_title: string;
+  phase: string | null;
+  progress: number;
+  started_at: string | null;
+  last_report_at: string | null;
+}
+
+/** One machine in the scraping fleet, as it last reported itself. */
+export interface WorkerNode {
+  /** Stable key — the machine's own id, or "ip:<addr>" for older workers. */
+  worker_key: string;
+  worker_id: string | null;
+  worker_ip: string | null;
+  worker_version: string | null;
+  /** The worker's own verdict on its code: "current" | "behind" | "unknown". */
+  worker_upstream: string | null;
+  last_seen_at: string | null;
+  /** No poll for over 10 minutes — presumed down or mid-restart. */
+  offline: boolean;
+  /** Paused: handed no new tasks. Does NOT stop the task it already holds. */
+  paused: boolean;
+  paused_at: string | null;
+  paused_by: string | null;
+  current_task: WorkerCurrentTask | null;
+  /** Paused AND holding nothing — the signal that it is safe to restart. */
+  drained: boolean;
+}
+
 /**
  * One upstream source, with its live load and its worker cap.
  * `source_key` is derived server-side from dataset columns (a scraper ckan_id
@@ -2005,6 +2037,21 @@ export const admin = {
    * back in the routine band. Only affects the CLAIM order — a task already
    * running keeps its worker, which is why the response reports `running`.
    */
+  workers: () => request<{ workers: WorkerNode[] }>("/admin/workers"),
+  /**
+   * Drain one worker (or put it back). Takes effect on its NEXT poll — the task
+   * it is running now finishes untouched. Watch `drained` for "safe to restart".
+   */
+  pauseWorker: (workerKey: string, paused: boolean) =>
+    request<{ worker_key: string; paused: boolean }>(
+      `/admin/workers/${encodeURIComponent(workerKey)}/pause`,
+      { method: "PUT", body: JSON.stringify({ paused }) },
+    ),
+  forgetWorker: (workerKey: string) =>
+    request<{ worker_key: string; status: string }>(
+      `/admin/workers/${encodeURIComponent(workerKey)}`,
+      { method: "DELETE" },
+    ),
   sourceLimits: () => request<{ sources: SourceLoadRow[] }>("/admin/source-limits"),
   /**
    * Cap concurrent workers on one source. `null` removes the cap; 0 stops new

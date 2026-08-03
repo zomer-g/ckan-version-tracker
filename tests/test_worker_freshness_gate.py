@@ -31,7 +31,22 @@ WORKER_SHA = "51ef400406507f701f2332bad8e3f8f5c1cbdedc"
 
 
 class _EmptyDB:
-    """No pending tasks — the gate is what's under test, not dispatch."""
+    """No pending tasks — the gate is what's under test, not dispatch.
+
+    Also stands in for the fleet bookkeeping the poll does before the gate
+    (app/services/worker_fleet.touch_worker): `get` finds no existing machine,
+    so the worker registers itself via `add`. Nothing here is asserted on — the
+    stub just has to answer the same calls a real session would.
+    """
+
+    async def get(self, model, key):
+        return None
+
+    def add(self, obj):
+        pass
+
+    async def rollback(self):
+        pass
 
     async def execute(self, stmt):
         class _Result:

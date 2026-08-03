@@ -837,6 +837,89 @@ async def cancel_scrape_task(
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
 
 
+@router.get("/workers")
+@limiter.limit("60/minute")
+async def list_workers(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The scraping fleet: which machines are alive, on what code, doing what.
+
+    ``drained`` is the field to watch when updating a worker — paused AND
+    holding nothing, i.e. safe to restart.
+    """
+    from app.services.worker_fleet import fleet
+
+    return {"workers": await fleet(db)}
+
+
+class WorkerPauseRequest(BaseModel):
+    paused: bool = True
+
+
+@router.put("/workers/{worker_key}/pause")
+@limiter.limit("30/minute")
+async def pause_worker(
+    request: Request,
+    worker_key: str,
+    payload: WorkerPauseRequest,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop giving one worker new tasks — or start again.
+
+    The task it is running right now is NOT touched: pausing takes effect the
+    next time that worker asks for work. So the sequence for a code update is
+    pause → wait for `drained` → restart the machine → un-pause.
+    """
+    from app.models.worker_node import WorkerNode
+
+    node = await db.get(WorkerNode, worker_key)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"worker לא מוכר: '{worker_key}'")
+
+    node.paused = payload.paused
+    node.paused_at = datetime.now(timezone.utc) if payload.paused else None
+    node.paused_by = user.email if payload.paused else None
+    await db.commit()
+    logger.info(
+        "Worker %s %s by %s", worker_key,
+        "paused (no new tasks)" if payload.paused else "resumed", user.email,
+    )
+    return {"worker_key": worker_key, "paused": node.paused}
+
+
+@router.delete("/workers/{worker_key}")
+@limiter.limit("30/minute")
+async def forget_worker(
+    request: Request,
+    worker_key: str,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Drop a machine from the fleet list (retired, renamed, one-off).
+
+    Purely a display cleanup: if that worker polls again it re-registers on its
+    next poll — and re-registers UNPAUSED, so this is not a way to un-pause a
+    machine you meant to keep drained.
+    """
+    from app.models.worker_node import WorkerNode
+
+    node = await db.get(WorkerNode, worker_key)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"worker לא מוכר: '{worker_key}'")
+    if node.paused:
+        raise HTTPException(
+            status_code=400,
+            detail="ה-worker מושהה. הסרה תמחק את ההשהיה ברגע שיפנה שוב — יש לבטל את ההשהיה במפורש קודם.",
+        )
+    await db.delete(node)
+    await db.commit()
+    logger.info("Worker %s forgotten by %s", worker_key, user.email)
+    return {"worker_key": worker_key, "status": "forgotten"}
+
+
 @router.get("/source-limits")
 @limiter.limit("60/minute")
 async def list_source_limits(

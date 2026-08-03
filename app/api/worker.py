@@ -29,6 +29,7 @@ from app.rate_limit import limiter
 from app.services import append_store, sampling_runs, source_registry
 from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.source_load import saturated_sources, source_filter
+from app.services.worker_fleet import touch_worker
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
@@ -403,6 +404,28 @@ async def poll_for_task(
     worker_version = (request.headers.get("x-worker-version") or "").strip()
     worker_engine_hash = (request.headers.get("x-worker-engine-hash") or "").strip().lower()
     worker_upstream = (request.headers.get("x-worker-upstream") or "").strip().lower()
+
+    # Record the poll, and honour a drain if this machine is paused.
+    #
+    # This is the whole per-worker pause: /poll is only ever asked when a worker
+    # wants its NEXT task, so answering 204 stops it taking more work while the
+    # task it already holds runs to completion. Nothing is killed — which is the
+    # point, since a heavy GovMap layer can be an hour in.
+    #
+    # A paused worker keeps polling and keeps refreshing last_seen_at, so the
+    # panel can show it as alive-and-idle: the state to wait for before
+    # restarting it to pick up new code.
+    from app.client_ip import get_client_ip
+    node = await touch_worker(
+        db,
+        worker_id=request.headers.get("x-worker-id"),
+        worker_ip=get_client_ip(request),
+        worker_version=worker_version,
+        worker_upstream=worker_upstream,
+    )
+    if node is not None and node.paused:
+        logger.info("Worker %s is paused by an admin — dispatching nothing", node.worker_key)
+        return Response(status_code=204)
     # Resolved only when an override is actually configured. Calling it
     # unconditionally would hit the GitHub commits API on every poll for a
     # private repo — a guaranteed 404 that burns the unauthenticated rate
@@ -599,7 +622,6 @@ async def poll_for_task(
     # show WHICH machine holds each task; the worker sends no identity beyond
     # its version headers. Persisted in a dedicated column (refreshed on every
     # progress report) so it survives the message being overwritten mid-run.
-    from app.client_ip import get_client_ip
     worker_ip = get_client_ip(request)
     worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
     if worker_ip and worker_ip != "unknown":

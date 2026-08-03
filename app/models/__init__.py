@@ -14,6 +14,7 @@ from app.models.auth_code import AuthCode
 from app.models.llm_budget import LlmDailyUsage
 from app.models.source_registry import SourceRegistry
 from app.models.source_limit import SourceLimit
+from app.models.worker_node import WorkerNode
 
 __all__ = [
     "User",
@@ -33,4 +34,5 @@ __all__ = [
     "CbsFeedback",
     "SourceRegistry",
     "SourceLimit",
+    "WorkerNode",
 ]

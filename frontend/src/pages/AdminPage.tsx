@@ -13,6 +13,9 @@ import {
   GovmapCoverageStatus,
   ScrapeQueueResponse,
   SourceLoadRow,
+  // Aliased: `WorkerNode` would shadow nothing here, but the row shape is a
+  // view of the model, and the alias keeps that distinction readable.
+  WorkerNode as WorkerNodeRow,
   ScheduledJobsResponse,
   DatasetSizesResponse,
   formatBytes,
@@ -1401,6 +1404,7 @@ export default function AdminPage() {
         )}
       </section>
 
+      <WorkerFleetPanel />
       <SourceLoadPanel />
       </>)}
 
@@ -2387,6 +2391,210 @@ const tdStyle: React.CSSProperties = {
   overflowWrap: "anywhere",
   wordBreak: "break-word",
 };
+
+/**
+ * The scraping fleet, with a drain switch per machine.
+ *
+ * Exists for one operation: updating a worker's code. Restarting a machine
+ * blind can kill a scrape an hour into a heavy GovMap layer, and until now
+ * there was no way to see which machines were even alive — a worker appeared in
+ * the app only as a string stamped on tasks it had already run, so an idle one
+ * was invisible.
+ *
+ * The sequence the panel is built around: השהה → wait for "מנוקז — אפשר
+ * להפעיל מחדש" → restart the machine → החזר לעבודה.
+ */
+function WorkerFleetPanel() {
+  const [workers, setWorkers] = useState<WorkerNodeRow[] | null>(null);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const r = await adminApi.workers();
+      setWorkers(r.workers);
+      setErrorMsg(null);
+    } catch (e: any) {
+      setErrorMsg(e?.message || String(e));
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // Faster than the source panel on purpose: after pausing, this list is what
+    // you sit and watch until the machine reports itself drained.
+    const id = setInterval(load, 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    setBusy((p) => new Set(p).add(key));
+    try {
+      await fn();
+      setErrorMsg(null);
+      await load();
+    } catch (e: any) {
+      setErrorMsg(e?.message || String(e));
+    }
+    setBusy((p) => { const n = new Set(p); n.delete(key); return n; });
+  };
+
+  const statusChip = (w: WorkerNodeRow): { label: string; bg: string; fg: string; title: string } => {
+    if (w.drained) return {
+      label: "✓ מנוקז — אפשר להפעיל מחדש", bg: "#dcfce7", fg: "#166534",
+      title: "מושהה ולא מחזיק משימה — הפעלה מחדש עכשיו לא תפיל גירוד",
+    };
+    if (w.paused) return {
+      label: "⏸ מתנקז — מסיים משימה", bg: "#fef3c7", fg: "#92400e",
+      title: "מושהה, אבל עדיין מריץ משימה. לא ייקח משימות חדשות; המתן לסיום",
+    };
+    if (w.offline) return {
+      label: "○ לא מדווח", bg: "#f1f5f9", fg: "#475569",
+      title: "לא ביקש עבודה יותר מ-10 דקות — כבוי, קרס, או באמצע הפעלה מחדש",
+    };
+    if (w.current_task) return {
+      label: "● בעבודה", bg: "#dbeafe", fg: "#1e40af", title: "מריץ משימה כרגע",
+    };
+    return { label: "● פנוי", bg: "#dcfce7", fg: "#166534", title: "חי ומבקש עבודה" };
+  };
+
+  return (
+    <section style={{
+      marginBottom: "1.5rem",
+      padding: "1rem 1.25rem",
+      background: "var(--surface)",
+      borderRadius: "var(--radius)",
+      boxShadow: "var(--shadow-sm)",
+      border: "1px solid var(--border)",
+    }} aria-labelledby="fleet-heading">
+      <div className="flex-between" style={{ marginBottom: "0.4rem" }}>
+        <h2 id="fleet-heading" style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
+          🖥 מכונות גירוד (workers)
+        </h2>
+        <button onClick={load} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
+          רענן ↻
+        </button>
+      </div>
+      <p className="text-muted" style={{ fontSize: "0.8rem", margin: "0 0 0.75rem", lineHeight: 1.6, maxWidth: "48rem" }}>
+        לעדכון קוד של מכונה: <strong>השהה</strong> — היא תסיים את המשימה הנוכחית ולא תיקח חדשה.
+        כשהיא מסומנת <strong>מנוקז</strong> אפשר להפעיל אותה מחדש בבטחה, ואז <strong>להחזיר לעבודה</strong>.
+        השהיה לא עוצרת גירוד שרץ, גם אם הוא באמצע שעה של עבודה.
+      </p>
+
+      {errorMsg && (
+        <div style={{
+          marginBottom: "0.6rem", padding: "0.4rem 0.6rem", fontSize: "0.8rem",
+          background: "#fee2e2", color: "#991b1b", borderRadius: 4,
+        }}>
+          {errorMsg}
+        </div>
+      )}
+
+      {!workers ? (
+        <div className="text-sm text-muted">טוען...</div>
+      ) : workers.length === 0 ? (
+        <div className="text-sm text-muted">
+          עוד לא נרשמה אף מכונה — הרשימה מתמלאת בפעם הראשונה ש-worker מבקש עבודה.
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+          {workers.map((w) => {
+            const chip = statusChip(w);
+            const isBusy = busy.has(w.worker_key);
+            return (
+              <li key={w.worker_key} style={{
+                padding: "0.5rem 0.7rem",
+                border: `1px solid ${w.paused ? "#fbbf24" : "var(--border)"}`,
+                background: w.paused ? "#fffbeb" : "var(--surface)",
+                borderRadius: 6,
+                fontSize: "0.85rem",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <strong style={{ direction: "ltr" }}>{w.worker_key}</strong>
+                  <span title={chip.title} style={{
+                    fontSize: "0.7rem", padding: "0.1rem 0.45rem", borderRadius: 9999,
+                    background: chip.bg, color: chip.fg, whiteSpace: "nowrap",
+                  }}>
+                    {chip.label}
+                  </span>
+                  {/* Which code it is on — the reason you are draining it. */}
+                  {w.worker_version && (
+                    <span className="text-muted" style={{ fontSize: "0.72rem", direction: "ltr" }}>
+                      {w.worker_version.slice(0, 8)}
+                    </span>
+                  )}
+                  {w.worker_upstream === "behind" && (
+                    <span title="ה-worker מדווח שהקוד שלו מאחור מול origin" style={{
+                      fontSize: "0.7rem", padding: "0.1rem 0.45rem", borderRadius: 9999,
+                      background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap",
+                    }}>
+                      קוד מיושן
+                    </span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  <span className="text-muted" style={{ fontSize: "0.75rem", whiteSpace: "nowrap" }}>
+                    נראה {formatRelative(w.last_seen_at)}
+                  </span>
+                  <button
+                    onClick={() => act(w.worker_key, () => adminApi.pauseWorker(w.worker_key, !w.paused))}
+                    disabled={isBusy}
+                    title={w.paused
+                      ? "החזר את המכונה לקבל משימות"
+                      : "אל תיתן למכונה משימות חדשות — המשימה הנוכחית תסתיים כרגיל"}
+                    style={{
+                      background: w.paused ? "#dcfce7" : "none",
+                      border: `1px solid ${w.paused ? "#166534" : "#92400e"}`,
+                      color: w.paused ? "#166534" : "#92400e",
+                      cursor: isBusy ? "default" : "pointer",
+                      opacity: isBusy ? 0.5 : 1,
+                      fontSize: "0.72rem", padding: "0.2rem 0.5rem",
+                      borderRadius: 4, whiteSpace: "nowrap",
+                    }}
+                  >
+                    {w.paused ? "▶ החזר לעבודה" : "⏸ השהה"}
+                  </button>
+                  {/* Only offered for machines that are gone and not drained —
+                      forgetting a paused worker would un-pause it on its next poll. */}
+                  {w.offline && !w.paused && (
+                    <button
+                      onClick={() => {
+                        if (!confirm(`להסיר את "${w.worker_key}" מהרשימה?`)) return;
+                        act(w.worker_key, () => adminApi.forgetWorker(w.worker_key));
+                      }}
+                      disabled={isBusy}
+                      title="הסרה מהרשימה בלבד — אם המכונה תבקש עבודה שוב היא תירשם מחדש"
+                      style={{
+                        background: "none", border: "1px solid var(--border)",
+                        color: "var(--text-muted)", cursor: isBusy ? "default" : "pointer",
+                        fontSize: "0.72rem", padding: "0.2rem 0.5rem",
+                        borderRadius: 4, whiteSpace: "nowrap",
+                      }}
+                    >
+                      ✕ הסר
+                    </button>
+                  )}
+                </div>
+                {w.current_task && (
+                  <div className="text-muted" style={{ marginTop: "0.3rem", fontSize: "0.78rem" }}>
+                    מריץ: <Link to={`/versions/${w.current_task.dataset_id}`}>{w.current_task.dataset_title}</Link>
+                    {w.current_task.phase && <> · {w.current_task.phase}</>}
+                    {w.current_task.progress > 0 && <> · {w.current_task.progress}%</>}
+                    {" · דיווח אחרון "}{formatRelative(w.current_task.last_report_at)}
+                  </div>
+                )}
+                {w.paused && w.paused_by && (
+                  <div className="text-muted" style={{ marginTop: "0.25rem", fontSize: "0.75rem" }}>
+                    הושהה על ידי {w.paused_by} {formatRelative(w.paused_at)}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 /**
  * Per-source load control: how many workers may sit on one upstream at once.
