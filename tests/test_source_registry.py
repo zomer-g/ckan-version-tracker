@@ -585,3 +585,61 @@ def test_a_nonsense_pattern_interval_is_rejected():
             "url_patterns": [{"regex": r"^https?://toy\.example\.org/z$",
                               "poll_interval": 0}],
         })
+
+
+# ── per-pattern cadence reaches the tracking form ───────────────────────────
+
+FEED_MANIFEST = {
+    "manifest_version": 1,
+    "id": "toyfeed",
+    "label_he": "מקור צעצוע — פיד",
+    "label_en": "Toy Source (feed)",
+    "site_url": "https://toy.example.org/",
+    "badge": {"bg": "#e0f2fe", "fg": "#075985", "accent": "#0ea5e9"},
+    # The whole corpus is expensive, so the source-wide default is daily.
+    "default_poll_interval": 86400,
+    "url_patterns": [
+        # ...but this one route is a single request, and says so.
+        {"regex": r"^https?://toy\.example\.org/x/?#/feed/?$",
+         "page_type": "toyfeed_feed", "poll_interval": 300},
+        {"regex": r"^https?://toy\.example\.org/x/?$",
+         "page_type": "toyfeed_all"},
+    ],
+}
+
+
+def test_validate_returns_the_matched_patterns_cadence(worker_key):
+    """The tracking form seeds its frequency picker from this and then always
+    sends a value back, so a source-wide default here silently overrode every
+    per-pattern poll_interval: a 5-minute feed was offered — and created — at
+    the whole-corpus cadence of 24 hours, making it exactly as fresh as the
+    history it exists to front-run."""
+    row = SourceRegistry(
+        id="toyfeed", manifest=FEED_MANIFEST, manifest_hash="h", enabled=True,
+    )
+    db = _FakeDB([row])
+    db.lookup_id = None
+    client = _client(db)
+
+    feed = client.post("/api/sources/validate",
+                       json={"url": "https://toy.example.org/x#/feed"}).json()
+    assert feed["page_type"] == "toyfeed_feed"
+    assert feed["default_poll_interval"] == 300
+
+    whole = client.post("/api/sources/validate",
+                        json={"url": "https://toy.example.org/x"}).json()
+    assert whole["page_type"] == "toyfeed_all"
+    assert whole["default_poll_interval"] == 86400
+
+
+def test_a_pattern_cadence_below_the_floor_is_raised_to_it():
+    """min_poll_interval is the contract; a manifest cannot undercut it, and
+    the form must never be seeded with a value the backend would reject."""
+    manifest = sr.validate_manifest({
+        **FEED_MANIFEST, "id": "toyfeed2",
+        "url_patterns": [{"regex": r"^https?://toy\.example\.org/y/?$",
+                          "page_type": "toyfeed2_y", "poll_interval": 5}],
+    })
+    match = sr.match_manifests("https://toy.example.org/y", [manifest])
+    assert max(match.poll_interval, settings.min_poll_interval) == \
+        settings.min_poll_interval

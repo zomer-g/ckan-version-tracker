@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
 from app.services import source_registry
@@ -86,7 +87,17 @@ async def validate_source_url(
         badge=display["badge"],
         source_link_he=display["source_link_he"],
         source_link_en=display["source_link_en"],
-        default_poll_interval=display["default_poll_interval"],
+        # The MATCHED PATTERN's cadence, not the source-wide default. The
+        # request form seeds its frequency picker from this and then always
+        # sends a value back, so declaring a per-pattern poll_interval had no
+        # effect through the UI at all: telegram's feed (one page read, meant
+        # for every 5 minutes) was offered at the whole-channel default of 24
+        # hours, which made the feed poll exactly as often as the history it
+        # exists to front-run. RegistryMatch.poll_interval already falls back
+        # to the manifest default when a pattern declares none.
+        default_poll_interval=max(
+            match.poll_interval, settings.min_poll_interval,
+        ),
     )
 
 

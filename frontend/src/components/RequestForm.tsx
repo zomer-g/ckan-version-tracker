@@ -28,6 +28,11 @@ interface RequestFormProps {
 }
 
 const INTERVAL_OPTIONS = [
+  // 300s is settings.min_poll_interval — the floor OVER accepts, and what a
+  // one-request feed (telegram's newest-messages page) declares. Without it
+  // here the nearest-match snap below rounded such a manifest up to 15
+  // minutes, so a declared cadence could never actually be offered.
+  { value: 300, labelHe: "5 דקות", labelEn: "5 minutes" },
   { value: 900, labelHe: "15 דקות", labelEn: "15 minutes" },
   { value: 3600, labelHe: "שעה", labelEn: "1 hour" },
   { value: 43200, labelHe: "12 שעות", labelEn: "12 hours" },
