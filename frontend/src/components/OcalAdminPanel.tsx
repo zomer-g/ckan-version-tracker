@@ -239,80 +239,166 @@ function ExceptionsSection() {
 }
 
 // ── People ────────────────────────────────────────────────────────────────
+const EMPTY_PERSON = { id: "", name: "", organization_id: "", wikipedia_link: "", notes: "" };
 function PeopleSection() {
   const { node, ok, fail } = useMsg();
   const [rows, setRows] = useState<OcalAdminPerson[]>([]);
+  const [orgs, setOrgs] = useState<OcalAdminOrg[]>([]);
   const [q, setQ] = useState("");
-  const [name, setName] = useState("");
-  const load = useCallback(() => { ocalAdmin.people(q || undefined).then((r) => setRows(r.people)).catch(fail); }, [q]); // eslint-disable-line
+  const [form, setForm] = useState({ ...EMPTY_PERSON });
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [csv, setCsv] = useState("");
+  const [showCsv, setShowCsv] = useState(false);
+  const load = useCallback(() => {
+    ocalAdmin.people(q || undefined).then((r) => setRows(r.people)).catch(fail);
+    ocalAdmin.organizations().then((r) => setOrgs(r.organizations)).catch(() => {});
+  }, [q]); // eslint-disable-line
+
   useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    const name = form.name.trim();
+    if (!name) return;
+    const body = { name, organization_id: form.organization_id || undefined, wikipedia_link: form.wikipedia_link || undefined, notes: form.notes || undefined };
+    try {
+      if (form.id) { await ocalAdmin.patchPerson(form.id, body); ok("עודכן"); }
+      else { await ocalAdmin.createPerson(body); ok("נוסף"); }
+      setForm({ ...EMPTY_PERSON }); load();
+    } catch (e) { fail(e); }
+  };
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const merge = async () => {
+    const ids = [...sel];
+    if (ids.length < 2) return;
+    const target = ids[0];
+    const tname = rows.find((r) => r.id === target)?.name;
+    if (!confirm(`למזג ${ids.length - 1} אנשים לתוך "${tname}"? הפעולה בלתי הפיכה.`)) return;
+    try { const r = await ocalAdmin.mergePeople(ids.slice(1), target); ok(`מוזגו ${r.merged} → ${tname}`); setSel(new Set()); load(); } catch (e) { fail(e); }
+  };
+  const importCsv = async () => {
+    const parsed = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [name, organization_name, wikipedia_link, notes] = l.split(/\t|,/).map((s) => (s || "").trim());
+      return { name, organization_name, wikipedia_link, notes };
+    }).filter((r) => r.name);
+    if (!parsed.length) { fail(new Error("לא נמצאו שורות תקינות (שם[,ארגון[,ויקיפדיה[,הערות]]])")); return; }
+    try { const r = await ocalAdmin.bulkImportPeople(parsed); ok(`יבוא: נוצרו ${r.created}, עודכנו ${r.updated}, דולגו ${r.skipped}`); setCsv(""); setShowCsv(false); load(); } catch (e) { fail(e); }
+  };
+
   return (
     <div>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
         <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש שם…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
-        <input style={inp} placeholder="שם איש חדש" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn-primary" disabled={!name.trim()} onClick={async () => {
-          try { await ocalAdmin.createPerson({ name: name.trim() }); setName(""); ok("נוסף"); load(); } catch (e) { fail(e); }
-        }}>הוסף</button>
+        <button style={btn} onClick={load}>חפש</button>
+        <button style={btn} onClick={() => setShowCsv((v) => !v)}>יבוא CSV</button>
+        {sel.size >= 2 && <button className="btn-primary" onClick={merge}>מזג {sel.size} → הראשון</button>}
       </div>
+
+      {/* add / edit form */}
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6 }}>
+        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="שם" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <select style={inp} value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })}>
+          <option value="">— ללא ארגון —</option>
+          {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="קישור ויקיפדיה" value={form.wikipedia_link} onChange={(e) => setForm({ ...form, wikipedia_link: e.target.value })} />
+        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="הערות" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+        <button className="btn-primary" disabled={!form.name.trim()} onClick={save}>{form.id ? "עדכן" : "הוסף"}</button>
+        {form.id && <button style={btn} onClick={() => setForm({ ...EMPTY_PERSON })}>ביטול</button>}
+      </div>
+
+      {showCsv && (
+        <div style={{ marginBottom: "0.6rem" }}>
+          <textarea style={{ ...inp, width: "100%", minHeight: 90, fontFamily: "monospace", fontSize: "0.8rem" }} dir="ltr"
+            placeholder="שורה לכל אדם: שם,ארגון,קישור ויקיפדיה,הערות" value={csv} onChange={(e) => setCsv(e.target.value)} />
+          <button className="btn-primary" style={{ marginTop: 4 }} disabled={!csv.trim()} onClick={importCsv}>ייבא</button>
+        </div>
+      )}
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-          <thead><tr><th style={th}>שם</th><th style={th}>ארגון</th><th style={{ ...th, textAlign: "end" }}>יומנים</th><th style={th}></th></tr></thead>
+      <div style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <thead><tr><th style={th}></th><th style={th}>שם</th><th style={th}>ארגון</th><th style={th}>ויקיפדיה</th><th style={{ ...th, textAlign: "end" }}>יומנים</th><th style={th}></th></tr></thead>
           <tbody>
             {rows.map((p) => (
-              <tr key={p.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+              <tr key={p.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", background: sel.has(p.id) ? "var(--bg-muted,#eef2ff)" : undefined }}>
+                <td style={td}><input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} title="בחר למיזוג" /></td>
                 <td style={td}>{p.name}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{p.organization_name || "—"}</td>
+                <td style={td}>{p.wikipedia_link ? <a href={p.wikipedia_link} target="_blank" rel="noreferrer">↗</a> : "—"}</td>
                 <td style={{ ...td, textAlign: "end" }}>{p.source_count}</td>
                 <td style={td}>
-                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5" }} onClick={async () => {
+                  <button style={btn} onClick={() => setForm({ id: p.id, name: p.name, organization_id: p.organization_id || "", wikipedia_link: p.wikipedia_link || "", notes: p.notes || "" })}>ערוך</button>
+                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={async () => {
                     if (!confirm(`למחוק את ${p.name}?`)) return;
                     try { await ocalAdmin.deletePerson(p.id); ok("נמחק"); load(); } catch (e) { fail(e); }
                   }}>מחק</button>
                 </td>
               </tr>
             ))}
+            {rows.length === 0 && <tr><td style={td} colSpan={6}>אין אנשים.</td></tr>}
           </tbody>
         </table>
       </div>
+      <p className="text-sm text-muted" style={{ marginTop: 6 }}>סמן ≥2 כדי למזג — הראשון שנבחר הוא היעד. מיזוג מפנה יומנים/ישויות/הצלבות ואז מוחק את השאר.</p>
     </div>
   );
 }
 
 // ── Organizations ─────────────────────────────────────────────────────────
+const EMPTY_ORG = { id: "", name: "", website: "", description: "" };
 function OrgsSection() {
   const { node, ok, fail } = useMsg();
   const [rows, setRows] = useState<OcalAdminOrg[]>([]);
-  const [name, setName] = useState("");
-  const load = useCallback(() => { ocalAdmin.organizations().then((r) => setRows(r.organizations)).catch(fail); }, []); // eslint-disable-line
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState({ ...EMPTY_ORG });
+  const load = useCallback(() => { ocalAdmin.organizations(q || undefined).then((r) => setRows(r.organizations)).catch(fail); }, [q]); // eslint-disable-line
   useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    const name = form.name.trim();
+    if (!name) return;
+    const body = { name, website: form.website || undefined, description: form.description || undefined };
+    try {
+      if (form.id) { await ocalAdmin.patchOrg(form.id, body); ok("עודכן"); }
+      else { await ocalAdmin.createOrg(body); ok("נוסף"); }
+      setForm({ ...EMPTY_ORG }); load();
+    } catch (e) { fail(e); }
+  };
+
   return (
     <div>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap" }}>
-        <input style={inp} placeholder="שם ארגון חדש" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn-primary" disabled={!name.trim()} onClick={async () => {
-          try { await ocalAdmin.createOrg({ name: name.trim() }); setName(""); ok("נוסף"); load(); } catch (e) { fail(e); }
-        }}>הוסף</button>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ארגון…" value={q}
+          onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
+        <button style={btn} onClick={load}>חפש</button>
+      </div>
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6 }}>
+        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="שם ארגון" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="אתר" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="תיאור" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        <button className="btn-primary" disabled={!form.name.trim()} onClick={save}>{form.id ? "עדכן" : "הוסף"}</button>
+        {form.id && <button style={btn} onClick={() => setForm({ ...EMPTY_ORG })}>ביטול</button>}
       </div>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
-          <thead><tr><th style={th}>שם</th><th style={th}>אתר</th><th style={th}></th></tr></thead>
+      <div style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+          <thead><tr><th style={th}>שם</th><th style={th}>אתר</th><th style={th}>תיאור</th><th style={th}></th></tr></thead>
           <tbody>
             {rows.map((o) => (
               <tr key={o.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
                 <td style={td}>{o.name}</td>
-                <td style={{ ...td, color: "var(--text-muted)" }}>{o.website || "—"}</td>
+                <td style={td}>{o.website ? <a href={o.website} target="_blank" rel="noreferrer" dir="ltr">{o.website}</a> : "—"}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>{o.description || "—"}</td>
                 <td style={td}>
-                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5" }} onClick={async () => {
+                  <button style={btn} onClick={() => setForm({ id: o.id, name: o.name, website: o.website || "", description: o.description || "" })}>ערוך</button>
+                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={async () => {
                     if (!confirm(`למחוק את ${o.name}?`)) return;
                     try { await ocalAdmin.deleteOrg(o.id); ok("נמחק"); load(); } catch (e) { fail(e); }
                   }}>מחק</button>
                 </td>
               </tr>
             ))}
+            {rows.length === 0 && <tr><td style={td} colSpan={4}>אין ארגונים.</td></tr>}
           </tbody>
         </table>
       </div>

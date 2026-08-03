@@ -2454,7 +2454,9 @@ export const ocalAdmin = {
     request(`/admin/ocal/people/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deletePerson: (id: string) => request<void>(`/admin/ocal/people/${id}`, { method: "DELETE" }),
   mergePeople: (source_ids: string[], target_id: string) =>
-    request<Record<string, unknown>>(`/admin/ocal/people/merge`, { method: "POST", body: JSON.stringify({ source_ids, target_id }) }),
+    request<{ merged: number; target_id: string }>(`/admin/ocal/people/merge`, { method: "POST", body: JSON.stringify({ source_ids, target_id }) }),
+  bulkImportPeople: (rows: Array<{ name: string; organization_name?: string; wikipedia_link?: string; notes?: string }>) =>
+    request<{ created: number; updated: number; skipped: number }>(`/admin/ocal/people/bulk-import`, { method: "POST", body: JSON.stringify({ rows }) }),
   // organizations
   organizations: (q?: string) => request<{ organizations: OcalAdminOrg[]; count: number }>(`/admin/ocal/organizations${aqs({ q })}`),
   createOrg: (body: { name: string; website?: string; description?: string }) =>

@@ -294,6 +294,65 @@ async def merge_people(request: Request, body: MergeBody, user: User = Depends(g
     return {"merged": len(srcs), "target_id": str(target)}
 
 
+class BulkPersonRow(BaseModel):
+    name: str
+    wikipedia_link: str | None = None
+    notes: str | None = None
+    organization_name: str | None = None
+
+
+class BulkPeopleBody(BaseModel):
+    rows: list[BulkPersonRow]
+
+
+@router.post("/people/bulk-import")
+@limiter.limit("6/minute")
+async def bulk_import_people(request: Request, body: BulkPeopleBody,
+                            user: User = Depends(get_admin_user)):
+    """Upsert people by name (case-insensitive); auto-create organizations by name.
+    Ported from Ocal admin people/bulk-import."""
+    if not body.rows:
+        raise HTTPException(400, "rows is required")
+    created = updated = skipped = 0
+    pool = await ocal_db.get_pool()
+    async with pool.acquire() as conn:
+        orgs = await conn.fetch("SELECT id, name FROM organizations")
+        org_by_name = {(o["name"] or "").lower().strip(): o["id"] for o in orgs}
+        for r in body.rows:
+            name = (r.name or "").strip()
+            if not name:
+                skipped += 1
+                continue
+            org_id = None
+            if r.organization_name and r.organization_name.strip():
+                key = r.organization_name.lower().strip()
+                org_id = org_by_name.get(key)
+                if org_id is None:
+                    o = await conn.fetchrow(
+                        "INSERT INTO organizations (name) VALUES ($1) "
+                        "ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id",
+                        r.organization_name.strip())
+                    org_id = o["id"]
+                    org_by_name[key] = org_id
+            existing = await conn.fetchrow(
+                "SELECT id FROM people WHERE lower(name)=lower($1) LIMIT 1", name)
+            if existing:
+                await conn.execute(
+                    "UPDATE people SET wikipedia_link=COALESCE($2,wikipedia_link), "
+                    "notes=COALESCE($3,notes), organization_id=COALESCE($4,organization_id), "
+                    "updated_at=now() WHERE id=$1",
+                    existing["id"], r.wikipedia_link, r.notes, org_id)
+                updated += 1
+            else:
+                await conn.execute(
+                    "INSERT INTO people (name, wikipedia_link, notes, organization_id) "
+                    "VALUES ($1,$2,$3,$4)", name, r.wikipedia_link, r.notes, org_id)
+                created += 1
+    logger.info("ocal admin: bulk-import people by %s — created=%d updated=%d skipped=%d",
+                user.email, created, updated, skipped)
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
 # ── organizations ─────────────────────────────────────────────────────────────
 
 @router.get("/organizations")
