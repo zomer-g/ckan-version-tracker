@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ocalAdmin, OcalAdminSource, OcalAdminPerson, OcalAdminOrg,
-  OcalCandidate, OcalException, OcalEntity,
+  OcalCandidate, OcalException, OcalEntity, OcalAutoImportLog,
 } from "../api/client";
 
-type Section = "sources" | "candidates" | "people" | "orgs" | "entities" | "content" | "exceptions";
+type Section = "sources" | "candidates" | "automation" | "people" | "orgs" | "entities" | "content" | "exceptions";
 const SECTIONS: [Section, string][] = [
   ["sources", "יומנים"],
   ["candidates", "מועמדים חדשים"],
+  ["automation", "אוטומציה"],
   ["exceptions", "נדחו"],
   ["entities", "ישויות"],
   ["people", "אנשים"],
@@ -433,6 +434,84 @@ function OrgsSection() {
   );
 }
 
+// ── Automation (settings + scan logs) ──────────────────────────────────────
+function AutomationSection() {
+  const { node, ok, fail } = useMsg();
+  const [st, setSt] = useState<{ scheduler_interval_hours: number; per_tick: number; scan_running: boolean; last_run: OcalAutoImportLog | null } | null>(null);
+  const [logs, setLogs] = useState<OcalAutoImportLog[]>([]);
+  const [form, setForm] = useState<{ auto_scan_enabled: boolean; confidence: number; min_rows: number; interval_hours: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    ocalAdmin.automationStatus().then((s) => {
+      setSt(s);
+      setForm({ auto_scan_enabled: s.settings.auto_scan_enabled, confidence: s.settings.confidence, min_rows: s.settings.min_rows, interval_hours: s.settings.interval_hours });
+    }).catch(fail);
+    ocalAdmin.automationLogs(50).then((r) => setLogs(r.logs)).catch(() => {});
+  }, []); // eslint-disable-line
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    if (!form) return;
+    setBusy(true);
+    try { await ocalAdmin.updateAutomationSettings(form); ok("הגדרות נשמרו"); load(); } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const scanNow = async () => {
+    setBusy(true);
+    try { const r = await ocalAdmin.scan(5); ok(r.message); setTimeout(load, 2000); } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+  const dt = (s: string) => { const d = new Date(s); return isNaN(d.getTime()) ? "—" : d.toLocaleString("he-IL"); };
+  const dur = (l: OcalAutoImportLog) => l.finished_at ? `${Math.max(0, Math.round((new Date(l.finished_at).getTime() - new Date(l.started_at).getTime()) / 1000))}s` : "רץ…";
+
+  return (
+    <div>
+      {node}
+      {form && (
+        <div style={{ padding: "0.7rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6, marginBottom: "0.8rem" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, fontWeight: 600 }}>
+            <input type="checkbox" checked={form.auto_scan_enabled} onChange={(e) => setForm({ ...form, auto_scan_enabled: e.target.checked })} />
+            ייבוא אוטומטי פעיל (סריקה כל {st?.scheduler_interval_hours}ש׳, עד {st?.per_tick} בכל ריצה)
+          </label>
+          <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ fontSize: "0.85rem" }}>סף ביטחון: <input type="number" step="0.05" min="0" max="1" style={{ ...inp, width: 80 }} value={form.confidence} onChange={(e) => setForm({ ...form, confidence: parseFloat(e.target.value) || 0 })} /></label>
+            <label style={{ fontSize: "0.85rem" }}>מינ׳ שורות: <input type="number" min="1" style={{ ...inp, width: 80 }} value={form.min_rows} onChange={(e) => setForm({ ...form, min_rows: parseInt(e.target.value) || 1 })} /></label>
+            <label style={{ fontSize: "0.85rem" }}>מרווח (שעות, בעליית שרת): <input type="number" step="0.5" min="0.5" style={{ ...inp, width: 80 }} value={form.interval_hours} onChange={(e) => setForm({ ...form, interval_hours: parseFloat(e.target.value) || 6 })} /></label>
+            <button className="btn-primary" disabled={busy} onClick={save}>שמור</button>
+            <button style={btn} disabled={busy} onClick={scanNow}>סרוק עכשיו</button>
+          </div>
+          <p className="text-sm text-muted" style={{ marginTop: 6 }}>שער הייבוא: כותרת + תאריך ממופים, ביטחון ≥ הסף, ≥ מינ׳ שורות ← מיובא אוטומטית; אחרת ← "נדחו". שינוי המרווח חל בעליית השרת הבאה.</p>
+        </div>
+      )}
+      {st && (
+        <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+          {st.scan_running ? "🟢 סריקה רצה כעת…" : "⚪ אין סריקה פעילה"}
+          {st.last_run && ` · אחרונה: ${dt(st.last_run.started_at)} (${st.last_run.trigger}) — יובאו ${st.last_run.imported}, נדחו ${st.last_run.skipped}`}
+        </div>
+      )}
+      <h4 style={{ margin: "0.5rem 0" }}>לוג סריקות</h4>
+      <div style={{ overflowX: "auto", maxHeight: 420, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <thead><tr><th style={th}>התחיל</th><th style={th}>טריגר</th><th style={{ ...th, textAlign: "end" }}>מועמדים</th><th style={{ ...th, textAlign: "end" }}>יובאו</th><th style={{ ...th, textAlign: "end" }}>נדחו</th><th style={{ ...th, textAlign: "end" }}>שגיאות</th><th style={th}>משך</th></tr></thead>
+          <tbody>
+            {logs.map((l, i) => (
+              <tr key={l.id || i} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+                <td style={td}>{dt(l.started_at)}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>{l.trigger}</td>
+                <td style={{ ...td, textAlign: "end" }}>{l.candidates}</td>
+                <td style={{ ...td, textAlign: "end", color: l.imported ? "var(--primary)" : undefined }}>{l.imported}</td>
+                <td style={{ ...td, textAlign: "end" }}>{l.skipped}</td>
+                <td style={{ ...td, textAlign: "end", color: l.errors ? "#b91c1c" : undefined }}>{l.errors}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>{dur(l)}</td>
+              </tr>
+            ))}
+            {logs.length === 0 && <tr><td style={td} colSpan={7}>אין ריצות עדיין — לחץ "סרוק עכשיו" או המתן ל-scheduler.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <button style={{ ...btn, marginTop: 8 }} onClick={load}>רענן</button>
+    </div>
+  );
+}
+
 // ── Entities (extracted event_entities) ────────────────────────────────────
 const ETYPES: [string, string][] = [["", "הכל"], ["person", "אנשים"], ["organization", "ארגונים"], ["place", "מקומות"]];
 const ETYPE_HE: Record<string, string> = { person: "אדם", organization: "ארגון", place: "מקום" };
@@ -580,6 +659,7 @@ export default function OcalAdminPanel() {
       </div>
       {sec === "sources" && <SourcesSection />}
       {sec === "candidates" && <CandidatesSection />}
+      {sec === "automation" && <AutomationSection />}
       {sec === "exceptions" && <ExceptionsSection />}
       {sec === "people" && <PeopleSection />}
       {sec === "orgs" && <OrgsSection />}

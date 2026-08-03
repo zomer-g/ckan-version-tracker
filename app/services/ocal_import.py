@@ -601,13 +601,14 @@ async def import_resource(resource_id: str, *, force: bool = False,
     mapping, conf, map_method = await map_fields_best(columns, rows)
 
     if not force:
+        auto = await get_automation_settings()  # DB overrides of the env gate
         if not all(t in mapping for t in _REQUIRED):
             await _record_exception(res, pkg, "auto_rejected")
             raise SkipImport("no title / start-date column mapped")
-        if conf < settings.ocal_import_confidence:
+        if conf < float(auto["confidence"]):
             await _record_exception(res, pkg, "auto_rejected")
             raise SkipImport(f"low mapping confidence {conf:.2f}")
-        if len(rows) < settings.ocal_import_min_rows:
+        if len(rows) < int(auto["min_rows"]):
             await _record_exception(res, pkg, "auto_rejected")
             raise SkipImport(f"too few rows ({len(rows)})")
 
@@ -679,6 +680,73 @@ async def _known_resource_ids() -> set[str]:
     return {r["resource_id"] for r in rows}
 
 
+# ── automation settings + run logs (DB-backed, editable from the admin) ────────
+# Tables live in the append DB's `ocal` schema (created out-of-band + ensured here
+# for fresh deploys). Settings override the env defaults at runtime; interval_hours
+# only takes effect on the next boot (the APScheduler trigger is fixed at startup).
+_AUTOMATION_DDL = [
+    """CREATE TABLE IF NOT EXISTS automation_settings (
+        id int PRIMARY KEY DEFAULT 1,
+        auto_scan_enabled boolean NOT NULL DEFAULT true,
+        interval_hours real NOT NULL DEFAULT 6,
+        confidence real NOT NULL DEFAULT 0.25,
+        min_rows int NOT NULL DEFAULT 10,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT automation_settings_single CHECK (id = 1))""",
+    "INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+    """CREATE TABLE IF NOT EXISTS auto_import_logs (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
+        trigger text NOT NULL DEFAULT 'scheduler',
+        candidates int NOT NULL DEFAULT 0, imported int NOT NULL DEFAULT 0,
+        skipped int NOT NULL DEFAULT 0, errors int NOT NULL DEFAULT 0, detail jsonb)""",
+    "CREATE INDEX IF NOT EXISTS auto_import_logs_started_idx ON auto_import_logs (started_at DESC)",
+]
+_automation_ready = False
+
+
+async def ensure_automation_tables() -> None:
+    global _automation_ready
+    if _automation_ready or not ocal_db.is_configured():
+        return
+    try:
+        for stmt in _AUTOMATION_DDL:
+            await ocal_db.execute(stmt)
+        _automation_ready = True
+    except Exception:  # noqa: BLE001 — best-effort; env defaults still work
+        logger.exception("ocal_import: ensure_automation_tables failed")
+
+
+async def get_automation_settings() -> dict:
+    """Effective automation config — DB row if present, else env defaults."""
+    await ensure_automation_tables()
+    try:
+        row = await ocal_db.fetchrow(
+            "SELECT auto_scan_enabled, interval_hours, confidence, min_rows, updated_at "
+            "FROM automation_settings WHERE id=1")
+        if row:
+            return dict(row)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"auto_scan_enabled": settings.ocal_import_enabled,
+            "interval_hours": settings.ocal_import_interval_hours,
+            "confidence": settings.ocal_import_confidence,
+            "min_rows": settings.ocal_import_min_rows, "updated_at": None}
+
+
+async def update_automation_settings(**fields) -> dict:
+    await ensure_automation_tables()
+    allowed = {"auto_scan_enabled", "interval_hours", "confidence", "min_rows"}
+    sets, args = [], []
+    for k, v in fields.items():
+        if k in allowed and v is not None:
+            args.append(v); sets.append(f"{k}=${len(args)}")
+    if sets:
+        await ocal_db.execute(
+            f"UPDATE automation_settings SET {', '.join(sets)}, updated_at=now() WHERE id=1", *args)
+    return await get_automation_settings()
+
+
 async def discover_candidates(limit: int | None = None) -> list[dict]:
     """New importable diary resources (not already a source or an exception),
     newest datasets first."""
@@ -714,12 +782,20 @@ async def discover_candidates(limit: int | None = None) -> list[dict]:
     return cands
 
 
-async def scan_once(max_import: int | None = None) -> dict:
+async def scan_once(max_import: int | None = None, *, trigger: str = "scheduler") -> dict:
     """Discover new diary resources and import up to ``max_import`` that pass the
-    gate; the rest of those evaluated are recorded as exceptions."""
+    gate; the rest of those evaluated are recorded as exceptions. Each run is
+    recorded in ``auto_import_logs`` (visible in the admin automation tab)."""
     if not ocal_db.is_configured():
         return {"enabled": False}
     cap = max_import if max_import is not None else settings.ocal_import_per_tick
+    log_id = None
+    try:
+        await ensure_automation_tables()
+        log_id = await ocal_db.fetchval(
+            "INSERT INTO auto_import_logs (trigger) VALUES ($1) RETURNING id", trigger)
+    except Exception:  # noqa: BLE001 — logging must never block the scan
+        logger.debug("ocal_import: could not open auto_import_logs row")
     cands = await discover_candidates()
     imported, skipped, errors = [], 0, 0
     for c in cands:
@@ -734,5 +810,14 @@ async def scan_once(max_import: int | None = None) -> dict:
         except Exception:  # noqa: BLE001 — one bad resource must not stop the scan
             errors += 1
             logger.exception("ocal_import: failed to import %s", rid)
-    return {"candidates": len(cands), "imported": len(imported),
-            "skipped": skipped, "errors": errors, "results": imported}
+    result = {"candidates": len(cands), "imported": len(imported),
+              "skipped": skipped, "errors": errors, "results": imported}
+    if log_id is not None:
+        try:
+            await ocal_db.execute(
+                "UPDATE auto_import_logs SET finished_at=now(), candidates=$2, "
+                "imported=$3, skipped=$4, errors=$5 WHERE id=$1",
+                log_id, len(cands), len(imported), skipped, errors)
+        except Exception:  # noqa: BLE001
+            logger.debug("ocal_import: could not close auto_import_logs row")
+    return result

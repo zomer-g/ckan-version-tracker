@@ -2377,7 +2377,7 @@ async def ocal_import_scan(
 
     async def _run() -> None:
         try:
-            r = await ocal_import.scan_once(max_import=cap)
+            r = await ocal_import.scan_once(max_import=cap, trigger="manual")
             logger.info("ocal diary scan (bg) by %s: %s", email,
                         {k: r.get(k) for k in ("candidates", "imported", "skipped", "errors")})
         except Exception:  # noqa: BLE001 — background task must swallow its own errors
@@ -2386,6 +2386,75 @@ async def ocal_import_scan(
     asyncio.create_task(_run())
     return {"started": True, "max_import": cap,
             "message": f"הסריקה רצה ברקע (עד {cap} יבואים) — רענן בעוד דקה לראות תוצאות."}
+
+
+class OcalAutomationSettings(BaseModel):
+    auto_scan_enabled: bool | None = None
+    interval_hours: float | None = None
+    confidence: float | None = None
+    min_rows: int | None = None
+
+
+@router.get("/ocal/automation/settings")
+@limiter.limit("30/minute")
+async def ocal_automation_get(request: Request, user: User = Depends(get_admin_user)):
+    """Effective auto-import settings (DB overrides, else env defaults)."""
+    from app.services import ocal_import
+    return await ocal_import.get_automation_settings()
+
+
+@router.put("/ocal/automation/settings")
+@limiter.limit("20/minute")
+async def ocal_automation_put(request: Request, body: OcalAutomationSettings,
+                             user: User = Depends(get_admin_user)):
+    """Update auto-import settings. auto_scan_enabled/confidence/min_rows take
+    effect immediately (read per run/import); interval_hours applies on next boot."""
+    from app.services import ocal_import
+    res = await ocal_import.update_automation_settings(
+        auto_scan_enabled=body.auto_scan_enabled, interval_hours=body.interval_hours,
+        confidence=body.confidence, min_rows=body.min_rows)
+    logger.info("ocal automation settings updated by %s", user.email)
+    return res
+
+
+@router.get("/ocal/automation/logs")
+@limiter.limit("30/minute")
+async def ocal_automation_logs(request: Request, limit: int = 50,
+                              user: User = Depends(get_admin_user)):
+    """Recent auto-import scan runs (scheduler + manual)."""
+    from app.services import ocal_db, ocal_import
+    await ocal_import.ensure_automation_tables()
+    rows = await ocal_db.fetch(
+        "SELECT id, started_at, finished_at, trigger, candidates, imported, skipped, errors "
+        "FROM auto_import_logs ORDER BY started_at DESC LIMIT $1", max(1, min(limit, 200)))
+    return {"logs": [dict(r) for r in rows]}
+
+
+@router.get("/ocal/automation/status")
+@limiter.limit("30/minute")
+async def ocal_automation_status(request: Request, user: User = Depends(get_admin_user)):
+    """Scheduler + last-run snapshot for the automation tab."""
+    from app.services import ocal_db, ocal_import
+    settingsd = await ocal_import.get_automation_settings()
+    last = None
+    running = False
+    try:
+        await ocal_import.ensure_automation_tables()
+        last = await ocal_db.fetchrow(
+            "SELECT started_at, finished_at, trigger, candidates, imported, skipped, errors "
+            "FROM auto_import_logs ORDER BY started_at DESC LIMIT 1")
+        running = bool(await ocal_db.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM auto_import_logs WHERE finished_at IS NULL "
+            "AND started_at > now() - interval '30 min')"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "settings": settingsd,
+        "scheduler_interval_hours": settings.ocal_import_interval_hours,
+        "per_tick": settings.ocal_import_per_tick,
+        "scan_running": running,
+        "last_run": dict(last) if last else None,
+    }
 
 
 class FieldFlagsRecomputeRequest(BaseModel):

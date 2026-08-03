@@ -2403,6 +2403,23 @@ export interface OcalEntity {
   event_count: number;
   matched: boolean;
 }
+export interface OcalAutomationSettings {
+  auto_scan_enabled: boolean;
+  interval_hours: number;
+  confidence: number;
+  min_rows: number;
+  updated_at?: string | null;
+}
+export interface OcalAutoImportLog {
+  id?: string;
+  started_at: string;
+  finished_at: string | null;
+  trigger: string;
+  candidates: number;
+  imported: number;
+  skipped: number;
+  errors: number;
+}
 export interface OcalCandidate {
   resource_id: string;
   resource_name: string | null;
@@ -2449,6 +2466,12 @@ export const ocalAdmin = {
   candidates: (limit = 50) => request<{ candidates: OcalCandidate[]; count: number }>(`/admin/ocal/candidates${aqs({ limit })}`),
   scan: (max_import = 5) =>
     request<{ started: boolean; max_import: number; message: string }>(`/admin/ocal/scan${aqs({ max_import })}`, { method: "POST" }),
+  // automation settings / logs / status
+  automationSettings: () => request<OcalAutomationSettings>(`/admin/ocal/automation/settings`),
+  updateAutomationSettings: (body: Partial<Pick<OcalAutomationSettings, "auto_scan_enabled" | "interval_hours" | "confidence" | "min_rows">>) =>
+    request<OcalAutomationSettings>(`/admin/ocal/automation/settings`, { method: "PUT", body: JSON.stringify(body) }),
+  automationLogs: (limit = 50) => request<{ logs: OcalAutoImportLog[] }>(`/admin/ocal/automation/logs${aqs({ limit })}`),
+  automationStatus: () => request<{ settings: OcalAutomationSettings; scheduler_interval_hours: number; per_tick: number; scan_running: boolean; last_run: OcalAutoImportLog | null }>(`/admin/ocal/automation/status`),
   importOne: (resource_id: string) =>
     request<{ events_upserted: number; source_id: string; rows_parsed: number }>(`/admin/ocal/import`, { method: "POST", body: JSON.stringify({ resource_id }) }),
   // exceptions

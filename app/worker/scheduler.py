@@ -342,7 +342,10 @@ async def init_scheduler() -> None:
         if not (settings.ocal_import_enabled and ocal_db.is_configured()):
             return
         try:
-            r = await ocal_import.scan_once()
+            auto = await ocal_import.get_automation_settings()
+            if not auto.get("auto_scan_enabled", True):
+                return  # runtime kill-switch from the admin automation tab
+            r = await ocal_import.scan_once(trigger="scheduler")
             if r.get("imported") or r.get("skipped"):
                 logger.info("ocal_import tick: %s", r)
         except Exception:  # noqa: BLE001 — never let a bad scan kill the job
