@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
-from app.models.scrape_task import ScrapeTask
+from app.models.scrape_task import INTERRUPTED_MESSAGE, PHASE_INTERRUPTED, ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
 from app.worker.poll_job import poll_dataset, resume_interrupted_appends
 from app.worker.datastore_push_runner import (
@@ -49,12 +49,10 @@ async def cleanup_stuck_scrape_tasks() -> None:
         for task in stuck:
             age_min = int((now - task.created_at).total_seconds() / 60) if task.created_at else 0
             hb_min = int((now - task.updated_at).total_seconds() / 60) if task.updated_at else age_min
+            # An interrupted run, not a failed scrape — see PHASE_INTERRUPTED.
             task.status = "failed"
-            task.phase = "timeout"
-            task.error = (
-                f"Task auto-reset by scheduler: no heartbeat for {hb_min} min "
-                f"(task age {age_min} min) — worker likely crashed"
-            )
+            task.phase = PHASE_INTERRUPTED
+            task.error = INTERRUPTED_MESSAGE.format(hb=hb_min, age=age_min)
             task.completed_at = now
             logger.warning(
                 "Scheduler auto-reset stuck task %s (age=%dmin, no heartbeat for %dmin)",

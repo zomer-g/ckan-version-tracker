@@ -1785,7 +1785,12 @@ export interface PromoteTaskResult {
 export interface ScrapeQueueResponse {
   running: ScrapeQueueRunning[];
   pending: ScrapeQueuePending[];
+  /** Real scrape failures only. */
   failed: ScrapeQueueFailed[];
+  /** Runs cut short — the worker stopped reporting (closed, machine slept).
+   *  Same row shape as `failed`; kept apart so a closed laptop is never read
+   *  as a defect in the scraper. Older builds omit it. */
+  interrupted?: ScrapeQueueFailed[];
 }
 
 /**

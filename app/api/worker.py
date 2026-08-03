@@ -532,14 +532,13 @@ async def poll_for_task(
     )
     cleaned = 0
     for stuck_task in stuck_result.scalars().all():
+        # An interrupted run, not a failed scrape — see PHASE_INTERRUPTED.
+        from app.models.scrape_task import INTERRUPTED_MESSAGE, PHASE_INTERRUPTED
         stuck_task.status = "failed"
-        stuck_task.phase = "timeout"
+        stuck_task.phase = PHASE_INTERRUPTED
         age_min = int((now - stuck_task.created_at).total_seconds() / 60) if stuck_task.created_at else 0
         hb_min = int((now - stuck_task.updated_at).total_seconds() / 60) if stuck_task.updated_at else age_min
-        stuck_task.error = (
-            f"Task auto-reset: no heartbeat for {hb_min} min "
-            f"(task age {age_min} min) — worker likely crashed"
-        )
+        stuck_task.error = INTERRUPTED_MESSAGE.format(hb=hb_min, age=age_min)
         stuck_task.completed_at = now
         logger.warning("Auto-reset stuck task %s (age=%dmin, no heartbeat for %dmin)",
                        stuck_task.id, age_min, hb_min)

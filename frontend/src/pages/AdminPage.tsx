@@ -1071,7 +1071,7 @@ export default function AdminPage() {
 
         {!queue ? (
           <div className="text-sm text-muted">טוען...</div>
-        ) : queue.running.length === 0 && queue.pending.length === 0 && queue.failed.length === 0 ? (
+        ) : queue.running.length === 0 && queue.pending.length === 0 && queue.failed.length === 0 && (queue.interrupted?.length ?? 0) === 0 ? (
           <div className="text-sm text-muted">התור ריק — אין משימות גירוד פעילות</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -1295,6 +1295,59 @@ export default function AdminPage() {
                       </li>
                     );
                   })}
+                </ul>
+              </div>
+            )}
+
+            {/* Interrupted runs — deliberately NOT in the failures block. The
+                worker was closed or the machine slept part-way through a long
+                layer; nothing is wrong with the scraper or the dataset, and the
+                only sensible action is to run it again. */}
+            {(queue.interrupted?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: "0.8rem" }}>
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#78350f", marginBottom: "0.4rem" }}>
+                  ⏸ ריצות שנקטעו — 24 שעות ({queue.interrupted!.length})
+                  <span style={{ fontWeight: 400, color: "var(--text-muted)", marginInlineStart: "0.4rem" }}>
+                    הוורקר הפסיק לדווח. אינן שגיאות גרידה.
+                  </span>
+                </div>
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {queue.interrupted!.map((t) => (
+                    <li key={t.task_id} style={{
+                      padding: "0.4rem 0.6rem",
+                      marginBottom: "0.2rem",
+                      background: "#fffbeb",
+                      border: "1px solid #fde68a",
+                      borderRadius: "4px",
+                      fontSize: "0.85rem",
+                    }}>
+                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center" }}>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                        <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                          {formatRelative(t.completed_at)}
+                        </span>
+                        <button
+                          onClick={() => handleRetryFailed(t.task_id, t.dataset_id, t.dataset_title)}
+                          title="הרץ שוב"
+                          style={{
+                            background: "none", border: "1px solid #166534", color: "#166534",
+                            cursor: "pointer", fontSize: "0.7rem", padding: "0.15rem 0.4rem",
+                            borderRadius: "4px", whiteSpace: "nowrap",
+                          }}
+                        >
+                          ↻ הרץ שוב
+                        </button>
+                      </div>
+                      {t.error && (
+                        <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
+                          {t.error}
+                        </div>
+                      )}
+                      {workerLabel(t) && (
+                        <div className="text-muted" style={{ fontSize: "0.7rem" }}>מכונה: {workerLabel(t)}</div>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               </div>
             )}

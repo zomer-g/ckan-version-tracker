@@ -779,8 +779,15 @@ async def list_scrape_tasks(
         .order_by(ScrapeTask.completed_at.desc())
         .limit(20)
     )
-    failed = [
-        {
+    # A run the operator cut short is not a scrape that failed. Split the two so
+    # a closed laptop stops sitting in the same list as GeometryFetchError — see
+    # PHASE_INTERRUPTED. Classified on read, so rows written before the phase
+    # existed land in the right bucket too.
+    from app.models.scrape_task import is_interrupted
+
+    failed, interrupted = [], []
+    for t, ds in failed_result.all():
+        row = {
             "task_id": str(t.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
@@ -790,10 +797,10 @@ async def list_scrape_tasks(
             "worker_id": t.worker_id,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
         }
-        for t, ds in failed_result.all()
-    ]
+        (interrupted if is_interrupted(t.phase, t.error) else failed).append(row)
 
-    return {"running": running, "pending": pending, "failed": failed}
+    return {"running": running, "pending": pending,
+            "failed": failed, "interrupted": interrupted}
 
 
 @router.delete("/scrape-tasks/{task_id}")

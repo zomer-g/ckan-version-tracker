@@ -30,6 +30,41 @@ PRIORITY_COVERAGE = 10     # GovMap coverage rollout's routine quarterly refresh
 PRIORITY_BACKFILL = 0      # one-shot whole-catalog re-scrapes; strictly last
 
 
+# ── interrupted runs ────────────────────────────────────────────────────
+# A worker that stops reporting is NOT a scrape that failed. The common cause
+# is mundane: the operator closed the worker, or the machine went to sleep,
+# part-way through a layer that takes hours. Recording that as a failure puts it
+# in the same list as GeometryFetchError and a short extraction, so a real
+# defect and a closed laptop look identical — and the dataset reads as broken
+# when nothing is wrong with it.
+#
+# These tasks keep status='failed' (every queue query, retry path and
+# terminal-state check already reasons about that) and are told apart by PHASE.
+# `is_interrupted` also matches the historical error text, so rows written
+# before this existed classify correctly without a migration.
+PHASE_INTERRUPTED = "interrupted"
+
+# Substring present in every auto-reset message ever written, old and new.
+INTERRUPTED_MARKER = "no heartbeat"
+
+INTERRUPTED_MESSAGE = (
+    "הריצה נקטעה: הוורקר הפסיק לדווח במשך {hb} דקות (הריצה נמשכה {age} דקות). "
+    "זו אינה שגיאת גרידה — בדרך כלל הוורקר נסגר או שהמחשב כובה באמצע שכבה "
+    "ארוכה. אפשר להריץ שוב; סריקות GovMap ממשיכות מהמקום שבו נעצרו."
+)
+
+
+def is_interrupted(phase: str | None, error: str | None) -> bool:
+    """Was this task cut off, rather than failed?
+
+    Phase is the signal going forward; the error substring covers the rows
+    written before the phase existed.
+    """
+    if (phase or "") == PHASE_INTERRUPTED:
+        return True
+    return INTERRUPTED_MARKER in (error or "")
+
+
 class ScrapeTask(Base):
     __tablename__ = "scrape_tasks"
 
