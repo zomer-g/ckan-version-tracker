@@ -12,11 +12,11 @@ import re
 import tempfile as _tempfile
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -28,6 +28,7 @@ from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services import append_store, sampling_runs, source_registry
 from app.services.archive_state import ROW_ARCHIVE_KEYS
+from app.services.source_load import saturated_sources, source_filter
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
@@ -307,7 +308,26 @@ async def sync_source_manifests(
 
     return {"upserted": upserted, "unchanged": unchanged, "rejected": rejected}
 
-def next_pending_task_q():
+# Arbitrary but fixed: the advisory-lock namespace for "someone is claiming a
+# scrape task right now". Any other advisory lock in this codebase must pick a
+# different number.
+_CLAIM_LOCK_KEY = 8_310_557
+
+
+async def _acquire_claim_lock(db: AsyncSession) -> bool:
+    """Take the fleet-wide claim lock for this transaction. True if we got it.
+
+    Postgres-only by nature; the SQLite test DB has no advisory locks and no
+    concurrency to protect against, so it always succeeds there.
+    """
+    if db.bind.dialect.name != "postgresql":
+        return True
+    return bool(await db.scalar(
+        text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _CLAIM_LOCK_KEY}
+    ))
+
+
+def next_pending_task_q(exclude_sources: Iterable[str] = ()):
     """The claim order: highest priority band first, oldest-first within a band.
 
     Factored out of ``poll_for_task`` so the ordering can be tested directly
@@ -319,14 +339,22 @@ def next_pending_task_q():
     whole-catalog GovMap backfill: hundreds of band-0 tasks can sit in the
     queue without pushing back a single routine poll, because a band-0 task is
     only ever claimed when nothing above it is pending.
+
+    ``exclude_sources`` drops every task belonging to a source that is already
+    at its worker cap (app/services/source_load.py). Skipping it here — rather
+    than claiming and refusing — is what keeps a cap from ever interrupting a
+    scrape: a capped source's tasks simply stay pending, and the next-best task
+    from another source goes out instead. A source with no cap is never in this
+    set, so an unconfigured system builds the same query it always did.
     """
-    return (
+    q = (
         select(ScrapeTask, TrackedDataset)
         .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
         .where(ScrapeTask.status == "pending")
-        .order_by(ScrapeTask.priority.desc(), ScrapeTask.created_at.asc())
-        .limit(1)
     )
+    for key in exclude_sources:
+        q = q.where(~source_filter(key))
+    return q.order_by(ScrapeTask.priority.desc(), ScrapeTask.created_at.asc()).limit(1)
 
 
 @router.get("/poll")
@@ -508,8 +536,24 @@ async def poll_for_task(
     row = None
     cancelled_locals = 0
     while True:
+        # Serialize the CLAIM (not the poll) across workers. Without this the
+        # per-source cap is only advisory: two workers reading "1 of 2 running"
+        # in the same instant would both claim, and the source would run 3 deep.
+        # SKIP LOCKED protects one ROW from a double claim; nothing protected a
+        # COUNT taken before the claim.
+        #
+        # try_ rather than plain advisory_xact_lock: a poll must never block on
+        # another poll. Losing the race means "not this second" — the worker is
+        # back in a second anyway, and 204 is a response it already handles.
+        # Re-taken each iteration because a datacollector deletion below commits,
+        # and an xact lock ends with its transaction.
+        if not await _acquire_claim_lock(db):
+            return Response(status_code=204)
+        # Sources already at their worker cap are excluded from the query rather
+        # than claimed-then-refused, so a cap never interrupts work in flight.
+        blocked = await saturated_sources(db)
         result = await db.execute(
-            next_pending_task_q()
+            next_pending_task_q(blocked.keys())
             # CRITICAL with multiple workers: the claim must be atomic.
             # Without a row lock, two workers polling in the same instant
             # both SELECT the same pending task, both flip it to 'running',

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import append_store, append_tables
@@ -68,6 +69,13 @@ MODE_LABELS_HE = {
 # silently truncated — a truncated target list reads as "all of them" (lessons:
 # no silent caps).
 MAX_TARGETS = 20000
+
+# The cap above guards against a targeted run that is secretly a full sweep.
+# It does not apply when the caller EXPLICITLY names a source dataset to take
+# the keys from: there the full corpus is the point, and the size is stated in
+# the summary rather than hidden. Still bounded, because a target list has to
+# be pulled page by page by the worker.
+MAX_TARGETS_FROM_DATASET = 250000
 
 
 def sampling_spec(ds) -> dict | None:
@@ -181,9 +189,61 @@ class SamplingError(ValueError):
     """A run that can't be built — unknown mode, missing argument, too big."""
 
 
+async def _targets_from_dataset(
+    db: AsyncSession, source_id: str, status: str | None, status_column: str | None,
+) -> tuple[str, int, str]:
+    """``(dataset_id, count, title)`` for a run that reads ANOTHER dataset's items.
+
+    Two corpora of one source can share their item list. Jerusalem's documents
+    index is one document per row, but the items it must READ are building
+    files — the register's grain — and the register already holds all ~100k of
+    their numbers. Without this the documents run re-discovers them from
+    scratch: ~15 hours of sweeping to rebuild a list that is already stored.
+
+    The status filter, when given, applies to the SOURCE dataset — that is the
+    only dataset where the status lives. Asking for "the documents of every file
+    at ועדת המשנה" is therefore one run, not a manual list.
+    """
+    from app.models.tracked_dataset import TrackedDataset
+
+    uid = _parse_uuid(source_id)
+    src = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if src is None:
+        raise SamplingError(f"מאגר המקור לרשימת היעדים לא נמצא: {source_id}")
+    src_spec = sampling_spec(src)
+    if not src_spec:
+        raise SamplingError(
+            f"מאגר המקור ({src.title}) לא מגדיר מפתח ישות, ולכן אין ממנו רשימת יעדים")
+    table = await resolve_table(src, db)
+    if not table:
+        raise SamplingError(f"למאגר המקור ({src.title}) אין עדיין טבלת ארכיון")
+    _keys, total = await append_store.latest_item_keys(
+        table, key_col=src_spec["item_key"], order_col=src_spec.get("sample_column"),
+        value_col=(status_column or src_spec.get("status_column")) if status else None,
+        value=status, limit=1,
+    )
+    if total == 0:
+        raise SamplingError(f"מאגר המקור ({src.title}) לא מחזיק ישויות תואמות")
+    if total > MAX_TARGETS_FROM_DATASET:
+        raise SamplingError(
+            f"{total:,} ישויות במאגר המקור — מעל התקרה של "
+            f"{MAX_TARGETS_FROM_DATASET:,} לרשימת יעדים")
+    return str(src.id), total, src.title
+
+
+def _parse_uuid(value: str):
+    import uuid as _uuid
+    try:
+        return _uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise SamplingError(f"מזהה מאגר לא תקין: {value}")
+
+
 async def build_params(
     ds, db: AsyncSession, *, mode: str, status: str | None = None,
-    item: str | None = None,
+    item: str | None = None, targets_from: str | None = None,
 ) -> tuple[dict, str]:
     """``(params, summary_he)`` for one targeted run.
 
@@ -207,6 +267,24 @@ async def build_params(
     # guard doesn't measure a one-file sample against a 90k-file register, and
     # so the version says what it is.
     params: dict = {"run_mode": mode, "run_partial": mode != "all"}
+
+    # Take the item list from ANOTHER dataset — the two corpora of one source
+    # share their items. This is checked before the per-mode branches because
+    # it REPLACES where the list comes from, whatever the mode's usual source
+    # would have been; the run itself is still a targeted re-read.
+    if targets_from:
+        source_id, total, title = await _targets_from_dataset(
+            db, targets_from, status, spec.get("status_column"))
+        params["run_mode"] = "status"
+        params["run_partial"] = True
+        params["run_targets_dataset"] = source_id
+        params["run_target_count"] = total
+        if status:
+            params["run_status"] = status
+        label = f"לפי רשימת הישויות של «{title}»"
+        if status:
+            label += f", סטטוס {status}"
+        return params, f"{label} ({total:,} ישויות)"
 
     if mode == "all":
         return params, MODE_LABELS_HE["all"]

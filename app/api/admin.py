@@ -837,6 +837,81 @@ async def cancel_scrape_task(
         raise HTTPException(status_code=400, detail=f"Cannot cancel task with status '{task.status}'")
 
 
+@router.get("/source-limits")
+@limiter.limit("60/minute")
+async def list_source_limits(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Load per upstream source, with the worker cap configured for each.
+
+    The counts are the point: a cap is a decision about a source you can see
+    is eating the fleet, so the panel has to show live `running` next to the
+    number being set, not just the number.
+    """
+    from app.services.source_load import source_load
+
+    return {"sources": await source_load(db)}
+
+
+class SourceLimitRequest(BaseModel):
+    # None removes the cap. 0 is a real setting — stop giving this source work.
+    max_workers: int | None = None
+
+
+@router.put("/source-limits/{source_key}")
+@limiter.limit("30/minute")
+async def set_source_limit(
+    request: Request,
+    source_key: str,
+    payload: SourceLimitRequest,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cap (or uncap) how many workers may scrape one source concurrently.
+
+    Takes effect on the next claim. It does NOT stop tasks already running —
+    a cap that killed live scrapes would throw away hours of work to enforce a
+    number, so lowering one drains instead: the source keeps its current workers
+    and is handed nothing new until it is back under the cap.
+    """
+    from app.models.source_limit import SourceLimit
+    from app.services.source_load import source_load
+
+    key = (source_key or "").strip()
+    known = {r["source_key"] for r in await source_load(db)}
+    # Sources are DERIVED from dataset columns, so a key that matches nothing is
+    # a typo that would sit in the table forever capping an imaginary upstream.
+    if key not in known:
+        raise HTTPException(
+            status_code=404,
+            detail=f"מקור לא מוכר: '{key}'. המקורות הקיימים: {', '.join(sorted(known))}",
+        )
+
+    existing = await db.get(SourceLimit, key)
+    if payload.max_workers is None:
+        if existing:
+            await db.delete(existing)
+            await db.commit()
+        logger.info("Source limit cleared for %s by %s", key, user.email)
+        return {"source_key": key, "max_workers": None}
+
+    if payload.max_workers < 0 or payload.max_workers > 99:
+        raise HTTPException(status_code=400, detail="max_workers חייב להיות בין 0 ל-99")
+
+    if existing:
+        existing.max_workers = payload.max_workers
+        existing.updated_by = user.email
+    else:
+        db.add(SourceLimit(
+            source_key=key, max_workers=payload.max_workers, updated_by=user.email,
+        ))
+    await db.commit()
+    logger.info("Source limit for %s set to %d by %s", key, payload.max_workers, user.email)
+    return {"source_key": key, "max_workers": payload.max_workers}
+
+
 class PromoteTaskRequest(BaseModel):
     # False restores the task to the routine band — an "undo" for a promotion
     # made in error, which matters because promoting a heavy layer can hold a

@@ -12,6 +12,7 @@ import {
   CoverageReport,
   GovmapCoverageStatus,
   ScrapeQueueResponse,
+  SourceLoadRow,
   ScheduledJobsResponse,
   DatasetSizesResponse,
   formatBytes,
@@ -1399,6 +1400,8 @@ export default function AdminPage() {
           </div>
         )}
       </section>
+
+      <SourceLoadPanel />
       </>)}
 
       {tab === "schedule" && (<>
@@ -2384,6 +2387,216 @@ const tdStyle: React.CSSProperties = {
   overflowWrap: "anywhere",
   wordBreak: "break-word",
 };
+
+/**
+ * Per-source load control: how many workers may sit on one upstream at once.
+ *
+ * The queue panel above answers "what goes next". This answers "how much of the
+ * fleet is allowed on one site" — the knob you reach for when a GovMap sweep
+ * (866 of ~1,100 tracked datasets) or a 38-dataset munidata batch has taken
+ * every worker, or when an upstream starts erroring and needs to be left alone.
+ *
+ * The live counts sit next to the input on purpose: a cap is a decision about
+ * a source you can see is loaded, and setting one blind is how you starve a
+ * source by accident.
+ */
+function SourceLoadPanel() {
+  const [rows, setRows] = useState<SourceLoadRow[] | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [saving, setSaving] = useState<Set<string>>(new Set());
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Uncommitted input text, keyed by source. Absent = show the stored value.
+  const [draft, setDraft] = useState<Record<string, string>>({});
+
+  const load = async () => {
+    try {
+      const r = await adminApi.sourceLimits();
+      setRows(r.sources);
+      setErrorMsg(null);
+    } catch (e: any) {
+      setErrorMsg(e?.message || String(e));
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const save = async (key: string, raw: string) => {
+    const trimmed = raw.trim();
+    // Empty means "no cap" — deliberately distinct from 0, which means "give
+    // this source nothing". Conflating them would silently freeze a source.
+    const value = trimmed === "" ? null : Number(trimmed);
+    if (value !== null && (!Number.isInteger(value) || value < 0 || value > 99)) {
+      setErrorMsg(`ערך לא תקין עבור ${key}: יש להזין מספר שלם בין 0 ל-99, או להשאיר ריק ללא הגבלה`);
+      return;
+    }
+    setSaving((p) => new Set(p).add(key));
+    try {
+      await adminApi.setSourceLimit(key, value);
+      setDraft((d) => { const n = { ...d }; delete n[key]; return n; });
+      setErrorMsg(null);
+      await load();
+    } catch (e: any) {
+      setErrorMsg(e?.message || String(e));
+    }
+    setSaving((p) => { const n = new Set(p); n.delete(key); return n; });
+  };
+
+  // Sources doing nothing and capping nothing are noise — 20 sources, of which
+  // usually two are busy. They stay one click away.
+  const interesting = (r: SourceLoadRow) =>
+    r.running > 0 || r.pending > 0 || r.max_workers !== null;
+  const visible = rows ? (showAll ? rows : rows.filter(interesting)) : [];
+  const hidden = rows ? rows.length - rows.filter(interesting).length : 0;
+
+  return (
+    <section style={{
+      marginBottom: "1.5rem",
+      padding: "1rem 1.25rem",
+      background: "var(--surface)",
+      borderRadius: "var(--radius)",
+      boxShadow: "var(--shadow-sm)",
+      border: "1px solid var(--border)",
+    }} aria-labelledby="source-load-heading">
+      <div className="flex-between" style={{ marginBottom: "0.4rem" }}>
+        <h2 id="source-load-heading" style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
+          🚦 עומס לפי מקור
+        </h2>
+        <button onClick={load} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
+          רענן ↻
+        </button>
+      </div>
+      <p className="text-muted" style={{ fontSize: "0.8rem", margin: "0 0 0.75rem", lineHeight: 1.6, maxWidth: "48rem" }}>
+        כמה workers מותר שיעבדו במקביל על אותו אתר מקור. ריק = ללא הגבלה, <code>0</code> = לא לתת
+        למקור הזה עבודה חדשה בכלל. המגבלה חלה על <strong>חלוקת משימות חדשות</strong> — משימה
+        שכבר רצה לא נעצרת, כך שהורדת מגבלה מתנקזת מעצמה ולא זורקת גירוד באמצע.
+      </p>
+
+      {errorMsg && (
+        <div style={{
+          marginBottom: "0.6rem", padding: "0.4rem 0.6rem", fontSize: "0.8rem",
+          background: "#fee2e2", color: "#991b1b", borderRadius: 4,
+        }}>
+          {errorMsg}
+        </div>
+      )}
+
+      {!rows ? (
+        <div className="text-sm text-muted">טוען...</div>
+      ) : (
+        <>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <thead>
+              <tr style={{ textAlign: "start", color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקור</th>
+                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מאגרים</th>
+                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בעבודה</th>
+                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בתור</th>
+                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקסימום workers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((r) => {
+                const key = r.source_key;
+                const stored = r.max_workers === null ? "" : String(r.max_workers);
+                const value = draft[key] ?? stored;
+                const dirty = draft[key] !== undefined && draft[key] !== stored;
+                // A cap lowered while work was in flight leaves the source
+                // legitimately above it. Say so, rather than let the row look
+                // like the cap is being ignored.
+                const over = r.max_workers !== null && r.running > r.max_workers;
+                return (
+                  <tr key={key} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "0.35rem 0.4rem", fontWeight: 600, direction: "ltr", textAlign: "start" }}>
+                      {key}
+                    </td>
+                    <td style={{ padding: "0.35rem 0.4rem" }} className="text-muted">
+                      {r.datasets.toLocaleString("he-IL")}
+                      {r.active_datasets !== r.datasets && (
+                        <span style={{ fontSize: "0.7rem" }}> ({r.active_datasets} פעילים)</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "0.35rem 0.4rem", fontWeight: r.running > 0 ? 700 : 400 }}>
+                      {r.running}
+                    </td>
+                    <td style={{ padding: "0.35rem 0.4rem" }} className="text-muted">{r.pending}</td>
+                    <td style={{ padding: "0.35rem 0.4rem" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                        <input
+                          type="number"
+                          min={0}
+                          max={99}
+                          value={value}
+                          placeholder="∞"
+                          disabled={saving.has(key)}
+                          onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter") save(key, value); }}
+                          onBlur={() => { if (dirty) save(key, value); }}
+                          style={{
+                            width: "4.5rem", padding: "0.2rem 0.4rem", fontSize: "0.85rem",
+                            border: "1px solid var(--border)", borderRadius: 4, textAlign: "center",
+                          }}
+                          title="ריק = ללא הגבלה · 0 = עצירה מלאה של המקור"
+                        />
+                        {dirty && (
+                          <button
+                            onClick={() => save(key, value)}
+                            disabled={saving.has(key)}
+                            className="btn-secondary"
+                            style={{ fontSize: "0.7rem", padding: "0.15rem 0.5rem" }}
+                          >
+                            שמור
+                          </button>
+                        )}
+                        {!dirty && r.max_workers === 0 && (
+                          <span style={{
+                            fontSize: "0.7rem", padding: "0.1rem 0.4rem", borderRadius: 9999,
+                            background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap",
+                          }}>
+                            מושהה
+                          </span>
+                        )}
+                        {!dirty && over && (
+                          <span
+                            title="המגבלה הורדה בזמן שמשימות כבר רצו — הן ימשיכו עד סיומן, ולא יימסרו חדשות"
+                            style={{
+                              fontSize: "0.7rem", padding: "0.1rem 0.4rem", borderRadius: 9999,
+                              background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap",
+                            }}
+                          >
+                            מעל המגבלה — יתנקז
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {visible.length === 0 && (
+            <div className="text-sm text-muted" style={{ padding: "0.5rem 0" }}>
+              אף מקור לא עמוס כרגע ולא מוגבל.
+            </div>
+          )}
+          {hidden > 0 && (
+            <button
+              onClick={() => setShowAll((s) => !s)}
+              className="btn-secondary"
+              style={{ marginTop: "0.6rem", fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+            >
+              {showAll ? "הצג רק מקורות פעילים" : `הצג את כל המקורות (עוד ${hidden})`}
+            </button>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 /**
  * Admin panel for the durable datastore-push queue.

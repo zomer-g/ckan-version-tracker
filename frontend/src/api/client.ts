@@ -242,7 +242,7 @@ export const datasets = {
   // currently at, how far each key series has got; `sample` queues one run.
   sampling: (id: string) =>
     request<SamplingOptions>(`/datasets/${id}/sampling`),
-  sample: (id: string, body: { mode: string; status?: string; item?: string }) =>
+  sample: (id: string, body: { mode: string; status?: string; item?: string; targets_from_dataset?: string }) =>
     request<{ message: string; task_id: string; mode: string; summary: string }>(
       `/datasets/${id}/sample`,
       { method: "POST", body: JSON.stringify(body) },
@@ -1710,6 +1710,23 @@ export interface ScrapeQueueFailed {
   completed_at: string | null;
 }
 
+/**
+ * One upstream source, with its live load and its worker cap.
+ * `source_key` is derived server-side from dataset columns (a scraper ckan_id
+ * prefix like "munidata", or a source_type like "govmap") — see
+ * app/services/source_load.py.
+ */
+export interface SourceLoadRow {
+  source_key: string;
+  datasets: number;
+  active_datasets: number;
+  /** Workers on this source right now. One worker runs one task. */
+  running: number;
+  pending: number;
+  /** null = uncapped. 0 = hand this source no new work at all. */
+  max_workers: number | null;
+}
+
 export interface PromoteTaskResult {
   status: "promoted" | "restored";
   priority: number;
@@ -1979,6 +1996,16 @@ export const admin = {
    * back in the routine band. Only affects the CLAIM order — a task already
    * running keeps its worker, which is why the response reports `running`.
    */
+  sourceLimits: () => request<{ sources: SourceLoadRow[] }>("/admin/source-limits"),
+  /**
+   * Cap concurrent workers on one source. `null` removes the cap; 0 stops new
+   * work for it. Applies to the next CLAIM — running scrapes are never aborted.
+   */
+  setSourceLimit: (sourceKey: string, maxWorkers: number | null) =>
+    request<{ source_key: string; max_workers: number | null }>(
+      `/admin/source-limits/${encodeURIComponent(sourceKey)}`,
+      { method: "PUT", body: JSON.stringify({ max_workers: maxWorkers }) },
+    ),
   promoteScrapeTask: (taskId: string, promote = true) =>
     request<PromoteTaskResult>(`/admin/scrape-tasks/${taskId}/promote`, {
       method: "POST",

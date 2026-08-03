@@ -301,3 +301,50 @@ def test_shrink_baseline_skips_partial_versions():
     # measure against, and the guard stays out of the way.
     assert run(worker._shrink_baseline_version(
         _FakeDb([_V(1, 1, partial=True)]), "ds")) is None
+
+
+# ── 5. taking the target list from another dataset ───────────────────────────
+
+def test_a_run_can_take_its_items_from_a_sibling_dataset(monkeypatch):
+    """Two corpora of one source share their items. Jerusalem's documents index
+    is one document per row, but the items it must READ are building files —
+    the register's grain, already stored there. Without this the documents run
+    re-discovers ~100k file numbers from scratch: ~15 hours to rebuild a list
+    that exists."""
+    from app.services import append_store as store
+
+    register = _ds(source_url="https://toy.example.gov.il/x", sampling=SAMPLING)
+    register.id = "11111111-1111-1111-1111-111111111111"
+    register.title = "המרשם"
+    docs = _ds(source_url="https://toy.example.gov.il/x",
+               sampling={**SAMPLING, "modes": ["all", "status"],
+                         "item_key": "קישור למסמך"})
+
+    class _DB:
+        async def execute(self, _q):
+            class R:
+                def scalar_one_or_none(self_inner): return register
+            return R()
+
+    monkeypatch.setattr(sampling_runs, "resolve_table",
+                        _async(lambda *a, **k: "append_register"))
+    monkeypatch.setattr(store, "latest_item_keys", _async(lambda *a, **k: ([], 100072)))
+
+    params, summary = run(sampling_runs.build_params(
+        docs, _DB(), mode="status", targets_from=register.id))
+
+    # The run is a targeted re-read whose LIST comes from elsewhere.
+    assert params["run_targets_dataset"] == register.id
+    assert params["run_target_count"] == 100072
+    assert params["run_partial"] is True
+    assert "100,072" in summary and "המרשם" in summary
+    # Still not embedded — the worker pulls it paged, from that dataset.
+    assert "run_targets" not in params
+
+
+def test_the_sibling_cap_is_far_above_the_status_cap():
+    """The status cap stops a 'targeted' run that is secretly a full sweep.
+    Naming a source dataset IS asking for its whole corpus, so the size is
+    stated rather than refused — but still bounded."""
+    assert sampling_runs.MAX_TARGETS_FROM_DATASET > sampling_runs.MAX_TARGETS
+    assert sampling_runs.MAX_TARGETS_FROM_DATASET >= 100072

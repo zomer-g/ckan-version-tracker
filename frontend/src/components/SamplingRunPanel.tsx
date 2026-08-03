@@ -23,6 +23,9 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
   const [opts, setOpts] = useState<SamplingOptions | null>(null);
   const [status, setStatus] = useState("");
   const [item, setItem] = useState("");
+  // Take the item list from another dataset of the same source instead of
+  // re-discovering it — see sampling_runs. Empty = discover as usual.
+  const [targetsFrom, setTargetsFrom] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -49,8 +52,10 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
     try {
       const r = await datasetsApi.sample(datasetId, {
         mode,
-        status: mode === "status" ? status : undefined,
+        status: mode === "status" ? status || undefined : undefined,
         item: mode === "item" ? item.trim() : undefined,
+        targets_from_dataset:
+          mode === "status" && targetsFrom.trim() ? targetsFrom.trim() : undefined,
       });
       setToast({ ok: true, msg: `נוסף לתור: ${r.summary} ✓` });
     } catch (e: any) {
@@ -120,6 +125,30 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
               אין עדיין סטטוסים בארכיון — הרץ דגימה מלאה אחת קודם
             </span>
           )}
+        </div>
+      )}
+
+      {opts.modes.includes("status") && (
+        <div style={{ display: "grid", gap: "0.3rem" }}>
+          <label style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            רשימת הישויות ממאגר אחר (אופציונלי) — מדלג על גילוי מחדש
+          </label>
+          <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={targetsFrom}
+              onChange={(e) => setTargetsFrom(e.target.value)}
+              placeholder="מזהה מאגר המקור (UUID)"
+              style={{ fontSize: "0.75rem", padding: "0.25rem 0.4rem", width: "22rem" }}
+            />
+            <button
+              className="btn-secondary"
+              style={btn}
+              disabled={busy || !targetsFrom.trim()}
+              onClick={() => run("status")}
+            >
+              דגום לפי הרשימה
+            </button>
+          </div>
         </div>
       )}
 

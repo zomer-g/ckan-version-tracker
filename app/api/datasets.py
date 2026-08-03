@@ -1617,6 +1617,14 @@ class SampleRequest(BaseModel):
     mode: str = "all"          # all | new | status | item
     status: str | None = None  # required for mode="status"
     item: str | None = None    # required for mode="item" (e.g. a מספר תיק)
+    # Take the item list from ANOTHER dataset of the same source instead of
+    # discovering it. Two corpora of one source share their items: Jerusalem's
+    # documents index must read building FILES, and the register already holds
+    # all ~100k of their numbers — so this turns a 31-hour run into a 16-hour
+    # one by skipping a re-discovery of a list that is already stored. With
+    # ``status``, the filter applies to the SOURCE dataset, which is the only
+    # one where the status lives.
+    targets_from_dataset: str | None = None
 
 
 @router.get("/{dataset_id}/sampling")
@@ -1678,7 +1686,8 @@ async def trigger_sample(
         )
     try:
         params, summary = await sampling_runs.build_params(
-            ds, db, mode=body.mode, status=body.status, item=body.item)
+            ds, db, mode=body.mode, status=body.status, item=body.item,
+            targets_from=body.targets_from_dataset)
     except sampling_runs.SamplingError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
