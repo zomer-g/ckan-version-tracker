@@ -247,6 +247,29 @@ async def clear_exception(request: Request, resource_id: str,
     return {"cleared": True}
 
 
+# ── dashboard (overview) ──────────────────────────────────────────────────────
+
+@router.get("/dashboard")
+@limiter.limit("30/minute")
+async def dashboard(request: Request, user: User = Depends(get_admin_user)):
+    """Overview counts + most-recently-added sources for the admin landing tab."""
+    counts = await ocal_db.fetchrow("""
+        SELECT (SELECT count(*) FROM diary_events WHERE is_active) AS events,
+               (SELECT count(*) FROM diary_sources) AS sources,
+               (SELECT count(*) FROM diary_sources WHERE is_enabled) AS enabled_sources,
+               (SELECT count(*) FROM people) AS people,
+               (SELECT count(*) FROM organizations) AS organizations,
+               (SELECT count(*) FROM (SELECT DISTINCT entity_name, entity_type
+                                      FROM mv_entity_counts) u) AS entities,
+               (SELECT count(*) FROM diary_exceptions) AS rejected""")
+    recent = await ocal_db.fetch("""
+        SELECT s.id, s.name, s.color, s.total_events, s.is_enabled, s.created_at,
+               p.name AS person_name
+        FROM diary_sources s LEFT JOIN people p ON p.id = s.person_id
+        ORDER BY s.created_at DESC NULLS LAST LIMIT 8""")
+    return {"counts": dict(counts), "recent_sources": _rows(recent)}
+
+
 # ── people ────────────────────────────────────────────────────────────────────
 
 @router.get("/people")

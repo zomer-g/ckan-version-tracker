@@ -2447,7 +2447,13 @@ function aqs(params: Record<string, unknown>): string {
   return s ? `?${s}` : "";
 }
 
+export interface OcalDashboard {
+  counts: { events: number; sources: number; enabled_sources: number; people: number; organizations: number; entities: number; rejected: number };
+  recent_sources: Array<{ id: string; name: string; color: string | null; total_events: number; is_enabled: boolean; created_at: string; person_name: string | null }>;
+}
+
 export const ocalAdmin = {
+  dashboard: () => request<OcalDashboard>(`/admin/ocal/dashboard`),
   // sources
   sources: (params: { q?: string; enabled?: boolean; reviewed?: boolean; limit?: number; offset?: number } = {}) =>
     request<{ sources: OcalAdminSource[]; total: number }>(`/admin/ocal/sources${aqs(params)}`),

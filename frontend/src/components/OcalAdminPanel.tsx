@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ocalAdmin, OcalAdminSource, OcalAdminPerson, OcalAdminOrg,
-  OcalCandidate, OcalException, OcalEntity, OcalAutoImportLog,
+  OcalCandidate, OcalException, OcalEntity, OcalAutoImportLog, OcalDashboard,
 } from "../api/client";
 
-type Section = "sources" | "candidates" | "automation" | "people" | "orgs" | "entities" | "content" | "exceptions";
+type Section = "dashboard" | "sources" | "candidates" | "automation" | "people" | "orgs" | "entities" | "content" | "exceptions";
 const SECTIONS: [Section, string][] = [
+  ["dashboard", "סקירה"],
   ["sources", "יומנים"],
   ["candidates", "מועמדים חדשים"],
   ["automation", "אוטומציה"],
@@ -48,6 +49,58 @@ function useMsg() {
     </>
   );
   return { node, ok, fail };
+}
+
+// ── Dashboard (overview) ────────────────────────────────────────────────────
+function DashboardSection({ onNav }: { onNav: (s: Section) => void }) {
+  const { node, fail } = useMsg();
+  const [d, setD] = useState<OcalDashboard | null>(null);
+  useEffect(() => { ocalAdmin.dashboard().then(setD).catch(fail); }, []); // eslint-disable-line
+  const tile = (label: string, val: number, sec?: Section) => (
+    <div onClick={sec ? () => onNav(sec) : undefined} style={{ padding: "0.8rem 1.1rem", background: "var(--bg-muted,#f1f5f9)", borderRadius: 8, textAlign: "center", minWidth: 104, cursor: sec ? "pointer" : "default" }}>
+      <div style={{ fontSize: "1.55rem", fontWeight: 700 }}>{(val || 0).toLocaleString()}</div>
+      <div className="text-sm text-muted">{label}</div>
+    </div>
+  );
+  const dt = (s: string) => { const x = new Date(s); return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("he-IL"); };
+  return (
+    <div>
+      {node}
+      {!d ? <div className="text-sm text-muted">טוען…</div> : (<>
+        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          {tile("אירועים", d.counts.events)}
+          {tile("יומנים", d.counts.sources, "sources")}
+          {tile("פעילים", d.counts.enabled_sources, "sources")}
+          {tile("ישויות", d.counts.entities, "entities")}
+          {tile("אנשים", d.counts.people, "people")}
+          {tile("ארגונים", d.counts.organizations, "orgs")}
+          {tile("נדחו", d.counts.rejected, "exceptions")}
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <button className="btn-primary" onClick={() => onNav("candidates")}>מועמדים חדשים</button>
+          <button style={btn} onClick={() => onNav("automation")}>אוטומציה</button>
+          <button style={btn} onClick={() => onNav("sources")}>נהל יומנים</button>
+        </div>
+        <h4 style={{ margin: "0.4rem 0" }}>יומנים שנוספו לאחרונה</h4>
+        <div style={{ overflowX: "auto", border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+            <thead><tr><th style={th}>יומן</th><th style={th}>בעלים</th><th style={{ ...th, textAlign: "end" }}>אירועים</th><th style={th}>נוסף</th></tr></thead>
+            <tbody>
+              {d.recent_sources.map((s) => (
+                <tr key={s.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", opacity: s.is_enabled ? 1 : 0.55 }}>
+                  <td style={td}><span aria-hidden style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: s.color || "#3B82F6", marginInlineEnd: 6 }} />{s.name}</td>
+                  <td style={{ ...td, color: "var(--text-muted)" }}>{s.person_name || "—"}</td>
+                  <td style={{ ...td, textAlign: "end" }}>{(s.total_events || 0).toLocaleString()}</td>
+                  <td style={{ ...td, color: "var(--text-muted)" }}>{dt(s.created_at)}</td>
+                </tr>
+              ))}
+              {d.recent_sources.length === 0 && <tr><td style={td} colSpan={4}>אין יומנים עדיין.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>)}
+    </div>
+  );
 }
 
 // ── Sources ───────────────────────────────────────────────────────────────
@@ -639,7 +692,7 @@ function ContentSection() {
 }
 
 export default function OcalAdminPanel() {
-  const [sec, setSec] = useState<Section>("sources");
+  const [sec, setSec] = useState<Section>("dashboard");
   return (
     <div>
       <p className="text-sm text-muted" style={{ marginTop: 0, lineHeight: 1.6 }}>
@@ -657,6 +710,7 @@ export default function OcalAdminPanel() {
             }}>{label}</button>
         ))}
       </div>
+      {sec === "dashboard" && <DashboardSection onNav={setSec} />}
       {sec === "sources" && <SourcesSection />}
       {sec === "candidates" && <CandidatesSection />}
       {sec === "automation" && <AutomationSection />}
