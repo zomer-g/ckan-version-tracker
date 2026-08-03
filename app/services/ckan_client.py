@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import tempfile
 from typing import Any
 from urllib.parse import urlparse
@@ -55,6 +56,30 @@ def _validate_url(url: str) -> None:
             raise
 
 
+# A pasted link, e.g. "https://t.me/s/Israel_Cyber" or "https://example.com/x".
+_URL_QUERY_RE = re.compile(r"^\s*[a-zA-Z][\w+.-]*://")
+
+
+def _solr_safe_query(query: str) -> str:
+    """A URL is Solr syntax, not a keyword — quote it so it stays a keyword.
+
+    CKAN passes ``q`` to Solr verbatim, where the scheme's colon makes ``https``
+    a field name. Solr has no such field, rejects the whole query, and CKAN
+    answers 409 — which ``_get``'s raise_for_status turns into a 500 on the home
+    page. That is not an edge case: the home search box falls back to a CKAN
+    keyword search for any URL no source recognises, so it is the normal path
+    for a link OVER doesn't track yet (every unknown link showed the red banner).
+
+    Quoting makes it a phrase query — a real search that honestly returns no
+    hits. Only strings that look like a URL are touched, so a deliberate field
+    query (``res_format:CSV``, ``organization:foo``) still reaches Solr as one.
+    """
+    if not _URL_QUERY_RE.match(query or ""):
+        return query
+    escaped = query.strip().replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 class CKANClient:
     """Async client for reading from data.gov.il CKAN API."""
 
@@ -73,7 +98,10 @@ class CKANClient:
             return data["result"]
 
     async def package_search(self, query: str, rows: int = 20, start: int = 0) -> dict:
-        return await self._get("package_search", {"q": query, "rows": rows, "start": start})
+        return await self._get(
+            "package_search",
+            {"q": _solr_safe_query(query), "rows": rows, "start": start},
+        )
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})
