@@ -125,10 +125,13 @@ class Settings(BaseSettings):
     # fresh once the legacy Ocal Node service is retired. Off ⇒ no discovery.
     # Rejected candidates are recorded in diary_exceptions so discovery converges.
     ocal_import_enabled: bool = True
-    ocal_import_interval_hours: float = 12.0
-    # How many NEW resources to evaluate+import per scheduler tick (each is a
-    # download+parse — kept small for the 512MB dyno).
-    ocal_import_per_tick: int = 2
+    ocal_import_interval_hours: float = 6.0  # scan 4×/day for new diaries
+    # How many NEW resources to IMPORT per scheduler tick. Imports are sequential
+    # (one download+parse in memory at a time → dyno-safe); the cap bounds per-tick
+    # time/LLM cost, not peak memory. Failing candidates are recorded as exceptions
+    # and never re-evaluated, so discovery converges. At 20/tick × 4 ticks/day the
+    # backlog clears within ~a day and steady-state new arrivals are covered easily.
+    ocal_import_per_tick: int = 20
     # Auto-import gate: a discovered resource is imported only when title AND a
     # start-date column mapped (the real correctness guarantee) and it has at
     # least this many rows. The confidence floor is deliberately LOW — a valid
