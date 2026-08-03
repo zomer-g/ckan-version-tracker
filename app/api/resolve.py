@@ -117,12 +117,23 @@ async def direct_to_dataset(
     """
     url = rebuild_source_url(path_part, request.url.query)
     matches = await find_datasets_for_url(db, url) if url else []
+    # Only an IDENTITY match is somewhere to send someone. A "path" match means
+    # "some dataset is cut from this same page", which for a hash-routed SPA is
+    # every route of the site — they all share one path. Sending a deep link
+    # there lands on a corpus it does not point at, and the request form for the
+    # one it DOES point at becomes unreachable: pasting the Jerusalem documents
+    # route opened the register's versions page instead. The frontend callers
+    # were fixed for this; this redirect is the third and last of them.
+    identity = [m for m in matches if m.get("match") == "identity"]
 
-    if len(matches) == 1:
-        target = f"/versions/{matches[0]['id']}"
-    elif matches:
+    if len(identity) == 1:
+        target = f"/versions/{identity[0]['id']}"
+    elif identity:
         target = f"/lookup?url={quote(url, safe='')}"
     elif url:
+        # Not tracked, or tracked only by page — the search box, which lists
+        # whatever IS collected from this page as "did you mean" and still
+        # opens the request form for the URL that was actually asked for.
         target = f"/?q={quote(url, safe='')}"
     else:
         target = "/lookup"

@@ -485,10 +485,16 @@ def test_direct_redirects_to_versions_form_or_chooser():
     assert missing.status_code == 302
     assert missing.headers["location"].startswith("/?q=")
 
-    # Ambiguous → the chooser, never a guess.
-    ambiguous = client.get("/direct/https://jeden.co.il/")
-    assert ambiguous.status_code == 302
-    assert ambiguous.headers["location"].startswith("/lookup?url=")
+    # Matched only by PAGE → the search box, which lists what is collected
+    # from this page as "did you mean" AND opens the request form for the URL
+    # actually asked for. Two datasets are cut from jeden.co.il, and neither of
+    # them IS the bare host — so sending someone to one of them, or to a chooser
+    # that offers only those two, answers a question they did not ask. This is
+    # the same rule the two frontend callers follow: only an identity match is
+    # a destination.
+    page_only = client.get("/direct/https://jeden.co.il/")
+    assert page_only.status_code == 302
+    assert page_only.headers["location"].startswith("/?q=")
 
     # A bare prefix is not an error — it lands on the link generator.
     assert client.get("/direct/").headers["location"] == "/lookup"
