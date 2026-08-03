@@ -784,19 +784,28 @@ export default function DataSqlPage() {
   }, [tables]);
 
   // Autocomplete: every table + every distinct column (with the tables it's in).
+  // A column also carries its Hebrew caption where the source documents one, so
+  // the box can be searched in the language the data is in — GovMap layers name
+  // their columns `shem_yishuv`, which nobody guesses. The first caption wins
+  // when the same machine name means the same thing in several layers.
   const sqlSuggestions = useMemo<SqlSuggestion[]>(() => {
     const out: SqlSuggestion[] = [];
     const colTables = new Map<string, Set<string>>();
+    const colAlias = new Map<string, string>();
     for (const t of tables) {
       out.push({ value: t.table, kind: "table", hint: displayName(t) });
       for (const c of t.columns) {
         if (!colTables.has(c.name)) colTables.set(c.name, new Set());
         colTables.get(c.name)!.add(t.table);
+        if (c.alias && !colAlias.has(c.name)) colAlias.set(c.name, c.alias);
       }
     }
     for (const [name, ts] of colTables) {
       const arr = [...ts];
-      out.push({ value: name, kind: "column", hint: arr.length <= 3 ? arr.join(", ") : `${arr.length} טבלאות` });
+      out.push({
+        value: name, kind: "column", alias: colAlias.get(name),
+        hint: arr.length <= 3 ? arr.join(", ") : `${arr.length} טבלאות`,
+      });
     }
     return out;
   }, [tables]);
@@ -818,7 +827,11 @@ export default function DataSqlPage() {
         t.title.toLowerCase().includes(f) ||
         (t.description || "").toLowerCase().includes(f) ||
         badge.label.toLowerCase().includes(f) ||
-        t.tags.some((tag) => tag.toLowerCase().includes(f))
+        t.tags.some((tag) => tag.toLowerCase().includes(f)) ||
+        // …and by what the table's FIELDS are called in Hebrew. A layer titled
+        // "אזורים סטטיסטיים" is the answer to a search for "אוכלוסייה", but the
+        // word appears only in a column caption — never in its name or title.
+        t.columns.some((c) => c.alias && c.alias.includes(filter.trim()))
       );
     });
     const m = new Map<string, { badge: Badge; list: CatalogTable[] }>();
@@ -876,6 +889,9 @@ export default function DataSqlPage() {
       table: t.table,
       columns: t.columns.map((c) => c.name),
       description: displayName(t),
+      aliases: Object.fromEntries(
+        t.columns.filter((c) => c.alias).map((c) => [c.name, c.alias as string]),
+      ),
     })),
     [shownTables],
   );
@@ -983,6 +999,10 @@ export default function DataSqlPage() {
   }, [runSql]);
 
   const selectedTable = selected ? byName.get(selected) || null : null;
+  // Hebrew caption of a column of the OPEN table (empty for every source that
+  // already names its columns in Hebrew — most of them).
+  const aliasOf = (col: string) =>
+    selectedTable?.columns.find((c) => c.name === col)?.alias;
 
   return (
     <div className="container mt-3">
@@ -1553,7 +1573,18 @@ export default function DataSqlPage() {
                       <thead>
                         <tr>
                           {detail.sample.columns.map((c) => (
-                            <th key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>{c}</th>
+                            <th key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
+                              {c}
+                              {/* The caption under the name, where the source
+                                  documents one: the header is the machine name
+                                  you must type, the line below it is what the
+                                  field actually holds. */}
+                              {aliasOf(c) && (
+                                <div dir="rtl" className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400 }}>
+                                  {aliasOf(c)}
+                                </div>
+                              )}
+                            </th>
                           ))}
                         </tr>
                       </thead>

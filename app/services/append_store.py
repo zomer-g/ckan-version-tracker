@@ -830,7 +830,10 @@ def _ident_ref(name: str) -> str:
 def format_schema_ddl(tables: list[dict], notes: str = "") -> str:
     """Render tables as CREATE TABLE DDL text. Each table dict:
     ``{"table": str, "description": str|None, "columns": [{"name","type"}]}``.
-    Column names are shown in the exact form SQL requires (quoted when needed)."""
+    Column names are shown in the exact form SQL requires (quoted when needed).
+    A column's optional ``alias`` — the Hebrew caption of a machine-named field
+    (see column_aliases) — is rendered as a trailing comment, so a reader can
+    match a question asked in Hebrew to the name SQL actually answers to."""
     out: list[str] = []
     if notes:
         out.append(notes.rstrip() + "\n")
@@ -841,23 +844,34 @@ def format_schema_ddl(tables: list[dict], notes: str = "") -> str:
         cols = t.get("columns") or []
         for i, c in enumerate(cols):
             tail = "," if i < len(cols) - 1 else ""
-            out.append(f"  {_ident_ref(c['name'])} {c.get('type') or 'text'}{tail}")
+            alias = (c.get("alias") or "").strip()
+            note = f"  -- {alias}" if alias else ""
+            out.append(f"  {_ident_ref(c['name'])} {c.get('type') or 'text'}{tail}{note}")
         out.append(");")
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
-async def schema_text(table: str, *, title: str | None = None) -> str:
-    """DESCRIBE-style DDL text for one append table (for the copy-to-AI button
-    and the MCP). Hidden bookkeeping columns (row_hash) are omitted."""
+async def schema_text(table: str, *, title: str | None = None,
+                      schema: str = "public") -> str:
+    """DESCRIBE-style DDL text for one table (for the copy-to-AI button and the
+    MCP). Hidden bookkeeping columns (row_hash) are omitted.
+
+    ``schema`` exists because this is also what /data's per-table copy button
+    calls, and that browser lists ``idx`` and ``odata`` tables too — hardcoding
+    'public' returned a table with NO columns for every GovMap layer."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = $1 "
-            "ORDER BY ordinal_position", table)
+            "WHERE table_schema = $2 AND table_name = $1 "
+            "ORDER BY ordinal_position", table, schema)
     cols = [{"name": r["column_name"], "type": r["data_type"]}
             for r in rows if r["column_name"] not in _HIDDEN_COLS]
+    if cols:
+        from app.services import column_aliases
+        aliases = (await column_aliases.load_map()).get((schema, table))
+        cols = column_aliases.apply(cols, aliases)
     notes = (
         "-- ארכיון מצטבר ב-OVER (over.org.il) — סכימה לכתיבת SQL\n"
         "-- קריאה בלבד: SELECT / WITH יחיד. שמות עמודות נשמרים כפי שהם במקור;\n"

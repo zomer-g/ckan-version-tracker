@@ -28,7 +28,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
-from app.services import append_store
+from app.services import append_store, column_aliases
 from app.services.storage_client import dataset_archives_neon
 
 logger = logging.getLogger(__name__)
@@ -184,6 +184,9 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
     # One cheap round-trip each for estimates + columns across ALL append tables.
     est = await append_store.list_public_tables()
     cols_by_table = await append_store.public_table_columns()
+    # Hebrew captions for machine-named columns (GovMap layers). One query,
+    # cached; absent until the ingest has run, and never fatal when it is.
+    alias_map = await column_aliases.load_map()
 
     out: list[dict] = []
     seen: set[str] = set()
@@ -198,6 +201,7 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
             if not columns:
                 continue
             seen.add(tbl)
+            columns = column_aliases.apply(columns, alias_map.get(("public", tbl)))
             out.append(_ds_record(ds, tbl, t["resource_name"], version_id,
                                    est.get(tbl), columns))
 
@@ -368,6 +372,7 @@ async def _index_records(db: AsyncSession, datasets: list[TrackedDataset]) -> li
 
     by_id = {str(d.id): d for d in datasets}
     cols_by_table = await append_store.schema_table_columns(index_mirror.SCHEMA)
+    alias_map = await column_aliases.load_map()
     recs: list[dict] = []
     for m in mirrored:
         ds = by_id.get(m["dataset_id"])
@@ -376,6 +381,10 @@ async def _index_records(db: AsyncSession, datasets: list[TrackedDataset]) -> li
         columns = cols_by_table.get(m["table"])
         if not columns:
             continue                      # table gone (dropped out of band)
+        # The GovMap layers live here, and they are exactly the tables whose
+        # column names are machine names — this is where the caption matters.
+        columns = column_aliases.apply(
+            columns, alias_map.get((index_mirror.SCHEMA, m["table"])))
         recs.append({
             "table": m["table"],
             "schema": index_mirror.SCHEMA,
@@ -462,6 +471,8 @@ async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str
         "-- שם עם אות גדולה, עברית או מילה שמורה חייב מרכאות כפולות — הוא מוצג",
         "-- למטה בדיוק בצורה שבה יש לכתוב אותו.",
         "-- טבלאות knesset: הכול באותיות קטנות (KNS_Bill ← kns_bill).",
+        "-- הערה /* ... */ אחרי עמודה היא הכינוי בעברית של אותו שדה (שכבות ממ\"ג",
+        "--   מפרסמות שמות מכונה) — בשאילתה כותבים תמיד את השם, לא את הכינוי.",
         "-- כל העמודות בסכימת idx הן text; המירו לפי הצורך (col::numeric, col::date).",
         "-- שכבות ממ\"ג: geometry_wkt היא טקסט. אם קיימת גם עמודת geom (טיפוס",
         "--   geometry, EPSG:4326) אפשר לשאול שאלות מרחביות:",
@@ -484,8 +495,13 @@ async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str
             cols = rec.get("columns") or []
             if not cols:
                 continue
+            # A GovMap layer's columns are machine names; its Hebrew caption
+            # rides along as a comment so an assistant reading this can tell
+            # which column answers a question asked in Hebrew — while still
+            # writing the only name the database answers to.
             body = ", ".join(
                 f"{append_store._ident_ref(c['name'])} {c.get('type') or 'text'}"
+                + (f" /* {c['alias']} */" if c.get("alias") else "")
                 for c in cols
             )
             ref = f"{sch}.{append_store._ident_ref(rec['table'])}"

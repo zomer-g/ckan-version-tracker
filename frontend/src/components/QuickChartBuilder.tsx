@@ -30,8 +30,14 @@ export default function QuickChartBuilder({ table, onCreate }: {
   table: CatalogTable;
   onCreate: (sql: string, chartParams: Record<string, string>) => void;
 }) {
+  // `label` is what the picker shows: the machine name plus the source's Hebrew
+  // caption where there is one. A GovMap layer's dropdown otherwise reads
+  // value0 / setl_name / gridcode, which is unusable without opening the source.
   const cols = useMemo(
-    () => table.columns.map((c) => ({ name: c.name, kind: kindOfType(c.type) })),
+    () => table.columns.map((c) => ({
+      name: c.name, kind: kindOfType(c.type),
+      label: c.alias ? `${c.name} — ${c.alias}` : c.name,
+    })),
     [table],
   );
   const numCols = cols.filter((c) => c.kind === "number");
@@ -109,8 +115,8 @@ export default function QuickChartBuilder({ table, onCreate }: {
           מה למדוד:{" "}
           <select value={measure} onChange={(e) => setMeasure(e.target.value)} style={selStyle}>
             <option value="count">מספר שורות</option>
-            {numCols.map((c) => <option key={`s${c.name}`} value={`sum:${c.name}`}>סכום — {c.name}</option>)}
-            {numCols.map((c) => <option key={`a${c.name}`} value={`avg:${c.name}`}>ממוצע — {c.name}</option>)}
+            {numCols.map((c) => <option key={`s${c.name}`} value={`sum:${c.name}`}>סכום — {c.label}</option>)}
+            {numCols.map((c) => <option key={`a${c.name}`} value={`avg:${c.name}`}>ממוצע — {c.label}</option>)}
           </select>
         </label>
         <label className="text-sm text-muted">
@@ -118,7 +124,7 @@ export default function QuickChartBuilder({ table, onCreate }: {
           <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} style={selStyle}>
             {groupables.map((c) => (
               <option key={c.name} value={c.name}>
-                {c.name}{c.kind === "date" ? " (לפי חודש)" : ""}
+                {c.label}{c.kind === "date" ? " (לפי חודש)" : ""}
               </option>
             ))}
           </select>

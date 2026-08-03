@@ -138,7 +138,8 @@ async def schema_txt(request: Request, table: str | None = None,
         if rec["kind"] == "knesset":
             from app.services import knesset_db
             return await knesset_db.schema_text()
-        return await append_store.schema_text(table, title=rec.get("title"))
+        return await append_store.schema_text(table, title=rec.get("title"),
+                                              schema=rec["schema"])
     if schema and schema not in ("public", "knesset", "idx"):
         raise HTTPException(status_code=400, detail="Unknown schema")
     return await data_catalog.schema_text_all(db, schema=schema)

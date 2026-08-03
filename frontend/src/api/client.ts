@@ -1175,6 +1175,11 @@ export const knessetDb = {
 export interface CatalogColumn {
   name: string;
   type: string;
+  // The Hebrew caption of a machine-named field (GovMap layers publish
+  // `shem_yishuv`, not "שם יישוב"). Present only where the source documents
+  // one; see app/services/column_aliases.py. The NAME is what SQL answers to —
+  // the alias is for finding it.
+  alias?: string;
 }
 export interface CatalogTable {
   table: string;

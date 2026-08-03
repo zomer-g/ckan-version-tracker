@@ -60,6 +60,9 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
   const cols = useMemo(
     () => table.columns.map((c) => ({
       name: c.name,
+      // What the pickers show — the name plus the source's Hebrew caption where
+      // one exists (GovMap layers publish machine names, see column_aliases).
+      label: c.alias ? `${c.name} — ${c.alias}` : c.name,
       kind: kindOf(c.type, pcols[c.name]?.detected_kind),
       // Real stored values, most frequent first. Present only for text columns
       // (the profiler records ranges for numbers and dates instead).
@@ -164,7 +167,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
                   onChange={(e) => setRow(i, { col: e.target.value, value: "", op: "=" })}>
                   {cols.map((x) => (
                     <option key={x.name} value={x.name}>
-                      {x.name}{x.fill !== undefined && x.fill < 0.9 ? ` (מלא ${Math.round(x.fill * 100)}%)` : ""}
+                      {x.label}{x.fill !== undefined && x.fill < 0.9 ? ` (מלא ${Math.round(x.fill * 100)}%)` : ""}
                     </option>
                   ))}
                 </select>
@@ -216,7 +219,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
               <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} style={box}>
                 <option value="">— ללא (הצג שורות) —</option>
                 {cols.map((c) => (
-                  <option key={c.name} value={c.name}>{c.name}{c.kind === "date" ? " (לפי חודש)" : ""}</option>
+                  <option key={c.name} value={c.name}>{c.label}{c.kind === "date" ? " (לפי חודש)" : ""}</option>
                 ))}
               </select>
             </label>
@@ -225,8 +228,8 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
                 מה למדוד:{" "}
                 <select value={measure} onChange={(e) => setMeasure(e.target.value)} style={box}>
                   <option value="count">מספר שורות</option>
-                  {numCols.map((c) => <option key={`s${c.name}`} value={`sum:${c.name}`}>סכום — {c.name}</option>)}
-                  {numCols.map((c) => <option key={`a${c.name}`} value={`avg:${c.name}`}>ממוצע — {c.name}</option>)}
+                  {numCols.map((c) => <option key={`s${c.name}`} value={`sum:${c.name}`}>סכום — {c.label}</option>)}
+                  {numCols.map((c) => <option key={`a${c.name}`} value={`avg:${c.name}`}>ממוצע — {c.label}</option>)}
                 </select>
               </label>
             )}

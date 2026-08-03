@@ -260,6 +260,35 @@ async def init_scheduler() -> None:
             misfire_grace_time=300,
         )
 
+    # Column captions: lift each GovMap layer's Hebrew field dictionary out of
+    # the documentation bundle already archived on its latest version, so /data
+    # can label machine-named columns. Version-gated and chunked like the mirror
+    # above — once a layer is ingested at its current version the tick skips it,
+    # so the steady state is two queries and the backfill advances a slice at a
+    # time instead of pulling ~810 ZIPs in one run.
+    async def column_alias_job() -> None:
+        if not _settings.append_database_url:
+            return
+        from app.database import async_session
+        from app.services import column_aliases
+        try:
+            async with async_session() as db:
+                r = await column_aliases.refresh(db, limit=40)
+            if r.get("columns"):
+                logger.info("column_aliases tick: %s", r)
+        except Exception:  # noqa: BLE001 — a bad bundle must not kill the job
+            logger.exception("column_aliases refresh tick failed")
+
+    if settings.index_mirror_enabled:
+        scheduler.add_job(
+            column_alias_job,
+            trigger=IntervalTrigger(minutes=10),
+            id="column_aliases",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the

@@ -16,6 +16,9 @@ export interface SqlSuggestion {
   value: string;
   kind: "table" | "column";
   hint?: string;
+  // The Hebrew caption of a machine-named column. Searchable — typing "אוכלוס"
+  // finds `pop_total` — but never inserted: only `value` is a real identifier.
+  alias?: string;
 }
 
 // Reserved words that must be double-quoted to be used as an identifier. Not
@@ -76,9 +79,15 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
     const { word } = tokenBeforeCaret(val, caret);
     if (word.length < 2) { setOpen(false); setItems([]); return; }
     const w = word.toLowerCase();
+    // A name matches by prefix; a Hebrew caption matches ANYWHERE in it, because
+    // captions are phrases ("שם האתר", "סה״כ אוכלוסייה") and the word a person
+    // remembers is rarely the first one. Name matches still sort first.
+    const nameHit = (s: SqlSuggestion) => s.value.toLowerCase().startsWith(w);
+    const aliasHit = (s: SqlSuggestion) => !!s.alias && s.alias.includes(word);
     const matches = suggestions
-      .filter((s) => s.value.toLowerCase() !== w && s.value.toLowerCase().startsWith(w))
+      .filter((s) => s.value.toLowerCase() !== w && (nameHit(s) || aliasHit(s)))
       .sort((a, b) =>
+        (nameHit(a) === nameHit(b) ? 0 : nameHit(a) ? -1 : 1) ||
         (a.kind === b.kind ? 0 : a.kind === "table" ? -1 : 1) ||
         a.value.length - b.value.length ||
         a.value.localeCompare(b.value))
@@ -182,6 +191,14 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
                 {s.kind === "table" ? "טבלה" : "עמודה"}
               </span>
               <code style={{ fontWeight: 600 }}>{s.value}</code>
+              {s.alias && (
+                <span
+                  dir="rtl"
+                  style={{ fontSize: "0.74rem", color: "var(--text, #111)", whiteSpace: "nowrap" }}
+                >
+                  {s.alias}
+                </span>
+              )}
               {s.hint && (
                 <span
                   dir="rtl"
@@ -213,21 +230,32 @@ export interface SchemaTable {
   table: string;
   columns: string[];
   description?: string;
+  // {column: Hebrew caption} for machine-named columns. Shown on the chip so a
+  // list of `shem_yishuv`/`pop_total` is readable without opening the source.
+  aliases?: Record<string, string>;
 }
 
-function ColumnChip({ name, onInsert }: { name: string; onInsert: (n: string) => void }) {
+function ColumnChip({ name, alias, onInsert }: {
+  name: string; alias?: string; onInsert: (n: string) => void;
+}) {
   return (
     <button
       type="button"
       onClick={() => onInsert(name)}
-      title={`הכנס עמודה: ${name}`}
+      title={alias ? `הכנס עמודה: ${name} (${alias})` : `הכנס עמודה: ${name}`}
       style={{
         fontFamily: "monospace", fontSize: "0.76rem", padding: "0.12rem 0.45rem",
         border: "1px solid var(--border, #d1d5db)", borderRadius: 999,
         background: "var(--bg, #fff)", color: "var(--text, #111)", cursor: "pointer",
+        display: "inline-flex", alignItems: "baseline", gap: "0.3rem",
       }}
     >
       {name}
+      {alias && (
+        <span dir="rtl" style={{ fontFamily: "inherit", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+          {alias}
+        </span>
+      )}
     </button>
   );
 }
@@ -278,7 +306,7 @@ export function SchemaReference({
           {single ? (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
               {tables[0].columns.map((c) => (
-                <ColumnChip key={c} name={c} onInsert={onInsert} />
+                <ColumnChip key={c} name={c} alias={tables[0].aliases?.[c]} onInsert={onInsert} />
               ))}
             </div>
           ) : (
@@ -319,7 +347,7 @@ export function SchemaReference({
                 {expanded.has(t.table) && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", padding: "0.3rem 0 0.2rem 1rem" }}>
                     {t.columns.map((c) => (
-                      <ColumnChip key={c} name={c} onInsert={onInsert} />
+                      <ColumnChip key={c} name={c} alias={t.aliases?.[c]} onInsert={onInsert} />
                     ))}
                   </div>
                 )}

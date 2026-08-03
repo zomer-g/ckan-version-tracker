@@ -2601,6 +2601,44 @@ async def _run_harvest_bg(phase: str, per_col_cap: int):
         logger.exception("settlement harvest (%s) crashed", phase)
 
 
+@router.post("/column-aliases/refresh")
+@limiter.limit("3/minute")
+async def column_aliases_refresh(
+    request: Request,
+    limit: int = 200,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_admin_user),
+):
+    """Ingest the Hebrew field dictionaries of GovMap layers into
+    public.over_column_aliases, so /data can label machine-named columns.
+
+    Reads the documentation bundle already archived on each layer's LATEST
+    version — no call to GovMap. Version-gated: a layer already ingested at its
+    current version is skipped unless ``force``. The scheduler runs the same
+    thing in small chunks; this is the button for doing it now."""
+    from app.services import append_store as _as
+    from app.services import column_aliases
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    try:
+        res = await column_aliases.refresh(db, limit=limit, force=force)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("column alias refresh failed")
+        raise HTTPException(status_code=500, detail=f"refresh failed: {e}")
+    logger.info("column aliases refreshed by %s: %s", user.email, res)
+    return {"status": "ok", **res}
+
+
+@router.get("/column-aliases/stats")
+@limiter.limit("30/minute")
+async def column_aliases_stats(request: Request, user: User = Depends(get_admin_user)):
+    """Coverage of the column-caption index: how many tables and columns carry a
+    Hebrew alias, and how many layers have been read."""
+    from app.services import column_aliases
+    return await column_aliases.stats()
+
+
 @router.post("/settlements/harvest")
 @limiter.limit("3/minute")
 async def settlements_harvest(
