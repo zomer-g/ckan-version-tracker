@@ -57,8 +57,12 @@ function SourcesSection() {
   const [filter, setFilter] = useState<"all" | "enabled" | "disabled" | "unreviewed">("all");
   const [busy, setBusy] = useState<string | null>(null);
   const [ner, setNer] = useState<{ available: boolean; provider: string | null } | null>(null);
+  const [people, setPeople] = useState<OcalAdminPerson[]>([]);
 
-  useEffect(() => { ocalAdmin.aiNerStatus().then(setNer).catch(() => setNer(null)); }, []);
+  useEffect(() => {
+    ocalAdmin.aiNerStatus().then(setNer).catch(() => setNer(null));
+    ocalAdmin.people().then((r) => setPeople(r.people)).catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     const params: Record<string, unknown> = { q, limit: 300 };
@@ -101,12 +105,20 @@ function SourcesSection() {
               <tr key={s.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", opacity: s.is_enabled ? 1 : 0.55 }}>
                 <td style={td}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: s.color || "#3B82F6" }} />
+                    <input type="color" value={s.color || "#3B82F6"} disabled={busy === s.id} title="צבע היומן"
+                      style={{ width: 20, height: 18, padding: 0, border: "none", background: "none", cursor: "pointer" }}
+                      onChange={(e) => act(s.id, () => ocalAdmin.patchSource(s.id, { color: e.target.value }), "צבע עודכן")} />
                     {s.name}
                   </span>
                   {s.reviewed_at && <span title="נסקר" style={{ marginInlineStart: 6, color: "var(--primary)" }}>✓</span>}
                 </td>
-                <td style={{ ...td, color: "var(--text-muted)" }}>{s.person_name || s.organization_name || "—"}</td>
+                <td style={td}>
+                  <select style={{ ...inp, fontSize: "0.76rem", maxWidth: 150, padding: "0.2rem 0.3rem" }} value={s.person_id || ""} disabled={busy === s.id}
+                    title="בעלים" onChange={(e) => act(s.id, () => ocalAdmin.patchSource(s.id, { person_id: e.target.value }), "בעלים עודכן")}>
+                    <option value="">{s.organization_name ? `(${s.organization_name})` : "— ללא בעלים —"}</option>
+                    {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </td>
                 <td style={{ ...td, textAlign: "end" }}>{(s.total_events || 0).toLocaleString()}</td>
                 <td style={{ ...td, color: "var(--text-muted)", fontSize: "0.75rem" }}>{s.sync_status}</td>
                 <td style={td}>
@@ -123,8 +135,22 @@ function SourcesSection() {
                       <button style={btn} disabled={busy === s.id}
                         onClick={() => act(s.id, () => ocalAdmin.reimportSource(s.id, false), "יובא מחדש")}>ייבא מחדש</button>
                     )}
+                    {s.resource_id && (
+                      <button style={btn} disabled={busy === s.id}
+                        onClick={() => { if (confirm(`לנקות את כל האירועים של "${s.name}" ולייבא מחדש מאפס?`)) act(s.id, () => ocalAdmin.reimportSource(s.id, true), "נוקה ויובא מחדש"); }}>ייבא (נקה)</button>
+                    )}
                     <button style={btn} disabled={busy === s.id}
                       onClick={() => act(s.id, () => ocalAdmin.enrichSource(s.id), "הועשר")}>העשר</button>
+                    <button style={btn} disabled={busy === s.id} onClick={async () => {
+                      setBusy(s.id);
+                      try { const r = await ocalAdmin.deduplicateSource(s.id); ok(`הוסרו ${r.deleted} אירועים כפולים`); load(); }
+                      catch (e) { fail(e); } finally { setBusy(null); }
+                    }}>נקה כפולים</button>
+                    <button style={btn} disabled={busy === s.id} onClick={async () => {
+                      setBusy(s.id);
+                      try { const r = await ocalAdmin.findMatchesSource(s.id); ok(`התאמות בין-יומנים: ${r.created ?? 0} חדשות, ${r.joined ?? 0} צורפו`); load(); }
+                      catch (e) { fail(e); } finally { setBusy(null); }
+                    }}>מצא התאמות</button>
                     {ner?.available && (
                       <button style={{ ...btn, color: "#6d28d9", borderColor: "#c4b5fd" }} disabled={busy === s.id}
                         title={`חילוץ ישויות עם LLM (${ner.provider}) — כרוך בעלות`}

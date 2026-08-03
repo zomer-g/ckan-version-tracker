@@ -2437,6 +2437,8 @@ export const ocalAdmin = {
     request<Record<string, unknown>>(`/admin/ocal/sources/${id}/reimport${aqs({ clear })}`, { method: "POST" }),
   enrichSource: (id: string, ai = false) => request<Record<string, unknown>>(`/admin/ocal/sources/${id}/enrich${aqs({ ai })}`, { method: "POST" }),
   aiNerStatus: () => request<{ enabled: boolean; available: boolean; provider: string | null; auto: boolean; batch: number }>(`/admin/ocal/ai-ner/status`),
+  deduplicateSource: (id: string) => request<{ deleted: number }>(`/admin/ocal/sources/${id}/deduplicate`, { method: "POST" }),
+  findMatchesSource: (id: string) => request<{ created?: number; joined?: number }>(`/admin/ocal/sources/${id}/find-matches`, { method: "POST" }),
   // candidates / scan / import (in admin.py)
   candidates: (limit = 50) => request<{ candidates: OcalCandidate[]; count: number }>(`/admin/ocal/candidates${aqs({ limit })}`),
   scan: (max_import = 5) =>

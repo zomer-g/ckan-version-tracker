@@ -170,6 +170,47 @@ async def enrich_source_ep(request: Request, source_id: str,
     return res
 
 
+@router.post("/sources/{source_id}/deduplicate")
+@limiter.limit("10/minute")
+async def deduplicate_source(request: Request, source_id: str,
+                            user: User = Depends(get_admin_user)):
+    """Remove duplicate events (same title + start_time), keeping the earliest
+    inserted row per group; then refresh the source's total_events. Ported from
+    Ocal admin sources/:id/deduplicate."""
+    sid = _uuid(source_id)
+    status = await ocal_db.execute("""
+        DELETE FROM diary_events WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY source_id, title, start_time ORDER BY created_at ASC) AS rn
+            FROM diary_events WHERE source_id = $1
+          ) sub WHERE rn > 1)
+    """, sid)
+    await ocal_db.execute(
+        "UPDATE diary_sources SET total_events = "
+        "(SELECT count(*) FROM diary_events WHERE source_id=$1 AND is_active) WHERE id=$1", sid)
+    deleted = 0
+    if status and status.upper().startswith("DELETE"):
+        try:
+            deleted = int(status.split()[-1])
+        except (ValueError, IndexError):
+            deleted = 0
+    logger.info("ocal admin: dedup source %s by %s — %d removed", source_id, user.email, deleted)
+    return {"deleted": deleted}
+
+
+@router.post("/sources/{source_id}/find-matches")
+@limiter.limit("10/minute")
+async def find_matches_source(request: Request, source_id: str,
+                             user: User = Depends(get_admin_user)):
+    """Run cross-diary event matching for one source (similar_events +
+    diary_events.match_group_id), then refresh the entity matview."""
+    from app.services import ocal_enrich
+    res = await ocal_enrich.find_matches_for_source(_uuid(source_id))
+    await ocal_enrich.refresh_entity_matview()
+    return res
+
+
 @router.get("/ai-ner/status")
 @limiter.limit("30/minute")
 async def ai_ner_status(request: Request, user: User = Depends(get_admin_user)):
