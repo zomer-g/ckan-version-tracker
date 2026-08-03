@@ -151,6 +151,27 @@ def test_write_clears_a_tables_captions_before_rewriting_them():
     assert conn.inserted == []
 
 
+# ── the checkpoint notices the mirror rebuilding underneath it ───────────────
+
+def test_columns_key_ignores_order_and_type():
+    a = CA.columns_key([{"name": "b", "type": "text"}, {"name": "a", "type": "text"}])
+    b = CA.columns_key([{"name": "a", "type": "int"}, {"name": "b", "type": "text"}])
+    assert a == b and a is not None
+
+
+def test_columns_key_changes_when_a_column_does():
+    before = CA.columns_key([{"name": "שם האתר", "type": "text"}])
+    after = CA.columns_key([{"name": "name", "type": "text"}])
+    assert before != after
+
+
+def test_columns_key_is_none_before_the_table_exists():
+    # A layer whose mirror table has not been loaded yet: the key flips from
+    # None to a hash the moment it is, which is what re-triggers the ingest.
+    assert CA.columns_key(None) is None
+    assert CA.columns_key([]) is None
+
+
 # ── the caption reaches the copy-to-AI DDL ───────────────────────────────────
 
 def test_ddl_shows_the_caption_next_to_the_name():

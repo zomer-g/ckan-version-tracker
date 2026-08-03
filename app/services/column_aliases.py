@@ -30,6 +30,7 @@ is the only thing that answers to SQL.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import zipfile
@@ -89,6 +90,11 @@ async def ensure_tables() -> None:
             )
             """
         )
+        # Half of the checkpoint (see columns_key): added separately so an
+        # already-deployed state table converges instead of needing a migration.
+        await conn.execute(
+            f"ALTER TABLE public.{_qi(STATE_TABLE)} "
+            f"ADD COLUMN IF NOT EXISTS columns_key text")
         from app.services.index_mirror import _readonly_role
         role = _readonly_role()
         if role:
@@ -179,13 +185,32 @@ async def _latest_versions(db: AsyncSession, dataset_ids: list) -> dict:
     return {r[0]: (r[1], r[2] or {}) for r in rows}
 
 
-async def _checkpoints() -> dict[str, int]:
-    """{dataset_id: version_number} already ingested."""
+async def _checkpoints() -> dict[str, tuple[int, str | None]]:
+    """``{dataset_id: (version_number, columns_key)}`` already ingested."""
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT dataset_id, version_number FROM public.{_qi(STATE_TABLE)}")
-    return {str(r["dataset_id"]): r["version_number"] for r in rows}
+            f"SELECT dataset_id, version_number, columns_key "
+            f"FROM public.{_qi(STATE_TABLE)}")
+    return {str(r["dataset_id"]): (r["version_number"], r["columns_key"]) for r in rows}
+
+
+def columns_key(columns: list[dict] | None) -> str | None:
+    """A short fingerprint of a table's column NAMES, or None if the table does
+    not exist yet.
+
+    This is the second half of the checkpoint, and it exists because two jobs
+    race on every new version: the index mirror rebuilds ``idx.govmap_*`` with
+    the new columns, and this one labels those columns. Gating on the version
+    alone, an ingest that ran BEFORE the rebuild would match the dictionary
+    against the OLD columns and then checkpoint the new version — freezing wrong
+    or missing captions in place until the layer's NEXT scrape, which for GovMap
+    is up to 90 days away. Keyed on the columns too, the next tick simply
+    notices the table changed underneath it and re-reads."""
+    if not columns:
+        return None
+    names = " ".join(sorted(c["name"] for c in columns))
+    return hashlib.sha1(names.encode("utf-8")).hexdigest()[:16]
 
 
 async def _write(conn, targets: list[tuple[str, str]], dictionary: dict[str, str],
@@ -234,9 +259,11 @@ async def refresh(db: AsyncSession, *, limit: int | None = None,
                   force: bool = False) -> dict:
     """Ingest field dictionaries for GovMap datasets whose latest version has one.
 
-    Version-gated like the index mirror: a dataset already ingested at its
-    current version is skipped, so a tick where nothing new landed is two
-    queries. ``force`` re-reads everything; ``limit`` bounds one tick's work.
+    Gated on (version, live column set) like the index mirror is gated on the
+    version, so a tick where nothing new landed is three queries. A layer is
+    re-read when a new version publishes a new dictionary, AND when the mirror
+    rebuilds its table underneath us (see columns_key). ``force`` re-reads
+    everything; ``limit`` bounds one tick's work.
     """
     if not append_store.is_configured():
         return {"ok": False, "reason": "append DB not configured"}
@@ -257,6 +284,9 @@ async def refresh(db: AsyncSession, *, limit: int | None = None,
         idx_tables = {m["dataset_id"]: m["table"] for m in await index_mirror.list_tables()}
     except Exception:  # noqa: BLE001 — the mirror may not exist yet
         idx_tables = {}
+    # Every idx table's columns in ONE round-trip, so the freshness check below
+    # costs nothing per dataset.
+    idx_columns = await append_store.schema_table_columns(index_mirror.SCHEMA)
 
     updated = columns = skipped = missing = 0
     pool = await append_store.get_pool()
@@ -264,7 +294,9 @@ async def refresh(db: AsyncSession, *, limit: int | None = None,
         version_number, maps = latest.get(ds.id, (None, {}))
         if version_number is None:
             continue
-        if done.get(str(ds.id)) == version_number:
+        idx_table = idx_tables.get(str(ds.id))
+        key = columns_key(idx_columns.get(idx_table)) if idx_table else None
+        if done.get(str(ds.id)) == (version_number, key):
             skipped += 1
             continue
         values = _doc_values(maps)
@@ -276,8 +308,8 @@ async def refresh(db: AsyncSession, *, limit: int | None = None,
 
         dictionary = await _bundle_dictionary(values)
         targets: list[tuple[str, str]] = []
-        if idx_tables.get(str(ds.id)):
-            targets.append((index_mirror.SCHEMA, idx_tables[str(ds.id)]))
+        if idx_table:
+            targets.append((index_mirror.SCHEMA, idx_table))
         for t in append_store.tables_from_mappings(ds, maps):
             targets.append(("public", t["table"]))
 
@@ -286,14 +318,15 @@ async def refresh(db: AsyncSession, *, limit: int | None = None,
             await conn.execute(
                 f"""
                 INSERT INTO public.{_qi(STATE_TABLE)}
-                    (dataset_id, version_number, fields, note, updated_at)
-                VALUES ($1, $2, $3, $4, now())
+                    (dataset_id, version_number, columns_key, fields, note, updated_at)
+                VALUES ($1, $2, $3, $4, $5, now())
                 ON CONFLICT (dataset_id) DO UPDATE
                 SET version_number = EXCLUDED.version_number,
+                    columns_key = EXCLUDED.columns_key,
                     fields = EXCLUDED.fields, note = EXCLUDED.note,
                     updated_at = now()
                 """,
-                ds.id, version_number, wrote,
+                ds.id, version_number, key, wrote,
                 None if dictionary else "bundle carried no field dictionary",
             )
         updated += 1
