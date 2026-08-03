@@ -43,6 +43,7 @@ from app.api.admin_nl_query import router as admin_nl_query_router
 from app.api.nl_query import router as nl_query_router
 from app.api.tables import router as tables_router
 from app.api.settlements import router as settlements_router
+from app.api.site_stats import router as site_stats_router
 from app.api.connector import router as connector_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
@@ -206,6 +207,7 @@ app.include_router(tables_router)
 app.include_router(nl_query_router)
 app.include_router(admin_nl_query_router)
 app.include_router(settlements_router)
+app.include_router(site_stats_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)

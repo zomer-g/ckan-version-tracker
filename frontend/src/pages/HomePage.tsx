@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch } from "../api/client";
+import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
@@ -9,6 +9,8 @@ import RegistrySourceCard from "../components/RegistrySourceCard";
 import GovmapRequestForm from "../components/GovmapRequestForm";
 import ResolvedMatches from "../components/ResolvedMatches";
 import { sourceBadgeFor } from "../utils/sourceBadge";
+// Site-wide totals are written in words ("67 מיליון") — see utils/bigNumber.ts.
+import { formatBigNumber } from "../utils/bigNumber";
 // idf.il section pattern lives in utils/idfPattern.ts so the
 // HomePage and SearchPage versions can never drift when we add new
 // sections.
@@ -102,23 +104,37 @@ function trackedHaystack(ds: TrackedDataset): string {
 }
 
 /**
- * Three-stat row under the search bar.
+ * Stat row under the search bar.
  *
- * Mirrors the Ocal/Ocoi hero canonical: 3 columns, big white number,
- * small primary-200 label. Numbers are derived from the dataset list
- * we already fetch — no second roundtrip, no flash of zero.
+ * Mirrors the Ocal/Ocoi hero canonical: big white number, small primary-200
+ * label. The first three (datasets / versions / organizations) are derived from
+ * the dataset list we already fetch — no second roundtrip, no flash of zero.
  *
- * If the list is still loading we render placeholders ("—") instead
- * of "0" so the user doesn't read a zero for a few hundred ms.
+ * The last three (SQL tables, their total rows, archived files) are site-wide
+ * totals that only the server can compute; they arrive separately from
+ * /api/stats and each one renders only once its own number is in, so a slow or
+ * unavailable total never holds up (or blanks) the rest of the row.
+ *
+ * While a number is still loading we render a placeholder ("—") instead of "0"
+ * so the user doesn't read a zero for a few hundred ms.
+ *
+ * Row counts and file counts run into the tens of millions, where exact digits
+ * are unreadable noise — those are written in words ("67 מיליון").
  */
 function HomeStats({
   datasets,
   loading,
+  siteStats,
+  siteStatsLoading,
   t,
+  lang,
 }: {
   datasets: TrackedDataset[];
   loading: boolean;
+  siteStats: SiteStats | null;
+  siteStatsLoading: boolean;
   t: (k: string) => string;
+  lang: string;
 }) {
   const datasetCount = datasets.length;
   const versionCount = datasets.reduce((sum, d) => sum + (d.version_count || 0), 0);
@@ -129,6 +145,17 @@ function HomeStats({
   ).size;
 
   const fmt = (n: number) => n.toLocaleString("he-IL");
+  // A site total is shown when we have it; still loading → "—"; failed on the
+  // server (null) → the stat is dropped from the row entirely.
+  const big = (n: number | null | undefined) =>
+    siteStatsLoading ? "—" : n == null ? null : formatBigNumber(n, lang);
+  const tablesText = siteStatsLoading
+    ? "—"
+    : siteStats?.tables == null
+      ? null
+      : fmt(siteStats.tables);
+  const rowsText = big(siteStats?.rows);
+  const filesText = big(siteStats?.files);
 
   return (
     <div className="home-stats" aria-label="סטטיסטיקות">
@@ -144,6 +171,24 @@ function HomeStats({
         <div className="home-stat-number">{loading ? "—" : fmt(orgCount)}</div>
         <div className="home-stat-label">{t("home.stats_organizations")}</div>
       </div>
+      {tablesText !== null && (
+        <div className="home-stat">
+          <div className="home-stat-number">{tablesText}</div>
+          <div className="home-stat-label">{t("home.stats_tables")}</div>
+        </div>
+      )}
+      {rowsText !== null && (
+        <div className="home-stat">
+          <div className="home-stat-number">{rowsText}</div>
+          <div className="home-stat-label">{t("home.stats_rows")}</div>
+        </div>
+      )}
+      {filesText !== null && (
+        <div className="home-stat">
+          <div className="home-stat-number">{filesText}</div>
+          <div className="home-stat-label">{t("home.stats_files")}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -163,7 +208,7 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
 }
 
 export default function HomePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
@@ -179,6 +224,8 @@ export default function HomePage() {
   // Tracked datasets
   const [trackedDatasets, setTrackedDatasets] = useState<TrackedDataset[]>([]);
   const [trackedLoading, setTrackedLoading] = useState(true);
+  const [siteStats, setSiteStats] = useState<SiteStats | null>(null);
+  const [siteStatsLoading, setSiteStatsLoading] = useState(true);
 
   // Tracked datasets that match the submitted keyword search. Reactive so
   // it fills in once the dataset list finishes loading (e.g. on a deep
@@ -270,6 +317,16 @@ export default function HomePage() {
       .then(setTrackedDatasets)
       .catch(() => {})
       .finally(() => setTrackedLoading(false));
+  }, []);
+
+  // Site-wide totals (SQL tables / rows / archived files) for the hero. Its own
+  // request: server-side cached, but seconds long on a cold cache — the dataset
+  // list and the whole page must not wait for it.
+  useEffect(() => {
+    publicApi.siteStats()
+      .then(setSiteStats)
+      .catch(() => {})
+      .finally(() => setSiteStatsLoading(false));
   }, []);
 
   const extractDatasetName = (input: string): string | null => {
@@ -787,7 +844,14 @@ export default function HomePage() {
             </button>
           </form>
 
-          <HomeStats datasets={trackedDatasets} loading={trackedLoading} t={t} />
+          <HomeStats
+            datasets={trackedDatasets}
+            loading={trackedLoading}
+            siteStats={siteStats}
+            siteStatsLoading={siteStatsLoading}
+            t={t}
+            lang={i18n.language}
+          />
         </div>
       </section>
 

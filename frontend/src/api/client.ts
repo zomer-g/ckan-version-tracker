@@ -1575,9 +1575,18 @@ export const knessetProtocols = {
   },
 };
 
+// Site-wide totals for the home hero. Any field is null when that total could
+// not be computed (see app/services/site_stats.py — each half fails soft).
+export interface SiteStats {
+  tables: number | null;
+  rows: number | null;
+  files: number | null;
+}
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
+  siteStats: () => request<SiteStats>("/stats"),
   dataset: (id: string) => request<TrackedDataset>(`/datasets/public/${id}`),
   request: (data: {
     ckan_id: string;

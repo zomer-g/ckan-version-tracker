@@ -1639,7 +1639,10 @@ label {
   border: 0 !important;
 }
 
-/* 3-stat row under the search — identical to Ocal/Ocoi */
+/* Stat row under the search — identical to Ocal/Ocoi, two rows deep.
+   Stays 3 columns at every width: the 6 stats read as 3+3, and the row
+   degrades to a single line of 3 by itself when the site totals
+   (tables/rows/files) are unavailable. */
 .home-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1653,7 +1656,13 @@ label {
 }
 
 .home-stat-number {
-  font-size: 1.75rem;
+  /* Scales down on narrow phones because the widest values here are WORDS, not
+     digits ("1.4 מיליארד"): at a fixed 1.75rem they no longer fit a third of a
+     375px screen. Past that they are allowed to break at the space (number on
+     one line, scale word on the next) rather than spill over the neighbouring
+     stat — which is what a nowrap would do once the row total passes a
+     billion. */
+  font-size: clamp(1.25rem, 6.5vw, 1.75rem);
   font-weight: 700;
   color: white;
   line-height: 1.15;
@@ -1667,7 +1676,7 @@ label {
 
 @media (min-width: 640px) {
   .home-stat-number { font-size: 2.25rem; }
-  .home-stats { gap: 3rem; }
+  .home-stats { gap: 1.75rem 3rem; }
 }
 
 @media (max-width: 480px) {

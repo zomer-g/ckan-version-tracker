@@ -1052,6 +1052,31 @@ async def public_table_columns() -> dict[str, list[dict]]:
     return out
 
 
+async def schema_row_estimates(schemas: list[str]) -> dict[tuple[str, str], int]:
+    """``{(schema, table): estimated_row_count}`` for every table (and matview)
+    in ``schemas``, in ONE pg_class query.
+
+    The cross-schema sibling of list_public_tables: the same ``reltuples``
+    planner estimate, but for the whole console catalog at once (public, knesset,
+    idx, odata, ocal) so a site-wide row total costs one round-trip instead of
+    N ``COUNT(*)`` scans over tables that reach into the millions. Never-analyzed
+    tables report -1; clamp to 0."""
+    for s in schemas:
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", s or ""):
+            raise ValueError(f"invalid schema: {s!r}")
+    if not schemas:
+        return {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT n.nspname AS schema, c.relname AS table, c.reltuples::bigint AS est "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.relkind IN ('r', 'm') AND n.nspname = ANY($1)",
+            list(schemas),
+        )
+    return {(r["schema"], r["table"]): max(0, int(r["est"] or 0)) for r in rows}
+
+
 async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) -> dict:
     """{columns, rows} — the first ``limit`` rows of a table, for the /data detail
     cube. Read through the least-privilege console role (SELECT-only). ``schema``
