@@ -59,6 +59,17 @@ def _validate_url(url: str) -> None:
 # A pasted link, e.g. "https://t.me/s/Israel_Cyber" or "https://example.com/x".
 _URL_QUERY_RE = re.compile(r"^\s*[a-zA-Z][\w+.-]*://")
 
+# Anything a user could have meant as Solr syntax rather than as words: a field
+# query, a boolean, a phrase, a group, a wildcard they typed themselves. The OR
+# fallback below rewrites the query, so it must keep its hands off these.
+_SOLR_SYNTAX_RE = re.compile(r'[:"()\[\]{}^~*?\\]|(?:^|\s)(?:AND|OR|NOT|TO)(?:\s|$)')
+
+
+def _is_plain_keyword_query(query: str) -> bool:
+    """True when the query is words, and only words."""
+    q = (query or "").strip()
+    return bool(q) and not _URL_QUERY_RE.match(q) and not _SOLR_SYNTAX_RE.search(q)
+
 
 def _solr_safe_query(query: str) -> str:
     """A URL is Solr syntax, not a keyword — quote it so it stays a keyword.
@@ -98,10 +109,60 @@ class CKANClient:
             return data["result"]
 
     async def package_search(self, query: str, rows: int = 20, start: int = 0) -> dict:
-        return await self._get(
+        """Search CKAN, widening to OR only when the strict search came up short.
+
+        Solr ANDs the tokens of a multi-word query, and its Hebrew analyser does
+        not strip clitics — so "הנחיות משטרה" misses every dataset that writes
+        "המשטרה", and the page comes back empty although the words are there. The
+        strict query still runs first and still ranks first: only when it fails to
+        fill the page do we re-ask with OR plus a prefix wildcard and append the
+        unique extras, so an exact match is never pushed down by a loose one.
+
+        The widening is deliberately narrow. It is skipped for a pasted URL and
+        for anything carrying Solr syntax (``res_format:CSV``, ``a AND b``, a
+        quoted phrase): rewriting those would silently answer a different
+        question than the one asked. It is skipped past the first page too — the
+        merge is page-local, so paging into it would repeat rows.
+        """
+        primary = await self._get(
             "package_search",
             {"q": _solr_safe_query(query), "rows": rows, "start": start},
         )
+
+        results = primary.get("results") or []
+        tokens = (query or "").split()
+        if (
+            start > 0
+            or len(results) >= rows
+            or len(tokens) < 2
+            or not _is_plain_keyword_query(query)
+        ):
+            return primary
+
+        merged = list(results)
+        seen = {r.get("id") for r in merged if r.get("id")}
+        or_query = " OR ".join(p for t in tokens for p in (t, f"{t}*"))
+        try:
+            extra = await self._get(
+                "package_search", {"q": or_query, "rows": rows, "start": 0}
+            )
+        except Exception as e:
+            # A widened search is a bonus, never a reason to fail the real one.
+            logger.debug("package_search OR fallback failed for %r: %s", query, e)
+            return primary
+
+        for r in extra.get("results") or []:
+            if len(merged) >= rows:
+                break
+            rid = r.get("id")
+            if rid and rid not in seen:
+                merged.append(r)
+                seen.add(rid)
+
+        # Report what this page actually holds, not what the OR query matched
+        # site-wide: the extras live on page 1 only, and a count promising pages
+        # that do not exist is worse than no fallback at all.
+        return {**primary, "results": merged, "count": max(primary.get("count") or 0, len(merged))}
 
     async def package_show(self, id_or_name: str) -> dict:
         return await self._get("package_show", {"id": id_or_name})
