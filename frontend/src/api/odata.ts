@@ -32,13 +32,36 @@ export function odataDatasetUrl(name: string, lang: string) {
 
 // Formats the SQL importer can turn into a table (mirrors odata_import.py).
 const IMPORTABLE_FORMATS = new Set(["CSV", "XLS", "XLSX", "ICS", "ICAL", "ICA"]);
+// File extension → format, for resources odata publishes with a BLANK format.
+const EXT_FORMATS: Record<string, string> = {
+  csv: "CSV", xlsx: "XLSX", xlsm: "XLSX", xls: "XLS",
+  ics: "ICS", ical: "ICAL", ica: "ICA",
+};
+
+function extFormat(candidate?: string | null): string {
+  const s = (candidate || "").trim();
+  if (!s) return "";
+  // An extension lives in the path — never in a URL's query string.
+  const path = s.includes("://") ? s.split(/[?#]/)[0] : s;
+  const ext = decodeURIComponent(path).split(".").pop()?.toLowerCase() || "";
+  return EXT_FORMATS[ext] || "";
+}
+
+/** A resource's real format. Some odata resources declare an EMPTY `format`
+ *  (e.g. "רשימת כתובות בישראל עם קואורדינטות", published as `כתובות.xlsx`), so
+ *  fall back to the extension of the file name / download URL. Mirrors
+ *  `infer_format` in odata_import.py. */
+export function resourceFormat(r: OdataResource): string {
+  const declared = (r.format || "").trim().toUpperCase();
+  if (IMPORTABLE_FORMATS.has(declared)) return declared;
+  return extFormat(r.name) || extFormat(r.url) || declared;
+}
 
 /** Can this resource be imported into a SQL table? Supported file format, or a
  *  datastore-active resource (whose dump we can always pull as CSV). */
 export function isImportableResource(r: OdataResource): boolean {
   if (!r.id) return false;
-  if ((r.format || "").toUpperCase() && IMPORTABLE_FORMATS.has((r.format || "").toUpperCase()))
-    return true;
+  if (IMPORTABLE_FORMATS.has(resourceFormat(r))) return true;
   return !!r.datastore_active;
 }
 

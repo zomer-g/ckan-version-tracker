@@ -1967,6 +1967,20 @@ export interface OdataImport {
   imported_at?: string | null;
 }
 
+/** A background odata import (parse + load runs for minutes on big files, so
+ *  the upload returns this and the UI polls until it settles). */
+export interface OdataImportJob {
+  id: string;
+  resource_id: string;
+  title?: string | null;
+  state: "running" | "done" | "error";
+  rows?: number | null;
+  columns?: number | null;
+  table?: string | null;
+  error?: string | null;
+  elapsed?: number | null;
+}
+
 export const admin = {
   pending: () => request<PendingRequest[]>("/admin/pending"),
   // One page of active datasets for the admin "מאגרים פעילים" tab. The tab used
@@ -2003,8 +2017,13 @@ export const admin = {
     }),
   // Client-side path: the browser fetched the file (Cloudflare blocks our
   // datacenter IP) and uploads the bytes here. `fd` carries file + metadata.
+  // Returns a JOB — the parse+load runs in the background, poll it below.
   odataImportFile: (fd: FormData) =>
-    request<OdataImport>("/admin/odata/import-file", { method: "POST", body: fd }),
+    request<OdataImportJob>("/admin/odata/import-file", { method: "POST", body: fd }),
+  odataImportJob: (job_id: string) =>
+    request<OdataImportJob>(
+      `/admin/odata/import-jobs/${encodeURIComponent(job_id)}`,
+    ),
   odataDeleteImport: (resource_id: string) =>
     request<{ deleted: boolean }>(
       `/admin/odata/imports/${encodeURIComponent(resource_id)}`,

@@ -7,6 +7,7 @@ import {
   odataDatasetUrl,
   odataPackageSearch,
   isImportableResource,
+  resourceFormat,
 } from "../api/odata";
 
 /**
@@ -40,6 +41,8 @@ export default function OdataImportPanel() {
   const [importsLoading, setImportsLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null); // resource_id in flight
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Rows loaded so far by the running import job — a big file takes minutes.
+  const [progress, setProgress] = useState<{ rows: number; label: string } | null>(null);
 
   const search = useCallback(async (q: string) => {
     abortRef.current?.abort();
@@ -81,6 +84,8 @@ export default function OdataImportPanel() {
 
   // The file is fetched CLIENT-SIDE (Cloudflare 403s our datacenter IP, but the
   // browser can read it — CORS is open) and uploaded to the backend to parse.
+  // The backend then works as a background JOB (a 548k-row spreadsheet takes
+  // minutes — longer than the gateway holds a request), so we poll it here.
   const doImport = async (r: OdataResource, d: OdataDataset) => {
     if (!r.id || !r.url) {
       setMsg({ ok: false, text: "למשאב אין קובץ להורדה." });
@@ -93,7 +98,8 @@ export default function OdataImportPanel() {
       const resp = await fetch(r.url);
       if (!resp.ok) throw new Error(`הורדת הקובץ מ-odata נכשלה (${resp.status})`);
       const blob = await resp.blob();
-      const fmt = (r.format || "").toUpperCase() || (r.datastore_active ? "CSV" : "");
+      // Falls back to the file extension when odata declares no format.
+      const fmt = resourceFormat(r) || (r.datastore_active ? "CSV" : "");
       const fd = new FormData();
       fd.append("file", blob, r.name?.trim() || "file");
       fd.append("resource_id", r.id);
@@ -103,13 +109,21 @@ export default function OdataImportPanel() {
       fd.append("organization", d.organization?.title || d.organization?.name || "");
       fd.append("source_url", `${ODATA_BASE}/dataset/${d.name}/resource/${r.id}`);
       fd.append("file_url", r.url);
-      const res = await admin.odataImportFile(fd);
-      setMsg({ ok: true, text: `יובא: ${res.title || label} → odata.${res.table} (${(res.rows ?? 0).toLocaleString()} שורות)` });
+      let job = await admin.odataImportFile(fd);
+      setProgress({ rows: 0, label: label || "" });
+      while (job.state === "running") {
+        await new Promise((res) => setTimeout(res, 2000));
+        job = await admin.odataImportJob(job.id);
+        setProgress({ rows: job.rows ?? 0, label: label || "" });
+      }
+      if (job.state === "error") throw new Error(job.error || "שגיאה לא ידועה");
+      setMsg({ ok: true, text: `יובא: ${job.title || label} → odata.${job.table} (${(job.rows ?? 0).toLocaleString()} שורות)` });
       await loadImports();
     } catch (e) {
       setMsg({ ok: false, text: `ייבוא נכשל: ${(e as Error).message}` });
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   };
 
@@ -141,6 +155,14 @@ export default function OdataImportPanel() {
       {msg && (
         <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: msg.ok ? "#ecfdf5" : "#fef2f2", color: msg.ok ? "#065f46" : "#991b1b", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}` }}>
           {msg.text}
+        </div>
+      )}
+
+      {progress && (
+        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: "#eff6ff", color: "#1e3a8a", border: "1px solid #bfdbfe" }}>
+          מייבא את "{progress.label}"… {progress.rows > 0
+            ? `${progress.rows.toLocaleString()} שורות נטענו`
+            : "מנתח את הקובץ"}. קובץ גדול יכול לקחת כמה דקות — אפשר להשאיר את הדף פתוח.
         </div>
       )}
 
@@ -235,7 +257,7 @@ export default function OdataImportPanel() {
                           const queryable = isImportableResource(r);
                           return (
                             <div key={r.id || i} className="odata-file-row">
-                              <span className="odata-file-format">{(r.format || "").toUpperCase() || "—"}</span>
+                              <span className="odata-file-format">{resourceFormat(r) || "—"}</span>
                               {r.url ? (
                                 <a className="odata-file-link" href={r.url} target="_blank" rel="noopener noreferrer" title={r.name || ""}>{r.name?.trim() || "קובץ"}</a>
                               ) : (

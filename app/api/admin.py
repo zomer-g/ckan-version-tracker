@@ -2531,7 +2531,11 @@ async def odata_import_file(
 
     odata's file downloads sit behind Cloudflare and 403 our datacenter IP, but
     the browser can fetch them (CORS is open). The bytes arrive as an upload; we
-    parse (CSV/XLS/XLSX/ICAL) and load into ``odata.<table>``."""
+    parse (CSV/XLS/XLSX/ICAL) and load into ``odata.<table>``.
+
+    Parsing + loading runs as a BACKGROUND JOB and this returns a job id at
+    once: a half-million-row spreadsheet takes minutes, well past the gateway's
+    request timeout. Poll /odata/import-jobs/{id} for the outcome."""
     import os
     import tempfile
     from app.services import odata_import
@@ -2539,7 +2543,13 @@ async def odata_import_file(
     rid = (resource_id or "").strip()
     if not rid:
         raise HTTPException(status_code=400, detail="resource_id is required")
-    fmt = (format or "").upper()
+    # odata publishes some resources with a BLANK format — the file name and the
+    # download URL still carry the extension.
+    fmt = odata_import.infer_format(format, file.filename, file_url)
+    if fmt not in odata_import.SUPPORTED_FILE_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"פורמט לא נתמך: {format or '—'}. נתמכים: CSV, XLS, XLSX, ICS/ICAL.")
     suffix = ".ics" if fmt in ("ICS", "ICAL", "ICA") else (
         ".xlsx" if fmt in ("XLS", "XLSX") else ".csv")
     fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="odata-upload-")
@@ -2551,25 +2561,38 @@ async def odata_import_file(
                 if not chunk:
                     break
                 fh.write(chunk)
-        res = await odata_import.import_uploaded(
-            resource_id=rid, fmt=fmt, dataset_name=(dataset_name or None),
-            title=(title or None), organization=(organization or None),
-            source_url=(source_url or None), file_url=(file_url or None),
-            tmp_path=tmp,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001
-        logger.exception("odata import-file failed for %s", rid)
-        raise HTTPException(status_code=500, detail=f"ייבוא נכשל: {e}")
-    finally:
         try:
             os.remove(tmp)
         except OSError:
             pass
-    logger.info("odata import-file by %s: %s -> odata.%s (%s rows)",
-                user.email, rid, res["table"], res["rows"])
-    return res
+        logger.exception("odata import-file upload failed for %s", rid)
+        raise HTTPException(status_code=500, detail=f"קליטת הקובץ נכשלה: {e}")
+    # From here the JOB owns the temp file and its cleanup.
+    job = odata_import.start_upload_job(
+        resource_id=rid, fmt=fmt, dataset_name=(dataset_name or None),
+        title=(title or None), organization=(organization or None),
+        source_url=(source_url or None), file_url=(file_url or None),
+        tmp_path=tmp, filename=file.filename,
+    )
+    logger.info("odata import-file by %s: %s queued as job %s (%s)",
+                user.email, rid, job["id"], fmt)
+    return job
+
+
+@router.get("/odata/import-jobs/{job_id}")
+@limiter.limit("240/minute")
+async def odata_import_job(
+    request: Request,
+    job_id: str,
+    user: User = Depends(get_admin_user),
+):
+    """Status of a background odata import: running / done / error, rows so far."""
+    from app.services import odata_import
+    job = odata_import.job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
 
 
 

@@ -20,8 +20,10 @@ import logging
 import os
 import re
 import tempfile
+import time
 import unicodedata
-from urllib.parse import urlsplit
+import uuid
+from urllib.parse import urlsplit, unquote
 
 import httpx
 
@@ -154,7 +156,7 @@ async def _record_import(*, resource_id: str, table: str, package_id: str | None
 async def import_uploaded(
     *, resource_id: str, fmt: str, dataset_name: str | None, title: str | None,
     organization: str | None, source_url: str | None, file_url: str | None,
-    tmp_path: str,
+    tmp_path: str, filename: str | None = None, progress=None,
 ) -> dict:
     """Import a file the ADMIN's BROWSER already downloaded and uploaded to us.
 
@@ -164,15 +166,15 @@ async def import_uploaded(
     resource page, file_url = original file) are stored with the table."""
     if not append_store.is_configured():
         raise RuntimeError("append DB is not configured (APPEND_DATABASE_URL missing)")
-    f = (fmt or "").upper()
+    f = infer_format(fmt, filename, file_url)
     if f not in SUPPORTED_FILE_FORMATS:
         raise ValueError(
             f"פורמט לא נתמך: {fmt or '—'}. נתמכים: CSV, XLS, XLSX, ICS/ICAL.")
-    columns, rows = await asyncio.to_thread(_parse_file, tmp_path, f)
+    table = table_name_for(resource_id, dataset_name)
+    columns, batches = await asyncio.to_thread(_open_for_load, tmp_path, f)
     if not columns:
         raise ValueError("לא נמצאו עמודות בקובץ")
-    table = table_name_for(resource_id, dataset_name)
-    loaded = await _load_rows(table, columns, _batches_from_rows(rows, len(columns)))
+    loaded = await _load_rows(table, columns, batches, progress=progress)
     final_title = (title or "").strip() or dataset_name or resource_id
     src = source_url or (
         f"{ODATA_BASE}/dataset/{dataset_name}/resource/{resource_id}"
@@ -227,6 +229,41 @@ SPREADSHEET_FORMATS = {"XLS", "XLSX"}
 ICAL_FORMATS = {"ICS", "ICAL", "ICA"}
 SUPPORTED_FILE_FORMATS = {"CSV"} | SPREADSHEET_FORMATS | ICAL_FORMATS
 
+# File extension → format, for resources odata publishes with a BLANK format.
+_EXT_FORMATS = {
+    "csv": "CSV", "xlsx": "XLSX", "xlsm": "XLSX", "xls": "XLS",
+    "ics": "ICS", "ical": "ICAL", "ica": "ICA",
+}
+
+
+def _ext_format(candidate: str | None) -> str:
+    """Supported format implied by a file name or download URL, else ""."""
+    s = (candidate or "").strip()
+    if not s:
+        return ""
+    # A URL's extension lives in the path — never in the query string.
+    path = urlsplit(s).path if "://" in s else s
+    ext = os.path.splitext(unquote(path))[1].lstrip(".").lower()
+    return _EXT_FORMATS.get(ext, "")
+
+
+def infer_format(fmt: str | None, *candidates: str | None) -> str:
+    """The resource's real format: its declared ``format`` when that is one we
+    support, otherwise the extension of its file name / download URL.
+
+    Some odata resources carry an EMPTY ``format`` — "רשימת כתובות בישראל עם
+    קואורדינטות" is one, published as ``כתובות.xlsx`` with ``format: ""`` and no
+    datastore. Trusting the declared field alone made those files un-importable
+    even though the bytes are a perfectly ordinary spreadsheet."""
+    declared = (fmt or "").strip().upper()
+    if declared in SUPPORTED_FILE_FORMATS:
+        return declared
+    for c in candidates:
+        found = _ext_format(c)
+        if found:
+            return found
+    return declared
+
 # A cell holds a real header if it is a string carrying a Hebrew or Latin letter.
 _LETTER_RE = re.compile("[A-Za-zא-ת]")
 # Invisible marks Israeli gov files embed in headers (RTL/LTR/BOM/ZWS/…).
@@ -234,8 +271,8 @@ _INVISIBLE_RE = re.compile(
     "[​-‏﻿­  ‪-‮⁠]")
 
 
-def is_supported_file_format(fmt: str | None) -> bool:
-    return (fmt or "").upper() in SUPPORTED_FILE_FORMATS
+def is_supported_file_format(fmt: str | None, *candidates: str | None) -> bool:
+    return infer_format(fmt, *candidates) in SUPPORTED_FILE_FORMATS
 
 
 def _norm_header(s: str) -> str:
@@ -259,53 +296,138 @@ async def _download_file(url: str, path: str) -> None:
                     fh.write(chunk)
 
 
-def _rows_to_table(rows: list[list]) -> tuple[list[str], list[list]]:
-    """A matrix of cell values → (safe column names, data rows).
+# How many leading rows may be inspected when looking for the header row, and
+# how many when sizing up a sheet. Both are windows on purpose: a streaming read
+# must decide from a bounded prefix (see _stream_table).
+_HEADER_SCAN_ROWS = 20
+_SHEET_PEEK_ROWS = 50
 
-    Ports OCAL's header handling: auto-detect the real header row (gov files
-    often start with merged title/logo rows) by picking the first row with the
-    most letter-bearing string cells; strip invisible marks; and fall back to
-    synthetic ``col_N`` headers for header-less files."""
-    if not rows:
-        return [], []
+
+def _pick_header(head: list[list]) -> tuple[list[str], list[int], int]:
+    """Find the header row inside a scan window → (columns, kept indices, row).
+
+    Gov files often open with merged title/logo rows, so the header is the first
+    row with the most letter-bearing string cells. Returns ``([], [], -1)`` when
+    the window holds no such row (a header-less file)."""
     best_i, best_score = 0, -1
-    for i, r in enumerate(rows[:20]):
+    for i, r in enumerate(head):
         score = sum(1 for v in r if isinstance(v, str) and _LETTER_RE.search(v))
         if score > best_score:
             best_score, best_i = score, i
         if best_score >= 5:
             break
     if best_score <= 0:
+        return [], [], -1
+    raw = [_norm_header(str(v)) if v is not None else "" for v in head[best_i]]
+    safe = append_store.safe_column_names(raw)
+    keep = [j for j, c in enumerate(safe) if c and c not in ("_id", "_full_text")]
+    return [safe[j] for j in keep], keep, best_i
+
+
+def _project(row, keep: list[int]) -> list:
+    """One raw cell row → the kept columns, as text."""
+    return [None if j >= len(row) or row[j] is None else str(row[j]) for j in keep]
+
+
+def _rows_to_table(rows: list[list]) -> tuple[list[str], list[list]]:
+    """A matrix of cell values → (safe column names, data rows).
+
+    Ports OCAL's header handling: auto-detect the real header row, strip
+    invisible marks, and fall back to synthetic ``col_N`` headers for
+    header-less files."""
+    if not rows:
+        return [], []
+    columns, keep, hdr_i = _pick_header(rows[:_HEADER_SCAN_ROWS])
+    if hdr_i < 0:
         # Header-less: synthesise col_1..col_n, every row is data.
         ncols = max((len(r) for r in rows), default=0)
         columns = [f"col_{k + 1}" for k in range(ncols)]
-        data = [[None if j >= len(r) or r[j] is None else str(r[j])
-                 for j in range(ncols)] for r in rows]
-        return columns, data
-    header = rows[best_i]
-    raw = [_norm_header(str(v)) if v is not None else "" for v in header]
-    safe = append_store.safe_column_names(raw)
-    keep = [j for j, c in enumerate(safe) if c and c not in ("_id", "_full_text")]
-    columns = [safe[j] for j in keep]
-    data = [[None if j >= len(r) or r[j] is None else str(r[j]) for j in keep]
-            for r in rows[best_i + 1:]]
-    return columns, data
+        keep = list(range(ncols))
+    return columns, [_project(r, keep) for r in rows[hdr_i + 1:]]
 
 
-def _parse_xlsx(path: str) -> tuple[list[str], list[list]]:
+def _stream_table(row_iter) -> tuple[list[str], object]:
+    """Streaming twin of ``_rows_to_table``: an iterator of raw cell rows →
+    (columns, generator of projected rows).
+
+    Only the header-scan window is ever held in memory, so a half-million-row
+    sheet costs a few kilobytes here instead of the ~240MB the eager parser
+    needed on a 512MB dyno. The one behavioural difference: a header-less file's
+    width is measured over the scan window rather than every row, because a
+    single forward pass cannot know the widest row in advance."""
+    it = iter(row_iter)
+    head: list[list] = []
+    for r in it:
+        head.append(list(r))
+        if len(head) >= _HEADER_SCAN_ROWS:
+            break
+    if not head:
+        return [], iter(())
+    columns, keep, hdr_i = _pick_header(head)
+    if hdr_i < 0:
+        ncols = max((len(r) for r in head), default=0)
+        columns = [f"col_{k + 1}" for k in range(ncols)]
+        keep = list(range(ncols))
+    rest = head[hdr_i + 1:]
+
+    def _gen():
+        for r in rest:
+            yield _project(r, keep)
+        for r in it:
+            yield _project(r, keep)
+
+    return columns, _gen()
+
+
+def _widest_sheet(wb):
+    """The workbook's data sheet — the one widest over its first rows.
+
+    Peeking a window (rather than reading every sheet whole, as the eager parser
+    did) still skips narrow chart/notes tabs without loading anything big."""
+    best, best_cols = None, -1
+    for ws in wb.worksheets:
+        ncols = 0
+        for i, r in enumerate(ws.iter_rows(values_only=True)):
+            ncols = max(ncols, len(r))
+            if i + 1 >= _SHEET_PEEK_ROWS:
+                break
+        if ncols > best_cols:
+            best, best_cols = ws, ncols
+    return best
+
+
+def _stream_xlsx(path: str) -> tuple[list[str], object]:
+    """(columns, row generator) over an XLSX, read-only and forward-only.
+
+    The workbook stays open for as long as the generator lives and is closed
+    when it is exhausted or thrown away."""
     import openpyxl
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        best_rows: list[list] = []
-        best_cols = -1
-        for ws in wb.worksheets:
-            sheet_rows = [list(r) for r in ws.iter_rows(values_only=True)]
-            ncols = max((len(r) for r in sheet_rows), default=0)
-            if ncols > best_cols:            # widest sheet wins (skip chart junk)
-                best_cols, best_rows = ncols, sheet_rows
-        return _rows_to_table(best_rows)
-    finally:
+        ws = _widest_sheet(wb)
+        if ws is None:
+            wb.close()
+            return [], iter(())
+        columns, rows = _stream_table(ws.iter_rows(values_only=True))
+        if not columns:                       # nothing to read — close now, the
+            wb.close()                        # guarded generator never starts
+            return [], iter(())
+    except BaseException:
         wb.close()
+        raise
+
+    def _guarded():
+        try:
+            yield from rows
+        finally:
+            wb.close()
+
+    return columns, _guarded()
+
+
+def _parse_xlsx(path: str) -> tuple[list[str], list[list]]:
+    columns, rows = _stream_xlsx(path)
+    return columns, list(rows)
 
 
 def _parse_xls(path: str) -> tuple[list[str], list[list]]:
@@ -406,15 +528,46 @@ def _batches_from_rows(rows: list[list], ncols: int):
         yield batch
 
 
+def _open_for_load(path: str, fmt: str) -> tuple[list[str], object]:
+    """A downloaded file → (columns, iterator of COPY batches).
+
+    XLSX streams (the format big gov spreadsheets arrive in — see _stream_xlsx);
+    the rest are parsed eagerly, which is fine for the sizes they come in: XLS
+    caps at 65k rows and calendars are tiny. Blocking — call in a thread."""
+    if (fmt or "").upper() == "XLSX":
+        columns, rows = _stream_xlsx(path)
+        return columns, _batches_from_rows(rows, len(columns))
+    columns, rows = _parse_file(path, fmt)
+    return columns, _batches_from_rows(rows, len(columns))
+
+
 # ── NEON loaders ─────────────────────────────────────────────────────────────
 
-async def _load_rows(table: str, columns: list[str], batch_iter) -> dict:
+async def _aiter_batches(batch_iter):
+    """Pull COPY batches off a BLOCKING iterator without stalling the loop.
+
+    Parsing is CPU-bound and, for a half-million-row spreadsheet, runs for
+    minutes; consuming the generator inline would freeze every other request
+    for its whole duration. One thread hop per 20k-row batch is free by
+    comparison."""
+    it = iter(batch_iter)
+    done = object()
+    while True:
+        batch = await asyncio.to_thread(next, it, done)
+        if batch is done:
+            return
+        yield batch
+
+
+async def _load_rows(table: str, columns: list[str], batch_iter,
+                     progress=None) -> dict:
     """Create ``odata.<table>`` from ``columns`` + an iterable of COPY batches
     (each a list of tuples), replacing any existing table atomically.
 
     Every column is ``text``; rows land in a staging table and a single
     transaction drops the old table and renames staging into place, so readers
-    see the old table or the new one, never a partial load."""
+    see the old table or the new one, never a partial load. ``progress``, if
+    given, is called with the running row count after each batch."""
     if not columns:
         raise ValueError("no usable columns")
     staging = append_store.clip_ident_bytes(table, 63 - len("__stg")) + "__stg"
@@ -426,13 +579,15 @@ async def _load_rows(table: str, columns: list[str], batch_iter) -> dict:
         await conn.execute(f"CREATE TABLE {_qt(staging)} ({defs})")
         rows = 0
         try:
-            for batch in batch_iter:
+            async for batch in _aiter_batches(batch_iter):
                 if not batch:
                     continue
                 await conn.copy_records_to_table(
                     staging, schema_name=SCHEMA, columns=columns, records=batch,
                 )
                 rows += len(batch)
+                if progress is not None:
+                    progress(rows)
             async with conn.transaction():
                 await conn.execute(f"DROP TABLE IF EXISTS {_qt(table)}")
                 await conn.execute(
@@ -484,8 +639,9 @@ async def import_resource(resource_id: str) -> dict:
                 logger.debug("odata: package_show failed for %s", res.get("package_id"),
                              exc_info=True)
 
-    fmt = (res.get("format") or "").upper()
     url = (res.get("url") or "").strip()
+    # A blank ``format`` is common on odata — fall back to the file extension.
+    fmt = infer_format(res.get("format"), res.get("name"), url)
     datastore_active = bool(res.get("datastore_active"))
     supported = fmt in SUPPORTED_FILE_FORMATS
     if not supported and not datastore_active:
@@ -516,11 +672,10 @@ async def import_resource(resource_id: str) -> dict:
                 raise ValueError("למשאב אין קובץ להורדה")
             await _download_file(url, tmp)
             # Parsing is CPU-bound (openpyxl / ical) — keep it off the event loop.
-            columns, rows = await asyncio.to_thread(_parse_file, tmp, fmt)
+            columns, batches = await asyncio.to_thread(_open_for_load, tmp, fmt)
             if not columns:
                 raise ValueError("לא נמצאו עמודות בקובץ")
-            loaded = await _load_rows(table, columns,
-                                      _batches_from_rows(rows, len(columns)))
+            loaded = await _load_rows(table, columns, batches)
         else:
             # datastore-active but blank/unknown format → CSV dump.
             await _download_dump(resource_id, tmp)
@@ -541,6 +696,84 @@ async def import_resource(resource_id: str) -> dict:
     return {"resource_id": resource_id, "table": table, "title": title,
             "organization": org, "rows": loaded["rows"],
             "columns": loaded["columns"], "source_url": source_url}
+
+
+# ── background import jobs ───────────────────────────────────────────────────
+# Parsing and loading a big spreadsheet takes minutes — the 548k-row "רשימת
+# כתובות בישראל עם קואורדינטות" needs ~3 — which is far longer than the gateway
+# will hold a request open, so an inline import returned a 504 no matter how
+# well it went. The upload endpoint hands the file to one of these jobs and
+# returns at once; the admin UI polls for the outcome. Single-process app (one
+# uvicorn worker, see render.yaml), so an in-memory registry is enough.
+
+_JOBS: dict[str, dict] = {}
+_JOB_TASKS: set = set()
+_JOB_TTL = 3600.0  # a finished job stays pollable for an hour
+
+_JOB_PUBLIC = ("id", "resource_id", "title", "state", "rows", "columns",
+               "table", "error")
+
+
+def _prune_jobs() -> None:
+    cutoff = time.time() - _JOB_TTL
+    for jid in [j for j, v in _JOBS.items()
+                if v.get("finished_at") and v["finished_at"] < cutoff]:
+        _JOBS.pop(jid, None)
+
+
+def job_status(job_id: str) -> dict | None:
+    """Public view of an import job, or None if unknown/expired."""
+    job = _JOBS.get(job_id)
+    if not job:
+        return None
+    out = {k: job.get(k) for k in _JOB_PUBLIC}
+    out["elapsed"] = round((job.get("finished_at") or time.time())
+                           - job["started_at"], 1)
+    return out
+
+
+def start_upload_job(*, resource_id: str, fmt: str, dataset_name: str | None,
+                     title: str | None, organization: str | None,
+                     source_url: str | None, file_url: str | None,
+                     tmp_path: str, filename: str | None = None) -> dict:
+    """Run ``import_uploaded`` in the background; returns the job's first status.
+
+    Owns the uploaded temp file: it is removed when the job ends, however it
+    ends."""
+    _prune_jobs()
+    job_id = uuid.uuid4().hex
+    job = {
+        "id": job_id, "resource_id": resource_id,
+        "title": (title or "").strip() or resource_id,
+        "state": "running", "rows": 0, "columns": None, "table": None,
+        "error": None, "started_at": time.time(), "finished_at": None,
+    }
+    _JOBS[job_id] = job
+
+    async def _run() -> None:
+        try:
+            res = await import_uploaded(
+                resource_id=resource_id, fmt=fmt, dataset_name=dataset_name,
+                title=title, organization=organization, source_url=source_url,
+                file_url=file_url, tmp_path=tmp_path, filename=filename,
+                progress=lambda n: job.__setitem__("rows", n),
+            )
+            job.update(state="done", table=res["table"], rows=res["rows"],
+                       columns=res["columns"], title=res["title"])
+        except Exception as e:  # noqa: BLE001 — the job reports its own failure
+            logger.exception("odata import job %s failed (%s)", job_id, resource_id)
+            job.update(state="error", error=str(e) or e.__class__.__name__)
+        finally:
+            job["finished_at"] = time.time()
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    task = asyncio.create_task(_run())
+    _JOB_TASKS.add(task)                      # keep a ref so it isn't GC'd
+    task.add_done_callback(_JOB_TASKS.discard)
+    return job_status(job_id)
 
 
 async def list_imports() -> list[dict]:
