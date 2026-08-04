@@ -5,6 +5,7 @@ import { organizations as orgsApi, OrganizationDetail } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
+import { fmtDateHe } from "../utils/dates";
 
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
@@ -189,10 +190,17 @@ export default function OrganizationDetailPage() {
                     it, so we read it off the page-level org instead. */}
                 <SourceChip sourceType={d.source_type} organization={org.name} />
               </div>
+              {/* Two different questions, so both are shown: last_modified is
+                  when the DATA last changed at the source, last_polled_at is
+                  when we last checked. A card saying "updated in March, checked
+                  today" is the honest reading of an unchanged dataset. */}
               <div className="text-sm text-muted">
                 {d.version_count} {t("home.versions_count")}
+                {d.last_modified && (
+                  <> · {t("tracked.last_modified")}: {fmtDateHe(d.last_modified)}</>
+                )}
                 {d.last_polled_at && (
-                  <> · {t("tracked.last_poll")}: {new Date(d.last_polled_at).toLocaleDateString()}</>
+                  <> · {t("tracked.last_poll")}: {fmtDateHe(d.last_polled_at)}</>
                 )}
               </div>
               <TagChips tags={d.tags} />

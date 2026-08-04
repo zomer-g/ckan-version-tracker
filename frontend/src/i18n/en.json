@@ -171,6 +171,7 @@
     "empty": "No datasets being tracked. Search for a dataset and add it to tracking.",
     "poll_interval": "Poll Interval",
     "last_poll": "Last Poll",
+    "last_modified": "Last Updated",
     "versions": "Versions",
     "poll_now": "Poll Now",
     "untrack": "Untrack",

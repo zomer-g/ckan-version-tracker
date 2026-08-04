@@ -111,6 +111,9 @@ export interface TagDataset {
   source_type: string;
   version_count: number;
   last_polled_at: string | null;
+  // The source's own timestamp on the newest version we hold — when the DATA
+  // last changed, as opposed to `last_polled_at`, which is when we last looked.
+  last_modified: string | null;
   tags: Tag[];
 }
 
@@ -2249,6 +2252,8 @@ export interface OrganizationDetail extends Organization {
     source_type: string;
     version_count: number;
     last_polled_at: string | null;
+    // See TagDataset.last_modified — the data's own timestamp, not ours.
+    last_modified: string | null;
     tags?: Tag[];
   }[];
 }

@@ -9,13 +9,10 @@ export function fmtTime(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? "" : d.toISOString().slice(11, 16);
 }
 
-/** "DD.MM.YYYY" from a "YYYY-MM-DD" (or ISO) date string. */
-export function fmtDateHe(dateStr: string | null | undefined): string {
-  if (!dateStr) return "";
-  const [y, mo, da] = String(dateStr).slice(0, 10).split("-");
-  if (!y || !mo || !da) return String(dateStr);
-  return `${da}.${mo}.${y}`;
-}
+// Nothing about this one is Ocal-specific, and the dataset cards need it too —
+// it lives in utils/dates now and is re-exported here so the Ocal tabs that
+// already import it from this module keep working.
+export { fmtDateHe } from "../../utils/dates";
 
 export const HE_MONTHS = [
   "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",

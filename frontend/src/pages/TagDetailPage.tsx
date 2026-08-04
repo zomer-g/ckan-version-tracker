@@ -5,6 +5,7 @@ import { tagsApi, type TagDetail } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
+import { fmtDateHe } from "../utils/dates";
 
 export default function TagDetailPage() {
   const { t } = useTranslation();
@@ -125,12 +126,18 @@ export default function TagDetailPage() {
                   )}
                 </div>
               )}
+              {/* See OrganizationDetailPage: last_modified is the data's own
+                  timestamp, last_polled_at is ours. */}
               <div className="text-sm text-muted">
                 {d.version_count} {t("home.versions_count")}
+                {d.last_modified && (
+                  <>
+                    {" "}· {t("tracked.last_modified")}: {fmtDateHe(d.last_modified)}
+                  </>
+                )}
                 {d.last_polled_at && (
                   <>
-                    {" "}· {t("tracked.last_poll")}:{" "}
-                    {new Date(d.last_polled_at).toLocaleDateString()}
+                    {" "}· {t("tracked.last_poll")}: {fmtDateHe(d.last_polled_at)}
                   </>
                 )}
               </div>
