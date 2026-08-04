@@ -482,7 +482,14 @@ async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str
         "--   geom && ST_MakeEnvelope(34.7,31.9,35.0,32.2,4326) לסינון לפי מלבן.",
         "--   ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(34.78,32.08),4326)::geography, 500)",
         "--   למרחק במטרים (בלי ::geography המרחק יוצא במעלות וחסר משמעות).",
+        append_store.CAST_NOTES,
     ]
+    # The site's own resolvers, read live from the database. Without them a
+    # reader joins two sources on a raw locality name — which returns rows, and
+    # silently loses every row spelled differently on the two sides.
+    fn = await append_store.helper_functions_note()
+    if fn:
+        lines.append(fn)
     by_schema: dict[str, list[dict]] = {}
     for rec in catalog:
         by_schema.setdefault(rec["schema"], []).append(rec)

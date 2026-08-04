@@ -852,6 +852,77 @@ def format_schema_ddl(tables: list[dict], notes: str = "") -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+# Guidance that belongs with the SCHEMA rather than with any one console, so
+# every surface that hands a schema to a model — the copy-to-AI button, the MCP's
+# describe_schema — carries it. Two casts and one join are where hand-written SQL
+# over this corpus actually breaks:
+#
+#   * every dataset column is text, and a missing value is the EMPTY STRING, not
+#     NULL, so a bare ::numeric raises on the first blank cell;
+#   * dates are strings in the publisher's own format, and to_date raises on the
+#     first malformed row — in a 700k-row register, sixteen bad rows kill the
+#     whole query;
+#   * two sources naming the same locality do not agree on the spelling, so a
+#     name-to-name join silently drops whatever is written differently.
+CAST_NOTES = (
+    "-- ערך חסר הוא מחרוזת ריקה ולא NULL: NULLIF(col,'')::numeric,\n"
+    "--   ולמכנה NULLIF(NULLIF(col,'')::numeric, 0).\n"
+    "-- תאריכים הם טקסט בפורמט של המפרסם (DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD).\n"
+    "--   to_date נכשל על השורה הראשונה שלא בפורמט — סננו קודם את הצורה,\n"
+    "--   למשל WHERE col ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}'."
+)
+
+GEOM_NOTES = (
+    "-- geometry_wkt היא טקסט. עמודת geom היא PostGIS (EPSG:4326):\n"
+    "--   ST_AsText(geom) לקריאה — בחירת geom עצמה מחזירה hex.\n"
+    "--   ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(lon,lat),4326)::geography, 500)\n"
+    "--   למרחק במטרים; בלי ::geography המרחק יוצא במעלות וחסר משמעות.\n"
+    "-- שכבות ממ\"ג מפרסמות שמות שדה של המקור (shem_yishuv, pop_total) ולא את\n"
+    "--   הכיתוב בעברית — הכיתוב מופיע כהערה ליד כל עמודה כאן."
+)
+
+
+async def sql_helper_functions() -> list[str]:
+    """The site's own SQL functions, as signature lines for a schema dump.
+
+    A table catalog cannot advertise functions, so a model handed only the DDL
+    has no way to discover that over_settlement_code() exists — and then writes
+    the name-to-name join that quietly drops every locality spelled differently.
+    Read live from pg_proc so this list cannot drift from what the database
+    actually offers."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.proname AS name,
+                       pg_get_function_identity_arguments(p.oid) AS args,
+                       pg_get_function_result(p.oid) AS returns
+                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname LIKE 'over\\_%'
+                ORDER BY p.proname
+                """)
+    except Exception:  # noqa: BLE001 — a schema dump must not fail over this
+        logger.debug("sql_helper_functions failed", exc_info=True)
+        return []
+    return [f"{r['name']}({r['args']}) -> {r['returns']}" for r in rows]
+
+
+async def helper_functions_note() -> str:
+    """The helper-function block for a schema dump, or '' when there are none."""
+    sigs = await sql_helper_functions()
+    if not sigs:
+        return ""
+    lines = [
+        "-- ── פונקציות עזר של האתר (לשימוש ישירות בשאילתה) ──",
+        "-- כשמצליבים שני מאגרים לפי יישוב או רשות: פותרים את שני הצדדים לקוד",
+        "-- ומחברים עליו. חיבור לפי שם חופשי מפיל בשקט כל כתיב שאינו זהה",
+        "-- (תל אביב - יפו / תל אביב -יפו, נצרת עילית שהוחלף לנוף הגליל).",
+    ]
+    lines += [f"--   {s}" for s in sigs]
+    return "\n".join(lines)
+
+
 async def schema_text(table: str, *, title: str | None = None,
                       schema: str = "public") -> str:
     """DESCRIBE-style DDL text for one table (for the copy-to-AI button and the
@@ -872,13 +943,22 @@ async def schema_text(table: str, *, title: str | None = None,
         from app.services import column_aliases
         aliases = (await column_aliases.load_map()).get((schema, table))
         cols = column_aliases.apply(cols, aliases)
-    notes = (
-        "-- ארכיון מצטבר ב-OVER (over.org.il) — סכימה לכתיבת SQL\n"
-        "-- קריאה בלבד: SELECT / WITH יחיד. שמות עמודות נשמרים כפי שהם במקור;\n"
-        "-- עמודה עם אות גדולה / עברית / מילה שמורה חייבת מרכאות כפולות (כפי שמופיע למטה).\n"
-        "-- first_seen = הזמן שבו השורה נוספה לארכיון."
-    )
-    return format_schema_ddl([{"table": table, "description": title, "columns": cols}], notes)
+    parts = [
+        "-- ארכיון מצטבר ב-OVER (over.org.il) — סכימה לכתיבת SQL",
+        "-- קריאה בלבד: SELECT / WITH יחיד. שמות עמודות נשמרים כפי שהם במקור;",
+        "-- עמודה עם אות גדולה / עברית / מילה שמורה חייבת מרכאות כפולות (כפי שמופיע למטה).",
+        "-- first_seen = הזמן שבו השורה נוספה לארכיון.",
+        CAST_NOTES,
+    ]
+    # The spatial block only where it applies — a note about ST_DWithin on a
+    # table with no geometry is noise that costs the reader attention.
+    if any(c["name"] in ("geom", "geometry_wkt") for c in cols):
+        parts.append(GEOM_NOTES)
+    fn = await helper_functions_note()
+    if fn:
+        parts.append(fn)
+    return format_schema_ddl([{"table": table, "description": title, "columns": cols}],
+                             "\n".join(parts))
 
 
 def validate_readonly_sql(sql: str) -> str:

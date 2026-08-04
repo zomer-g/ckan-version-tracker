@@ -174,6 +174,45 @@ def test_columns_key_is_none_before_the_table_exists():
 
 # ── the caption reaches the copy-to-AI DDL ───────────────────────────────────
 
+# ── schema dumps carry the traps, not just the column list ───────────────────
+
+def test_cast_notes_spell_the_empty_string_guard_correctly():
+    # This text is copied verbatim into queries by whoever reads the schema, so
+    # a mangled quote here becomes a broken query everywhere.
+    assert "NULLIF(col,'')::numeric" in A.CAST_NOTES
+    assert "to_date" in A.CAST_NOTES
+
+
+def test_geom_notes_insist_on_the_geography_cast():
+    # Distance without ::geography is in degrees — the single most common way a
+    # spatial answer comes out confidently wrong.
+    assert "::geography" in A.GEOM_NOTES
+
+
+def test_helper_function_note_explains_why_not_to_join_on_a_name():
+    async def fake():
+        return ["over_settlement_code(q text) -> integer"]
+    orig = A.sql_helper_functions
+    A.sql_helper_functions = fake
+    try:
+        note = asyncio.run(A.helper_functions_note())
+    finally:
+        A.sql_helper_functions = orig
+    assert "over_settlement_code(q text) -> integer" in note
+    assert "בשקט" in note          # the reason: a name join loses rows silently
+
+
+def test_helper_function_note_is_empty_when_the_db_has_no_functions():
+    async def none():
+        return []
+    orig = A.sql_helper_functions
+    A.sql_helper_functions = none
+    try:
+        assert asyncio.run(A.helper_functions_note()) == ""
+    finally:
+        A.sql_helper_functions = orig
+
+
 def test_ddl_shows_the_caption_next_to_the_name():
     ddl = A.format_schema_ddl([{
         "table": "govmap_23_x",
