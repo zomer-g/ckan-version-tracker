@@ -287,6 +287,32 @@ async def init_scheduler() -> None:
             misfire_grace_time=300,
         )
 
+    # The site's own index (public.over_datasets / over_dataset_files): what each
+    # dataset holds, how big, in which formats, and whether it is queryable here.
+    # Wholly derived — every refresh replaces it — so the cadence is a freshness
+    # choice, not a correctness one. Hourly: nothing in it moves faster than a
+    # poll landing, and the build is one pass over the catalog plus two grouped
+    # queries.
+    async def site_index_job() -> None:
+        if not _settings.append_database_url:
+            return
+        from app.database import async_session
+        from app.services import site_index
+        try:
+            async with async_session() as db:
+                await site_index.refresh(db)
+        except Exception:  # noqa: BLE001 — a derived index must never kill a tick
+            logger.exception("site_index refresh tick failed")
+
+    scheduler.add_job(
+        site_index_job,
+        trigger=IntervalTrigger(minutes=60),
+        id="site_index",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the

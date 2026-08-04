@@ -2243,6 +2243,25 @@ async def index_mirror_backfill_geometry(
     return s
 
 
+@router.post("/site-index/refresh")
+@limiter.limit("6/minute")
+async def site_index_refresh(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rebuild ``public.over_datasets`` + ``public.over_dataset_files`` now.
+
+    The site's own index, queryable from /data: one row per dataset saying what
+    it holds and what can be done with it here. Refreshed hourly by the
+    scheduler; this is for when you want it to reflect a change immediately.
+    Wholly derived — a rebuild is always safe."""
+    from app.services import site_index
+    s = await site_index.refresh(db)
+    logger.info("Site index refreshed by %s: %s", user.email, s)
+    return s
+
+
 @router.post("/index-mirror/purge-ineligible")
 @limiter.limit("3/minute")
 async def index_mirror_purge(
