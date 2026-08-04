@@ -257,19 +257,26 @@ class Settings(BaseSettings):
     index_mirror_interval_minutes: int = 10
     # Build a PostGIS `geom` column + GiST index on mirrored GovMap layers, so
     # /data can run spatial SQL instead of only matching geometry_wkt as text.
-    # Off by default: it needs `CREATE EXTENSION postgis SCHEMA extensions` to
-    # have been run on the append DB, and a deploy with this still false must
-    # behave exactly as before. Measured on the append DB 2026-07-23 (see
-    # docs/neon-postgis/README.md §5 stage 1): conversion is ~21µs per geometry
-    # and the GiST index ~40 bytes per row, so the cost is storage — about +80%
-    # on a geometry table, ~$0.20/month across the whole corpus.
+    # Measured on the append DB 2026-07-23 (see docs/neon-postgis/README.md §5
+    # stage 1): conversion is ~21µs per geometry and the GiST index ~40 bytes
+    # per row, so the cost is storage — about +80% on a geometry table,
+    # ~$0.20/month across the whole corpus.
+    #
+    # ON by default since 2026-08-04. It was off while `CREATE EXTENSION postgis
+    # SCHEMA extensions` might not have been run on the append DB — but a
+    # SETTING is the wrong place to encode "the database might not support
+    # this", because it makes every layer's geometry depend on an operator
+    # remembering to flip a flag. index_mirror._postgis_available() now asks the
+    # database directly, once per process, and the whole geometry step degrades
+    # to a recorded no-op when the extension is absent. So this reads as "we
+    # want geometry wherever it is possible", which is the invariant.
     #
     # NOTE the asymmetry: turning this ON adds geom to each table as it next
     # syncs, and turning it OFF removes it the same way, because every sync
     # rebuilds the table from scratch (COPY to staging, then swap). Neither
     # direction is retroactive, so `postgis_rows` in the checkpoint is what
     # tells you which tables actually have it.
-    index_mirror_postgis_enabled: bool = False
+    index_mirror_postgis_enabled: bool = True
     # Layers per tick for the in-place geometry backfill (see
     # index_mirror.backfill_geometry). Only relevant while the corpus is
     # catching up: once every layer has the column the query finds nothing and

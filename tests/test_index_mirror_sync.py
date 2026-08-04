@@ -99,13 +99,23 @@ class _GeomConn:
     """Records SQL and fakes the one value _add_geometry reads (the WKT sample).
 
     ``fail_on`` makes a statement raise, so the savepoint path can be exercised.
+    ``sample`` doubles as the CRS sniff's input, and ``columns`` as the live
+    column list _ensure_degrees introspects — which is how the ITM→WGS84
+    conversion is exercised without a database.
     """
 
     def __init__(self, sample="POLYGON((34.78 32.08, 34.79 32.09))", fail_on=None,
-                 bad_rows=0):
+                 bad_rows=0, columns=("geometry_wkt",)):
         self.executed: list[str] = []
         self.sample, self.fail_on = sample, fail_on
         self.bad_rows = bad_rows
+        self.columns = list(columns)
+
+    async def fetch(self, sql, *a):
+        self.executed.append(sql)
+        if "information_schema.columns" in sql:
+            return [{"column_name": c} for c in self.columns]
+        return []
 
     async def fetchval(self, sql, *a):
         self.executed.append(sql)
@@ -133,8 +143,17 @@ class _GeomConn:
         return _Tx()
 
 
-def _enable_postgis(monkeypatch, on=True):
+def _enable_postgis(monkeypatch, on=True, installed=True, srid=True):
+    """Set the WANT (the setting) and the CAN (what the database has).
+
+    The two are deliberately separate in the module — the setting says we want
+    geometry, the probes say the database can give it — and the probe results
+    are process-cached, so every test states both explicitly rather than
+    inheriting whatever the previous test happened to leave behind."""
     monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", on)
+    monkeypatch.setattr(index_mirror, "_postgis_present", installed)
+    monkeypatch.setattr(index_mirror, "_srid_present",
+                        {index_mirror.ITM_SRID: srid})
 
 
 def test_classify_wkt_crs_separates_degrees_from_itm():
@@ -211,13 +230,72 @@ def test_geometry_step_qualifies_every_postgis_reference(monkeypatch):
             assert '"extensions".' in sql, f"unqualified PostGIS use: {sql}"
 
 
-def test_geometry_step_refuses_itm_wkt_instead_of_converting_it(monkeypatch):
-    """Converting ITM metres as 4326 yields geometry that is wrong but looks
-    valid — the worst possible failure. Skip and say why."""
+_ITM_SAMPLE = "MULTIPOLYGON(((245134.2 698829.0, 1 2)))"
+
+
+def test_itm_wkt_is_reprojected_so_the_layer_still_gets_geometry(monkeypatch):
+    """A layer last scraped before the 2026-07-08 WGS84 switch holds ITM metres
+    in the same column a newer layer holds degrees in. Refusing it (the old
+    behaviour) left the layer without geometry until a re-scrape — up to 90 days
+    for GovMap, and meanwhile the console's map drew it in the Gulf of Guinea.
+    Convert it instead, via a real ST_Transform from 6991."""
     _enable_postgis(monkeypatch)
-    conn = _GeomConn(sample="MULTIPOLYGON(((245134.2 698829.0, 1 2)))")
+    conn = _GeomConn(sample=_ITM_SAMPLE)
     got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
-    assert "itm" in got["skipped"]
+    assert got["rows"] == 1234
+    joined = " | ".join(conn.executed)
+    assert "ST_Transform" in joined and "6991" in joined
+    assert any("ADD COLUMN" in s for s in conn.executed)
+
+
+def test_reprojection_never_relabels_itm_as_degrees(monkeypatch):
+    """The failure this whole path exists to avoid: declaring ITM metres to be
+    EPSG:4326 produces geometry that is wrong but perfectly valid-looking. The
+    conversion must PARSE as 6991 and transform — never parse as 4326."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(sample=_ITM_SAMPLE)
+    asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    convert = [s for s in conn.executed if "ST_Transform" in s]
+    assert convert, "no conversion statement was issued"
+    for sql in convert:
+        # The WKT is parsed AS 6991 and transformed TO 4326, in that order.
+        assert f"try_geom" in sql
+        assert f", {index_mirror.ITM_SRID})" in sql
+        assert f", {index_mirror.GEOM_SRID})" in sql
+        assert sql.index(f", {index_mirror.ITM_SRID})") < sql.index(
+            f", {index_mirror.GEOM_SRID})")
+
+
+def test_reprojection_rehashes_so_the_next_sync_does_not_double_the_table(monkeypatch):
+    """geometry_wkt is one of the columns _row_hash is taken over. Rewriting it
+    without recomputing the hash would make every row of the next sync read as
+    new — a silently doubled table, half in each frame."""
+    _enable_postgis(monkeypatch)
+    conn = _GeomConn(sample=_ITM_SAMPLE,
+                     columns=("geometry_wkt", "_row_hash"))
+    asyncio.run(index_mirror._ensure_degrees(conn, "t"))
+    assert any('SET "_row_hash"' in s for s in conn.executed), \
+        "converted the geometry but left the row hashes describing the old text"
+
+
+def test_reprojection_is_skipped_when_the_database_lacks_epsg_6991(monkeypatch):
+    """ST_Transform against an SRID that is not in spatial_ref_sys aborts the
+    statement. Better to stay text-only and say so."""
+    _enable_postgis(monkeypatch, srid=False)
+    conn = _GeomConn(sample=_ITM_SAMPLE)
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert "6991" in got["skipped"]
+    assert not any("ADD COLUMN" in s for s in conn.executed)
+
+
+def test_geometry_step_is_a_recorded_no_op_without_the_extension(monkeypatch):
+    """The setting says we WANT geometry; the database says whether it CAN. With
+    the setting on and PostGIS absent, the content still mirrors and the reason
+    is recorded — no error, no per-tick exception."""
+    _enable_postgis(monkeypatch, installed=False)
+    conn = _GeomConn()
+    got = asyncio.run(index_mirror._add_geometry(conn, "t__stg", ["geometry_wkt"]))
+    assert got == {"skipped": "postgis not installed on the append DB"}
     assert not any("ADD COLUMN" in s for s in conn.executed)
 
 
@@ -524,6 +602,54 @@ def test_append_writes_only_the_rows_the_table_lacks(tmp_path, monkeypatch):
     joined = " | ".join(conn.executed)
     assert "NOT EXISTS" in joined, "the diff is what makes this incremental"
     assert '"idx"."t"' in joined
+
+
+class _CrsConn(_LoadConn):
+    """A _LoadConn whose WKT sniff answers differently for the live table and
+    the staging one, so the two frames can be made to disagree."""
+
+    def __init__(self, live_wkt, incoming_wkt, **kw):
+        super().__init__(**kw)
+        self.live_wkt, self.incoming_wkt = live_wkt, incoming_wkt
+
+    async def fetchval(self, sql, *a):
+        if "substring" in sql:
+            return self.incoming_wkt if "__stg" in sql else self.live_wkt
+        return await super().fetchval(sql, *a)
+
+
+_ITM_WKT = "MULTIPOLYGON(((245134.2 698829.0, 1 2)))"
+_WGS_WKT = "POLYGON((34.78 32.08, 34.79 32.09))"
+
+
+def test_a_changed_geometry_frame_forces_a_rebuild_instead_of_doubling(
+        tmp_path, monkeypatch):
+    """The 2026-07-08 ITM→WGS84 switch rewrites geometry_wkt for EVERY row, so
+    every hash differs and a plain append would insert the whole layer a second
+    time — half in metres, half in degrees, with nothing afterwards to tell the
+    halves apart. Hand the table back for a rebuild instead."""
+    _enable_postgis(monkeypatch, on=False)   # the guard is not a geometry feature
+    conn = _CrsConn(live_wkt=_ITM_WKT, incoming_wkt=_WGS_WKT)
+    path = _csv(tmp_path, "geometry_wkt\nPOINT(34.78 32.08)\n")
+
+    out = asyncio.run(index_mirror._append(
+        conn, path, "t", ["geometry_wkt"], ["geometry_wkt"], [0]))
+
+    assert out is None, "an append across a frame change doubles the layer"
+    assert not any("INSERT INTO" in s for s in conn.executed)
+
+
+def test_an_unchanged_geometry_frame_still_appends(tmp_path, monkeypatch):
+    """The guard must not turn every ordinary refresh into a full rebuild."""
+    _enable_postgis(monkeypatch, on=False)
+    conn = _CrsConn(live_wkt=_WGS_WKT, incoming_wkt=_WGS_WKT)
+    path = _csv(tmp_path, "geometry_wkt\nPOINT(34.78 32.08)\n")
+
+    out = asyncio.run(index_mirror._append(
+        conn, path, "t", ["geometry_wkt"], ["geometry_wkt"], [0]))
+
+    assert out is not None and out["mode"] == "append"
+    assert any("INSERT INTO" in s for s in conn.executed)
 
 
 def test_append_never_drops_or_renames_the_live_table(tmp_path, monkeypatch):

@@ -2128,6 +2128,9 @@ async def index_mirror_status(
         "deferred_bytes": sum(d.get("csv_bytes") or 0 for d in deferred),
         "max_csv_mb": settings.index_mirror_max_csv_mb,
         "incremental": settings.index_mirror_incremental,
+        # Are the mapping layers uniform? `without_geom` > 0 means that many
+        # layers answer a spatial question differently from their neighbours.
+        "geometry": await index_mirror.geometry_coverage(),
         "pending_sample": [
             {"title": t["title"], "table": t["table"], "version": t["version_number"]}
             for t in todo[:20]

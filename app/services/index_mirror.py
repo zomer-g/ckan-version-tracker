@@ -131,9 +131,20 @@ PG_EXT_SCHEMA = "extensions"
 WKT_COLUMN = "geometry_wkt"
 GEOM_COLUMN = "geom"
 # Everything the scraper has written since 2026-07-08 is WGS84 lon/lat. Layers
-# last scraped before that still hold ITM 6991 metres, and converting those as
-# 4326 would produce geometry that is wrong but looks valid — hence the sniff.
+# last scraped before that still hold ITM 6991 metres — the sniff below tells
+# the two apart, and _ensure_degrees REPROJECTS the old ones so that every
+# mirrored layer answers in the same frame regardless of when it was scraped.
 GEOM_SRID = 4326
+# The frame those pre-2026-07-08 layers are in. EPSG:6991 (IG05/12) is the
+# scraper's canonical ITM — never 2039, which differs only in datum realisation
+# and would put every converted layer ~0.4 mm off for no reason.
+#
+# ST_Transform does the datum shift properly. What must NEVER happen is the
+# other thing: declaring ITM metres as 4326 and calling it converted, which
+# yields geometry that is wrong but looks valid. That is why this path is a
+# transform and not a relabel, and why an unparseable row is left alone rather
+# than guessed at.
+ITM_SRID = 6991
 
 _WKT_FIRST_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -472,6 +483,139 @@ def _geom_index_name(table: str) -> str:
     return _index_name(table, "geom_gix")
 
 
+# Whether the append DB actually has PostGIS, and whether it knows EPSG:6991.
+# Neither can change under a running process (an extension install is a deploy
+# event), so both are read once and cached. None = not asked yet.
+_postgis_present: bool | None = None
+_srid_present: dict[int, bool] = {}
+
+
+async def _postgis_available(conn) -> bool:
+    """Is the PostGIS extension installed on this database?
+
+    The SETTING says whether we want geometry; this says whether the database
+    can give it. Keeping them separate is what lets the setting default to ON:
+    a database without the extension degrades to exactly the old behaviour
+    (content mirrored, no geom, reason recorded) instead of erroring once per
+    table per tick."""
+    global _postgis_present
+    if _postgis_present is None:
+        try:
+            _postgis_present = bool(await conn.fetchval(
+                "SELECT true FROM pg_extension WHERE extname = 'postgis'"))
+        except Exception:  # noqa: BLE001 — treat an unreadable catalog as absent
+            logger.debug("idx: could not probe for PostGIS", exc_info=True)
+            return False
+        if not _postgis_present:
+            logger.info("idx: PostGIS is not installed on the append DB — "
+                        "mirroring content only. Install it with: "
+                        "CREATE SCHEMA IF NOT EXISTS %s; "
+                        "CREATE EXTENSION postgis SCHEMA %s;",
+                        PG_EXT_SCHEMA, PG_EXT_SCHEMA)
+    return _postgis_present
+
+
+async def _srid_available(conn, srid: int) -> bool:
+    """Does spatial_ref_sys carry ``srid``? EPSG:6991 was added to the EPSG
+    registry late enough that an old PostGIS build can lack it, and ST_Transform
+    against a missing SRID aborts the statement."""
+    if srid not in _srid_present:
+        try:
+            _srid_present[srid] = bool(await conn.fetchval(
+                f"SELECT true FROM {_qi(PG_EXT_SCHEMA)}.spatial_ref_sys "
+                f"WHERE srid = $1", srid))
+        except Exception:  # noqa: BLE001
+            logger.debug("idx: could not probe spatial_ref_sys", exc_info=True)
+            return False
+    return _srid_present[srid]
+
+
+async def _geom_enabled(conn) -> bool:
+    """Wanted (setting) AND possible (extension present)."""
+    if not settings.index_mirror_postgis_enabled:
+        return False
+    return await _postgis_available(conn)
+
+
+async def _wkt_crs(conn, table: str, where: str) -> str:
+    """Classify ``table``'s geometry_wkt from ONE truncated sample row.
+
+    Truncated on purpose: the full value is a TOASTed multi-megabyte polygon on
+    the layers where this matters, and expanding one to read its first number
+    cost 46 seconds in the pilot."""
+    wkt = _qi(WKT_COLUMN)
+    sample = await conn.fetchval(
+        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table)} "
+        f"WHERE {where} LIMIT 1")
+    return "empty" if sample is None else classify_wkt_crs(sample)
+
+
+async def _ensure_degrees(conn, table: str) -> tuple[str, dict]:
+    """Bring ``table``'s ``geometry_wkt`` to EPSG:4326, reprojecting if needed.
+
+    This is what makes a mirrored layer behave the same whenever it was scraped.
+    The scraper switched its published geometry from ITM 6991 to WGS84 on
+    2026-07-08, and that switch was not retroactive: a layer last scraped before
+    it still holds metres in the same column a newer layer holds degrees in. The
+    console's map draws that column directly, so an ITM-era layer landed in the
+    Gulf of Guinea; the geometry step used to refuse the table outright and wait
+    for a re-scrape, which for GovMap means up to 90 days.
+
+    So convert instead — properly, via ``ST_Transform`` from 6991, which applies
+    the datum shift. A row whose WKT will not parse is LEFT AS IT WAS: it is the
+    same row the geometry step cannot convert either, so it ends up with a NULL
+    ``geom`` on both paths and nothing is silently mislabelled.
+
+    ``_row_hash`` is recomputed when the table carries one — the hash is taken
+    over the source columns, and geometry_wkt is one of them, so rewriting it
+    without rehashing would make every row of the next sync read as new and
+    double the table.
+
+    Returns ``(crs, note)`` where crs is the frame the column is in AFTERWARDS:
+    ``degrees`` (ready), ``itm`` (conversion unavailable), ``unknown``,
+    ``empty`` (no geometry rows) or ``none`` (no geometry column)."""
+    live = await _live_columns(conn, table) or []
+    if WKT_COLUMN not in live:
+        return "none", {}
+
+    wkt = _qi(WKT_COLUMN)
+    have = f"{wkt} IS NOT NULL AND {wkt} <> ''"
+    crs = await _wkt_crs(conn, table, have)
+    if crs != "itm":
+        return crs, {}
+    if not await _srid_available(conn, ITM_SRID):
+        return crs, {"skipped": f"geometry is ITM but EPSG:{ITM_SRID} is not in "
+                                f"spatial_ref_sys — cannot reproject"}
+
+    ext = _qi(PG_EXT_SCHEMA)
+    parsed = f"{_qt('try_geom')}({wkt}, {ITM_SRID})"
+    try:
+        # One transaction: the column and the hashes that describe it move
+        # together or not at all. A half-converted table would be the one state
+        # this module cannot recover from on its own.
+        async with conn.transaction():
+            tag = await conn.execute(
+                f"UPDATE {_qt(table)} SET {wkt} = "
+                f"{ext}.ST_AsText({ext}.ST_Transform({parsed}, {GEOM_SRID})) "
+                f"WHERE {have} AND {parsed} IS NOT NULL")
+            if HASH_COLUMN in live:
+                await conn.execute(
+                    f"UPDATE {_qt(table)} SET {_qi(HASH_COLUMN)} = "
+                    f"{_hash_expr(_source_columns(live))}")
+    except Exception as exc:  # noqa: BLE001 — the load must survive this
+        logger.warning("idx mirror: ITM→WGS84 conversion failed for %s", table,
+                       exc_info=True)
+        return crs, {"error": f"{type(exc).__name__}: {exc}"[:500]}
+
+    try:
+        n = int(str(tag).rsplit(" ", 1)[-1])
+    except (ValueError, AttributeError):
+        n = 0
+    logger.info("idx mirror: %s — reprojected %d rows EPSG:%d → EPSG:%d",
+                table, n, ITM_SRID, GEOM_SRID)
+    return "degrees", {"converted": n}
+
+
 async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
     """Materialise ``geom`` + a GiST index on ``staging``, before the swap.
 
@@ -498,21 +642,17 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
         return {"skipped": "postgis disabled"}
     if WKT_COLUMN not in columns:
         return {"skipped": "no geometry column"}
+    if not await _postgis_available(conn):
+        return {"skipped": "postgis not installed on the append DB"}
 
-    # One truncated row: enough to classify the CRS, and it never expands the
-    # whole TOASTed geometry (which is what made a naive scan cost 46 seconds).
-    sample = await conn.fetchval(
-        f"SELECT substring({_qi(WKT_COLUMN)} from 1 for 120) FROM {_qt(staging)} "
-        f"WHERE {_qi(WKT_COLUMN)} IS NOT NULL AND {_qi(WKT_COLUMN)} <> '' LIMIT 1")
-    if sample is None:
+    # ITM-era layers are REPROJECTED here rather than refused, so that a layer's
+    # geometry does not depend on when it happened to be scraped.
+    crs, note = await _ensure_degrees(conn, staging)
+    if crs == "empty":
         return {"skipped": "no geometry rows"}
-    crs = classify_wkt_crs(sample)
     if crs != "degrees":
-        # ITM layers are not transformed here on purpose: re-scraping the source
-        # rewrites the CSV as 4326, which keeps "every geom is 4326" true
-        # everywhere instead of introducing a second, silent conversion path.
-        return {"skipped": f"wkt looks like {crs}, expected degrees "
-                           f"(EPSG:{GEOM_SRID}) — re-scrape the dataset"}
+        return {"skipped": note.get("skipped") or note.get("error")
+                or f"wkt looks like {crs}, expected degrees (EPSG:{GEOM_SRID})"}
 
     geom, wkt = _qi(GEOM_COLUMN), _qi(WKT_COLUMN)
     try:
@@ -545,6 +685,8 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
         attempted = 0
     bad = int(bad or 0)
     out: dict = {"rows": attempted - bad}
+    if note.get("converted"):
+        out["reprojected"] = note["converted"]
     if bad:
         out["skipped"] = (f"{bad} of {attempted} rows had WKT PostGIS could not "
                           f"parse (kept as NULL geom)")
@@ -570,6 +712,8 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
         return {"skipped": "postgis disabled"}
     if WKT_COLUMN not in columns:
         return {"skipped": "no geometry column"}
+    if not await _postgis_available(conn):
+        return {"skipped": "postgis not installed on the append DB"}
 
     has_geom = await conn.fetchval(
         "SELECT true FROM information_schema.columns "
@@ -578,6 +722,14 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
     if not has_geom:
         return await _add_geometry(conn, table, columns)
 
+    # Whole-table, not just the new rows: the column has ONE frame, and the
+    # append path can only reach an ITM table when its source is still ITM too
+    # (a CRS change forces a rebuild — see _append).
+    crs, note = await _ensure_degrees(conn, table)
+    if crs not in ("degrees", "empty"):
+        return {"skipped": note.get("skipped") or note.get("error")
+                or f"wkt looks like {crs}, expected degrees (EPSG:{GEOM_SRID})"}
+
     geom, wkt = _qi(GEOM_COLUMN), _qi(WKT_COLUMN)
     pending_wkt = (f"{geom} IS NULL AND {wkt} IS NOT NULL AND {wkt} <> ''")
     sample = await conn.fetchval(
@@ -585,10 +737,6 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
         f"WHERE {pending_wkt} LIMIT 1")
     if sample is None:
         return {"skipped": "no geometry rows"}
-    crs = classify_wkt_crs(sample)
-    if crs != "degrees":
-        return {"skipped": f"wkt looks like {crs}, expected degrees "
-                           f"(EPSG:{GEOM_SRID}) — re-scrape the dataset"}
     try:
         status = await conn.execute(
             f"UPDATE {_qt(table)} SET {geom} = "
@@ -609,6 +757,8 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
         attempted = 0
     bad = int(bad or 0)
     out: dict = {"rows": attempted - bad}
+    if note.get("converted"):
+        out["reprojected"] = note["converted"]
     if bad:
         out["skipped"] = (f"{bad} of {attempted} rows had WKT PostGIS could not "
                           f"parse (kept as NULL geom)")
@@ -665,6 +815,12 @@ async def backfill_geometry(limit: int = 25) -> dict:
     pool = await append_store.get_pool()
     done, failed, skipped = [], [], []
     async with pool.acquire() as conn:
+        if not await _postgis_available(conn):
+            return {"skipped": "postgis not installed on the append DB"}
+        # try_geom lives in `idx` and every conversion below goes through it —
+        # this path can run before any sync has created it (flag flipped on a
+        # corpus that is already mirrored). Idempotent.
+        await ensure_schema(conn)
         await _ensure_state_table(conn)
         tables = await geometry_backfill_candidates(conn, limit)
         for table in tables:
@@ -758,7 +914,7 @@ async def _rebuild(conn, tmp: str, table: str, columns: list[str],
 
 
 async def _append(conn, tmp: str, table: str, live_cols: list[str],
-                  columns: list[str], keep: list[int]) -> dict:
+                  columns: list[str], keep: list[int]) -> dict | None:
     """Insert only the rows the table does not already hold.
 
     The CSV is a full snapshot, so the whole of it still has to be read — but it
@@ -776,7 +932,15 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
     The diff is set-based and runs entirely in the database: no hash set is ever
     built in the dyno's memory, so this costs the same whether the table holds a
     thousand rows or ten million. Hashing happens in ``live_cols`` order on both
-    sides — see _hash_expr."""
+    sides — see _hash_expr.
+
+    Returns None when the incoming CSV's geometry is in a DIFFERENT frame than
+    the live table's, which the caller answers with a rebuild. That case is not
+    hypothetical: the scraper switched from ITM 6991 to WGS84 on 2026-07-08, so
+    the first version to land on an ITM-era layer after that carries a different
+    geometry_wkt for EVERY row — hence a different hash for every row — and
+    appending it would silently DOUBLE the table, half of it in each frame. A
+    rebuild is the honest answer to "the whole column changed meaning"."""
     staging = _staging_name(table)
     defs = ", ".join(f"{_qi(c)} text" for c in columns)
     src = ", ".join(_qi(c) for c in live_cols)
@@ -795,6 +959,19 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
                 staging, schema_name=SCHEMA, columns=columns, records=batch,
             )
             rows += len(batch)
+
+        # Same column, same frame? Two truncated single-row reads, and only when
+        # the table actually carries geometry.
+        if WKT_COLUMN in columns and WKT_COLUMN in live_cols:
+            have = f"{_qi(WKT_COLUMN)} IS NOT NULL AND {_qi(WKT_COLUMN)} <> ''"
+            live_crs = await _wkt_crs(conn, table, have)
+            new_crs = await _wkt_crs(conn, staging, have)
+            known = {"degrees", "itm"}
+            if live_crs in known and new_crs in known and live_crs != new_crs:
+                logger.info("idx mirror: %s — geometry frame changed %s → %s, "
+                            "rebuilding instead of appending", table,
+                            live_crs, new_crs)
+                return None
 
         # The CTE's hash column is prefixed because a source column really can
         # be called anything — an index CSV with an `_h` column would otherwise
@@ -871,10 +1048,13 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
         async with pool.acquire() as conn:
             await ensure_schema(conn)
             live = await _live_columns(conn, table)
+            res = None
             if _can_append(live, columns):
+                # None = the append path found the geometry frame had changed
+                # and handed the table back for a rebuild (see _append).
                 res = await _append(conn, tmp, table, _source_columns(live),
                                     columns, keep)
-            else:
+            if res is None:
                 res = await _rebuild(conn, tmp, table, columns, keep)
 
         geom = res["geom"]
@@ -886,6 +1066,9 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
         return {"table": table, "rows": res["rows"], "new_rows": res["new_rows"],
                 "mode": res["mode"], "columns": len(columns),
                 "geom_rows": geom.get("rows"),
+                # Non-zero only on the one sync that lifts an ITM-era layer to
+                # WGS84 — worth seeing in the admin result, not just the log.
+                "reprojected": geom.get("reprojected"),
                 "geom_error": geom.get("error"),
                 "geom_skipped": geom.get("skipped")}
     finally:
@@ -1229,6 +1412,50 @@ async def list_tables() -> list[dict]:
     return [{"dataset_id": str(r["dataset_id"]), "table": r["table_name"],
              "version_number": r["version_number"], "rows": r["rows"],
              "synced_at": r["synced_at"]} for r in rows]
+
+
+async def geometry_coverage() -> dict:
+    """How uniform the mirrored layers actually are, right now.
+
+    "Every mapping layer behaves the same" is an invariant, and an invariant
+    nobody can measure is a wish. This is the measurement: of the mirrored
+    tables that carry geometry, how many have a queryable ``geom``, and how many
+    are still text-only — with the reason available per table in the
+    checkpoint's ``postgis_note``. A non-zero ``without_geom`` is the number of
+    layers that answer a spatial question differently from their neighbours."""
+    if not append_store.is_configured():
+        return {"skipped": "append DB not configured"}
+    pool = await append_store.get_pool()
+    try:
+        async with pool.acquire() as conn:
+            postgis = await _postgis_available(conn)
+            row = await conn.fetchrow("""
+                SELECT count(*) FILTER (WHERE has_wkt)              AS with_wkt,
+                       count(*) FILTER (WHERE has_wkt AND has_geom) AS with_geom
+                FROM (
+                    SELECT c.relname,
+                           bool_or(col.column_name = $2) AS has_wkt,
+                           bool_or(col.column_name = $3) AS has_geom
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                                       AND n.nspname = $1
+                    JOIN information_schema.columns col
+                      ON col.table_schema = $1 AND col.table_name = c.relname
+                    WHERE c.relkind = 'r'
+                    GROUP BY c.relname
+                ) t
+            """, SCHEMA, WKT_COLUMN, GEOM_COLUMN)
+    except Exception:  # noqa: BLE001 — schema not created yet
+        logger.debug("idx: geometry_coverage before first sync", exc_info=True)
+        return {"with_wkt": 0, "with_geom": 0, "without_geom": 0}
+    with_wkt, with_geom = int(row["with_wkt"] or 0), int(row["with_geom"] or 0)
+    return {
+        "postgis_installed": postgis,
+        "postgis_enabled": settings.index_mirror_postgis_enabled,
+        "with_wkt": with_wkt,
+        "with_geom": with_geom,
+        "without_geom": with_wkt - with_geom,
+    }
 
 
 async def list_deferred() -> list[dict]:
