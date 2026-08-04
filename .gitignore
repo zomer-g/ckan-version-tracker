@@ -10,7 +10,14 @@ frontend/dist/
 *.egg-info/
 dist/
 build/
-.claude/
+# Local agent state — settings, worktrees, session scratch. One exception: a
+# SKILL that documents how to work on THIS repo is part of the repo, not a
+# machine-local preference, so it is versioned like any other doc. Git cannot
+# re-include a path under an excluded directory, hence the step-by-step form.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/over-sql/
 
 # Dev-server logs and the Vite/TS incremental build cache — local artifacts,
 # regenerated on every run, never meaningful in history.
