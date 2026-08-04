@@ -98,9 +98,11 @@ async def authenticate(
     #     (see app/config.py::mcp_service_token and docs mcp-service-token).
     #   * UNSCOPED, accepted risk: this single token authenticates as the
     #     `service` principal for EVERY MCP resource — the main /mcp
-    #     (routes.py), the CBS MCP (cbs_routes.py) and the Knesset MCP
-    #     (knesset_routes.py) all call this same authenticate() and none gate
-    #     on tier. So one leaked token grants full access to all three. Per-
+    #     (routes.py), the CBS MCP (cbs_routes.py), the Knesset MCP
+    #     (knesset_routes.py), the Ocal MCP (ocal_routes.py) and the whole-site
+    #     SQL MCP (sql_routes.py) all call this same authenticate() and none
+    #     gate on tier. So one leaked token grants full access to all of them —
+    #     including free read-only SQL over every mirrored table. Per-
     #     resource scoping isn't implementable with a bare shared secret (it
     #     carries no claims); doing it properly means either issuing a signed
     #     service JWT with an `aud`/scope claim checked per resource, or minting

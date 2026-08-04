@@ -35,6 +35,7 @@ from app.mcp.config import (
     google_callback_url,
     knesset_mcp_url,
     ocal_mcp_url,
+    sql_mcp_url,
     mcp_jwt_secret,
     mcp_url,
 )
@@ -115,6 +116,19 @@ def ocal_protected_resource_metadata(request: Request) -> JSONResponse:
         "authorization_servers": [mcp_url(request)],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base_url(request)}/projects/ocal",
+        "scopes_supported": ["mcp"],
+    })
+
+
+def sql_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728 metadata for the whole-site SQL MCP. Same authorization server
+    as the main MCP — one login + one api_users invite (or the service token)
+    grants all resources."""
+    return JSONResponse({
+        "resource": sql_mcp_url(request),
+        "authorization_servers": [mcp_url(request)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{base_url(request)}/data",
         "scopes_supported": ["mcp"],
     })
 

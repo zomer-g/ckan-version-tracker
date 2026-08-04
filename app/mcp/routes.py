@@ -163,16 +163,23 @@ async def mcp_options(request: Request, rest: str = ""):
     return _preflight()
 
 
+# Every MCP resource on this app. Each dedicated server (cbs/knesset/ocal/data)
+# is a separate protected resource under the SAME authorization server, and they
+# all need the permissive cross-origin treatment — listing them by prefix keeps
+# a new resource from silently getting the restrictive global CORS policy.
+_MCP_PREFIXES = ("/mcp", "/cbs/mcp", "/knesset/mcp", "/ocal/mcp", "/data/mcp")
+
+
 def _is_mcp_path(path: str) -> bool:
-    return (
-        path == "/mcp"
-        or path.startswith("/mcp/")
-        or path == "/cbs/mcp"
-        or path.startswith("/cbs/mcp/")
-        or path.startswith("/.well-known/oauth-protected-resource/mcp")
-        or path.startswith("/.well-known/oauth-authorization-server/mcp")
-        or path.startswith("/.well-known/oauth-protected-resource/cbs/mcp")
-    )
+    if any(path == p or path.startswith(p + "/") for p in _MCP_PREFIXES):
+        return True
+    for wk in ("/.well-known/oauth-protected-resource",
+               "/.well-known/oauth-authorization-server"):
+        if path.startswith(wk):
+            rest = path[len(wk):]
+            if any(rest == p or rest.startswith(p + "/") for p in _MCP_PREFIXES):
+                return True
+    return False
 
 
 class MCPCorsMiddleware(BaseHTTPMiddleware):

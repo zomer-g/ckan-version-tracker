@@ -251,6 +251,14 @@ from app.mcp.ocal_routes import ocal_mcp_router, ocal_mcp_wellknown_router
 app.include_router(ocal_mcp_wellknown_router)
 app.include_router(ocal_mcp_router)
 
+# Dedicated whole-site SQL MCP at /data/mcp (same OAuth server + api_users gate;
+# the MCP twin of the public /data console — table catalog, DDL and free
+# read-only SELECT across every schema). Registered before the SPA fallback so
+# /data/mcp isn't swallowed by the React /data route.
+from app.mcp.sql_routes import sql_mcp_router, sql_mcp_wellknown_router
+app.include_router(sql_mcp_wellknown_router)
+app.include_router(sql_mcp_router)
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"

@@ -24,6 +24,10 @@ KNESSET_MCP_PREFIX = "/knesset/mcp"
 # Dedicated יומן לעם (Ocal) MCP — a FOURTH protected resource on the same
 # authorization server (officials' public work-calendars, migrated into OVER).
 OCAL_MCP_PREFIX = "/ocal/mcp"
+# Dedicated whole-site SQL MCP — a FIFTH protected resource on the same
+# authorization server (the MCP twin of the public /data console: the full table
+# catalog, its DDL, and free read-only SELECT across every schema).
+SQL_MCP_PREFIX = "/data/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -75,6 +79,17 @@ def ocal_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the Ocal resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/ocal/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{OCAL_MCP_PREFIX}"
+
+
+def sql_mcp_url(request: Request, path: str = "") -> str:
+    """The whole-site SQL MCP resource URL, e.g. https://www.over.org.il/data/mcp."""
+    return f"{base_url(request)}{SQL_MCP_PREFIX}{path}"
+
+
+def sql_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the SQL resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/data/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{SQL_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:

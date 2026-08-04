@@ -324,6 +324,14 @@ const MCP_SERVERS: {
     tools: ["search_datasets", "get_dataset", "query_dataset_rows", "list_tags", "list_organizations", "get_stats"],
   },
   {
+    key: "sql",
+    label: "SQL — כל מסד הנתונים של האתר",
+    path: "/data/mcp",
+    purpose:
+      "קטלוג כל הטבלאות השאילתיות באתר, מבנה הטבלאות (DDL) ושאילתות SQL חופשיות (קריאה בלבד) מעל כל הסכימות — מאגרים, כנסת, אינדקסי אוספים, מידע לעם ויומן לעם. אותו מנוע שמאחורי קונסולת /data.",
+    tools: ["list_schemas", "list_tables", "describe_schema", "run_sql", "get_table", "get_table_profile"],
+  },
+  {
     key: "cbs",
     label: "למ״ס (CBS)",
     path: "/cbs/mcp",
