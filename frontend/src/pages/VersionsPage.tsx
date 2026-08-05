@@ -386,6 +386,18 @@ export default function VersionsPage() {
               {t("versions.title")}
               {" · "}
               {versionsList.length} {t("home.versions_count")}
+              {/* When the DATA last changed, per the publisher's own timestamp
+                  on the newest version we hold. The version rows below carry it
+                  too, but a visitor asking "is this current?" should not have to
+                  scan a list — and the catalog cards that link here now say the
+                  same thing, so the answer must not change on arrival.
+                  formatHebrewDate, not the cards' fmtDateHe: it is what this
+                  page already uses for metadata_modified (row 1 of the list is
+                  this same value), and a page disagreeing with itself by a day
+                  would be worse than either choice. */}
+              {dataset.last_modified && (
+                <> · {t("tracked.last_modified")}: {formatHebrewDate(dataset.last_modified, false)}</>
+              )}
               {isAdmin && datasetTotalBytes !== null && (
                 <> · סך גודל הקבצים: {formatBytes(datasetTotalBytes)}</>
               )}
