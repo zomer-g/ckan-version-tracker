@@ -989,6 +989,51 @@ export default function DataSqlPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [runFetch, setSearchParams]);
 
+  // Clear: back to an empty console — editor, result, chart and error — and
+  // strip the query out of the URL too, so a reload or a shared link does not
+  // resurrect what was just cleared. One setSearchParams write, since two in a
+  // tick clobber each other in react-router.
+  //
+  // The cleared text is kept so it can be put back. A console is where people
+  // build a query over several minutes, and a clear button with no way back is
+  // one misclick away from destroying that — which is how a button ends up
+  // never being used.
+  const clearedRef = useRef<string | null>(null);
+  const [cleared, setCleared] = useState(false);
+  const clearedTimer = useRef<number | undefined>(undefined);
+
+  const clearConsole = useCallback(() => {
+    clearedRef.current = sqlText;
+    setSqlText("");
+    setSqlResult(null);
+    setSqlError(null);
+    setExecutedSql("");
+    placeholderRef.current = false;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("sql");
+      for (const k of CHART_PARAM_KEYS) next.delete(k);
+      return next;
+    }, { replace: true });
+    // The offer to undo is temporary on purpose: it is for the misclick, not a
+    // second clipboard.
+    setCleared(true);
+    window.clearTimeout(clearedTimer.current);
+    clearedTimer.current = window.setTimeout(() => setCleared(false), 12000);
+    sqlEditorRef.current?.focus();
+  }, [sqlText, setSearchParams]);
+
+  const undoClear = useCallback(() => {
+    if (clearedRef.current === null) return;
+    setSqlText(clearedRef.current);
+    clearedRef.current = null;
+    setCleared(false);
+    window.clearTimeout(clearedTimer.current);
+    sqlEditorRef.current?.focus();
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(clearedTimer.current), []);
+
   // Load a generated snippet (from the profile's JOIN helper) into the editor,
   // scroll up, and optionally run it.
   const useSql = useCallback((sql: string, run = false) => {
@@ -1085,6 +1130,33 @@ export default function DataSqlPage() {
             {sqlRunning ? "מריץ…" : sqlCooldown ? "רגע…" : "▶ הרץ"}
           </button>
           <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
+          {(sqlText.trim() || sqlResult || sqlError) && (
+            <button
+              type="button"
+              onClick={clearConsole}
+              title="ניקוי העורך, התוצאה והתרשים — והסרת השאילתה מכתובת העמוד"
+              style={{
+                fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
+                border: "1px solid var(--border, #d1d5db)", background: "none",
+                color: "var(--text-muted)", cursor: "pointer",
+              }}
+            >
+              ✕ נקה
+            </button>
+          )}
+          {cleared && (
+            <button
+              type="button"
+              onClick={undoClear}
+              style={{
+                fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
+                border: "1px solid var(--primary, #0f766e)", background: "none",
+                color: "var(--primary, #0f766e)", cursor: "pointer",
+              }}
+            >
+              ↩ החזר את השאילתה
+            </button>
+          )}
           {sqlResult && (
             <span className="text-sm text-muted">
               {sqlResult.row_count.toLocaleString()} שורות{sqlResult.truncated ? " (נחתך ל-1,000)" : ""}

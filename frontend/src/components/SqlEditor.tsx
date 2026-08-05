@@ -65,6 +65,9 @@ export interface SqlEditorHandle {
   // Insert a table/column name at the caret, double-quoted when needed. Used by
   // the clickable SchemaReference below.
   insertIdentifier: (name: string) => void;
+  // Put the caret back in the editor — after a console reset, the next thing
+  // the user does is type.
+  focus: () => void;
 }
 
 const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor({
@@ -111,6 +114,10 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   }, [value, onChange]);
 
   useImperativeHandle(ref, () => ({
+    focus() {
+      taRef.current?.focus();
+      setOpen(false);
+    },
     insertIdentifier(name: string) {
       const insert = quoteIdent(name);
       const ta = taRef.current;
