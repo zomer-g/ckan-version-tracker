@@ -8,6 +8,7 @@ import {
   tagsApi,
   PendingRequest,
   TrackedDataset,
+  AdminDatasetFacets,
   StorageTarget,
   CoverageReport,
   GovmapCoverageStatus,
@@ -36,7 +37,10 @@ import PageContentPanel from "../components/PageContentPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
 import OcalAdminPanel from "../components/OcalAdminPanel";
-import { sourceBadgeFor as sourceBadgeForShared } from "../utils/sourceBadge";
+import {
+  sourceBadgeFor as sourceBadgeForShared,
+  sourceBadgeForKey,
+} from "../utils/sourceBadge";
 
 // Unified storage-plan options for the admin selectors, source-aware:
 //   • NEON (queryable tabular-rows DB) and "R2 + NEON" (a per-version CSV
@@ -60,6 +64,23 @@ function storageTargetOptions(
   }
   return opts;
 }
+
+// Hebrew labels for the two storage axes as they come back from the facet
+// endpoint. Unknown values render raw rather than being dropped — a plan the
+// server knows about must stay filterable even if this map hasn't caught up.
+const STORAGE_TARGET_LABELS: Record<string, string> = {
+  local: "מקומי (לא ב-OVER)",
+  r2: "R2",
+  "r2+neon": "R2 + NEON",
+  neon: "NEON בלבד",
+  odata: "ODATA",
+  "odata+neon": "ODATA + NEON",
+};
+
+const STORAGE_MODE_LABELS: Record<string, string> = {
+  append_only: "תוספת בלבד",
+  full_snapshot: "שמירה מלאה",
+};
 
 // Small caption above each control in the redesigned dataset cards.
 const admFieldLabel = {
@@ -198,12 +219,17 @@ export default function AdminPage() {
   const [dsLoading, setDsLoading] = useState(false);
   const [dsQInput, setDsQInput] = useState("");   // what's typed
   const [dsQ, setDsQ] = useState("");             // what's submitted
-  const [dsStorage, setDsStorage] = useState("");
-  const [dsSourceType, setDsSourceType] = useState("");
+  const [dsStorage, setDsStorage] = useState("");   // storage TARGET (r2, neon, …)
+  const [dsMode, setDsMode] = useState("");         // storage MODE (append_only …)
+  const [dsSource, setDsSource] = useState("");     // upstream site key
   const [dsSourceGone, setDsSourceGone] = useState("");
   const [dsImportWarn, setDsImportWarn] = useState("");
   const [dsOffset, setDsOffset] = useState(0);
   const [dsLimit, setDsLimit] = useState(25);
+  // What the filter dropdowns may offer, straight from the catalog. Without
+  // this the source filter was four hardcoded options for ~20 real upstream
+  // sites, so most sources could not be isolated at all.
+  const [dsFacets, setDsFacets] = useState<AdminDatasetFacets | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [intervalOverrides, setIntervalOverrides] = useState<Record<string, number>>({});
@@ -280,9 +306,23 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab !== "datasets") return;
     loadDatasets();
+    loadDatasetFacets();
     if (!sizes && !sizesLoading) loadSizes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dsQ, dsStorage, dsSourceType, dsSourceGone, dsImportWarn, dsOffset, dsLimit]);
+  }, [tab, dsQ, dsStorage, dsMode, dsSource, dsSourceGone, dsImportWarn, dsOffset, dsLimit]);
+
+  // Type-to-search: the box used to require pressing "חפש" (or Enter) and gave
+  // no sign it was waiting for that, so a typed query looked like a filter that
+  // simply didn't work. Debounced, because each keystroke would otherwise be a
+  // list + facet round-trip. Submitting still applies immediately.
+  useEffect(() => {
+    if (tab !== "datasets") return;
+    const typed = dsQInput.trim();
+    if (typed === dsQ) return;
+    const id = setTimeout(() => { setDsOffset(0); setDsQ(typed); }, 400);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsQInput, tab]);
 
   const loadTags = async () => {
     try {
@@ -540,15 +580,21 @@ export default function AdminPage() {
   // One page of active datasets, honoring the current search/filters. Called by
   // the effect below on every filter or page change, and after any mutation
   // that can move a row in or out of the current page.
+  // The filter state, in the one shape both the list and the facet counts take.
+  const dsFilters = () => ({
+    q: dsQ || undefined,
+    storage: dsStorage || undefined,
+    mode: dsMode || undefined,
+    source: dsSource || undefined,
+    source_gone: dsSourceGone || undefined,
+    import_warning: dsImportWarn || undefined,
+  });
+
   const loadDatasets = async () => {
     setDsLoading(true);
     try {
       const page = await adminApi.datasetsPage({
-        q: dsQ || undefined,
-        storage: dsStorage || undefined,
-        source_type: dsSourceType || undefined,
-        source_gone: dsSourceGone || undefined,
-        import_warning: dsImportWarn || undefined,
+        ...dsFilters(),
         limit: dsLimit,
         offset: dsOffset,
       });
@@ -559,6 +605,26 @@ export default function AdminPage() {
     } finally {
       setDsLoading(false);
     }
+  };
+
+  // Option lists for the filter dropdowns. Re-pulled with the list because each
+  // facet is counted with the OTHER filters applied — the counts are a promise
+  // about what picking that option would show, not a static catalog census.
+  const loadDatasetFacets = async () => {
+    try {
+      setDsFacets(await adminApi.datasetFacets(dsFilters()));
+    } catch (e) {
+      console.error("Failed to load dataset facets", e);
+    }
+  };
+
+  const dsFiltersActive = !!(dsQ || dsStorage || dsMode || dsSource || dsSourceGone || dsImportWarn);
+
+  const clearDsFilters = () => {
+    setDsQInput(""); setDsQ("");
+    setDsStorage(""); setDsMode(""); setDsSource("");
+    setDsSourceGone(""); setDsImportWarn("");
+    setDsOffset(0);
   };
 
   const handleApprove = async (id: string) => {
@@ -1717,8 +1783,11 @@ export default function AdminPage() {
         </h2>
       </div>
 
-      {/* Search + filters. All three run in SQL (GET /api/admin/datasets), so
-          the browser only ever renders one page of cards. */}
+      {/* Search + filters. Every one of them runs in SQL (GET
+          /api/admin/datasets), so the browser only ever renders one page of
+          cards — and every dropdown's OPTIONS come from the catalog itself
+          (GET /api/admin/dataset-facets) rather than a hardcoded list that
+          drifts from reality the moment a source is added. */}
       <div className="card mb-2" style={{ padding: "0.75rem 1rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
         <form
           onSubmit={(e) => { e.preventDefault(); setDsOffset(0); setDsQ(dsQInput.trim()); }}
@@ -1731,8 +1800,7 @@ export default function AdminPage() {
             aria-label="חיפוש מאגרים"
             style={{ fontSize: "0.85rem", padding: "0.35rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", width: "22rem", maxWidth: "60vw" }}
           />
-          <button type="submit" className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.35rem 0.8rem" }}>חפש</button>
-          {dsQ && (
+          {dsQInput && (
             <button
               type="button"
               className="btn-secondary"
@@ -1744,33 +1812,65 @@ export default function AdminPage() {
             </button>
           )}
         </form>
+
+        {/* Source = the upstream SITE. This used to be four hardcoded options
+            for ~20 real sources, with every scraped site buried under one
+            "סקרייפר" entry that no further choice could narrow. */}
+        <select
+          value={dsSource}
+          onChange={(e) => { setDsOffset(0); setDsSource(e.target.value); }}
+          aria-label="סינון לפי מקור"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px", maxWidth: "14rem" }}
+        >
+          <option value="">
+            כל המקורות{dsFacets ? ` (${dsFacets.sources.length})` : ""}
+          </option>
+          {(dsFacets?.sources ?? []).map((f) => (
+            <option key={f.value} value={f.value}>
+              {sourceBadgeForKey(f.value).label} ({f.count.toLocaleString()})
+            </option>
+          ))}
+          {/* A source that vanished from the facets under the other filters
+              would otherwise silently deselect itself on the next render. */}
+          {dsSource && !(dsFacets?.sources ?? []).some((f) => f.value === dsSource) && (
+            <option value={dsSource}>{sourceBadgeForKey(dsSource).label} (0)</option>
+          )}
+        </select>
+
+        {/* Storage TARGET and storage MODE are two independent axes; the single
+            old dropdown made them mutually exclusive, so "append-only datasets
+            that live on NEON" — the actual question — could not be asked. */}
         <select
           value={dsStorage}
           onChange={(e) => { setDsOffset(0); setDsStorage(e.target.value); }}
+          aria-label="סינון לפי יעד אחסון"
+          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+        >
+          <option value="">כל יעדי האחסון</option>
+          {(dsFacets?.storage_targets ?? []).map((f) => (
+            <option key={f.value} value={f.value}>
+              {STORAGE_TARGET_LABELS[f.value] ?? f.value} ({f.count.toLocaleString()})
+            </option>
+          ))}
+          {dsStorage && !(dsFacets?.storage_targets ?? []).some((f) => f.value === dsStorage) && (
+            <option value={dsStorage}>{STORAGE_TARGET_LABELS[dsStorage] ?? dsStorage} (0)</option>
+          )}
+        </select>
+        <select
+          value={dsMode}
+          onChange={(e) => { setDsOffset(0); setDsMode(e.target.value); }}
           aria-label="סינון לפי אופן שמירה"
           style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
         >
           <option value="">כל אופני השמירה</option>
-          <option value="append_only">תוספת בלבד</option>
-          <option value="full_snapshot">שמירה מלאה</option>
-          <option value="local">מקומי</option>
-          <option value="r2">R2</option>
-          <option value="r2+neon">R2 + NEON</option>
-          <option value="neon">NEON בלבד</option>
-          <option value="odata">ODATA</option>
-          <option value="odata+neon">ODATA + NEON</option>
-        </select>
-        <select
-          value={dsSourceType}
-          onChange={(e) => { setDsOffset(0); setDsSourceType(e.target.value); }}
-          aria-label="סינון לפי סוג מקור"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
-        >
-          <option value="">כל המקורות</option>
-          <option value="ckan">data.gov.il</option>
-          <option value="scraper">סקרייפר</option>
-          <option value="govmap">GovMap</option>
-          <option value="cbs">למ"ס</option>
+          {(dsFacets?.storage_modes ?? []).map((f) => (
+            <option key={f.value} value={f.value}>
+              {STORAGE_MODE_LABELS[f.value] ?? f.value} ({f.count.toLocaleString()})
+            </option>
+          ))}
+          {dsMode && !(dsFacets?.storage_modes ?? []).some((f) => f.value === dsMode) && (
+            <option value={dsMode}>{STORAGE_MODE_LABELS[dsMode] ?? dsMode} (0)</option>
+          )}
         </select>
         <select
           value={dsSourceGone}
@@ -1780,7 +1880,9 @@ export default function AdminPage() {
           style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
         >
           <option value="">המקור: הכל</option>
-          <option value="only">⃠ רק מאגרים שהוסרו מהמקור</option>
+          <option value="only">
+            ⃠ רק מאגרים שהוסרו מהמקור{dsFacets ? ` (${dsFacets.source_gone.toLocaleString()})` : ""}
+          </option>
           <option value="exclude">רק מאגרים שהמקור שלהם קיים</option>
         </select>
         <select
@@ -1791,9 +1893,22 @@ export default function AdminPage() {
           style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
         >
           <option value="">איכות ייבוא: הכל</option>
-          <option value="only">⚠ רק חשודים לייבוא פגום</option>
+          <option value="only">
+            ⚠ רק חשודים לייבוא פגום{dsFacets ? ` (${dsFacets.import_warning.toLocaleString()})` : ""}
+          </option>
           <option value="exclude">רק ללא חשש</option>
         </select>
+        {dsFiltersActive && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={clearDsFilters}
+            style={{ fontSize: "0.8rem", padding: "0.35rem 0.7rem" }}
+            title="בטל את כל הסינונים"
+          >
+            נקה סינון
+          </button>
+        )}
         <select
           value={dsLimit}
           onChange={(e) => { setDsOffset(0); setDsLimit(Number(e.target.value)); }}
@@ -1850,7 +1965,7 @@ export default function AdminPage() {
         <div className="empty-state">
           {dsLoading
             ? "טוען…"
-            : dsQ || dsStorage || dsSourceType || dsSourceGone || dsImportWarn
+            : dsFiltersActive
               ? "אין מאגרים התואמים לחיפוש"
               : "אין מאגרים פעילים"}
         </div>

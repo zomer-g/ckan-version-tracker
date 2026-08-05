@@ -1959,6 +1959,51 @@ export interface AdminDatasetsPage {
   offset: number;
 }
 
+/** The datasets tab's filter state — the same shape drives the list and the
+ *  facet counts, so the two can never ask different questions. */
+export interface AdminDatasetFilters {
+  q?: string;
+  /** Storage TARGET ("r2", "r2+neon", "local", …). */
+  storage?: string;
+  /** Storage MODE ("append_only" | "full_snapshot") — a separate axis from
+   *  the target, so "append-only on NEON" is expressible. */
+  mode?: string;
+  /** Upstream site key ("govmap", "munidata", "mankal", … — source_key). */
+  source?: string;
+  /** "only" = just the datasets whose source the publisher removed; "exclude" = hide them. */
+  source_gone?: string;
+  /** "only" = just the datasets suspected of a faulty import; "exclude" = hide them. */
+  import_warning?: string;
+}
+
+export interface AdminDatasetFacet {
+  value: string;
+  count: number;
+}
+
+/** Option lists for the datasets tab's filters, counted against the catalog.
+ *  Each list is counted with its OWN filter lifted, so a count says what
+ *  picking that option would actually yield. */
+export interface AdminDatasetFacets {
+  total: number;
+  sources: AdminDatasetFacet[];
+  storage_targets: AdminDatasetFacet[];
+  storage_modes: AdminDatasetFacet[];
+  source_gone: number;
+  import_warning: number;
+}
+
+function adminDatasetParams(opts: AdminDatasetFilters): URLSearchParams {
+  const p = new URLSearchParams();
+  if (opts.q) p.set("q", opts.q);
+  if (opts.storage) p.set("storage", opts.storage);
+  if (opts.mode) p.set("mode", opts.mode);
+  if (opts.source) p.set("source", opts.source);
+  if (opts.source_gone) p.set("source_gone", opts.source_gone);
+  if (opts.import_warning) p.set("import_warning", opts.import_warning);
+  return p;
+}
+
 export interface OdataImport {
   resource_id: string;
   table: string;
@@ -1992,26 +2037,19 @@ export const admin = {
   // One page of active datasets for the admin "מאגרים פעילים" tab. The tab used
   // to pull the entire catalog (~1,100 rows / 1MB) from the public /datasets on
   // every admin page load; filtering + slicing now happen in SQL.
-  datasetsPage: (
-    opts: {
-      q?: string; storage?: string; source_type?: string;
-      /** "only" = just the datasets whose source the publisher removed; "exclude" = hide them. */
-      source_gone?: string;
-      /** "only" = just the datasets suspected of a faulty import; "exclude" = hide them. */
-      import_warning?: string;
-      limit?: number; offset?: number;
-    } = {},
-  ) => {
-    const p = new URLSearchParams();
-    if (opts.q) p.set("q", opts.q);
-    if (opts.storage) p.set("storage", opts.storage);
-    if (opts.source_type) p.set("source_type", opts.source_type);
-    if (opts.source_gone) p.set("source_gone", opts.source_gone);
-    if (opts.import_warning) p.set("import_warning", opts.import_warning);
+  datasetsPage: (opts: AdminDatasetFilters & { limit?: number; offset?: number } = {}) => {
+    const p = adminDatasetParams(opts);
     if (opts.limit != null) p.set("limit", String(opts.limit));
     if (opts.offset != null) p.set("offset", String(opts.offset));
     const qs = p.toString();
     return request<AdminDatasetsPage>(`/admin/datasets${qs ? `?${qs}` : ""}`);
+  },
+  // The filter dropdowns' own contents: every source / storage plan actually
+  // present in the catalog, counted. The tab used to hardcode four source
+  // options for ~20 real upstream sites, so most of them were unfilterable.
+  datasetFacets: (opts: AdminDatasetFilters = {}) => {
+    const qs = adminDatasetParams(opts).toString();
+    return request<AdminDatasetFacets>(`/admin/dataset-facets${qs ? `?${qs}` : ""}`);
   },
   // מידע לעם (odata) → queryable SQL tables (admin-curated import)
   odataImports: () =>

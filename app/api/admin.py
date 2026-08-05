@@ -1773,43 +1773,30 @@ def _storage_target_expr():
     )
 
 
-@router.get("/datasets", response_model=AdminDatasetsPage)
-@limiter.limit("60/minute")
-async def admin_datasets(
-    request: Request,
+def _admin_dataset_conds(
+    *,
     q: str | None = None,
     storage: str | None = None,
+    mode: str | None = None,
+    source: str | None = None,
     source_type: str | None = None,
     source_gone: str | None = None,
     import_warning: str | None = None,
-    limit: int = 25,
-    offset: int = 0,
-    user: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """One page of active datasets, newest-first, for the admin datasets tab.
+    skip: str | None = None,
+) -> list:
+    """WHERE clauses for the admin datasets tab — the ONE definition of what
+    each filter means, shared by the list and by the facet counts.
 
-    ``q`` matches (case-insensitively, anywhere) the dataset title, its CKAN
-    name, its organization (slug or title), any of its tags, or a storage-plan
-    keyword ("neon", "r2", "מקומי", "תוספת", …). ``storage`` filters exactly on
-    a storage target ("r2+neon") or a storage mode ("append_only").
-
-    ``source_gone`` narrows to datasets whose SOURCE the publisher has removed:
-    "only" for those alone, "exclude" to hide them. They stay `status='active'`
-    on purpose — the archive is still the point, and for a removed source it may
-    be the last public copy — so without this filter they are indistinguishable
-    from datasets that are merely between polls.
+    ``skip`` lifts a single dimension ("source", "storage", "mode",
+    "source_gone", "import_warning"). That is what makes the counts next to
+    each option honest: a facet must be counted with its OWN filter removed,
+    otherwise picking "GOVMAP" would report every other source as 0 and the
+    dropdown would collapse to whatever is already selected.
     """
-    from sqlalchemy import exists, func, or_
-    from sqlalchemy.orm import selectinload
+    from sqlalchemy import exists, or_
 
-    from app.api.datasets import build_dataset_response, latest_mappings_for
     from app.models.tag import Tag, dataset_tags
-    from app.models.user import User as UserModel
-    from app.models.version_index import VersionIndex
-
-    limit = max(1, min(int(limit or 25), 200))
-    offset = max(0, int(offset or 0))
+    from app.services.source_load import source_filter
 
     storage_expr = _storage_target_expr()
 
@@ -1820,24 +1807,40 @@ async def admin_datasets(
         # administered, and would drown the tab.
         TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
     ]
-    if source_type:
+    # `source` is the UPSTREAM SITE (govmap / munidata / mankal / …), derived
+    # from the ckan_id prefix exactly as the worker's load control derives it.
+    # `source_type` is the coarse engine kind (ckan / scraper / govmap / cbs)
+    # and is kept only so an old bookmarked URL still resolves: on its own it
+    # buries ~20 distinct sites under one "scraper" option.
+    if source and skip != "source":
+        conds.append(source_filter(source.strip()))
+    if source_type and skip != "source":
         conds.append(TrackedDataset.source_type == source_type)
-    if import_warning:
+    if import_warning and skip != "import_warning":
         w = import_warning.strip().lower()
         if w in ("only", "1", "true", "yes"):
             conds.append(TrackedDataset.import_warning.isnot(None))
         elif w in ("exclude", "0", "false", "no"):
             conds.append(TrackedDataset.import_warning.is_(None))
-    if source_gone:
+    if source_gone and skip != "source_gone":
         g = source_gone.strip().lower()
         if g in ("only", "1", "true", "yes"):
             conds.append(TrackedDataset.source_gone_at.isnot(None))
         elif g in ("exclude", "0", "false", "no"):
             conds.append(TrackedDataset.source_gone_at.is_(None))
-    if storage:
-        s = storage.strip()
+    if mode and skip != "mode":
+        conds.append(_storage_mode_expr() == mode.strip())
+    if storage and skip != "storage":
+        # "r2+neon" typed into a URL arrives as "r2 neon" — a bare "+" in a
+        # query string IS a space. No storage target contains one, so reading a
+        # space as the "+" it must have been costs nothing and stops a
+        # hand-written /admin?storage=r2+neon from silently matching zero rows.
+        s = storage.strip().replace(" ", "+")
+        # A storage MODE sent on the `storage` param (how the old single
+        # dropdown spoke) still works — modes and targets share no values.
         if s in ("append_only", "full_snapshot"):
-            conds.append(TrackedDataset.storage_mode == s)
+            if skip != "mode":
+                conds.append(_storage_mode_expr() == s)
         else:
             conds.append(storage_expr == s)
     if q and q.strip():
@@ -1873,8 +1876,72 @@ async def admin_datasets(
             if any(w in lowered for w in words)
         ]
         if modes:
-            matches.append(TrackedDataset.storage_mode.in_(modes))
+            matches.append(_storage_mode_expr().in_(modes))
         conds.append(or_(*matches))
+    return conds
+
+
+def _storage_mode_expr():
+    """``storage_mode``, with a NULL reading as the column's own default.
+
+    Rows created before the column existed can still carry NULL, and a NULL
+    silently drops out of both ``== 'full_snapshot'`` and a GROUP BY facet —
+    the dataset would be filtered into nothing and counted nowhere.
+    """
+    from sqlalchemy import func, literal
+
+    return func.coalesce(TrackedDataset.storage_mode, literal("full_snapshot"))
+
+
+@router.get("/datasets", response_model=AdminDatasetsPage)
+@limiter.limit("60/minute")
+async def admin_datasets(
+    request: Request,
+    q: str | None = None,
+    storage: str | None = None,
+    mode: str | None = None,
+    source: str | None = None,
+    source_type: str | None = None,
+    source_gone: str | None = None,
+    import_warning: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One page of active datasets, newest-first, for the admin datasets tab.
+
+    ``q`` matches (case-insensitively, anywhere) the dataset title, its CKAN
+    name, its organization (slug or title), any of its tags, or a storage-plan
+    keyword ("neon", "r2", "מקומי", "תוספת", …). ``storage`` filters exactly on
+    a storage target ("r2+neon"), ``mode`` on a storage mode ("append_only") —
+    two axes, independently combinable, because "every append-only dataset
+    living on NEON" is a real question the single old dropdown couldn't ask.
+
+    ``source`` is the upstream site (see app/services/source_load.source_key):
+    "govmap", "munidata", "mankal", … — the distinction the coarse
+    ``source_type`` throws away by calling all ~20 scraped sites "scraper".
+
+    ``source_gone`` narrows to datasets whose SOURCE the publisher has removed:
+    "only" for those alone, "exclude" to hide them. They stay `status='active'`
+    on purpose — the archive is still the point, and for a removed source it may
+    be the last public copy — so without this filter they are indistinguishable
+    from datasets that are merely between polls.
+    """
+    from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
+
+    from app.api.datasets import build_dataset_response, latest_mappings_for
+    from app.models.user import User as UserModel
+    from app.models.version_index import VersionIndex
+
+    limit = max(1, min(int(limit or 25), 200))
+    offset = max(0, int(offset or 0))
+
+    conds = _admin_dataset_conds(
+        q=q, storage=storage, mode=mode, source=source, source_type=source_type,
+        source_gone=source_gone, import_warning=import_warning,
+    )
 
     base = (
         select(TrackedDataset, UserModel, Organization)
@@ -1927,6 +1994,127 @@ async def admin_datasets(
         total=int(total),
         limit=limit,
         offset=offset,
+    )
+
+
+class AdminDatasetFacet(BaseModel):
+    value: str
+    count: int
+
+
+class AdminDatasetFacets(BaseModel):
+    """The option lists behind the datasets tab's filters, with live counts."""
+    total: int
+    sources: list[AdminDatasetFacet]
+    storage_targets: list[AdminDatasetFacet]
+    storage_modes: list[AdminDatasetFacet]
+    source_gone: int
+    import_warning: int
+
+
+@router.get("/dataset-facets", response_model=AdminDatasetFacets)
+@limiter.limit("60/minute")
+async def admin_dataset_facets(
+    request: Request,
+    q: str | None = None,
+    storage: str | None = None,
+    mode: str | None = None,
+    source: str | None = None,
+    source_type: str | None = None,
+    source_gone: str | None = None,
+    import_warning: str | None = None,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What the datasets tab is allowed to filter BY, counted against what is
+    actually in the catalog.
+
+    The tab used to offer four hardcoded source options ("ckan / scraper /
+    govmap / cbs") while the catalog holds ~20 distinct upstream sites, so the
+    16 scraped sources were unreachable: picking "סקרייפר" returned munidata,
+    idf, mankal, jda, mevaker … in one undifferentiated list, and no choice
+    narrowed it further. Every option here is derived from the rows themselves,
+    so a source added tomorrow appears without a frontend release.
+
+    Each facet is counted with ITS OWN filter lifted (see ``skip`` in
+    _admin_dataset_conds) and every other filter applied — the standard
+    faceted-search rule, which is what makes a count a promise: "12" next to
+    GOVMAP means picking GOVMAP yields 12 rows, not 12 rows before whatever
+    else is selected.
+    """
+    from sqlalchemy import func
+
+    from app.services.source_load import source_key
+
+    def _conds(skip: str | None = None):
+        return _admin_dataset_conds(
+            q=q, storage=storage, mode=mode, source=source,
+            source_type=source_type, source_gone=source_gone,
+            import_warning=import_warning, skip=skip,
+        )
+
+    async def _count(conds) -> int:
+        return int((await db.execute(
+            select(func.count()).select_from(
+                select(TrackedDataset.id)
+                .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+                .where(*conds)
+                .subquery()
+            )
+        )).scalar() or 0)
+
+    # Sources: keyed in Python, not SQL. source_key splits on "-scraper-",
+    # which needs split_part — absent from the SQLite the tests run on — and
+    # the row set here is the ~1.1k administrable datasets, two small columns.
+    src_rows = (await db.execute(
+        select(TrackedDataset.ckan_id, TrackedDataset.source_type)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+        .where(*_conds(skip="source"))
+    )).all()
+    src_counts: dict[str, int] = {}
+    for ckan_id, st in src_rows:
+        k = source_key(ckan_id, st)
+        src_counts[k] = src_counts.get(k, 0) + 1
+
+    storage_conds = _conds(skip="storage")
+    target_rows = (await db.execute(
+        select(_storage_target_expr(), func.count())
+        .select_from(TrackedDataset)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+        .where(*storage_conds)
+        .group_by(_storage_target_expr())
+    )).all()
+    mode_expr = _storage_mode_expr()
+    mode_rows = (await db.execute(
+        select(mode_expr, func.count())
+        .select_from(TrackedDataset)
+        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+        .where(*_conds(skip="mode"))
+        .group_by(mode_expr)
+    )).all()
+
+    def _facets(pairs) -> list[AdminDatasetFacet]:
+        # Biggest first: the filter is a "take me to the interesting pile"
+        # control, and alphabetical order buries govmap's 866 under avodata's 2.
+        return sorted(
+            [AdminDatasetFacet(value=str(v), count=int(c)) for v, c in pairs if v],
+            key=lambda f: (-f.count, f.value),
+        )
+
+    gone_conds = _conds(skip="source_gone")
+    warn_conds = _conds(skip="import_warning")
+
+    return AdminDatasetFacets(
+        total=await _count(_conds()),
+        sources=_facets(src_counts.items()),
+        storage_targets=_facets(target_rows),
+        storage_modes=_facets(mode_rows),
+        source_gone=await _count(
+            [*gone_conds, TrackedDataset.source_gone_at.isnot(None)]
+        ),
+        import_warning=await _count(
+            [*warn_conds, TrackedDataset.import_warning.isnot(None)]
+        ),
     )
 
 

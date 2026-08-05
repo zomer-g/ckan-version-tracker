@@ -556,3 +556,36 @@ export function sourceBadgeFor(
     sourceLinkKey: "home.source_link",
   };
 }
+
+/**
+ * The badge for a SOURCE KEY — the upstream-site id the server groups by
+ * (app/services/source_load.source_key): "govmap", "ckan", "cbs", or a
+ * scraper's ckan_id prefix ("munidata", "mankal", "idf", …).
+ *
+ * The server can enumerate the sources present in the catalog but has no
+ * business knowing their colours or Hebrew names, which live here and in the
+ * worker manifests. Feeding the key back through `sourceBadgeFor` as a
+ * synthetic ckan_id is what lets a source added tomorrow — built-in ladder
+ * entry OR runtime manifest — pick up its own chip with no code change here.
+ */
+export function sourceBadgeForKey(key: string): SourceBadge {
+  if (key === "govmap" || key === "cbs") return sourceBadgeFor(key);
+  if (key === "ckan" || key === "datagovil") return sourceBadgeFor("ckan");
+  const badge = sourceBadgeFor("scraper", null, `${key}-scraper-x`);
+  // A key we can't place — an unclassifiable row ("unknown"), or a manifest
+  // source whose registry fetch hasn't landed — falls through the ladder to
+  // the generic GOV.IL chip. In a LIST of sources that lie is worse than no
+  // chip at all: three unrelated sources would all read "GOV.IL" and look
+  // like duplicates. Wear the raw key instead, which is at least distinct.
+  if (badge.id !== key) {
+    return {
+      id: key,
+      bg: "#f1f5f9",
+      fg: "#334155",
+      label: key,
+      accent: "#94a3b8",
+      sourceLinkKey: "home.source_link",
+    };
+  }
+  return badge;
+}
