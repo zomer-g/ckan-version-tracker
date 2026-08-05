@@ -589,8 +589,10 @@ export default function AdminPage() {
         reqRow?.resource_ids && reqRow.resource_ids.length > 0
           ? reqRow.resource_ids
           : undefined;
-      // Storage destination chosen in the row (undefined → backend default,
-      // which is R2 for scraper/govmap, ODATA for ckan).
+      // Storage destination chosen in the row. Left undefined unless the admin
+      // actually changed the select, so the backend applies its own default —
+      // which is the same value the card was already displaying (GET /pending
+      // returns default_storage_target, not the raw derived plan).
       const storageTarget = storageOverrides[id];
       await adminApi.approve(id, intervalOverride, titleToSend, orgIdOverride, pickedIds, storageTarget);
       await loadAll();
@@ -1673,8 +1675,12 @@ export default function AdminPage() {
               )}
               <div className="text-sm mb-1" style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 500 }}>{t("admin.storage_target") || "יעד אחסון"}:</span>
+                {/* No local fallback below: req.storage_target IS what approve
+                    will apply if this select is never touched. A hardcoded "r2"
+                    there was a fourth opinion on the plan — and the one the
+                    admin actually read. */}
                 <select
-                  value={storageOverrides[req.id] ?? req.storage_target ?? "r2"}
+                  value={storageOverrides[req.id] ?? req.storage_target}
                   onChange={(e) => setStorageOverrides((prev) => ({
                     ...prev, [req.id]: e.target.value as StorageTarget,
                   }))}

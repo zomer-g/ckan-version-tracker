@@ -126,3 +126,45 @@ def test_a_scraper_is_still_files_only(stack):
     r = client.post(f"/api/admin/approve/{_SCRAPER}")
     assert r.status_code == 200, r.text
     assert _plan(Session, _SCRAPER) == "r2"
+
+
+# ── The card must show the plan approve will actually apply ────────────────
+#
+# The defaulting above was right from the day it shipped; what was wrong was the
+# sentence the admin read before pressing the button. GET /pending derived the
+# plan from the global file backend and answered "r2" for a request approve
+# would turn into "r2+neon", so the approval card described a dataset that would
+# never appear in the SQL console — and, because the select is only submitted
+# when it CHANGES, an admin who "confirmed" the displayed R2 by selecting it
+# made that description come true.
+
+
+def _pending(client):
+    r = client.get("/api/admin/pending")
+    assert r.status_code == 200, r.text
+    return {row["id"]: row for row in r.json()}
+
+
+@pytest.mark.parametrize("ds_id", [_CKAN, _SCRAPER])
+def test_the_pending_card_shows_what_approve_will_do(stack, ds_id):
+    """The one invariant: for every source type, what the card says and what
+    approve does are the same value — not merely both 'reasonable'."""
+    client, Session = stack
+    shown = _pending(client)[str(ds_id)]["storage_target"]
+
+    r = client.post(f"/api/admin/approve/{ds_id}")
+    assert r.status_code == 200, r.text
+
+    assert shown == _plan(Session, ds_id)
+
+
+def test_a_ckan_card_offers_the_dual_write_not_r2(stack):
+    """Pinned separately from the agreement test above: the two could agree on
+    the WRONG value and this is the value that matters."""
+    client, Session = stack
+    assert _pending(client)[str(_CKAN)]["storage_target"] == "r2+neon"
+
+
+def test_a_scraper_card_still_says_files_only(stack):
+    client, Session = stack
+    assert _pending(client)[str(_SCRAPER)]["storage_target"] == "r2"

@@ -25,6 +25,7 @@ from app.api.datasets import (
     DatasetResponse,
     apply_storage_target,
     dataset_is_neon_eligible,
+    default_storage_target,
     storage_target_of,
 )
 from app.services.odata_client import odata_client
@@ -73,10 +74,12 @@ class PendingRequest(BaseModel):
     source_type: str = "ckan"
     source_url: str | None = None
     storage_mode: str = "full_snapshot"
-    # Suggested unified storage plan for the approval UI, derived from the
-    # request's scraper_config (falls back to the global STORAGE_BACKEND
-    # default, R2). The admin can override it on approve.
-    storage_target: str = "r2"
+    # The unified storage plan this request will actually be approved with —
+    # `default_storage_target`, the same call approve makes. It is what the
+    # approval card displays, so it must not be a second opinion: it used to be
+    # the raw derived plan, which read "r2" for a data.gov.il request that
+    # approve would (correctly) turn into "r2+neon". The admin can override it.
+    storage_target: str = "r2+neon"
     # Whether the NEON (tabular-rows) plans are offered for this source (CKAN
     # only). The approval UI greys NEON out when false.
     neon_eligible: bool = True
@@ -117,7 +120,9 @@ async def list_pending(
             source_type=ds.source_type or "ckan",
             source_url=ds.source_url,
             storage_mode=ds.storage_mode or "full_snapshot",
-            storage_target=storage_target_of(ds.scraper_config),
+            storage_target=default_storage_target(
+                ds.source_type, ds.scraper_config, dataset_is_neon_eligible(ds)
+            ),
             neon_eligible=dataset_is_neon_eligible(ds),
             resource_ids=ds.resource_ids,
             resource_id=ds.resource_id,
@@ -181,33 +186,15 @@ async def approve_request(
         ds.organization = org_row.name
 
     # Resolve + pin the unified storage plan. The admin's explicit choice wins
-    # for every source type; with no choice we default scraper/govmap to R2 and
-    # CKAN to its derived target (the global STORAGE_BACKEND default, R2). NEON
-    # plans are valid only for CKAN tabular sources.
+    # for every source type; with no choice the shared default applies — the
+    # same one GET /pending showed on the card, so approving without touching
+    # the select does what the card said it would.
     if body and body.storage_target:
         target = body.storage_target
-    elif ds.source_type in ("scraper", "govmap"):
-        # Default scraper/govmap to R2 files — BUT preserve a dual-write
-        # opt-in the source's config branch set at creation (e.g.
-        # registries.health.gov.il sets archive_neon=True for R2+NEON), so
-        # approval doesn't silently drop the NEON half of the plan.
-        if (ds.scraper_config or {}).get("archive_neon") and dataset_is_neon_eligible(ds):
-            target = "r2+neon"
-        else:
-            target = "r2"
-    elif dataset_is_neon_eligible(ds):
-        # data.gov.il is TABULAR — the whole point of tracking it is that the
-        # rows end up queryable on /data. Defaulting it to the global file
-        # backend (R2) gave a dataset whose files were archived but which never
-        # appeared in the SQL console, and nothing in the approve flow said so.
-        # Dual-write instead: the file snapshot still lands in R2, and the rows
-        # stream to the NEON append DB. Resources with no datastore behind them
-        # (XLS/PDF attachments) simply keep the file half — the poll job gates
-        # the NEON path on `datastore_active`.
-        derived = storage_target_of(ds.scraper_config)
-        target = "r2+neon" if derived == "r2" else derived
     else:
-        target = storage_target_of(ds.scraper_config)
+        target = default_storage_target(
+            ds.source_type, ds.scraper_config, dataset_is_neon_eligible(ds)
+        )
     if "neon" in target and not dataset_is_neon_eligible(ds):
         raise HTTPException(
             status_code=400,

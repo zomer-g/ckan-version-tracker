@@ -1683,7 +1683,10 @@ export interface PendingRequest {
   requester_name: string;
   source_type: string;
   source_url: string | null;
-  storage_target?: StorageTarget;
+  // Always sent (GET /pending sets it on every row): the plan approve will
+  // apply if the admin does not override it. Required, so the approval select
+  // cannot fall back to a guess of its own.
+  storage_target: StorageTarget;
   neon_eligible?: boolean;
   resource_ids?: string[] | null;
   resource_id?: string | null;

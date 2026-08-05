@@ -240,6 +240,45 @@ def dataset_is_neon_eligible(ds) -> bool:
     return kind in TABULAR_SCRAPER_KINDS or kind in source_registry.neon_kinds()
 
 
+def default_storage_target(
+    source_type: str | None,
+    scraper_config: dict | None,
+    neon_eligible: bool,
+) -> str:
+    """The storage plan a dataset gets when nobody picks one.
+
+    This is the ONE rule. It had been written out three times — the request
+    creation path, the approve handler, and the pending list that shows the
+    admin what approve is about to do — and the third copy was never updated
+    when the other two started defaulting data.gov.il to the dual write. So the
+    approval card said "R2 — סנפשוט מלא" for a request that would in fact be
+    approved as R2+NEON. Worse than a wrong caption: the select is only sent
+    when the admin CHANGES it, so an admin who opened the dropdown and picked
+    the plan it already displayed turned a correct default into an explicit
+    "r2" the backend then honoured, and the rows never reached the SQL console.
+
+    Three copies of a rule is how that happens, so callers share this one.
+    """
+    sc = scraper_config or {}
+    if (source_type or "ckan") in ("scraper", "govmap"):
+        # Files (PDF/ZIP/catalog index) unless the source's own config branch
+        # opted into the dual write at creation — e.g. registries.health.gov.il
+        # sets archive_neon. Approval must not silently drop that half.
+        if sc.get("archive_neon") and neon_eligible:
+            return "r2+neon"
+        return "r2"
+    derived = storage_target_of(scraper_config)
+    # data.gov.il is TABULAR — the reason to track it is that the rows become
+    # queryable on /data. A plan derived from the global file backend gives
+    # archived files and nothing in SQL, so the bare file plan is upgraded to
+    # the dual write. Resources with no datastore behind them (XLS/PDF) simply
+    # keep the file half; the poll job gates the NEON path on datastore_active.
+    # An explicit local/odata/neon plan is a real choice and is left alone.
+    if neon_eligible and derived == "r2":
+        return "r2+neon"
+    return derived
+
+
 # Cadence used when neither the client nor a source manifest specifies one.
 DEFAULT_POLL_INTERVAL = 604800  # weekly
 
@@ -1280,9 +1319,12 @@ async def track_dataset(
 
     # data.gov.il is tabular: default a new CKAN dataset to the dual write so
     # its rows reach the NEON append DB and the SQL console, not just its files.
-    # Same default as admin.approve_request — the two creation paths must agree.
-    if storage_target_of(ckan_scraper_config) == "r2":
-        ckan_scraper_config = apply_storage_target(ckan_scraper_config, "r2+neon")
+    # Shares default_storage_target with approve and the pending list, so the
+    # plan a requester's dataset gets is the plan the admin was shown.
+    ckan_scraper_config = apply_storage_target(
+        ckan_scraper_config,
+        default_storage_target("ckan", ckan_scraper_config, True),
+    )
 
     ds = TrackedDataset(
         ckan_id=body.ckan_id,
