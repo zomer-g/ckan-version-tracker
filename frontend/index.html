@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The /data console keeps the running query in the page URL. Without this,
+         the browser sends that full URL as the Referer of every API call, and a
+         WAF that inspects Referer for SQL keywords blocks the console outright.
+         Belt to the response header's braces (app/main.py), because the static
+         build is also served from caches and previews. -->
+    <meta name="referrer" content="strict-origin" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

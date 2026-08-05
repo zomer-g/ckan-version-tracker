@@ -171,6 +171,27 @@ app.add_middleware(
 from app.mcp.routes import MCPCorsMiddleware
 app.add_middleware(MCPCorsMiddleware)
 
+
+# Referrer policy. The /data console keeps the current query in the page URL so
+# it can be shared and reloaded — which means the browser's default policy
+# (strict-origin-when-cross-origin sends the FULL url on same-origin requests)
+# puts raw SQL into the Referer header of every subsequent API call. Cloudflare's
+# managed SQL-injection rules inspect that header, see SELECT/FROM/UNION in
+# cleartext, and answer 403 — so opening a shared query link left the console
+# unable to run ANYTHING in that tab until the URL changed, and no amount of
+# waiting helped because the block is deterministic, not rate-based. Verified
+# against production: same request, plain Referer 200, Referer carrying the
+# query 403.
+#
+# `strict-origin` sends only "https://www.over.org.il/" — enough for any
+# same-origin check, nothing for a WAF to match on, and it repairs every link
+# already shared, since the policy applies when the browser SENDS.
+@app.middleware("http")
+async def _referrer_policy(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Referrer-Policy", "strict-origin")
+    return response
+
 # API routes
 app.include_router(auth_router)
 app.include_router(oauth_router)
