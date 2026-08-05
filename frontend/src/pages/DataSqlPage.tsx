@@ -5,6 +5,8 @@ import {
   CatalogTable,
   CatalogTableDetail,
   KnessetDbSqlResult,
+  utf8ToBase64,
+  base64ToUtf8,
 } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
@@ -252,6 +254,31 @@ function rowTooltip(t: CatalogTable): string {
   if (hasGeometry(t)) parts.push("🗺 נתמך ב-PostGIS — ניתן לתשאל מרחבית (עמודת geom, EPSG:4326)");
   for (const f of FIELD_FACETS) if (flagTrue(t, f.key)) parts.push(f.title);
   return parts.join("\n");
+}
+
+// The query travels in the URL so a console session can be reloaded and shared,
+// and it travels BASE64 (`?q=`) because the plain form (`?sql=`) put SELECT /
+// FROM / UNION into the Referer header of every request the page made next —
+// which Cloudflare's SQL-injection rules read and answered 403, leaving anyone
+// who opened a shared link unable to run anything at all. Referrer-Policy fixes
+// that at the browser (see app/main.py); encoding fixes it at the source, and a
+// tab that never got the new policy is exactly the case that needs the second
+// one. `sql=` is still READ, so every link already shared keeps working.
+function sqlFromUrl(params: URLSearchParams): string {
+  const q = params.get("q");
+  if (q) {
+    try { return base64ToUtf8(q); } catch { /* mangled link — fall through */ }
+  }
+  return params.get("sql") || "";
+}
+
+// Keeps the two forms from ever coexisting: whoever writes the query writes `q`
+// and clears the legacy key, so a stale `sql=` cannot linger in the URL and keep
+// poisoning the Referer.
+function putSqlInUrl(next: URLSearchParams, sql: string): void {
+  next.delete("sql");
+  next.delete("q");
+  if (sql.length <= 1800) next.set("q", utf8ToBase64(sql));
 }
 
 const PLACEHOLDER_SQL =
@@ -750,7 +777,7 @@ export default function DataSqlPage() {
   // Explicit per-source expand/collapse overrides (see isOpen below).
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
-  const [sqlText, setSqlText] = useState(() => searchParams.get("sql") || PLACEHOLDER_SQL);
+  const [sqlText, setSqlText] = useState(() => sqlFromUrl(searchParams) || PLACEHOLDER_SQL);
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
@@ -767,7 +794,7 @@ export default function DataSqlPage() {
   // drives the "which tables feed this query" indication.
   const [executedSql, setExecutedSql] = useState("");
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
-  const placeholderRef = useRef(!searchParams.get("sql"));
+  const placeholderRef = useRef(!sqlFromUrl(searchParams));
 
   useEffect(() => {
     dataCatalog
@@ -962,13 +989,11 @@ export default function DataSqlPage() {
   const runSql = useCallback((sqlArg?: string) => {
     const sql = (typeof sqlArg === "string" ? sqlArg : sqlText).trim();
     if (!sql) return;
-    if (sql.length <= 1800) {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.set("sql", sql);
-        return next;
-      }, { replace: true });
-    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      putSqlInUrl(next, sql);
+      return next;
+    }, { replace: true });
     runFetch(sql);
   }, [sqlText, setSearchParams, runFetch]);
 
@@ -982,7 +1007,7 @@ export default function DataSqlPage() {
       const next = new URLSearchParams(prev);
       for (const k of CHART_PARAM_KEYS) next.delete(k);
       for (const [k, v] of Object.entries(chartParams)) next.set(k, v);
-      if (sql.length <= 1800) next.set("sql", sql);
+      putSqlInUrl(next, sql);
       return next;
     }, { replace: true });
     runFetch(sql);
@@ -1012,6 +1037,7 @@ export default function DataSqlPage() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("sql");
+      next.delete("q");
       for (const k of CHART_PARAM_KEYS) next.delete(k);
       return next;
     }, { replace: true });
