@@ -239,6 +239,12 @@ class Settings(BaseSettings):
     # (retry-deferred?max_csv_mb=… then sync?max_csv_mb=…) rather than in one
     # step: 54 datasets are deferred, 9GB of CSV, the largest 3.5GB.
     index_mirror_max_csv_mb: int = 25
+    # The ceiling for REFRESHING a table the console already serves. The cap
+    # above decides what is worth starting to mirror; this one decides how big a
+    # dataset may grow before we would rather freeze it than risk the dyno. In
+    # between, a live table keeps up with its source — a query that silently
+    # answers about last quarter is a worse outcome than a deferral nobody sees.
+    index_mirror_refresh_max_csv_mb: int = 120
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.

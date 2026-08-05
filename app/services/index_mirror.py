@@ -1298,6 +1298,21 @@ async def pending(db, *, limit: int | None = None,
     return out[:limit] if limit else out
 
 
+async def _table_is_live(table: str) -> bool:
+    """Whether ``idx.<table>`` exists right now — i.e. whether the /data console
+    is already serving this dataset. Never raises: an unknown answer is treated
+    as 'not live', which keeps the cap in force."""
+    try:
+        pool = await append_store.get_pool()
+        async with pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = $1 AND c.relname = $2", SCHEMA, table))
+    except Exception:  # noqa: BLE001
+        logger.debug("idx: liveness check failed for %s", table, exc_info=True)
+        return False
+
+
 async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
     """Mirror one pending dataset. Never raises.
 
@@ -1318,6 +1333,20 @@ async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
             size = await storage_client.object_size(item["r2_value"])
         except Exception:  # noqa: BLE001 — unknown size ⇒ treat as too big
             size = None
+        # The cap gates what we START mirroring, not what we KEEP current. Once a
+        # table is in the catalog people query it, cite it and build on it, and
+        # letting it silently freeze at an old version is a worse failure than
+        # the memory pressure the cap was written to avoid — the query still
+        # answers, just not about today. So an already-served table refreshes
+        # past the cap, up to a hard ceiling that still protects the dyno.
+        if (size is not None and size > max_bytes
+                and size <= settings.index_mirror_refresh_max_csv_mb * 2**20
+                and await _table_is_live(item["table"])):
+            logger.info("idx: %s is %.1f MB (> %.0f MB cap) but already mirrored "
+                        "— refreshing anyway", item.get("title"), size / 2**20,
+                        max_bytes / 2**20)
+            max_bytes = None
+    if max_bytes:
         if size is None or size > max_bytes:
             reason = (f"csv {size/2**20:.1f} MB > {max_bytes/2**20:.0f} MB cap"
                       if size else "csv size unknown")
