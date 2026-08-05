@@ -68,19 +68,54 @@ def key_of(value: str) -> str:
 
 _SAFE_KEY_PART = re.compile(r"[^A-Za-z0-9._\-]+")
 
+# Suffixes worth preserving, longest first so ".geojson.gz" wins over ".gz".
+# Only these: an arbitrary "last dot onwards" rule would treat a dotted layer
+# name ("מגרשים 1.2") as having an extension and truncate it.
+_KNOWN_SUFFIXES = (
+    ".geojson.gz", ".csv.gz", ".json.gz",
+    ".gpkg", ".parquet", ".geojson", ".json", ".csv", ".zip", ".gz",
+    ".pdf", ".xlsx", ".xls", ".shp", ".kml", ".kmz", ".txt", ".xml",
+)
+
+
+def _split_suffix(name: str) -> tuple[str, str]:
+    """``("מעג\"ל מבנים", ".gpkg")`` — stem and a KNOWN extension, or ``(name, "")``."""
+    lowered = name.lower()
+    for suf in _KNOWN_SUFFIXES:
+        if lowered.endswith(suf) and len(name) > len(suf):
+            return name[: -len(suf)], name[-len(suf):]
+    return name, ""
+
 
 def _safe_filename(filename: str) -> str:
-    """Make a filename safe to embed in an object key.
+    """Make a filename safe to embed in an object key, WITHOUT eating its
+    extension.
 
     Object keys are also URL path segments served from the public domain, so
-    we keep ASCII-clean characters and collapse everything else to ``_``.
-    Hebrew/space-laden names round-trip poorly through CDNs and command-line
-    download tools, so a stable ASCII key is preferable; the human-readable
-    name lives in the DB/UI, not the storage key.
+    non-ASCII collapses to ``_``; the human-readable name lives in the DB/UI,
+    not the storage key. But sanitizing the whole string and then stripping
+    ``._-`` off the ends destroyed the extension of every layer whose title is
+    entirely Hebrew: "מעג\"ל מבנים.gpkg" collapsed to "_.gpkg", the strip ate
+    the underscore AND the dot separating it, and the stored key ended up
+    "…_gpkg". A title carrying any ASCII at all — "חופות עצים 2024" — kept its
+    dot and came out "2024.gpkg", which is why the behaviour looked random.
+
+    It matters most where it hurts most: heavy GovMap layers publish the
+    GeoPackage and the GeoParquet INSTEAD of a CSV, so those extensionless
+    files are the data, and a reader has to guess the format and rename before
+    any GIS tool will open them.
+
+    Splitting the extension off FIRST means the stem can collapse to nothing
+    without taking the extension with it.
     """
     name = (filename or "file").strip().replace("/", "_").replace("\\", "_")
-    name = _SAFE_KEY_PART.sub("_", name).strip("._-")
-    return name or "file"
+    stem, suffix = _split_suffix(name)
+    stem = _SAFE_KEY_PART.sub("_", stem).strip("._-")
+    if not stem:
+        # Every character was unsafe. Better a generic stem with a correct
+        # extension than an extension masquerading as the whole filename.
+        stem = "file"
+    return stem + suffix if suffix else (stem or "file")
 
 
 def build_key(dataset_id: str, version_number: int, filename: str) -> str:
@@ -119,10 +154,14 @@ def _filename_from_value(value: str, fallback: str) -> str:
         tail = key_of(value).rsplit("/", 1)[-1]
         m = _KEY_PREFIX_RE.match(tail)
         name = (m.group(1) if m else tail) or fallback
-        # The CSV is stored under the key tail "csv" (no extension) — give
-        # it one so it opens correctly in Drive.
-        if name.lower() == "csv":
-            name = "data.csv"
+        # Keys written before _safe_filename stopped eating extensions have an
+        # extension AS their whole name — a layer titled entirely in Hebrew
+        # collapsed to "_.gpkg" and then to "gpkg". Those keys are permanent
+        # (resource_mappings and every existing link point at them), so repair
+        # the NAME here, where we hand a filename to Drive and to the UI.
+        bare = name.lower().lstrip(".")
+        if bare and "." not in bare and f".{bare}" in _KNOWN_SUFFIXES:
+            name = f"data.{bare}"
         return name
     return fallback
 
