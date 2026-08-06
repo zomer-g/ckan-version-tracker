@@ -133,7 +133,15 @@
     "source_link_cbs": "מקור ב-cbs.gov.il",
     "source_link_jda": "מקור ב-jda.gov.il (הרשות לפיתוח ירושלים)",
     "source_link_eden": "מקור ב-jeden.co.il (חברת עדן)",
-    "source_link_knesset": "מקור בפיד ה-ODATA של הכנסת (knesset.gov.il)"
+    "source_link_knesset": "מקור בפיד ה-ODATA של הכנסת (knesset.gov.il)",
+    "picker_loading": "קורא את רשימת הקבצים בעמוד…",
+    "picker_failed": "לא ניתן לקרוא את רשימת הקבצים:",
+    "picker_failed_hint": "אפשר לשלוח את הבקשה גם בלי לבחור — במקרה כזה ייובאו כל הקבצים שהעמוד עצמו מציג.",
+    "picker_retry": "נסה שוב",
+    "picker_empty": "לא נמצאו קבצים בעמוד הזה.",
+    "picker_not_on_page": "קבצים נוספים בתיקייה (לא מוצגים בעמוד)",
+    "picker_no_table": "לא טבלה",
+    "picker_tables_hint": "כל קובץ נשמר כפי שהוא, וכל גיליון נתונים בו נטען גם כטבלה לשאילתות SQL."
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",

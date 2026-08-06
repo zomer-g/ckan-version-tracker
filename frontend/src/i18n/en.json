@@ -133,7 +133,15 @@
     "source_link_cbs": "Source on cbs.gov.il",
     "source_link_jda": "Source on jda.gov.il (Jerusalem Development Authority)",
     "source_link_eden": "Source on jeden.co.il (Eden Company)",
-    "source_link_knesset": "Source on the Knesset ODATA feed (knesset.gov.il)"
+    "source_link_knesset": "Source on the Knesset ODATA feed (knesset.gov.il)",
+    "picker_loading": "Reading the page's file list…",
+    "picker_failed": "Could not read the file list:",
+    "picker_failed_hint": "You can submit without choosing — everything the page itself lists will be imported.",
+    "picker_retry": "Try again",
+    "picker_empty": "No files found on this page.",
+    "picker_not_on_page": "Other files in the folder (not shown on the page)",
+    "picker_no_table": "not a table",
+    "picker_tables_hint": "Each file is archived as-is, and every data sheet in it is also loaded as a SQL-queryable table."
   },
   "search": {
     "title": "Search Government Datasets",

@@ -330,6 +330,36 @@ def _apply_registry_match(match, sc: dict) -> dict:
     return merged
 
 
+# A page's file list, not a file system: bounded, and each entry a plain path.
+MAX_SELECTED_FILES = 1000
+MAX_SELECTED_FILE_LENGTH = 500
+
+
+def _apply_file_selection(match, sc: dict, selected: list[str] | None) -> dict:
+    """Write the picker's choice into ``scraper_config["files"]``.
+
+    Only for a source whose manifest declares ``file_picker`` — otherwise the
+    key is dropped rather than stored, because a config key no engine reads is
+    a promise the dataset does not keep. Ignored when empty: every engine here
+    treats "no selection" as "whatever the page itself lists", which is the
+    right default and not the same as "nothing".
+    """
+    if not selected or not getattr(match.manifest, "file_picker", False):
+        return sc
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in selected[:MAX_SELECTED_FILES]:
+        if not isinstance(raw, str):
+            continue
+        path = raw.strip()[:MAX_SELECTED_FILE_LENGTH]
+        if path and path not in seen:
+            seen.add(path)
+            cleaned.append(path)
+    if cleaned:
+        sc["files"] = cleaned
+    return sc
+
+
 def _normalize_resource_ids(ids: list[str] | None) -> list[str] | None:
     """De-dupe + strip, reject obviously-bad inputs. None passes through
     so callers can distinguish "no change" from "track all"."""
@@ -1826,6 +1856,14 @@ class TrackingRequest(BaseModel):
     # cadence, own versions page, own NEON table) instead of one dataset that
     # mirrors them all together.
     split_resources: bool = False
+    # Registered sources with a file picker (manifest.file_picker + a previewer
+    # in app/api/sources.PREVIEWERS): the server-relative paths ticked in the
+    # form, stored as scraper_config["files"]. Deliberately NOT a free-form
+    # scraper_config — this endpoint is anonymous, and one narrow list of
+    # strings is a very different thing to accept from the public than an
+    # arbitrary config dict the worker will act on. Empty/absent means "what
+    # the page itself lists", which is each engine's own default.
+    selected_files: list[str] | None = None
     # Null → the manifest's cadence for a registered source, else weekly.
     preferred_interval: int | None = None
     requester_name: str = ""
@@ -2208,6 +2246,7 @@ async def submit_tracking_request(
             # broke when it didn't.
             if registry_match.manifest.neon_eligible:
                 sc.setdefault("archive_neon", True)
+            sc = _apply_file_selection(registry_match, sc, body.selected_files)
         ds = TrackedDataset(
             ckan_id=f"{slug_prefix}-{unique_slug}",
             ckan_name=unique_slug,

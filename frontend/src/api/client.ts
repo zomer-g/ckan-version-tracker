@@ -761,6 +761,26 @@ export interface RegistrySourceValidation extends GovIlValidation {
   source_link_he?: string;
   source_link_en?: string;
   default_poll_interval?: number;
+  // The pasted page publishes several files and this build knows how to list
+  // them, so the tracking form should offer them to pick from.
+  file_picker?: boolean;
+}
+
+// One file on a previewed page. `path` is the server-relative path and is what
+// travels back as `selected_files`; `on_page` is false for a file that shares
+// the page's folder without being part of the page's own table.
+export interface SourceFile {
+  path: string;
+  name: string;
+  title: string;
+  chapter: string;
+  subject: string;
+  ext: string;
+  size: number;
+  modified: string;
+  url: string;
+  on_page: boolean;
+  tabular: boolean;
 }
 
 export const sources = {
@@ -769,6 +789,13 @@ export const sources = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+  // Live and read-only: asks the source site what the pasted page publishes.
+  // No dataset exists yet and no file is downloaded.
+  preview: (url: string) =>
+    request<{ title: string; url: string; source_id: string; files: SourceFile[] }>(
+      "/sources/preview",
+      { method: "POST", body: JSON.stringify({ url }) },
+    ),
   registry: () =>
     request<{ sources: RegistrySourceView[] }>("/sources/registry"),
 };
@@ -1647,6 +1674,9 @@ export const publicApi = {
     requester_name?: string;
     requester_notes?: string;
     requester_contact?: string;
+    // Registered sources with a file picker: the server-relative paths ticked
+    // in the form. Omitted means "whatever the page itself lists".
+    selected_files?: string[];
   }) =>
     request<{ message: string }>("/datasets/requests", {
       method: "POST",

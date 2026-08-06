@@ -1,6 +1,7 @@
-import { useState, FormEvent, useMemo, useEffect } from "react";
+import { useState, FormEvent, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { publicApi } from "../api/client";
+import { publicApi, SourceFile } from "../api/client";
+import SourceFilePicker from "./SourceFilePicker";
 
 export interface ResourceOption {
   id: string;
@@ -25,6 +26,10 @@ interface RequestFormProps {
   // their manifest, since the site's own publishing rhythm is known there and
   // not to the person pasting the URL.
   defaultInterval?: number;
+  // The pasted page publishes several files and the server can list them
+  // (validate's `file_picker`). Renders the scraper-mode file picker, whose
+  // ticks travel as `selected_files`. Nothing else about the form changes.
+  filePicker?: boolean;
 }
 
 const INTERVAL_OPTIONS = [
@@ -51,6 +56,7 @@ export default function RequestForm({
   sourceType = "ckan",
   sourceUrl,
   defaultInterval,
+  filePicker = false,
 }: RequestFormProps) {
   const { t, i18n } = useTranslation();
   // The single editable text field now NAMES THE DATASET (sent as `title`
@@ -119,6 +125,17 @@ export default function RequestForm({
   const showResourcePicker =
     sourceType === "ckan" && Array.isArray(availableResources) && availableResources.length > 0;
 
+  // Scraper-mode file picker (a page publishing many files — see
+  // SourceFilePicker). Kept separate from the CKAN resource picker above: that
+  // one picks CKAN resource IDS out of a package the browser already has,
+  // this one picks FILE PATHS out of a page the server has to go and read.
+  const showFilePicker = sourceType === "scraper" && filePicker && !!sourceUrl;
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [pageFileCount, setPageFileCount] = useState<number | null>(null);
+  const onFilesLoaded = useCallback((files: SourceFile[]) => {
+    setPageFileCount(files.length);
+  }, []);
+
   const formId = sourceType === "scraper" ? (sourceUrl || "scraper") : (ckanId || "form");
 
   const toggleResource = (rid: string) => {
@@ -137,11 +154,21 @@ export default function RequestForm({
     try {
       const trimmedName = datasetName.trim();
       if (sourceType === "scraper" && sourceUrl) {
+        // A page with files to pick and nothing picked would silently fall
+        // back to "everything the page lists" — which is a reasonable default
+        // but not what someone who just unticked everything meant.
+        if (showFilePicker && pageFileCount !== null && pageFileCount > 0
+            && selectedFiles.size === 0) {
+          setError(t("home.request_pick_files"));
+          setSubmitting(false);
+          return;
+        }
         await publicApi.requestScraper({
           source_url: sourceUrl,
           title: trimmedName || datasetTitle,
           preferred_interval: interval,
           requester_notes: notes || undefined,
+          selected_files: selectedFiles.size > 0 ? Array.from(selectedFiles) : undefined,
         });
       } else {
         const ids = Array.from(selectedResources);
@@ -269,6 +296,14 @@ export default function RequestForm({
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {showFilePicker && (
+          <SourceFilePicker
+            sourceUrl={sourceUrl!}
+            selected={selectedFiles}
+            onChange={setSelectedFiles}
+            onLoaded={onFilesLoaded}
+          />
+        )}
         {showResourcePicker && (
           <div
             style={{

@@ -80,6 +80,7 @@ export default function RegistrySourceCard({
                 sourceType="scraper"
                 sourceUrl={result.url}
                 defaultInterval={result.default_poll_interval}
+                filePicker={result.file_picker}
               />
             ) : (
               <button

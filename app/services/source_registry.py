@@ -165,6 +165,15 @@ class SourceManifest(BaseModel):
     neon_eligible: bool = False
     # Display hint: the source produces geographic layers.
     spatial: bool = False
+    # The source publishes pages holding many files, only some of which the
+    # person tracking one wants mirrored. When true the tracking form asks
+    # POST /api/sources/preview what is on the pasted page, shows the list, and
+    # writes the ticked paths into scraper_config["files"]. A source that says
+    # nothing here tracks whatever its engine decides, as every source did
+    # before. Only a source with a previewer registered in app/api/sources.py
+    # can honour it — reading a page is site-specific work, and the flag alone
+    # does not teach OVER how to do it.
+    file_picker: bool = False
     # The scraper_config every dataset of this source starts with. Travels
     # verbatim to the worker via /api/worker/poll.
     default_config: dict[str, Any] = Field(default_factory=dict)
@@ -506,4 +515,5 @@ def display_view(man: SourceManifest) -> dict[str, Any]:
         "default_poll_interval": man.default_poll_interval,
         "neon_eligible": man.neon_eligible,
         "spatial": man.spatial,
+        "file_picker": man.file_picker,
     }

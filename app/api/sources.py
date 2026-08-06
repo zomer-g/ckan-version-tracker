@@ -1,17 +1,18 @@
 """Public endpoints for declaratively-registered sources.
 
 The fifteen built-in sources each have their own ``/api/<source>/validate``.
-Sources registered by the worker have no code here, so these two endpoints
-serve all of them:
+Sources registered by the worker have no code here, so these endpoints serve
+all of them:
 
   POST /api/sources/validate  — classify a pasted URL against every manifest
+  POST /api/sources/preview   — list the files on a pasted page, for the picker
   GET  /api/sources/registry  — badge/label metadata for the frontend
 
 See app/services/source_registry.py for the manifest contract.
 """
 import logging
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,28 @@ from app.services import source_registry
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
+
+# Sources whose pages hold many files and can be previewed before tracking, so
+# the person choosing can see what they are choosing from.
+#
+# A manifest declaring ``file_picker`` is a REQUEST for this; the entry here is
+# what makes it possible, because reading a page's file table is site-specific
+# work that no manifest can express. A manifest that asks for a picker with no
+# previewer registered simply gets none — the dataset is created tracking
+# whatever its engine defaults to, which is the pre-picker behaviour and never
+# an error.
+#
+# Each value is an async callable ``(url) -> {"title", "url", "files": [...]}``
+# raising an exception whose message is safe to show. Keep the row shape in
+# step with the worker's engine for that source, or the picker will offer files
+# the scrape then ignores.
+def _cbs_pub_previewer():
+    from app.services.cbs_pub_preview import preview
+
+    return preview
+
+
+PREVIEWERS = {"cbs_pub": _cbs_pub_previewer}
 
 
 class ValidateRequest(BaseModel):
@@ -54,6 +77,11 @@ class ValidateResponse(BaseModel):
     # brings its feed. Surfaced so the form can say so before the user submits:
     # one paste creating two datasets is a surprise worth spending a line on.
     companions: list[dict] | None = None
+    # True when the tracking form should call POST /preview and offer the page's
+    # files to tick. Both halves have to be true — the manifest asking for a
+    # picker and this OVER build knowing how to read that source's pages — so
+    # the frontend is told the answer rather than deriving it from either.
+    file_picker: bool = False
 
 
 @router.post("/validate", response_model=ValidateResponse)
@@ -117,7 +145,48 @@ async def validate_source_url(
             # than a template rendered hopefully.
             if (companion := await source_registry.classify_url(db, companion_url))
         ] or None,
+        file_picker=bool(display.get("file_picker")) and match.source_id in PREVIEWERS,
     )
+
+
+class PreviewRequest(BaseModel):
+    url: str
+
+
+@router.post("/preview")
+# Tighter than /validate: this one leaves the building. Every call is a handful
+# of requests to the source site, made on behalf of an anonymous visitor.
+@limiter.limit("10/minute")
+async def preview_source_url(
+    request: Request,
+    body: PreviewRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """List the files a pasted page publishes, so they can be picked.
+
+    Read-only and live: nothing is stored, no dataset exists yet, and no file
+    is downloaded. Returns ``{"title", "url", "source_id", "files": [...]}``.
+    A file with ``on_page: false`` sits in the same folder but is not part of
+    this page's own table — shown, and left unticked, rather than hidden.
+    """
+    url = (body.url or "").strip()
+    match = await source_registry.classify_url(db, url)
+    if not match:
+        raise HTTPException(status_code=400, detail="URL does not match any registered source.")
+    factory = PREVIEWERS.get(match.source_id)
+    if not factory or not match.manifest.file_picker:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source '{match.source_id}' does not publish a file list to pick from.",
+        )
+    try:
+        result = await factory()(url)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("source preview failed for %s: %s", url, exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {**result, "source_id": match.source_id}
 
 
 @router.get("/registry")
