@@ -184,11 +184,15 @@ export default function OrganizationDetailPage() {
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
                 </h3>
-                {/* Every dataset on this page belongs to `org`, so the org
-                    slug (org.name) is the right "organization" hint for the
-                    IDF-vs-gov.il split. The inner dataset shape doesn't carry
-                    it, so we read it off the page-level org instead. */}
-                <SourceChip sourceType={d.source_type} organization={org.name} />
+                {/* ckan_id (prefix, stamped at create time) is the signal that
+                    separates the scraper sources; org.name is only the fallback
+                    hint — every dataset on this page belongs to `org`, and the
+                    inner dataset shape doesn't carry its own org slug. */}
+                <SourceChip
+                  sourceType={d.source_type}
+                  organization={org.name}
+                  ckanId={d.ckan_id}
+                />
               </div>
               {/* Two different questions, so both are shown: last_modified is
                   when the DATA last changed at the source, last_polled_at is

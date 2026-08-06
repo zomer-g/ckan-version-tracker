@@ -112,6 +112,10 @@ export interface TagDataset {
   id: string;
   title: string;
   ckan_name: string;
+  // Needed for the source chip — sourceBadgeFor keys on the ckan_id prefix,
+  // which is the only signal that separates the scraper sources from each
+  // other (organization drifts, and several share one ministry).
+  ckan_id: string | null;
   organization: string | null;
   organization_id: string | null;
   organization_title: string | null;
@@ -540,6 +544,7 @@ export const govmap = {
 export interface ResolveMatch {
   id: string;
   title: string;
+  ckan_id?: string | null;
   organization?: string | null;
   source_type?: string | null;
   source_url?: string | null;
@@ -2297,6 +2302,8 @@ export interface OrganizationDetail extends Organization {
     id: string;
     title: string;
     ckan_name: string;
+    // See TagDataset.ckan_id — the source chip's only reliable signal.
+    ckan_id: string | null;
     source_type: string;
     version_count: number;
     last_polled_at: string | null;

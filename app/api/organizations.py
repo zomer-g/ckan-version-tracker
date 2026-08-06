@@ -49,6 +49,10 @@ class DatasetMini(BaseModel):
     id: str
     title: str
     ckan_name: str
+    # Same reason as TagDatasetMini: the client derives the source chip from
+    # the never-changing ckan_id prefix. The org slug alone can't distinguish
+    # two scraper sources that belong to the same ministry.
+    ckan_id: str | None = None
     source_type: str
     version_count: int
     last_polled_at: str | None
@@ -255,6 +259,7 @@ async def get_organization(
                 id=str(ds.id),
                 title=ds.title,
                 ckan_name=ds.ckan_name,
+                ckan_id=ds.ckan_id,
                 source_type=ds.source_type or "ckan",
                 version_count=version_counts.get(ds.id, 0),
                 last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,

@@ -44,6 +44,12 @@ class TagDatasetMini(BaseModel):
     id: str
     title: str
     ckan_name: str
+    # The source badge is derived client-side from the ckan_id PREFIX
+    # ("mankal-scraper-", "registries-scraper-", …), which is stamped at create
+    # time and never drifts. Without it every scraper dataset on the tag page
+    # fell through to the generic GOV.IL chip — `organization` alone can't tell
+    # the sources apart (see frontend/src/utils/sourceBadge.ts).
+    ckan_id: str | None = None
     organization: str | None = None
     organization_id: str | None = None
     organization_title: str | None = None
@@ -136,6 +142,7 @@ async def get_tag(tag_id: str, request: Request, db: AsyncSession = Depends(get_
             id=str(ds.id),
             title=ds.title,
             ckan_name=ds.ckan_name,
+            ckan_id=ds.ckan_id,
             organization=ds.organization,
             organization_id=str(ds.organization_id) if ds.organization_id else None,
             organization_title=org.title if org else None,

@@ -110,7 +110,14 @@ export default function TagDetailPage() {
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
                 </h3>
-                <SourceChip sourceType={d.source_type} organization={d.organization} />
+                {/* ckanId is not optional decoration: its prefix is what tells
+                    the scraper sources apart. Omitting it collapsed every
+                    non-CKAN dataset on this page into one "GOV.IL" chip. */}
+                <SourceChip
+                  sourceType={d.source_type}
+                  organization={d.organization}
+                  ckanId={d.ckan_id}
+                />
               </div>
               {d.organization_title && (
                 <div className="text-sm text-muted" style={{ marginBottom: "0.25rem" }}>

@@ -50,6 +50,9 @@ def _serialize(row, match: str) -> dict:
     return {
         "id": str(row.id),
         "title": row.title,
+        # Carried so the caller can render the right source chip: it keys on
+        # the ckan_id prefix, which (unlike `organization`) never drifts.
+        "ckan_id": row.ckan_id,
         "organization": row.organization,
         "source_type": row.source_type,
         "source_url": row.source_url,
@@ -131,6 +134,7 @@ async def find_datasets_for_url(
             select(
                 TrackedDataset.id,
                 TrackedDataset.title,
+                TrackedDataset.ckan_id,
                 TrackedDataset.organization,
                 TrackedDataset.source_type,
                 TrackedDataset.source_url,

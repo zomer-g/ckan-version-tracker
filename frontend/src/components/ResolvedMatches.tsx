@@ -53,6 +53,7 @@ export default function ResolvedMatches({
                 <SourceChip
                   sourceType={m.source_type || undefined}
                   organization={m.organization || undefined}
+                  ckanId={m.ckan_id || undefined}
                 />
                 <span className="badge badge-info">
                   {m.version_count} {t("home.versions_count")}

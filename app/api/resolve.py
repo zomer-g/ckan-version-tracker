@@ -32,6 +32,7 @@ direct_router = APIRouter(tags=["resolve"])
 class ResolveMatch(BaseModel):
     id: str
     title: str
+    ckan_id: str | None = None
     organization: str | None = None
     source_type: str | None = None
     source_url: str | None = None
