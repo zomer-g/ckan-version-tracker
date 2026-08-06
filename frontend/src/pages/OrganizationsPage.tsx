@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, Organization } from "../api/client";
+import CatalogTabs from "../components/CatalogTabs";
 
 export default function OrganizationsPage() {
   const { t } = useTranslation();
@@ -28,6 +29,7 @@ export default function OrganizationsPage() {
 
   return (
     <div className="container mt-3">
+      <CatalogTabs active="organizations" />
       <div className="page-header">
         <h1>{t("organizations.title", "ארגונים")}</h1>
         <p className="text-muted text-sm">

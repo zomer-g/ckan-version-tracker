@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { publicApi, TrackedDataset } from "../api/client";
 import { sourceBadgeFor, type SourceBadge } from "../utils/sourceBadge";
+import CatalogTabs from "../components/CatalogTabs";
 
 interface SourceGroup {
   badge: SourceBadge;
@@ -45,6 +46,7 @@ export default function SourcesPage() {
 
   return (
     <div className="container mt-3">
+      <CatalogTabs active="sources" />
       <div className="page-header">
         <h1>{t("sources.title", "מקורות")}</h1>
         <p className="text-muted text-sm">

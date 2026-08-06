@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
+import CatalogTabs from "../components/CatalogTabs";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
@@ -872,6 +873,9 @@ export default function HomePage() {
       </section>
 
       <div className="container mt-3" role="main">
+        {/* The catalog's other entry points, one click from the search box. */}
+        <CatalogTabs active="search" />
+
         {/* Search Results */}
         {error && <div role="alert" className="badge badge-danger mb-2" style={{ display: "block", textAlign: "center" }}>{error}</div>}
 

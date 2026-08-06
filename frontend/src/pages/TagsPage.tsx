@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { tagsApi, admin as adminApi, type TagWithCount } from "../api/client";
+import CatalogTabs from "../components/CatalogTabs";
 import { useAuth } from "../auth/AuthContext";
 
 export default function TagsPage() {
@@ -14,7 +15,16 @@ export default function TagsPage() {
   useEffect(() => {
     tagsApi
       .list()
-      .then(setTags)
+      // Busiest tags first — the API returns them alphabetically, which buried
+      // the tags that actually carry datasets under one-off committee names.
+      .then((rows) =>
+        setTags(
+          [...rows].sort(
+            (a, b) =>
+              b.dataset_count - a.dataset_count || a.name.localeCompare(b.name, "he")
+          )
+        )
+      )
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -43,6 +53,7 @@ export default function TagsPage() {
 
   return (
     <div className="container mt-3">
+      <CatalogTabs active="tags" />
       <div className="page-header">
         <h1>{t("tags.page_title", "תגיות")}</h1>
         <p className="text-muted text-sm">

@@ -109,6 +109,17 @@ export default function Navbar() {
   // Two-level structure: a few flat entry points + grouped dropdowns.
   const navEntries: NavEntry[] = [
     { to: "/", label: t("nav.search") },
+    // The catalog sits right next to search on purpose: both browse the same
+    // corpus, so they belong side by side rather than at opposite ends.
+    {
+      key: "catalog",
+      label: t("nav.catalog", "קטלוג"),
+      children: [
+        { to: "/organizations", label: t("nav.organizations", "ארגונים") },
+        { to: "/tags", label: t("nav.tags", "תגיות") },
+        { to: "/sources", label: t("nav.sources", "מקורות") },
+      ],
+    },
     { to: "/data", label: t("nav.data_sql", "SQL") },
     {
       key: "projects",
@@ -119,15 +130,6 @@ export default function Navbar() {
         { to: "/projects/odata", label: t("nav.odata", "מידע לעם") },
         { to: "/projects/ocal", label: t("nav.ocal", "יומן לעם") },
         { to: "/projects/ocoi", label: t("nav.ocoi", "ניגוד עניינים לעם") },
-      ],
-    },
-    {
-      key: "catalog",
-      label: t("nav.catalog", "קטלוג"),
-      children: [
-        { to: "/organizations", label: t("nav.organizations", "ארגונים") },
-        { to: "/tags", label: t("nav.tags", "תגיות") },
-        { to: "/sources", label: t("nav.sources", "מקורות") },
       ],
     },
     {
