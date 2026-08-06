@@ -362,7 +362,14 @@ _PLACEHOLDER_RE = re.compile(r"\{(\w+)(?:\|(\w+))?\}")
 # two identities and two datasets for one corpus. Telegram usernames are the
 # worked case: t.me serves any casing and echoes back whichever was asked for,
 # so nothing downstream can canonicalise it either.
-_MODIFIERS = {"lower": str.lower, "upper": str.upper}
+#
+# ``unquote`` is the same problem one level down. match_manifests tries the URL
+# raw AND percent-decoded and takes whichever matches first, so a group over a
+# Hebrew path segment captures "%D7%94%D7%A8..." from a browser copy-paste and
+# "הרש..." from the same link typed out — two spellings of one page, and
+# therefore two identities, unless the group is folded back to one. Idempotent:
+# a value with no percent-escapes passes through unchanged.
+_MODIFIERS = {"lower": str.lower, "upper": str.upper, "unquote": unquote}
 
 
 def _render(template: str, groups: dict[str, str]) -> str:

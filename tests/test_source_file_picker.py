@@ -164,6 +164,51 @@ def test_a_failing_preview_reports_the_sites_own_message(monkeypatch):
     assert "לא נמצא עמוד פרסום" in resp.json()["detail"]
 
 
+# --- identity: one dataset per page, not per source --------------------------
+
+PAGED = _manifest(
+    id="toypaged",
+    url_patterns=[{
+        "regex": r"^https?://toy\.example\.org/(?P<section>[^/]+)/(?P<slug>[^/?#]+)\.aspx$",
+        "page_type": "toypaged_page",
+        "config": {"page": "{section}/{slug|unquote}"},
+    }],
+)
+
+
+def _identity(url: str):
+    return sr.identity_of(sr.match_manifests(url, [sr.validate_manifest(PAGED)]))
+
+
+def test_a_page_in_the_config_is_what_makes_it_its_own_dataset():
+    """identity_of is (source, page_type, config). A source whose every URL
+    yields the same config makes every page of the site ONE dataset — the
+    second page pasted resolves to the first one's versions page. cbs_pub
+    shipped that way and every CBS publication collapsed into one."""
+    a = _identity("https://toy.example.org/a/one.aspx")
+    b = _identity("https://toy.example.org/a/two.aspx")
+    c = _identity("https://toy.example.org/b/one.aspx")
+    assert len({a, b, c}) == 3
+
+
+def test_the_unquote_modifier_folds_the_two_spellings_of_a_hebrew_page():
+    """match_manifests tries the URL raw AND decoded and takes the first that
+    matches, so a Hebrew slug is captured encoded from a browser copy-paste and
+    decoded from the same link typed out. Without the fold that is two
+    identities, and the second paste opens a duplicate dataset."""
+    encoded = "https://toy.example.org/a/%D7%94%D7%A8%D7%A9%D7%95%D7%99%D7%95%D7%AA.aspx"
+    decoded = "https://toy.example.org/a/הרשויות.aspx"
+    assert _identity(encoded) == _identity(decoded)
+    assert "%D7" not in _identity(encoded)[2]
+
+
+def test_an_unknown_modifier_stays_visible_rather_than_silently_not_folding():
+    """A config that quietly stopped normalising would surface only as
+    duplicate datasets, much later."""
+    from app.services.source_registry import _render
+    assert _render("{slug|bogus}", {"slug": "x"}) == "{slug|bogus}"
+
+
 # --- storing the selection --------------------------------------------------
 
 
