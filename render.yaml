@@ -35,6 +35,14 @@ services:
       # See app/services/auto_discovery.py.
       - key: AUTO_DISCOVER_ENABLED
         value: "true"
+      # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
+      # headful browser and get past the Reblaze wall this server cannot. Was
+      # off while no worker could claim the `ckan_blocked_files` kind — queuing
+      # a task nothing executes fails it, and a failed task is no longer active,
+      # so the next poll would queue another one for ever. govil-scraper ships
+      # the engine now. See app/worker/poll_job._queue_blocked_files_task.
+      - key: CKAN_BLOCKED_FILES_ENABLED
+        value: "true"
       - key: ODATA_URL
         value: "https://www.odata.org.il"
       - key: ODATA_API_KEY
