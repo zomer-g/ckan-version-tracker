@@ -491,10 +491,16 @@ async def _poll_dataset(
             # a worker a structured work-list (id, name, format, url) instead of
             # a Hebrew sentence to parse. See app/services/blocked_resources.py.
             blocked_entries = blocked_resources.describe(resources, blocked_ids)
+            # Detection has no memory, so without this a file the worker already
+            # rescued would be reported as missing again on the very next poll.
+            # The stamp survives only while the package's revision has not moved.
+            blocked_entries = blocked_resources.carry_fetch_state(
+                blocked_entries, blocked_resources.stored(ds), modified=new_modified)
             blocked_resources.remember(ds, blocked_entries)
             pending_note = blocked_resources.note_for(blocked_entries)
-            # …and hand the ones this process cannot reach to a worker that can.
-            await _queue_blocked_files_task(ds, blocked_entries)
+            # …and hand the ones still missing to a worker that can reach them.
+            await _queue_blocked_files_task(
+                ds, blocked_resources.pending(blocked_entries))
 
             is_first_version = latest_version is None
 

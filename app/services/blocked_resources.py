@@ -61,15 +61,86 @@ def describe(resources: list[dict], blocked_ids) -> list[dict]:
     ]
 
 
+def pending(entries: list[dict] | None) -> list[dict]:
+    """The blocked resources that still have no archive.
+
+    A file the worker fetched stays BLOCKED — data.gov.il goes on refusing this
+    server, and the next poll will detect it again, correctly. What changes is
+    that it is no longer MISSING. Reporting "waiting to be fetched" over a
+    dataset that is fully archived would be false in the direction that matters,
+    so the notice is driven by this rather than by the raw list.
+    """
+    return [e for e in (entries or []) if not e.get("fetched_at")]
+
+
 def note_for(entries: list[dict] | None) -> str | None:
-    """The standing user-facing indication, or None when nothing is blocked."""
-    if not entries:
+    """The standing user-facing indication, or None when nothing is missing."""
+    missing = pending(entries)
+    if not missing:
         return None
-    listed = ", ".join(f"{e.get('name')} ({e.get('format')})" for e in entries)
+    listed = ", ".join(f"{e.get('name')} ({e.get('format')})" for e in missing)
     return (
         "ℹ ממתין לגירוד בדפדפן — "
-        f"{len(entries)} קבצים חסומים להורדה שרתית ב-data.gov.il: {listed}"
+        f"{len(missing)} קבצים חסומים להורדה שרתית ב-data.gov.il: {listed}"
     )
+
+
+def carry_fetch_state(entries: list[dict], previous: list[dict] | None,
+                      *, modified: str | None) -> list[dict]:
+    """Re-attach what a previous poll knew about which files have been fetched.
+
+    Detection rebuilds the entries from the source every time and has no memory,
+    so without this each poll would forget that a file was already archived and
+    the notice would come straight back on a dataset that is complete.
+
+    The stamp only survives while the SOURCE has not moved: it records the
+    package's ``metadata_modified`` at fetch time, and a package that has been
+    revised may well be offering a different file under the same resource id.
+    Then the entry is pending again and the worker is asked for it again —
+    which is the correct answer, and the reason this keys on the revision rather
+    than on a bare "done" flag.
+    """
+    was = {e.get("id"): e for e in (previous or []) if e.get("fetched_at")}
+    out = []
+    for entry in entries:
+        old = was.get(entry.get("id"))
+        if old and old.get("fetched_modified") == modified:
+            entry = {**entry,
+                     "fetched_at": old["fetched_at"],
+                     "fetched_modified": old.get("fetched_modified"),
+                     "fetched_version": old.get("fetched_version")}
+        out.append(entry)
+    return out
+
+
+def mark_fetched(ds, resource_ids, *, modified: str | None,
+                 version: int | None = None, now: str | None = None) -> bool:
+    """Record that a worker delivered these resources. Returns True if changed.
+
+    Called when a ``ckan_blocked_files`` run pushes its version. Only the
+    resources it actually delivered are stamped — a run that failed on one file
+    leaves that one pending, so a partial rescue reads as partial.
+    """
+    import datetime as _dt
+
+    ids = set(resource_ids or ())
+    if not ids:
+        return False
+    entries = stored(ds)
+    if not entries:
+        return False
+    stamp = now or _dt.datetime.now(_dt.timezone.utc).isoformat()
+    changed = False
+    out = []
+    for entry in entries:
+        if entry.get("id") in ids and entry.get("fetched_modified") != modified:
+            entry = {**entry, "fetched_at": stamp, "fetched_modified": modified,
+                     "fetched_version": version}
+            changed = True
+        out.append(entry)
+    if changed:
+        ds.scraper_config = {**(ds.scraper_config or {}), CONFIG_KEY: out}
+    return changed
 
 
 def stored(ds) -> list[dict]:

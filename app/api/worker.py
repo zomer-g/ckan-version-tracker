@@ -26,7 +26,8 @@ from app.models.source_registry import SourceRegistry
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
-from app.services import append_store, sampling_runs, source_registry
+from app.services import (append_store, blocked_resources, sampling_runs,
+                          source_registry)
 from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.source_load import saturated_sources, source_filter
 from app.services.worker_fleet import touch_worker
@@ -1922,6 +1923,23 @@ async def push_version(
     ds.last_polled_at = datetime.now(timezone.utc)
     ds.last_modified = body.metadata_modified
     ds.last_error = "; ".join(push_errors)[:2000] if push_errors else None
+
+    # A worker just delivered files this server is refused. Record WHICH ones,
+    # so the standing "waiting to be fetched" notice stops being said over a
+    # dataset that is now archived. The resources stay blocked — data.gov.il
+    # goes on refusing us and the next poll will detect them again, correctly —
+    # they simply stop being missing. Only what the run actually delivered is
+    # stamped, so a partial rescue reads as partial.
+    _delivered = [
+        r.get("resource_id") or r.get("id")
+        for r in ((body.scrape_metadata or {}).get("blocked_files", {})
+                  .get("resources") or [])
+        if r.get("status") in ("features", "raw_only")
+    ]
+    if _delivered:
+        blocked_resources.mark_fetched(
+            ds, [r for r in _delivered if r],
+            modified=body.metadata_modified, version=next_version)
     # A version landed, so the source is demonstrably there — clear any
     # "removed at the publisher" mark. Layer ids get renumbered and pages come
     # back; the badge must not outlive the outage that produced it.

@@ -122,3 +122,72 @@ def test_a_corrupt_stored_value_reads_as_never_checked():
     ds = _DS({br.CONFIG_KEY: "not a list"})
     assert br.assessed(ds) is False
     assert br.stored(ds) == []
+
+
+# ---------------------------------------------------------------------------
+# blocked is not the same as missing
+#
+# A worker CAN reach these files; this server cannot. Once one has been
+# delivered the resource stays blocked — data.gov.il goes on refusing us, and
+# the next poll detects it again, correctly — but it is no longer missing.
+# Saying "waiting to be fetched" over a fully archived dataset would be false
+# in the direction that actually misleads.
+# ---------------------------------------------------------------------------
+
+MOD = "2026-08-07T09:00:00"
+
+
+def test_a_fetched_resource_stops_being_reported():
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a", "c"}))
+    assert "2 קבצים" in br.note_for(br.stored(ds))
+
+    br.mark_fetched(ds, ["a", "c"], modified=MOD, version=1)
+    assert br.note_for(br.stored(ds)) is None
+    assert br.pending(br.stored(ds)) == []
+    # …but still recorded as blocked, because it still is.
+    assert len(br.stored(ds)) == 2
+
+
+def test_a_partial_rescue_reads_as_partial():
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a", "c"}))
+    br.mark_fetched(ds, ["a"], modified=MOD, version=1)
+    still = br.pending(br.stored(ds))
+    assert [e["id"] for e in still] == ["c"]
+    assert "1 קבצים" in br.note_for(br.stored(ds))
+
+
+def test_the_next_poll_does_not_forget_what_was_fetched():
+    """Detection rebuilds the entries from the source and has no memory. Without
+    carry_fetch_state the notice returns on a dataset that is complete."""
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a"}))
+    br.mark_fetched(ds, ["a"], modified=MOD, version=1)
+
+    fresh = br.describe(RESOURCES, {"a"})            # a later poll, no memory
+    assert br.note_for(fresh) is not None            # …would report it again
+    carried = br.carry_fetch_state(fresh, br.stored(ds), modified=MOD)
+    assert br.note_for(carried) is None
+
+
+def test_a_revised_package_makes_the_file_pending_again():
+    """The stamp records the revision it was fetched at. A package that moved
+    may be offering a different file under the same resource id, so the rescue
+    is asked for again — which is why this keys on the revision and not on a
+    bare done-flag."""
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a"}))
+    br.mark_fetched(ds, ["a"], modified=MOD, version=1)
+
+    carried = br.carry_fetch_state(
+        br.describe(RESOURCES, {"a"}), br.stored(ds),
+        modified="2026-09-01T00:00:00")           # the source moved
+    assert br.pending(carried), "a revised package must be re-fetched"
+
+
+def test_marking_an_unknown_resource_changes_nothing():
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a"}))
+    assert br.mark_fetched(ds, ["zzz"], modified=MOD) is False
+    assert br.mark_fetched(ds, [], modified=MOD) is False
