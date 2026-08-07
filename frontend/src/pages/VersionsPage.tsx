@@ -29,6 +29,23 @@ import ErrorBoundary from "../components/ErrorBoundary";
 
 const ODATA_BASE = "https://www.odata.org.il";
 
+// What a partial version READ. A version's change_summary carries the mode's
+// KEY and no label, so unlike the admin panel — which is handed
+// sampling_runs.MODE_LABELS_HE with the options — this page has to hold its
+// own copy. Worded generically where the server's wording is per-source
+// ("תיק בודד" is a building file; this page also serves plans and layers).
+//
+// A mode with no entry — one the server grows and this build has not learned —
+// still gets the badge, under a generic label: that the version is part of the
+// corpus is the load-bearing half, and which part is the detail.
+const RUN_MODE_LABELS_HE: Record<string, string> = {
+  all: "כל הישויות במאגר",
+  open: "רק ישויות שטרם נסגרו",
+  new: "רק ישויות חדשות באתר",
+  status: "לפי סטטוס",
+  item: "ישות בודדת",
+};
+
 // Israeli date format DD.MM.YYYY (optionally with HH:MM). `toLocaleString()`
 // renders the browser locale (e.g. US "6/21/2026, 8:12 PM"), which the team
 // flagged as wrong — Israel uses day-first dotted dates.
@@ -690,6 +707,29 @@ export default function VersionsPage() {
                     )}
                   </div>
                 </div>
+
+                {/* A version that read PART of the corpus on purpose. Without
+                    this the page renders a targeted re-sample and a full pass
+                    identically — nothing here distinguished them at all, not
+                    even by size, since a scraper version's row count was never
+                    shown. So it carries the count too: the מבא"ת register
+                    publishes 11,047 rows after 36,784 every week and is
+                    entirely healthy, and a reader who finds that number
+                    elsewhere (the API, the archive page) needs this line to be
+                    the thing that already explained it. */}
+                {summary?.partial_run && (
+                  <div className="flex mt-1" style={{ gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                    <span className="badge badge-info" title="הגרסה הזו דגמה חלק מהמאגר במכוון — היא אינה מעידה על צמצום שלו">
+                      דגימה חלקית
+                    </span>
+                    <span className="text-sm text-muted">
+                      {(summary.run_mode && RUN_MODE_LABELS_HE[summary.run_mode])
+                        || "חלק מהמאגר"}
+                      {summary.total_rows != null &&
+                        ` · ${summary.total_rows.toLocaleString()} ${t("versions.rows")}`}
+                    </span>
+                  </div>
+                )}
 
                 {summary && summary.type === "large_dataset" ? (
                   <div className="flex mt-1" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
