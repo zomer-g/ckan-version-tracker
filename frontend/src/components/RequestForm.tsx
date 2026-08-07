@@ -132,9 +132,21 @@ export default function RequestForm({
   const showFilePicker = sourceType === "scraper" && filePicker && !!sourceUrl;
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [pageFileCount, setPageFileCount] = useState<number | null>(null);
+  // path → absolute URL, so a split submit can send URLs (which the registry
+  // classifies on its own) while the ticks stay keyed by path.
+  const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const onFilesLoaded = useCallback((files: SourceFile[]) => {
     setPageFileCount(files.length);
+    setFileUrls(Object.fromEntries(files.map((f) => [f.path, f.url])));
   }, []);
+
+  // A page of files is a folder of unrelated tables, so one dataset per file is
+  // the default here — the same reasoning as splitting a CKAN package, and the
+  // only shape in which a big publication fits into SQL at all.
+  const [splitFiles, setSplitFiles] = useState(true);
+  const [fileResults, setFileResults] = useState<
+    Array<{ url: string; status: string; name?: string }> | null
+  >(null);
 
   const formId = sourceType === "scraper" ? (sourceUrl || "scraper") : (ckanId || "form");
 
@@ -163,13 +175,23 @@ export default function RequestForm({
           setSubmitting(false);
           return;
         }
-        await publicApi.requestScraper({
+        const picked = Array.from(selectedFiles);
+        const res = await publicApi.requestScraper({
           source_url: sourceUrl,
           title: trimmedName || datasetTitle,
           preferred_interval: interval,
           requester_notes: notes || undefined,
-          selected_files: selectedFiles.size > 0 ? Array.from(selectedFiles) : undefined,
+          // Splitting sends URLs, because each one becomes a dataset the
+          // registry has to classify by itself; otherwise paths, which the
+          // page-level engine matches against its own listing.
+          selected_files: picked.length
+            ? (showFilePicker && splitFiles
+                ? picked.map((p) => fileUrls[p]).filter(Boolean)
+                : picked)
+            : undefined,
+          split_files: showFilePicker && splitFiles ? true : undefined,
         });
+        if (res?.results) setFileResults(res.results);
       } else {
         const ids = Array.from(selectedResources);
         if (showResourcePicker && ids.length === 0) {
@@ -227,12 +249,23 @@ export default function RequestForm({
         aria-live="polite"
       >
         <p style={{ color: "#166534", fontWeight: 500, margin: 0 }}>
-          {splitResults
-            ? t("home.request_split_success", {
-                n: splitResults.filter((r) => r.status === "pending").length,
+          {fileResults
+            ? t("home.split_files_success", {
+                n: fileResults.filter((r) => r.status === "pending").length,
               })
-            : t("home.request_success")}
+            : splitResults
+              ? t("home.request_split_success", {
+                  n: splitResults.filter((r) => r.status === "pending").length,
+                })
+              : t("home.request_success")}
         </p>
+        {fileResults && fileResults.some((r) => r.status !== "pending") && (
+          <p className="text-sm" style={{ color: "#166534", margin: "0.5rem 0 0 0" }}>
+            {t("home.request_split_skipped", {
+              n: fileResults.filter((r) => r.status !== "pending").length,
+            })}
+          </p>
+        )}
         {splitResults && splitResults.some((r) => r.status === "duplicate") && (
           <p className="text-sm" style={{ color: "#166534", margin: "0.5rem 0 0 0" }}>
             {t("home.request_split_skipped", {
@@ -297,12 +330,38 @@ export default function RequestForm({
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {showFilePicker && (
-          <SourceFilePicker
-            sourceUrl={sourceUrl!}
-            selected={selectedFiles}
-            onChange={setSelectedFiles}
-            onLoaded={onFilesLoaded}
-          />
+          <>
+            <SourceFilePicker
+              sourceUrl={sourceUrl!}
+              selected={selectedFiles}
+              onChange={setSelectedFiles}
+              onLoaded={onFilesLoaded}
+            />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.4rem",
+                fontSize: "0.85rem",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={splitFiles}
+                onChange={(e) => setSplitFiles(e.target.checked)}
+                style={{ marginTop: "0.2rem" }}
+              />
+              <span>
+                <span style={{ fontWeight: 600 }}>{t("home.split_files_label")}</span>
+                <span className="text-muted" style={{ display: "block" }}>
+                  {splitFiles
+                    ? t("home.split_files_hint", { n: selectedFiles.size })
+                    : t("home.split_files_off_hint")}
+                </span>
+              </span>
+            </label>
+          </>
         )}
         {showResourcePicker && (
           <div

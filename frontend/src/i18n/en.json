@@ -141,7 +141,11 @@
     "picker_empty": "No files found on this page.",
     "picker_not_on_page": "Other files in the folder (not shown on the page)",
     "picker_no_table": "not a table",
-    "picker_tables_hint": "Each file is archived as-is, and every data sheet in it is also loaded as a SQL-queryable table."
+    "picker_tables_hint": "Each file is archived as-is, and every data sheet in it is also loaded as a SQL-queryable table.",
+    "split_files_label": "A separate dataset per file",
+    "split_files_hint": "The {{n}} picked files each open as their own dataset, with their own version history and SQL table.",
+    "split_files_off_hint": "All picked files go into one dataset for the page, each sheet a table inside it.",
+    "split_files_success": "{{n}} requests submitted — one dataset per file. We'll review them shortly."
   },
   "search": {
     "title": "Search Government Datasets",

@@ -1864,6 +1864,14 @@ class TrackingRequest(BaseModel):
     # arbitrary config dict the worker will act on. Empty/absent means "what
     # the page itself lists", which is each engine's own default.
     selected_files: list[str] | None = None
+    # Give every ticked file its OWN dataset — own version history, own SQL
+    # table — instead of one dataset holding them all as resources. The twin of
+    # ``split_resources`` for CKAN packages, and wanted for the same reason: a
+    # CBS publication page is a folder of up to 110 unrelated tables, and
+    # "אוכלוסייה ביישובים 2024" is a thing someone tracks, not resource #37 of
+    # a page. Each entry of selected_files must then be an absolute URL the
+    # registry can classify on its own.
+    split_files: bool = False
     # Null → the manifest's cadence for a registered source, else weekly.
     preferred_interval: int | None = None
     requester_name: str = ""
@@ -1934,6 +1942,83 @@ async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
             logger.warning("Could not open companion %s", url, exc_info=True)
             await db.rollback()
     return created
+
+
+async def _create_file_requests(
+    db: AsyncSession, urls: list[str], interval: int,
+) -> dict:
+    """One pending dataset per picked file URL.
+
+    Each URL is classified by the registry exactly like a pasted one, so it
+    picks up its own page_type, config, title and cadence with nothing
+    special-cased here — the same route ``_create_companion_requests`` takes.
+    A file the registry does not recognise, or one already tracked, is reported
+    rather than raised: with fifty files ticked, one bad entry must not throw
+    away the other forty-nine.
+    """
+    from app.services.activity_log import log_event
+
+    if not urls:
+        raise HTTPException(
+            status_code=400, detail="Pick at least one file to track separately.",
+        )
+    results: list[dict] = []
+    created = 0
+    for url in urls[:MAX_SELECTED_FILES]:
+        url = (url or "").strip()
+        if not url.startswith("http"):
+            results.append({"url": url, "status": "invalid",
+                            "error": "not an absolute URL"})
+            continue
+        try:
+            match = await source_registry.classify_url(db, url)
+            if match is None:
+                results.append({"url": url, "status": "invalid",
+                                "error": "no source recognises this file"})
+                continue
+            duplicate = await find_datasets_for_url(db, url, strict=True)
+            if duplicate:
+                results.append({"url": url, "status": "duplicate",
+                                "dataset_id": str(duplicate[0]["id"]),
+                                "dataset_title": duplicate[0]["title"]})
+                continue
+            sc = dict(match.scraper_config)
+            sc.setdefault("download_files", True)
+            if match.manifest.neon_eligible:
+                sc.setdefault("archive_neon", True)
+            slug = scraper_url_slug(match.collector_name, url)
+            ds = TrackedDataset(
+                ckan_id=f"{match.manifest.slug_prefix}-{slug}",
+                ckan_name=slug,
+                title=match.title,
+                organization=match.manifest.resolved_origin,
+                source_type="scraper",
+                source_url=url,
+                scraper_config=sc,
+                poll_interval=max(interval, settings.min_poll_interval),
+                status="pending",
+                created_by=None,
+                last_modified=None,
+            )
+            db.add(ds)
+            await db.commit()
+            await log_event(event="requested", dataset=ds, status="info",
+                            actor="request",
+                            message="התקבלה בקשת גירוד לקובץ (ממתינה לאישור)")
+            created += 1
+            results.append({"url": url, "status": "pending", "name": match.title})
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not open per-file request %s", url, exc_info=True)
+            await db.rollback()
+            results.append({"url": url, "status": "invalid", "error": "failed"})
+    if not created:
+        raise HTTPException(
+            status_code=400,
+            detail="None of the picked files could be opened — "
+                   "they are already tracked, or not recognised.",
+        )
+    return {"message": "Request submitted", "status": "pending",
+            "created": created, "results": results}
 
 
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
@@ -2063,6 +2148,15 @@ async def submit_tracking_request(
                     )
         if not collector_name:
             raise HTTPException(status_code=400, detail=_invalid_scraper_url_detail())
+
+        # One dataset per ticked file, instead of one dataset holding them all.
+        # Runs BEFORE the duplicate check on the pasted URL: the page itself is
+        # not being tracked in this mode, so whether the page is already tracked
+        # says nothing about the files.
+        if body.split_files and registry_match and registry_match.manifest.file_picker:
+            return await _create_file_requests(
+                db, body.selected_files or [], interval,
+            )
 
         # Duplicate check by source-URL identity — see the admin path above.
         existing = await find_datasets_for_url(db, body.source_url, strict=True)

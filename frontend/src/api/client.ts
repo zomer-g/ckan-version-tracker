@@ -1674,11 +1674,27 @@ export const publicApi = {
     requester_name?: string;
     requester_notes?: string;
     requester_contact?: string;
-    // Registered sources with a file picker: the server-relative paths ticked
-    // in the form. Omitted means "whatever the page itself lists".
+    // Registered sources with a file picker: what was ticked. Server-relative
+    // paths normally; absolute file URLs when split_files is set, since each
+    // then has to be classified by the registry on its own. Omitted means
+    // "whatever the page itself lists".
     selected_files?: string[];
+    // One dataset per ticked file instead of one dataset holding them all.
+    split_files?: boolean;
   }) =>
-    request<{ message: string }>("/datasets/requests", {
+    request<{
+      message: string;
+      // Present only for split_files: one entry per picked file.
+      created?: number;
+      results?: Array<{
+        url: string;
+        status: "pending" | "duplicate" | "invalid";
+        name?: string;
+        error?: string;
+        dataset_id?: string;
+        dataset_title?: string;
+      }>;
+    }>("/datasets/requests", {
       method: "POST",
       body: JSON.stringify({ source_type: "scraper", ...data }),
     }),
