@@ -882,6 +882,11 @@ async def _neon_stream_load_file(
             total += await append_store.append_rows(
                 table, cols, batch, key_col=None, keyless=True,
             )
+        # Once the whole file is down, not once per batch — see
+        # append_store.fill_geometry. `cols` is set as soon as the header is
+        # read, so a file that turned out to be header-only skips this too.
+        if total and cols:
+            await append_store.fill_geometry(table, cols)
         return total
     finally:
         if delete_after:

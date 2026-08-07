@@ -538,29 +538,37 @@ async def append_rows(
                 inserted += int(status.split()[-1])
             except (ValueError, IndexError):
                 pass
-        if inserted:
-            await _fill_geometry_quietly(conn, table, source_cols)
     return inserted
 
 
-async def _fill_geometry_quietly(conn, table: str, source_cols: list[str]) -> None:
-    """Give the rows just inserted a PostGIS `geom`, if the table has
-    coordinates and the feature is switched on.
+async def fill_geometry(table: str, source_cols: list[str]) -> dict:
+    """Give a table's rows a PostGIS `geom`, once a load has FINISHED.
 
-    Inside the same connection, after the inserts, and swallowing everything:
-    geometry is an enhancement, and the archive's job — getting the rows down —
-    is already done by the time this runs. An import must never fail because a
-    point could not be built. Off by default; see settings.append_postgis_enabled.
+    Deliberately not inside ``append_rows``. The big corpora arrive through
+    streaming loaders that call append_rows once per 5,000-row batch — נחלים is
+    1,549,676 rows, so ~310 calls — and the geometry step ends with a
+    `count(*) WHERE geom IS NULL` to report how many rows it could not place.
+    Hanging that off each batch means ~310 full scans of a table that is growing
+    under them: quadratic work on precisely the dataset the feature exists for.
+    Once, at the end, is both cheaper and the same answer.
+
+    Swallows everything. Geometry is an enhancement and the archive's real job —
+    getting the rows down — is already done by the time this runs; an import
+    must never fail because a point could not be built. Off by default; see
+    settings.append_postgis_enabled.
     """
     try:
         from app.services import append_geometry
-        result = await append_geometry.fill(conn, table, source_cols)
-    except Exception:  # noqa: BLE001 — never let this reach the caller
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await append_geometry.fill(conn, table, source_cols)
+    except Exception as exc:  # noqa: BLE001 — never let this reach the caller
         logger.warning("append geometry: unexpected failure on %s", table,
                        exc_info=True)
-        return
+        return {"error": f"{type(exc).__name__}: {exc}"[:500]}
     if result.get("rows") or result.get("error"):
         logger.info("append geometry: %s → %s", table, result)
+    return result
 
 
 # ── Content-diff mode (capture new AND changed rows, efficiently) ────────────
