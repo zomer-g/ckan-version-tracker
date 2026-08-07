@@ -292,6 +292,15 @@ class Settings(BaseSettings):
     # was only enabled once its corpus had been measured. See
     # app/services/append_geometry.py.
     append_postgis_enabled: bool = False
+
+    # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
+    # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
+    # OFF until the worker ships a handler for the `ckan_blocked_files` kind:
+    # queuing a task nothing knows how to execute would fail it, and since a
+    # failed task no longer counts as active, the next poll would queue another
+    # — a treadmill of failures across the 13 affected datasets. Flip this on
+    # once govil-scraper can claim the kind.
+    ckan_blocked_files_enabled: bool = False
     # Layers per tick for the in-place geometry backfill (see
     # index_mirror.backfill_geometry). Only relevant while the corpus is
     # catching up: once every layer has the column the query finds nothing and

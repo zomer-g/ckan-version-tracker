@@ -493,6 +493,8 @@ async def _poll_dataset(
             blocked_entries = blocked_resources.describe(resources, blocked_ids)
             blocked_resources.remember(ds, blocked_entries)
             pending_note = blocked_resources.note_for(blocked_entries)
+            # …and hand the ones this process cannot reach to a worker that can.
+            await _queue_blocked_files_task(ds, blocked_entries)
 
             is_first_version = latest_version is None
 
@@ -936,6 +938,67 @@ async def _collect_datacollector_api(ds: TrackedDataset, db) -> None:
         "Local collect: version %d created for %s (%d rows)",
         next_version, ds.ckan_name, len(records),
     )
+
+
+BLOCKED_FILES_KIND = "ckan_blocked_files"
+
+
+async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> None:
+    """Ask a worker to fetch the files data.gov.il will not serve this server.
+
+    CKAN is polled INLINE, in the web process, where Playwright cannot run — and
+    getting past the wall needs a real headful browser. So the inline poll keeps
+    doing everything it can (datastore rows, files that download fine) and this
+    hands the remainder to the worker fleet. Additive on purpose: the existing
+    CKAN path is not re-routed, it just stops being the only attempt.
+
+    The resource list travels in the task's own ``params`` rather than being
+    read off the dataset later. ``params`` is merged over ``scraper_config`` in
+    the /poll response (``_poll_scraper_config``), so the worker receives it
+    with no migration and no new endpoint — and the task stays truthful about
+    what it was queued for even if the dataset's assessment changes underneath
+    it.
+
+    Its OWN session, so nothing here can reach the poll's transaction. A
+    duplicate insert loses to ``uq_scrape_tasks_active_per_dataset`` (one active
+    task per dataset), and inside the poll's session that IntegrityError would
+    abort the whole commit — the archive would be lost to a bookkeeping row.
+    Nothing in this function is allowed to matter that much.
+    """
+    if not entries or not settings.ckan_blocked_files_enabled:
+        return
+    from app.models.scrape_task import PRIORITY_ROUTINE, ScrapeTask
+
+    try:
+        async with async_session() as task_db:
+            existing = await task_db.execute(
+                select(ScrapeTask).where(
+                    ScrapeTask.tracked_dataset_id == ds.id,
+                    ScrapeTask.status.in_(["pending", "running"]),
+                )
+            )
+            if existing.scalar_one_or_none():
+                # Already queued or being worked. Re-queuing every poll would
+                # pile up one task per cadence for a wall that is not moving.
+                return
+            task_db.add(ScrapeTask(
+                tracked_dataset_id=ds.id,
+                status="pending",
+                priority=PRIORITY_ROUTINE,
+                phase="queued",
+                params={"kind": BLOCKED_FILES_KIND, "blocked_resources": entries},
+                message=(f"{len(entries)} file(s) blocked by data.gov.il — "
+                         f"queued for browser fetch")[:500],
+            ))
+            await task_db.commit()
+            logger.info("Queued %s task for %s (%d blocked file(s))",
+                        BLOCKED_FILES_KIND, ds.ckan_name, len(entries))
+    except IntegrityError:
+        logger.info("Blocked-files task already queued for %s (index race)",
+                    ds.ckan_name)
+    except Exception:  # noqa: BLE001 — the poll must survive this
+        logger.warning("Could not queue blocked-files task for %s",
+                       ds.ckan_name, exc_info=True)
 
 
 async def _create_scrape_task(
