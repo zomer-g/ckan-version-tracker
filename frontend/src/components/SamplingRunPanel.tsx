@@ -111,6 +111,16 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
             {labels.new || "רק חדשות"}
           </button>
         )}
+        {/* Like "new", this takes no argument — what counts as closed is the
+            source's own knowledge, filtered at the source. It needs a button
+            even though it is usually on a cadence: a mode with no way to start
+            it by hand cannot be tested, and מבא"ת ran this weekly for a week
+            with nothing in the product able to invoke or even name it. */}
+        {opts.modes.includes("open") && (
+          <button className="btn-secondary" style={btn} disabled={busy} onClick={() => run("open")}>
+            {labels.open || "רק שטרם נסגרו"}
+          </button>
+        )}
         {scheduled.map(([mode, s]) => (
           <span
             key={mode}

@@ -394,6 +394,67 @@ def test_a_new_run_sends_only_the_live_frontier_and_says_which(monkeypatch):
     assert "1936" not in summary
 
 
+MAVAT_SAMPLING = {
+    "modes": ["all", "open", "new", "status", "item"],
+    "item_key": "מספר תכנית",
+    "status_column": "סטטוס",
+    "sample_column": "תאריך דגימה",
+    "key_separator": "-",
+    "new_series_window": 0,
+}
+
+
+def test_a_mode_missing_from_MODES_is_dropped_from_what_a_source_declared():
+    """The failure this guards is silent in both directions. A source declaring
+    a mode OVER does not list gets it filtered away by available_modes — no
+    button, no label, and build_params refusing it — while the mode itself works
+    perfectly if something puts it in a config by hand. That is exactly how the
+    מבא"ת weekly run spent its first week: running, and invisible."""
+    assert "open" in sampling_runs.MODES
+    assert "open" in sampling_runs.MODE_LABELS_HE
+    assert "open" in sampling_runs.available_modes(_ds(sampling=MAVAT_SAMPLING))
+    # And a mode nobody defined is still refused, however a manifest spells it.
+    assert "המצאה" not in sampling_runs.available_modes(
+        _ds(sampling={**MAVAT_SAMPLING, "modes": ["all", "המצאה"]}))
+
+
+def test_an_open_run_carries_a_freshly_computed_frontier(monkeypatch):
+    """The status filter runs at the source and can only return what the source
+    calls open NOW, so a plan that first appears already approved is invisible
+    to it — permanently, since no later run calls it open either. The frontier
+    is the other half, and it must be rebuilt per run: one frozen into a
+    dataset's config keeps working while only ever finding what was new on the
+    day it was written."""
+    ds = _ds(sampling=MAVAT_SAMPLING)
+    frontier = {"501": "501-1566249", "101": "101-1600436"}
+    monkeypatch.setattr(sampling_runs, "resolve_table",
+                        _async(lambda *a, **k: "append_mavat_all_x"))
+    monkeypatch.setattr(append_store, "key_frontier", _async(lambda *a, **k: frontier))
+
+    params, summary = run(sampling_runs.build_params(ds, None, mode="open"))
+    assert params["run_mode"] == "open"
+    assert params["run_partial"] is True
+    assert params["run_frontier"] == frontier
+    assert "2" in summary  # the series COUNT, not 844 series spelled out
+    assert "501-1566249" not in summary
+
+
+def test_a_register_whose_prefix_is_a_place_keeps_every_series():
+    """DEFAULT_NEW_SERIES_WINDOW assumes a prefix is a PERIOD, so the newest few
+    sort last and the rest have retired. מבא"ת prefixes are planning spaces —
+    844 of them, none retiring — and the two that sort highest are legacy
+    one-offs. Trimmed to the default this frontier would forget 842 spaces, and
+    because is_new calls an unknown prefix new, the walk meant to find ~50 plans
+    would hand back the register. The source says 0 to prevent that."""
+    frontier = {**{str(500 + i): f"{500 + i}-15000{i:02d}" for i in range(20)},
+                "תתל/ 99": "תתל/ 99", "תתל/ 98": "תתל/ 98"}
+    assert sampling_runs.recent_series(frontier, 0) == frontier
+    # Left at the default, the two survivors are the legacy names — every real
+    # planning space gone.
+    trimmed = sampling_runs.recent_series(frontier)
+    assert sorted(trimmed) == ["תתל/ 98", "תתל/ 99"]
+
+
 # ── 7. a cadence the SOURCE declares ─────────────────────────────────────────
 
 def test_a_source_declares_its_own_sampling_cadence():
@@ -408,6 +469,12 @@ def test_a_source_declares_its_own_sampling_cadence():
     # however the manifest spells it.
     assert sampling_runs.schedule_for(
         _ds(sampling={**SAMPLING, "schedule": {"status": 604800}}), "status") is None
+    # "open" is schedulable for the same reason "new" is — the run is fully
+    # specified without anyone choosing a selector.
+    assert "open" in sampling_runs.SCHEDULABLE_MODES
+    assert sampling_runs.schedule_for(
+        _ds(sampling={**MAVAT_SAMPLING, "schedule": {"open": 604800}}),
+        "open") == 604800
     # Junk and zero mean "no", not "every tick".
     for bad in ({"new": 0}, {"new": -1}, {"new": "שבוע"}, [604800]):
         assert sampling_runs.schedule_for(

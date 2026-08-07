@@ -51,13 +51,27 @@ logger = logging.getLogger(__name__)
 # Every mode a dataset may declare. A dataset lists the subset it supports —
 # "new" only means something for a source that can cheaply enumerate what it
 # does not have yet, and that is a property of the site, not of OVER.
-MODES = ("all", "new", "status", "item")
+#
+# "open" is the same idea one step further: the items still in motion, whatever
+# their number. It is here rather than expressed as "status" because WHICH
+# statuses count as finished is the source's knowledge, not a selector anyone
+# should be asked to pick — מבא"ת treats אישור and נדחתה as terminal and
+# everything else, including a missing status, as open. OVER only names the
+# mode; the engine decides what it means and filters at the source.
+#
+# A mode missing from this tuple is not merely unavailable: available_modes
+# silently DROPS it from whatever the source declared, so the button never
+# appears and build_params refuses it. That is how "open" ran for a week as an
+# undocumented key in one dataset's scraper_config — the mode worked, and
+# nothing in the product could see it.
+MODES = ("all", "new", "open", "status", "item")
 
 # What each mode is called where a human reads it (the admin panel, the
 # activity log, a version's change_summary).
 MODE_LABELS_HE = {
     "all": "כל הישויות במאגר",
     "new": "רק ישויות חדשות באתר",
+    "open": "רק ישויות שטרם נסגרו",
     "status": "לפי סטטוס",
     "item": "תיק בודד",
 }
@@ -88,15 +102,26 @@ MAX_TARGETS_FROM_DATASET = 250000
 #
 # Two, not one, because the boundary is a date and runs land on both sides of
 # it: through January a run must still see the tail of last year's numbering.
+#
+# The window assumes a series prefix is a PERIOD, so that the newest few sort
+# last and the rest are genuinely retired. A source whose prefix means something
+# else must say ``new_series_window: 0``, and it is not a nicety: מבא"ת keys are
+# <מרחב תכנון>-<serial> over 844 prefixes, none of which retires, and the two
+# that sort highest are one-off legacy names ("תתל/ 99"). Trimmed to two, its
+# frontier would forget 842 planning spaces — and since is_new calls an unknown
+# prefix new, the walk meant to find ~50 plans would hand back the register.
 DEFAULT_NEW_SERIES_WINDOW = 2
 
 # The modes a source may ask OVER to run on a cadence of its own, via
-# ``sampling.schedule``. Only "new" so far, and the restriction is not
-# arbitrary: "new" is fully specified by the archive (walk forward from the
-# frontier), whereas "status" needs someone to say WHICH status — a selector
-# this module has no basis to invent, and getting it wrong turns a cheap weekly
-# run into a day-long one.
-SCHEDULABLE_MODES = ("new",)
+# ``sampling.schedule``.
+#
+# Both entries share the property that makes a mode schedulable: the run is
+# fully specified without anyone choosing anything. "new" walks forward from the
+# frontier the archive already holds; "open" is defined by the source's own idea
+# of a terminal status. "status" is excluded for exactly that reason — it needs
+# someone to say WHICH status, a selector this module has no basis to invent,
+# and getting it wrong turns a cheap weekly run into a day-long one.
+SCHEDULABLE_MODES = ("new", "open")
 
 
 def sampling_spec(ds) -> dict | None:
@@ -438,6 +463,34 @@ async def build_params(
                                 f"(סדרות {', '.join(sorted(walked, reverse=True))}, "
                                 f"מעבר ל-{', '.join(sorted(walked.values(), reverse=True))})")
         return params, MODE_LABELS_HE["new"]
+
+    if mode == "open":
+        # Which items are "still in motion" is decided at the SOURCE — the
+        # engine filters on the source's own terminal statuses, in the query, so
+        # nothing here selects them. What OVER contributes is the frontier.
+        #
+        # That half is not decoration. A status filter can only return items the
+        # source currently calls open, so an item that appears for the first
+        # time ALREADY closed is invisible to it — not late, invisible, because
+        # no later run will call it open either. The frontier is what catches it,
+        # and it has to be recomputed on every run: a frontier written once into
+        # a dataset's config is stale the moment the run it belongs to succeeds,
+        # which is the failure that hides best (the run keeps working, and only
+        # ever finds what was new that first day).
+        if spec.get("key_separator"):
+            full = await append_store.key_frontier(
+                table, key_col=spec["item_key"], separator=spec["key_separator"])
+            walked = recent_series(full, spec.get("new_series_window"))
+            params["run_frontier"] = walked
+            if walked:
+                # The count, not the series. "new" can name its two; a register
+                # that keeps all 844 of them would turn this line into a page,
+                # and what a reader checks here is that the number is 844 and
+                # not 2 — the trimming mistake DEFAULT_NEW_SERIES_WINDOW warns
+                # about shows up exactly here.
+                return params, (f"{MODE_LABELS_HE['open']} "
+                                f"(+ חדשות, על פני {len(walked):,} סדרות)")
+        return params, MODE_LABELS_HE["open"]
 
     # mode == "status"
     value = (status or "").strip()
