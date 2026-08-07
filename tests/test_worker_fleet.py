@@ -69,10 +69,29 @@ async def _session_factory(with_workers_table=True):
 
 # ── identity ──────────────────────────────────────────────────────────────
 
+def test_a_machine_is_the_hostname_not_the_process():
+    """The worker sends <hostname>#<random-token-per-process>. Keying on the
+    whole string made every restart a new row — one box produced 20+ ghost
+    entries in two days — and pinned the pause to a process that then died."""
+    assert worker_key("GZ-14#83d832", "84.94.211.2") == "GZ-14"
+    assert worker_key("GZ-14#5d60c5", "84.94.211.2") == "GZ-14"
+    assert worker_key("ThinkPad14#d8c040", "176.230.29.213") == "ThinkPad14"
+
+
+def test_a_restart_lands_on_the_same_row():
+    """The whole point: the pause must survive the restart it exists for."""
+    assert worker_key("GZ-14#aaaaaa", None) == worker_key("GZ-14#bbbbbb", None)
+
+
+def test_a_friendly_override_is_already_a_machine_name():
+    """OVER_WORKER_ID replaces the whole string and carries no token."""
+    assert worker_key("office-1", "10.0.0.5") == "office-1"
+
+
 def test_explicit_id_beats_ip():
-    """Two workers behind one NAT share an IP — keying on it would let a pause
+    """Two machines behind one NAT share an IP — keying on it would let a pause
     of one silently drain the other."""
-    assert worker_key("box-a#1234", "10.0.0.5") == "box-a#1234"
+    assert worker_key("box-a#1234", "10.0.0.5") == "box-a"
     assert worker_key(None, "10.0.0.5") == "ip:10.0.0.5"
     assert worker_key("", "unknown") == "unknown"
 
@@ -119,6 +138,59 @@ def test_heartbeat_writes_are_throttled_but_a_code_change_is_not():
             assert node.worker_version == "new"
             assert node.worker_upstream == "current"
             assert _as_utc(node.last_seen_at) > first_seen
+    _run(go())
+
+
+def test_restarting_a_worker_neither_forks_a_row_nor_drops_the_pause():
+    """The bug this fixes, end to end. A machine restarts under a NEW process
+    token; before machine-keying that produced a second row (the panel filled
+    with ghosts of one box) and the restarted worker came back UNPAUSED —
+    defeating the pause on the exact event it exists for."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            await touch_worker(db, worker_id="GZ-14#aaaaaa", worker_ip="84.94.211.2",
+                               worker_version="old")
+            node = await db.get(WorkerNode, "GZ-14")
+            node.paused = True
+            await db.commit()
+
+            # Same box, restarted on new code: new token, new version.
+            back = await touch_worker(db, worker_id="GZ-14#bbbbbb",
+                                      worker_ip="84.94.211.2", worker_version="new")
+
+            rows = (await db.scalars(select(WorkerNode))).all()
+            assert [r.worker_key for r in rows] == ["GZ-14"], "one machine, one row"
+            assert back.paused is True, "the pause must survive the restart"
+            assert back.worker_version == "new"
+            assert back.worker_id == "GZ-14#bbbbbb", "the live process is visible"
+    _run(go())
+
+
+def test_two_processes_on_one_box_are_one_machine_holding_two_tasks():
+    """Pausing means "stop this machine so I can update it", which covers every
+    process on it. Reporting only one task would make a busy box look safe."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            for n, ckan in ((1, "layer-1"), (2, "layer-2")):
+                ds = TrackedDataset(
+                    id=uuid.uuid4(), ckan_id=ckan, ckan_name=ckan, title=f"שכבה {n}",
+                    source_type="govmap", is_active=True,
+                )
+                db.add(ds)
+                db.add(ScrapeTask(
+                    id=uuid.uuid4(), tracked_dataset_id=ds.id, status="running",
+                    priority=PRIORITY_ROUTINE, created_at=NOW,
+                    worker_id=f"GZ-14#proc{n}", worker_ip="84.94.211.2",
+                ))
+            db.add(WorkerNode(worker_key="GZ-14", worker_id="GZ-14#proc2",
+                              worker_ip="84.94.211.2", last_seen_at=NOW, paused=True))
+            await db.commit()
+
+            row = (await fleet(db))[0]
+            assert len(row["current_tasks"]) == 2
+            assert row["drained"] is False, "still holding work — not safe to restart"
     _run(go())
 
 
@@ -199,8 +271,8 @@ def test_fleet_lists_what_each_machine_is_doing(env):
     client, _ = env
     w = _workers(client)
     assert set(w) == {"busy-box", "idle-box", "gone-box"}
-    assert w["busy-box"]["current_task"]["dataset_title"] == "שכבת GovMap 52"
-    assert w["idle-box"]["current_task"] is None
+    assert [t["dataset_title"] for t in w["busy-box"]["current_tasks"]] == ["שכבת GovMap 52"]
+    assert w["idle-box"]["current_tasks"] == []
     assert w["gone-box"]["offline"] is True
     assert w["busy-box"]["offline"] is False
 

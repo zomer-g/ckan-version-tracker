@@ -53,15 +53,33 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 
 
 def worker_key(worker_id: str | None, worker_ip: str | None) -> str:
-    """Stable key for one machine.
+    """Stable key for one MACHINE — across restarts.
 
-    The explicit id wins because two workers behind one NAT share an IP and
-    would otherwise pause each other. Workers too old to send an id are keyed
-    by address so they are still listed and still pausable, at that precision.
+    The worker reports ``<hostname>#<short>`` where ``short`` is a random token
+    fixed at import time (govscraper/legacy/over_worker.py::_detect_worker_id),
+    so it is a PROCESS id, not a machine id. Keying the fleet on the whole
+    string was wrong twice over:
+
+      * every restart minted a new row, so the list filled with dead instances
+        of the same box — 20+ ``GZ-14#…`` rows for one machine;
+      * a pause was attached to a process that no longer exists. Restarting to
+        update code — the entire reason the pause exists — brought the machine
+        back under a new key, unpaused. The switch could not survive the one
+        event it was built for.
+
+    So the machine is the hostname, and the token is demoted to an instance
+    detail (``worker_id`` on the row, shown next to it). Several worker
+    PROCESSES on one box therefore share a row, which is right for this switch:
+    "stop this machine so I can update it" means all of them. Per-task
+    attribution still uses the full id via ``scrape_tasks.worker_id``.
+
+    OVER_WORKER_ID overrides the whole string, and a friendly name like
+    "office-1" has no "#" — it is already a machine name, and survives as-is.
     """
     wid = (worker_id or "").strip()
     if wid:
-        return wid[:80]
+        machine = wid.split("#", 1)[0].strip()
+        return (machine or wid)[:80]
     ip = (worker_ip or "").strip()
     if ip and ip != "unknown":
         return f"ip:{ip}"[:80]
@@ -106,10 +124,15 @@ async def touch_worker(
         version = (worker_version or "").strip()[:64] or None
         upstream = (worker_upstream or "").strip()[:16] or None
         ip = (worker_ip or "").strip()[:64] or None
+        # The instance is the process token behind this poll. Since the ROW is
+        # the machine, this is the only place a restart shows up at all — leave
+        # it stale and the panel names a process that died days ago.
+        instance = (worker_id or "").strip()[:64] or None
         changed = (
             (version is not None and version != node.worker_version)
             or (upstream is not None and upstream != node.worker_upstream)
             or (ip is not None and ip != node.worker_ip)
+            or (instance is not None and instance != node.worker_id)
         )
         seen = _as_utc(node.last_seen_at)
         if changed or seen is None or (now - seen) > _TOUCH_EVERY:
@@ -120,6 +143,8 @@ async def touch_worker(
                 node.worker_upstream = upstream
             if ip is not None:
                 node.worker_ip = ip
+            if instance is not None:
+                node.worker_id = instance
             await db.commit()
         return node
     except SQLAlchemyError as e:  # noqa: BLE001 — dispatch outranks bookkeeping
@@ -142,26 +167,34 @@ async def fleet(db: AsyncSession) -> list[dict]:
         .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
         .where(ScrapeTask.status == "running")
     )
-    current: dict[str, dict] = {}
+    # A LIST per machine, not one task: several worker processes can share a box
+    # and the machine is one row now, so "what is it holding" can be more than
+    # one thing. Overwriting into a single slot would hide work and make a
+    # machine look safe to restart when it isn't.
+    current: dict[str, list[dict]] = {}
     for task, ds in running.all():
-        current[worker_key(task.worker_id, task.worker_ip)] = {
+        current.setdefault(worker_key(task.worker_id, task.worker_ip), []).append({
             "task_id": str(task.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
             "phase": task.phase,
             "progress": task.progress,
+            "worker_instance": task.worker_id,
             "started_at": task.created_at.isoformat() if task.created_at else None,
             "last_report_at": task.updated_at.isoformat() if task.updated_at else None,
-        }
+        })
 
     now = datetime.now(timezone.utc)
     out = []
     for n in nodes:
         seen = _as_utc(n.last_seen_at)
         offline = seen is None or (now - seen) > OFFLINE_AFTER
-        task = current.get(n.worker_key)
+        tasks = current.get(n.worker_key, [])
         out.append({
             "worker_key": n.worker_key,
+            # The process behind the machine's last poll. Its token changes on
+            # every restart, which is how a restart is visible without the
+            # machine turning into a new row.
             "worker_id": n.worker_id,
             "worker_ip": n.worker_ip,
             "worker_version": n.worker_version,
@@ -171,11 +204,11 @@ async def fleet(db: AsyncSession) -> list[dict]:
             "paused": n.paused,
             "paused_at": n.paused_at.isoformat() if n.paused_at else None,
             "paused_by": n.paused_by,
-            "current_task": task,
+            "current_tasks": tasks,
             # The state an operator waits for before restarting a machine:
             # drained means "paused AND holding nothing".
-            "drained": bool(n.paused and task is None),
+            "drained": bool(n.paused and not tasks),
         })
     # Busy first, then live-but-idle, then the machines that stopped reporting.
-    out.sort(key=lambda w: (w["offline"], w["current_task"] is None, w["worker_key"]))
+    out.sort(key=lambda w: (w["offline"], not w["current_tasks"], w["worker_key"]))
     return out
