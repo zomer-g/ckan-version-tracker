@@ -23,7 +23,7 @@ from app.services.snapshot_service import (
     append_new_rows_to_shared_resource,
     create_version_snapshot,
 )
-from app.services import conditional_archiver
+from app.services import blocked_resources, conditional_archiver
 from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.storage_client import (
     dataset_archives_neon,
@@ -54,6 +54,21 @@ _active_polls: set[str] = set()
 # import (no running loop needed on Python ≥3.10) and used on the app's single
 # event loop.
 _POLL_SEMAPHORE = asyncio.Semaphore(max(1, settings.poll_max_concurrency))
+
+
+def _restate_blocked(ds: TrackedDataset) -> None:
+    """Carry the standing "files are being withheld" notice across a shortcut
+    return, which never reaches the detection that produces it.
+
+    Deliberately ADDITIVE. This runs on paths that verified nothing, so it must
+    not overwrite a real failure recorded by the last poll that did the work,
+    and must not clear the field on its own authority — the "it is fixed now"
+    answer can only come from a poll that actually re-downloaded. It writes
+    only when there is something to say and it is not already said.
+    """
+    note = blocked_resources.note_for(blocked_resources.stored(ds))
+    if note and note != (ds.last_error or ""):
+        ds.last_error = note[:2000]
 
 
 async def poll_dataset(
@@ -250,15 +265,34 @@ async def _poll_dataset(
                 )
             )
 
+            # Never checked whether data.gov.il is withholding this dataset's
+            # files. Same shape as neon_pending above — what we hold is behind
+            # what we should hold, even though the source did not move — so it
+            # is work to do, not nothing to do. Without it a dataset whose
+            # metadata has not changed since the detection shipped would take
+            # the shortcut below forever and never learn it is losing files.
+            # Costs one full poll per dataset, once: detection then stores its
+            # answer (an empty list included) and the shortcut resumes.
+            # Narrowed to datasets that actually carry a downloadable FILE: a
+            # purely datastore-backed package has nothing that can be withheld,
+            # and forcing a full poll on one buys nothing while costing a
+            # re-archive of a potentially huge table.
+            blocked_unknown = not blocked_resources.assessed(ds) and any(
+                r.get("url") and not r.get("datastore_active")
+                for r in pkg.get("resources", [])
+            )
+
             # Quick check: has anything changed? (Skipped on a forced retry.)
             if (
                 not force
                 and not is_append
                 and not neon_pending
+                and not blocked_unknown
                 and not has_metadata_changed(ds.last_modified, new_modified)
             ):
                 logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
                 ds.last_polled_at = datetime.now(timezone.utc)
+                _restate_blocked(ds)
                 await db.commit()
                 return
 
@@ -274,7 +308,9 @@ async def _poll_dataset(
             #   • last_modified reset to NULL by the admin (e.g. they changed
             #     resource_ids): the existing version was built against a
             #     different tracked set.
-            forced_repoll = force or neon_pending or ds.last_modified is None
+            #   • blocked_unknown — we have never checked whether this
+            #     dataset's files are being withheld (see above).
+            forced_repoll = force or neon_pending or blocked_unknown or ds.last_modified is None
             if (
                 not is_append
                 and not forced_repoll
@@ -284,6 +320,7 @@ async def _poll_dataset(
                 logger.info("Version already exists for %s with modified=%s, skipping", ds.ckan_name, new_modified)
                 ds.last_polled_at = datetime.now(timezone.utc)
                 ds.last_modified = new_modified
+                _restate_blocked(ds)
                 await db.commit()
                 return
 
@@ -381,6 +418,12 @@ async def _poll_dataset(
                     or appendonly_datastore
                     or neon_datastore
                 ):
+                    # This path archives ROWS through the datastore API and
+                    # never downloads a file, so there is nothing here for the
+                    # blocked-file check to see. Record that as its answer:
+                    # left unassessed it would read as "never checked" and
+                    # force this expensive poll on every tick forever.
+                    blocked_resources.remember(ds, [])
                     await _poll_large_dataset(ds, pkg, resource_to_check, ds_info, next_version, old_mappings, db)
                     return
 
@@ -414,6 +457,10 @@ async def _poll_dataset(
                         next_version=next_version, new_modified=new_modified, db=db,
                     )
                     if handled:
+                        # Datastore rows only, no file fetched — same reasoning
+                        # as the single-resource path above.
+                        blocked_resources.remember(ds, [])
+                        await db.commit()
                         return
                     logger.info(
                         "multi-neon declined for %s (no append DB?) — snapshot path",
@@ -438,17 +485,14 @@ async def _poll_dataset(
             # file that downloads fine (e.g. a plain PDF attachment) is not
             # flagged. These await the browser extension (they're NOT lost, just
             # not server-archivable); tabular/datastore resources are unaffected.
-            res_by_id = {r["id"]: r for r in resources}
-            iap_pending = [
-                f"{r.get('name') or r['id'][:8]} ({(r.get('format') or '?').upper()})"
-                for rid in blocked_ids
-                if (r := res_by_id.get(rid))
-            ]
-            pending_note = (
-                "ℹ ממתין לתוסף הדפדפן — "
-                f"{len(iap_pending)} קבצים חסומים להורדה שרתית ב-data.gov.il: "
-                + ", ".join(iap_pending)
-            ) if iap_pending else None
+            # Remembered on the dataset, not recomputed from scratch each time:
+            # the wall is a property of the resource, and the two shortcuts
+            # above return long before this line. Storing it is also what gives
+            # a worker a structured work-list (id, name, format, url) instead of
+            # a Hebrew sentence to parse. See app/services/blocked_resources.py.
+            blocked_entries = blocked_resources.describe(resources, blocked_ids)
+            blocked_resources.remember(ds, blocked_entries)
+            pending_note = blocked_resources.note_for(blocked_entries)
 
             is_first_version = latest_version is None
 
