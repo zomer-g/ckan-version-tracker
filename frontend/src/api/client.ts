@@ -1681,6 +1681,9 @@ export const publicApi = {
     selected_files?: string[];
     // One dataset per ticked file instead of one dataset holding them all.
     split_files?: boolean;
+    // url → the label the picker showed. The server can only title a file from
+    // its URL, and a filename is not what the site calls the table.
+    file_titles?: Record<string, string>;
   }) =>
     request<{
       message: string;

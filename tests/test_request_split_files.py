@@ -157,6 +157,27 @@ def test_each_picked_file_becomes_its_own_dataset(stack):
     assert all(d.poll_interval == 86400 for d in rows)
 
 
+def test_each_dataset_is_named_so_the_queue_can_tell_them_apart(stack):
+    """Fifty pending cards all reading "הלמ״ס — קובץ נתונים" are unusable: the
+    only thing distinguishing them was the URL. The picker's own label wins;
+    failing that the manifest at least renders the filename."""
+    client, Session = stack
+    r = _post(client, split_files=True, selected_files=[F1, F2],
+              file_titles={F1: "קובץ נתונים לעיבוד - 2024"})
+    assert r.status_code == 201, r.text
+    titles = {d.source_url: d.title for d in _rows(Session)}
+    assert titles[F1] == "קובץ נתונים לעיבוד - 2024"      # the picker's label
+    assert titles[F2] == "מקור צעצוע — קובץ"               # the manifest fallback
+    assert len(set(titles.values())) == 2
+
+
+def test_a_blank_or_absent_label_falls_back_instead_of_blanking_the_title(stack):
+    client, Session = stack
+    _post(client, split_files=True, selected_files=[F1, F2],
+          file_titles={F1: "   ", "https://unrelated.example.org/x": "ignored"})
+    assert all(d.title for d in _rows(Session))
+
+
 def test_the_page_itself_is_not_tracked_when_splitting(stack):
     """Splitting means the files are the datasets. Opening the page as well
     would re-import every one of them a second time."""

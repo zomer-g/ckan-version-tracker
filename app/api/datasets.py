@@ -1872,6 +1872,13 @@ class TrackingRequest(BaseModel):
     # a page. Each entry of selected_files must then be an absolute URL the
     # registry can classify on its own.
     split_files: bool = False
+    # url → the label the picker showed for that file. The registry can only
+    # title a file from its URL, and a filename ("2003.xls", "t7.xls") is not
+    # what the site calls the table — so without this the pending queue renders
+    # fifty cards that can only be told apart by reading their URLs. Optional
+    # and keyed by URL rather than positional, so a mismatch degrades to the
+    # manifest title instead of mislabelling a dataset.
+    file_titles: dict[str, str] | None = None
     # Null → the manifest's cadence for a registered source, else weekly.
     preferred_interval: int | None = None
     requester_name: str = ""
@@ -1944,8 +1951,12 @@ async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
     return created
 
 
+MAX_FILE_TITLE_LENGTH = 300
+
+
 async def _create_file_requests(
     db: AsyncSession, urls: list[str], interval: int,
+    titles: dict[str, str] | None = None,
 ) -> dict:
     """One pending dataset per picked file URL.
 
@@ -1987,10 +1998,16 @@ async def _create_file_requests(
             if match.manifest.neon_eligible:
                 sc.setdefault("archive_neon", True)
             slug = scraper_url_slug(match.collector_name, url)
+            # The picker's label for this file beats the manifest's, which can
+            # only be built from the URL. Both are provisional: push_version
+            # replaces the title with the source's own on the first scrape.
+            label = (titles or {}).get(url, "")
+            title = (label.strip()[:MAX_FILE_TITLE_LENGTH]
+                     if isinstance(label, str) and label.strip() else match.title)
             ds = TrackedDataset(
                 ckan_id=f"{match.manifest.slug_prefix}-{slug}",
                 ckan_name=slug,
-                title=match.title,
+                title=title,
                 organization=match.manifest.resolved_origin,
                 source_type="scraper",
                 source_url=url,
@@ -2006,7 +2023,7 @@ async def _create_file_requests(
                             actor="request",
                             message="התקבלה בקשת גירוד לקובץ (ממתינה לאישור)")
             created += 1
-            results.append({"url": url, "status": "pending", "name": match.title})
+            results.append({"url": url, "status": "pending", "name": title})
         except Exception:  # noqa: BLE001
             logger.warning("Could not open per-file request %s", url, exc_info=True)
             await db.rollback()
@@ -2155,7 +2172,7 @@ async def submit_tracking_request(
         # says nothing about the files.
         if body.split_files and registry_match and registry_match.manifest.file_picker:
             return await _create_file_requests(
-                db, body.selected_files or [], interval,
+                db, body.selected_files or [], interval, body.file_titles or {},
             )
 
         # Duplicate check by source-URL identity — see the admin path above.

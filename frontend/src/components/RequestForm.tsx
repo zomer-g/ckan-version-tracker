@@ -135,9 +135,13 @@ export default function RequestForm({
   // path → absolute URL, so a split submit can send URLs (which the registry
   // classifies on its own) while the ticks stay keyed by path.
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
+  // url → the label shown in the picker, so a split submit can name each
+  // dataset what the site calls the table rather than after its filename.
+  const [fileTitles, setFileTitles] = useState<Record<string, string>>({});
   const onFilesLoaded = useCallback((files: SourceFile[]) => {
     setPageFileCount(files.length);
     setFileUrls(Object.fromEntries(files.map((f) => [f.path, f.url])));
+    setFileTitles(Object.fromEntries(files.map((f) => [f.url, f.title])));
   }, []);
 
   // A page of files is a folder of unrelated tables, so one dataset per file is
@@ -190,6 +194,7 @@ export default function RequestForm({
                 : picked)
             : undefined,
           split_files: showFilePicker && splitFiles ? true : undefined,
+          file_titles: showFilePicker && splitFiles ? fileTitles : undefined,
         });
         if (res?.results) setFileResults(res.results);
       } else {
