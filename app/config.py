@@ -283,6 +283,15 @@ class Settings(BaseSettings):
     # direction is retroactive, so `postgis_rows` in the checkpoint is what
     # tells you which tables actually have it.
     index_mirror_postgis_enabled: bool = True
+    # The same capability for `public.append_*`, on its own switch and OFF by
+    # default. Deliberately NOT sharing the flag above: the two run over
+    # different corpora with different geometry shapes, and the append side
+    # writes to LIVE tables (an append never rebuilds and swaps), so turning it
+    # on is not the reversible non-event that turning on the idx side is.
+    # `index_mirror_postgis_enabled` itself shipped off for the same reason and
+    # was only enabled once its corpus had been measured. See
+    # app/services/append_geometry.py.
+    append_postgis_enabled: bool = False
     # Layers per tick for the in-place geometry backfill (see
     # index_mirror.backfill_geometry). Only relevant while the corpus is
     # catching up: once every layer has the column the query finds nothing and

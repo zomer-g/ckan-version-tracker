@@ -538,7 +538,29 @@ async def append_rows(
                 inserted += int(status.split()[-1])
             except (ValueError, IndexError):
                 pass
+        if inserted:
+            await _fill_geometry_quietly(conn, table, source_cols)
     return inserted
+
+
+async def _fill_geometry_quietly(conn, table: str, source_cols: list[str]) -> None:
+    """Give the rows just inserted a PostGIS `geom`, if the table has
+    coordinates and the feature is switched on.
+
+    Inside the same connection, after the inserts, and swallowing everything:
+    geometry is an enhancement, and the archive's job — getting the rows down —
+    is already done by the time this runs. An import must never fail because a
+    point could not be built. Off by default; see settings.append_postgis_enabled.
+    """
+    try:
+        from app.services import append_geometry
+        result = await append_geometry.fill(conn, table, source_cols)
+    except Exception:  # noqa: BLE001 — never let this reach the caller
+        logger.warning("append geometry: unexpected failure on %s", table,
+                       exc_info=True)
+        return
+    if result.get("rows") or result.get("error"):
+        logger.info("append geometry: %s → %s", table, result)
 
 
 # ── Content-diff mode (capture new AND changed rows, efficiently) ────────────
@@ -1624,20 +1646,61 @@ async def latest_value_counts(
 async def latest_item_keys(
     table: str, *, key_col: str, order_col: str | None = None,
     value_col: str | None = None, value: str | None = None,
+    include_values: list | None = None, exclude_values: list | None = None,
+    activity_col: str | None = None, activity_since: str | None = None,
     limit: int = 1000, offset: int = 0,
 ) -> tuple[list[str], int]:
-    """``(keys, total)`` — the item keys, optionally only those whose latest
-    sample has ``value_col == value``. Paged, because the register this exists
-    for holds ~90k of them and the worker pulls the list it is about to
-    re-sample."""
+    """``(keys, total)`` — the item keys, narrowed by the latest sample of each.
+
+    Four ways to narrow, combined with AND, all evaluated against an item's most
+    recent sample (that is what ``latest_source`` is for — a file that passed
+    through a status two years ago is not at it now):
+
+    ``value``            one exact status — "the items at ועדת המשנה"
+    ``include_values``   any of a set — a named group of statuses
+    ``exclude_values``   none of a set — "everything except the terminal ones"
+    ``activity_since``   ``activity_col >= activity_since`` — WHEN it last moved
+
+    The last one is the one that changes what a targeted run can express, and it
+    exists because of a measurement. On the Jerusalem register 79,943 items are
+    at a non-terminal status, but 61,334 of them last moved over a decade ago:
+    re-reading 200 of those found zero changes in five days, while 200 recently
+    moved ones yielded twelve. Selecting on status alone cannot tell those two
+    populations apart, so it buys a 33-hour weekly run to find what a 2-hour one
+    already finds. Selecting on recency can.
+
+    Compared as TEXT, deliberately. These columns hold whatever the source
+    published — ISO-ish stamps, empty strings, the occasional oddity — and a
+    ``::date`` cast turns one bad row into a failed run for the whole register.
+    Zero-padded ISO sorts correctly as text, which is the only property needed.
+    """
     cols = await user_columns(table)
     if key_col not in cols:
         return [], 0
     source = latest_source(table, cols, key_col=key_col, order_col=order_col)
-    where, params = "", []
+    clauses, params = [], []
+
+    def _ph() -> str:
+        return f"${len(params) + 1}"
+
     if value_col and value_col in cols and value is not None:
-        where = f' WHERE {_qi(value_col)}::text = $1'
-        params = [str(value)]
+        clauses.append(f'{_qi(value_col)}::text = {_ph()}')
+        params.append(str(value))
+    if value_col and value_col in cols and include_values:
+        clauses.append(f'{_qi(value_col)}::text = ANY({_ph()})')
+        params.append([str(v) for v in include_values])
+    if value_col and value_col in cols and exclude_values:
+        # COALESCE so an item with a NULL status is KEPT by an exclusion: "not
+        # one of the finished ones" has to include the item whose status the
+        # source never set, or 24 files fall out of every run silently.
+        clauses.append(
+            f'NOT (COALESCE({_qi(value_col)}::text, \'\') = ANY({_ph()}))')
+        params.append([str(v) for v in exclude_values])
+    if activity_col and activity_col in cols and activity_since:
+        clauses.append(f'{_qi(activity_col)}::text >= {_ph()}')
+        params.append(str(activity_since))
+
+    where = f' WHERE {" AND ".join(clauses)}' if clauses else ""
     limit = max(1, min(int(limit or 1000), 20000))
     offset = max(0, int(offset or 0))
     pool = await get_pool()

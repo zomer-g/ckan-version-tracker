@@ -221,6 +221,20 @@ def _qt(table: str, schema: str = SCHEMA) -> str:
     return f"{_qi(schema)}.{_qi(table)}"
 
 
+def _try_geom() -> str:
+    """``idx.try_geom`` — always, whoever is calling.
+
+    The geometry helpers below take a ``schema`` so they can also build ``geom``
+    on ``public.append_*``. This one function must NOT follow it: it is created
+    once, in ``idx``, and exists nowhere else. Writing it as ``_qt('try_geom')``
+    inside a schema-aware helper reads as correct and silently becomes
+    ``public.try_geom`` the moment a non-idx caller arrives — every geometry
+    step then fails with 42883, and since these helpers never raise, it fails
+    *quietly* and the column is simply never built.
+    """
+    return _qt("try_geom", SCHEMA)
+
+
 def _staging_name(table: str) -> str:
     """Staging table name that stays inside the 63-byte identifier budget."""
     return append_store.clip_ident_bytes(table, 63 - len("__stg")) + "__stg"
@@ -267,13 +281,13 @@ def _hash_expr(columns: list[str], alias: str = "") -> str:
     return append_store._content_hash_expr(columns, alias)
 
 
-async def _live_columns(conn, table: str) -> list[str] | None:
+async def _live_columns(conn, table: str, schema: str = SCHEMA) -> list[str] | None:
     """Column names of ``idx.<table>`` in ordinal order, or None if it does not
     exist yet."""
     rows = await conn.fetch(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
-        SCHEMA, table)
+        schema, table)
     return [r["column_name"] for r in rows] or None
 
 
@@ -337,7 +351,7 @@ async def ensure_schema(conn) -> None:
     # gap is reported rather than silent.
     try:
         await conn.execute(f"""
-            CREATE OR REPLACE FUNCTION {_qt('try_geom')}(w text, srid int)
+            CREATE OR REPLACE FUNCTION {_try_geom()}(w text, srid int)
             RETURNS {_qi(PG_EXT_SCHEMA)}.geometry
             LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
             BEGIN
@@ -537,7 +551,7 @@ async def _geom_enabled(conn) -> bool:
     return await _postgis_available(conn)
 
 
-async def _wkt_crs(conn, table: str, where: str) -> str:
+async def _wkt_crs(conn, table: str, where: str, schema: str = SCHEMA) -> str:
     """Classify ``table``'s geometry_wkt from ONE truncated sample row.
 
     Truncated on purpose: the full value is a TOASTed multi-megabyte polygon on
@@ -545,12 +559,12 @@ async def _wkt_crs(conn, table: str, where: str) -> str:
     cost 46 seconds in the pilot."""
     wkt = _qi(WKT_COLUMN)
     sample = await conn.fetchval(
-        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table)} "
+        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table, schema)} "
         f"WHERE {where} LIMIT 1")
     return "empty" if sample is None else classify_wkt_crs(sample)
 
 
-async def _ensure_degrees(conn, table: str) -> tuple[str, dict]:
+async def _ensure_degrees(conn, table: str, schema: str = SCHEMA) -> tuple[str, dict]:
     """Bring ``table``'s ``geometry_wkt`` to EPSG:4326, reprojecting if needed.
 
     This is what makes a mirrored layer behave the same whenever it was scraped.
@@ -574,13 +588,13 @@ async def _ensure_degrees(conn, table: str) -> tuple[str, dict]:
     Returns ``(crs, note)`` where crs is the frame the column is in AFTERWARDS:
     ``degrees`` (ready), ``itm`` (conversion unavailable), ``unknown``,
     ``empty`` (no geometry rows) or ``none`` (no geometry column)."""
-    live = await _live_columns(conn, table) or []
+    live = await _live_columns(conn, table, schema) or []
     if WKT_COLUMN not in live:
         return "none", {}
 
     wkt = _qi(WKT_COLUMN)
     have = f"{wkt} IS NOT NULL AND {wkt} <> ''"
-    crs = await _wkt_crs(conn, table, have)
+    crs = await _wkt_crs(conn, table, have, schema)
     if crs != "itm":
         return crs, {}
     if not await _srid_available(conn, ITM_SRID):
@@ -588,19 +602,19 @@ async def _ensure_degrees(conn, table: str) -> tuple[str, dict]:
                                 f"spatial_ref_sys — cannot reproject"}
 
     ext = _qi(PG_EXT_SCHEMA)
-    parsed = f"{_qt('try_geom')}({wkt}, {ITM_SRID})"
+    parsed = f"{_try_geom()}({wkt}, {ITM_SRID})"
     try:
         # One transaction: the column and the hashes that describe it move
         # together or not at all. A half-converted table would be the one state
         # this module cannot recover from on its own.
         async with conn.transaction():
             tag = await conn.execute(
-                f"UPDATE {_qt(table)} SET {wkt} = "
+                f"UPDATE {_qt(table, schema)} SET {wkt} = "
                 f"{ext}.ST_AsText({ext}.ST_Transform({parsed}, {GEOM_SRID})) "
                 f"WHERE {have} AND {parsed} IS NOT NULL")
             if HASH_COLUMN in live:
                 await conn.execute(
-                    f"UPDATE {_qt(table)} SET {_qi(HASH_COLUMN)} = "
+                    f"UPDATE {_qt(table, schema)} SET {_qi(HASH_COLUMN)} = "
                     f"{_hash_expr(_source_columns(live))}")
     except Exception as exc:  # noqa: BLE001 — the load must survive this
         logger.warning("idx mirror: ITM→WGS84 conversion failed for %s", table,
@@ -616,7 +630,8 @@ async def _ensure_degrees(conn, table: str) -> tuple[str, dict]:
     return "degrees", {"converted": n}
 
 
-async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
+async def _add_geometry(conn, staging: str, columns: list[str],
+                        schema: str = SCHEMA) -> dict:
     """Materialise ``geom`` + a GiST index on ``staging``, before the swap.
 
     Building it on staging rather than on the live table is not a preference:
@@ -647,7 +662,7 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
 
     # ITM-era layers are REPROJECTED here rather than refused, so that a layer's
     # geometry does not depend on when it happened to be scraped.
-    crs, note = await _ensure_degrees(conn, staging)
+    crs, note = await _ensure_degrees(conn, staging, schema)
     if crs == "empty":
         return {"skipped": "no geometry rows"}
     if crs != "degrees":
@@ -658,20 +673,20 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
     try:
         async with conn.transaction():  # all-or-nothing: no half-built column
             await conn.execute(
-                f"ALTER TABLE {_qt(staging)} ADD COLUMN {geom} "
+                f"ALTER TABLE {_qt(staging, schema)} ADD COLUMN {geom} "
                 f"{_qi(PG_EXT_SCHEMA)}.geometry(Geometry, {GEOM_SRID})")
             status = await conn.execute(
-                f"UPDATE {_qt(staging)} SET {geom} = "
-                f"{_qt('try_geom')}({wkt}, {GEOM_SRID}) "
+                f"UPDATE {_qt(staging, schema)} SET {geom} = "
+                f"{_try_geom()}({wkt}, {GEOM_SRID}) "
                 f"WHERE {wkt} IS NOT NULL AND {wkt} <> ''")
             # Rows whose WKT the parser refused. Counted INSIDE the transaction,
             # while the numbers are still true, so a layer that half-converted
             # reports the gap instead of looking complete.
             bad = await conn.fetchval(
-                f"SELECT count(*) FROM {_qt(staging)} "
+                f"SELECT count(*) FROM {_qt(staging, schema)} "
                 f"WHERE {wkt} IS NOT NULL AND {wkt} <> '' AND {geom} IS NULL")
             await conn.execute(
-                f"CREATE INDEX {_qi(_geom_index_name(staging))} ON {_qt(staging)} "
+                f"CREATE INDEX {_qi(_geom_index_name(staging))} ON {_qt(staging, schema)} "
                 f"USING GIST ({geom})")
     except Exception as exc:  # noqa: BLE001 — the load must survive this
         logger.warning("idx mirror: geometry step failed for %s — loading "
@@ -695,7 +710,8 @@ async def _add_geometry(conn, staging: str, columns: list[str]) -> dict:
     return out
 
 
-async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
+async def _fill_geometry(conn, table: str, columns: list[str],
+                         schema: str = SCHEMA) -> dict:
     """Build ``geom`` for the rows an append just added, on the LIVE table.
 
     The incremental path never swaps a table in, so there is no staging copy to
@@ -718,14 +734,14 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
     has_geom = await conn.fetchval(
         "SELECT true FROM information_schema.columns "
         "WHERE table_schema = $1 AND table_name = $2 AND column_name = $3",
-        SCHEMA, table, GEOM_COLUMN)
+        schema, table, GEOM_COLUMN)
     if not has_geom:
-        return await _add_geometry(conn, table, columns)
+        return await _add_geometry(conn, table, columns, schema)
 
     # Whole-table, not just the new rows: the column has ONE frame, and the
     # append path can only reach an ITM table when its source is still ITM too
     # (a CRS change forces a rebuild — see _append).
-    crs, note = await _ensure_degrees(conn, table)
+    crs, note = await _ensure_degrees(conn, table, schema)
     if crs not in ("degrees", "empty"):
         return {"skipped": note.get("skipped") or note.get("error")
                 or f"wkt looks like {crs}, expected degrees (EPSG:{GEOM_SRID})"}
@@ -733,19 +749,19 @@ async def _fill_geometry(conn, table: str, columns: list[str]) -> dict:
     geom, wkt = _qi(GEOM_COLUMN), _qi(WKT_COLUMN)
     pending_wkt = (f"{geom} IS NULL AND {wkt} IS NOT NULL AND {wkt} <> ''")
     sample = await conn.fetchval(
-        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table)} "
+        f"SELECT substring({wkt} from 1 for 120) FROM {_qt(table, schema)} "
         f"WHERE {pending_wkt} LIMIT 1")
     if sample is None:
         return {"skipped": "no geometry rows"}
     try:
         status = await conn.execute(
-            f"UPDATE {_qt(table)} SET {geom} = "
-            f"{_qt('try_geom')}({wkt}, {GEOM_SRID}) WHERE {pending_wkt}")
+            f"UPDATE {_qt(table, schema)} SET {geom} = "
+            f"{_try_geom()}({wkt}, {GEOM_SRID}) WHERE {pending_wkt}")
         # Rows the parser refused keep a NULL geom, so they are re-offered by the
         # WHERE above on every later sync. That is deliberate and bounded (they
         # are a handful): a PostGIS upgrade then fixes them without a reload.
         bad = await conn.fetchval(
-            f"SELECT count(*) FROM {_qt(table)} WHERE {pending_wkt}")
+            f"SELECT count(*) FROM {_qt(table, schema)} WHERE {pending_wkt}")
     except Exception as exc:  # noqa: BLE001 — the append must survive this
         logger.warning("idx mirror: geometry fill failed for %s", table,
                        exc_info=True)
