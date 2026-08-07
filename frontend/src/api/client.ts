@@ -291,6 +291,10 @@ export interface SamplingOptions {
   statuses?: { value: string; items: number }[];
   frontier?: Record<string, string>;
   max_targets?: number;
+  // The modes OVER already runs by itself, per the source's manifest. Absent
+  // means every run of that mode is a click — which is a different dataset to
+  // be looking at, so the panel says which it is.
+  schedule?: Record<string, { interval_seconds: number; last_run_at: string | null }>;
   error?: string;
 }
 
@@ -316,6 +320,17 @@ export interface Version {
     // the in-browser map for heavy GovMap layers whose GeoJSON is too large
     // to load in a browser tab without crashing it.
     total_rows?: number;
+    // This version read a SUBSET of the corpus on purpose — one item, the items
+    // at one status, only what is new, only what is still open (see
+    // app/services/sampling_runs.py). Set by push-version, and absent rather
+    // than false on a full pass.
+    //
+    // Load-bearing for a reader, not only for the shrink guard: a partial
+    // version's row count is a count of what it READ, and next to a full pass's
+    // it reads as a collapse. The register of מבא"ת publishes 11,047 rows after
+    // 36,784 every week and is perfectly healthy.
+    partial_run?: boolean;
+    run_mode?: string;
   } | null;
   resource_mappings: Record<string, any> | null;
   dataset_title?: string | null;

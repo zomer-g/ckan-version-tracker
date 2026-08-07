@@ -338,6 +338,77 @@ async def init_scheduler() -> None:
         misfire_grace_time=300,
     )
 
+    # Scheduled targeted sampling. A source too big to re-read whole says so in
+    # its manifest (``sampling.schedule = {"new": 604800}``) and OVER keeps that
+    # cadence for it — the weekly "which files opened since we last looked",
+    # alongside the far rarer full pass the poll job already runs.
+    #
+    # Why this is not just a shorter poll_interval: on the register that forced
+    # it (Jerusalem building licensing) a full pass is 48 hours and re-reads
+    # 100k files, while the walk that finds the ~15 genuinely new ones is under
+    # a minute. Running the former weekly would spend a fifth of the fleet's
+    # year re-reading files nobody claimed had changed.
+    #
+    # The tick is far shorter than any cadence it serves, and each dataset's own
+    # last-queued time is what decides — so a deploy can never reset a weekly
+    # run into never firing (the trap add_poll_job documents), and a missed tick
+    # costs at most one tick.
+    async def sampling_schedule_job() -> None:
+        from app.models.scrape_task import PRIORITY_ROUTINE
+        from app.services import sampling_runs
+
+        now = datetime.now(timezone.utc)
+        async with async_session() as db:
+            datasets = (await db.execute(
+                select(TrackedDataset).where(
+                    TrackedDataset.is_active.is_(True),
+                    TrackedDataset.status == "active",
+                    TrackedDataset.source_type == "scraper",
+                )
+            )).scalars().all()
+            for ds in datasets:
+                for mode in sampling_runs.SCHEDULABLE_MODES:
+                    interval = sampling_runs.schedule_for(ds, mode)
+                    if not interval:
+                        continue
+                    last = await sampling_runs.last_run_at(db, ds.id, mode)
+                    if last and (now - last).total_seconds() < interval:
+                        continue
+                    try:
+                        _task, summary, _p = await sampling_runs.queue_run(
+                            ds, db, mode=mode, priority=PRIORITY_ROUTINE,
+                            actor="scheduler", reaim=False,
+                            note="דגימה מתוזמנת",
+                        )
+                    except sampling_runs.SamplingBusy:
+                        continue   # something is already queued — next tick
+                    except sampling_runs.SamplingError as e:
+                        logger.warning("Scheduled %s sampling for %s refused: %s",
+                                       mode, ds.ckan_name, e)
+                        continue
+                    except Exception:  # noqa: BLE001 — one bad dataset, not the tick
+                        logger.exception("Scheduled %s sampling for %s failed",
+                                         mode, ds.ckan_name)
+                        await db.rollback()
+                        continue
+                    logger.info("Queued scheduled %s sampling for %s (every %ds) — %s",
+                                mode, ds.ckan_name, interval, summary)
+
+    scheduler.add_job(
+        sampling_schedule_job,
+        trigger=IntervalTrigger(
+            minutes=30,
+            # A few minutes after boot, clear of the poll-job registration
+            # burst — but soon enough that a dataset whose cadence came due
+            # while the dyno was down does not wait another half hour.
+            start_date=datetime.now(timezone.utc) + timedelta(minutes=3),
+        ),
+        id="sampling_schedule",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
     # Auto-discovery: every N hours, map the full data.gov.il catalog and
     # onboard ONE random untracked dataset as a NEON-archived tracked dataset.
     # Off unless AUTO_DISCOVER_ENABLED is set. max_instances=1 + the job's own

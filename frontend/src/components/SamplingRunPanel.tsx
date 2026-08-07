@@ -18,6 +18,16 @@ import { useAuth } from "../auth/AuthContext";
  * Renders nothing unless the dataset's source declares it supports this, so it
  * is invisible on every other dataset rather than being a dead control.
  */
+/** "604800" → "שבוע". A cadence is read, not counted in seconds. */
+function everyLabel(seconds: number): string {
+  const days = Math.round(seconds / 86400);
+  if (days >= 28 && days <= 31) return "חודש";
+  if (days === 7) return "שבוע";
+  if (days >= 1) return `${days} ימים`;
+  const hours = Math.max(1, Math.round(seconds / 3600));
+  return `${hours} שעות`;
+}
+
 export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
   const { user } = useAuth();
   const [opts, setOpts] = useState<SamplingOptions | null>(null);
@@ -45,6 +55,11 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
 
   const labels = opts.mode_labels || {};
   const statuses = opts.statuses || [];
+  // Modes OVER runs on its own cadence. Without this the panel reads the same
+  // whether a mode runs weekly by itself or only ever when someone clicks —
+  // and that difference is the whole question of whether the dataset is
+  // keeping up with its source.
+  const scheduled = Object.entries(opts.schedule || {});
 
   const run = async (mode: string) => {
     setBusy(true);
@@ -96,6 +111,28 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
             {labels.new || "רק חדשות"}
           </button>
         )}
+        {scheduled.map(([mode, s]) => (
+          <span
+            key={mode}
+            title={
+              s.last_run_at
+                ? `הריצה האוטומטית האחרונה: ${new Date(s.last_run_at).toLocaleString("he-IL")}`
+                : "טרם רצה אוטומטית — תיכנס לתור בבדיקה הקרובה"
+            }
+            style={{
+              fontSize: "0.7rem",
+              color: "var(--text-muted)",
+              border: "1px solid var(--border)",
+              borderRadius: "999px",
+              padding: "0.15rem 0.55rem",
+            }}
+          >
+            ⏱ {labels[mode] || mode} — אוטומטי כל {everyLabel(s.interval_seconds)}
+            {s.last_run_at
+              ? `, אחרונה ${new Date(s.last_run_at).toLocaleDateString("he-IL")}`
+              : ", טרם רצה"}
+          </span>
+        ))}
       </div>
 
       {opts.modes.includes("status") && (

@@ -77,28 +77,55 @@ MAX_TARGETS = 20000
 # be pulled page by page by the worker.
 MAX_TARGETS_FROM_DATASET = 250000
 
+# How many key series a "what's new" walk looks at, when the source does not say.
+#
+# A frontier is one entry per series ever seen, and this register has 90 of them
+# — one per year back to the 1930s. Walking all of them is not merely wasteful,
+# it is walking the wrong thing: a series prefix is the year the item was OPENED,
+# and the walk probes the ``.00`` suffix a brand-new item starts at, so a new
+# item can only ever appear at the far end of the CURRENT series. The older 88
+# spend ~25 misses each proving a year that closed decades ago is still closed.
+#
+# Two, not one, because the boundary is a date and runs land on both sides of
+# it: through January a run must still see the tail of last year's numbering.
+DEFAULT_NEW_SERIES_WINDOW = 2
+
+# The modes a source may ask OVER to run on a cadence of its own, via
+# ``sampling.schedule``. Only "new" so far, and the restriction is not
+# arbitrary: "new" is fully specified by the archive (walk forward from the
+# frontier), whereas "status" needs someone to say WHICH status — a selector
+# this module has no basis to invent, and getting it wrong turns a cheap weekly
+# run into a day-long one.
+SCHEDULABLE_MODES = ("new",)
+
 
 def sampling_spec(ds) -> dict | None:
     """The dataset's ``sampling`` block, or None if it declares none.
 
-    Read from the dataset's stored config first, and from its source's MANIFEST
-    when the stored config has none. The fallback is what makes this work on the
-    datasets that already exist: a stored ``scraper_config`` is a snapshot taken
-    when the dataset was created, so without it a manifest that learns to
-    declare sampling would only ever apply to datasets created afterwards —
-    every existing one would need a config backfill, which is precisely the
-    drift the declarative registry exists to avoid.
+    The source's MANIFEST is the base and the dataset's stored config is layered
+    over it, key by key. Both halves are load-bearing:
+
+    * the manifest half is what makes this work on the datasets that already
+      exist. A stored ``scraper_config`` is a snapshot taken when the dataset was
+      created, so a manifest that later learns to declare something — a sampling
+      block at all, a cadence, a narrower walk — would otherwise apply only to
+      datasets created afterwards, and every existing one would need a config
+      backfill. That is precisely the drift the declarative registry exists to
+      avoid, and the datasets with history worth reading are the OLD ones.
+    * the stored half still wins for every key it declares, so a per-dataset
+      choice an admin made stays made.
 
     Resolution goes through the same matcher OVER classifies a pasted URL with,
     so a dataset gets the block its own corpus declares (the register's four
-    modes, the documents index's one) rather than the source's default. The
+    modes, the documents index's two) rather than the source's default. The
     cache is warmed at startup and this is a pure lookup — no DB, so it is safe
     inside response serialization.
     """
-    spec = (ds.scraper_config or {}).get("sampling")
-    if not isinstance(spec, dict) or not spec.get("item_key"):
-        spec = _manifest_spec(ds)
-    if not isinstance(spec, dict) or not spec.get("item_key"):
+    stored = (ds.scraper_config or {}).get("sampling")
+    stored = stored if isinstance(stored, dict) else {}
+    base = _manifest_spec(ds)
+    spec = {**base, **stored} if isinstance(base, dict) else stored
+    if not spec.get("item_key"):
         return None
     return spec
 
@@ -150,8 +177,14 @@ async def resolve_table(ds, db: AsyncSession) -> str | None:
 async def options(ds, db: AsyncSession) -> dict:
     """What the admin panel needs to offer the four buttons: the modes this
     dataset supports, the statuses its items are actually at (with counts, so
-    "לפי סטטוס" shows how much work each choice is), and how far each key series
-    has got."""
+    "לפי סטטוס" shows how much work each choice is), how far each key series has
+    got, and which modes OVER is already running on a cadence of their own.
+
+    That last part is not decoration. A mode that runs weekly by itself and a
+    mode that only ever runs when someone clicks look identical in this panel
+    otherwise, and the difference is the whole question "is this dataset keeping
+    up?" — so the cadence and when it last fired are stated.
+    """
     spec = sampling_spec(ds)
     if not spec:
         return {"enabled": False, "modes": []}
@@ -167,7 +200,17 @@ async def options(ds, db: AsyncSession) -> dict:
         "statuses": [],
         "frontier": {},
         "max_targets": MAX_TARGETS,
+        "schedule": {},
     }
+    for mode in SCHEDULABLE_MODES:
+        seconds = schedule_for(ds, mode)
+        if not seconds:
+            continue
+        last = await last_run_at(db, ds.id, mode)
+        out["schedule"][mode] = {
+            "interval_seconds": seconds,
+            "last_run_at": last.isoformat() if last else None,
+        }
     if not table or not append_store.is_configured():
         return out
     try:
@@ -185,8 +228,89 @@ async def options(ds, db: AsyncSession) -> dict:
     return out
 
 
+def recent_series(frontier: dict, window=None) -> dict:
+    """The last N series of a frontier — the only ones a new item can open in.
+
+    "What's new" means "since the last time we looked", and the frontier already
+    says that per series. What it does not say is that most of its series are
+    dead: a key's prefix is the period the item was opened in, so the run that
+    walks all 90 of a 90-year register spends 88 of them re-proving that 1974 is
+    over. Trimming to the newest few is what keeps a weekly run at minutes
+    rather than an hour, and nothing reachable is lost — a later request against
+    an OLD item is a sub-key of that item (``1999/0448.12``), which the walk
+    does not probe for in any case (it probes ``.00``, what a NEW item opens
+    with) and which a re-sample of the item itself is the honest way to catch.
+
+    ``window=0`` means "every series", for a source whose numbering genuinely
+    does not retire.
+    """
+    try:
+        n = DEFAULT_NEW_SERIES_WINDOW if window is None else int(window)
+    except (TypeError, ValueError):
+        n = DEFAULT_NEW_SERIES_WINDOW
+    frontier = {str(k): v for k, v in (frontier or {}).items() if k}
+    if n <= 0 or len(frontier) <= n:
+        return frontier
+    # Lexicographic on a zero-padded period prefix is chronological, which is
+    # the same assumption key_frontier's max() already rests on.
+    return {k: frontier[k] for k in sorted(frontier, reverse=True)[:n]}
+
+
+def schedule_for(ds, mode: str) -> int | None:
+    """Seconds between automatic runs of ``mode``, if the source asks for any.
+
+    Declared by the source, not by OVER: ``sampling.schedule = {"new": 604800}``
+    on the corpus that wants it. A source that says nothing is polled exactly as
+    it was — this adds a cadence, it never changes the existing one.
+    """
+    if mode not in SCHEDULABLE_MODES:
+        return None
+    sched = (sampling_spec(ds) or {}).get("schedule")
+    if not isinstance(sched, dict):
+        return None
+    try:
+        seconds = int(sched.get(mode))
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+async def last_run_at(db: AsyncSession, dataset_id, mode: str):
+    """When a run of ``mode`` was last QUEUED for this dataset, or None.
+
+    Read off the task queue rather than a column of its own: the task is where a
+    run's mode is already recorded (migration 047), it is never pruned, and it
+    survives a restart — so the cadence cannot be reset by a deploy, which is
+    the failure mode a weekly schedule would show up as monthly.
+
+    Queued, not completed, is deliberate: a run that failed still consumed its
+    slot, and re-firing a 40-minute walk every tick because it errored once is
+    worse than waiting for the next one.
+    """
+    from app.models.scrape_task import ScrapeTask
+
+    return (await db.execute(
+        select(ScrapeTask.created_at)
+        .where(ScrapeTask.tracked_dataset_id == dataset_id,
+               ScrapeTask.params["run_mode"].astext == mode)
+        .order_by(ScrapeTask.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+
 class SamplingError(ValueError):
     """A run that can't be built — unknown mode, missing argument, too big."""
+
+
+class SamplingBusy(SamplingError):
+    """This dataset already has a run in flight.
+
+    Separate from the errors above because it is not a bad request: nothing is
+    wrong with what was asked, it is only the wrong moment. A caller that can
+    wait (the scheduler) skips a tick; one that cannot (an admin watching) is
+    told to wait rather than having a scrape already in flight re-aimed under it
+    — that would publish a version labelled as something it did not read.
+    """
 
 
 async def _targets_from_dataset(
@@ -303,9 +427,16 @@ async def build_params(
     if mode == "new":
         # The frontier is the whole instruction: "start past the highest key you
         # already hold". Tiny, so it rides in the task rather than being fetched.
+        # Narrowed to the live series — see recent_series.
         if spec.get("key_separator"):
-            params["run_frontier"] = await append_store.key_frontier(
+            full = await append_store.key_frontier(
                 table, key_col=spec["item_key"], separator=spec["key_separator"])
+            walked = recent_series(full, spec.get("new_series_window"))
+            params["run_frontier"] = walked
+            if walked:
+                return params, (f"{MODE_LABELS_HE['new']} "
+                                f"(סדרות {', '.join(sorted(walked, reverse=True))}, "
+                                f"מעבר ל-{', '.join(sorted(walked.values(), reverse=True))})")
         return params, MODE_LABELS_HE["new"]
 
     # mode == "status"
@@ -328,3 +459,73 @@ async def build_params(
     params["run_status"] = value
     params["run_target_count"] = total
     return params, f"{MODE_LABELS_HE['status']}: {value} ({total:,} ישויות)"
+
+
+async def queue_run(
+    ds, db: AsyncSession, *, mode: str = "all", status: str | None = None,
+    item: str | None = None, targets_from: str | None = None,
+    priority: int | None = None, actor: str = "admin", reaim: bool = True,
+    note: str = "דגימה ממוקדת",
+) -> tuple:
+    """Put one targeted run on the queue. ``(task, summary, params)``.
+
+    The single path to a sampling task, shared by the admin's button and by the
+    scheduled cadence, so the two cannot drift into meaning different things.
+    The run's parameters belong on the TASK rather than going through poll_job:
+    they ARE the run (migration 047), and the worker reads them merged over the
+    dataset's config when it claims it.
+
+    ``reaim`` is the one place the two callers legitimately differ. At most one
+    active task exists per dataset (uq_scrape_tasks_active_per_dataset), so a
+    PENDING task has to be either re-aimed or yielded to:
+
+    * an admin who clicked supersedes whatever a routine poll queued — that is
+      what clicking meant (``reaim=True``);
+    * a scheduled run must NOT (``reaim=False``). The pending task it would
+      overwrite could be the monthly full pass, and silently converting a
+      48-hour sweep into a 40-minute walk — every week, forever — would quietly
+      cancel the very run that catches what the walk cannot see.
+
+    A RUNNING task is never re-aimed by anyone: a scrape in flight would publish
+    its version under the new label while holding the old one's rows.
+    """
+    from app.models.scrape_task import PRIORITY_MANUAL, ScrapeTask
+    from app.services.activity_log import log_event
+
+    if not getattr(ds, "is_active", True):
+        raise SamplingError(
+            "המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה")
+    params, summary = await build_params(
+        ds, db, mode=mode, status=status, item=item, targets_from=targets_from)
+
+    existing = (await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status.in_(["pending", "running"]),
+        )
+    )).scalar_one_or_none()
+    if existing is not None and (existing.status == "running" or not reaim):
+        raise SamplingBusy(
+            "כבר רצה עכשיו משימה על המאגר הזה — המתן לסיומה"
+            if existing.status == "running"
+            else "כבר ממתינה בתור משימה על המאגר הזה — הדגימה המתוזמנת תחכה לתור הבא")
+
+    prio = PRIORITY_MANUAL if priority is None else priority
+    label = f"{note}: {summary}"[:500]
+    if existing is not None:
+        existing.params = params
+        existing.priority = max(existing.priority or 0, prio)
+        existing.message = label
+        task = existing
+    else:
+        task = ScrapeTask(
+            tracked_dataset_id=ds.id, status="pending", priority=prio,
+            phase="queued", params=params, message=label,
+        )
+        db.add(task)
+    await db.commit()
+    await log_event(
+        event="queued", dataset=ds, status="info", actor=actor,
+        message=f"נוספה לתור {note} — {summary}", detail=str(params),
+    )
+    return task, summary, params

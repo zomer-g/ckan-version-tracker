@@ -1758,9 +1758,7 @@ async def trigger_sample(
     target supersedes whatever a routine poll queued. A RUNNING one is refused —
     re-aiming a scrape already in flight would silently mislabel its version.
     """
-    from app.models.scrape_task import PRIORITY_MANUAL, ScrapeTask
     from app.services import sampling_runs
-    from app.services.activity_log import log_event
 
     uid = parse_uuid(dataset_id, "dataset_id")
     ds = (await db.execute(
@@ -1774,44 +1772,13 @@ async def trigger_sample(
             detail="המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה",
         )
     try:
-        params, summary = await sampling_runs.build_params(
+        task, summary, params = await sampling_runs.queue_run(
             ds, db, mode=body.mode, status=body.status, item=body.item,
-            targets_from=body.targets_from_dataset)
+            targets_from=body.targets_from_dataset, actor=user.email)
+    except sampling_runs.SamplingBusy as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except sampling_runs.SamplingError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    existing = (await db.execute(
-        select(ScrapeTask).where(
-            ScrapeTask.tracked_dataset_id == ds.id,
-            ScrapeTask.status.in_(["pending", "running"]),
-        )
-    )).scalar_one_or_none()
-    if existing and existing.status == "running":
-        raise HTTPException(
-            status_code=409,
-            detail="כבר רצה עכשיו משימה על המאגר הזה — המתן לסיומה",
-        )
-    if existing:
-        existing.params = params
-        existing.priority = max(existing.priority or 0, PRIORITY_MANUAL)
-        existing.message = f"דגימה ממוקדת: {summary}"[:500]
-        task = existing
-    else:
-        task = ScrapeTask(
-            tracked_dataset_id=ds.id,
-            status="pending",
-            priority=PRIORITY_MANUAL,
-            phase="queued",
-            params=params,
-            message=f"דגימה ממוקדת: {summary}"[:500],
-        )
-        db.add(task)
-    await db.commit()
-    await log_event(
-        event="queued", dataset=ds, status="info", actor=user.email,
-        message=f"נוספה לתור דגימה ממוקדת — {summary}",
-        detail=str(params),
-    )
     return {
         "message": "Sampling run queued",
         "dataset_id": str(ds.id),
