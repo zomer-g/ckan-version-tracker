@@ -692,6 +692,7 @@ async def dataset_item_keys(
     dataset_id: str,
     request: Request,
     status: str | None = None,
+    group: str | None = None,
     limit: int = 5000,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
@@ -728,19 +729,34 @@ async def dataset_item_keys(
     table = await sampling_runs.resolve_table(ds, db)
     if not table:
         raise HTTPException(status_code=409, detail="Dataset has no archive table yet")
+    # A named GROUP is the source's own selector — "the publication clocks",
+    # "everything that moved in the past year" — resolved here rather than being
+    # spelled out in the task, so the run and this endpoint cannot disagree
+    # about what the group means. The activity window inside it resolves to an
+    # absolute date on every call, which is why it is computed and not stored.
+    filters: dict = {}
+    if group:
+        try:
+            filters = sampling_runs.group_filters(ds, group)
+        except sampling_runs.SamplingError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        filters = {"value_col": spec.get("status_column") if status else None,
+                   "value": status}
+
     keys, total = await append_store.latest_item_keys(
         table,
         key_col=spec["item_key"],
         order_col=spec.get("sample_column"),
-        value_col=spec.get("status_column") if status else None,
-        value=status,
         limit=limit,
         offset=offset,
+        **filters,
     )
     return {
         "dataset_id": str(ds.id),
         "column": spec["item_key"],
         "status": status,
+        "group": group,
         "keys": keys,
         "total": total,
         "limit": limit,

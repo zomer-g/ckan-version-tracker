@@ -61,12 +61,13 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
   // keeping up with its source.
   const scheduled = Object.entries(opts.schedule || {});
 
-  const run = async (mode: string) => {
+  const run = async (mode: string, group?: string) => {
     setBusy(true);
     setToast(null);
     try {
       const r = await datasetsApi.sample(datasetId, {
         mode,
+        group: mode === "group" ? group : undefined,
         status: mode === "status" ? status || undefined : undefined,
         item: mode === "item" ? item.trim() : undefined,
         targets_from_dataset:
@@ -121,6 +122,24 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
             {labels.open || "רק שטרם נסגרו"}
           </button>
         )}
+        {/* A tracking group is a target list the SOURCE names — "the
+            publication clocks", "everything that moved in the past year" — so
+            each is its own button with its current size on it. The size is the
+            point: a group is not a status, and choosing to run one by hand
+            without seeing how many items it holds is choosing blind. */}
+        {(opts.groups || []).map((g) => (
+          <button
+            key={g.name}
+            className="btn-secondary"
+            style={btn}
+            disabled={busy || !g.items}
+            title={g.error || undefined}
+            onClick={() => run("group", g.name)}
+          >
+            {g.label}
+            {g.items ? ` (${g.items.toLocaleString("he-IL")})` : ""}
+          </button>
+        ))}
         {scheduled.map(([mode, s]) => (
           <span
             key={mode}
@@ -137,7 +156,7 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
               padding: "0.15rem 0.55rem",
             }}
           >
-            ⏱ {labels[mode] || mode} — אוטומטי כל {everyLabel(s.interval_seconds)}
+            ⏱ {s.label || labels[mode] || mode} — אוטומטי כל {everyLabel(s.interval_seconds)}
             {s.last_run_at
               ? `, אחרונה ${new Date(s.last_run_at).toLocaleDateString("he-IL")}`
               : ", טרם רצה"}

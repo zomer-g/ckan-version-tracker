@@ -1714,6 +1714,10 @@ class SampleRequest(BaseModel):
     # ``status``, the filter applies to the SOURCE dataset, which is the only
     # one where the status lives.
     targets_from_dataset: str | None = None
+    # A named tracking group the source declares (mode="group") — "the
+    # publication clocks", "everything that moved in the past year". The
+    # selector lives in the manifest; this only names which one.
+    group: str | None = None
 
 
 @router.get("/{dataset_id}/sampling")
@@ -1774,7 +1778,8 @@ async def trigger_sample(
     try:
         task, summary, params = await sampling_runs.queue_run(
             ds, db, mode=body.mode, status=body.status, item=body.item,
-            targets_from=body.targets_from_dataset, actor=user.email)
+            targets_from=body.targets_from_dataset, group=body.group,
+            actor=user.email)
     except sampling_runs.SamplingBusy as e:
         raise HTTPException(status_code=409, detail=str(e))
     except sampling_runs.SamplingError as e:

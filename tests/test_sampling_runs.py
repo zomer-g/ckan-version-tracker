@@ -604,3 +604,114 @@ def test_an_empty_queue_gets_a_fresh_task_at_the_callers_band(monkeypatch):
     ds.is_active = False
     with pytest.raises(sampling_runs.SamplingError):
         run(sampling_runs.queue_run(ds, _QueueDb(None), mode="new"))
+
+
+# ── 9. named tracking groups ─────────────────────────────────────────────────
+#
+# "לפי סטטוס" turned out to be the wrong axis on the register that forced all of
+# this. 79,943 of its files are at a non-terminal status, but 61,334 of them last
+# moved over a decade ago — re-reading 200 of those against the live site found
+# ZERO changes in five days, while 200 recently-moved ones yielded twelve. A
+# group is what lets a source say "the ones that actually move" instead.
+
+GROUPS = {
+    "publication": {"label_he": "שעוני פרסום", "statuses": ["תום תקופת פרסום", "נוסח פרסום אושר"]},
+    "active": {"label_he": "תיקים שזזו בשנה האחרונה", "activity_within_days": 365,
+               "exclude_statuses": ["הבקשה נסגרה", "הבקשה נגנזה"]},
+}
+SAMPLING_G = {**SAMPLING, "modes": ["all", "new", "group", "status", "item"],
+              "activity_column": "תאריך סטטוס", "groups": GROUPS,
+              "schedule": {"new": 604800, "group:publication": 259200,
+                           "group:active": 604800}}
+
+
+def test_a_group_selects_on_a_set_of_statuses():
+    f = sampling_runs.group_filters(_ds(sampling=SAMPLING_G), "publication")
+    assert f["value_col"] == STATUS_COL
+    assert f["include_values"] == ["תום תקופת פרסום", "נוסח פרסום אושר"]
+    assert "activity_since" not in f
+
+
+def test_a_group_selects_on_WHEN_an_item_last_moved():
+    """The axis that separates the live register from the dead one. Resolved to
+    an absolute date on every call — a window written once into a dataset's
+    config is a fixed date that silently stops moving, and the run keeps
+    succeeding while covering an ever-staler slice."""
+    from datetime import datetime, timedelta, timezone
+
+    f = sampling_runs.group_filters(_ds(sampling=SAMPLING_G), "active")
+    assert f["activity_col"] == "תאריך סטטוס"
+    assert f["exclude_values"] == ["הבקשה נסגרה", "הבקשה נגנזה"]
+    expected = (datetime.now(timezone.utc) - timedelta(days=365)).date().isoformat()
+    assert f["activity_since"] == expected
+
+
+def test_an_unknown_or_empty_group_is_refused_by_name():
+    ds = _ds(sampling=SAMPLING_G)
+    with pytest.raises(sampling_runs.SamplingError) as e:
+        sampling_runs.group_filters(ds, "לא קיים")
+    assert "publication" in str(e.value)      # says what IS declared
+    # A group that selects on nothing would silently mean "the whole register".
+    empty = _ds(sampling={**SAMPLING_G, "groups": {"g": {"label_he": "ריק"}}})
+    with pytest.raises(sampling_runs.SamplingError):
+        sampling_runs.group_filters(empty, "g")
+
+
+def test_an_activity_group_without_a_date_column_is_refused():
+    """Silently dropping the window would turn 'the year's movers' into the
+    whole corpus — a two-hour run into a two-day one, under the same label."""
+    ds = _ds(sampling={**SAMPLING_G, "activity_column": None})
+    with pytest.raises(sampling_runs.SamplingError):
+        sampling_runs.group_filters(ds, "active")
+
+
+def test_a_group_run_is_a_named_list_the_ENGINE_calls_status(monkeypatch):
+    """The engine's fallback branch is a full-corpus discovery sweep, so a mode
+    it does not recognise turns a two-hour run into a two-day one. A group is
+    OVER's idea about how the list was CHOSEN; what the scraper gets told is the
+    thing it already knows how to do — read a named list."""
+    ds = _ds(sampling=SAMPLING_G)
+    monkeypatch.setattr(sampling_runs, "resolve_table",
+                        _async(lambda *a, **k: "append_ykpubdata_x"))
+    monkeypatch.setattr(append_store, "latest_item_keys", _async(lambda *a, **k: ([], 4699)))
+
+    params, summary = run(sampling_runs.build_params(ds, None, mode="group", group="active"))
+    assert params["run_mode"] == "status"          # what the engine understands
+    assert params["run_group"] == "active"         # what OVER meant
+    assert params["run_partial"] is True
+    assert params["run_target_count"] == 4699
+    assert "4,699" in summary and "שזזו בשנה האחרונה" in summary
+    # Still not embedded — the worker pulls it from /keys?group=active.
+    assert "run_targets" not in params
+
+
+def test_a_group_holding_nothing_is_refused_rather_than_run_empty(monkeypatch):
+    ds = _ds(sampling=SAMPLING_G)
+    monkeypatch.setattr(sampling_runs, "resolve_table",
+                        _async(lambda *a, **k: "append_ykpubdata_x"))
+    monkeypatch.setattr(append_store, "latest_item_keys", _async(lambda *a, **k: ([], 0)))
+    with pytest.raises(sampling_runs.SamplingError):
+        run(sampling_runs.build_params(ds, None, mode="group", group="publication"))
+    with pytest.raises(sampling_runs.SamplingError):
+        run(sampling_runs.build_params(ds, None, mode="group", group=""))
+
+
+def test_several_cadences_coexist_on_one_dataset():
+    """A source can want more than one, and they are not one per mode: this
+    register wants its numbering walked weekly, its publication clocks read
+    every three days and its year's movers read weekly."""
+    runs = sampling_runs.scheduled_runs(_ds(sampling=SAMPLING_G))
+    assert {r["key"] for r in runs} == {"new", "group:publication", "group:active"}
+    by_key = {r["key"]: r for r in runs}
+    assert by_key["group:publication"]["interval"] == 259200
+    assert by_key["group:publication"]["mode"] == "group"
+    assert by_key["group:publication"]["group"] == "publication"
+    assert by_key["new"]["group"] is None
+    # A schedule entry for a group that isn't declared, or a mode the source
+    # doesn't offer, is ignored rather than queued as something undefined.
+    bogus = _ds(sampling={**SAMPLING_G,
+                          "schedule": {"group:nope": 3600, "status": 3600, "all": 3600}})
+    assert sampling_runs.scheduled_runs(bogus) == []
+    # And the plain-mode helper still answers for plain modes only.
+    assert sampling_runs.schedule_for(_ds(sampling=SAMPLING_G), "new") == 604800
+    assert sampling_runs.schedule_for(_ds(sampling=SAMPLING_G), "group") is None

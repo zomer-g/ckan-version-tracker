@@ -10,6 +10,7 @@ import { publicApi, TrackedDataset } from "../api/client";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
+import SourceMethodology from "../components/SourceMethodology";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 
 export default function SourceDetailPage() {
@@ -77,6 +78,12 @@ export default function SourceDetailPage() {
       <p className="text-muted text-sm" style={{ marginBottom: "1rem" }}>
         {mine.length} {t("sources.datasets_count", "מאגרים במעקב")}
       </p>
+
+      {/* How this source is tracked and why — open here, because on the
+          source's own page the method IS the subject. */}
+      <div style={{ marginBottom: "1.25rem" }}>
+        <SourceMethodology sourceId={sourceId} />
+      </div>
 
       {mine.length === 0 ? (
         <div className="empty-state">{t("sources.no_datasets", "אין מאגרים למקור זה.")}</div>

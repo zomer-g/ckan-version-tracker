@@ -256,7 +256,17 @@ export const datasets = {
   // currently at, how far each key series has got; `sample` queues one run.
   sampling: (id: string) =>
     request<SamplingOptions>(`/datasets/${id}/sampling`),
-  sample: (id: string, body: { mode: string; status?: string; item?: string; targets_from_dataset?: string }) =>
+  sample: (
+    id: string,
+    body: {
+      mode: string;
+      status?: string;
+      item?: string;
+      targets_from_dataset?: string;
+      /** For mode="group": which named group the source declares. */
+      group?: string;
+    },
+  ) =>
     request<{ message: string; task_id: string; mode: string; summary: string }>(
       `/datasets/${id}/sample`,
       { method: "POST", body: JSON.stringify(body) },
@@ -291,10 +301,23 @@ export interface SamplingOptions {
   statuses?: { value: string; items: number }[];
   frontier?: Record<string, string>;
   max_targets?: number;
-  // The modes OVER already runs by itself, per the source's manifest. Absent
-  // means every run of that mode is a click — which is a different dataset to
-  // be looking at, so the panel says which it is.
-  schedule?: Record<string, { interval_seconds: number; last_run_at: string | null }>;
+  // The runs OVER already performs by itself, per the source's manifest, keyed
+  // by "new" / "group:<name>". Absent means every run is a click — which is a
+  // different dataset to be looking at, so the panel says which it is.
+  schedule?: Record<
+    string,
+    {
+      mode: string;
+      group: string | null;
+      label: string;
+      interval_seconds: number;
+      last_run_at: string | null;
+    }
+  >;
+  // Named target lists the source declares — "the publication clocks",
+  // "everything that moved in the past year". `items` is how many the group
+  // holds right now, which is what makes running one a considered choice.
+  groups?: { name: string; label: string; items: number | null; error?: string }[];
   error?: string;
 }
 

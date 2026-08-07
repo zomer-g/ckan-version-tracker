@@ -79,6 +79,17 @@ export interface RegistrySourceView {
   default_poll_interval: number;
   neon_eligible: boolean;
   spatial: boolean;
+  /** Long-form Hebrew prose on how this source is tracked and why. Plain text
+   *  with "## " headings and "- " bullets — never HTML, because it arrives from
+   *  a worker's manifest. See SourceMethodology. */
+  methodology_he?: string | null;
+}
+
+/** Every registry source by id, for the pages that need more than its badge. */
+const runtimeSources = new Map<string, RegistrySourceView>();
+
+export function registrySource(id: string | undefined): RegistrySourceView | null {
+  return (id && runtimeSources.get(id)) || null;
 }
 
 export function primeRegistryBadges(
@@ -86,7 +97,9 @@ export function primeRegistryBadges(
   lang: string,
 ): void {
   runtimeBadges.clear();
+  runtimeSources.clear();
   for (const source of sources) {
+    runtimeSources.set(source.id, source);
     runtimeBadges.set(source.ckan_id_prefix, {
       id: source.id,
       bg: source.badge.bg,

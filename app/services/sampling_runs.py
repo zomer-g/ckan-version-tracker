@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 # appears and build_params refuses it. That is how "open" ran for a week as an
 # undocumented key in one dataset's scraper_config — the mode worked, and
 # nothing in the product could see it.
-MODES = ("all", "new", "open", "status", "item")
+MODES = ("all", "new", "open", "group", "status", "item")
 
 # What each mode is called where a human reads it (the admin panel, the
 # activity log, a version's change_summary).
@@ -72,6 +72,7 @@ MODE_LABELS_HE = {
     "all": "כל הישויות במאגר",
     "new": "רק ישויות חדשות באתר",
     "open": "רק ישויות שטרם נסגרו",
+    "group": "קבוצת מעקב",
     "status": "לפי סטטוס",
     "item": "תיק בודד",
 }
@@ -121,7 +122,7 @@ DEFAULT_NEW_SERIES_WINDOW = 2
 # of a terminal status. "status" is excluded for exactly that reason — it needs
 # someone to say WHICH status, a selector this module has no basis to invent,
 # and getting it wrong turns a cheap weekly run into a day-long one.
-SCHEDULABLE_MODES = ("new", "open")
+SCHEDULABLE_MODES = ("new", "open", "group")
 
 
 def sampling_spec(ds) -> dict | None:
@@ -226,14 +227,15 @@ async def options(ds, db: AsyncSession) -> dict:
         "frontier": {},
         "max_targets": MAX_TARGETS,
         "schedule": {},
+        "groups": [],
     }
-    for mode in SCHEDULABLE_MODES:
-        seconds = schedule_for(ds, mode)
-        if not seconds:
-            continue
-        last = await last_run_at(db, ds.id, mode)
-        out["schedule"][mode] = {
-            "interval_seconds": seconds,
+    for run in scheduled_runs(ds):
+        last = await last_run_at(db, ds.id, run["mode"], run["group"])
+        out["schedule"][run["key"]] = {
+            "mode": run["mode"],
+            "group": run["group"],
+            "label": run["label"],
+            "interval_seconds": run["interval"],
             "last_run_at": last.isoformat() if last else None,
         }
     if not table or not append_store.is_configured():
@@ -247,6 +249,21 @@ async def options(ds, db: AsyncSession) -> dict:
         if spec.get("key_separator"):
             out["frontier"] = await append_store.key_frontier(
                 table, key_col=spec["item_key"], separator=spec["key_separator"])
+        # How big each group is RIGHT NOW. The whole point of a group is that
+        # its size is not the size of a status, so a panel that named groups
+        # without counting them would hide the only number that matters when
+        # choosing to run one by hand.
+        for name in groups(ds):
+            entry = {"name": name, "label": group_label(ds, name), "items": None}
+            try:
+                _k, total = await append_store.latest_item_keys(
+                    table, key_col=spec["item_key"],
+                    order_col=spec.get("sample_column"), limit=1,
+                    **group_filters(ds, name))
+                entry["items"] = total
+            except SamplingError as e:
+                entry["error"] = str(e)
+            out["groups"].append(entry)
     except Exception as e:  # noqa: BLE001 — the panel must render without the archive
         logger.warning("sampling options for %s: %s", ds.id, e)
         out["error"] = str(e)
@@ -281,45 +298,160 @@ def recent_series(frontier: dict, window=None) -> dict:
     return {k: frontier[k] for k in sorted(frontier, reverse=True)[:n]}
 
 
+# ── named tracking groups ────────────────────────────────────────────────────
+#
+# A group is a target list the SOURCE names and OVER computes: "the six statuses
+# that are publication clocks", "everything that moved in the last year". It
+# exists because "לפי סטטוס" turned out to be the wrong axis on a register whose
+# statuses are not the thing that varies — see GROUP_SELECTORS below for what a
+# group may select on, and the ykpubdata manifest for the worked example.
+#
+# The declaration lives in the sampling block::
+#
+#     "activity_column": "תאריך סטטוס",     # when the item last moved AT SOURCE
+#     "groups": {
+#         "publication": {"label_he": "…", "statuses": [...]},
+#         "active": {"label_he": "…", "activity_within_days": 365,
+#                    "exclude_statuses": [...]},
+#     },
+#     "schedule": {"new": 604800, "group:publication": 259200,
+#                  "group:active": 604800},
+
+GROUP_SELECTORS = ("statuses", "exclude_statuses", "activity_within_days")
+
+# A schedule key naming a group, e.g. "group:active".
+GROUP_SCHEDULE_PREFIX = "group:"
+
+
+def groups(ds) -> dict:
+    """Every tracking group this dataset's source declares, by name."""
+    g = (sampling_spec(ds) or {}).get("groups")
+    if not isinstance(g, dict):
+        return {}
+    return {str(k): v for k, v in g.items() if isinstance(v, dict)}
+
+
+def group_label(ds, name: str) -> str:
+    g = groups(ds).get(name) or {}
+    return str(g.get("label_he") or name)
+
+
+def group_filters(ds, name: str) -> dict:
+    """``latest_item_keys`` kwargs for one group, or raise if it isn't declared.
+
+    The activity window is resolved to an absolute date HERE, on every run,
+    rather than being stored: a window written once into a dataset's config is a
+    fixed date that silently stops moving, and the run keeps succeeding while
+    covering an ever-staler slice.
+    """
+    spec = sampling_spec(ds) or {}
+    g = groups(ds).get(name)
+    if g is None:
+        known = ", ".join(sorted(groups(ds))) or "אין"
+        raise SamplingError(f"קבוצת מעקב לא מוכרת: {name!r} (הקבוצות שהוגדרו: {known})")
+    if not any(k in g for k in GROUP_SELECTORS):
+        raise SamplingError(f"קבוצת המעקב {name!r} לא מגדירה שום תנאי סינון")
+
+    out: dict = {"value_col": spec.get("status_column")}
+    if g.get("statuses"):
+        out["include_values"] = list(g["statuses"])
+    if g.get("exclude_statuses"):
+        out["exclude_values"] = list(g["exclude_statuses"])
+    days = g.get("activity_within_days")
+    if days:
+        from datetime import datetime, timedelta, timezone
+
+        col = g.get("activity_column") or spec.get("activity_column")
+        if not col:
+            raise SamplingError(
+                f"קבוצת המעקב {name!r} מסננת לפי ותק, אבל לא הוגדרה עמודת תאריך "
+                "(activity_column)")
+        since = (datetime.now(timezone.utc) - timedelta(days=int(days))).date()
+        out["activity_col"] = col
+        out["activity_since"] = since.isoformat()
+    return out
+
+
+def scheduled_runs(ds) -> list[dict]:
+    """Every automatic run this source asks OVER to keep, as
+    ``{key, mode, group, interval, label}``.
+
+    One list rather than a per-mode lookup, because a source can want several
+    cadences at once and they are not one per mode: the Jerusalem register wants
+    its numbering walked weekly, its publication clocks read every three days,
+    and everything that moved in the past year read weekly — three runs, two of
+    which are the same mode aimed at different groups.
+    """
+    sched = (sampling_spec(ds) or {}).get("schedule")
+    if not isinstance(sched, dict):
+        return []
+    declared = available_modes(ds)
+    out: list[dict] = []
+    for key, raw in sched.items():
+        key = str(key)
+        try:
+            seconds = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if seconds <= 0:
+            continue
+        if key.startswith(GROUP_SCHEDULE_PREFIX):
+            name = key[len(GROUP_SCHEDULE_PREFIX):]
+            if "group" not in declared or name not in groups(ds):
+                continue
+            out.append({"key": key, "mode": "group", "group": name,
+                        "interval": seconds, "label": group_label(ds, name)})
+        else:
+            if key not in SCHEDULABLE_MODES or key not in declared:
+                continue
+            out.append({"key": key, "mode": key, "group": None,
+                        "interval": seconds, "label": MODE_LABELS_HE.get(key, key)})
+    return out
+
+
 def schedule_for(ds, mode: str) -> int | None:
-    """Seconds between automatic runs of ``mode``, if the source asks for any.
+    """Seconds between automatic runs of a plain (group-less) ``mode``, if the
+    source asks for any. See ``scheduled_runs`` for the general form.
 
     Declared by the source, not by OVER: ``sampling.schedule = {"new": 604800}``
     on the corpus that wants it. A source that says nothing is polled exactly as
     it was — this adds a cadence, it never changes the existing one.
     """
-    if mode not in SCHEDULABLE_MODES:
-        return None
-    sched = (sampling_spec(ds) or {}).get("schedule")
-    if not isinstance(sched, dict):
-        return None
-    try:
-        seconds = int(sched.get(mode))
-    except (TypeError, ValueError):
-        return None
-    return seconds if seconds > 0 else None
+    for run in scheduled_runs(ds):
+        if run["mode"] == mode and run["group"] is None:
+            return run["interval"]
+    return None
 
 
-async def last_run_at(db: AsyncSession, dataset_id, mode: str):
-    """When a run of ``mode`` was last QUEUED for this dataset, or None.
+async def last_run_at(db: AsyncSession, dataset_id, mode: str, group=None):
+    """When a run of ``mode`` (aimed at ``group``) was last QUEUED, or None.
 
     Read off the task queue rather than a column of its own: the task is where a
-    run's mode is already recorded (migration 047), it is never pruned, and it
-    survives a restart — so the cadence cannot be reset by a deploy, which is
-    the failure mode a weekly schedule would show up as monthly.
+    run's parameters are already recorded (migration 047), it is never pruned,
+    and it survives a restart — so the cadence cannot be reset by a deploy,
+    which is the failure mode a weekly schedule would show up as monthly.
+
+    Matched on ``run_group`` when there is one, because two groups are two
+    independent cadences: the publication clocks run every three days and the
+    year's movers weekly, and both are queued as the same underlying named-list
+    run. Keying only on the mode would let whichever fired first hold the other
+    one's slot, and the three-day group would quietly become weekly.
 
     Queued, not completed, is deliberate: a run that failed still consumed its
-    slot, and re-firing a 40-minute walk every tick because it errored once is
-    worse than waiting for the next one.
+    slot, and re-firing a long run every tick because it errored once is worse
+    than waiting for the next one.
     """
     from app.models.scrape_task import ScrapeTask
 
+    q = select(ScrapeTask.created_at).where(
+        ScrapeTask.tracked_dataset_id == dataset_id)
+    if group:
+        q = q.where(ScrapeTask.params["run_group"].astext == str(group))
+    else:
+        q = q.where(ScrapeTask.params["run_mode"].astext == mode,
+                    ScrapeTask.params["run_group"].astext.is_(None))
     return (await db.execute(
-        select(ScrapeTask.created_at)
-        .where(ScrapeTask.tracked_dataset_id == dataset_id,
-               ScrapeTask.params["run_mode"].astext == mode)
-        .order_by(ScrapeTask.created_at.desc())
-        .limit(1)
+        q.order_by(ScrapeTask.created_at.desc()).limit(1)
     )).scalar_one_or_none()
 
 
@@ -393,6 +525,7 @@ def _parse_uuid(value: str):
 async def build_params(
     ds, db: AsyncSession, *, mode: str, status: str | None = None,
     item: str | None = None, targets_from: str | None = None,
+    group: str | None = None,
 ) -> tuple[dict, str]:
     """``(params, summary_he)`` for one targeted run.
 
@@ -448,6 +581,33 @@ async def build_params(
     table = await resolve_table(ds, db)
     if not table:
         raise SamplingError("למאגר אין עדיין טבלת ארכיון — הרץ דגימה מלאה אחת קודם")
+
+    if mode == "group":
+        name = (group or "").strip()
+        if not name:
+            raise SamplingError("לא נבחרה קבוצת מעקב")
+        filters = group_filters(ds, name)
+        _keys, total = await append_store.latest_item_keys(
+            table, key_col=spec["item_key"], order_col=spec.get("sample_column"),
+            limit=1, **filters,
+        )
+        if total == 0:
+            raise SamplingError(f"אין ישויות בקבוצת המעקב {group_label(ds, name)!r}")
+        if total > MAX_TARGETS_FROM_DATASET:
+            raise SamplingError(
+                f"{total:,} ישויות בקבוצה {group_label(ds, name)!r} — מעל התקרה של "
+                f"{MAX_TARGETS_FROM_DATASET:,}")
+        # The ENGINE is told "status", which is what it calls reading a named
+        # list of keys; the group is OVER's business — it describes how the list
+        # was CHOSEN, not what the scraper does with it. Sending an unknown mode
+        # would be worse than cosmetic: the engine's fallback branch is a
+        # full-corpus discovery sweep, so a mode it does not recognise turns a
+        # two-hour run into a two-day one.
+        params["run_mode"] = "status"
+        params["run_partial"] = True
+        params["run_group"] = name
+        params["run_target_count"] = total
+        return params, f"{group_label(ds, name)} ({total:,} ישויות)"
 
     if mode == "new":
         # The frontier is the whole instruction: "start past the highest key you
@@ -517,6 +677,7 @@ async def build_params(
 async def queue_run(
     ds, db: AsyncSession, *, mode: str = "all", status: str | None = None,
     item: str | None = None, targets_from: str | None = None,
+    group: str | None = None,
     priority: int | None = None, actor: str = "admin", reaim: bool = True,
     note: str = "דגימה ממוקדת",
 ) -> tuple:
@@ -549,7 +710,8 @@ async def queue_run(
         raise SamplingError(
             "המאגר מושהה (is_active=false) — הפעל אותו מחדש לפני דגימה")
     params, summary = await build_params(
-        ds, db, mode=mode, status=status, item=item, targets_from=targets_from)
+        ds, db, mode=mode, status=status, item=item, targets_from=targets_from,
+        group=group)
 
     existing = (await db.execute(
         select(ScrapeTask).where(

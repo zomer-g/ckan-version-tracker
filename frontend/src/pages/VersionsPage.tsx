@@ -19,6 +19,7 @@ import TagChips from "../components/TagChips";
 import DriveExportButton from "../components/DriveExportButton";
 import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
 import SamplingRunPanel from "../components/SamplingRunPanel";
+import SourceMethodology from "../components/SourceMethodology";
 import ScrapeStatusBanner from "../components/ScrapeStatusBanner";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
@@ -576,6 +577,17 @@ export default function VersionsPage() {
       {/* A collection in flight. Public, and only rendered while one is running
           — a dataset that takes days to collect otherwise looks abandoned. */}
       {datasetId && <ScrapeStatusBanner datasetId={datasetId} />}
+
+      {/* How this source is tracked and why — the cadence, what was measured to
+          choose it, what it deliberately leaves to the full pass. Folded here:
+          on a dataset page the versions are the subject and the method is the
+          background to them. Renders nothing for a source that declares none. */}
+      {dataset?.source_type === "scraper" && (
+        <SourceMethodology
+          sourceId={sourceBadgeFor(dataset.source_type, dataset.organization, dataset.ckan_id).id}
+          collapsed
+        />
+      )}
 
       {/* Targeted re-sampling (admin, and only for a source that declares it):
           re-read the whole register, only what is new, only the items at one

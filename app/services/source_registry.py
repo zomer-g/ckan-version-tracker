@@ -158,6 +158,23 @@ class SourceManifest(BaseModel):
     origin: str | None = None
     source_link_he: str | None = None
     source_link_en: str | None = None
+    # Long-form Hebrew prose about HOW this source is tracked and why — the
+    # analysis behind its cadence, what was measured, what was deliberately left
+    # out. Rendered on the source's page and on each of its datasets.
+    #
+    # This exists because a tracking decision is not self-evident from the data
+    # it produces. A reader looking at the Jerusalem register sees files
+    # re-read on three different clocks and has no way to know that the choice
+    # rests on a measurement — that 61,334 of its "open" files have not moved in
+    # a decade and that re-reading 200 of them found nothing — or that the
+    # monthly full pass is what makes the narrower runs safe. Without somewhere
+    # to say it, that reasoning lives only in a commit message.
+    #
+    # Paragraphs are split on a blank line; a line starting with "## " is a
+    # heading and one starting with "- " is a bullet. No HTML: the text comes
+    # from a worker's manifest, and rendering markup from there would make any
+    # worker able to inject into the page.
+    methodology_he: str | None = None
     default_poll_interval: int = 86400
     # True when the engine emits row-level tabular data (so the dataset can be
     # loaded into the NEON append DB and queried in the SQL console), rather
@@ -519,6 +536,7 @@ def display_view(man: SourceManifest) -> dict[str, Any]:
         },
         "source_link_he": man.source_link_he or f"לצפייה באתר {man.label_he}",
         "source_link_en": man.source_link_en or f"View on {man.resolved_origin}",
+        "methodology_he": man.methodology_he,
         "default_poll_interval": man.default_poll_interval,
         "neon_eligible": man.neon_eligible,
         "spatial": man.spatial,

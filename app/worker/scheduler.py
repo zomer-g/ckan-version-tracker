@@ -367,32 +367,37 @@ async def init_scheduler() -> None:
                 )
             )).scalars().all()
             for ds in datasets:
-                for mode in sampling_runs.SCHEDULABLE_MODES:
-                    interval = sampling_runs.schedule_for(ds, mode)
-                    if not interval:
-                        continue
-                    last = await sampling_runs.last_run_at(db, ds.id, mode)
-                    if last and (now - last).total_seconds() < interval:
+                # A source can want several cadences at once, and they are not
+                # one per mode: the Jerusalem register wants its numbering
+                # walked weekly, its publication clocks read every three days
+                # and its year's movers read weekly. Each is due on its own
+                # clock, and only ONE can be queued per tick because a dataset
+                # holds at most one active task — the rest come round again.
+                for run in sampling_runs.scheduled_runs(ds):
+                    last = await sampling_runs.last_run_at(
+                        db, ds.id, run["mode"], run["group"])
+                    if last and (now - last).total_seconds() < run["interval"]:
                         continue
                     try:
                         _task, summary, _p = await sampling_runs.queue_run(
-                            ds, db, mode=mode, priority=PRIORITY_ROUTINE,
-                            actor="scheduler", reaim=False,
-                            note="דגימה מתוזמנת",
+                            ds, db, mode=run["mode"], group=run["group"],
+                            priority=PRIORITY_ROUTINE, actor="scheduler",
+                            reaim=False, note="דגימה מתוזמנת",
                         )
                     except sampling_runs.SamplingBusy:
-                        continue   # something is already queued — next tick
+                        break      # dataset is occupied — every run here waits
                     except sampling_runs.SamplingError as e:
-                        logger.warning("Scheduled %s sampling for %s refused: %s",
-                                       mode, ds.ckan_name, e)
+                        logger.warning("Scheduled %s for %s refused: %s",
+                                       run["key"], ds.ckan_name, e)
                         continue
                     except Exception:  # noqa: BLE001 — one bad dataset, not the tick
-                        logger.exception("Scheduled %s sampling for %s failed",
-                                         mode, ds.ckan_name)
+                        logger.exception("Scheduled %s for %s failed",
+                                         run["key"], ds.ckan_name)
                         await db.rollback()
                         continue
-                    logger.info("Queued scheduled %s sampling for %s (every %ds) — %s",
-                                mode, ds.ckan_name, interval, summary)
+                    logger.info("Queued scheduled %s for %s (every %ds) — %s",
+                                run["key"], ds.ckan_name, run["interval"], summary)
+                    break          # one run per dataset per tick
 
     scheduler.add_job(
         sampling_schedule_job,
