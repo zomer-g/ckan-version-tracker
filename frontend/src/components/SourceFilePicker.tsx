@@ -208,7 +208,7 @@ export default function SourceFilePicker({
                   type="checkbox"
                   checked={selected.has(file.path)}
                   onChange={() => toggle(file.path)}
-                  style={{ marginTop: "0.2rem" }}
+                  style={{ width: "1rem", height: "1rem", flexShrink: 0, marginTop: "0.2rem" }}
                 />
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ wordBreak: "break-word" }}>{file.title}</span>

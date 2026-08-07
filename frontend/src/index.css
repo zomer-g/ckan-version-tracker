@@ -138,6 +138,17 @@ select {
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
+/* A tick is a glyph, not a field. The rule above is written for text inputs,
+   and stretching a checkbox to `width: 100%` makes it eat its whole flex row
+   and squeeze the label beside it to zero width — the file picker's names
+   vanished that way. Call sites that set their own size still win. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  padding: 0;
+  flex: none;
+}
+
 input:focus,
 select:focus {
   outline: none;
