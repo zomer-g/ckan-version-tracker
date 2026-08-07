@@ -1466,6 +1466,258 @@ label {
   color: var(--text-muted);
 }
 
+/* Government-decision analysis (/rationale/:key) — shares the about-* shell.
+   Three visual layers matching the three reveal steps: the decision text reads
+   as a quoted document, the operative tasks as cards inset into their clause,
+   and the analysis as a colour-coded triptych inside each task. */
+.decision-draft-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  background: #FEF3C7;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  padding: 0.75rem 1.25rem;
+  margin-bottom: 1.5rem;
+  color: #78350F;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.decision-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.decision-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.decision-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.decision-part {
+  margin-bottom: 2rem;
+}
+
+.decision-part-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--text-muted);
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.decision-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.decision-section-head h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--primary);
+  line-height: 1.4;
+}
+
+.decision-section-label {
+  flex: none;
+  display: inline-block;
+  min-width: 2.75rem;
+  text-align: center;
+  background: var(--primary-50);
+  color: var(--primary-700);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* The decision's own words: preserve the clause numbering and line breaks that
+   carry its structure, and set them apart from the editorial voice around. */
+.decision-text {
+  white-space: pre-wrap;
+  color: var(--text-muted);
+  line-height: 1.9;
+  font-size: 0.95rem;
+  border-inline-start: 3px solid var(--border);
+  padding-inline-start: 1rem;
+}
+
+.decision-tasks {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px dashed var(--border);
+}
+
+.decision-tasks-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.decision-task {
+  background: var(--primary-50);
+  border: 1px solid var(--primary-100);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.decision-task:last-child {
+  margin-bottom: 0;
+}
+
+.decision-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.decision-task-head h5 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--primary-800);
+  line-height: 1.5;
+}
+
+.decision-status {
+  flex: none;
+  border-radius: var(--radius-full);
+  padding: 0.15rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.decision-status-done {
+  background: #DCFCE7;
+  color: #166534;
+}
+
+.decision-status-partial {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.decision-status-not-done {
+  background: #FEE2E2;
+  color: #991B1B;
+}
+
+.decision-status-unknown {
+  background: var(--border);
+  color: var(--text-muted);
+}
+
+.decision-task-obligation {
+  margin-top: 0.5rem;
+  color: var(--text);
+  line-height: 1.75;
+  font-size: 0.92rem;
+}
+
+.decision-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.decision-task-meta > div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.decision-task-meta dt {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.decision-task-meta dt::after {
+  content: ":";
+}
+
+.decision-task-meta dd {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.decision-analysis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.decision-analysis-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  border-top: 3px solid var(--border);
+  padding: 0.85rem 1rem;
+}
+
+.decision-analysis-block h6 {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.4rem;
+}
+
+.decision-analysis-block p {
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.decision-analysis-potential {
+  border-top-color: var(--primary-500);
+}
+
+.decision-analysis-potential h6 {
+  color: var(--primary-700);
+}
+
+.decision-analysis-actual {
+  border-top-color: var(--warning);
+}
+
+.decision-analysis-actual h6 {
+  color: #92400E;
+}
+
+.decision-analysis-damage {
+  border-top-color: var(--danger);
+}
+
+.decision-analysis-damage h6 {
+  color: #991B1B;
+}
+
+@media (max-width: 720px) {
+  .decision-analysis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .project-link {
   display: block;
   padding: 1rem 1.25rem;

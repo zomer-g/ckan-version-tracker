@@ -56,6 +56,8 @@ from app.api.tags import admin_router as admin_tags_router
 from app.api.admin_mcp_users import router as admin_mcp_users_router
 from app.api.page_content import router as page_content_router
 from app.api.page_content import admin_router as admin_page_content_router
+from app.api.decision_analysis import router as decision_analysis_router
+from app.api.decision_analysis import admin_router as admin_decision_analysis_router
 from app.api.v1 import router as v1_router
 from app.config import settings
 from app.rate_limit import limiter, rate_limit_exceeded_handler
@@ -242,6 +244,8 @@ app.include_router(v1_router)
 app.include_router(admin_mcp_users_router)
 app.include_router(page_content_router)
 app.include_router(admin_page_content_router)
+app.include_router(decision_analysis_router)
+app.include_router(admin_decision_analysis_router)
 
 # MCP server + its OAuth (registered before the SPA fallback so /mcp and the
 # root-path /.well-known/*/mcp metadata return real responses, not index.html).

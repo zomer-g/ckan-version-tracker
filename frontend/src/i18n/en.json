@@ -388,6 +388,20 @@
     "source_jester": "The Government Jester — a Chrome extension for downloading Israeli government datasets",
     "source_about": "The About page — what this system is and how it works"
   },
+  "decision": {
+    "not_found_title": "The analysis isn't available",
+    "not_found_text": "This page hasn't been published yet. In the meantime, see the rationale page.",
+    "draft_title": "Draft — not shown to the public",
+    "draft_text": "Visible to you as an admin only. Publish it from the \"Decision analysis\" tab in the admin panel.",
+    "meta_decision": "Government decision",
+    "meta_sections": "clauses",
+    "meta_tasks": "operative tasks",
+    "analysis_locked": "Reveal the operative tasks first",
+    "analysis_empty": "Not written yet.",
+    "back_to_rationale": "Back to the rationale page",
+    "rationale_link_title": "A full analysis of decision 1933",
+    "rationale_link_text": "The decision's full text, the operative tasks each clause created, and what actually became of them."
+  },
   "common": {
     "loading": "Loading...",
     "error": "Error",

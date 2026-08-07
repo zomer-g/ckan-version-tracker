@@ -15,6 +15,7 @@ from app.models.llm_budget import LlmDailyUsage
 from app.models.source_registry import SourceRegistry
 from app.models.source_limit import SourceLimit
 from app.models.worker_node import WorkerNode
+from app.models.decision_analysis import DecisionAnalysis
 
 __all__ = [
     "User",
@@ -35,4 +36,5 @@ __all__ = [
     "SourceRegistry",
     "SourceLimit",
     "WorkerNode",
+    "DecisionAnalysis",
 ]

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { datasets as datasetsApi } from "../api/client";
+import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 
 /**
  * Brand icon — inline SVG (no extra dep) shaped as a stacked-archive /
@@ -106,6 +107,10 @@ export default function Navbar() {
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
+  // Published decision analyses, if any — cached module-side, so this is one
+  // request per session and not one per navigation.
+  const publishedDecisions = usePublishedDecisions();
+
   // Two-level structure: a few flat entry points + grouped dropdowns.
   const navEntries: NavEntry[] = [
     { to: "/", label: t("nav.search") },
@@ -138,6 +143,12 @@ export default function Navbar() {
       children: [
         { to: "/about", label: t("nav.about") },
         { to: "/rationale", label: t("nav.rationale", "הרציונל") },
+        // Decision analyses appear here only once published — an unpublished
+        // draft returns nothing from the index endpoint and leaves no link.
+        ...publishedDecisions.map((d) => ({
+          to: `/rationale/${d.key}`,
+          label: t("nav.decision", "החלטה") + " " + d.key,
+        })),
         { to: "/api", label: t("nav.api", "API") },
       ],
     },

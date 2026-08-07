@@ -1,6 +1,7 @@
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
+import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 
 const DECISION_URL = "https://www.gov.il/he/pages/2016_dec1933";
 const REPORT_URL =
@@ -21,6 +22,9 @@ function ExtLink({ href, children }: { href: string; children?: React.ReactNode 
 export default function RationalePage() {
   const { t } = useTranslation();
   usePageContentOverrides("rationale");
+  // Empty until an analysis is published — the card below then appears on its
+  // own, with no code change.
+  const decisions = usePublishedDecisions();
 
   return (
     <div>
@@ -117,6 +121,23 @@ export default function RationalePage() {
           </ul>
           <p>{t("rationale.fix_text2")}</p>
         </div>
+
+        {decisions.length > 0 && (
+          <div className="about-card">
+            <h2>{t("decision.rationale_link_title", "ניתוח מלא של החלטה 1933")}</h2>
+            <p>{t("decision.rationale_link_text")}</p>
+            <ul className="family-list">
+              {decisions.map((d) => (
+                <li key={d.key}>
+                  <strong>
+                    <Link to={`/rationale/${d.key}`}>{d.title}</Link>
+                  </strong>
+                  {d.subtitle ? `: ${d.subtitle}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="about-card">
           <h2>{t("rationale.sources_title")}</h2>

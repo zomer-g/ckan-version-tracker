@@ -15,6 +15,7 @@ import AppendArchivePage from "./pages/AppendArchivePage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
 import RationalePage from "./pages/RationalePage";
+import DecisionAnalysisPage from "./pages/DecisionAnalysisPage";
 import ApiPage from "./pages/ApiPage";
 import ProjectImportPage from "./pages/ProjectImportPage";
 import OcalPage from "./pages/OcalPage";
@@ -141,6 +142,9 @@ export default function App() {
           <Route path="/projects/ocoi" element={<ProjectImportPage project="ocoi" />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />
+          {/* The page itself gates on `published` server-side, so the route may
+              exist while the analysis is still a draft — only an admin sees it. */}
+          <Route path="/rationale/:key" element={<DecisionAnalysisPage />} />
           <Route
             path="/growth"
             element={

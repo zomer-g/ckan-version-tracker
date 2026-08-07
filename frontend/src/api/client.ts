@@ -1836,14 +1836,21 @@ export interface WorkerCurrentTask {
   dataset_title: string;
   phase: string | null;
   progress: number;
+  /** Which process on the machine holds it (`<hostname>#<token>`). */
+  worker_instance: string | null;
   started_at: string | null;
   last_report_at: string | null;
 }
 
 /** One machine in the scraping fleet, as it last reported itself. */
 export interface WorkerNode {
-  /** Stable key — the machine's own id, or "ip:<addr>" for older workers. */
+  /**
+   * The MACHINE — hostname, or "ip:<addr>" for workers too old to send an id.
+   * Deliberately not the full `<hostname>#<token>` the worker sends: that
+   * token is per-process, so keying on it made every restart a new row.
+   */
   worker_key: string;
+  /** Last instance seen, token included — a changed token means a restart. */
   worker_id: string | null;
   worker_ip: string | null;
   worker_version: string | null;
@@ -1856,7 +1863,8 @@ export interface WorkerNode {
   paused: boolean;
   paused_at: string | null;
   paused_by: string | null;
-  current_task: WorkerCurrentTask | null;
+  /** Everything the machine holds — several processes can share one box. */
+  current_tasks: WorkerCurrentTask[];
   /** Paused AND holding nothing — the signal that it is safe to restart. */
   drained: boolean;
 }
@@ -2324,6 +2332,75 @@ export const pageContent = {
       )}&key=${encodeURIComponent(key)}`,
       { method: "DELETE" },
     ),
+};
+
+// Government-decision analysis (/rationale/1933) — the decision's full text,
+// the operative tasks extracted from each clause, and the per-task analysis.
+// `list` and `get` are public but return only PUBLISHED analyses; the admin
+// endpoints serve and save the draft.
+export type DecisionTaskStatus = "done" | "partial" | "not_done" | "unknown";
+
+export interface DecisionTask {
+  id: string;
+  title: string;
+  obligation: string;
+  responsible: string;
+  due: string;
+  status: DecisionTaskStatus;
+  potential: string;
+  actual: string;
+  damage: string;
+}
+
+export interface DecisionSection {
+  id: string;
+  part: string;
+  label: string;
+  heading: string;
+  text: string;
+  tasks: DecisionTask[];
+}
+
+export interface DecisionDoc {
+  key: string;
+  title: string;
+  subtitle: string;
+  intro: string;
+  decision_number: string;
+  decision_date: string;
+  decision_url: string;
+  labels: Record<string, string>;
+  sections: DecisionSection[];
+}
+
+export interface DecisionAnalysisView {
+  key: string;
+  published: boolean;
+  doc: DecisionDoc;
+  // Admin payload only.
+  is_customized?: boolean;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DecisionAnalysisSummary {
+  key: string;
+  title: string;
+  subtitle: string;
+}
+
+export const decisionAnalysis = {
+  list: () => request<DecisionAnalysisSummary[]>("/decision-analysis"),
+  get: (key: string) => request<DecisionAnalysisView>(`/decision-analysis/${key}`),
+  getDraft: (key: string) =>
+    request<DecisionAnalysisView>(`/admin/decision-analysis/${key}`),
+  save: (key: string, body: { doc?: DecisionDoc; published?: boolean }) =>
+    request<{ ok: boolean }>(`/admin/decision-analysis/${key}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  revert: (key: string) =>
+    request<{ ok: boolean }>(`/admin/decision-analysis/${key}`, { method: "DELETE" }),
 };
 
 // Tags API

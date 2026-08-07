@@ -34,6 +34,7 @@ import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
 import NlQueryAdminPanel from "../components/NlQueryAdminPanel";
 import PageContentPanel from "../components/PageContentPanel";
+import DecisionAnalysisPanel from "../components/DecisionAnalysisPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
 import OcalAdminPanel from "../components/OcalAdminPanel";
@@ -180,7 +181,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "drive" | "odata" | "ocal";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -194,6 +195,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
   { id: "content",   label: "טקסטים",            emoji: "📝" },
+  { id: "decision",  label: "ניתוח החלטה",       emoji: "📑" },
   { id: "drive",     label: "חיבור Drive",       emoji: "📁" },
   { id: "odata",     label: "מידע לעם → SQL",    emoji: "📊" },
   { id: "ocal",      label: "יומן לעם",           emoji: "📔" },
@@ -1629,6 +1631,8 @@ export default function AdminPage() {
 
       {tab === "content" && <PageContentPanel />}
 
+      {tab === "decision" && <DecisionAnalysisPanel />}
+
       {tab === "drive" && <DriveConnectionPanel />}
 
       {tab === "odata" && <OdataImportPanel />}
@@ -2626,8 +2630,9 @@ function WorkerFleetPanel() {
       label: "○ לא מדווח", bg: "#f1f5f9", fg: "#475569",
       title: "לא ביקש עבודה יותר מ-10 דקות — כבוי, קרס, או באמצע הפעלה מחדש",
     };
-    if (w.current_task) return {
-      label: "● בעבודה", bg: "#dbeafe", fg: "#1e40af", title: "מריץ משימה כרגע",
+    if (w.current_tasks.length > 0) return {
+      label: w.current_tasks.length > 1 ? `● בעבודה (${w.current_tasks.length})` : "● בעבודה",
+      bg: "#dbeafe", fg: "#1e40af", title: "מריץ משימה כרגע",
     };
     return { label: "● פנוי", bg: "#dcfce7", fg: "#166534", title: "חי ומבקש עבודה" };
   };
@@ -2697,6 +2702,18 @@ function WorkerFleetPanel() {
                       {w.worker_version.slice(0, 8)}
                     </span>
                   )}
+                  {/* The process token behind the last poll. The row is the
+                      MACHINE, so this is how a restart stays visible — the
+                      token changes, the row (and its pause) does not. */}
+                  {w.worker_id && w.worker_id.includes("#") && (
+                    <span
+                      className="text-muted"
+                      style={{ fontSize: "0.68rem", direction: "ltr" }}
+                      title="מזהה התהליך שדיווח לאחרונה — משתנה בכל הפעלה מחדש של המכונה"
+                    >
+                      #{w.worker_id.split("#")[1]}
+                    </span>
+                  )}
                   {w.worker_upstream === "behind" && (
                     <span title="ה-worker מדווח שהקוד שלו מאחור מול origin" style={{
                       fontSize: "0.7rem", padding: "0.1rem 0.45rem", borderRadius: 9999,
@@ -2748,14 +2765,14 @@ function WorkerFleetPanel() {
                     </button>
                   )}
                 </div>
-                {w.current_task && (
-                  <div className="text-muted" style={{ marginTop: "0.3rem", fontSize: "0.78rem" }}>
-                    מריץ: <Link to={`/versions/${w.current_task.dataset_id}`}>{w.current_task.dataset_title}</Link>
-                    {w.current_task.phase && <> · {w.current_task.phase}</>}
-                    {w.current_task.progress > 0 && <> · {w.current_task.progress}%</>}
-                    {" · דיווח אחרון "}{formatRelative(w.current_task.last_report_at)}
+                {w.current_tasks.map((t) => (
+                  <div key={t.task_id} className="text-muted" style={{ marginTop: "0.3rem", fontSize: "0.78rem" }}>
+                    מריץ: <Link to={`/versions/${t.dataset_id}`}>{t.dataset_title}</Link>
+                    {t.phase && <> · {t.phase}</>}
+                    {t.progress > 0 && <> · {t.progress}%</>}
+                    {" · דיווח אחרון "}{formatRelative(t.last_report_at)}
                   </div>
-                )}
+                ))}
                 {w.paused && w.paused_by && (
                   <div className="text-muted" style={{ marginTop: "0.25rem", fontSize: "0.75rem" }}>
                     הושהה על ידי {w.paused_by} {formatRelative(w.paused_at)}
