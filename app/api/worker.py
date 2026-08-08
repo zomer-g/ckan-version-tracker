@@ -961,24 +961,62 @@ def _neon_csv_path(value: str) -> str:
     return value[len(_NEON_CSV_PREFIX):]
 
 
-async def _neon_only_load_csv(table: str, path: str, res_name: str) -> None:
+async def _neon_only_load_csv(table: str, path: str, res_name: str,
+                              ds_id=None, expected: int = 0) -> None:
     """Load a NEON-only dataset's uploaded CSV into its append table.
 
     Unlike the R2 mirror above, this IS the archive: nothing else holds these
     rows. So a failure is an error, not a warning — the version exists and its
     table is empty or partial, and only the next poll (which re-scrapes and
     re-uploads; the append is idempotent on row_hash) will fill it.
+
+    "The next poll will fill it" is the reasoning that let this stay quiet, and
+    on a monthly or quarterly corpus it means the gap stands for months. Worse,
+    nothing said the gap was there: the version keeps reporting the count the
+    scrape produced. So the row count is checked against what the version
+    promised and a shortfall is written to the dataset, where the page shows it.
     """
+    total = 0
+    failed = None
     try:
         total = await _neon_stream_load_file(table, path, delete_after=True)
         logger.info("NEON-only archive: +%d rows into %s for %s",
                     total, table, res_name)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — recorded below, never re-raised
+        failed = e
         logger.error(
             "NEON-only archive FAILED for %s → %s: %s. The version exists but "
             "its rows are missing or partial; the next poll re-loads them.",
             res_name, table, e,
         )
+    if ds_id is None or expected <= 0:
+        return
+    # One-directional and so free of false alarms: an append table accumulates
+    # across versions, so it can hold far MORE than one version's count and can
+    # never legitimately hold less.
+    try:
+        held = await append_store.table_count(table)
+    except Exception as e:  # noqa: BLE001 — a check must not become the failure
+        logger.warning("NEON landed-check failed for %s: %s", table, e)
+        return
+    if held >= expected and failed is None:
+        return
+    note = (f"⚠ {res_name}: {held:,} שורות בטבלה מתוך {expected:,} שנקלטו "
+            f"בגרסה — הטעינה ל-NEON חלקית")
+    try:
+        from app.database import async_session
+        from app.models.tracked_dataset import TrackedDataset as _TD
+        async with async_session() as _db:
+            row = (await _db.execute(
+                select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
+            if row is not None:
+                row.import_warning = note
+                row.import_warning_at = datetime.now(timezone.utc)
+                await _db.commit()
+        logger.error("NEON short load: %s holds %d of %d rows (%s)",
+                     table, held, expected, res_name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not record the short-load warning: %s", e)
 
 
 async def _run_consolidate_bg(ds_id: uuid.UUID, dedup_key: str) -> None:
@@ -1398,6 +1436,45 @@ async def push_version(
                 _neon_layout.append({"resource": res_name, "table": table})
             return table
 
+        # Rows that were scraped, published in the version's count, and are not
+        # in the table anyone can query. Collected here and turned into the
+        # dataset's import_warning after the version commits.
+        _neon_short: list[str] = []
+
+        async def _check_neon_landed(table: str, res_name: str, parsed: int) -> None:
+            """Did the rows this version promises actually reach the table?
+
+            They can silently not. The load is best-effort by design — a failure
+            is logged and the version is published anyway, on the reasoning that
+            the next poll refills it — and nothing compares the two numbers
+            afterwards. גושים shape sat for a day with a version reporting 18,689
+            rows over a table holding 11,578, its published GeoJSON containing
+            18,689 features and not one duplicate among them: a third of the
+            national block layer missing, with every surface in the product
+            reporting success. It surfaced only because a spatial join came up
+            two thirds short and someone counted.
+
+            The comparison is one-directional and therefore free of false
+            alarms: an APPEND table accumulates across versions and samples, so
+            it can legitimately hold far MORE than this version's count and can
+            never legitimately hold less. Anything under is missing rows.
+            """
+            if parsed <= 0:
+                return
+            try:
+                total = await append_store.table_count(table)
+            except Exception as e:  # noqa: BLE001 — a check must not fail a push
+                logger.warning("NEON landed-check failed for %s: %s", table, e)
+                return
+            if total < parsed:
+                msg = (f"{res_name}: {total:,} שורות בטבלה מתוך {parsed:,} "
+                       f"שנקלטו בגרסה — הטעינה ל-NEON חלקית")
+                _neon_short.append(msg)
+                logger.error(
+                    "NEON short load: %s has %d rows, version carried %d (%s)",
+                    table, total, parsed, res_name,
+                )
+
         async def _neon_load_from_csv(res_name: str, csv_bytes: bytes | None) -> bool:
             """Load one resource's rows from its CSV bytes. Returns whether they
             landed — which the NEON-only path needs (there it is the version's
@@ -1430,6 +1507,7 @@ async def push_version(
                 # version whose load threw would point every reader at a table
                 # that holds nothing of this version.
                 _record_neon_table(res_name)
+                await _check_neon_landed(table, res_name, len(n_records))
                 logger.info(
                     "NEON archive: +%d new rows into %s for %s", n, table, res_name,
                 )
@@ -1461,7 +1539,14 @@ async def push_version(
                     continue
                 _table = _record_neon_table(res.name)
                 _t = asyncio.create_task(
-                    _neon_only_load_csv(_table, _neon_csv_path(pre_uploaded), res.name)
+                    _neon_only_load_csv(
+                        _table, _neon_csv_path(pre_uploaded), res.name,
+                        # What the version is about to promise. The load runs
+                        # after this response, so the check has to carry the
+                        # number with it rather than read it back off a version
+                        # that may not be committed yet.
+                        ds_id=ds.id, expected=int(res.row_count or 0),
+                    )
                 )
                 _NEON_BG_TASKS.add(_t)
                 _t.add_done_callback(_NEON_BG_TASKS.discard)
@@ -1971,6 +2056,11 @@ async def push_version(
         [e for e in _prev_engines if e],
         (body.scrape_metadata or {}).get("quality_warning"),
     )
+    # A short NEON load outranks an engine-change note: one says the data may be
+    # shaped differently, the other says some of it is not there. Prepended
+    # rather than replacing, so a version that earned both still says both.
+    if _neon_short:
+        _warn = "⚠ " + " · ".join(_neon_short) + (f" · {_warn}" if _warn else "")
     if _warn != ds.import_warning:
         ds.import_warning = _warn
         ds.import_warning_at = datetime.now(timezone.utc) if _warn else None
