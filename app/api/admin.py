@@ -2520,6 +2520,34 @@ async def index_mirror_backfill_geometry(
     return s
 
 
+@router.post("/append/backfill-geometry")
+@limiter.limit("6/minute")
+async def append_backfill_geometry(
+    request: Request,
+    limit: int = 25,
+    user: User = Depends(get_admin_user),
+):
+    """Add PostGIS ``geom`` to `public.append_*` tables that already hold rows.
+
+    The sibling of ``/index-mirror/backfill-geometry``, for the tables the
+    blocked-file rescue produces. It exists because the ordinary fill runs off a
+    LOAD, and these load exactly once: the files were fetched, so nothing
+    re-queues the dataset, and an append table dedups even if something did. The
+    first rescued spatial dataset sat on 11,578 rows of geometry_wkt with no
+    route to a geometry column — re-scraping could not have produced one,
+    because there was nothing left to scrape.
+
+    Call repeatedly until ``remaining`` is 0. Idempotent: candidates are chosen
+    by the absence of the column.
+    """
+    from app.services import append_geometry
+    s = await append_geometry.backfill(limit=max(1, min(int(limit), 200)))
+    logger.info("Append geometry backfill by %s: %s", user.email,
+                {k: v for k, v in s.items()
+                 if k not in ("results", "failures", "skips")})
+    return s
+
+
 @router.post("/site-index/refresh")
 @limiter.limit("6/minute")
 async def site_index_refresh(

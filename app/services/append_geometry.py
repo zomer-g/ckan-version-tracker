@@ -111,6 +111,80 @@ def point_expr(col_a: str, col_b: str, *, ext: str = "extensions",
     )
 
 
+async def candidates(conn, limit: int = 25) -> list[str]:
+    """`public.append_*` tables that hold geometry but have no `geom` yet.
+
+    Chosen by the ABSENCE of the column, so a re-run continues where the last
+    stopped and converting twice is impossible.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT c.table_name
+        FROM information_schema.columns c
+        WHERE c.table_schema = $1 AND c.table_name LIKE 'append%'
+        GROUP BY c.table_name
+        HAVING bool_or(lower(c.column_name) = ANY($2::text[]))
+           AND NOT bool_or(c.column_name = 'geom')
+        ORDER BY c.table_name
+        LIMIT $3
+        """,
+        SCHEMA,
+        [_idx.WKT_COLUMN, *_FIRST, *_SECOND],
+        limit,
+    )
+    return [r["table_name"] for r in rows]
+
+
+async def backfill(limit: int = 25) -> dict:
+    """Build `geom` on tables that already hold their rows.
+
+    Needed because the fill runs off a LOAD, and a rescued dataset only loads
+    once: the files were fetched, so nothing re-queues it, and an append table
+    dedups anyway. The first rescued spatial dataset landed 11,578 rows of
+    geometry_wkt while the switch was still off and had no route to a geometry
+    column at all — re-scraping would not have produced one, because there was
+    nothing left to scrape.
+
+    Adds the column to the live table directly, exactly as the idx backfill
+    does, and for the same reason: the content is already correct and only a
+    derived column is missing. Idempotent and chunked; a failure on one table is
+    recorded, never raised, so one bad table cannot stall the rest.
+    """
+    if not settings.append_postgis_enabled:
+        return {"skipped": "append postgis disabled"}
+    from app.services import append_store
+    if not append_store.is_configured():
+        raise RuntimeError("append DB is not configured")
+
+    pool = await append_store.get_pool()
+    done, failed, skipped = [], [], []
+    async with pool.acquire() as conn:
+        if not await _idx._postgis_available(conn):
+            return {"skipped": "postgis not installed on the append DB"}
+        # try_geom lives in `idx` and the WKT path goes through it; this can run
+        # before any idx sync has created it. Idempotent.
+        await _idx.ensure_schema(conn)
+        for table in await candidates(conn, limit):
+            cols = [r["column_name"] for r in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = $1 AND table_name = $2", SCHEMA, table)]
+            res = await fill(conn, table, cols)
+            if res.get("rows") is not None:
+                done.append({"table": table, "rows": res["rows"],
+                             "note": res.get("skipped")})
+            elif res.get("error"):
+                failed.append({"table": table, "error": res["error"]})
+            else:
+                skipped.append({"table": table, "reason": res.get("skipped")})
+        remaining = len(await candidates(conn, 10_000))
+
+    logger.info("append geometry backfill: built=%d failed=%d skipped=%d "
+                "remaining=%d", len(done), len(failed), len(skipped), remaining)
+    return {"built": len(done), "failed": len(failed), "skipped": len(skipped),
+            "remaining": remaining, "results": done, "failures": failed,
+            "skips": skipped}
+
+
 async def fill(conn, table: str, columns: list[str]) -> dict:
     """Build `geom` for the rows an append just added. Never raises.
 

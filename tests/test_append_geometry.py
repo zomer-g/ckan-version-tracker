@@ -130,6 +130,28 @@ def test_the_switch_still_stops_it(monkeypatch):
     assert out == {"skipped": "append postgis disabled"}
 
 
+def test_the_backfill_is_off_with_the_switch():
+    from app.config import settings
+    import app.config as _cfg
+    was = settings.append_postgis_enabled
+    try:
+        settings.append_postgis_enabled = False
+        assert asyncio.run(ag.backfill()) == {"skipped": "append postgis disabled"}
+    finally:
+        settings.append_postgis_enabled = was
+
+
+def test_the_candidate_query_looks_for_geometry_without_geom():
+    """The backfill exists because these tables load ONCE — the files were
+    fetched, so nothing re-queues the dataset, and the append dedups anyway.
+    Candidates are picked by the ABSENCE of geom so a re-run continues rather
+    than converting twice."""
+    import inspect
+    src = inspect.getsource(ag.candidates)
+    assert "NOT bool_or(c.column_name = 'geom')" in src
+    assert "LIKE 'append%'" in src
+
+
 def test_a_wkt_table_is_handed_to_the_tested_idx_path(monkeypatch):
     """When the worker starts returning features extracted from the blocked
     files it will write geometry_wkt in EPSG:4326 — `idx`'s shape, and `idx`'s
