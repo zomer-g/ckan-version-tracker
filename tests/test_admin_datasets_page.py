@@ -230,6 +230,36 @@ def test_storage_target_and_mode_are_independent_axes(client):
     }
 
 
+def test_facet_expressions_type_their_constants_for_postgres():
+    """Every constant used as a VALUE must be cast, or production 500s.
+
+    asyncpg sends each bound value as an untyped parameter and lets Postgres
+    infer it. Compared against a column ("… = $1") that always works, which is
+    why every filter kept working. But the facet counts SELECT and GROUP BY the
+    derived storage plan, and there a bare "THEN $1" has nothing to infer from:
+    Postgres answers "could not determine data type of parameter" and the whole
+    endpoint dies.
+
+    No SQLite test can catch this — SQLite types a parameter from the value it
+    was handed — so this one reads the emitted Postgres SQL instead.
+    """
+    from sqlalchemy import func as sa_func, select as sa_select
+    from sqlalchemy.dialects import postgresql
+
+    from app.api.admin import _storage_mode_expr, _storage_target_expr
+
+    for expr in (_storage_target_expr(), _storage_mode_expr()):
+        sql = str(
+            sa_select(expr, sa_func.count())
+            .select_from(TrackedDataset)
+            .group_by(expr)
+            .compile(dialect=postgresql.dialect())
+        )
+        assert "THEN %(" not in sql, sql          # CASE branch
+        assert "|| %(" not in sql, sql            # concat operand
+        assert ", %(param" not in sql, sql        # coalesce default
+
+
 def _facet(payload, dimension):
     return {f["value"]: f["count"] for f in payload[dimension]}
 

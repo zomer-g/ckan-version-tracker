@@ -1786,6 +1786,25 @@ _STORAGE_MODE_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _txt(value: str):
+    """A string constant Postgres can type on sight.
+
+    asyncpg sends every bound value as an untyped parameter and lets Postgres
+    infer what it is. Compared against a column that always works. But these
+    constants are also SELECTed and GROUPed BY — the facet counts read the
+    derived storage plan as a column — and there Postgres has nothing to infer
+    from: ``SELECT CASE WHEN … THEN $1 END … GROUP BY …`` fails outright with
+    "could not determine data type of parameter". The cast supplies the type
+    that the position doesn't.
+
+    Invisible on SQLite, which types parameters from the value it was handed —
+    which is why the unit tests passed while production 500'd.
+    """
+    from sqlalchemy import String, cast, literal
+
+    return cast(literal(value, String), String)
+
+
 def _storage_target_expr():
     """SQL twin of ``storage_target_of`` — the derived storage plan as a column.
 
@@ -1793,18 +1812,18 @@ def _storage_target_expr():
     scraper_config keys (upload_mode / storage_backend / archive_neon) and falls
     back to the global STORAGE_BACKEND default when nothing is pinned.
     """
-    from sqlalchemy import String, case, cast, func, literal
+    from sqlalchemy import String, case, cast, func
 
     sc = TrackedDataset.scraper_config
-    backend = func.coalesce(sc["storage_backend"].astext, literal(settings.storage_backend))
+    backend = func.coalesce(sc["storage_backend"].astext, _txt(settings.storage_backend))
     # Postgres renders a JSON true as the text 'true'; SQLite (the unit-test DB)
     # yields the integer 1, which never compares equal to a string there — cast
     # first and accept both spellings so the expression is dialect-portable.
     archive_neon = func.lower(cast(sc["archive_neon"].astext, String))
     return case(
-        (sc["upload_mode"].astext == "local_only", literal("local")),
-        (backend == "neon", literal("neon")),
-        (archive_neon.in_(("true", "1")), backend + literal("+neon")),
+        (sc["upload_mode"].astext == "local_only", _txt("local")),
+        (backend == "neon", _txt("neon")),
+        (archive_neon.in_(("true", "1")), backend + _txt("+neon")),
         else_=backend,
     )
 
@@ -1924,9 +1943,9 @@ def _storage_mode_expr():
     silently drops out of both ``== 'full_snapshot'`` and a GROUP BY facet —
     the dataset would be filtered into nothing and counted nowhere.
     """
-    from sqlalchemy import func, literal
+    from sqlalchemy import func
 
-    return func.coalesce(TrackedDataset.storage_mode, literal("full_snapshot"))
+    return func.coalesce(TrackedDataset.storage_mode, _txt("full_snapshot"))
 
 
 @router.get("/datasets", response_model=AdminDatasetsPage)

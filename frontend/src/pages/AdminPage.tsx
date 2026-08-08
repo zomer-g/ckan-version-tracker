@@ -232,6 +232,7 @@ export default function AdminPage() {
   // this the source filter was four hardcoded options for ~20 real upstream
   // sites, so most sources could not be isolated at all.
   const [dsFacets, setDsFacets] = useState<AdminDatasetFacets | null>(null);
+  const [dsFacetsError, setDsFacetsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [intervalOverrides, setIntervalOverrides] = useState<Record<string, number>>({});
@@ -615,8 +616,15 @@ export default function AdminPage() {
   const loadDatasetFacets = async () => {
     try {
       setDsFacets(await adminApi.datasetFacets(dsFilters()));
-    } catch (e) {
+      setDsFacetsError(null);
+    } catch (e: any) {
+      // Say so. A failed facet load leaves the dropdowns holding nothing but
+      // their "all" option, which reads exactly like a catalog with no sources
+      // in it — the filters look broken rather than unloaded, and that is how
+      // this shipped broken to production once already.
       console.error("Failed to load dataset facets", e);
+      setDsFacets(null);
+      setDsFacetsError(e?.message || String(e));
     }
   };
 
@@ -1921,6 +1929,12 @@ export default function AdminPage() {
         >
           {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} בעמוד</option>)}
         </select>
+        {dsFacetsError && (
+          <div className="text-sm" style={{ flexBasis: "100%", color: "#b91c1c" }}>
+            ⚠ רשימות הסינון לא נטענו ({dsFacetsError}) — הסינון עצמו עדיין עובד,
+            אבל האפשרויות בתפריטים חסרות.
+          </div>
+        )}
       </div>
 
       {/* OVER full-version coverage audit (#4) */}
