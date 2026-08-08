@@ -64,6 +64,32 @@ FLAG_PATTERNS: dict[str, _Flag] = {
         r"תאריך|שנה|שנת|date|datetime|(^|_)dt($|_)|(^|_)yr($|_)|year",
         exclude=r"אחוז",
     ),
+    # A CADASTRAL key — גוש/חלקה — which is what lets a dataset be joined to the
+    # parcel map, and through it to every other dataset carrying the same key.
+    # Jerusalem's building-licensing register holds it on 88% of its ~100k files;
+    # מבא"ת holds none at all (its layers publish no cadastral field), which is
+    # exactly the kind of thing this flag exists to make visible without opening
+    # each table.
+    #
+    # The exclusions are measured, not imagined. A bare גוש matches three place
+    # names in one CBS file — אבו גוש, גוש עציון, ג'ש (גוש חלב) — and the KKL
+    # layer's forest blocks (גוש יער / הגוש היערני), none of which is cadastral.
+    # מחלקת/המחלקה is the department sense; the from-parcel column that reads
+    # "מחלקה" survives on its table's גוש column anyway, which is the one a join
+    # actually starts from.
+    "has_parcel": _Flag(
+        r"גוש|חלקה|חלקות|(^|[^a-z])(gush|parcel|helka)",
+        exclude=r"אבו גוש|גוש עציון|גוש חלב|גוש יער|היערני|מחלקת|המחלקה",
+    ),
+    # A SHAPE, or the coordinates of one. Separate from has_parcel because the
+    # two answer different questions: this one is "can I draw it", that one is
+    # "can I join it to something I can draw".
+    "has_geometry": _Flag(
+        # (^|_)geom($|_) rather than ^geom$: PostGIS's own default column is
+        # `the_geom`, and a layer that renames it usually keeps the word.
+        r"(^|_)geom($|_)|geometry|_wkt$|קואורדינט|נ\.צ|"
+        r"(^|[^a-z])(lat|lon|lng|latitude|longitude|easting|northing)($|[^a-z])",
+    ),
 }
 
 DEFAULT_FIELDS = ("has_locality",)

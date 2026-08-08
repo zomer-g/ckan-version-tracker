@@ -53,3 +53,47 @@ def test_compute_for_columns_flags_by_any_table():
     out = asyncio.run(ff.compute_for_columns(cols, ("has_locality", "has_date")))
     assert out["d1"] == {"has_locality": True, "has_date": False}
     assert out["d2"] == {"has_locality": False, "has_date": True}
+
+
+def test_parcel_matches_the_cadastral_keys_that_make_a_join_possible():
+    """גוש/חלקה is what lets a dataset be joined to the parcel map and, through
+    it, to anything else carrying the same key — Jerusalem's licensing register,
+    the block shapefiles, the real-estate transactions. Every spelling below is
+    a real column name from the live catalog."""
+    for col in ["גוש", "מספר גוש", "תת גוש", "מחלקה", "עד חלקה", "מספר חלקה",
+                "gush", "gush_num", "gushnum", "GUSH_NUM", "gush_helka",
+                "parcel", "parcel_id", "parcel_1"]:
+        assert _has("has_parcel", col), col
+
+
+def test_parcel_rejects_place_names_and_forest_blocks():
+    """The false friends are measured, not imagined: one CBS file carries three
+    Hebrew place names containing גוש, and the KKL layer's blocks are forestry,
+    not cadastre. Flagging either would send someone joining on a town name."""
+    for col in ["אבו גוש", "ג'ש (גוש חלב)", "גוש עציון",
+                "מספר גוש יער", "שם הגוש היערני",
+                "מחלקת רכש", "המחלקה המשפטית"]:
+        assert not _has("has_parcel", col), col
+
+
+def test_geometry_matches_shapes_and_coordinates():
+    for col in ["geom", "geometry_wkt", "the_geom", "lat", "lon", "lng",
+                "latitude", "longitude", "נ.צ", "קואורדינטת X"]:
+        assert _has("has_geometry", col), col
+
+
+def test_geometry_rejects_words_that_merely_contain_the_letters():
+    # "lat"/"lon" inside a longer word is not a coordinate.
+    for col in ["plate_number", "מספר טלפון", "along_route", "translation",
+                "latest", "מחיר"]:
+        assert not _has("has_geometry", col), col
+
+
+def test_the_two_spatial_flags_answer_different_questions():
+    """has_geometry is "can I draw it"; has_parcel is "can I join it to
+    something I can draw". Jerusalem's register is the case that matters: it
+    holds no shape at all, and is reachable on the map only through its גוש."""
+    jlm = [{"name": c} for c in ["מספר תיק", "גוש", "מחלקה", "רחוב"]]
+    flags = asyncio.run(ff.compute_for_columns(
+        {"jlm": jlm}, ("has_parcel", "has_geometry")))
+    assert flags["jlm"] == {"has_parcel": True, "has_geometry": False}
