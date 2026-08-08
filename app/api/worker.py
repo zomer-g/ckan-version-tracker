@@ -886,7 +886,15 @@ async def _neon_stream_load_file(
         # Once the whole file is down, not once per batch — see
         # append_store.fill_geometry. `cols` is set as soon as the header is
         # read, so a file that turned out to be header-only skips this too.
-        if total and cols:
+        #
+        # NOT gated on rows being new. A table loaded while the geometry switch
+        # was off keeps every row and dedups them on re-load, so `total` comes
+        # back 0 and a run conditioned on it could never repair what it already
+        # holds — which is exactly the state append_subgushallshape_aa29e909 was
+        # left in: 11,578 rows of WKT and no geom. Re-polling is the repair.
+        # The cost of the no-op case is one indexed pass over rows whose geom is
+        # already set.
+        if cols:
             await append_store.fill_geometry(table, cols)
         return total
     finally:
