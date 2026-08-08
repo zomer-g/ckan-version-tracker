@@ -11,6 +11,7 @@ the invariants below are about what happens when they don't, because the
 failure modes there are silent ones: a form that offers files nobody can
 import, or a config key no engine reads.
 """
+import asyncio
 import os
 
 os.environ.setdefault("JWT_SECRET_KEY", "test")
@@ -135,6 +136,61 @@ def test_preview_returns_the_pages_files(monkeypatch):
     assert body["source_id"] == "toypicker"
     assert body["title"] == "עמוד פרסום"
     assert [f["path"] for f in body["files"]] == ["/a/x.xlsx"]
+
+
+def test_preview_marks_files_over_already_has(monkeypatch):
+    """Coming back to a page of 27 files of which 23 are already in the approval
+    queue gave no way to see which four were left: the picker offered all 27 and
+    the submit answered "all duplicates"."""
+    async def fake(url):
+        return {"title": "עמוד", "url": url, "files": [
+            {"path": "/a/x.xlsx", "url": "https://toy.example.org/a/x.xlsx",
+             "name": "x.xlsx", "title": "לוח 1", "chapter": "", "subject": "",
+             "order": None, "ext": "xlsx", "size": 1, "modified": "",
+             "on_page": True, "tabular": True},
+            {"path": "/a/y.xlsx", "url": "https://toy.example.org/a/y.xlsx",
+             "name": "y.xlsx", "title": "לוח 2", "chapter": "", "subject": "",
+             "order": None, "ext": "xlsx", "size": 1, "modified": "",
+             "on_page": True, "tabular": True},
+        ]}
+
+    async def fake_mark(db, files):
+        known = {"https://toy.example.org/a/x.xlsx":
+                 {"dataset_id": "abc", "status": "pending"}}
+        return [{**f, "tracked": f["url"] in known,
+                 **({"tracked_dataset": known[f["url"]]} if f["url"] in known else {})}
+                for f in files]
+
+    monkeypatch.setitem(sources_api.PREVIEWERS, "toypicker", lambda: fake)
+    monkeypatch.setattr(sources_api, "_mark_tracked", fake_mark)
+    body = _client(PICKER_MANIFEST).post("/api/sources/preview", json={"url": PAGE}).json()
+    by_path = {f["path"]: f for f in body["files"]}
+    assert by_path["/a/x.xlsx"]["tracked"] is True
+    assert by_path["/a/x.xlsx"]["tracked_dataset"]["status"] == "pending"
+    assert by_path["/a/y.xlsx"]["tracked"] is False
+
+
+def test_marking_tracked_never_costs_the_file_list(monkeypatch):
+    """The list is the point of the endpoint; the annotation is a nicety."""
+    async def fake(url):
+        return {"title": "עמוד", "url": url, "files": [
+            {"path": "/a/x.xlsx", "url": "https://toy.example.org/a/x.xlsx",
+             "name": "x.xlsx", "title": "לוח", "chapter": "", "subject": "",
+             "order": None, "ext": "xlsx", "size": 1, "modified": "",
+             "on_page": True, "tabular": True},
+        ]}
+
+    class _Boom:
+        async def execute(self, stmt):
+            raise RuntimeError("db down")
+
+    monkeypatch.setitem(sources_api.PREVIEWERS, "toypicker", lambda: fake)
+    files = asyncio.run(sources_api._mark_tracked(_Boom(), _run_files(fake)))
+    assert len(files) == 1 and files[0]["path"] == "/a/x.xlsx"
+
+
+def _run_files(fake):
+    return asyncio.run(fake("u"))["files"]
 
 
 def test_preview_refuses_a_url_no_source_claims():

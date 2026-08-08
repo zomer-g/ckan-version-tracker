@@ -196,7 +196,17 @@ export default function RequestForm({
           split_files: showFilePicker && splitFiles ? true : undefined,
           file_titles: showFilePicker && splitFiles ? fileTitles : undefined,
         });
-        if (res?.results) setFileResults(res.results);
+        if (res?.results) {
+          // Nothing new opened because every pick was already tracked. That is
+          // an answer, not a failure — but showing the success banner would be
+          // a lie about what just happened.
+          if (!res.created) {
+            setError(t("home.split_files_none"));
+            setSubmitting(false);
+            return;
+          }
+          setFileResults(res.results);
+        }
       } else {
         const ids = Array.from(selectedResources);
         if (showResourcePicker && ids.length === 0) {

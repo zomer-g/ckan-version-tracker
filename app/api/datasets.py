@@ -2000,11 +2000,17 @@ async def _create_file_requests(
             logger.warning("Could not open per-file request %s", url, exc_info=True)
             await db.rollback()
             results.append({"url": url, "status": "invalid", "error": "failed"})
-    if not created:
+    # "Every file was already tracked" is NOT a failure — it is the answer to
+    # the question, and it is the normal outcome of re-submitting a page whose
+    # files are sitting in the approval queue. Raising 400 here painted a red
+    # error over a correct result and read as "the picker is broken"; the
+    # per-file results say what actually happened, and the form reports it.
+    # A submit where nothing was even RECOGNISED is a different thing and still
+    # fails loudly.
+    if not created and not any(r["status"] == "duplicate" for r in results):
         raise HTTPException(
             status_code=400,
-            detail="None of the picked files could be opened — "
-                   "they are already tracked, or not recognised.",
+            detail="None of the picked files is one this site knows how to track.",
         )
     return {"message": "Request submitted", "status": "pending",
             "created": created, "results": results}

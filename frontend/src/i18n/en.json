@@ -145,7 +145,11 @@
     "split_files_label": "A separate dataset per file",
     "split_files_hint": "The {{n}} picked files each open as their own dataset, with their own version history and SQL table.",
     "split_files_off_hint": "All picked files go into one dataset for the page, each sheet a table inside it.",
-    "split_files_success": "{{n}} requests submitted — one dataset per file. We'll review them shortly."
+    "split_files_success": "{{n}} requests submitted — one dataset per file. We'll review them shortly.",
+    "picker_tracked": "tracked",
+    "picker_pending": "awaiting approval",
+    "picker_tracked_count": "{{n}} already tracked",
+    "split_files_none": "Every picked file is already tracked or awaiting approval — no new datasets were opened."
   },
   "search": {
     "title": "Search Government Datasets",

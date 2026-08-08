@@ -819,6 +819,9 @@ export interface SourceFile {
   url: string;
   on_page: boolean;
   tabular: boolean;
+  // OVER already has a dataset for this file — active or awaiting approval.
+  tracked?: boolean;
+  tracked_dataset?: { dataset_id: string; status: string };
 }
 
 export const sources = {

@@ -168,6 +168,12 @@ async def preview_source_url(
     is downloaded. Returns ``{"title", "url", "source_id", "files": [...]}``.
     A file with ``on_page: false`` sits in the same folder but is not part of
     this page's own table — shown, and left unticked, rather than hidden.
+
+    Each file also carries ``tracked``: whether OVER already has a dataset for
+    it, whether active or still awaiting approval. Without it, coming back to a
+    page of 27 files of which 23 are already in the queue gives no way to see
+    which four are left — the picker offers all 27, the submit reports them all
+    as duplicates, and the whole thing reads as a failure.
     """
     url = (body.url or "").strip()
     match = await source_registry.classify_url(db, url)
@@ -186,7 +192,44 @@ async def preview_source_url(
     except Exception as exc:  # noqa: BLE001
         logger.warning("source preview failed for %s: %s", url, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {**result, "source_id": match.source_id}
+    files = await _mark_tracked(db, result.get("files") or [])
+    return {**result, "files": files, "source_id": match.source_id}
+
+
+async def _mark_tracked(db: AsyncSession, files: list[dict]) -> list[dict]:
+    """Stamp ``tracked`` on each file that already has a dataset.
+
+    ONE query over the exact URLs, not a per-file identity lookup: the picker
+    is what created these datasets and it stores the URL it shows here, so an
+    exact match covers every file it opened. A file tracked under some other
+    spelling is reported untracked and the submit reports it as a duplicate —
+    the pre-existing behaviour, not a regression.
+
+    Never fatal. The file list is the point of this endpoint; losing the
+    annotation is a worse picker, losing the list is a broken one.
+    """
+    urls = [f.get("url") for f in files if f.get("url")]
+    if not urls:
+        return files
+    try:
+        from sqlalchemy import select
+
+        from app.models.tracked_dataset import TrackedDataset
+
+        rows = (await db.execute(
+            select(TrackedDataset.source_url, TrackedDataset.id,
+                   TrackedDataset.status)
+            .where(TrackedDataset.source_url.in_(urls))
+        )).all()
+    except Exception:  # noqa: BLE001
+        logger.warning("preview: could not mark tracked files", exc_info=True)
+        return files
+    known = {r[0]: {"dataset_id": str(r[1]), "status": r[2]} for r in rows}
+    return [
+        {**f, "tracked": f.get("url") in known,
+         **({"tracked_dataset": known[f["url"]]} if f.get("url") in known else {})}
+        for f in files
+    ]
 
 
 @router.get("/registry")

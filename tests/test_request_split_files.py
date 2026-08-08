@@ -197,6 +197,27 @@ def test_a_file_already_tracked_is_reported_not_duplicated(stack):
     assert len(_rows(Session)) == 2
 
 
+def test_everything_already_tracked_is_an_answer_not_a_failure(stack):
+    """Re-submitting a page whose files are sitting in the approval queue used
+    to paint a red "None of the picked files could be opened" over a correct
+    result, and read as the picker being broken. The per-file results say what
+    happened; only a submit where nothing was even RECOGNISED still fails."""
+    client, _ = stack
+    _post(client, split_files=True, selected_files=[F1, F2])
+    r = _post(client, split_files=True, selected_files=[F1, F2])
+    assert r.status_code == 201, r.text
+    assert r.json()["created"] == 0
+    assert {x["status"] for x in r.json()["results"]} == {"duplicate"}
+
+
+def test_a_submit_of_nothing_recognisable_still_fails_loudly(stack):
+    client, _ = stack
+    r = _post(client, split_files=True,
+              selected_files=["https://elsewhere.example.org/x.xlsx"])
+    assert r.status_code == 400
+    assert "know" in r.json()["detail"]
+
+
 def test_one_bad_url_does_not_sink_the_rest(stack):
     """With fifty files ticked, a single unrecognised entry must not throw away
     the other forty-nine."""

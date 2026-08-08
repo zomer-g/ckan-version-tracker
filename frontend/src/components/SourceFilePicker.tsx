@@ -55,9 +55,12 @@ export default function SourceFilePicker({
         if (cancelled) return;
         setFiles(res.files);
         onLoaded?.(res.files);
-        // Default to what the page itself publishes — the answer that matches
-        // what a reader looking at the page would say "all of it" means.
-        onChange(new Set(res.files.filter((f) => f.on_page).map((f) => f.path)));
+        // Default to what the page publishes and OVER does not already have.
+        // Re-offering the 23 files already in the approval queue is how a page
+        // of 27 came back reporting "all of them are duplicates".
+        onChange(new Set(
+          res.files.filter((f) => f.on_page && !f.tracked).map((f) => f.path),
+        ));
       } catch (e: any) {
         if (!cancelled) setError(e?.message || t("common.error"));
       }
@@ -137,7 +140,10 @@ export default function SourceFilePicker({
     );
   }
 
-  const tickable = files.map((f) => f.path);
+  // "Select all" means everything still worth picking. A file OVER already has
+  // is not, and including it turns the submit into a wall of duplicates.
+  const tickable = files.filter((f) => !f.tracked).map((f) => f.path);
+  const trackedCount = files.filter((f) => f.tracked).length;
 
   return (
     <div style={boxStyle}>
@@ -208,10 +214,29 @@ export default function SourceFilePicker({
                   type="checkbox"
                   checked={selected.has(file.path)}
                   onChange={() => toggle(file.path)}
+                  disabled={file.tracked}
                   style={{ width: "1rem", height: "1rem", flexShrink: 0, marginTop: "0.2rem" }}
                 />
-                <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ flex: 1, minWidth: 0, opacity: file.tracked ? 0.55 : 1 }}>
                   <span style={{ wordBreak: "break-word" }}>{file.title}</span>
+                  {file.tracked && (
+                    <span
+                      style={{
+                        marginInlineStart: "0.4rem",
+                        padding: "0.05rem 0.35rem",
+                        borderRadius: "9999px",
+                        fontSize: "0.65rem",
+                        fontWeight: 600,
+                        background: "#dcfce7",
+                        color: "#166534",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {file.tracked_dataset?.status === "pending"
+                        ? t("home.picker_pending")
+                        : t("home.picker_tracked")}
+                    </span>
+                  )}
                   <span className="text-muted" style={{ marginInlineStart: "0.4rem", fontSize: "0.75rem" }}>
                     {file.ext.toUpperCase()}
                     {file.size ? ` · ${fmtSize(file.size)}` : ""}
@@ -227,6 +252,7 @@ export default function SourceFilePicker({
 
       <p className="text-sm text-muted" style={{ margin: "0.5rem 0 0 0" }}>
         {t("home.request_files_selected", { n: selected.size, total: files.length })}
+        {trackedCount > 0 && ` · ${t("home.picker_tracked_count", { n: trackedCount })}`}
         {" — "}
         {t("home.picker_tables_hint")}
       </p>
