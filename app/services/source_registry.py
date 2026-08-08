@@ -175,6 +175,19 @@ class SourceManifest(BaseModel):
     # from a worker's manifest, and rendering markup from there would make any
     # worker able to inject into the page.
     methodology_he: str | None = None
+    # The same account, cut to what a reader needs on a DATASET page — where
+    # the versions are the subject and this is background, folded shut. The
+    # full text belongs on the source's own page, which is about the source.
+    #
+    # Two texts rather than one truncated: the short one is not the opening of
+    # the long one. On a dataset page the question is narrow ("how current is
+    # what I am looking at, and what is missing from it"), and the sentence that
+    # answers it may be the fourth paragraph of the full account. Truncation
+    # would reliably cut before it.
+    #
+    # Optional. A source that declares only the full text shows that in both
+    # places, exactly as before this existed.
+    methodology_short_he: str | None = None
     default_poll_interval: int = 86400
     # True when the engine emits row-level tabular data (so the dataset can be
     # loaded into the NEON append DB and queried in the SQL console), rather
@@ -537,6 +550,7 @@ def display_view(man: SourceManifest) -> dict[str, Any]:
         "source_link_he": man.source_link_he or f"לצפייה באתר {man.label_he}",
         "source_link_en": man.source_link_en or f"View on {man.resolved_origin}",
         "methodology_he": man.methodology_he,
+        "methodology_short_he": man.methodology_short_he,
         "default_poll_interval": man.default_poll_interval,
         "neon_eligible": man.neon_eligible,
         "spatial": man.spatial,

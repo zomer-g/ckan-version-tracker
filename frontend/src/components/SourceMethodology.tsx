@@ -3,14 +3,23 @@ import { sources as sourcesApi } from "../api/client";
 import { registrySource, type RegistrySourceView } from "../utils/sourceBadge";
 
 /**
- * How a source is tracked, and why — the source's own account of its method.
+ * What a source updates and when — so a reader can predict what they will and
+ * will not find in it.
  *
- * A tracking decision is invisible in the data it produces. A reader looking at
- * the Jerusalem building-licensing register sees files re-read on three
- * different clocks and has no way to know that the cadence rests on a
- * measurement, that most of its "open" files have not moved in a decade, or
- * that the monthly full pass is what makes the narrower runs safe. Without
- * somewhere to say that, the reasoning lives only in a commit message.
+ * Freshness is invisible in the data. One row of the מבא"ת register shows a
+ * plan's status beside its land-use cells and gives no sign that the status was
+ * re-read this week while the cells may be three months old; nor that a plan
+ * cancelled last week can still read as open for another month; nor that the
+ * plan's own documents were never collected at all. A reader has no reason to
+ * suspect any of it, and every reason to mistake the gaps for the register's.
+ *
+ * Deliberately NOT an account of the scraping. How the rows are obtained is
+ * this project's problem — request counts, captchas and row sizes crowd out the
+ * one thing the reader cannot work out alone.
+ *
+ * Two texts, picked by where it renders: the full account on the source's own
+ * page, and `methodology_short_he` on a dataset page, folded, where the
+ * versions are the subject and this is background.
  *
  * The text is PLAIN, deliberately: it arrives from a worker's manifest, and
  * rendering markup from there would let any worker inject into this page. Only
@@ -86,10 +95,13 @@ export default function SourceMethodology({
   }, [sourceId, primed]);
 
   const source = primed ?? fetched;
-  const blocks = useMemo(
-    () => (source?.methodology_he ? parseMethodology(source.methodology_he) : []),
-    [source?.methodology_he],
-  );
+  // A dataset page asks a narrower question than the source's own page — how
+  // current is THIS, and what is missing from it — so it gets the short text
+  // where the source wrote one. Not a truncation of the long one: the sentence
+  // that answers the narrow question is often several paragraphs in, and
+  // cutting by length would reliably drop it.
+  const raw = (collapsed && source?.methodology_short_he) || source?.methodology_he;
+  const blocks = useMemo(() => (raw ? parseMethodology(raw) : []), [raw]);
   if (!blocks.length) return null;
 
   return (
@@ -113,7 +125,7 @@ export default function SourceMethodology({
         }}
       >
         <span aria-hidden="true" style={{ fontSize: "0.7rem" }}>{open ? "▼" : "◀"}</span>
-        שיטת המעקב — מה נמדד וכל כמה זמן נקרא
+        מה מתעדכן וכל כמה זמן
       </button>
 
       {open && (

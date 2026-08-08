@@ -83,6 +83,10 @@ export interface RegistrySourceView {
    *  with "## " headings and "- " bullets — never HTML, because it arrives from
    *  a worker's manifest. See SourceMethodology. */
   methodology_he?: string | null;
+  /** The same account cut to a dataset page's narrower question — how current
+   *  is this, and what is missing. Falls back to methodology_he when a source
+   *  declares no short form. */
+  methodology_short_he?: string | null;
 }
 
 /** Every registry source by id, for the pages that need more than its badge. */
