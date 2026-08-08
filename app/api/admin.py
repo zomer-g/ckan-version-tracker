@@ -1369,6 +1369,7 @@ async def refresh_dataset_sizes_job() -> None:
     import time
 
     from app.database import async_session
+    from app.services import heap
 
     async with async_session() as db:
         try:
@@ -1377,6 +1378,13 @@ async def refresh_dataset_sizes_job() -> None:
             _dataset_sizes_cache["at"] = time.time()
         except Exception:
             logger.exception("Scheduled dataset-sizes refresh failed")
+
+    # Still the largest transient allocation this process makes on a timer,
+    # even at half its former size, so hand the pages back immediately
+    # rather than waiting up to five minutes for the periodic trim. This is
+    # the burst that takes RSS from ~185MB to ~330MB within 90 seconds of
+    # boot; without a trim, that peak is simply where the floor stays.
+    heap.trim_and_log("dataset-sizes refresh")
 
 
 @router.get("/dataset-sizes")
@@ -3075,21 +3083,60 @@ async def memory_state(
     counts types, which costs CPU for a moment but allocates almost nothing.
     """
     import gc
+    import tracemalloc
 
     gc.collect()  # so counts reflect retained objects, not collectable garbage
     from app.database import engine
+    from app.services import heap
 
     pool = getattr(engine, "pool", None)
+    rss = _rss_kb()
+    # The comparison that settles "leak or fragmentation": live Python bytes
+    # against resident bytes. When RSS climbs and traced_kb doesn't, nothing
+    # is being retained — the pages are just not going back to the OS.
+    traced_kb = tracemalloc.get_traced_memory()[0] // 1024 if tracemalloc.is_tracing() else None
     return {
-        "rss_kb": _rss_kb(),
+        "rss_kb": rss,
+        "traced_kb": traced_kb,
+        "untraced_kb": (rss - traced_kb) if rss is not None and traced_kb is not None else None,
         "gc_counts": gc.get_count(),
         "gc_stats": gc.get_stats(),
         "tracked_objects": len(gc.get_objects()),
         "asyncio_tasks": len(asyncio.all_tasks()),
         "db_pool": pool.status() if pool is not None and hasattr(pool, "status") else None,
         "types": _type_histogram(top),
-        "tracemalloc_on": __import__("tracemalloc").is_tracing(),
+        "tracemalloc_on": tracemalloc.is_tracing(),
+        "malloc_trim_available": heap.unavailable_reason() is None,
+        "malloc_trim_unavailable_reason": heap.unavailable_reason(),
         "baseline_at": _mem_baseline["at"],
+    }
+
+
+@router.post("/memory/trim")
+@limiter.limit("10/minute")
+async def memory_trim(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Trim the heap now and report what it bought.
+
+    The scheduler does this every 5 minutes; this is the manual version, and
+    the quickest way to demonstrate the mechanism on a live process — call it
+    while RSS sits high and watch the number drop in one step. A large
+    ``freed_kb`` is itself the proof that the memory was free all along and
+    merely un-returned.
+    """
+    from app.services import heap
+
+    before = _rss_kb()
+    result = heap.trim()
+    after = _rss_kb()
+    return {
+        "trimmed": result,
+        "unavailable_reason": heap.unavailable_reason(),
+        "rss_kb_before": before,
+        "rss_kb_after": after,
+        "freed_kb": (before - after) if before is not None and after is not None else None,
     }
 
 

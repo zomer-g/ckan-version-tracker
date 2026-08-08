@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
+from app.services import heap
 from app.models.scrape_task import INTERRUPTED_MESSAGE, PHASE_INTERRUPTED, ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
 from app.worker.poll_job import poll_dataset, resume_interrupted_appends
@@ -93,6 +94,34 @@ async def init_scheduler() -> None:
         cleanup_stuck_scrape_tasks,
         trigger=IntervalTrigger(minutes=5),
         id="cleanup_stuck_scrape_tasks",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+
+    # Give the OS its pages back (every 5 min).
+    #
+    # This dyno was being OOM-killed ~19 times a day by what looked like a
+    # leak and measurably isn't one: over a window where RSS grew 24MB,
+    # tracemalloc saw 3.3MB more live Python bytes and the GC-tracked object
+    # count went DOWN. Python frees the memory; glibc keeps the pages. Every
+    # transient burst — the dataset-sizes fan-out, a NEON push, decoding a
+    # large JSON body — permanently raises an arena's high-water mark, and
+    # RSS ends up being the sum of every arena's worst moment.
+    #
+    # malloc_trim is the only thing that reverses that, and Python exposes no
+    # way to call it, so app/services/heap.py reaches it through ctypes. The
+    # cadence just needs to be shorter than the time it takes a plateau to
+    # reach 512Mi; 5 minutes turns a one-way ratchet into a sawtooth. Cheap
+    # (it walks free lists, no I/O) and a no-op off glibc, so local dev and
+    # any future musl image simply skip it.
+    async def trim_heap_job() -> None:
+        heap.trim_and_log("scheduled trim")
+
+    scheduler.add_job(
+        trim_heap_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="trim_heap",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,

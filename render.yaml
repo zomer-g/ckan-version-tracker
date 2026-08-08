@@ -26,6 +26,18 @@ services:
         value: "3.11.0"
       - key: NODE_VERSION
         value: "20"
+      # Cap glibc's per-thread malloc arenas. The other half of the OOM fix
+      # in app/services/heap.py: by default glibc gives a threaded process up
+      # to 8 arenas per core, and each one keeps every page it ever grew
+      # into. With SQLAlchemy's pool, botocore and uvicorn all holding
+      # threads, transient bursts got spread across arenas that could never
+      # be handed back, so RSS ratcheted to the sum of every arena's worst
+      # moment and the 512Mi dyno was OOM-killed ~19 times a day. Capping at
+      # 2 keeps freed memory in a pool malloc_trim can actually return.
+      # Costs some allocator contention; on a single small instance that is
+      # a far better trade than being killed hourly.
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: DATA_GOV_IL_URL
