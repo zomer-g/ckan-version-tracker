@@ -83,6 +83,22 @@ const STORAGE_MODE_LABELS: Record<string, string> = {
   full_snapshot: "שמירה מלאה",
 };
 
+// One filter control in the datasets tab's filter bar.
+//
+// `width: auto` is the point. index.css gives every <select> width:100%, which
+// is right for the selects inside a card's field grid and wrong here: it made
+// each filter claim a whole row of the flex bar, so five controls that belong
+// side by side rendered as a five-storey stack that read like five unrelated
+// settings. An inline style is what beats the stylesheet without touching the
+// global rule every other select depends on.
+const admFilterSelect = {
+  fontSize: "0.8rem",
+  padding: "0.35rem 0.5rem",
+  border: "1px solid var(--border)",
+  borderRadius: "6px",
+  width: "auto",
+} as const;
+
 // Small caption above each control in the redesigned dataset cards.
 const admFieldLabel = {
   fontSize: "0.68rem",
@@ -1832,7 +1848,7 @@ export default function AdminPage() {
           value={dsSource}
           onChange={(e) => { setDsOffset(0); setDsSource(e.target.value); }}
           aria-label="סינון לפי מקור"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px", maxWidth: "14rem" }}
+          style={{ ...admFilterSelect, maxWidth: "14rem" }}
         >
           <option value="">
             כל המקורות{dsFacets ? ` (${dsFacets.sources.length})` : ""}
@@ -1856,7 +1872,7 @@ export default function AdminPage() {
           value={dsStorage}
           onChange={(e) => { setDsOffset(0); setDsStorage(e.target.value); }}
           aria-label="סינון לפי יעד אחסון"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+          style={{ ...admFilterSelect }}
         >
           <option value="">כל יעדי האחסון</option>
           {(dsFacets?.storage_targets ?? []).map((f) => (
@@ -1872,7 +1888,7 @@ export default function AdminPage() {
           value={dsMode}
           onChange={(e) => { setDsOffset(0); setDsMode(e.target.value); }}
           aria-label="סינון לפי אופן שמירה"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+          style={{ ...admFilterSelect }}
         >
           <option value="">כל אופני השמירה</option>
           {(dsFacets?.storage_modes ?? []).map((f) => (
@@ -1889,7 +1905,7 @@ export default function AdminPage() {
           onChange={(e) => { setDsOffset(0); setDsSourceGone(e.target.value); }}
           aria-label="סינון לפי קיום המקור"
           title="מאגרים שהמפרסם הסיר את המקור שלהם — מזוהה בוודאות בצד הסורק, לא מנוחש מכישלון גירוד"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+          style={{ ...admFilterSelect }}
         >
           <option value="">המקור: הכל</option>
           <option value="only">
@@ -1902,7 +1918,7 @@ export default function AdminPage() {
           onChange={(e) => { setDsOffset(0); setDsImportWarn(e.target.value); }}
           aria-label="סינון לפי חשש לייבוא פגום"
           title="מאגרים שהגרסה האחרונה שלהם חשודה כלא תקינה — למשל גאומטריה שהתנוונה למרות מספר רשומות מלא"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px" }}
+          style={{ ...admFilterSelect }}
         >
           <option value="">איכות ייבוא: הכל</option>
           <option value="only">
@@ -1925,7 +1941,7 @@ export default function AdminPage() {
           value={dsLimit}
           onChange={(e) => { setDsOffset(0); setDsLimit(Number(e.target.value)); }}
           aria-label="מאגרים בעמוד"
-          style={{ fontSize: "0.8rem", padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: "6px", marginInlineStart: "auto" }}
+          style={{ ...admFilterSelect, marginInlineStart: "auto" }}
         >
           {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} בעמוד</option>)}
         </select>
