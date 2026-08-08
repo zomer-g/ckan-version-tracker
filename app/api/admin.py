@@ -1223,12 +1223,40 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     )
     datasets = ds_result.scalars().all()
 
-    # Per-dataset version rows (single query, group in Python)
+    # Per-dataset version rows (single query, group in Python).
+    #
+    # Columns, not ORM entities, and joined to the same dataset predicate as
+    # above. This used to be `select(VersionIndex)` over the whole table: it
+    # hydrated every one of ~15,600 rows into a mapped instance — each with
+    # its own instance state, held in the session identity map — including
+    # the rows of the ~2,900 committee singles and the inactive datasets
+    # that the loop below never looks up. Measured against production, that
+    # read alone cost +94MB RSS every time this job ticked, and the dyno
+    # never gave it all back: the 20-minute cadence ratcheted the floor up
+    # until a routine NEON push (~100MB) tipped a 512MB instance into OOM.
+    #
+    # change_summary is reduced to its "type" key in SQL because that is the
+    # only key read here; the rest of that JSONB (~6MB catalog-wide) was
+    # being parsed into Python dicts and thrown away. resource_mappings is
+    # still needed whole — the totals below sum over its values.
     v_result = await db.execute(
-        select(VersionIndex).order_by(VersionIndex.version_number.asc())
+        select(
+            VersionIndex.id,
+            VersionIndex.tracked_dataset_id,
+            VersionIndex.version_number,
+            VersionIndex.resource_mappings,
+            VersionIndex.change_summary["type"].astext.label("v_type"),
+        )
+        .join(TrackedDataset, TrackedDataset.id == VersionIndex.tracked_dataset_id)
+        .where(
+            TrackedDataset.is_active.is_(True),
+            TrackedDataset.status == "active",
+            TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
+        )
+        .order_by(VersionIndex.version_number.asc())
     )
-    versions_by_ds: dict[str, list[VersionIndex]] = {}
-    for v in v_result.scalars().all():
+    versions_by_ds: dict[str, list] = {}
+    for v in v_result.all():
         versions_by_ds.setdefault(str(v.tracked_dataset_id), []).append(v)
 
     # Capped low (not 10) — this fan-out shares a 512MB dyno with scheduled
@@ -1292,7 +1320,7 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
                         if isinstance(rid, str) and rid and rid not in seen:
                             seen.add(rid)
                             v_total += rid_to_size.get(rid, 0)
-            v_type = (v.change_summary or {}).get("type") if isinstance(v.change_summary, dict) else None
+            v_type = v.v_type  # change_summary->>'type', projected in SQL above
             ds_versions.append({
                 "version_id": str(v.id),
                 "version_number": v.version_number,
@@ -2977,3 +3005,194 @@ async def settlements_harvest(
     logger.info("settlement harvest (%s) started by %s", phase, user.email)
     return {"status": "started", "phase": phase,
             "message": "Harvest running in the background; watch over_settlement_unresolved."}
+
+
+# ---------------------------------------------------------------------------
+# Memory diagnostics
+#
+# Added while chasing a leak that killed this 512MB dyno ~19 times a day: the
+# RSS floor climbed from ~190MB at boot to ~500MB over a few hours and never
+# came back down. Two explanations were argued convincingly from the code and
+# both turned out to be wrong, so this exists to answer the question with a
+# measurement from the running process instead of another reading of the
+# source.
+#
+# Everything here is opt-in and admin-only. The type histogram is cheap enough
+# to call on a live dyno; tracemalloc is NOT (it allocates per tracked block,
+# which on an instance already near its ceiling can be the thing that pushes
+# it over), so it starts only when explicitly asked and can be stopped again.
+# ---------------------------------------------------------------------------
+
+_mem_baseline: dict = {"at": None, "rss_kb": None, "types": None, "snapshot": None}
+
+
+def _rss_kb() -> int | None:
+    """Resident set size in KB, straight from /proc — no psutil dependency.
+
+    Returns None off Linux (local dev on Windows/macOS), where the caller
+    just reports the object counts without an RSS figure.
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except Exception:
+        pass
+    return None
+
+
+def _type_histogram(top: int = 40) -> list[dict]:
+    """Live object count per type, biggest first.
+
+    A leak shows up here as a type whose count keeps climbing between two
+    calls — which is what distinguishes an actual leak (objects retained)
+    from a high-water mark the allocator simply never returned to the OS
+    (RSS stays up, counts do not).
+    """
+    import gc
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for obj in gc.get_objects():
+        try:
+            counts[type(obj).__qualname__] += 1
+        except Exception:
+            continue
+    return [{"type": t, "count": c} for t, c in counts.most_common(top)]
+
+
+@router.get("/memory")
+@limiter.limit("10/minute")
+async def memory_state(
+    request: Request,
+    top: int = 40,
+    user: User = Depends(get_admin_user),
+):
+    """Cheap, always-safe snapshot of what this process is holding.
+
+    Safe to hit on production at any time: it walks the GC's object list and
+    counts types, which costs CPU for a moment but allocates almost nothing.
+    """
+    import gc
+
+    gc.collect()  # so counts reflect retained objects, not collectable garbage
+    from app.database import engine
+
+    pool = getattr(engine, "pool", None)
+    return {
+        "rss_kb": _rss_kb(),
+        "gc_counts": gc.get_count(),
+        "gc_stats": gc.get_stats(),
+        "tracked_objects": len(gc.get_objects()),
+        "asyncio_tasks": len(asyncio.all_tasks()),
+        "db_pool": pool.status() if pool is not None and hasattr(pool, "status") else None,
+        "types": _type_histogram(top),
+        "tracemalloc_on": __import__("tracemalloc").is_tracing(),
+        "baseline_at": _mem_baseline["at"],
+    }
+
+
+@router.post("/memory/baseline")
+@limiter.limit("6/minute")
+async def memory_baseline(
+    request: Request,
+    tracemalloc_on: bool = False,
+    nframes: int = 1,
+    user: User = Depends(get_admin_user),
+):
+    """Mark 'here is normal' so a later call can report what grew since.
+
+    Pass ``tracemalloc_on=1`` to also start tracemalloc and take an allocation
+    snapshot — that gives file:line attribution in /memory/growth, at the cost
+    of real overhead on a dyno that is already tight. Leave it off first: the
+    type histogram alone usually says whether anything is being retained at
+    all, and that answer decides whether the expensive tool is worth running.
+    """
+    import gc
+    import tracemalloc
+
+    gc.collect()
+    if tracemalloc_on and not tracemalloc.is_tracing():
+        tracemalloc.start(max(1, min(nframes, 10)))
+    _mem_baseline["at"] = datetime.now(timezone.utc).isoformat()
+    _mem_baseline["rss_kb"] = _rss_kb()
+    _mem_baseline["types"] = {d["type"]: d["count"] for d in _type_histogram(400)}
+    _mem_baseline["snapshot"] = tracemalloc.take_snapshot() if tracemalloc.is_tracing() else None
+    logger.info("memory baseline taken by %s (tracemalloc=%s)", user.email, tracemalloc.is_tracing())
+    return {
+        "baseline_at": _mem_baseline["at"],
+        "rss_kb": _mem_baseline["rss_kb"],
+        "tracemalloc_on": tracemalloc.is_tracing(),
+    }
+
+
+@router.get("/memory/growth")
+@limiter.limit("10/minute")
+async def memory_growth(
+    request: Request,
+    limit: int = 25,
+    user: User = Depends(get_admin_user),
+):
+    """What grew since the baseline — the actual leak-hunting call.
+
+    ``types`` ranks object types by how many more of them exist now than at
+    the baseline; a genuine leak puts a steadily climbing type at the top.
+    ``allocations`` is present only if the baseline was taken with
+    tracemalloc on, and attributes the growth in bytes to file:line.
+    """
+    import gc
+    import tracemalloc
+
+    if not _mem_baseline["at"]:
+        raise HTTPException(status_code=409, detail="No baseline yet — POST /api/admin/memory/baseline first")
+
+    gc.collect()
+    now_types = {d["type"]: d["count"] for d in _type_histogram(400)}
+    base_types = _mem_baseline["types"] or {}
+    deltas = [
+        {"type": t, "now": c, "was": base_types.get(t, 0), "delta": c - base_types.get(t, 0)}
+        for t, c in now_types.items()
+    ]
+    deltas.sort(key=lambda d: d["delta"], reverse=True)
+
+    allocations = None
+    if _mem_baseline["snapshot"] is not None and tracemalloc.is_tracing():
+        current = tracemalloc.take_snapshot()
+        allocations = [
+            {"where": str(s.traceback), "size_diff_kb": s.size_diff // 1024,
+             "count_diff": s.count_diff}
+            for s in current.compare_to(_mem_baseline["snapshot"], "lineno")[:limit]
+        ]
+
+    rss_now = _rss_kb()
+    return {
+        "baseline_at": _mem_baseline["at"],
+        "rss_kb_was": _mem_baseline["rss_kb"],
+        "rss_kb_now": rss_now,
+        "rss_kb_delta": (rss_now - _mem_baseline["rss_kb"])
+        if rss_now is not None and _mem_baseline["rss_kb"] is not None else None,
+        "types": deltas[:limit],
+        "allocations": allocations,
+    }
+
+
+@router.post("/memory/tracemalloc/stop")
+@limiter.limit("6/minute")
+async def memory_tracemalloc_stop(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Turn tracemalloc back off and drop the stored snapshot.
+
+    Worth calling as soon as the question is answered — the tracking overhead
+    is exactly the kind of steady overhead we are here to hunt.
+    """
+    import tracemalloc
+
+    was = tracemalloc.is_tracing()
+    if was:
+        tracemalloc.stop()
+    _mem_baseline["snapshot"] = None
+    logger.info("tracemalloc stopped by %s (was_tracing=%s)", user.email, was)
+    return {"was_tracing": was, "tracemalloc_on": tracemalloc.is_tracing()}
