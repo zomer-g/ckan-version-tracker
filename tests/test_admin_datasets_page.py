@@ -260,6 +260,34 @@ def test_facet_expressions_type_their_constants_for_postgres():
         assert ", %(param" not in sql, sql        # coalesce default
 
 
+def test_one_broken_facet_does_not_take_the_filter_bar_down(client, monkeypatch):
+    """The failure mode that shipped: a single dead GROUP BY 500'd everything.
+
+    The tab then showed five dropdowns holding nothing but their "all" option,
+    which reads as a catalog with no sources in it rather than a query that
+    died — so the whole filter bar looked broken and no error was visible
+    anywhere.
+    """
+    import app.api.admin as admin_mod
+
+    def boom():
+        raise RuntimeError("no such operator")
+
+    # Only the storage-mode facet reads this expression when no filter is set,
+    # so this breaks exactly one dimension — the realistic shape of the outage.
+    monkeypatch.setattr(admin_mod, "_storage_mode_expr", boom)
+
+    r = client.get("/api/admin/dataset-facets")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["storage_modes"] == []
+    assert "no such operator" in body["errors"]["storage_modes"]
+    # ...and every other dimension still answered.
+    assert _facet(body, "sources") == {"ckan": 2, "govmap": 1, "jda": 1, "mankal": 1}
+    assert _facet(body, "storage_targets") == {"r2+neon": 1, "local": 1, "neon": 1, "r2": 2}
+    assert body["total"] == 5
+
+
 def _facet(payload, dimension):
     return {f["value"]: f["count"] for f in payload[dimension]}
 

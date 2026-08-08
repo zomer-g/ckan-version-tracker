@@ -2065,6 +2065,14 @@ class AdminDatasetFacets(BaseModel):
     storage_modes: list[AdminDatasetFacet]
     source_gone: int
     import_warning: int
+    # Per-dimension failures, {dimension: "ErrorType: message"}. One dimension
+    # that cannot be computed must not take the other four down with it — the
+    # whole filter bar went blank in production because a single failing GROUP
+    # BY 500'd the endpoint, and the tab then looked like a catalog with no
+    # sources rather than a query that died. Admin-only, so the database's own
+    # words go straight through: whoever can read this page is the person who
+    # would otherwise be reading the server log.
+    errors: dict[str, str] = {}
 
 
 @router.get("/dataset-facets", response_model=AdminDatasetFacets)
@@ -2101,6 +2109,26 @@ async def admin_dataset_facets(
 
     from app.services.source_load import source_key
 
+    errors: dict[str, str] = {}
+
+    async def _dimension(name: str, run, default):
+        """Compute one facet, or record why it could not be computed.
+
+        A rollback is not optional: on Postgres a failed statement poisons the
+        transaction, so without it every dimension after the first failure
+        would fail too and the error would name the wrong query.
+        """
+        try:
+            return await run()
+        except Exception as e:  # noqa: BLE001 — one dead facet, not a dead tab
+            logger.exception("dataset facet %r failed", name)
+            errors[name] = f"{type(e).__name__}: {e}"
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            return default
+
     def _conds(skip: str | None = None):
         return _admin_dataset_conds(
             q=q, storage=storage, mode=mode, source=source,
@@ -2121,32 +2149,41 @@ async def admin_dataset_facets(
     # Sources: keyed in Python, not SQL. source_key splits on "-scraper-",
     # which needs split_part — absent from the SQLite the tests run on — and
     # the row set here is the ~1.1k administrable datasets, two small columns.
-    src_rows = (await db.execute(
-        select(TrackedDataset.ckan_id, TrackedDataset.source_type)
-        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
-        .where(*_conds(skip="source"))
-    )).all()
+    async def _src_rows():
+        return (await db.execute(
+            select(TrackedDataset.ckan_id, TrackedDataset.source_type)
+            .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+            .where(*_conds(skip="source"))
+        )).all()
+
+    src_rows = await _dimension("sources", _src_rows, [])
     src_counts: dict[str, int] = {}
     for ckan_id, st in src_rows:
         k = source_key(ckan_id, st)
         src_counts[k] = src_counts.get(k, 0) + 1
 
-    storage_conds = _conds(skip="storage")
-    target_rows = (await db.execute(
-        select(_storage_target_expr(), func.count())
-        .select_from(TrackedDataset)
-        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
-        .where(*storage_conds)
-        .group_by(_storage_target_expr())
-    )).all()
-    mode_expr = _storage_mode_expr()
-    mode_rows = (await db.execute(
-        select(mode_expr, func.count())
-        .select_from(TrackedDataset)
-        .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
-        .where(*_conds(skip="mode"))
-        .group_by(mode_expr)
-    )).all()
+    async def _target_rows():
+        expr = _storage_target_expr()
+        return (await db.execute(
+            select(expr, func.count())
+            .select_from(TrackedDataset)
+            .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+            .where(*_conds(skip="storage"))
+            .group_by(expr)
+        )).all()
+
+    async def _mode_rows():
+        expr = _storage_mode_expr()
+        return (await db.execute(
+            select(expr, func.count())
+            .select_from(TrackedDataset)
+            .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
+            .where(*_conds(skip="mode"))
+            .group_by(expr)
+        )).all()
+
+    target_rows = await _dimension("storage_targets", _target_rows, [])
+    mode_rows = await _dimension("storage_modes", _mode_rows, [])
 
     def _facets(pairs) -> list[AdminDatasetFacet]:
         # Biggest first: the filter is a "take me to the interesting pile"
@@ -2156,20 +2193,30 @@ async def admin_dataset_facets(
             key=lambda f: (-f.count, f.value),
         )
 
-    gone_conds = _conds(skip="source_gone")
-    warn_conds = _conds(skip="import_warning")
-
+    # Building the conditions happens INSIDE each guard too, not just running
+    # them: _admin_dataset_conds composes SQL expressions, and an expression
+    # that cannot be built takes the endpoint down just as thoroughly as a
+    # query that cannot run.
     return AdminDatasetFacets(
-        total=await _count(_conds()),
+        total=await _dimension("total", lambda: _count(_conds()), 0),
         sources=_facets(src_counts.items()),
         storage_targets=_facets(target_rows),
         storage_modes=_facets(mode_rows),
-        source_gone=await _count(
-            [*gone_conds, TrackedDataset.source_gone_at.isnot(None)]
+        source_gone=await _dimension(
+            "source_gone",
+            lambda: _count([
+                *_conds(skip="source_gone"), TrackedDataset.source_gone_at.isnot(None),
+            ]),
+            0,
         ),
-        import_warning=await _count(
-            [*warn_conds, TrackedDataset.import_warning.isnot(None)]
+        import_warning=await _dimension(
+            "import_warning",
+            lambda: _count([
+                *_conds(skip="import_warning"), TrackedDataset.import_warning.isnot(None),
+            ]),
+            0,
         ),
+        errors=errors,
     )
 
 

@@ -631,8 +631,16 @@ export default function AdminPage() {
   // about what picking that option would show, not a static catalog census.
   const loadDatasetFacets = async () => {
     try {
-      setDsFacets(await adminApi.datasetFacets(dsFilters()));
-      setDsFacetsError(null);
+      const facets = await adminApi.datasetFacets(dsFilters());
+      setDsFacets(facets);
+      // A partial answer still says what failed — the endpoint no longer dies
+      // whole when one dimension does.
+      const partial = Object.entries(facets.errors ?? {});
+      setDsFacetsError(
+        partial.length
+          ? partial.map(([dim, msg]) => `${dim}: ${msg}`).join(" · ")
+          : null,
+      );
     } catch (e: any) {
       // Say so. A failed facet load leaves the dropdowns holding nothing but
       // their "all" option, which reads exactly like a catalog with no sources

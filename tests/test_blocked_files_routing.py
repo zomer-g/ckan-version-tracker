@@ -111,6 +111,45 @@ def test_nothing_blocked_queues_nothing(db):
     assert _tasks(db) == []
 
 
+# ---------------------------------------------------------------------------
+# It reports whether it queued, because the caller has to log the difference.
+#
+# The inline poll ends 0/N here — it genuinely cannot fetch the file, and that
+# is precisely what put a worker on it. Logging that red made a working system
+# read as a collapsing one: five red rows per cycle, each immediately followed
+# by the rescue that succeeded (אסטרטגית לדרכים 2050 went from that line to
+# "version 1 created" in 29 seconds).
+# ---------------------------------------------------------------------------
+
+def test_it_reports_that_it_queued(db):
+    assert _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES)) is True
+
+
+def test_an_existing_task_still_counts_as_rescued(db):
+    """Second poll, task already waiting: the files are still on their way, so
+    the caller must not fall back to calling it a failure."""
+    _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES))
+    assert _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES)) is True
+
+
+def test_no_rescue_reports_false(monkeypatch, db):
+    """Nothing queued — with the switch off, or nothing blocked — is a real
+    failure again, and must be logged as one."""
+    assert _run(poll_job._queue_blocked_files_task(_ds(db), [])) is False
+    monkeypatch.setattr(settings, "ckan_blocked_files_enabled", False)
+    assert _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES)) is False
+
+
+def test_a_queue_failure_reports_false_rather_than_claiming_a_rescue(monkeypatch, db):
+    """If the task could not be created, nobody is coming for these files —
+    saying "handed to a worker" would be worse than saying nothing."""
+    def _boom(*a, **k):
+        raise RuntimeError("database is on fire")
+
+    monkeypatch.setattr(poll_job, "async_session", _boom)
+    assert _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES)) is False
+
+
 def test_it_does_not_requeue_while_one_is_already_waiting(db):
     """The wall is not moving. One task per dataset, not one per cadence."""
     for _ in range(3):

@@ -2098,6 +2098,10 @@ export interface AdminDatasetFacets {
   storage_modes: AdminDatasetFacet[];
   source_gone: number;
   import_warning: number;
+  /** {dimension: "ErrorType: message"} for any facet that could not be
+   *  computed. The other dimensions still arrive — one dead facet is not a
+   *  dead filter bar. */
+  errors?: Record<string, string>;
 }
 
 function adminDatasetParams(opts: AdminDatasetFilters): URLSearchParams {

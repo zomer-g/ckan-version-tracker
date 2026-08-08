@@ -499,7 +499,7 @@ async def _poll_dataset(
             blocked_resources.remember(ds, blocked_entries)
             pending_note = blocked_resources.note_for(blocked_entries)
             # …and hand the ones still missing to a worker that can reach them.
-            await _queue_blocked_files_task(
+            rescue_queued = await _queue_blocked_files_task(
                 ds, blocked_resources.pending(blocked_entries))
 
             is_first_version = latest_version is None
@@ -672,11 +672,28 @@ async def _poll_dataset(
                         next_version, ds.ckan_name, expected, msg,
                     )
                     from app.services.activity_log import log_event
-                    await log_event(
-                        event="failed", dataset=ds, status="error", actor="system",
-                        message="הגירוד נכשל — אף משאב לא נשמר",
-                        detail=msg,
-                    )
+                    if rescue_queued:
+                        # Not a failure — a handover. This process genuinely
+                        # cannot fetch the file, and that is exactly what put a
+                        # worker on it seconds ago; אסטרטגית לדרכים 2050 went
+                        # from this line to "version 1 created" in 29 seconds.
+                        # Logging it red made a working system read as a
+                        # collapsing one: five red rows a cycle, each one
+                        # immediately followed by the rescue that succeeded.
+                        await log_event(
+                            event="queued", dataset=ds, status="info",
+                            actor="system",
+                            message="הקבצים חסומים לשרת — הועברו לגירוד בדפדפן",
+                            detail=msg,
+                        )
+                        ds.last_error = blocked_resources.note_for(blocked_entries)
+                    else:
+                        await log_event(
+                            event="failed", dataset=ds, status="error",
+                            actor="system",
+                            message="הגירוד נכשל — אף משאב לא נשמר",
+                            detail=msg,
+                        )
                 else:
                     # Compute change summary
                     change_summary = compute_change_summary(
@@ -949,7 +966,7 @@ async def _collect_datacollector_api(ds: TrackedDataset, db) -> None:
 BLOCKED_FILES_KIND = "ckan_blocked_files"
 
 
-async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> None:
+async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> bool:
     """Ask a worker to fetch the files data.gov.il will not serve this server.
 
     CKAN is polled INLINE, in the web process, where Playwright cannot run — and
@@ -972,7 +989,7 @@ async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> 
     Nothing in this function is allowed to matter that much.
     """
     if not entries or not settings.ckan_blocked_files_enabled:
-        return
+        return False
     from app.models.scrape_task import PRIORITY_ROUTINE, ScrapeTask
 
     try:
@@ -986,7 +1003,7 @@ async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> 
             if existing.scalar_one_or_none():
                 # Already queued or being worked. Re-queuing every poll would
                 # pile up one task per cadence for a wall that is not moving.
-                return
+                return True
             task_db.add(ScrapeTask(
                 tracked_dataset_id=ds.id,
                 status="pending",
@@ -999,12 +1016,14 @@ async def _queue_blocked_files_task(ds: TrackedDataset, entries: list[dict]) -> 
             await task_db.commit()
             logger.info("Queued %s task for %s (%d blocked file(s))",
                         BLOCKED_FILES_KIND, ds.ckan_name, len(entries))
+            return True
     except IntegrityError:
         logger.info("Blocked-files task already queued for %s (index race)",
                     ds.ckan_name)
     except Exception:  # noqa: BLE001 — the poll must survive this
         logger.warning("Could not queue blocked-files task for %s",
                        ds.ckan_name, exc_info=True)
+    return False
 
 
 async def _create_scrape_task(
