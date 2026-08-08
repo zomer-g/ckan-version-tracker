@@ -295,12 +295,18 @@ class Settings(BaseSettings):
 
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
-    # OFF until the worker ships a handler for the `ckan_blocked_files` kind:
-    # queuing a task nothing knows how to execute would fail it, and since a
-    # failed task no longer counts as active, the next poll would queue another
-    # — a treadmill of failures across the 13 affected datasets. Flip this on
-    # once govil-scraper can claim the kind.
-    ckan_blocked_files_enabled: bool = False
+    #
+    # Shipped OFF while nothing could claim the `ckan_blocked_files` kind: a
+    # task no worker executes fails, and a failed task no longer counts as
+    # active, so the next poll would queue another — a treadmill across every
+    # affected dataset. govil-scraper now dispatches the kind (ahead of the
+    # manifest registry, with the CKAN path untouched), so the reason is gone.
+    #
+    # The default is the switch rather than an env var: the same value was put
+    # in render.yaml and never reached the service, because Render does not sync
+    # a Blueprint's envVars on an ordinary deploy. Code deploys demonstrably do
+    # arrive; that is the path this rides on.
+    ckan_blocked_files_enabled: bool = True
     # Layers per tick for the in-place geometry backfill (see
     # index_mirror.backfill_geometry). Only relevant while the corpus is
     # catching up: once every layer has the column the query finds nothing and

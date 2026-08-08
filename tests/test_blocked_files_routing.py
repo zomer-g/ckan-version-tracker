@@ -118,9 +118,12 @@ def test_it_does_not_requeue_while_one_is_already_waiting(db):
     assert len(_tasks(db)) == 1
 
 
-def test_it_is_off_by_default(monkeypatch, db):
-    """A `kind` no worker can claim would fail, and a failed task is no longer
-    active — so the next poll queues another. Off until the handler ships."""
+def test_the_switch_actually_stops_it(monkeypatch, db):
+    """Now ON by default, since govil-scraper dispatches the kind. The switch
+    stays because the failure it guards against is ugly: a task no worker can
+    claim fails, and a failed task is no longer active, so the next poll queues
+    another — a treadmill across every affected dataset. If the worker side
+    ever regresses, this is the one lever that stops the bleeding."""
     monkeypatch.setattr(settings, "ckan_blocked_files_enabled", False)
     _run(poll_job._queue_blocked_files_task(_ds(db), ENTRIES))
     assert _tasks(db) == []
