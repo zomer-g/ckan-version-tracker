@@ -128,29 +128,39 @@ SCHEDULABLE_MODES = ("new", "open", "group")
 def sampling_spec(ds) -> dict | None:
     """The dataset's ``sampling`` block, or None if it declares none.
 
-    The source's MANIFEST is the base and the dataset's stored config is layered
-    over it, key by key. Both halves are load-bearing:
+    **The MANIFEST wins whenever one matches.** A dataset's stored copy is only
+    the fallback, for a source that has no manifest at all.
 
-    * the manifest half is what makes this work on the datasets that already
-      exist. A stored ``scraper_config`` is a snapshot taken when the dataset was
-      created, so a manifest that later learns to declare something — a sampling
-      block at all, a cadence, a narrower walk — would otherwise apply only to
-      datasets created afterwards, and every existing one would need a config
-      backfill. That is precisely the drift the declarative registry exists to
-      avoid, and the datasets with history worth reading are the OLD ones.
-    * the stored half still wins for every key it declares, so a per-dataset
-      choice an admin made stays made.
+    That precedence is the whole point, and getting it backwards cost a live
+    outage of exactly the silent kind this feature is prone to. This block
+    describes what the SOURCE can do — which modes exist, which groups, on what
+    cadence — and a dataset's ``scraper_config`` holds nothing but a photograph
+    of it taken the day that dataset was created. Nothing writes into it
+    afterwards; there is no per-dataset tuning of sampling to preserve. Where a
+    corpus genuinely needs a narrower block (the documents index offers two
+    modes, a single file one), that narrowing already comes from the manifest's
+    own ``url_pattern`` and arrives here through the matcher below.
+
+    Layering the stored copy ON TOP looked like the conservative choice and was
+    the opposite. It works for a key the snapshot has never heard of, which is
+    how ``schedule`` reached the Jerusalem register — but it fails for a key the
+    snapshot ALREADY HAS and the manifest has since changed. ``modes`` is that
+    key: the register's stored list was written on 2026-08-01, before the
+    ``group`` mode existed, so it shadowed the manifest's newer list,
+    ``available_modes`` dropped ``group``, and ``scheduled_runs`` silently
+    discarded both group cadences. The weekly ``new`` run kept working, so
+    everything looked healthy — the two runs that were supposed to start simply
+    never did, and nothing anywhere said so.
 
     Resolution goes through the same matcher OVER classifies a pasted URL with,
-    so a dataset gets the block its own corpus declares (the register's four
-    modes, the documents index's two) rather than the source's default. The
-    cache is warmed at startup and this is a pure lookup — no DB, so it is safe
-    inside response serialization.
+    so a dataset gets the block its own corpus declares rather than the source's
+    default. The cache is warmed at startup and this is a pure lookup — no DB,
+    so it is safe inside response serialization.
     """
     stored = (ds.scraper_config or {}).get("sampling")
     stored = stored if isinstance(stored, dict) else {}
-    base = _manifest_spec(ds)
-    spec = {**base, **stored} if isinstance(base, dict) else stored
+    manifest = _manifest_spec(ds)
+    spec = manifest if isinstance(manifest, dict) and manifest else stored
     if not spec.get("item_key"):
         return None
     return spec

@@ -481,11 +481,7 @@ def test_a_source_declares_its_own_sampling_cadence():
             _ds(sampling={**SAMPLING, "schedule": bad}), "new") is None
 
 
-def test_the_manifest_can_add_a_key_to_a_dataset_that_predates_it(monkeypatch):
-    """A stored scraper_config is a snapshot from creation. If it replaced the
-    manifest block wholesale, a cadence added to a manifest would reach only
-    datasets created afterwards — and the register that needs one is older than
-    the feature. The stored half still wins for every key it does declare."""
+def _toy_manifest(monkeypatch, sampling):
     from app.services import source_registry
 
     manifest = source_registry.validate_manifest({
@@ -494,24 +490,91 @@ def test_the_manifest_can_add_a_key_to_a_dataset_that_predates_it(monkeypatch):
         "label_he": "מקור", "label_en": "Source",
         "site_url": "https://toy.example.gov.il/",
         "badge": {"bg": "#fff", "fg": "#000", "accent": "#123456"},
-        "default_config": {"sampling": {**SAMPLING, "schedule": {"new": 604800},
-                                        "new_series_window": 2}},
+        "default_config": {"sampling": sampling},
         "url_patterns": [{"regex": r"^https?://toy\.example\.gov\.il/.*$"}],
     })
     monkeypatch.setattr(source_registry, "cached_manifests", lambda: [manifest])
+    return manifest
 
-    # Stored config has a full sampling block — from before the schedule existed.
+
+def test_the_manifest_beats_a_datasets_stored_snapshot(monkeypatch):
+    """A stored ``scraper_config`` is a photograph of the manifest taken the day
+    the dataset was created, and nothing writes into it afterwards. So the
+    manifest is the authority and the stored copy is only a fallback.
+
+    Layering the stored copy on top instead looks conservative and is the
+    opposite. It works for a key the snapshot never had — which is how
+    ``schedule`` first reached a register older than the feature — and fails for
+    a key the snapshot HAS and the manifest has since changed."""
+    _toy_manifest(monkeypatch, {**SAMPLING, "schedule": {"new": 604800},
+                                "new_series_window": 2})
+
+    # Stored block predates the schedule entirely: the manifest supplies it.
     ds = _ds(source_url="https://toy.example.gov.il/x", sampling=SAMPLING)
     spec = sampling_runs.sampling_spec(ds)
-    assert spec["schedule"] == {"new": 604800}     # arrived from the manifest
+    assert spec["schedule"] == {"new": 604800}
     assert spec["item_key"] == ITEM_KEY
 
-    # …and a narrower choice stored on the dataset is not overwritten by the
-    # source's default.
-    narrowed = _ds(source_url="https://toy.example.gov.il/x",
-                   sampling={**SAMPLING, "modes": ["all"]})
-    assert sampling_runs.sampling_spec(narrowed)["modes"] == ["all"]
-    assert sampling_runs.sampling_spec(narrowed)["schedule"] == {"new": 604800}
+    # A URL no manifest claims falls back to the stored copy, which is the only
+    # thing a source without a manifest ever has.
+    orphan = _ds(source_url="https://elsewhere.example.com/x", sampling=SAMPLING)
+    assert sampling_runs.sampling_spec(orphan)["modes"] == SAMPLING["modes"]
+
+
+def test_a_stale_stored_mode_list_cannot_hide_a_new_mode(monkeypatch):
+    """The regression this exists for, and it failed in production silently.
+
+    ykpubdata's register stored its sampling block on 2026-08-01, when the mode
+    list was [all, new, status, item]. The manifest later gained "group" and two
+    group cadences. With the stored copy layered on top, its OLD ``modes`` list
+    shadowed the new one, ``available_modes`` never saw "group", and
+    ``scheduled_runs`` silently discarded BOTH group cadences — while the
+    weekly "new" run, which the stale list did contain, kept working. Nothing
+    errored. Nothing logged. The two runs simply never started."""
+    _toy_manifest(monkeypatch, {
+        **SAMPLING,
+        "modes": ["all", "new", "group", "status", "item"],
+        "groups": {"live": {"label_he": "פעילים", "activity_within_days": 365}},
+        "activity_column": "תאריך סטטוס",
+        "schedule": {"new": 604800, "group:live": 259200},
+    })
+
+    stale = _ds(source_url="https://toy.example.gov.il/x",
+                sampling={**SAMPLING, "modes": ["all", "new", "status", "item"]})
+    assert "group" in sampling_runs.available_modes(stale)
+    assert [r["key"] for r in sampling_runs.scheduled_runs(stale)] == [
+        "new", "group:live"]
+
+
+def test_a_corpus_the_manifest_narrows_stays_narrow(monkeypatch):
+    """The manifest winning must not widen a corpus that is deliberately
+    narrow. It does not, because the narrowing comes from the manifest's own
+    url_pattern — which is the matcher this resolves through — and not from the
+    dataset's stored copy."""
+    from app.services import source_registry
+
+    manifest = source_registry.validate_manifest({
+        "manifest_version": 1,
+        "id": "toysrc",
+        "label_he": "מקור", "label_en": "Source",
+        "site_url": "https://toy.example.gov.il/",
+        "badge": {"bg": "#fff", "fg": "#000", "accent": "#123456"},
+        "default_config": {"sampling": {**SAMPLING, "modes": ["all", "new", "group"],
+                                        "schedule": {"new": 604800}}},
+        "url_patterns": [
+            {"regex": r"^https?://toy\.example\.gov\.il/docs.*$",
+             "page_type": "toy_docs",
+             "config": {"sampling": {"modes": ["all"], "item_key": ITEM_KEY}}},
+            {"regex": r"^https?://toy\.example\.gov\.il/.*$"},
+        ],
+    })
+    monkeypatch.setattr(source_registry, "cached_manifests", lambda: [manifest])
+
+    wide = _ds(source_url="https://toy.example.gov.il/x", sampling=SAMPLING)
+    narrow = _ds(source_url="https://toy.example.gov.il/docs", sampling=SAMPLING)
+    assert "group" in sampling_runs.available_modes(wide)
+    assert sampling_runs.available_modes(narrow) == ["all"]
+    assert sampling_runs.scheduled_runs(narrow) == []
 
 
 # ── 8. queueing: who may re-aim a task that is already there ─────────────────
