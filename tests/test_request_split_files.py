@@ -197,6 +197,53 @@ def test_a_file_already_tracked_is_reported_not_duplicated(stack):
     assert len(_rows(Session)) == 2
 
 
+def _set_status(Session, url, status):
+    async def _go():
+        async with Session() as db:
+            row = (await db.execute(
+                select(TrackedDataset).where(TrackedDataset.source_url == url)
+            )).scalar_one()
+            row.status = status
+            await db.commit()
+
+    _run(_go())
+
+
+def test_rejecting_a_batch_does_not_make_those_files_unaddable(stack):
+    """Rejecting is how someone says "not these" — often, as it happened, because
+    27 identically-titled cards looked like junk. It used to leave every one of
+    those files permanently un-addable: the queue was empty, and every new
+    request was answered "already tracked" about a row nothing would ever
+    scrape. Re-requesting re-opens that row."""
+    client, Session = stack
+    _post(client, split_files=True, selected_files=[F1, F2])
+    _set_status(Session, F1, "rejected")
+
+    r = _post(client, split_files=True, selected_files=[F1],
+              file_titles={F1: "קובץ נתונים לעיבוד - 2024"})
+    assert r.status_code == 201, r.text
+    assert r.json()["created"] == 1
+    assert r.json()["results"][0]["reopened"] is True
+
+    rows = {d.source_url: d for d in _rows(Session)}
+    # Re-opened in place — a SECOND row for the same URL would be a real
+    # duplicate, and the two would fight over the same corpus.
+    assert len(rows) == 2
+    assert rows[F1].status == "pending"
+    # Renamed from this request: the bad name is usually why it was rejected.
+    assert rows[F1].title == "קובץ נתונים לעיבוד - 2024"
+
+
+def test_an_active_dataset_still_blocks(stack):
+    """Only 'rejected' is revivable. A live dataset is a real duplicate."""
+    client, Session = stack
+    _post(client, split_files=True, selected_files=[F1])
+    _set_status(Session, F1, "active")
+    r = _post(client, split_files=True, selected_files=[F1])
+    assert r.json()["created"] == 0
+    assert r.json()["results"][0]["status"] == "duplicate"
+
+
 def test_everything_already_tracked_is_an_answer_not_a_failure(stack):
     """Re-submitting a page whose files are sitting in the approval queue used
     to paint a red "None of the picked files could be opened" over a correct

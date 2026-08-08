@@ -1926,6 +1926,43 @@ async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
 MAX_FILE_TITLE_LENGTH = 300
 
 
+def _file_title(titles: dict[str, str] | None, url: str, match) -> str:
+    """The picker's label for a file, else the manifest's URL-derived one."""
+    label = (titles or {}).get(url, "")
+    if isinstance(label, str) and label.strip():
+        return label.strip()[:MAX_FILE_TITLE_LENGTH]
+    return match.title
+
+
+async def _reopen_rejected(
+    db: AsyncSession, dataset_id, titles, url: str, match, interval: int,
+) -> str | None:
+    """Put a rejected dataset back in the approval queue. Returns its title.
+
+    The title and cadence are refreshed from THIS request, because the reason a
+    batch gets rejected and re-requested is usually that the first attempt named
+    them badly — carrying the old name forward would re-create the situation
+    that got them rejected.
+    """
+    from app.api.utils import parse_uuid
+    from app.services.activity_log import log_event
+
+    # find_datasets_for_url reports ids as strings; the column is a UUID.
+    row = (await db.execute(
+        select(TrackedDataset).where(
+            TrackedDataset.id == parse_uuid(str(dataset_id), "dataset_id"))
+    )).scalar_one_or_none()
+    if row is None or row.status != "rejected":
+        return None
+    row.status = "pending"
+    row.title = _file_title(titles, url, match)
+    row.poll_interval = max(interval, settings.min_poll_interval)
+    await db.commit()
+    await log_event(event="requested", dataset=row, status="info", actor="request",
+                    message="הבקשה נפתחה מחדש לאחר דחייה (ממתינה לאישור)")
+    return row.title
+
+
 async def _create_file_requests(
     db: AsyncSession, urls: list[str], interval: int,
     titles: dict[str, str] | None = None,
@@ -1959,12 +1996,30 @@ async def _create_file_requests(
                 results.append({"url": url, "status": "invalid",
                                 "error": "no source recognises this file"})
                 continue
-            duplicate = await find_datasets_for_url(db, url, strict=True)
-            if duplicate:
+            existing = await find_datasets_for_url(db, url, strict=True)
+            # A REJECTED dataset must not block the file forever. Rejecting a
+            # batch is how someone says "not these" — often, as here, because
+            # 27 identically-titled cards looked like junk — and it left every
+            # one of those files permanently un-addable, answering each new
+            # request with "already tracked" about a row nothing will ever
+            # scrape. Re-requesting re-opens that row rather than creating a
+            # second one for the same URL, which would be a real duplicate.
+            revivable = [d for d in existing if d.get("status") == "rejected"]
+            blocking = [d for d in existing if d.get("status") != "rejected"]
+            if blocking:
                 results.append({"url": url, "status": "duplicate",
-                                "dataset_id": str(duplicate[0]["id"]),
-                                "dataset_title": duplicate[0]["title"]})
+                                "dataset_id": str(blocking[0]["id"]),
+                                "dataset_title": blocking[0]["title"]})
                 continue
+            if revivable:
+                revived = await _reopen_rejected(
+                    db, revivable[0]["id"], titles, url, match, interval,
+                )
+                if revived:
+                    created += 1
+                    results.append({"url": url, "status": "pending",
+                                    "name": revived, "reopened": True})
+                    continue
             sc = dict(match.scraper_config)
             sc.setdefault("download_files", True)
             if match.manifest.neon_eligible:
@@ -1973,9 +2028,7 @@ async def _create_file_requests(
             # The picker's label for this file beats the manifest's, which can
             # only be built from the URL. Both are provisional: push_version
             # replaces the title with the source's own on the first scrape.
-            label = (titles or {}).get(url, "")
-            title = (label.strip()[:MAX_FILE_TITLE_LENGTH]
-                     if isinstance(label, str) and label.strip() else match.title)
+            title = _file_title(titles, url, match)
             ds = TrackedDataset(
                 ckan_id=f"{match.manifest.slug_prefix}-{slug}",
                 ckan_name=slug,
@@ -2154,7 +2207,13 @@ async def submit_tracking_request(
             )
 
         # Duplicate check by source-URL identity — see the admin path above.
-        existing = await find_datasets_for_url(db, body.source_url, strict=True)
+        # A REJECTED dataset does not block: rejecting is how an admin says
+        # "not this one", not "nobody may ever ask for this again", and a row
+        # nothing will ever scrape should not answer a new request with
+        # "already tracked".
+        existing = [d for d in await find_datasets_for_url(db, body.source_url,
+                                                           strict=True)
+                    if d.get("status") != "rejected"]
         if existing:
             # Name the dataset, as the admin path does. "Already tracked" alone
             # is indistinguishable from a bug when the URL the requester pasted

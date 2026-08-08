@@ -219,7 +219,11 @@ async def _mark_tracked(db: AsyncSession, files: list[dict]) -> list[dict]:
         rows = (await db.execute(
             select(TrackedDataset.source_url, TrackedDataset.id,
                    TrackedDataset.status)
-            .where(TrackedDataset.source_url.in_(urls))
+            # A rejected dataset is NOT "already tracked" — nothing will ever
+            # scrape it. Showing those files as taken is what left a whole
+            # publication un-addable after one batch rejection.
+            .where(TrackedDataset.source_url.in_(urls),
+                   TrackedDataset.status != "rejected")
         )).all()
     except Exception:  # noqa: BLE001
         logger.warning("preview: could not mark tracked files", exc_info=True)
