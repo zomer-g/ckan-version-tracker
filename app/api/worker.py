@@ -1462,11 +1462,20 @@ async def push_version(
             if parsed <= 0:
                 return
             try:
-                total = await append_store.table_count(table)
+                # The ESTIMATE, not count(*): this runs while push-version's
+                # request is open, and an exact count of the parcel layer's 1.1M
+                # rows is the kind of long synchronous step that gets the task
+                # reclaimed mid-push — the failure this whole area keeps having.
+                total = await append_store.table_count_estimate(table)
             except Exception as e:  # noqa: BLE001 — a check must not fail a push
                 logger.warning("NEON landed-check failed for %s: %s", table, e)
                 return
-            if total < parsed:
+            if total < 0:
+                return  # never analysed — no answer is not the same as none
+            # A margin, because the estimate is a few percent out and a false
+            # "rows are missing" on a healthy dataset would teach everyone to
+            # ignore the warning. A third of a layer missing clears this easily.
+            if total < parsed * 0.95:
                 msg = (f"{res_name}: {total:,} שורות בטבלה מתוך {parsed:,} "
                        f"שנקלטו בגרסה — הטעינה ל-NEON חלקית")
                 _neon_short.append(msg)

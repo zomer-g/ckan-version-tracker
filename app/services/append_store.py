@@ -1087,6 +1087,33 @@ async def table_count(table: str, *, schema: str = "public") -> int:
             return 0
 
 
+async def table_count_estimate(table: str, *, schema: str = "public") -> int:
+    """Planner's row estimate for the table — a catalog lookup, not a scan.
+
+    ``table_count`` is ``count(*)``, which on the million-row tables (the
+    national parcel layer, the plan entities) is seconds to minutes and cannot
+    be run anywhere a request is waiting. This is the version for those places:
+    it costs one index probe and is accurate to a few percent after any ANALYZE,
+    which is far more resolution than "did a third of the rows fail to arrive"
+    needs.
+
+    Returns -1 when the planner has no estimate yet (a table created this
+    transaction and never analysed), so callers can tell "no answer" apart from
+    "no rows" — reading -1 as 0 would report every fresh table as empty.
+    """
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
+        raise ValueError(f"invalid schema: {schema!r}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT c.reltuples::bigint FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = $1 AND c.relname = $2", schema, table)
+    if val is None or val < 0:
+        return -1
+    return int(val)
+
+
 async def schema_table_columns(schema: str) -> dict[str, list[dict]]:
     """{table: [{name,type}, …]} for every table in ``schema``, in one query.
 
@@ -1681,6 +1708,15 @@ async def latest_item_keys(
     published — ISO-ish stamps, empty strings, the occasional oddity — and a
     ``::date`` cast turns one bad row into a failed run for the whole register.
     Zero-padded ISO sorts correctly as text, which is the only property needed.
+
+    Status comparisons are TRIMMED on both sides, and that is not tidiness. The
+    Jerusalem register publishes some statuses with a leading space
+    (``" תחילת הודעות לפני תקנה 36"``) and the source stopped doing so partway
+    through: the first weekly re-read of 4,690 files rewrote 115 of them without
+    it. Matching exactly, a group defined on the spaced spelling silently lost
+    123 of its 571 files overnight — and would have lost more every week, since
+    each run trims whatever it touches. The group would have decayed to matching
+    only the files nobody had re-read, while continuing to look like it worked.
     """
     cols = await user_columns(table)
     if key_col not in cols:
@@ -1692,10 +1728,11 @@ async def latest_item_keys(
         return f"${len(params) + 1}"
 
     if value_col and value_col in cols and value is not None:
-        clauses.append(f'{_qi(value_col)}::text = {_ph()}')
+        clauses.append(f'btrim({_qi(value_col)}::text) = btrim({_ph()})')
         params.append(str(value))
     if value_col and value_col in cols and include_values:
-        clauses.append(f'{_qi(value_col)}::text = ANY({_ph()})')
+        clauses.append(
+            f'btrim({_qi(value_col)}::text) = ANY(SELECT btrim(v) FROM unnest({_ph()}::text[]) v)')
         params.append([str(v) for v in include_values])
     if value_col and value_col in cols and exclude_values:
         # COALESCE so an item with a NULL status is KEPT by an exclusion: "not

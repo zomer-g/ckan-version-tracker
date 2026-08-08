@@ -100,3 +100,23 @@ def test_the_check_is_skipped_when_there_is_nothing_to_compare(monkeypatch):
                                    expected=0))
     run(worker._neon_only_load_csv("append_x", "/tmp/x.csv", "r", expected=99))
     assert rec.import_warning is None
+
+
+def test_the_request_path_check_never_scans_the_table(monkeypatch):
+    """push-version's own check runs while the request is open. An exact
+    count(*) of the 1.1M-row parcel layer there is the long synchronous step
+    that gets a task reclaimed mid-push — the failure this area keeps having.
+    It must use the planner estimate, and it must tolerate the estimate being a
+    few percent out rather than crying wolf on a healthy dataset."""
+    import inspect
+    src = inspect.getsource(worker.push_version)
+    assert "table_count_estimate" in src
+    assert "append_store.table_count(" not in src
+
+
+def test_an_unanalysed_table_is_not_reported_as_empty():
+    """reltuples is -1 before the first ANALYZE. Reading that as 0 would flag
+    every freshly created table as having lost all its rows."""
+    import inspect
+    src = inspect.getsource(worker.push_version)
+    assert "total < 0" in src
