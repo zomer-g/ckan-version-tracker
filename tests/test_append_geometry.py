@@ -118,11 +118,14 @@ def test_postgis_calls_are_schema_qualified():
 # the guard rails around it
 # ---------------------------------------------------------------------------
 
-def test_nothing_happens_while_the_flag_is_off():
-    """Default-off is what makes this safe to merge: the append path calls it
-    on every insert, and until someone decides otherwise it must do nothing."""
+def test_the_switch_still_stops_it(monkeypatch):
+    """ON by default now that the rescued corpora arrive carrying geometry.
+    The switch stays because the work is not free — on a table whose WKT is
+    ITM the geometry step rewrites the whole column and rehashes every row
+    before it can build anything — so there has to be a way to stop it without
+    a deploy."""
     from app.config import settings
-    assert settings.append_postgis_enabled is False
+    monkeypatch.setattr(settings, "append_postgis_enabled", False)
     out = asyncio.run(ag.fill(None, "append_x", ["lon", "lat"]))
     assert out == {"skipped": "append postgis disabled"}
 

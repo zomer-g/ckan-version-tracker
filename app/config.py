@@ -291,7 +291,19 @@ class Settings(BaseSettings):
     # `index_mirror_postgis_enabled` itself shipped off for the same reason and
     # was only enabled once its corpus had been measured. See
     # app/services/append_geometry.py.
-    append_postgis_enabled: bool = False
+    # ON now that there is something to build from. The census that preceded
+    # this (2026-08-07) found NO append table carrying geometry_wkt — the
+    # rescued SHP/KML corpora are the first, and they arrive with it. The seven
+    # coordinate-pair tables already there get their geom on their next append,
+    # from a classifier verified against production: 2,995/2,999 and 446/447
+    # placed, every point inside the country.
+    #
+    # One thing to watch on the big ones: if the worker emits geometry_wkt in
+    # ITM (its own report says the SOURCE is EPSG:6991), _ensure_degrees
+    # rewrites the WHOLE column and recomputes row hashes before building geom.
+    # Correct, and cheap on 18k rows; on נחלים's 1.5M it is a real operation.
+    # Hence the order this was turned on in: smallest dataset first.
+    append_postgis_enabled: bool = True
 
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
