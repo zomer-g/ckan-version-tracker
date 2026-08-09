@@ -215,6 +215,13 @@ class PushVersionRequest(BaseModel):
     # Which run mode produced it — free text, for the version's change_summary
     # and the activity log ("only what's new", "status=נדונה בוועדת המשנה", …).
     run_mode: str | None = None
+    # And WHICH named group it was aimed at, when it was aimed at one. A group
+    # run reaches the engine as run_mode="status" (that is what the scraper
+    # calls reading a named list), so without this a version says "partial, by
+    # status" with no status and no group — and nothing on the page tells a
+    # reader whether its 4,690 rows are the publication clocks or the year's
+    # movers. See app/services/sampling_runs.py.
+    run_group: str | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -2085,6 +2092,8 @@ async def push_version(
         change_summary["partial_run"] = True
         if body.run_mode:
             change_summary["run_mode"] = body.run_mode
+        if body.run_group:
+            change_summary["run_group"] = body.run_group
     version = VersionIndex(
         tracked_dataset_id=ds.id,
         version_number=next_version,

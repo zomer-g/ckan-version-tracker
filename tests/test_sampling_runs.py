@@ -778,3 +778,67 @@ def test_several_cadences_coexist_on_one_dataset():
     # And the plain-mode helper still answers for plain modes only.
     assert sampling_runs.schedule_for(_ds(sampling=SAMPLING_G), "new") == 604800
     assert sampling_runs.schedule_for(_ds(sampling=SAMPLING_G), "group") is None
+
+
+# ── 10. whitespace drift in a status column ──────────────────────────────────
+
+class _CapturePool:
+    """Captures the SQL latest_item_keys builds, without a database."""
+
+    def __init__(self):
+        self.queries: list[str] = []
+        self.args: list[tuple] = []
+
+    def acquire(self):
+        pool = self
+
+        class _Conn:
+            async def fetchval(self, q, *a):
+                pool.queries.append(q); pool.args.append(a); return 0
+
+            async def fetch(self, q, *a):
+                pool.queries.append(q); pool.args.append(a); return []
+
+        class _Ctx:
+            async def __aenter__(self_inner): return _Conn()
+            async def __aexit__(self_inner, *exc): return False
+
+        return _Ctx()
+
+
+def test_a_status_filter_survives_the_source_changing_its_whitespace(monkeypatch):
+    """The Jerusalem register publishes some statuses with a LEADING SPACE, and
+    the source stopped doing so partway through: the first weekly re-read of
+    4,690 files rewrote 115 of them without it.
+
+    Matched exactly, the publication group — defined on the spaced spelling —
+    dropped from 569 files to 448 overnight, and would have lost more every
+    week, because each run trims whatever it touches. It would have decayed to
+    matching only the files nobody had re-read yet, while still reporting
+    success. Both sides are trimmed so neither spelling can hide a file."""
+    pool = _CapturePool()
+    monkeypatch.setattr(append_store, "get_pool", _async(lambda: pool))
+    monkeypatch.setattr(append_store, "user_columns",
+                        _async(lambda t: [ITEM_KEY, STATUS_COL, SAMPLE_COL]))
+
+    run(append_store.latest_item_keys(
+        "append_x", key_col=ITEM_KEY, order_col=SAMPLE_COL, value_col=STATUS_COL,
+        include_values=[" תחילת הודעות לפני תקנה 36"],
+        exclude_values=["הבקשה נסגרה"], limit=1,
+    ))
+    sql = " ".join(pool.queries)
+    # The column is trimmed…
+    assert f'btrim("{STATUS_COL}"::text)' in sql
+    # …and so is every value it is compared against, so a group declared with
+    # the old spelling still matches a row rewritten without it.
+    assert sql.count("SELECT btrim(v) FROM unnest(") >= 2
+    # The exclusion still keeps a row whose status the source never set.
+    assert "COALESCE" in sql
+
+    # A single exact status is trimmed on both sides too — the same drift breaks
+    # a "by status" run just as quietly.
+    pool.queries.clear()
+    run(append_store.latest_item_keys(
+        "append_x", key_col=ITEM_KEY, value_col=STATUS_COL,
+        value=" תחילת הודעות לפני תקנה 36", limit=1))
+    assert "btrim(" in " ".join(pool.queries)

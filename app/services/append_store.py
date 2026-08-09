@@ -1739,7 +1739,8 @@ async def latest_item_keys(
         # one of the finished ones" has to include the item whose status the
         # source never set, or 24 files fall out of every run silently.
         clauses.append(
-            f'NOT (COALESCE({_qi(value_col)}::text, \'\') = ANY({_ph()}))')
+            f'NOT (btrim(COALESCE({_qi(value_col)}::text, \'\')) = '
+            f'ANY(SELECT btrim(v) FROM unnest({_ph()}::text[]) v))')
         params.append([str(v) for v in exclude_values])
     if activity_col and activity_col in cols and activity_since:
         clauses.append(f'{_qi(activity_col)}::text >= {_ph()}')
