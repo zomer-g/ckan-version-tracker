@@ -2,7 +2,14 @@ services:
   - type: web
     name: ckan-version-tracker
     env: python
-    plan: starter
+    # standard (2GB), not starter (512MB). Measured, not chosen: loading the
+    # 1,097,775-row national parcels register peaked at ~670MB — the load alone
+    # is ~280MB above a ~400MB idle baseline, so it OOM-killed a starter dyno 45
+    # seconds in, every time, and no batch-size tuning can create headroom that
+    # is not there. Keep this in step with the dashboard: the dashboard wins
+    # today, so a blueprint re-sync is the only thing that could quietly put a
+    # 512MB ceiling back under a workload already proven not to fit it.
+    plan: standard
     buildCommand: |
       pip install -r requirements.txt
       cd frontend && npm install && npm run build && cd ..
