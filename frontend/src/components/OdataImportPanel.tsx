@@ -82,33 +82,35 @@ export default function OdataImportPanel() {
 
   const importedIds = new Set(imports.map((i) => i.resource_id));
 
-  // The file is fetched CLIENT-SIDE (Cloudflare 403s our datacenter IP, but the
-  // browser can read it — CORS is open) and uploaded to the backend to parse.
-  // The backend then works as a background JOB (a 548k-row spreadsheet takes
+  // The backend works as a background JOB (a 548k-row spreadsheet takes
   // minutes — longer than the gateway holds a request), so we poll it here.
-  const doImport = async (r: OdataResource, d: OdataDataset) => {
-    if (!r.id || !r.url) {
-      setMsg({ ok: false, text: "למשאב אין קובץ להורדה." });
+  //
+  // Both routes below end at this function: by the time we are here the bytes
+  // are in hand, whether the browser fetched them from odata or the admin
+  // picked them off disk.
+  const sendImport = async (
+    r: OdataResource, d: OdataDataset, blob: Blob, filename: string, fmt: string,
+  ) => {
+    const label = d.title?.trim() || d.name;
+    // The server keys the table on it, so there is nothing to import without
+    // one. The guard used to live in the fetch path only; both routes need it.
+    if (!r.id) {
+      setBusy(null);
+      setMsg({ ok: false, text: "למשאב אין מזהה — אי אפשר לייבא." });
       return;
     }
-    const label = d.title?.trim() || d.name;
-    setBusy(r.id);
-    setMsg(null);
     try {
-      const resp = await fetch(r.url);
-      if (!resp.ok) throw new Error(`הורדת הקובץ מ-odata נכשלה (${resp.status})`);
-      const blob = await resp.blob();
-      // Falls back to the file extension when odata declares no format.
-      const fmt = resourceFormat(r) || (r.datastore_active ? "CSV" : "");
       const fd = new FormData();
-      fd.append("file", blob, r.name?.trim() || "file");
+      fd.append("file", blob, filename);
       fd.append("resource_id", r.id);
       fd.append("format", fmt);
       fd.append("dataset_name", d.name || "");
       fd.append("title", label || "");
       fd.append("organization", d.organization?.title || d.organization?.name || "");
       fd.append("source_url", `${ODATA_BASE}/dataset/${d.name}/resource/${r.id}`);
-      fd.append("file_url", r.url);
+      // Provenance only — and on the manual route it is the Drive link that
+      // could not be fetched, which is exactly what a reader wants recorded.
+      fd.append("file_url", r.url || "");
       let job = await admin.odataImportFile(fd);
       setProgress({ rows: 0, label: label || "" });
       while (job.state === "running") {
@@ -125,6 +127,52 @@ export default function OdataImportPanel() {
       setBusy(null);
       setProgress(null);
     }
+  };
+
+  // The file is fetched CLIENT-SIDE: Cloudflare 403s our datacenter IP, but the
+  // browser can read it (CORS is open).
+  const doImport = async (r: OdataResource, d: OdataDataset) => {
+    if (!r.id || !r.url) {
+      setMsg({ ok: false, text: "למשאב אין קובץ להורדה." });
+      return;
+    }
+    setBusy(r.id);
+    setMsg(null);
+    let blob: Blob;
+    try {
+      const resp = await fetch(r.url);
+      if (!resp.ok) throw new Error(`הורדת הקובץ מ-odata נכשלה (${resp.status})`);
+      blob = await resp.blob();
+    } catch (e) {
+      // A resource whose url points at a Drive/Dropbox VIEWER rather than at
+      // bytes lands here — the fetch is refused by CORS, or it succeeds and
+      // hands back an HTML page. Neither is a file, and neither is something
+      // this side can fix, so say what to do instead of just failing.
+      setBusy(null);
+      setMsg({
+        ok: false,
+        text: `לא ניתן להוריד את הקובץ מהדפדפן (${(e as Error).message}). ` +
+              `אם המשאב מקשר לדרייב — הורד אותו ידנית והשתמש ב"⬆ העלה קובץ".`,
+      });
+      return;
+    }
+    // Falls back to the file extension when odata declares no format.
+    const fmt = resourceFormat(r) || (r.datastore_active ? "CSV" : "");
+    await sendImport(r, d, blob, r.name?.trim() || "file", fmt);
+  };
+
+  // Manual route: the admin downloaded the file themselves. Needed because a
+  // מידע לעם resource can point at a Google Drive link — `open?id=…&usp=drive_fs`
+  // is a viewer page, not a file — so there is nothing for the automatic route
+  // to fetch, and the dataset was simply unreachable from SQL.
+  const doUploadFile = async (r: OdataResource, d: OdataDataset, file: File) => {
+    setBusy(r.id ?? null);
+    setMsg(null);
+    // Deliberately NOT the resource's declared format: the file the admin chose
+    // is the truth here, and a resource labelled CSV that turns out to be an
+    // .xlsx would otherwise be parsed as the wrong thing. Empty lets the server
+    // infer from the filename it is actually given.
+    await sendImport(r, d, file, file.name, "");
   };
 
   const doDelete = async (imp: OdataImport) => {
@@ -270,8 +318,26 @@ export default function OdataImportPanel() {
                                   {busy === r.id ? "מייבא…" : already ? "↻ ייבא מחדש" : "⭳ ייבא ל-SQL"}
                                 </button>
                               ) : (
-                                <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }} title="פורמט לא נתמך לייבוא (נתמכים: CSV/XLS/XLSX/ICAL או datastore)">לא ניתן לייבוא</span>
+                                <span className="text-muted" style={{ fontSize: "0.72rem", flex: "0 0 auto" }} title="פורמט לא נתמך לייבוא אוטומטי (נתמכים: CSV/XLS/XLSX/ICAL או datastore) — אפשר להעלות את הקובץ ידנית">אין ייבוא אוטומטי</span>
                               )}
+                              {/* Always offered, including where the automatic
+                                  route is impossible: a resource that links to
+                                  Google Drive has no fetchable bytes, and
+                                  before this it could not reach SQL at all. */}
+                              <label className="odata-sql-query-btn" style={{ cursor: busy === r.id ? "default" : "pointer", opacity: busy === r.id ? 0.5 : 1, flex: "0 0 auto" }}
+                                title="בחר קובץ מהמחשב (CSV/XLS/XLSX/ICAL) וטען אותו לטבלת SQL תחת המשאב הזה">
+                                ⬆ העלה קובץ
+                                <input type="file" accept=".csv,.xls,.xlsx,.xlsm,.ics,.ical,.ica" disabled={busy === r.id}
+                                  style={{ display: "none" }}
+                                  onChange={(e) => {
+                                    const f = e.target.files?.[0];
+                                    // Reset first: picking the SAME file twice
+                                    // after a failed run fires no change event
+                                    // otherwise, and the button looks dead.
+                                    e.target.value = "";
+                                    if (f) void doUploadFile(r, d, f);
+                                  }} />
+                              </label>
                             </div>
                           );
                         })}
