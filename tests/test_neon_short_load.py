@@ -41,6 +41,9 @@ def _patch(monkeypatch, *, held, loaded=None, rec=None, raises=None):
         return held
 
     monkeypatch.setattr(worker, "_neon_stream_load_file", _stream)
+    # The shared helper reads the ESTIMATE — an exact count(*) of a million-row
+    # table is the long step that must never sit on a request path.
+    monkeypatch.setattr(append_store, "table_count_estimate", _count)
     monkeypatch.setattr(append_store, "table_count", _count)
     if rec is not None:
         monkeypatch.setattr(worker, "async_session", None, raising=False)
@@ -120,3 +123,46 @@ def test_an_unanalysed_table_is_not_reported_as_empty():
     import inspect
     src = inspect.getsource(worker.push_version)
     assert "total < 0" in src
+
+
+def test_every_loader_reports_a_short_load_not_just_two(monkeypatch):
+    """The first version of this check covered two of the three loaders, and the
+    one it missed is the one that failed. The parcel layer's version reported
+    1,097,775 rows over a table holding 150,000 — a background load killed by an
+    OOM eighty seconds in — and the dataset page said nothing, because its
+    loader was the third.
+
+    They now share one helper, so a fourth cannot quietly ship without it."""
+    import inspect
+    src = inspect.getsource(worker)
+    for fn in ("_neon_only_load_csv", "_neon_stream_load_r2"):
+        body = inspect.getsource(getattr(worker, fn))
+        assert "_record_short_load" in body, f"{fn} can lose rows silently"
+    # and push-version's own in-request check
+    assert "_check_neon_landed" in inspect.getsource(worker.push_version)
+
+
+def test_the_shared_check_flags_a_background_load_that_died(monkeypatch):
+    rec = _Rec()
+
+    async def _count(table, **kw):
+        return 150000
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _count)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_shape_x", "ds-1", 1097775,
+                                  res_name="חלקות shape"))
+    assert rec.import_warning
+    assert "150,000" in rec.import_warning and "1,097,775" in rec.import_warning
+
+
+def test_the_shared_check_stays_quiet_when_the_table_is_fuller(monkeypatch):
+    rec = _Rec()
+
+    async def _count(table, **kw):
+        return 2_000_000        # accumulated across versions — normal
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _count)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_shape_x", "ds-1", 1097775))
+    assert rec.import_warning is None

@@ -825,6 +825,46 @@ def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> 
     )
 
 
+async def _record_short_load(table: str, ds_id, expected: int,
+                             res_name: str = "", force: bool = False) -> None:
+    """Write a warning onto the dataset when a table holds fewer rows than the
+    version that filled it promised.
+
+    Shared by every loader, because the first version of this check was added to
+    two of the three and the one it missed is the one that failed: the parcel
+    layer's version reported 1,097,775 rows over a table holding 150,000, and
+    the dataset page said nothing, because its loader was the third.
+
+    One-directional and so free of false alarms — an append table accumulates
+    across versions and samples, so it may hold far MORE than any single
+    version's count and can never legitimately hold less.
+    """
+    if ds_id is None or expected <= 0:
+        return
+    try:
+        held = await append_store.table_count_estimate(table)
+    except Exception as e:  # noqa: BLE001 — a check must not become the failure
+        logger.warning("NEON landed-check failed for %s: %s", table, e)
+        return
+    if not force and (held < 0 or held >= expected * 0.95):
+        return
+    note = (f"⚠ {res_name or table}: {held:,} שורות בטבלה מתוך {expected:,} "
+            f"שנקלטו בגרסה — הטעינה ל-NEON חלקית")
+    try:
+        from app.database import async_session
+        from app.models.tracked_dataset import TrackedDataset as _TD
+        async with async_session() as _db:
+            row = (await _db.execute(
+                select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
+            if row is not None:
+                row.import_warning = note
+                row.import_warning_at = datetime.now(timezone.utc)
+                await _db.commit()
+        logger.error("NEON short load: %s holds ~%d of %d rows", table, held, expected)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not record the short-load warning: %s", e)
+
+
 def _open_maybe_gzip(path: str):
     """Open a CSV that may or may not be gzipped, as text, without reading it.
 
@@ -929,7 +969,8 @@ async def _neon_stream_load_file(
                 pass
 
 
-async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
+async def _neon_stream_load_r2(table: str, r2_key: str,
+                               ds_id=None, expected: int = 0) -> None:
     """Stream a version's R2 CSV into the dataset's NEON table.
 
     Used for the >50MB out-of-band CSV path (e.g. registries Cosmetics,
@@ -963,6 +1004,14 @@ async def _neon_stream_load_r2(table: str, r2_key: str) -> None:
                 _os.remove(tmp)
             except OSError:
                 pass
+    # The third loader, and the one the short-load check first shipped without.
+    # It is also the one most likely to stop early: it runs as a background task
+    # AFTER the response, so a dyno recycle kills it mid-stream with no
+    # exception to catch and nothing written anywhere. The national parcel layer
+    # landed 150,000 of 1,097,775 rows that way on 2026-08-09 — killed by an OOM
+    # eighty seconds in — under a version reporting the full count and a
+    # dataset page reporting nothing at all.
+    await _record_short_load(table, ds_id, expected, res_name=r2_key)
 
 
 # A NEON-only dataset's out-of-band CSV, handed from /upload-csv to
@@ -1013,34 +1062,15 @@ async def _neon_only_load_csv(table: str, path: str, res_name: str,
             "its rows are missing or partial; the next poll re-loads them.",
             res_name, table, e,
         )
-    if ds_id is None or expected <= 0:
-        return
-    # One-directional and so free of false alarms: an append table accumulates
-    # across versions, so it can hold far MORE than one version's count and can
-    # never legitimately hold less.
-    try:
-        held = await append_store.table_count(table)
-    except Exception as e:  # noqa: BLE001 — a check must not become the failure
-        logger.warning("NEON landed-check failed for %s: %s", table, e)
-        return
-    if held >= expected and failed is None:
-        return
-    note = (f"⚠ {res_name}: {held:,} שורות בטבלה מתוך {expected:,} שנקלטו "
-            f"בגרסה — הטעינה ל-NEON חלקית")
-    try:
-        from app.database import async_session
-        from app.models.tracked_dataset import TrackedDataset as _TD
-        async with async_session() as _db:
-            row = (await _db.execute(
-                select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
-            if row is not None:
-                row.import_warning = note
-                row.import_warning_at = datetime.now(timezone.utc)
-                await _db.commit()
-        logger.error("NEON short load: %s holds %d of %d rows (%s)",
-                     table, held, expected, res_name)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("could not record the short-load warning: %s", e)
+    # One implementation, shared with the other two loaders — the first version
+    # of this check was written per-loader and the one it was not written into
+    # is the one that lost 947,775 rows.
+    #
+    # `force` covers the case a count alone cannot see: a table already holding
+    # an earlier version's rows can pass the comparison while THIS load put
+    # nothing in it.
+    await _record_short_load(table, ds_id, expected, res_name=res_name,
+                             force=failed is not None)
 
 
 async def _run_consolidate_bg(ds_id: uuid.UUID, dedup_key: str) -> None:
@@ -1605,7 +1635,12 @@ async def push_version(
                 if _archive_neon and storage.is_storage_value(pre_uploaded):
                     _table = _record_neon_table(res.name)
                     _t = asyncio.create_task(
-                        _neon_stream_load_r2(_table, pre_uploaded)
+                        _neon_stream_load_r2(
+                            _table, pre_uploaded,
+                            # Carried in, not read back: this runs after the
+                            # response, off a version that may not be committed.
+                            ds_id=ds.id, expected=int(res.row_count or 0),
+                        )
                     )
                     _NEON_BG_TASKS.add(_t)
                     _t.add_done_callback(_NEON_BG_TASKS.discard)
