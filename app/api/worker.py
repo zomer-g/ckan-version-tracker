@@ -906,6 +906,22 @@ async def _neon_stream_load_file(
     Raises on failure; the callers below decide how loud that is.
     """
     from app.services import append_store
+    # Sized so ONE batch is ONE insert, rather than a round number that happens
+    # to straddle the parameter ceiling.
+    #
+    # append_rows re-splits anything over _MAX_PARAMS, so a fixed 5000 rows over
+    # a 23-column table came out as 2,730 + 2,270 — two differently-shaped INSERT
+    # statements, on every batch, each with tens of thousands of placeholders.
+    # asyncpg prepares and caches by statement text, so that is two large
+    # prepared statements per batch shape rather than one reused, and the peak
+    # is the bigger of the two rather than the size actually chosen.
+    #
+    # Deriving it from the column count instead makes every insert identical and
+    # the memory per insert a property of the table rather than of an arbitrary
+    # constant — which matters most exactly where it went wrong: 1,097,775 parcel
+    # rows carrying polygon WKT, on a 512MB dyno.
+    #
+    # Set after the header is read, since the column count is what sizes it.
     BATCH = 5000
     try:
         cols: list[str] = []
@@ -930,6 +946,7 @@ async def _neon_stream_load_file(
             cols = [safe[i] for i in keep]
             if not cols:
                 return 0
+            BATCH = min(BATCH, append_store.chunk_size_for(len(cols), True))
             for row in reader:
                 batch.append({safe[i]: (row[i] if i < len(row) else "") or ""
                               for i in keep})
