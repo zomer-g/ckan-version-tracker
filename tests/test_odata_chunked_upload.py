@@ -127,3 +127,76 @@ def test_an_unsupported_format_is_refused_and_the_staging_cleaned(client):
     assert r.status_code == 422
     assert not os.path.exists(
         os.path.join(tempfile.gettempdir(), f"odata-stage-{uid}"))
+
+
+# ── the other half: parsing must not hold the file either ────────────────────
+#
+# The chunked upload fixed the TRANSPORT. Parsing was still eager for CSV — the
+# whole file as bytes, again as a str, again as a list of millions of small
+# lists, all alive at once — which is what OOM-killed the 2GB dyno on a 413MB
+# file. XLSX had a streaming reader; CSV, the format that actually gets big,
+# did not.
+
+def _big_csv(tmp_path, rows: int):
+    p = tmp_path / "big.csv"
+    with open(p, "w", encoding="utf-8", newline="") as fh:
+        fh.write("שם,כתובת,ערך\n")
+        for i in range(rows):
+            fh.write(f"ישוב {i},רחוב הרצל {i},{i}\n")
+    return str(p)
+
+
+def test_csv_is_streamed_not_held(tmp_path):
+    """Peak heap must track the BATCH size, not the file size — otherwise the
+    ceiling is just moved, not removed."""
+    import tracemalloc
+    from app.services import odata_import as oi
+
+    path = _big_csv(tmp_path, 200_000)
+    size_mb = os.path.getsize(path) / 1024 / 1024
+
+    tracemalloc.start()
+    columns, batches = oi._open_for_load(path, "CSV")
+    seen = 0
+    peak_seen = 0
+    for b in batches:
+        seen += len(b)
+        _, peak = tracemalloc.get_traced_memory()
+        peak_seen = max(peak_seen, peak)
+    tracemalloc.stop()
+
+    assert columns == ["שם", "כתובת", "ערך"]
+    assert seen == 200_000, "rows were lost in the stream"
+    # Generous, and still far under the several-times-the-file the eager path
+    # cost. The point is that this does not scale with the input.
+    assert peak_seen / 1024 / 1024 < size_mb * 2, (
+        f"peak {peak_seen/1024/1024:.0f}MB on a {size_mb:.0f}MB file — "
+        "the parse is holding the file")
+
+
+def test_the_windows_1255_sniff_survives_streaming(tmp_path):
+    """Many Israeli gov CSVs are win-1255. The eager parser could look at every
+    byte to decide; a streaming one decides from a prefix, and getting that
+    wrong corrupts every Hebrew value in the table."""
+    from app.services import odata_import as oi
+
+    p = tmp_path / "cp1255.csv"
+    with open(p, "wb") as fh:
+        fh.write("עיר,ערך\nחיפה,1\nתל אביב,2\n".encode("windows-1255"))
+    columns, rows = oi._stream_csv(str(p))
+    assert columns == ["עיר", "ערך"]
+    assert [list(r) for r in rows] == [["חיפה", "1"], ["תל אביב", "2"]]
+
+
+def test_the_file_is_closed_when_the_generator_is_exhausted(tmp_path):
+    """It stays open for the life of the generator; a leak here would strand a
+    handle per import."""
+    import gc
+    from app.services import odata_import as oi
+
+    path = _big_csv(tmp_path, 10)
+    _, rows = oi._stream_csv(path)
+    list(rows)
+    gc.collect()
+    # On Windows an open handle blocks removal outright, which is the assertion.
+    os.remove(path)

@@ -440,21 +440,71 @@ def _parse_xls(path: str) -> tuple[list[str], list[list]]:
     return _rows_to_table(rows)
 
 
-def _parse_csv_file(path: str) -> tuple[list[str], list[list]]:
+# How much of a CSV is read to decide its encoding. The eager parser could
+# examine every byte; a streaming one has to choose from a prefix. 4MB is
+# thousands of rows — orders of magnitude more than the header — and the
+# alternative (a full pass just to sniff) is the cost this whole function
+# exists to avoid.
+_CSV_SNIFF_BYTES = 4 * 1024 * 1024
+
+
+def _csv_encoding(path: str) -> str:
+    """utf-8-sig, or windows-1255 for the many Israeli gov CSVs published in it.
+
+    Same rule the eager parser used — no Hebrew after a UTF-8 decode, but bytes
+    sitting in the win-1255 Hebrew range — applied to a prefix instead of the
+    whole file.
+    """
     with open(path, "rb") as fh:
-        raw = fh.read()
+        raw = fh.read(_CSV_SNIFF_BYTES)
     text = raw.decode("utf-8-sig", errors="replace")
-    # Many Israeli gov CSVs are Windows-1255, not UTF-8. If the UTF-8 decode
-    # produced no Hebrew but the bytes are in the win-1255 Hebrew range, redecode.
     if not re.search(r"[א-ת]", text) and any(0xC0 <= b <= 0xFA for b in raw):
         try:
-            text = raw.decode("windows-1255")
-        except Exception:  # noqa: BLE001 — keep the utf-8 attempt on failure
+            raw.decode("windows-1255")
+            return "windows-1255"
+        except Exception:  # noqa: BLE001 — keep utf-8 when the guess will not decode
             pass
-        if text[:1] == "﻿":
-            text = text[1:]
-    rows = [list(r) for r in csv.reader(io.StringIO(text))]
-    return _rows_to_table(rows)
+    return "utf-8-sig"
+
+
+def _stream_csv(path: str) -> tuple[list[str], object]:
+    """(columns, row generator) over a CSV, forward-only.
+
+    The streaming twin of _parse_csv_file, and the reason it exists: that one
+    held the whole file as bytes, then again as a str, then again as a list of
+    millions of small lists — all three alive at once. On גזטיר נכסים (413MB)
+    that is several GB, and it OOM-killed a 2GB dyno. Nothing downstream ever
+    needed the rows at once: _batches_from_rows is already a generator and the
+    loader consumes it in COPY batches.
+
+    The file stays open for as long as the generator lives and is closed when it
+    is exhausted or thrown away — same contract as _stream_xlsx.
+    """
+    fh = open(path, "r", encoding=_csv_encoding(path), errors="replace",
+              newline="")
+    try:
+        columns, rows = _stream_table(csv.reader(fh))
+        if not columns:
+            fh.close()
+            return [], iter(())
+    except BaseException:
+        fh.close()
+        raise
+
+    def _guarded():
+        try:
+            yield from rows
+        finally:
+            fh.close()
+
+    return columns, _guarded()
+
+
+def _parse_csv_file(path: str) -> tuple[list[str], list[list]]:
+    """Eager CSV read. Kept for callers that genuinely want the whole table in
+    memory; the import path streams instead — see _stream_csv."""
+    columns, rows = _stream_csv(path)
+    return columns, [list(r) for r in rows]
 
 
 def _ical_dt(prop) -> str:
@@ -534,9 +584,17 @@ def _open_for_load(path: str, fmt: str) -> tuple[list[str], object]:
     XLSX streams (the format big gov spreadsheets arrive in — see _stream_xlsx);
     the rest are parsed eagerly, which is fine for the sizes they come in: XLS
     caps at 65k rows and calendars are tiny. Blocking — call in a thread."""
-    if (fmt or "").upper() == "XLSX":
+    f = (fmt or "").upper()
+    if f == "XLSX":
         columns, rows = _stream_xlsx(path)
         return columns, _batches_from_rows(rows, len(columns))
+    if f == "CSV":
+        # CSV was in "the rest" and parsed eagerly, on the assumption that only
+        # spreadsheets get big. CSV is exactly the format that gets big: גזטיר
+        # נכסים is 413MB, and reading it whole OOM-killed a 2GB dyno.
+        columns, rows = _stream_csv(path)
+        return columns, _batches_from_rows(rows, len(columns))
+    # XLS caps at 65k rows and calendars are tiny, so eager is fine for those.
     columns, rows = _parse_file(path, fmt)
     return columns, _batches_from_rows(rows, len(columns))
 
