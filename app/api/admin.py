@@ -2589,6 +2589,61 @@ async def index_mirror_purge(
     return s
 
 
+# ── append-table repair — mojibake purge + join-key indexes ──────────────────
+
+@router.post("/append-tables/{table}/purge-mojibake")
+@limiter.limit("3/minute")
+async def append_purge_mojibake(
+    request: Request,
+    table: str,
+    apply: bool = False,
+    allow_empty: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Delete rows whose text was decoded with the wrong codepage (U+FFFD).
+
+    For shapefiles ingested before GOVSCRAPER 169d98c, whose Hebrew columns
+    arrived as `????`. An append table keeps the corrupt row alongside its
+    correctly-decoded twin after a re-scrape — different bytes, different
+    row_hash — so both answer every query until the bad one is removed.
+
+    ``apply=false`` (default) reports the count without deleting. A purge that
+    would empty the table is refused; re-poll the dataset first."""
+    from app.services import append_repair
+    s = await append_repair.purge(table, apply=apply, allow_empty=allow_empty)
+    if s.get("error"):
+        raise HTTPException(status_code=409, detail=s["error"])
+    logger.info("Mojibake purge by %s: table=%s corrupt=%s applied=%s",
+                user.email, table, s.get("corrupt"), s.get("applied"))
+    return s
+
+
+@router.post("/append-tables/{table}/index")
+@limiter.limit("3/minute")
+async def append_create_index(
+    request: Request,
+    table: str,
+    columns: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Index a lookup/join key on an append table. ``columns`` is comma-separated.
+
+    Append tables ship with a unique index on row_hash and a GiST index on geom;
+    neither serves a filter by cadastral key, which leaves a large register
+    scannable only end-to-end and effectively unjoinable inside the /data
+    console's statement timeout."""
+    from app.services import append_repair
+    cols = [c.strip() for c in columns.split(",") if c.strip()]
+    if not cols:
+        raise HTTPException(status_code=400, detail="columns is required")
+    s = await append_repair.ensure_index(table, cols, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=409, detail=s["error"])
+    logger.info("Append index by %s: %s", user.email, s)
+    return s
+
+
 # ── מידע לעם (odata) import — admin-curated processed-data tables ────────────
 
 class OdataImportRequest(BaseModel):
