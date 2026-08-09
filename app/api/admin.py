@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -2937,6 +2938,179 @@ async def odata_import_file(
     )
     logger.info("odata import-file by %s: %s queued as job %s (%s)",
                 user.email, rid, job["id"], fmt)
+    return job
+
+
+# ── Big files: browser → R2 → server, never through the edge ─────────────────
+#
+# /odata/import-file carries the bytes in the request body, and over.org.il is
+# behind Cloudflare — anything past ~100MB is rejected at the edge before
+# FastAPI sees it, so the upload fails with nothing to report. גזטיר נכסים is a
+# 413MB CSV, four times the ceiling, and no amount of server-side patience
+# helps.
+#
+# So the browser PUTs the file straight to R2 in presigned parts (the same
+# mechanism the worker uses for GB-scale layer outputs), and the server then
+# streams it back down to disk and parses it. The bytes never traverse the dyno
+# as a request body.
+
+_ODATA_UPLOAD_PREFIX = "odata-import/"
+
+
+def _require_odata_upload_key(key: str) -> None:
+    """Confine these endpoints to their own prefix.
+
+    They are admin-only, but a presign call that accepts ANY key is a
+    write-anywhere primitive over the whole bucket — including live version
+    objects. Nothing here needs that.
+    """
+    if not isinstance(key, str) or not key.startswith(_ODATA_UPLOAD_PREFIX):
+        raise HTTPException(status_code=400, detail="key outside the import area")
+
+
+class OdataUploadStart(BaseModel):
+    filename: str
+    content_type: str | None = None
+
+
+class OdataUploadPart(BaseModel):
+    key: str
+    upload_id: str
+    part_number: int
+
+
+class OdataUploadComplete(BaseModel):
+    key: str
+    upload_id: str
+    # Optional and normally absent. A browser cannot read the ETag of a
+    # cross-origin PUT unless the bucket's CORS policy exposes it, so the parts
+    # are read back from R2 instead — see below.
+    parts: list[dict] | None = None
+
+
+@router.post("/odata/upload/start")
+@limiter.limit("30/minute")
+async def odata_upload_start(
+    request: Request,
+    body: OdataUploadStart,
+    user: User = Depends(get_admin_user),
+):
+    """Begin a direct-to-R2 multipart upload for a file too big for the edge."""
+    import uuid as _uuid
+    if not storage_client.is_configured():
+        raise HTTPException(status_code=400, detail="R2 storage not configured")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (body.filename or "file").strip())[:120]
+    key = f"{_ODATA_UPLOAD_PREFIX}{_uuid.uuid4().hex}/{safe or 'file'}"
+    upload_id = await storage_client.create_multipart(
+        key, body.content_type or "application/octet-stream")
+    logger.info("odata upload started by %s: %s", user.email, key)
+    return {"key": key, "upload_id": upload_id, "part_size": 64 * 1024 * 1024}
+
+
+@router.post("/odata/upload/part")
+@limiter.limit("600/minute")
+async def odata_upload_part(
+    request: Request,
+    body: OdataUploadPart,
+    user: User = Depends(get_admin_user),
+):
+    """A presigned PUT URL for one part. The browser uploads to R2 directly."""
+    _require_odata_upload_key(body.key)
+    if not 1 <= body.part_number <= 10_000:
+        raise HTTPException(status_code=400, detail="part_number out of range")
+    url = await storage_client.presign_part(body.key, body.upload_id,
+                                            body.part_number)
+    return {"url": url}
+
+
+@router.post("/odata/upload/complete")
+@limiter.limit("30/minute")
+async def odata_upload_complete(
+    request: Request,
+    body: OdataUploadComplete,
+    user: User = Depends(get_admin_user),
+):
+    """Seal the multipart upload. The object is then readable by the server.
+
+    The part list comes from R2 itself, not from the browser. A cross-origin PUT
+    cannot read its own ETag response header unless the bucket's CORS policy
+    names it in Access-Control-Expose-Headers, so a browser that uploaded every
+    part correctly would still have nothing to complete with. Asking the store
+    what it holds needs no CORS, and is the store's own account of the upload
+    rather than the uploader's claim about it.
+    """
+    _require_odata_upload_key(body.key)
+    parts = await storage_client.list_parts(body.key, body.upload_id)
+    if not parts:
+        raise HTTPException(
+            status_code=400,
+            detail="R2 לא קיבל אף חלק — ההעלאה לא הושלמה")
+    await storage_client.complete_multipart(body.key, body.upload_id, parts)
+    logger.info("odata upload completed by %s: %s (%d parts)",
+                user.email, body.key, len(parts))
+    return {"key": body.key, "parts": len(parts)}
+
+
+@router.post("/odata/import-r2")
+@limiter.limit("12/minute")
+async def odata_import_from_r2(
+    request: Request,
+    key: str = Form(...),
+    resource_id: str = Form(...),
+    format: str = Form(""),
+    filename: str = Form(""),
+    dataset_name: str = Form(""),
+    title: str = Form(""),
+    organization: str = Form(""),
+    source_url: str = Form(""),
+    file_url: str = Form(""),
+    user: User = Depends(get_admin_user),
+):
+    """Import a file the admin already PUT into R2. Returns a job id at once.
+
+    The staged object is deleted once it has been parsed — it is a courier, not
+    an archive. The authority for this table is the import record and the
+    provenance links stored with it.
+    """
+    import os
+    import tempfile
+    from app.services import odata_import
+
+    _require_odata_upload_key(key)
+    rid = (resource_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="resource_id is required")
+    name = filename or key.rsplit("/", 1)[-1]
+    fmt = odata_import.infer_format(format, name, file_url)
+    if fmt not in odata_import.SUPPORTED_FILE_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"פורמט לא נתמך: {format or '—'}. נתמכים: CSV, XLS, XLSX, ICS/ICAL.")
+    suffix = ".ics" if fmt in ("ICS", "ICAL", "ICA") else (
+        ".xlsx" if fmt in ("XLS", "XLSX") else ".csv")
+    fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="odata-r2-")
+    os.close(fd)
+    # Straight to disk (managed transfer, constant memory). Reading the object
+    # into RAM would OOM the 512MB dyno on the very files this path exists for.
+    if not await storage_client.download_to_file(key, tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=502,
+                            detail="לא ניתן לקרוא את הקובץ שהועלה מ-R2")
+    try:
+        await storage_client.delete_object(key)
+    except Exception:  # noqa: BLE001 — a stranded staging object is not fatal
+        logger.warning("could not delete staged odata upload %s", key)
+    job = odata_import.start_upload_job(
+        resource_id=rid, fmt=fmt, dataset_name=(dataset_name or None),
+        title=(title or None), organization=(organization or None),
+        source_url=(source_url or None), file_url=(file_url or None),
+        tmp_path=tmp, filename=name,
+    )
+    logger.info("odata import-r2 by %s: %s queued as job %s (%s, from %s)",
+                user.email, rid, job["id"], fmt, key)
     return job
 
 

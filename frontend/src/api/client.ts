@@ -2178,6 +2178,29 @@ export const admin = {
   // Returns a JOB — the parse+load runs in the background, poll it below.
   odataImportFile: (fd: FormData) =>
     request<OdataImportJob>("/admin/odata/import-file", { method: "POST", body: fd }),
+  // Big-file path. over.org.il is behind Cloudflare (~100MB body ceiling), so a
+  // 413MB CSV cannot be POSTed here at all — the browser PUTs it to R2 in
+  // presigned parts and the server reads it back from there.
+  odataUploadStart: (filename: string, content_type?: string) =>
+    request<{ key: string; upload_id: string; part_size: number }>(
+      "/admin/odata/upload/start",
+      { method: "POST", body: JSON.stringify({ filename, content_type }) },
+    ),
+  odataUploadPartUrl: (key: string, upload_id: string, part_number: number) =>
+    request<{ url: string }>("/admin/odata/upload/part", {
+      method: "POST",
+      body: JSON.stringify({ key, upload_id, part_number }),
+    }),
+  // No parts are sent: the server reads back from R2 what it actually received.
+  // A cross-origin PUT cannot see its own ETag unless the bucket exposes that
+  // header, so the browser has nothing trustworthy to report.
+  odataUploadComplete: (key: string, upload_id: string) =>
+    request<{ key: string; parts: number }>("/admin/odata/upload/complete", {
+      method: "POST",
+      body: JSON.stringify({ key, upload_id }),
+    }),
+  odataImportFromR2: (fd: FormData) =>
+    request<OdataImportJob>("/admin/odata/import-r2", { method: "POST", body: fd }),
   odataImportJob: (job_id: string) =>
     request<OdataImportJob>(
       `/admin/odata/import-jobs/${encodeURIComponent(job_id)}`,
