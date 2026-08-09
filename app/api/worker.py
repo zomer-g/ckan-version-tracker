@@ -825,6 +825,30 @@ def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> 
     )
 
 
+def _open_maybe_gzip(path: str):
+    """Open a CSV that may or may not be gzipped, as text, without reading it.
+
+    Which one it is depends on how the bytes got here, and both routes are
+    legitimate. /upload-csv receives gzip and decompresses on the way to
+    storage, so its object is plain. A CSV too large for that endpoint goes
+    straight from the worker to R2 and stays compressed — which is not just
+    acceptable but necessary: the national parcel layer is 2.8 GB plain and
+    894 MB gzipped, and this dyno's /tmp is capped at 2 GB. Downloading the
+    plain form to load it would exceed the disk before it exceeded anything
+    else ("Size of temporary storage volume /tmp exceeded the limit of 2GB",
+    2026-08-09).
+
+    Sniffed by magic number rather than suffix: the key an object is stored
+    under is not a promise about its bytes.
+    """
+    with open(path, "rb") as probe:
+        magic = probe.read(2)
+    if magic == b"\x1f\x8b":
+        import gzip as _gzip
+        return _gzip.open(path, "rt", encoding="utf-8-sig", newline="")
+    return open(path, "r", encoding="utf-8-sig", newline="")
+
+
 async def _neon_stream_load_file(
     table: str, path: str, *, delete_after: bool = False,
 ) -> int:
@@ -848,7 +872,7 @@ async def _neon_stream_load_file(
         batch: list[dict] = []
         ensured = False
         total = 0
-        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        with _open_maybe_gzip(path) as fh:
             reader = _csv.reader(fh)
             try:
                 header = next(reader)
