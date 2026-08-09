@@ -355,40 +355,6 @@ class StorageClient:
 
         return await asyncio.to_thread(_do)
 
-    async def list_parts(self, key: str, upload_id: str) -> list[dict]:
-        """The parts R2 has actually received, as [{"PartNumber", "ETag"}].
-
-        Exists so a BROWSER upload can be completed without the client reporting
-        its own ETags. A cross-origin PUT cannot read the ETag response header
-        unless the bucket's CORS policy names it in Access-Control-Expose-Headers
-        — it is not one of the headers exposed by default — so a browser that
-        uploaded every part perfectly still has nothing to complete the upload
-        with. Asking the store what it holds needs no CORS at all, and is a
-        better answer anyway: it is the store's own account of the upload rather
-        than the uploader's.
-        """
-        if not self.is_configured():
-            raise RuntimeError("R2 storage is not configured")
-
-        def _do() -> list[dict]:
-            client = self._get_client()
-            out: list[dict] = []
-            marker = 0
-            while True:
-                resp = client.list_parts(
-                    Bucket=settings.s3_bucket, Key=key, UploadId=upload_id,
-                    PartNumberMarker=marker,
-                )
-                for p in resp.get("Parts", []):
-                    out.append({"PartNumber": p["PartNumber"], "ETag": p["ETag"]})
-                if not resp.get("IsTruncated"):
-                    break
-                marker = resp.get("NextPartNumberMarker", 0)
-            out.sort(key=lambda p: p["PartNumber"])
-            return out
-
-        return await asyncio.to_thread(_do)
-
     async def complete_multipart(self, key: str, upload_id: str,
                                  parts: list[dict]) -> None:
         """Finish a multipart upload. ``parts`` = [{"PartNumber": n, "ETag": e}]."""

@@ -165,9 +165,9 @@ export default function OdataImportPanel() {
   // מידע לעם resource can point at a Google Drive link — `open?id=…&usp=drive_fs`
   // is a viewer page, not a file — so there is nothing for the automatic route
   // to fetch, and the dataset was simply unreachable from SQL.
-  // Anything at or above this cannot be POSTed to over.org.il at all:
-  // Cloudflare rejects the body at the edge, so the request never reaches
-  // FastAPI and there is no error to show. Such a file goes to R2 first.
+  // At or above this a single POST is rejected by Cloudflare's ~100MB body
+  // ceiling before it ever reaches the server, so there is no error to show —
+  // the button just appears dead. Such a file is sliced and sent piece by piece.
   const EDGE_BODY_LIMIT = 80 * 1024 * 1024;
 
   const doUploadFile = async (r: OdataResource, d: OdataDataset, file: File) => {
@@ -186,43 +186,35 @@ export default function OdataImportPanel() {
       return;
     }
     const label = d.title?.trim() || d.name;
+    const mb = (n: number) => Math.round(n / (1024 * 1024));
     try {
-      // Straight to R2 in presigned parts — the same route the worker uses for
-      // GB-scale outputs. Progress is reported per part, because this is
-      // minutes of work on a 413MB file and a silent button is what sent us
-      // looking for this bug in the first place.
-      const mb = (n: number) => Math.round(n / (1024 * 1024));
-      setProgress({ rows: 0, label: `מעלה ${file.name} (${mb(file.size)}MB)…` });
-      const started = await admin.odataUploadStart(file.name, file.type || undefined);
-      const partSize = started.part_size || 64 * 1024 * 1024;
-      const total = Math.ceil(file.size / partSize);
+      const begun = await admin.odataUploadBegin();
+      const size = begun.chunk_size || 32 * 1024 * 1024;
+      const total = Math.ceil(file.size / size);
+      // Sequential on purpose: the server APPENDS each slice, so order is the
+      // file. Parallel uploads would interleave and produce a corrupt CSV that
+      // parses far enough to look plausible.
       for (let i = 0; i < total; i++) {
-        const { url } = await admin.odataUploadPartUrl(
-          started.key, started.upload_id, i + 1);
-        const chunk = file.slice(i * partSize, Math.min((i + 1) * partSize, file.size));
-        const put = await fetch(url, { method: "PUT", body: chunk });
-        if (!put.ok) throw new Error(`העלאת חלק ${i + 1}/${total} נכשלה (${put.status})`);
-        // The part's ETag is deliberately NOT read here: a cross-origin PUT
-        // cannot see it unless the bucket exposes it via CORS. The server asks
-        // R2 what it received when completing.
+        const fd = new FormData();
+        fd.append("upload_id", begun.upload_id);
+        fd.append("chunk", file.slice(i * size, Math.min((i + 1) * size, file.size)));
+        await admin.odataUploadChunk(fd);
         setProgress({
           rows: 0,
-          label: `מעלה ${file.name}: ${mb(Math.min((i + 1) * partSize, file.size))}/${mb(file.size)}MB`,
+          label: `מעלה ${file.name}: ${mb(Math.min((i + 1) * size, file.size))}/${mb(file.size)}MB`,
         });
       }
-      await admin.odataUploadComplete(started.key, started.upload_id);
-
       const fd = new FormData();
-      fd.append("key", started.key);
+      fd.append("upload_id", begun.upload_id);
       fd.append("resource_id", r.id);
-      fd.append("format", "");
       fd.append("filename", file.name);
+      fd.append("format", "");
       fd.append("dataset_name", d.name || "");
       fd.append("title", label || "");
       fd.append("organization", d.organization?.title || d.organization?.name || "");
       fd.append("source_url", `${ODATA_BASE}/dataset/${d.name}/resource/${r.id}`);
       fd.append("file_url", r.url || "");
-      let job = await admin.odataImportFromR2(fd);
+      let job = await admin.odataImportStaged(fd);
       setProgress({ rows: 0, label: label || "" });
       while (job.state === "running") {
         await new Promise((res) => setTimeout(res, 2000));
