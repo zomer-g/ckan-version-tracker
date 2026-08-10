@@ -2782,3 +2782,66 @@ export const ocalAdmin = {
   mergeEntities: (names: string[], target_name: string, entity_type?: string) =>
     request<{ merged: number }>(`/admin/ocal/entities/merge`, { method: "POST", body: JSON.stringify({ names, target_name, entity_type }) }),
 };
+
+// ── שאלות לעם — חיפוש רוחבי (cross-source deep search) ──────────────────────
+// The page issues ONE request per source so each column paints as soon as it
+// lands; `sources` therefore normally carries a single id.
+
+export interface DeepCard {
+  title: string;
+  snippet: string;
+  url: string | null;
+  date: string | null;
+  badges: string[];
+}
+export interface DeepFilter {
+  id: string;
+  label: string;
+  type: "text" | "date" | "number" | "select";
+  options?: { value: string; label: string }[];
+}
+export interface DeepSource {
+  id: string;
+  name: string;
+  color: string;
+  attribution: { text: string; href: string };
+  server: string;
+  local: string | null;
+  public: boolean;
+  configured: boolean;
+  hint: string;
+  filters: DeepFilter[] | null;
+}
+export interface DeepColumn {
+  id: string;
+  name: string;
+  color: string;
+  attribution: { text: string; href: string };
+  server: string;
+  configured: boolean;
+  error: string | null;
+  total: number;
+  results: DeepCard[];
+}
+
+export const deepSearch = {
+  sources: () => request<{ sources: DeepSource[] }>("/deep-search/sources"),
+  search: (p: {
+    q: string;
+    sources?: string;
+    limit?: number;
+    filters?: Record<string, string>;
+  }) => {
+    // Per-source filters ride as f_<filterId>=… — the backend only reads the
+    // ids that source declared, so an unknown one is simply ignored.
+    const params: Record<string, unknown> = {
+      q: p.q,
+      sources: p.sources,
+      limit: p.limit,
+    };
+    for (const [k, v] of Object.entries(p.filters || {})) params[`f_${k}`] = v;
+    return request<{ query: string; sources: DeepColumn[] }>(
+      `/deep-search/search${_qs(params)}`,
+    );
+  },
+};

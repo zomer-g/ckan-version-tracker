@@ -590,6 +590,19 @@ class Settings(BaseSettings):
     # recall and costs input tokens linearly; 6 keeps the prompt around 4k.
     nl_query_top_k: int = 6
 
+    # ── חיפוש רוחבי / "שאלות לעם" (app/services/deep_search.py) ──
+    # One query fanned out to every corpus OVER exposes over MCP. The v1 sources
+    # are all servers of THIS process, dispatched in-process, so the feature
+    # needs no token and no outbound network — deep_search_enabled is a kill
+    # switch for the two public endpoints, not a configuration gate.
+    # deep_search_source_timeout is a HARD per-source ceiling: the page runs one
+    # request per column and a user is watching, so a stuck corpus must lose its
+    # own column rather than hold the page. Deliberately far below tagit_mcp's
+    # 100s wake budget, which exists for a spin-down tier nobody is watching.
+    deep_search_enabled: bool = True
+    deep_search_source_timeout: float = 25.0
+    deep_search_max_limit: int = 50
+
     # Table profiler (app/services/table_profiler.py). When auto is on, a poll
     # that lands a new version for a NEON-backed dataset re-runs the (free) SQL
     # profile of its table(s); the LLM enrichment layer runs only for a brand-new

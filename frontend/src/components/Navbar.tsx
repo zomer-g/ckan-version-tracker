@@ -130,6 +130,7 @@ export default function Navbar() {
       key: "projects",
       label: t("nav.projects", "פרויקטים"),
       children: [
+        { to: "/projects/questions", label: t("nav.questions", "שאלות לעם") },
         { to: "/knesset", label: t("nav.knesset_db", "הכנסת") },
         { to: "/cbs", label: t("nav.cbs", 'למ"ס') },
         { to: "/projects/odata", label: t("nav.odata", "מידע לעם") },

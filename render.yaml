@@ -92,6 +92,13 @@ services:
       # the VALUE in the dashboard; empty ⇒ deep search returns 503.
       - key: TAGIT_MCP_TOKEN
         sync: false
+      # Kill switch for the "שאלות לעם" cross-source search (/api/deep-search).
+      # Its v1 sources are all MCP servers of this same process, dispatched
+      # in-process, so the feature needs NO token and no outbound network —
+      # this only exists to take the two public endpoints down (503) without a
+      # code deploy. See app/services/deep_search.py.
+      - key: DEEP_SEARCH_ENABLED
+        value: "true"
       # Shared secret gating /api/connector (the Looker Studio community
       # connector's backend). Set the VALUE in the Render dashboard — the same
       # value goes into the Apps Script project's OVER_CONNECTOR_KEY script
