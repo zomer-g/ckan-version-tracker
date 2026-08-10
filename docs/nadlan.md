@@ -75,16 +75,31 @@ the entire heuristic ladder, as published fact.
 
 It does **not** replace the ladder: the two fail on different names.
 
-| matching the gazetteer | פתח תקווה | חיפה |
+**Country-wide** (the file is now tracked, so this is the whole corpus —
+30,995 canonical, 34,734 gazetteer, 152,130 official rows):
+
+| matching the gazetteer | all localities | localities the address/postal files cover |
 |---|---|---|
-| raw name | 61.4 % | 63.8 % |
-| official file alone | 93.6 % | 87.6 % |
-| heuristic ladder alone | 93.7 % | 82.7 % |
-| **both (shipped)** | **96.5 %** | **91.9 %** |
+| raw name | 61.1 % | — |
+| heuristic ladder alone | 72.7 % | 79.4 % |
+| **ladder + official file** | **75.6 %** | **82.6 %** |
+
+⚠ **These supersede the two-city figures this section used to quote**
+(96.5 % / 91.9 % for פתח תקווה and חיפה). Those were real for those cities and
+badly unrepresentative: the big cities are exactly where all three sources are
+richest. Measure on the corpus, not on Tel Aviv-sized samples.
+
+**The remaining gap is coverage, not naming.** 2,938 gazetteer streets (8.5 %)
+sit in localities the address list and postal file do not cover *at all* — the
+address list has 321 localities and the gazetteer 430 — so they cannot match a
+canonical street by construction. **99.7 % of them are in the official file's
+1,312 localities**, which is precisely what the file adds beyond the match rate:
+those streets now get a canonical name and a real code instead of nothing.
 
 The file also **merges duplicate canonical streets** the ladder kept apart —
-Haifa went from 1,210 "streets" to 1,056, and 996 of those now carry a real
-`official_code`, the first genuine street identifier in the project.
+39,825 → 37,815 country-wide (2,010 duplicates), and **35,168 of the 37,815
+streets now carry a real `official_code`**, the first genuine street identifier
+in the project.
 
 What only the file can reach: 373 Petah Tikva synonym pairs share **no token**
 with their official name — transliteration variants (`ברנדייס` / `בראנדיס` /
@@ -99,14 +114,14 @@ The table is found by **column signature**, not by name
 tracked CKAN dataset or through the admin odata import. If it is absent the
 build silently falls back to the ladder alone.
 
-> ⚠ **Not yet tracked.** OVER tracks this dataset's **XML** sibling
-> (`e3a63f81-…`, resource `98d231af`), which the scraper misrouted as a KML,
-> archived raw and loaded **0 rows** — there is no queryable table. The
-> queryable resource is the **CSV** `bf185c7f-1a4e-4662-88c5-fa118a244bda`
-> (9.3 MB, `datastore_active`, refreshed 2026-08-02). Direct file download is
-> Imperva-blocked; the CKAN **datastore API** works.
+**Tracked as** `public.append_israel_streets_synom_bf185c7f` — OVER dataset
+`bf185c7f-0000-4000-8000-57fb2bd99088`, 152,130 rows, all columns `text` with
+trailing spaces on every value (`'official '`, `'ירושלים '`), which the loader
+strips. Note the dataset's **XML** sibling (`e3a63f81-…`) is a decoy: the
+scraper misrouted it as a KML, archived it raw and loaded **0 rows**.
 
-**Baseline, for reference** — Petah Tikva (822 canonical streets, 876 gazetteer names):
+**Petah Tikva, for reference** (822 canonical streets, 876 gazetteer names) —
+a best case, not a typical one:
 
 | approach | matched | |
 |---|---|---|

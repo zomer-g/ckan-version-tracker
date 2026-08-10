@@ -846,20 +846,27 @@ def _resolve_streets(canon_rows, gaz_rows, official_rows=()) -> tuple[list, list
     fact rather than inference.
 
     It does NOT replace the ladder, because the two fail on different names.
-    Measured against the real gazetteer street lists:
+    Measured over the WHOLE corpus (30,995 canonical, 34,734 gazetteer, 152,130
+    official rows) — not on a couple of big cities, where every source is at its
+    richest and the rate flatters itself into the 90s:
 
-    ==================  ===========  =======
-    matching gazetteer  פתח תקווה    חיפה
-    ==================  ===========  =======
-    raw name              61.4%       63.8%
-    official file         93.6%       87.6%
-    heuristic ladder      93.7%       82.7%
-    **both**              **96.9%**   **91.8%**
-    ==================  ===========  =======
+    ========================  =============  ==========================
+    matching gazetteer        all localities  where canon files reach
+    ========================  =============  ==========================
+    raw name                     61.1%        —
+    heuristic ladder             72.7%        79.4%
+    **ladder + official file**   **75.6%**    **82.6%**
+    ========================  =============  ==========================
 
-    So the file is layered ON TOP: its codes merge canonical spellings that the
-    ladder would have kept apart, and its synonyms become aliases outranking
-    every heuristic guess."""
+    The residue is COVERAGE, not naming: 2,938 gazetteer streets (8.5%) are in
+    localities the address/postal files do not cover at all, so they cannot match
+    by construction — and 99.7% of those ARE in the official file's 1,312
+    localities, which is exactly what it adds beyond the match rate.
+
+    So the file is layered ON TOP: its codes merge canonical spellings the ladder
+    kept apart (39,825 → 37,815 streets country-wide) and give 35,168 of them a
+    real identifier, and its synonyms become aliases outranking every heuristic
+    guess."""
     code_of = _official_code_index(official_rows)
 
     # 1. canonical streets. Grouped by the OFFICIAL CODE where the street file
