@@ -30,8 +30,21 @@ import asyncio
 import os
 import sys
 
-# Make `app...` importable when run as `python scripts/ocal_scan.py` from anywhere.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Make `app...` importable AND load .env correctly no matter the caller's CWD
+# (Task Scheduler / cron start in System32): pin both sys.path and the working
+# directory to the repo root (the parent of this scripts/ dir).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
+# Hebrew diary titles are printed; when run headless (Task Scheduler / cron) the
+# stream encoding may be cp1252 and choke. Force utf-8 with replacement so the
+# final summary print can never crash a run whose DB work already succeeded.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 
 async def _main() -> int:
