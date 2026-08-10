@@ -176,12 +176,67 @@ def _tool_payload(result: dict) -> dict:
 
 
 def _remote_caller(source: Source, token: str | None, budget_s: float):
-    """An async ``call(tool, args) -> payload`` bound to one remote MCP endpoint."""
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    """An async ``call(tool, args) -> payload`` bound to one remote MCP endpoint.
+
+    Returns ``(call, aclose)`` — ONE httpx client is held for the whole source
+    run, because a source with a ``run()`` makes several calls and a session
+    server would otherwise re-handshake for each.
+
+    Two server flavours are supported, and the difference is not cosmetic:
+      * stateless (ours, TAG-IT) — POST tools/call straight in.
+      * session (מפתח התקציב) — a bare tools/call is refused with "Missing
+        session ID"; it needs initialize → Mcp-Session-Id → notifications/
+        initialized first. Declared per source via ``handshake=True``.
+    """
+    headers = {"Content-Type": "application/json",
+               # Streamable-HTTP servers may answer either way; accept both.
+               "Accept": "application/json, text/event-stream"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    # A source with a run() fires several calls concurrently. Without this lock
+    # each of them would see sid=None and open its OWN session, and the racing
+    # initializes leave the server holding sessions the later calls no longer
+    # match — which presents as the whole column timing out, not as an error.
+    state: dict = {"client": None, "sid": None, "lock": asyncio.Lock()}
+
+    def _client() -> httpx.AsyncClient:
+        if state["client"] is None:
+            state["client"] = httpx.AsyncClient(
+                timeout=httpx.Timeout(budget_s, connect=10.0), follow_redirects=True)
+        return state["client"]
+
+    def _headers() -> dict:
+        h = dict(headers)
+        if state["sid"]:
+            h["Mcp-Session-Id"] = state["sid"]
+        return h
+
+    async def _handshake() -> None:
+        if not source.handshake or state["sid"]:
+            return
+        async with state["lock"]:
+            if state["sid"]:            # another call opened it while we waited
+                return
+            resp = await _client().post(source.mcp_url, headers=_headers(), json={
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "over-deep-search", "version": "1.0"}}})
+            if resp.status_code >= 400:
+                raise SourceError(f"המקור סירב לפתוח מושב ({resp.status_code})")
+            sid = resp.headers.get("mcp-session-id")
+            if not sid:
+                raise SourceError("המקור לא החזיר מזהה מושב")
+            state["sid"] = sid
+            # Best-effort: some servers require the notification, none reject it.
+            try:
+                await _client().post(
+                    source.mcp_url, headers=_headers(),
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+            except (httpx.TransportError, httpx.TimeoutException):
+                pass
 
     async def call(tool: str, args: dict) -> dict:
+        await _handshake()
         payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                    "params": {"name": tool, "arguments": args or {}}}
         start = time.monotonic()
@@ -189,10 +244,7 @@ def _remote_caller(source: Source, token: str | None, budget_s: float):
         last: Exception = SourceError("המקור אינו זמין")
         while True:
             try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(budget_s, connect=10.0), follow_redirects=True
-                ) as client:
-                    resp = await client.post(source.mcp_url, headers=headers, json=payload)
+                resp = await _client().post(source.mcp_url, headers=_headers(), json=payload)
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last = SourceError(f"המקור אינו זמין: {type(e).__name__}")
             else:
@@ -219,7 +271,12 @@ def _remote_caller(source: Source, token: str | None, budget_s: float):
             delay = min(delay * 1.6, 5.0)
         raise last
 
-    return call
+    async def aclose() -> None:
+        if state["client"] is not None:
+            await state["client"].aclose()
+            state["client"] = None
+
+    return call, aclose
 
 
 # ── the fan-out ─────────────────────────────────────────────────────────────
@@ -238,35 +295,39 @@ def _column(source: Source, *, configured: bool = True, error: str | None = None
 
 async def _query(request, source: Source, q: str, limit: int, filters: dict) -> dict:
     """Run one source and return its column. Raises — wrapped by run_source."""
+    aclose = None
     if source.local:
         call = _local_caller(request, source)
     else:
-        call = _remote_caller(source, resolve_token(source),
-                              float(settings.deep_search_source_timeout))
+        call, aclose = _remote_caller(source, resolve_token(source),
+                                      float(settings.deep_search_source_timeout))
+    try:
+        if source.run is not None:
+            out = await source.run(call, q, limit, filters)
+            cards = [c for c in (out.get("results") or []) if c]
+            return _column(source, results=cards, total=out.get("total"))
 
-    if source.run is not None:
-        out = await source.run(call, q, limit, filters)
-        cards = [c for c in (out.get("results") or []) if c]
-        return _column(source, results=cards, total=out.get("total"))
-
-    payload = await call(source.tool, source.build_args(q, limit, filters))
-    raw = payload.get(source.results_path)
-    rows = raw if isinstance(raw, list) else []
-    cards: list[Card] = []
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        try:
-            card = source.normalize(item)
-        except Exception:  # noqa: BLE001
-            # One malformed row must not empty a column that is otherwise fine.
-            logger.debug("deep_search: normalize failed for %s", source.id, exc_info=True)
-            continue
-        if card and card.title:
-            cards.append(card)
-    total = payload.get("total")
-    return _column(source, results=cards,
-                   total=int(total) if isinstance(total, int) else len(cards))
+        payload = await call(source.tool, source.build_args(q, limit, filters))
+        raw = payload.get(source.results_path)
+        rows = raw if isinstance(raw, list) else []
+        cards = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            try:
+                card = source.normalize(item)
+            except Exception:  # noqa: BLE001
+                # One malformed row must not empty an otherwise fine column.
+                logger.debug("deep_search: normalize failed for %s", source.id, exc_info=True)
+                continue
+            if card and card.title:
+                cards.append(card)
+        total = payload.get("total")
+        return _column(source, results=cards,
+                       total=int(total) if isinstance(total, int) else len(cards))
+    finally:
+        if aclose is not None:
+            await aclose()
 
 
 async def run_source(request, source: Source, q: str, limit: int,

@@ -24,17 +24,22 @@ export interface ColState {
   error?: string;
 }
 
+// Radius tokens follow the rule documented in index.css :root — buttons and
+// inputs get --radius (8px), chips and badges get --radius-full. Nothing here
+// hardcodes a radius, so the feature can never drift from the site.
 const chip = (bg: string, fg: string): React.CSSProperties => ({
   display: "inline-block",
-  padding: "0.05rem 0.45rem",
-  borderRadius: 4,
+  padding: "0.125rem 0.5rem",
+  borderRadius: "var(--radius-full, 9999px)",
   background: bg,
   color: fg,
   fontSize: "0.72rem",
+  fontWeight: 600,
   whiteSpace: "nowrap",
 });
 
 const MUTED_CHIP = chip("var(--bg-muted, #eef2f5)", "var(--text-muted)");
+const EXTERNAL_CHIP = chip("var(--warning, #f59e0b)", "#fff");
 
 /** Round-robin across sources: every source's top hit, then every source's 2nd… */
 export function mergeInterleaved(
@@ -241,7 +246,14 @@ export function SourceColumn({
           gap: "0.4rem",
         }}
       >
-        <h3 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700 }}>{source.name}</h3>
+        <h3 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700 }}>
+          {source.name}
+          {source.external && (
+            <span style={{ ...EXTERNAL_CHIP, marginInlineStart: "0.4rem", fontWeight: 600 }}>
+              מקור חיצוני
+            </span>
+          )}
+        </h3>
         <div style={{ display: "flex", alignItems: "baseline", gap: "0.4rem" }}>
           <span className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>
             {count === null
@@ -355,7 +367,7 @@ export function SourceChips({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "0.35rem",
-                borderRadius: 999,
+                borderRadius: "var(--radius-full, 9999px)",
                 border: `1px solid ${on ? s.color : "var(--border, #d1d5db)"}`,
                 background: on ? s.color : "transparent",
                 color: on ? "#fff" : "var(--text-muted)",
@@ -363,7 +375,11 @@ export function SourceChips({
                 fontSize: "0.8rem",
                 opacity: s.configured ? 1 : 0.5,
               }}
-              title={s.configured ? s.hint : "המקור אינו מוגדר בשרת"}
+              title={
+                !s.configured
+                  ? "המקור אינו מוגדר בשרת"
+                  : (s.external ? "מקור חיצוני — " : "") + s.hint
+              }
             >
               <button
                 type="button"
@@ -383,6 +399,11 @@ export function SourceChips({
               >
                 {on ? "✓ " : ""}
                 {s.name}
+                {s.external && (
+                  <span aria-label="מקור חיצוני" style={{ opacity: 0.85 }}>
+                    {" ↗"}
+                  </span>
+                )}
               </button>
               {status && (
                 <span style={{ fontSize: "0.68rem", opacity: 0.85 }}>{status}</span>
@@ -419,7 +440,7 @@ export function SourceChips({
 const inputStyle: React.CSSProperties = {
   padding: "0.3rem 0.5rem",
   border: "1px solid var(--border, #d1d5db)",
-  borderRadius: 4,
+  borderRadius: "var(--radius, 8px)",
   fontSize: "0.85rem",
   width: "auto",
 };

@@ -2809,6 +2809,8 @@ export interface DeepSource {
   local: string | null;
   public: boolean;
   configured: boolean;
+  /** Someone else's corpus (TAG-IT, מפתח התקציב) — surfaced as a marker. */
+  external: boolean;
   hint: string;
   filters: DeepFilter[] | null;
 }

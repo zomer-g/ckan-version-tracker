@@ -195,6 +195,12 @@ class Source:
     mcp_url: str | None = None
     token_env: str | None = None
     public: bool = False
+    # Session-style MCP server: needs initialize → Mcp-Session-Id before any
+    # tools/call. Ours and TAG-IT's are stateless; מפתח התקציב is not.
+    handshake: bool = False
+    # Held by someone else. Surfaced in the UI as a "מקור חיצוני" marker so a
+    # reader is never left thinking OVER produced the row.
+    external: bool = False
     run: Callable[..., Awaitable[dict]] | None = None
     filters: tuple[Filter, ...] = ()
     active: bool = True
@@ -218,7 +224,7 @@ class Source:
             "id": self.id, "name": self.name, "color": self.color,
             "attribution": dict(self.attribution), "server": self.server,
             "local": self.local, "public": self.public, "configured": configured,
-            "hint": self.hint,
+            "external": self.external, "hint": self.hint,
             "filters": [f.as_dict() for f in self.filters] or None,
         }
 
@@ -416,6 +422,160 @@ async def _run_corporate(call, q: str, limit: int, filters: dict) -> dict:
     return {"results": results, "total": len(results)}
 
 
+# ── TAG-IT corpora: מבקר המדינה + החלטות הממשלה ─────────────────────────────
+# Both live on the SAME tag-it.biz workspace as ממ״מ, differing only by scope,
+# and reuse the tagit_mcp_token already in the environment. We go through
+# tagit_mcp's own _rpc rather than the generic remote transport so this inherits
+# its proven cold-start retry and its shape-agnostic normalizer — TAG-IT's
+# document rows nest differently per corpus, which is exactly what _normalize
+# was written to absorb.
+
+def _n_tagit(d: dict) -> Card | None:
+    title = d.get("title")
+    if not title:
+        return None
+    badges = [b for b in (d.get("doc_type"),) if b]
+    return Card(
+        title=truncate(title, 160),
+        snippet=truncate(d.get("abstract") or d.get("snippet") or ""),
+        url=d.get("link"),
+        date=iso_date(d.get("date")),
+        badges=tuple(badges),
+    )
+
+
+def _tagit_runner(scope_setting: str):
+    async def run(call, q: str, limit: int, filters: dict) -> dict:
+        from app.config import settings
+        from app.services import tagit_mcp
+
+        args = {"scope": int(getattr(settings, scope_setting)),
+                "text_query": q, "page": 1, "size": max(1, min(limit, 50))}
+        args.update(date_args(filters))
+        result = await tagit_mcp._rpc(
+            "tools/call", {"name": "search_documents", "arguments": args})
+        items, total = tagit_mcp._as_items_and_total(tagit_mcp._tool_payload(result))
+        cards: list[Card] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            try:
+                c = _n_tagit(tagit_mcp._normalize(it))
+            except Exception:  # noqa: BLE001
+                continue
+            if c:
+                cards.append(c)
+        return {"results": cards, "total": total if total is not None else len(cards)}
+
+    return run
+
+
+# ── מפתח התקציב (BudgetKey) — external, public, session-style MCP ───────────
+# Four datasets merged into one column. Field names below are verified against
+# live DatasetFullTextSearch responses, not inferred.
+
+def _ils(v) -> str | None:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n >= 1e9:
+        return f"₪{n / 1e9:.1f} מיליארד"
+    if n >= 1e6:
+        return f"₪{n / 1e6:.0f} מיליון"
+    if n >= 1e3:
+        return f"₪{n / 1e3:.0f} אלף"
+    return f"₪{n:.0f}"
+
+
+def _n_ob_entity(r: dict) -> Card | None:
+    if not r.get("entity_name"):
+        return None
+    return Card(title=r["entity_name"],
+                snippet=join_parts(r.get("entity_kind__he"),
+                                   _ils(r.get("received_amount")) and
+                                   f"קיבל {_ils(r.get('received_amount'))}"),
+                url=r.get("item_url"), badges=("ישויות",))
+
+
+def _n_ob_budget(r: dict) -> Card | None:
+    if not r.get("title"):
+        return None
+    return Card(title=r["title"],
+                snippet=join_parts(r.get("code"), r.get("year-range")),
+                url=r.get("item_url"), badges=("סעיפי תקציב",))
+
+
+def _n_ob_support(r: dict) -> Card | None:
+    name = r.get("receiver_entity_name")
+    if not name:
+        return None
+    return Card(title=name,
+                snippet=join_parts(r.get("purpose"), r.get("supporting_ministry")),
+                url=r.get("item_url"),
+                date=(str(r["__approval_year"]) if r.get("__approval_year") else None),
+                badges=("תמיכות",))
+
+
+def _n_ob_contract(r: dict) -> Card | None:
+    name = r.get("supplier_entity_name")
+    if not name:
+        return None
+    return Card(title=name,
+                snippet=join_parts(r.get("purpose"), r.get("purchasing_ministry"),
+                                   _ils(r.get("executed") or r.get("volume"))),
+                url=r.get("item_url"),
+                date=(str(r["start_year"]) if r.get("start_year") else None),
+                badges=("התקשרויות",))
+
+
+OBUDGET_DATASETS: tuple[dict, ...] = (
+    {"id": "entities_data", "label": "ישויות", "norm": _n_ob_entity},
+    {"id": "budget_items_data", "label": "סעיפי תקציב", "norm": _n_ob_budget},
+    {"id": "supports_transactions_data", "label": "תמיכות", "norm": _n_ob_support},
+    {"id": "contracts_data", "label": "התקשרויות", "norm": _n_ob_contract},
+)
+
+OBUDGET_FILTER = Filter("dataset", "מאגר", "select", tuple(
+    [{"value": "", "label": "כל המאגרים"}]
+    + [{"value": d["id"], "label": d["label"]} for d in OBUDGET_DATASETS]
+))
+
+
+async def _run_obudget(call, q: str, limit: int, filters: dict) -> dict:
+    """Query the four BudgetKey datasets and merge them into one column.
+
+    SEQUENTIALLY, on purpose. This server serves one request at a time per MCP
+    session: firing the four concurrently makes the whole column hang until the
+    timeout, while one after another costs ~3s in total. Do not "optimise" this
+    into a gather without re-measuring against the live endpoint.
+    """
+    wanted = (filters or {}).get("dataset") or ""
+    specs = [d for d in OBUDGET_DATASETS if not wanted or d["id"] == wanted] \
+        or list(OBUDGET_DATASETS)
+    per = max(2, -(-limit // len(specs)))
+
+    results: list[Card] = []
+    failures: list[BaseException] = []
+    for spec in specs:
+        try:
+            payload = await call("DatasetFullTextSearch", {"dataset": spec["id"], "q": q})
+        except Exception as e:  # noqa: BLE001 — one dead dataset ≠ a dead column
+            failures.append(e)
+            continue
+        for r in (payload.get("search_results") or [])[:per]:
+            try:
+                c = spec["norm"](r)
+            except Exception:  # noqa: BLE001
+                c = None
+            if c:
+                results.append(c)
+    if failures and len(failures) == len(specs):
+        # Everything failed — surface it as an error rather than as "no results".
+        raise failures[0]
+    return {"results": results, "total": len(results)}
+
+
 # ── the registry ────────────────────────────────────────────────────────────
 
 _OVER_ATTR = {"text": "נתוני מטא-דאטה מעובדים של גרסאות לעם — היסטוריית הגרסאות של מאגרים ממשלתיים.",
@@ -501,6 +661,43 @@ SOURCES: tuple[Source, ...] = (
             **({"participants": f["participants"]} if f.get("participants") else {}),
         },
         normalize=_n_event,
+    ),
+    Source(
+        id="mevaker", name="דוחות מבקר המדינה", color="#0369a1",
+        attribution={"text": "מקור חיצוני: מסמכי מבקר המדינה כפי שנסרקו ונותחו ב-TAG-IT; "
+                             "המסמך המלא באתר המבקר.",
+                     "href": "https://tag-it.biz"},
+        mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        hint="חיפוש בתוך גוף הדוחות",
+        filters=DATE_RANGE,
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_tagit_runner("tagit_mevaker_scope"),
+    ),
+    Source(
+        id="gov_decisions", name="החלטות הממשלה", color="#7c3aed",
+        attribution={"text": "מקור חיצוני: מאגר החלטות הממשלה כפי שנסרק ונותח ב-TAG-IT; "
+                             "ההחלטה המלאה באתר gov.il.",
+                     "href": "https://tag-it.biz"},
+        mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        hint="חיפוש בתוך גוף ההחלטות",
+        filters=DATE_RANGE,
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_tagit_runner("tagit_gov_decisions_scope"),
+    ),
+    Source(
+        id="obudget", name="מפתח התקציב", color="#b45309",
+        attribution={
+            "text": "מקור חיצוני ומידע מעובד: הנתונים נאספים ומעובדים על-ידי מפתח "
+                    "התקציב (obudget.org) — לא על-ידי גרסאות לעם. ישויות, סעיפי "
+                    "תקציב, תמיכות והתקשרויות.",
+            "href": "https://next.obudget.org",
+        },
+        mcp_url="https://next.obudget.org/mcp", public=True, handshake=True,
+        external=True,
+        hint="ישויות · סעיפי תקציב · תמיכות · התקשרויות",
+        filters=(OBUDGET_FILTER,),
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_run_obudget,
     ),
     Source(
         id="entities", name="תאגידים", color="#003647",

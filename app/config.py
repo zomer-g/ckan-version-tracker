@@ -414,6 +414,11 @@ class Settings(BaseSettings):
     tagit_mcp_url: str = "https://tag-it.biz/mcp"
     tagit_mcp_token: str = ""
     tagit_mmm_scope: int = 14
+    # Two more corpora on the SAME TAG-IT workspace, surfaced as their own
+    # columns in the חיפוש רוחבי (app/services/deep_search_sources.py). They
+    # reuse tagit_mcp_token — no new secret.
+    tagit_mevaker_scope: int = 13          # דוחות מבקר המדינה
+    tagit_gov_decisions_scope: int = 16    # החלטות הממשלה
     # TAG-IT scope holding the Knesset committee-protocols corpus (indexed like
     # the ממ״מ one). Currently only Knesset-25 protocols are loaded; the full
     # corpus of all committees is being backfilled gradually.
@@ -602,6 +607,11 @@ class Settings(BaseSettings):
     deep_search_enabled: bool = True
     deep_search_source_timeout: float = 25.0
     deep_search_max_limit: int = 50
+    # מפתח התקציב (BudgetKey) — a genuinely PUBLIC third-party MCP, no token.
+    # Unlike TAG-IT's and our own stateless endpoints, this one is a SESSION
+    # server: it rejects a bare tools/call with "Missing session ID", so the
+    # source is declared handshake=True (initialize → Mcp-Session-Id).
+    obudget_mcp_url: str = "https://next.obudget.org/mcp"
 
     # Table profiler (app/services/table_profiler.py). When auto is on, a poll
     # that lands a new version for a NEON-backed dataset re-runs the (free) SQL

@@ -260,22 +260,17 @@ export default function QuestionsPage() {
             flex: "1 1 260px",
             padding: "0.5rem 0.7rem",
             border: "1px solid var(--border, #d1d5db)",
-            borderRadius: 4,
+            borderRadius: "var(--radius, 8px)",
             fontSize: "0.95rem",
           }}
         />
+        {/* btn-primary rather than a hand-rolled style, so this button is the
+            site's button — same radius, colour, hover and focus ring. */}
         <button
           type="submit"
+          className="btn-primary"
           disabled={sources.length === 0}
-          style={{
-            padding: "0.5rem 1.4rem",
-            borderRadius: 4,
-            border: "none",
-            fontWeight: 600,
-            background: "var(--primary, #044E66)",
-            color: "#fff",
-            cursor: sources.length === 0 ? "wait" : "pointer",
-          }}
+          style={{ cursor: sources.length === 0 ? "wait" : "pointer" }}
         >
           🔍 חיפוש רוחבי
         </button>
@@ -298,14 +293,16 @@ export default function QuestionsPage() {
               aria-selected={mode === m}
               onClick={() => changeMode(m)}
               style={{
-                padding: "0.3rem 0.8rem",
-                borderRadius: 999,
+                // A segmented control of BUTTONS, so --radius like every other
+                // button on the site — full-round is reserved for chips/badges.
+                padding: "0.4rem 0.9rem",
+                borderRadius: "var(--radius, 8px)",
                 cursor: "pointer",
                 fontSize: "0.82rem",
                 fontWeight: 600,
-                border: `1px solid ${mode === m ? "var(--primary, #044E66)" : "var(--border, #d1d5db)"}`,
-                background: mode === m ? "var(--primary, #044E66)" : "none",
-                color: mode === m ? "#fff" : "var(--text)",
+                border: `1px solid ${mode === m ? "var(--primary-700, #06607C)" : "var(--border, #d1d5db)"}`,
+                background: mode === m ? "var(--primary-700, #06607C)" : "transparent",
+                color: mode === m ? "#fff" : "var(--primary-700, #06607C)",
               }}
             >
               {label}

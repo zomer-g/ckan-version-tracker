@@ -151,6 +151,46 @@ def test_normalizers_are_total():
         assert s.normalize({}) is None, s.id
 
 
+def test_external_sources_are_declared_and_attributed():
+    """Someone else's corpus must SAY so and link back to the owner — a reader
+    has to be able to tell what OVER produced from what it merely surfaces."""
+    external = [s for s in deep_search_sources.SOURCES if s.external]
+    assert {s.id for s in external} == {"mevaker", "gov_decisions", "obudget"}
+    for s in external:
+        assert s.local is None, f"{s.id} is marked external but dispatches locally"
+        assert "חיצוני" in s.attribution["text"], f"{s.id} attribution hides its origin"
+    ob = deep_search_sources.source_by_id("obudget")
+    # The brief was explicit: say it is external AND processed, and link out.
+    assert "מעובד" in ob.attribution["text"]
+    assert "obudget.org" in ob.attribution["href"]
+
+
+def test_session_servers_are_flagged():
+    """מפתח התקציב refuses a bare tools/call with "Missing session ID"; ours and
+    TAG-IT's are stateless. Getting this flag wrong is a dead column."""
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    assert by_id["obudget"].handshake is True
+    assert by_id["mevaker"].handshake is False
+    assert all(not s.handshake for s in deep_search_sources.SOURCES if s.local)
+
+
+def test_obudget_needs_no_token_but_tagit_does(monkeypatch):
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    assert deep_search.is_configured(by_id["obudget"]) is True
+    monkeypatch.delenv("TAGIT_MCP_TOKEN", raising=False)
+    monkeypatch.setattr(deep_search.settings, "tagit_mcp_token", "")
+    assert deep_search.is_configured(by_id["mevaker"]) is False
+    monkeypatch.setattr(deep_search.settings, "tagit_mcp_token", "tok")
+    assert deep_search.is_configured(by_id["gov_decisions"]) is True
+
+
+def test_tagit_sources_use_distinct_scopes():
+    from app.config import settings
+    scopes = {settings.tagit_mevaker_scope, settings.tagit_mmm_scope,
+              settings.tagit_protocols_scope, settings.tagit_gov_decisions_scope}
+    assert len(scopes) == 4, f"TAG-IT scopes collide: {scopes}"
+
+
 # ── the /sources endpoint ───────────────────────────────────────────────────
 
 def test_sources_lists_every_active_source_and_leaks_no_secret(monkeypatch):
@@ -354,7 +394,7 @@ def test_remote_parses_plain_json(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     _FakeClient.script = [_FakeResponse(payload={
         "result": {"content": [{"type": "text", "text": '{"items": [{"title": "a"}]}'}]}})]
-    call = deep_search._remote_caller(_remote_source(), "tok", 5.0)
+    call, _ = deep_search._remote_caller(_remote_source(), "tok", 5.0)
     assert asyncio.run(call("search", {}))["items"][0]["title"] == "a"
 
 
@@ -363,7 +403,7 @@ def test_remote_parses_sse_frame(monkeypatch):
     _FakeClient.script = [_FakeResponse(
         content_type="text/event-stream",
         text='event: message\ndata: {"result": {"structuredContent": {"items": [{"title": "b"}]}}}\n')]
-    call = deep_search._remote_caller(_remote_source(), "tok", 5.0)
+    call, _ = deep_search._remote_caller(_remote_source(), "tok", 5.0)
     assert asyncio.run(call("search", {}))["items"][0]["title"] == "b"
 
 
@@ -371,7 +411,7 @@ def test_remote_401_is_not_retried(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     _FakeClient.script = [_FakeResponse(status_code=401)]
     _FakeClient.posts = []
-    call = deep_search._remote_caller(_remote_source(), "bad", 5.0)
+    call, _ = deep_search._remote_caller(_remote_source(), "bad", 5.0)
     with pytest.raises(deep_search.SourceError):
         asyncio.run(call("search", {}))
     assert len(_FakeClient.posts) == 1
@@ -383,7 +423,7 @@ def test_remote_gives_up_inside_its_budget(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     _FakeClient.script = [_FakeResponse(status_code=503) for _ in range(20)]
     _FakeClient.posts = []
-    call = deep_search._remote_caller(_remote_source(), "tok", 2.0)
+    call, _ = deep_search._remote_caller(_remote_source(), "tok", 2.0)
     loop_start = asyncio.run(_timed(call))
     assert loop_start < 6.0
 
