@@ -2931,6 +2931,8 @@ export const nadlan = {
   resolve: (q: string, radius_m = 0) =>
     request<NadlanEnvelope>(
       `/nadlan/resolve?q=${encodeURIComponent(q)}&radius_m=${radius_m}`),
+};
+
 // ── שאלות לעם — חיפוש רוחבי (cross-source deep search) ──────────────────────
 // The page issues ONE request per source so each column paints as soon as it
 // lands; `sources` therefore normally carries a single id.
