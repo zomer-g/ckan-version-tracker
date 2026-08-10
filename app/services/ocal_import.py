@@ -429,8 +429,21 @@ async def _fetch_and_parse(res: dict) -> tuple[list[str], list[list]]:
     os.close(fd)
     try:
         if url and fmt in odi.SUPPORTED_FILE_FORMATS:
-            await odi._download_file(url, tmp)
-            return await asyncio.to_thread(odi._parse_file, tmp, fmt)
+            try:
+                await odi._download_file(url, tmp)
+                return await asyncio.to_thread(odi._parse_file, tmp, fmt)
+            except Exception as e:  # noqa: BLE001
+                # odata's RAW uploaded files sit behind Cloudflare, which 403s our
+                # datacenter (Render) IP — so on the server the direct download
+                # always fails (locally, from a residential IP, it works). When it's
+                # blocked, fall back to the CKAN datastore DUMP (a dynamic API route
+                # that is NOT IP-blocked) for datastore-active resources. That path
+                # ASCII-mangles Hebrew column names, but the LLM field-mapper also
+                # reads sample rows, so it recovers the mapping from the data itself.
+                if not ds_active:
+                    raise
+                logger.warning("ocal_import: raw download blocked (%s) — datastore fallback for %s",
+                               type(e).__name__, rid)
         if ds_active:
             await odi._download_dump(rid, tmp)
             return await asyncio.to_thread(odi._parse_file, tmp, "CSV")
