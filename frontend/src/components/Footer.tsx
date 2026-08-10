@@ -20,6 +20,7 @@ export default function Footer() {
         { label: t("nav.odata", "מידע לעם"), to: "/projects/odata" },
         { label: t("nav.ocal", "יומן לעם"), to: "/projects/ocal" },
         { label: t("nav.ocoi", "ניגוד עניינים לעם"), to: "/projects/ocoi" },
+        { label: t("nav.nadlan", 'נדל"ן לעם'), to: "/projects/nadlan" },
       ],
     },
     {

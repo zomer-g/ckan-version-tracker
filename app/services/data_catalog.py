@@ -225,6 +225,16 @@ _OVER_TITLES = {
     "over_table_profiles": "גרסאות לעם — פרופילי טבלאות",
     "over_settlement_unresolved": "גרסאות לעם — ערכי יישוב שלא נפתרו (לאיסוף הטיות)",
     "over_settlement_found": "גרסאות לעם — הטיות שנמצאו בפועל + טבלת המקור",
+    # נדל"ן לעם — the property-level crosswalk (app/services/nadlan_index.py).
+    "over_re_parcels": "נדל\"ן לעם — חלקות (שדרת הזיהוי: גוש-תת גוש-חלקה + נקודה)",
+    "over_re_parcel_gazetteer": "נדל\"ן לעם — גזטיר הנכסים מקובץ לרמת חלקה",
+    "over_re_streets": "נדל\"ן לעם — רחובות (שם קנוני לכל יישוב)",
+    "over_re_street_aliases": "נדל\"ן לעם — הטיות שמות רחובות",
+    "over_re_street_unmatched": "נדל\"ן לעם — שמות רחוב מהגזטיר ללא מקבילה",
+    "over_re_postal_localities": "נדל\"ן לעם — קוד יישוב של דואר ישראל מול סמל הלמ״ס",
+    "over_re_addresses": "נדל\"ן לעם — כתובות מוצלבות (מיקוד + נקודה + חלקה)",
+    "over_re_zip5": "נדל\"ן לעם — מיקוד (5 ספרות) לפי יישוב",
+    "over_re_build_state": "נדל\"ן לעם — מצב בניית האינדקס",
 }
 
 

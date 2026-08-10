@@ -2782,3 +2782,112 @@ export const ocalAdmin = {
   mergeEntities: (names: string[], target_name: string, entity_type?: string) =>
     request<{ merged: number }>(`/admin/ocal/entities/merge`, { method: "POST", body: JSON.stringify({ names, target_name, entity_type }) }),
 };
+
+// ── נדל"ן לעם (nadlan) — the property-level spatial crosswalk ───────────────
+// One envelope for all four entry modes (see app/api/nadlan.py): whichever
+// spatial identity you start from, the answer carries the property's identity
+// in every other codespace plus a per-source block linking to that source's
+// untouched full row on /data.
+
+export interface NadlanSourceBlock {
+  table: string;
+  fields: Record<string, unknown>;
+  console_sql: string;
+  row_url: string;
+}
+
+export interface NadlanAddress {
+  street: string | null;
+  house: number | null;
+  suffix: string | null;
+  entrance: string | null;
+  zip7: string | null;
+  neighbourhood: string | null;
+  lat: number | null;
+  lon: number | null;
+  match: string | null;
+}
+
+export interface NadlanProperty {
+  parcel_key: string;
+  identity: {
+    gush: number;
+    gush_suffix: number;
+    helka: number;
+    gp_key: string;
+    settlement: { code: number | null; name: string | null };
+    region: { reg_mun: string | null; county: string | null; region: string | null };
+    point: { lat: number; lon: number } | null;
+    distance_m: number | null;
+    zip7: string[];
+    zip5: string[];
+    streets: string[];
+    addresses: NadlanAddress[];
+  };
+  sources: {
+    parcels: NadlanSourceBlock;
+    gazetteer: NadlanSourceBlock;
+    postal: NadlanSourceBlock;
+    address_list: NadlanSourceBlock;
+  };
+  match: { method: string | null; confidence: string; notes: string[] };
+}
+
+export interface NadlanEnvelope {
+  query: Record<string, unknown>;
+  data: NadlanProperty[];
+  count: number;
+  processed: boolean;
+  caveats: string[];
+  addresses?: Record<string, unknown>[];
+  alternatives?: { mode: string; parsed: Record<string, unknown> }[];
+  hint?: string;
+}
+
+export interface NadlanStats {
+  parcels: number;
+  parcels_ambiguous: number;
+  parcels_with_settlement: number;
+  parcels_with_gazetteer: number;
+  addresses: number;
+  addresses_with_point: number;
+  addresses_with_zip: number;
+  addresses_linked_pip: number;
+  streets: number;
+  streets_in_gazetteer: number;
+  zip5_codes: number;
+  localities_with_addresses: number;
+  coverage: Record<string, number>;
+}
+
+export interface NadlanStreet {
+  street_key: string;
+  name: string;
+  settlement_code: number;
+  settlement_name: string | null;
+}
+
+export const nadlan = {
+  stats: () => request<NadlanStats>("/nadlan/stats"),
+  parcel: (gush: number, helka: number, suffix?: number) =>
+    request<NadlanEnvelope>(
+      `/nadlan/parcel/${gush}/${helka}${suffix != null ? `?suffix=${suffix}` : ""}`),
+  geometry: (gush: number, helka: number, suffix = 0) =>
+    request<{ geojson: string; legal_area: string | null; status_text: string | null }>(
+      `/nadlan/parcel/${gush}/${helka}/geometry?suffix=${suffix}`),
+  point: (lat: number, lon: number, radius_m = 0, limit = 50) =>
+    request<NadlanEnvelope>(
+      `/nadlan/point?lat=${lat}&lon=${lon}&radius_m=${radius_m}&limit=${limit}`),
+  zip: (zip: string) => request<NadlanEnvelope>(`/nadlan/zip/${encodeURIComponent(zip)}`),
+  address: (city: string, street: string, number?: string) =>
+    request<NadlanEnvelope>(
+      `/nadlan/address?city=${encodeURIComponent(city)}&street=${encodeURIComponent(street)}` +
+      (number ? `&number=${encodeURIComponent(number)}` : "")),
+  streets: (q: string, settlement?: number, limit = 20) =>
+    request<{ data: NadlanStreet[] }>(
+      `/nadlan/streets?q=${encodeURIComponent(q)}` +
+      (settlement != null ? `&settlement=${settlement}` : "") + `&limit=${limit}`),
+  resolve: (q: string, radius_m = 0) =>
+    request<NadlanEnvelope>(
+      `/nadlan/resolve?q=${encodeURIComponent(q)}&radius_m=${radius_m}`),
+};

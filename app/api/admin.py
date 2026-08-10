@@ -3209,6 +3209,66 @@ async def settlements_load(
     return {"status": "ok", **res}
 
 
+async def _run_nadlan_bg(stages: list[str] | None):
+    from app.services import nadlan_index
+    try:
+        res = await nadlan_index.build(stages)
+        logger.info("nadlan index build finished: %s", res)
+    except Exception:  # noqa: BLE001 — a background task must not kill the worker
+        logger.exception("nadlan index build failed")
+
+
+@router.post("/nadlan/build")
+@limiter.limit("6/minute")
+async def nadlan_build(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    stages: str | None = None,
+    user: User = Depends(get_admin_user),
+):
+    """(Re)build the נדל"ן לעם crosswalk.
+
+    ``stages`` is a comma-separated subset of
+    ``source_indexes,parcels,gazetteer,postal_localities,streets,addresses,zip5,pip``;
+    omit it for the default set, which skips the two expensive opt-ins —
+    ``source_indexes`` (a one-off that never needs repeating) and ``pip``, the
+    384k point-in-polygon pass that is the only stage with material Neon compute
+    cost. A full run far exceeds the HTTP timeout, so it goes to the background
+    and progress is polled from GET /api/admin/nadlan/state."""
+    from app.services import append_store as _as
+    from app.services import nadlan_index
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    wanted = [s.strip() for s in stages.split(",") if s.strip()] if stages else None
+    if wanted:
+        unknown = [s for s in wanted if s not in nadlan_index.STAGES]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown stage(s): {', '.join(unknown)}; "
+                       f"valid: {', '.join(nadlan_index.STAGES)}")
+    background_tasks.add_task(_run_nadlan_bg, wanted)
+    logger.info("nadlan build (stages=%s) started by %s", wanted or "default", user.email)
+    return {"status": "started", "stages": wanted or "default",
+            "message": "Building in the background; poll GET /api/admin/nadlan/state."}
+
+
+@router.get("/nadlan/state")
+@limiter.limit("30/minute")
+async def nadlan_state(request: Request, user: User = Depends(get_admin_user)):
+    """Per-stage watermark, row counts, duration and status."""
+    from app.services import append_store as _as
+    from app.services import nadlan_index, nadlan_query
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    try:
+        state = await nadlan_index.get_state()
+    except Exception as e:  # noqa: BLE001 — tables may not exist before the first build
+        return {"stages": [], "ready": False, "note": str(e)}
+    stats = await nadlan_query.stats() if await nadlan_query.is_ready() else {}
+    return {"stages": state, "ready": bool(stats), "stats": stats}
+
+
 async def _run_harvest_bg(phase: str, per_col_cap: int):
     from app.services import settlement_harvest
     try:

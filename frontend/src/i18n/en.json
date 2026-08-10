@@ -22,7 +22,8 @@
     "catalog": "Catalog",
     "odata": "Information for the People",
     "ocal": "Calendar for the People",
-    "ocoi": "Conflicts of Interest for the People"
+    "ocoi": "Conflicts of Interest for the People",
+    "nadlan": "Nadlan LaAm"
   },
   "tags": {
     "page_title": "Tags",
@@ -312,7 +313,9 @@
     "ocal_title": "Calendar for the People",
     "ocal_desc": "The public work calendars of officials and public figures, after extracting and processing the meetings and entities.",
     "ocoi_title": "Conflicts of Interest for the People",
-    "ocoi_desc": "A processed mapping of relationships and conflicts of interest extracted from public declarations."
+    "ocoi_desc": "A processed mapping of relationships and conflicts of interest extracted from public declarations.",
+    "nadlan_title": "Nadlan LaAm (Real Estate for the People)",
+    "nadlan_desc": "Cleaning and cross-linking property-level spatial data in Israel."
   },
   "about": {
     "title": "About Versions for the People",

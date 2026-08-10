@@ -19,6 +19,7 @@ import DecisionAnalysisPage from "./pages/DecisionAnalysisPage";
 import ApiPage from "./pages/ApiPage";
 import ProjectImportPage from "./pages/ProjectImportPage";
 import OcalPage from "./pages/OcalPage";
+import NadlanPage from "./pages/NadlanPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
@@ -140,6 +141,7 @@ export default function App() {
           <Route path="/projects/odata" element={<ProjectImportPage project="odata" />} />
           <Route path="/projects/ocal" element={<OcalPage />} />
           <Route path="/projects/ocoi" element={<ProjectImportPage project="ocoi" />} />
+          <Route path="/projects/nadlan" element={<NadlanPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />
           {/* The page itself gates on `published` server-side, so the route may
