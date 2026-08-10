@@ -429,8 +429,21 @@ async def _fetch_and_parse(res: dict) -> tuple[list[str], list[list]]:
     os.close(fd)
     try:
         if url and fmt in odi.SUPPORTED_FILE_FORMATS:
-            await odi._download_file(url, tmp)
-            return await asyncio.to_thread(odi._parse_file, tmp, fmt)
+            try:
+                await odi._download_file(url, tmp)
+                return await asyncio.to_thread(odi._parse_file, tmp, fmt)
+            except Exception as e:  # noqa: BLE001
+                # odata's RAW uploaded files sit behind Cloudflare, which 403s our
+                # datacenter (Render) IP — so on the server the direct download
+                # always fails (locally, from a residential IP, it works). When it's
+                # blocked, fall back to the CKAN datastore DUMP (a dynamic API route
+                # that is NOT IP-blocked) for datastore-active resources. That path
+                # ASCII-mangles Hebrew column names, but the LLM field-mapper also
+                # reads sample rows, so it recovers the mapping from the data itself.
+                if not ds_active:
+                    raise
+                logger.warning("ocal_import: raw download blocked (%s) — datastore fallback for %s",
+                               type(e).__name__, rid)
         if ds_active:
             await odi._download_dump(rid, tmp)
             return await asyncio.to_thread(odi._parse_file, tmp, "CSV")
@@ -578,7 +591,7 @@ async def _record_exception(res: dict, pkg: dict, reason: str) -> None:
 # ── the import ────────────────────────────────────────────────────────────────
 
 async def import_resource(resource_id: str, *, force: bool = False,
-                          enrich: bool = True) -> dict:
+                          enrich: bool = True, refresh_matview: bool = True) -> dict:
     """Import one odata diary resource into the ocal DB.
 
     ``force`` (manual admin action) bypasses the auto-import gate. Without it, a
@@ -641,7 +654,8 @@ async def import_resource(resource_id: str, *, force: bool = False,
             # the legacy Ocal pipeline imported with skipAI=true (free stages
             # only); the paid LLM stage is an admin-triggered action by default.
             enriched = await ocal_enrich.enrich_source(
-                source_id, is_resync=False, run_ai=settings.ocal_ai_ner_auto)
+                source_id, is_resync=False, run_ai=settings.ocal_ai_ner_auto,
+                refresh_matview=refresh_matview)
         except Exception:  # noqa: BLE001 — enrichment is best-effort
             logger.exception("ocal_import: enrichment failed for %s", source_id)
 
@@ -803,13 +817,21 @@ async def scan_once(max_import: int | None = None, *, trigger: str = "scheduler"
             break
         rid = c["resource_id"]
         try:
-            imported.append(await import_resource(rid, force=False))
+            # refresh_matview=False: refresh once after the whole batch below,
+            # not once per source (each refresh scans ~1M entity rows).
+            imported.append(await import_resource(rid, force=False, refresh_matview=False))
         except SkipImport as e:
             skipped += 1
             logger.info("ocal_import: skip %s — %s", rid, e)
         except Exception:  # noqa: BLE001 — one bad resource must not stop the scan
             errors += 1
             logger.exception("ocal_import: failed to import %s", rid)
+    if imported:
+        try:
+            from app.services import ocal_enrich
+            await ocal_enrich.refresh_entity_matview()
+        except Exception:  # noqa: BLE001 — matview refresh is best-effort
+            logger.warning("ocal_import: end-of-scan matview refresh failed")
     result = {"candidates": len(cands), "imported": len(imported),
               "skipped": skipped, "errors": errors, "results": imported}
     if log_id is not None:

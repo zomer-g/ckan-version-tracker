@@ -20,6 +20,7 @@ import ApiPage from "./pages/ApiPage";
 import ProjectImportPage from "./pages/ProjectImportPage";
 import OcalPage from "./pages/OcalPage";
 import NadlanPage from "./pages/NadlanPage";
+import QuestionsPage from "./pages/QuestionsPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import TagsPage from "./pages/TagsPage";
@@ -138,6 +139,9 @@ export default function App() {
             }
           />
           <Route path="/api" element={<ApiPage />} />
+          {/* A first-party page, so it gets its own component rather than the
+              ProjectImportPage template (that one is for external sibling sites). */}
+          <Route path="/projects/questions" element={<QuestionsPage />} />
           <Route path="/projects/odata" element={<ProjectImportPage project="odata" />} />
           <Route path="/projects/ocal" element={<OcalPage />} />
           <Route path="/projects/ocoi" element={<ProjectImportPage project="ocoi" />} />

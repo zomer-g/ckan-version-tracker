@@ -1,6 +1,6 @@
 import { useState, FormEvent, useMemo, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { publicApi, SourceFile } from "../api/client";
+import { publicApi, CkanCoverage, SourceFile } from "../api/client";
 import SourceFilePicker from "./SourceFilePicker";
 
 export interface ResourceOption {
@@ -124,6 +124,51 @@ export default function RequestForm({
 
   const showResourcePicker =
     sourceType === "ckan" && Array.isArray(availableResources) && availableResources.length > 0;
+
+  // What of this collection the site already holds. Fetched rather than
+  // inferred: the answer is per FILE, and a collection is routinely half
+  // archived — 20 of the 22 files on a package can be frozen 2019 copies
+  // nobody tracks. Without it the picker submits blind and the server
+  // answers "already tracked" about a choice the reader could not have
+  // avoided making.
+  const [coverage, setCoverage] = useState<CkanCoverage | null>(null);
+  useEffect(() => {
+    if (!showResourcePicker || !ckanId) return;
+    let cancelled = false;
+    publicApi
+      .ckanCoverage(ckanId)
+      .then((c) => {
+        if (!cancelled) setCoverage(c);
+      })
+      // Best-effort: without it the picker is exactly what it was before,
+      // and the server still refuses duplicates. Never block the request.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showResourcePicker, ckanId]);
+
+  const coverageById = useMemo(() => {
+    const map = new Map<string, CkanCoverage["resources"][number]>();
+    for (const r of coverage?.resources || []) map.set(r.id, r);
+    return map;
+  }, [coverage]);
+
+  const isSelectable = useCallback(
+    (rid: string) => coverageById.get(rid)?.selectable ?? true,
+    [coverageById],
+  );
+
+  // A file that arrived pre-ticked (?resource= in the pasted URL, or a
+  // single-resource package) but turns out to be archived already must not
+  // stay ticked — submitting it is the dead end this is here to remove.
+  useEffect(() => {
+    if (coverageById.size === 0) return;
+    setSelectedResources((prev) => {
+      const next = new Set([...prev].filter((rid) => isSelectable(rid)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [coverageById, isSelectable]);
 
   // Scraper-mode file picker (a page publishing many files — see
   // SourceFilePicker). Kept separate from the CKAN resource picker above: that
@@ -404,7 +449,13 @@ export default function RequestForm({
                 <button
                   type="button"
                   onClick={() =>
-                    setSelectedResources(new Set(availableResources!.map((r) => r.id)))
+                    setSelectedResources(
+                      new Set(
+                        availableResources!
+                          .map((r) => r.id)
+                          .filter((rid) => isSelectable(rid)),
+                      ),
+                    )
                   }
                   style={{
                     background: "none",
@@ -446,6 +497,11 @@ export default function RequestForm({
             >
               {availableResources!.map((res, idx) => {
                 const checked = selectedResources.has(res.id);
+                const cov = coverageById.get(res.id);
+                // "Held" means a dataset already owns this file — an archive
+                // to link to, or a request awaiting approval. Either way it is
+                // not something to ask for again.
+                const held = cov ? !cov.selectable : false;
                 return (
                   <label
                     key={res.id}
@@ -456,20 +512,67 @@ export default function RequestForm({
                       padding: "0.55rem 0.7rem",
                       borderBottom:
                         idx < availableResources!.length - 1 ? "1px solid var(--border)" : "none",
-                      cursor: "pointer",
+                      cursor: held ? "default" : "pointer",
                       fontSize: "0.9rem",
-                      background: checked ? "var(--primary-50)" : "transparent",
+                      background: checked
+                        ? "var(--primary-50)"
+                        : held
+                          ? "var(--bg-secondary, #f8f9fa)"
+                          : "transparent",
+                      opacity: held ? 0.72 : 1,
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={held}
                       onChange={() => toggleResource(res.id)}
                       style={{ width: "1rem", height: "1rem", flexShrink: 0 }}
                     />
                     <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {res.name || res.id}
+                      {/* The date is what separates the file that still
+                          updates from the frozen copies a publisher leaves
+                          behind — routinely most of the list. */}
+                      {cov?.last_modified && (
+                        <span className="text-muted" style={{ fontSize: "0.75rem", marginInlineStart: "0.4rem" }}>
+                          {cov.last_modified.slice(0, 10)}
+                        </span>
+                      )}
                     </span>
+                    {cov && cov.state !== "free" && (
+                      cov.state === "collected" && cov.dataset_id ? (
+                        <a
+                          href={`/versions/${cov.dataset_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          title={cov.dataset_title}
+                          className="badge"
+                          style={{
+                            fontSize: "0.7rem",
+                            flexShrink: 0,
+                            background: "#dcfce7",
+                            color: "#166534",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {t("home.picker_tracked")} &#8599;
+                        </a>
+                      ) : (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: "0.7rem",
+                            flexShrink: 0,
+                            background: "#fef3c7",
+                            color: "#92400e",
+                          }}
+                        >
+                          {t("home.picker_pending")}
+                        </span>
+                      )
+                    )}
                     {res.format && (
                       <span className="badge" style={{ fontSize: "0.7rem", flexShrink: 0 }}>
                         {res.format}
@@ -486,6 +589,14 @@ export default function RequestForm({
                     n: selectedResources.size,
                     total: availableResources!.length,
                   })}
+              {coverage && coverage.collected + coverage.pending > 0 && (
+                <span>
+                  {" · "}
+                  {t("home.picker_tracked_count", {
+                    n: coverage.collected + coverage.pending,
+                  })}
+                </span>
+              )}
             </div>
 
             {/* One dataset per file, or one dataset for all of them. */}

@@ -1671,11 +1671,44 @@ export interface SiteStats {
   files: number | null;
 }
 
+// One file of a CKAN collection, and whether OVER already holds it.
+//   collected — an active dataset archives it; not selectable, link instead
+//   pending   — a request for it is in the approval queue
+//   free      — nobody holds it; this is what "can be added" means
+export interface CkanCoverageResource {
+  id: string;
+  name: string;
+  format: string | null;
+  last_modified: string | null;
+  size: number | null;
+  datastore_active: boolean;
+  state: "collected" | "pending" | "free";
+  selectable: boolean;
+  dataset_id?: string;
+  dataset_title?: string;
+}
+
+export interface CkanCoverage {
+  ckan_id: string;
+  ckan_name: string;
+  title: string;
+  total: number;
+  collected: number;
+  pending: number;
+  free: number;
+  resources: CkanCoverageResource[];
+}
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
   siteStats: () => request<SiteStats>("/stats"),
   dataset: (id: string) => request<TrackedDataset>(`/datasets/public/${id}`),
+  // What of a data.gov.il collection this site already archives, per file.
+  // Asked BEFORE the picker is shown, so nobody ticks a file the submit would
+  // then refuse as a duplicate.
+  ckanCoverage: (ckanId: string) =>
+    request<CkanCoverage>(`/datasets/ckan-coverage/${encodeURIComponent(ckanId)}`),
   request: (data: {
     ckan_id: string;
     resource_id?: string;
@@ -2898,4 +2931,67 @@ export const nadlan = {
   resolve: (q: string, radius_m = 0) =>
     request<NadlanEnvelope>(
       `/nadlan/resolve?q=${encodeURIComponent(q)}&radius_m=${radius_m}`),
+// ── שאלות לעם — חיפוש רוחבי (cross-source deep search) ──────────────────────
+// The page issues ONE request per source so each column paints as soon as it
+// lands; `sources` therefore normally carries a single id.
+
+export interface DeepCard {
+  title: string;
+  snippet: string;
+  url: string | null;
+  date: string | null;
+  badges: string[];
+}
+export interface DeepFilter {
+  id: string;
+  label: string;
+  type: "text" | "date" | "number" | "select";
+  options?: { value: string; label: string }[];
+}
+export interface DeepSource {
+  id: string;
+  name: string;
+  color: string;
+  attribution: { text: string; href: string };
+  server: string;
+  local: string | null;
+  public: boolean;
+  configured: boolean;
+  /** Someone else's corpus (TAG-IT, מפתח התקציב) — surfaced as a marker. */
+  external: boolean;
+  hint: string;
+  filters: DeepFilter[] | null;
+}
+export interface DeepColumn {
+  id: string;
+  name: string;
+  color: string;
+  attribution: { text: string; href: string };
+  server: string;
+  configured: boolean;
+  error: string | null;
+  total: number;
+  results: DeepCard[];
+}
+
+export const deepSearch = {
+  sources: () => request<{ sources: DeepSource[] }>("/deep-search/sources"),
+  search: (p: {
+    q: string;
+    sources?: string;
+    limit?: number;
+    filters?: Record<string, string>;
+  }) => {
+    // Per-source filters ride as f_<filterId>=… — the backend only reads the
+    // ids that source declared, so an unknown one is simply ignored.
+    const params: Record<string, unknown> = {
+      q: p.q,
+      sources: p.sources,
+      limit: p.limit,
+    };
+    for (const [k, v] of Object.entries(p.filters || {})) params[`f_${k}`] = v;
+    return request<{ query: string; sources: DeepColumn[] }>(
+      `/deep-search/search${_qs(params)}`,
+    );
+  },
 };

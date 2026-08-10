@@ -17,6 +17,7 @@
     "menu": "Navigation menu",
     "cbs": "CBS",
     "data_sql": "SQL",
+    "questions": "Ask Everything",
     "knesset_db": "Knesset DB",
     "projects": "Projects",
     "catalog": "Catalog",
@@ -235,6 +236,9 @@
     "append_key_placeholder": "Key column (optional)"
   },
   "versions": {
+    "collection_more_title": "{{n}} more files in this collection are not archived",
+    "collection_more_body": "The source collection holds {{total}} files. {{held}} are archived here, {{free}} are not. Each file you add becomes its own dataset — its own version history and SQL table.",
+    "collection_more_btn": "Add files from this collection",
     "title": "Version History",
     "version": "Version",
     "detected": "Detected",

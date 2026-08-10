@@ -15,6 +15,7 @@ export default function Footer() {
     {
       title: t("footer.group_projects", "פרויקטים"),
       links: [
+        { label: t("nav.questions", "שאלות לעם"), to: "/projects/questions" },
         { label: t("nav.knesset_db", "הכנסת"), to: "/knesset" },
         { label: t("nav.cbs", 'למ"ס'), to: "/cbs" },
         { label: t("nav.odata", "מידע לעם"), to: "/projects/odata" },

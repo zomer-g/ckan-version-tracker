@@ -617,7 +617,7 @@ async def refresh_entity_matview() -> None:
 
 
 async def enrich_source(source_id, *, is_resync: bool = False,
-                        run_ai: bool = False) -> dict:
+                        run_ai: bool = False, refresh_matview: bool = True) -> dict:
     """Full enrichment chain for one source. Each stage is non-fatal.
 
     The free stages (entities → cross-refs → matview → matching) always run.
@@ -636,7 +636,10 @@ async def enrich_source(source_id, *, is_resync: bool = False,
                 "errors": ai_errors,
             }
         out["cross_refs"] = await cross_reference_for_source(source_id, is_resync=is_resync)
-        await refresh_entity_matview()
+        # Skipped in bulk (scan) runs — the caller refreshes once at the end
+        # instead of once per source (the refresh scans ~1M entity rows).
+        if refresh_matview:
+            await refresh_entity_matview()
     except Exception:  # noqa: BLE001
         logger.exception("ocal_enrich: entities/cross-ref chain failed for %s", source_id)
     try:
