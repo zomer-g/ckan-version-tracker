@@ -135,6 +135,20 @@ def test_card_caps_unbounded_free_text():
     assert "\n" not in Card(title="a\r\n\r\n   b").title
 
 
+def test_iso_date_reads_each_corpus_the_way_that_corpus_writes_it():
+    """A silently transposed date is the worst kind of wrong — it still sorts
+    and still renders. The מבקר library writes DD.MM.YYYY; the cooperatives
+    feed writes US M/D/YYYY."""
+    d = deep_search_sources.iso_date
+    assert d("08.05.2018") == "2018-05-08"      # 8 May, not 5 August
+    assert d("26.07.2026") == "2026-07-26"
+    assert d("3/1/2020 12:00:00 AM") == "2020-03-01"   # US: 1 March
+    assert d("25/12/2021") == "2021-12-25"      # first number can't be a month
+    assert d("2019-06-24T10:00:00") == "2019-06-24"
+    assert d("") is None and d(None) is None
+    assert d("לא ידוע") is None
+
+
 def test_local_value_error_message_is_surfaced(stub_local):
     """The MCP tools raise ValueError with user-facing Hebrew; show it."""
     stub_local["payloads"]["search_datasets"] = ValueError("מסד הנתונים אינו מוגדר בשרת")

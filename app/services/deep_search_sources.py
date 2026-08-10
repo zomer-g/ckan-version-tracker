@@ -75,15 +75,20 @@ def iso_date(v: Any) -> str | None:
     m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
     if m:
         return m.group(0)
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    # DOTS are unambiguous here: the מבקר library writes DD.MM.YYYY, so
+    # 08.05.2018 is 8 May, never 5 August.
+    m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})", s)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        # DD/MM/YYYY is the Israeli registries' format; a day > 12 disambiguates
-        # it from the US M/D/YYYY the cooperatives feed uses. When both readings
-        # are valid the two agree closely enough not to matter for sorting.
-        if d > 12:
-            return f"{y:04d}-{mo:02d}-{d:02d}"
-        return f"{y:04d}-{d:02d}-{mo:02d}"
+        return f"{y:04d}-{mo:02d}-{d:02d}" if 1 <= mo <= 12 else None
+    # SLASHES are genuinely mixed across these corpora: the cooperatives feed
+    # writes US M/D/YYYY ("3/1/2020 12:00:00 AM"). Read month-first, unless the
+    # first number cannot be a month.
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mo, d = (b, a) if a > 12 else (a, b)
+        return f"{y:04d}-{mo:02d}-{d:02d}" if 1 <= mo <= 12 else None
     return None
 
 
@@ -470,6 +475,87 @@ def _tagit_runner(scope_setting: str):
     return run
 
 
+# ── מבקר המדינה: OVER's own catalog of the reports ──────────────────────────
+# The TAG-IT column above searches document BODIES but holds only the 2018-19
+# local-government slice. This one is OVER's own scrape of the State
+# Comptroller's library: metadata + a link to the PDF rather than full text,
+# but every report type back to 1989 — and it extends itself as the scraper
+# runs. (Its coverage currently stops at 2019 because the scraper's page walk
+# gave up on a 192-page gap; fixed in govil-scraper ed6db15, so this column
+# grows on its own once that lands.)
+
+MEVAKER_DATASETS: tuple[dict, ...] = (
+    {"id": "930bcb01-26b4-4d3e-a179-eb1a7d7e8e0e", "label": "דוחות שנתיים"},
+    {"id": "7484e444-d33c-4ecb-8f0b-bb14db2b3b92", "label": "ביקורת על השלטון המקומי"},
+    {"id": "2e052782-7170-4c35-a095-913f92241460", "label": "דוחות מיוחדים"},
+    {"id": "e1caf35f-24da-440e-8741-432f8201f829", "label": "מימון בחירות ברשויות"},
+    {"id": "cc50a099-013a-4639-9531-eaa87fa5dc66", "label": "עיונים, מאמרים, ספרים"},
+    {"id": "3c2671aa-1fcc-42bf-afe0-bbb0e3cc1e1b", "label": "מימון מפלגות"},
+    {"id": "ace3e717-1924-408c-8fef-311211647099", "label": "דוחות נציב תלונות הציבור"},
+    {"id": "e808abed-db33-41f9-8423-0557b6c91d9d", "label": "ביקורת על האיגודים"},
+    {"id": "424b6993-3ce8-4368-b89b-b1882760ad5c", "label": "מימון בחירות מקדימות"},
+)
+
+MEVAKER_FILTER = Filter("dataset", "סוג הדוח", "select", tuple(
+    [{"value": "", "label": "כל סוגי הדוחות"}]
+    + [{"value": d["id"], "label": d["label"]} for d in MEVAKER_DATASETS]
+))
+
+
+def _mevaker_row(r: dict, label: str) -> Card | None:
+    title = r.get("title")
+    if not title:
+        return None
+    badges = [label]
+    pub = r.get("publication_name")
+    if pub and pub != label:
+        badges.append(str(pub))
+    return Card(
+        title=truncate(title, 160),
+        snippet=join_parts(r.get("group_name"), r.get("main_audit_obj")),
+        # report_url is the report's page in the library; the PDF is the
+        # fallback when a task has no page of its own.
+        url=r.get("report_url") or r.get("pdf_url"),
+        date=iso_date(r.get("publish_date")),
+        badges=tuple(badges),
+    )
+
+
+async def _run_mevaker_catalog(call, q: str, limit: int, filters: dict) -> dict:
+    """Search OVER's nine מבקר datasets and merge them into one column.
+
+    Concurrent (unlike the BudgetKey column): these are in-process calls and
+    each opens its own DB session, and the tables are small — the largest is
+    ~1,100 rows.
+    """
+    import asyncio
+
+    wanted = (filters or {}).get("dataset") or ""
+    specs = [d for d in MEVAKER_DATASETS if not wanted or d["id"] == wanted] \
+        or list(MEVAKER_DATASETS)
+    per = max(2, -(-limit // len(specs)))
+
+    async def one(spec: dict) -> list[Card]:
+        payload = await call("query_dataset_rows",
+                             {"dataset_id": spec["id"], "q": q, "limit": per})
+        out = []
+        for r in (payload.get("rows") or [])[:per]:
+            try:
+                c = _mevaker_row(r, spec["label"])
+            except Exception:  # noqa: BLE001
+                c = None
+            if c:
+                out.append(c)
+        return out
+
+    settled = await asyncio.gather(*(one(s) for s in specs), return_exceptions=True)
+    ok = [r for r in settled if not isinstance(r, BaseException)]
+    if not ok:
+        raise next(r for r in settled if isinstance(r, BaseException))
+    results = [c for sub in ok for c in sub]
+    return {"results": results, "total": len(results)}
+
+
 # ── מפתח התקציב (BudgetKey) — external, public, session-style MCP ───────────
 # Four datasets merged into one column. Field names below are verified against
 # live DatasetFullTextSearch responses, not inferred.
@@ -663,12 +749,27 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_event,
     ),
     Source(
-        id="mevaker", name="דוחות מבקר המדינה", color="#0369a1",
+        id="mevaker_reports", name="מבקר המדינה — קטלוג הדוחות", color="#0369a1",
+        attribution={"text": "סריקה של גרסאות לעם לספריית מבקר המדינה — מטא-דאטה "
+                             "וקישור לדוח המלא באתר המבקר.",
+                     "href": "https://www.mevaker.gov.il/subjects"},
+        local="over", hint="כל סוגי הדוחות · מטא-דאטה וקישור ל-PDF",
+        filters=(MEVAKER_FILTER,),
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_run_mevaker_catalog,
+    ),
+    Source(
+        # Deliberately separate from the catalog column: this one searches the
+        # document TEXT, but the TAG-IT workspace holds only the 2018-19
+        # local-government slice. The hint says so — a user who searches 2023
+        # here and gets nothing must know why.
+        id="mevaker", name="מבקר המדינה — טקסט מלא", color="#075985",
         attribution={"text": "מקור חיצוני: מסמכי מבקר המדינה כפי שנסרקו ונותחו ב-TAG-IT; "
-                             "המסמך המלא באתר המבקר.",
+                             "המסמך המלא באתר המבקר. הקורפוס כאן מכסה דוחות ביקורת "
+                             "על השלטון המקומי בלבד, 2018–2019.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        hint="חיפוש בתוך גוף הדוחות",
+        hint="חיפוש בגוף המסמך · שלטון מקומי 2018–2019 בלבד",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_tagit_runner("tagit_mevaker_scope"),
