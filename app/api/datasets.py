@@ -15,7 +15,7 @@ from app.rate_limit import limiter
 from app.services.ckan_client import ckan_client
 from app.services.dataset_lookup import find_datasets_for_url
 from app.services.odata_client import odata_client
-from app.services import archive_state, source_registry
+from app.services import archive_state, ckan_coverage, source_registry
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -1814,6 +1814,53 @@ async def pending_count(request: Request, db: AsyncSession = Depends(get_db)):
     return {"count": int(total)}
 
 
+@router.get("/ckan-coverage/{ckan_id}")
+@limiter.limit("60/minute")
+async def ckan_package_coverage(
+    ckan_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """What of a data.gov.il collection this site already archives.
+
+    Public on purpose. The picker in the request form used to submit blind:
+    the duplicate check ran server-side AFTER the submit, so a reader ticked
+    files that were already here and got "already tracked" back as an error.
+    Anyone looking at a collection should be able to see, before choosing,
+    which of its files are archived, which are queued, and which are still
+    open — and a collection already tracked here should offer its remaining
+    files rather than dead-ending at a versions page.
+
+    Reads the source live (the resource list is the source's, not ours) and
+    the claim state from the same rule the split submit applies.
+    """
+    try:
+        pkg = await ckan_client.package_show(ckan_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    resources = pkg.get("resources", [])
+    rows = await ckan_coverage.holders(db, pkg.get("id") or ckan_id)
+    # The slug and the uuid are both legitimate ckan_ids to have been stored;
+    # a dataset requested under one must not read as absent under the other.
+    alt = pkg.get("name") if (pkg.get("id") or ckan_id) != pkg.get("name") else None
+    if alt:
+        seen = {d.id for d in rows}
+        rows += [d for d in await ckan_coverage.holders(db, alt) if d.id not in seen]
+
+    entries = ckan_coverage.describe(resources, rows)
+    return {
+        "ckan_id": pkg.get("id") or ckan_id,
+        "ckan_name": pkg.get("name"),
+        "title": pkg.get("title") or pkg.get("name"),
+        "total": len(entries),
+        "collected": sum(1 for e in entries if e["state"] == "collected"),
+        "pending": sum(1 for e in entries if e["state"] == "pending"),
+        "free": sum(1 for e in entries if e["selectable"]),
+        "resources": entries,
+    }
+
+
 class TrackingRequest(BaseModel):
     ckan_id: str | None = None
     source_type: str = "ckan"  # "ckan" | "scraper" | "govmap"
@@ -2537,12 +2584,7 @@ async def submit_tracking_request(
     # requester just kept being told the files were "already tracked" by
     # something they could never find. Asking again is allowed; the admin can
     # reject again.
-    existing_rows = [
-        d for d in (await db.execute(
-            select(TrackedDataset).where(TrackedDataset.ckan_id == body.ckan_id)
-        )).scalars().all()
-        if d.status in ("active", "pending")
-    ]
+    existing_rows = await ckan_coverage.holders(db, body.ckan_id)
 
     # ---- split mode: one independent dataset per picked resource ----
     # A CKAN package is a folder, not a table: its CSVs are usually unrelated
@@ -2563,17 +2605,11 @@ async def submit_tracking_request(
                 detail=f"resource_ids not found on source: {bad}",
             )
 
-        # What each existing dataset pins. A row pinning nothing at all mirrors
-        # the WHOLE package (legacy "track all"), so its set is every resource
-        # at the source.
+        # What each existing dataset pins, and which of them the public
+        # coverage view calls "collected". Shared with GET /ckan-coverage so
+        # the picker can never offer a file this submit would refuse.
         all_source_ids = set(by_id)
         wanted = set(resource_ids)
-
-        def _pinned(d) -> set[str]:
-            ids = set(d.resource_ids or [])
-            if d.resource_id:
-                ids.add(d.resource_id)
-            return ids or all_source_ids
 
         # A PENDING combined request is not tracking — it's an earlier request
         # for the very same files, at coarser granularity. Splitting the same
@@ -2587,21 +2623,18 @@ async def submit_tracking_request(
         # row that already pins exactly one resource is left alone: that's the
         # duplicate case, and re-submitting a file must not fan out into a
         # second pending request for it.
-        superseded: list[TrackedDataset] = []
+        superseded = [
+            d for d in existing_rows
+            if ckan_coverage.is_combined_request(
+                d, ckan_coverage.pinned_ids(d, all_source_ids)
+            )
+            and ckan_coverage.pinned_ids(d, all_source_ids) <= wanted
+        ]
         # rid → the dataset already holding it, so a "duplicate" result can say
         # WHERE the file went instead of leaving the requester at a dead end.
-        taken: dict[str, TrackedDataset] = {}
-        for d in existing_rows:
-            pins = _pinned(d)
-            if (
-                d.status == "pending"
-                and len(pins) > 1
-                and pins <= wanted
-            ):
-                superseded.append(d)
-                continue
-            for rid in pins:
-                taken.setdefault(rid, d)
+        taken = ckan_coverage.claims(
+            existing_rows, all_source_ids, skip=superseded,
+        )
 
         org_name = pkg.get("organization", {}).get("name", "") if pkg.get("organization") else ""
         org_id = None

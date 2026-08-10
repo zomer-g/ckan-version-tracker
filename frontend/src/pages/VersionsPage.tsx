@@ -21,6 +21,7 @@ import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
 import SamplingRunPanel from "../components/SamplingRunPanel";
 import SourceMethodology from "../components/SourceMethodology";
 import ScrapeStatusBanner from "../components/ScrapeStatusBanner";
+import CollectionCoverage from "../components/CollectionCoverage";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
 // idf code paths. Only govmap pages that actually have a GeoJSON
@@ -577,6 +578,18 @@ export default function VersionsPage() {
       {/* A collection in flight. Public, and only rendered while one is running
           — a dataset that takes days to collect otherwise looks abandoned. */}
       {datasetId && <ScrapeStatusBanner datasetId={datasetId} />}
+
+      {/* The rest of the folder. A data.gov.il package holds many files and
+          each becomes its own dataset here, so this page is one file of a
+          collection — and the question "what else is in it" had nowhere to be
+          asked. Public: anyone can request the missing files, one dataset per
+          file. Renders nothing when the collection is fully collected. */}
+      {dataset && (dataset.source_type || "ckan") === "ckan" && dataset.ckan_id && (
+        <CollectionCoverage
+          ckanId={dataset.ckan_id}
+          collectionTitle={dataset.title}
+        />
+      )}
 
       {/* How this source is tracked and why — the cadence, what was measured to
           choose it, what it deliberately leaves to the full pass. Folded here:

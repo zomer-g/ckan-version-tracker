@@ -1671,11 +1671,44 @@ export interface SiteStats {
   files: number | null;
 }
 
+// One file of a CKAN collection, and whether OVER already holds it.
+//   collected — an active dataset archives it; not selectable, link instead
+//   pending   — a request for it is in the approval queue
+//   free      — nobody holds it; this is what "can be added" means
+export interface CkanCoverageResource {
+  id: string;
+  name: string;
+  format: string | null;
+  last_modified: string | null;
+  size: number | null;
+  datastore_active: boolean;
+  state: "collected" | "pending" | "free";
+  selectable: boolean;
+  dataset_id?: string;
+  dataset_title?: string;
+}
+
+export interface CkanCoverage {
+  ckan_id: string;
+  ckan_name: string;
+  title: string;
+  total: number;
+  collected: number;
+  pending: number;
+  free: number;
+  resources: CkanCoverageResource[];
+}
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
   siteStats: () => request<SiteStats>("/stats"),
   dataset: (id: string) => request<TrackedDataset>(`/datasets/public/${id}`),
+  // What of a data.gov.il collection this site already archives, per file.
+  // Asked BEFORE the picker is shown, so nobody ticks a file the submit would
+  // then refuse as a duplicate.
+  ckanCoverage: (ckanId: string) =>
+    request<CkanCoverage>(`/datasets/ckan-coverage/${encodeURIComponent(ckanId)}`),
   request: (data: {
     ckan_id: string;
     resource_id?: string;

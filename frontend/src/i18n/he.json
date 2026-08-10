@@ -235,6 +235,9 @@
     "append_key_placeholder": "עמודת מפתח (אופציונלי)"
   },
   "versions": {
+    "collection_more_title": "יש עוד {{n}} קבצים באוסף הזה שאינם נאספים",
+    "collection_more_body": "האוסף במקור מכיל {{total}} קבצים. {{held}} כבר נאספים כאן, {{free}} עדיין לא. כל קובץ שיתווסף ייפתח כמאגר עצמאי — היסטוריית גרסאות וטבלת SQL משלו.",
+    "collection_more_btn": "הוספת קבצים מהאוסף",
     "title": "היסטוריית גרסאות",
     "version": "גרסה",
     "detected": "זוהה",
