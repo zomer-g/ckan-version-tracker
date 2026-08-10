@@ -81,13 +81,13 @@ export default function NadlanPage() {
     const run = async () => {
       let promise: Promise<NadlanEnvelope> | null = null;
       if (tab === "map" && lat != null && lon != null) {
-        promise = nadlan.point(lat, lon, radiusM);
+        promise = nadlan.point(lat, lon, radiusM, 50, true);
       } else if (tab === "gush" && gush && helka) {
-        promise = nadlan.parcel(Number(gush), Number(helka));
+        promise = nadlan.parcel(Number(gush), Number(helka), undefined, true);
       } else if (tab === "zip" && /^[0-9]{5}([0-9]{2})?$/.test(zip)) {
-        promise = nadlan.zip(zip);
+        promise = nadlan.zip(zip, true);
       } else if (tab === "address" && city && street) {
-        promise = nadlan.address(city, street, houseNo || undefined);
+        promise = nadlan.address(city, street, houseNo || undefined, true);
       }
       if (!promise) { setEnv(null); setError(null); return; }
 
@@ -174,36 +174,23 @@ export default function NadlanPage() {
 
         {/* ── the four entry forms ── */}
         {tab === "map" && (
-          <div style={{ marginBottom: "1rem" }}>
-            <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.6rem" }}>
-              <label className="text-sm">
-                רדיוס:{" "}
-                <select
-                  value={String(radiusM)}
-                  onChange={(e) => patch({ r: e.target.value === "0" ? null : e.target.value })}
-                  style={{ padding: "0.25rem 0.5rem" }}
-                >
-                  {RADII.map((r) => (
-                    <option key={r} value={r}>{r === 0 ? "החלקה שמתחת לסמן" : `${r} מ׳`}</option>
-                  ))}
-                </select>
-              </label>
-              <span className="text-sm text-muted">לחצו על המפה כדי לבחור נקודה.</span>
-              {lat != null && lon != null && (
-                <span className="text-sm text-muted">({lat.toFixed(5)}, {lon.toFixed(5)})</span>
-              )}
-            </div>
-            <Suspense fallback={<div className="text-sm text-muted">טוען מפה…</div>}>
-              <NadlanMap
-                lat={lat}
-                lon={lon}
-                radiusM={radiusM}
-                results={results}
-                selected={expanded}
-                polygon={polygon}
-                onPick={(la, lo) => patch({ lat: String(la), lon: String(lo) })}
-              />
-            </Suspense>
+          <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+            <label className="text-sm">
+              רדיוס:{" "}
+              <select
+                value={String(radiusM)}
+                onChange={(e) => patch({ r: e.target.value === "0" ? null : e.target.value })}
+                style={{ padding: "0.25rem 0.5rem" }}
+              >
+                {RADII.map((r) => (
+                  <option key={r} value={r}>{r === 0 ? "החלקה שמתחת לסמן" : `${r} מ׳`}</option>
+                ))}
+              </select>
+            </label>
+            <span className="text-sm text-muted">לחצו על המפה כדי לבחור נקודה.</span>
+            {lat != null && lon != null && (
+              <span className="text-sm text-muted">({lat.toFixed(5)}, {lon.toFixed(5)})</span>
+            )}
           </div>
         )}
 
@@ -264,6 +251,31 @@ export default function NadlanPage() {
             />
           </form>
         )}
+
+        {/* The map is NOT exclusive to the map tab: a property found by address,
+            zip or gush/helka has to be locatable on the map too, so the same
+            polygon layer is shown for every mode and fits itself to the result. */}
+        <div style={{ marginBottom: "1rem" }}>
+          <Suspense fallback={<div className="text-sm text-muted">טוען מפה…</div>}>
+            <NadlanMap
+              lat={lat}
+              lon={lon}
+              radiusM={radiusM}
+              results={results}
+              selected={expanded}
+              polygon={polygon}
+              onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
+              onSelect={(k) => setExpanded(k)}
+            />
+          </Suspense>
+          {results.length > 0 && (
+            <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+              {results.filter((r) => r.geometry).length.toLocaleString("he-IL")} מתוך{" "}
+              {results.length.toLocaleString("he-IL")} חלקות מוצגות עם גבולות החלקה.
+              לחיצה על חלקה במפה תפתח את ההצלבה שלה.
+            </div>
+          )}
+        </div>
 
         {/* ── results ── */}
         {loading && <div className="text-sm text-muted">מחפש…</div>}

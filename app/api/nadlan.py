@@ -67,10 +67,11 @@ async def nadlan_parcel(
     gush: int = Path(..., ge=1, le=99_999_999),
     helka: int = Path(..., ge=0, le=99_999_999),
     suffix: int | None = Query(None, ge=0, le=999, description="תת-גוש"),
+    geometry: bool = Query(False, description="לצרף את פוליגון החלקה לכל תוצאה"),
 ):
     await _require_ready()
     parcels = await nadlan_query.by_gush_helka(gush, helka, suffix)
-    data = await nadlan_query.property_envelope(parcels)
+    data = await nadlan_query.property_envelope(parcels, with_geometry=geometry)
     return _envelope("gush_helka", {"gush": gush, "helka": helka, "suffix": suffix}, data)
 
 
@@ -101,23 +102,29 @@ async def nadlan_point(
     lon: float = Query(..., ge=33.0, le=36.5, description="קו אורך (WGS84)"),
     radius_m: float = Query(0, ge=0, le=nadlan_query.MAX_RADIUS_M),
     limit: int = Query(50, ge=1, le=nadlan_query.MAX_LIMIT),
+    geometry: bool = Query(False, description="לצרף את פוליגון החלקה לכל תוצאה"),
 ):
     """radius_m=0 answers "which parcel is this point inside"; anything larger
     returns the parcels whose centre lies within that many metres."""
     await _require_ready()
     parcels = await nadlan_query.by_point(lat, lon, radius_m, limit)
-    data = await nadlan_query.property_envelope(parcels)
+    data = await nadlan_query.property_envelope(parcels, with_geometry=geometry)
     return _envelope("point", {"lat": lat, "lon": lon, "radius_m": radius_m}, data)
 
 
 @router.get("/zip/{zip_code}")
 @limiter.limit("120/minute")
-async def nadlan_zip(request: Request, zip_code: str = Path(..., min_length=5, max_length=7)):
+async def nadlan_zip(
+    request: Request,
+    zip_code: str = Path(..., min_length=5, max_length=7),
+    geometry: bool = Query(False, description="לצרף את פוליגון החלקה לכל תוצאה"),
+):
     await _require_ready()
     if not zip_code.isdigit() or len(zip_code) not in (5, 7):
         raise HTTPException(status_code=422, detail="מיקוד חייב להיות 5 או 7 ספרות")
     addrs, parcels = await nadlan_query.by_zip(zip_code)
-    data = await nadlan_query.property_envelope(parcels, addresses=addrs)
+    data = await nadlan_query.property_envelope(parcels, addresses=addrs,
+                                                with_geometry=geometry)
     return _envelope("zip", {"zip": zip_code}, data, addresses=addrs)
 
 
@@ -128,10 +135,12 @@ async def nadlan_address(
     city: str = Query(..., min_length=1, max_length=100),
     street: str = Query(..., min_length=1, max_length=120),
     number: str | None = Query(None, max_length=40),
+    geometry: bool = Query(False, description="לצרף את פוליגון החלקה לכל תוצאה"),
 ):
     await _require_ready()
     addrs, parcels = await nadlan_query.by_address(city, street, number)
-    data = await nadlan_query.property_envelope(parcels, addresses=addrs)
+    data = await nadlan_query.property_envelope(parcels, addresses=addrs,
+                                                with_geometry=geometry)
     return _envelope("address", {"city": city, "street": street, "number": number},
                      data, addresses=addrs)
 

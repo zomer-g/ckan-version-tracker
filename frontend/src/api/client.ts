@@ -2831,6 +2831,10 @@ export interface NadlanProperty {
     address_list: NadlanSourceBlock;
   };
   match: { method: string | null; confidence: string; notes: string[] };
+  // The parcel polygon as a GeoJSON *string*, present when the request asked
+  // for it (`geometry=true`). Rides the same envelope as the identity so a
+  // property found by zip is as locatable on the map as one found by clicking.
+  geometry: string | null;
 }
 
 export interface NadlanEnvelope {
@@ -2869,20 +2873,24 @@ export interface NadlanStreet {
 
 export const nadlan = {
   stats: () => request<NadlanStats>("/nadlan/stats"),
-  parcel: (gush: number, helka: number, suffix?: number) =>
+  parcel: (gush: number, helka: number, suffix?: number, geometry = false) =>
     request<NadlanEnvelope>(
-      `/nadlan/parcel/${gush}/${helka}${suffix != null ? `?suffix=${suffix}` : ""}`),
+      `/nadlan/parcel/${gush}/${helka}?geometry=${geometry}` +
+      (suffix != null ? `&suffix=${suffix}` : "")),
   geometry: (gush: number, helka: number, suffix = 0) =>
     request<{ geojson: string; legal_area: string | null; status_text: string | null }>(
       `/nadlan/parcel/${gush}/${helka}/geometry?suffix=${suffix}`),
-  point: (lat: number, lon: number, radius_m = 0, limit = 50) =>
+  point: (lat: number, lon: number, radius_m = 0, limit = 50, geometry = false) =>
     request<NadlanEnvelope>(
-      `/nadlan/point?lat=${lat}&lon=${lon}&radius_m=${radius_m}&limit=${limit}`),
-  zip: (zip: string) => request<NadlanEnvelope>(`/nadlan/zip/${encodeURIComponent(zip)}`),
-  address: (city: string, street: string, number?: string) =>
+      `/nadlan/point?lat=${lat}&lon=${lon}&radius_m=${radius_m}&limit=${limit}` +
+      `&geometry=${geometry}`),
+  zip: (zip: string, geometry = false) =>
+    request<NadlanEnvelope>(
+      `/nadlan/zip/${encodeURIComponent(zip)}?geometry=${geometry}`),
+  address: (city: string, street: string, number?: string, geometry = false) =>
     request<NadlanEnvelope>(
       `/nadlan/address?city=${encodeURIComponent(city)}&street=${encodeURIComponent(street)}` +
-      (number ? `&number=${encodeURIComponent(number)}` : "")),
+      `&geometry=${geometry}` + (number ? `&number=${encodeURIComponent(number)}` : "")),
   streets: (q: string, settlement?: number, limit = 20) =>
     request<{ data: NadlanStreet[] }>(
       `/nadlan/streets?q=${encodeURIComponent(q)}` +

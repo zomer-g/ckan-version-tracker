@@ -152,6 +152,42 @@ def test_ambiguous_parcel_is_downgraded_not_hidden(client, monkeypatch):
     assert any("תת-גוש" in n for n in prop["match"]["notes"])
 
 
+# ── polygons on the map ───────────────────────────────────────────────────────
+_POLY = '{"type":"Polygon","coordinates":[[[34.9,32.07],[34.91,32.07],[34.91,32.08],[34.9,32.07]]]}'
+
+
+def test_geometry_is_off_by_default(client, monkeypatch):
+    """The polygon lives in the 4.58 GB source table — never fetched unasked."""
+    called = []
+
+    async def _geoms(keys, simplify=None):
+        called.append(list(keys))
+        return {}
+
+    monkeypatch.setattr(nadlan_query, "parcel_geometries", _geoms)
+    _stub_lookup(monkeypatch)
+    body = client.get("/api/nadlan/parcel/6319/225").json()
+    assert called == []
+    assert body["data"][0]["geometry"] is None
+
+
+@pytest.mark.parametrize("url", [
+    "/api/nadlan/parcel/6319/225?geometry=true",
+    "/api/nadlan/point?lat=32.0789&lon=34.9171&radius_m=250&geometry=true",
+    "/api/nadlan/zip/4935048?geometry=true",
+    "/api/nadlan/address?city=פתח תקווה&street=אבימלך&geometry=true",
+])
+def test_every_mode_can_return_the_parcel_polygon(client, monkeypatch, url):
+    """Whichever identity you searched by, the result is locatable on the map."""
+    async def _geoms(keys, simplify=None):
+        return {k: _POLY for k in keys}
+
+    monkeypatch.setattr(nadlan_query, "parcel_geometries", _geoms)
+    _stub_lookup(monkeypatch)
+    body = client.get(url).json()
+    assert body["data"][0]["geometry"] == _POLY
+
+
 # ── validation ────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("url", [
     "/api/nadlan/point?lat=32.08&lon=34.88&radius_m=999999",  # unbounded radius

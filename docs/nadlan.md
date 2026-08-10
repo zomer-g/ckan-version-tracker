@@ -143,6 +143,26 @@ work queue rather than a silent loss.
 | `over_re_zip5` | zip → locality rollup |
 | `over_re_build_state` | per-stage watermark, timing, row counts |
 
+### Locating a property on the map
+
+The polygons are not copied into the spine (that is the 4.58 GB), but every mode
+can return them: pass `geometry=true` to `/parcel`, `/point`, `/zip` or
+`/address` and each result carries its parcel outline as GeoJSON **on the same
+envelope as its identity**. So a property found by מיקוד or by כתובת is exactly
+as locatable on the map as one found by clicking — the identity and the shape
+never diverge.
+
+Bounded twice so this stays cheap: the gush list drives the source table's
+existing `"GUSH_NUM"` btree (a text equality, so no cast defeats the index), then
+the key list narrows to the exact parcels. `ST_SimplifyPreserveTopology` at ~2 m
+takes a real 3,067-char urban polygon down to 257 — 200 parcels cost ~60 KB
+rather than megabytes. `MAX_GEOMETRIES` caps it at 200.
+
+On the page the map is shown for **every** tab, not just the map tab, and fits
+itself to the results when the search carried no map pin. A parcel without a
+polygon falls back to a centroid marker, and the page says how many of the
+results are drawn with real boundaries rather than leaving it to be guessed.
+
 Two deliberate choices:
 
 - **`ST_PointOnSurface`, not `ST_Centroid`** — a concave parcel's centroid can

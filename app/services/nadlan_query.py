@@ -174,7 +174,8 @@ async def by_address(city: str, street: str, number: str | None = None
 
 # ── the unified envelope ──────────────────────────────────────────────────────
 async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None = None,
-                            include_addresses: bool = True) -> list[dict]:
+                            include_addresses: bool = True,
+                            with_geometry: bool = False) -> list[dict]:
     """Turn parcel rows into the full cross-source answer.
 
     One shape for all four entry modes: identity in every codespace, one block
@@ -184,6 +185,11 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
     if not parcels:
         return []
     keys = [p["parcel_key"] for p in parcels]
+
+    # The polygon rides on the SAME envelope as everything else, so a property
+    # found by zip or by address is as locatable on the map as one found by
+    # clicking it — the identity and its shape never diverge.
+    geoms = await parcel_geometries(keys) if with_geometry else {}
 
     gaz = {g["parcel_key"]: g for g in await _fetch(
         f"""SELECT * FROM public.{_qi(GAZ_TABLE)}
@@ -272,6 +278,7 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
             },
             "match": {"method": "gp_key" if g else None,
                       "confidence": confidence, "notes": notes},
+            "geometry": geoms.get(pk),
         })
     return out
 
@@ -282,8 +289,44 @@ def _lit(v) -> str:
 
 
 # ── detail + support ──────────────────────────────────────────────────────────
+# Bulk map geometry. A coarser tolerance than the single-parcel detail view
+# (~2 m vs ~0.5 m) because this draws many parcels at once: measured on real
+# urban parcels it takes a 3,067-char polygon down to 257 without a visible
+# difference at neighbourhood zoom, so 200 parcels cost ~60 KB rather than MBs.
+BULK_SIMPLIFY = 0.00002
+DETAIL_SIMPLIFY = 0.000005
+MAX_GEOMETRIES = 200
+
+
+async def parcel_geometries(parcel_keys, simplify: float = BULK_SIMPLIFY) -> dict[str, str]:
+    """parcel_key → GeoJSON polygon, for drawing results on the map.
+
+    The polygons are the one thing the spine deliberately does not carry, so this
+    reaches into the 4.58 GB source table — but bounded twice: the gush list
+    drives the existing ``"GUSH_NUM"`` btree (a text equality, so no cast defeats
+    the index), and the key list then narrows to the exact parcels."""
+    keys = list(dict.fromkeys(parcel_keys))[:MAX_GEOMETRIES]
+    if not keys:
+        return {}
+    gushes = sorted({k.split("-")[0] for k in keys if k})
+    # The source writes plain integers today; accept the float-text form too so a
+    # future re-scrape that reformats them cannot silently return nothing.
+    gushes += [f"{g}.0" for g in gushes]
+    rows = await _fetch(
+        f"""
+        SELECT public.over_parcel_key(s."GUSH_NUM", s."GUSH_SUFFI", s."PARCEL") AS parcel_key,
+               {_qi(PG_EXT_SCHEMA)}.ST_AsGeoJSON(
+                 {_qi(PG_EXT_SCHEMA)}.ST_SimplifyPreserveTopology(s.geom, $3)) AS geojson
+        FROM {_t(PARCELS_SRC)} s
+        WHERE s."GUSH_NUM" = ANY($1::text[])
+          AND s.geom IS NOT NULL
+          AND public.over_parcel_key(s."GUSH_NUM", s."GUSH_SUFFI", s."PARCEL") = ANY($2::text[])
+        """, gushes, keys, simplify)
+    return {r["parcel_key"]: r["geojson"] for r in rows if r.get("geojson")}
+
+
 async def parcel_geometry(gush: int, suffix: int, helka: int,
-                          simplify: float = 0.000005) -> dict | None:
+                          simplify: float = DETAIL_SIMPLIFY) -> dict | None:
     """The polygon — the one thing the spine deliberately does not carry.
 
     Reached on the source table's ``GUSH_NUM`` btree (one row), and simplified
