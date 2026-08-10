@@ -484,31 +484,50 @@ def _tagit_runner(scope_setting: str):
 # gave up on a 192-page gap; fixed in govil-scraper ed6db15, so this column
 # grows on its own once that lands.)
 
+# Addressed by their idx-mirror TABLE, not by dataset_id: these corpora have no
+# ``append_`` table, so query_dataset_rows resolves a name that does not exist
+# and answers zero rows without erroring. See deep_search.idx_text_search.
 MEVAKER_DATASETS: tuple[dict, ...] = (
-    {"id": "930bcb01-26b4-4d3e-a179-eb1a7d7e8e0e", "label": "דוחות שנתיים"},
-    {"id": "7484e444-d33c-4ecb-8f0b-bb14db2b3b92", "label": "ביקורת על השלטון המקומי"},
-    {"id": "2e052782-7170-4c35-a095-913f92241460", "label": "דוחות מיוחדים"},
-    {"id": "e1caf35f-24da-440e-8741-432f8201f829", "label": "מימון בחירות ברשויות"},
-    {"id": "cc50a099-013a-4639-9531-eaa87fa5dc66", "label": "עיונים, מאמרים, ספרים"},
-    {"id": "3c2671aa-1fcc-42bf-afe0-bbb0e3cc1e1b", "label": "מימון מפלגות"},
-    {"id": "ace3e717-1924-408c-8fef-311211647099", "label": "דוחות נציב תלונות הציבור"},
-    {"id": "e808abed-db33-41f9-8423-0557b6c91d9d", "label": "ביקורת על האיגודים"},
-    {"id": "424b6993-3ce8-4368-b89b-b1882760ad5c", "label": "מימון בחירות מקדימות"},
+    {"table": "mevaker_annual_12077e64_930bcb01", "label": "דוחות שנתיים",
+     "ds": "930bcb01-26b4-4d3e-a179-eb1a7d7e8e0e"},
+    {"table": "mevaker_local_government_55aa6126_7484e444", "label": "ביקורת על השלטון המקומי",
+     "ds": "7484e444-d33c-4ecb-8f0b-bb14db2b3b92"},
+    {"table": "mevaker_special_0dafb68d_2e052782", "label": "דוחות מיוחדים",
+     "ds": "2e052782-7170-4c35-a095-913f92241460"},
+    {"table": "mevaker_local_elections_funding_224da9e6_e1caf35f", "label": "מימון בחירות ברשויות",
+     "ds": "e1caf35f-24da-440e-8741-432f8201f829"},
+    {"table": "mevaker_studies_a22d3742_cc50a099", "label": "עיונים, מאמרים, ספרים",
+     "ds": "cc50a099-013a-4639-9531-eaa87fa5dc66"},
+    {"table": "mevaker_party_funding_b3a5060d_3c2671aa", "label": "מימון מפלגות",
+     "ds": "3c2671aa-1fcc-42bf-afe0-bbb0e3cc1e1b"},
+    {"table": "mevaker_ombudsman_25059dda_ace3e717", "label": "דוחות נציב תלונות הציבור",
+     "ds": "ace3e717-1924-408c-8fef-311211647099"},
+    {"table": "mevaker_unions_eb5d1524_e808abed", "label": "ביקורת על האיגודים",
+     "ds": "e808abed-db33-41f9-8423-0557b6c91d9d"},
+    {"table": "mevaker_primaries_funding_683675f3_424b6993", "label": "מימון בחירות מקדימות",
+     "ds": "424b6993-3ce8-4368-b89b-b1882760ad5c"},
 )
+
+_MEVAKER_COLUMNS = ("title", "group_name", "main_audit_obj", "publication_name",
+                    "publish_date", "report_url", "pdf_url")
+_MEVAKER_SEARCH_IN = ("title", "group_name", "publication_name")
+# publish_date is TEXT in DD.MM.YYYY, so a plain sort would order by day first.
+_MEVAKER_ORDER = ('right("publish_date", 4) DESC NULLS LAST, '
+                  'substr("publish_date", 4, 2) DESC, substr("publish_date", 1, 2) DESC')
 
 MEVAKER_FILTER = Filter("dataset", "סוג הדוח", "select", tuple(
     [{"value": "", "label": "כל סוגי הדוחות"}]
-    + [{"value": d["id"], "label": d["label"]} for d in MEVAKER_DATASETS]
+    + [{"value": d["table"], "label": d["label"]} for d in MEVAKER_DATASETS]
 ))
 
 
-def _mevaker_row(r: dict, label: str) -> Card | None:
+def _mevaker_row(r: dict, spec: dict) -> Card | None:
     title = r.get("title")
     if not title:
         return None
-    badges = [label]
+    badges = [spec["label"]]
     pub = r.get("publication_name")
-    if pub and pub != label:
+    if pub and pub != spec["label"]:
         badges.append(str(pub))
     return Card(
         title=truncate(title, 160),
@@ -522,26 +541,28 @@ def _mevaker_row(r: dict, label: str) -> Card | None:
 
 
 async def _run_mevaker_catalog(call, q: str, limit: int, filters: dict) -> dict:
-    """Search OVER's nine מבקר datasets and merge them into one column.
+    """Search OVER's nine מבקר mirror tables and merge them into one column.
 
-    Concurrent (unlike the BudgetKey column): these are in-process calls and
-    each opens its own DB session, and the tables are small — the largest is
-    ~1,100 rows.
+    Ignores ``call``: these corpora live in the idx schema with no append_
+    table, so there is no MCP tool that can read them (see
+    deep_search.idx_text_search for why, and for the safety argument).
     """
     import asyncio
 
+    from app.services.deep_search import idx_text_search
+
     wanted = (filters or {}).get("dataset") or ""
-    specs = [d for d in MEVAKER_DATASETS if not wanted or d["id"] == wanted] \
+    specs = [d for d in MEVAKER_DATASETS if not wanted or d["table"] == wanted] \
         or list(MEVAKER_DATASETS)
     per = max(2, -(-limit // len(specs)))
 
     async def one(spec: dict) -> list[Card]:
-        payload = await call("query_dataset_rows",
-                             {"dataset_id": spec["id"], "q": q, "limit": per})
+        rows = await idx_text_search(spec["table"], _MEVAKER_COLUMNS,
+                                     _MEVAKER_SEARCH_IN, _MEVAKER_ORDER, q, per)
         out = []
-        for r in (payload.get("rows") or [])[:per]:
+        for r in rows:
             try:
-                c = _mevaker_row(r, spec["label"])
+                c = _mevaker_row(r, spec)
             except Exception:  # noqa: BLE001
                 c = None
             if c:
@@ -753,7 +774,9 @@ SOURCES: tuple[Source, ...] = (
         attribution={"text": "סריקה של גרסאות לעם לספריית מבקר המדינה — מטא-דאטה "
                              "וקישור לדוח המלא באתר המבקר.",
                      "href": "https://www.mevaker.gov.il/subjects"},
-        local="over", hint="כל סוגי הדוחות · מטא-דאטה וקישור ל-PDF",
+        # Grouped with the SQL server because that is the store it actually
+        # reads (the idx mirror), not the app DB.
+        local="sql", hint="כל סוגי הדוחות · מטא-דאטה וקישור ל-PDF",
         filters=(MEVAKER_FILTER,),
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_run_mevaker_catalog,

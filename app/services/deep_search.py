@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -71,6 +72,43 @@ _RETRY_RPC_CODES = {-32001, -32603}
 
 class SourceError(RuntimeError):
     """The source was reachable but could not answer."""
+
+
+# Table names are constants in the registry; this re-validates them anyway, so
+# a future edit cannot turn the identifier below into an injection point.
+_IDX_TABLE_RE = re.compile(r"^[a-z0-9_]+$")
+
+
+async def idx_text_search(table: str, columns: tuple[str, ...], search_in: tuple[str, ...],
+                          order_sql: str, q: str, limit: int) -> list[dict]:
+    """Text-search one table in the NEON index-mirror (`idx` schema).
+
+    Why this exists rather than an MCP tool: the scraper corpora mirrored into
+    `idx` have NO ``append_`` table, so ``query_dataset_rows`` resolves a name
+    that does not exist and returns zero rows without erroring — a silent empty
+    column. The only MCP tool that could reach `idx` is ``run_sql``, which is
+    deliberately outside ALLOWED_TOOLS because this page is anonymous.
+
+    So: a server-built statement, on the same read-only role that backs the
+    public /data console. The table and column names come from the registry and
+    are re-validated here; the search term is a BOUND parameter and is never
+    interpolated. There is no path from a request to the shape of this SQL.
+    """
+    from app.services import append_store
+
+    idents = (table,) + columns + search_in
+    bad = [i for i in idents if not _IDX_TABLE_RE.match(i)]
+    if bad:
+        raise SourceError(f"identifier rejected: {bad}")
+
+    cols = ", ".join(f'"{c}"' for c in columns)
+    where = " OR ".join(f'"{c}" ILIKE $1' for c in search_in)
+    sql = (f"SELECT {cols} FROM idx.{table} WHERE {where} "
+           f"ORDER BY {order_sql} LIMIT {int(limit)}")
+    pool = await append_store.get_readonly_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, f"%{q}%")
+    return [dict(r) for r in rows]
 
 
 # ── token resolution ────────────────────────────────────────────────────────

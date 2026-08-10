@@ -179,6 +179,29 @@ def test_external_sources_are_declared_and_attributed():
     assert "obudget.org" in ob.attribution["href"]
 
 
+def test_idx_search_rejects_identifiers_it_did_not_whitelist():
+    """idx_text_search builds its own SQL, so the identifiers must be proven
+    safe: everything but [a-z0-9_] is refused before a statement is formed.
+    The search term itself is always a bound parameter, never interpolated."""
+    for bad in ('mevaker"; DROP TABLE x --', "public.users", "a-b", "Tbl", "x;y", ""):
+        with pytest.raises(deep_search.SourceError):
+            asyncio.run(deep_search.idx_text_search(bad, ("title",), ("title",), "1", "q", 5))
+    with pytest.raises(deep_search.SourceError):
+        asyncio.run(deep_search.idx_text_search(
+            "ok_table", ('title" , (select 1) as x --',), ("title",), "1", "q", 5))
+
+
+def test_mevaker_catalog_targets_idx_tables_not_dataset_ids():
+    """query_dataset_rows cannot reach these corpora — they have no append_
+    table and it answers zero rows without erroring. The registry must address
+    them by mirror table."""
+    for spec in deep_search_sources.MEVAKER_DATASETS:
+        assert spec["table"].startswith("mevaker_"), spec
+        assert deep_search._IDX_TABLE_RE.match(spec["table"]), spec
+    opts = {o["value"] for o in deep_search_sources.MEVAKER_FILTER.options if o["value"]}
+    assert opts == {s["table"] for s in deep_search_sources.MEVAKER_DATASETS}
+
+
 def test_session_servers_are_flagged():
     """מפתח התקציב refuses a bare tools/call with "Missing session ID"; ours and
     TAG-IT's are stateless. Getting this flag wrong is a dead column."""
