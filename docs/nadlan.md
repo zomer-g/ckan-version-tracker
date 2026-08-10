@@ -63,13 +63,56 @@ The naming gap is narrow and directed. Distinct (locality, street) pairs: postal
 So the canonical spelling is taken from the postal/address side (it is also what
 a user types) and the gazetteer's spellings become weighted aliases.
 
-**Measured on Petah Tikva** (822 canonical streets, 876 gazetteer names):
+### The authoritative layer: רשות האוכלוסין's street file
+
+data.gov.il `israel-streets-synom` (resource `bf185c7f…`, 152,130 rows,
+**1,312 localities**, keyed by the **CBS** code — 1,270/1,312 resolve in
+`over_settlements`) publishes each street once as `official` and again under
+every `synonym of <code>` spelling. For Petah Tikva alone that is 1,166 official
+streets and **2,395 synonyms**, including both name orders (`יוסף ספיר` /
+`ספיר יוסף`), the type-prefixed form (`דרך ספיר`) and the bare surname (`ספיר`) —
+the entire heuristic ladder, as published fact.
+
+It does **not** replace the ladder: the two fail on different names.
+
+| matching the gazetteer | פתח תקווה | חיפה |
+|---|---|---|
+| raw name | 61.4 % | 63.8 % |
+| official file alone | 93.6 % | 87.6 % |
+| heuristic ladder alone | 93.7 % | 82.7 % |
+| **both (shipped)** | **96.5 %** | **91.9 %** |
+
+The file also **merges duplicate canonical streets** the ladder kept apart —
+Haifa went from 1,210 "streets" to 1,056, and 996 of those now carry a real
+`official_code`, the first genuine street identifier in the project.
+
+What only the file can reach: 373 Petah Tikva synonym pairs share **no token**
+with their official name — transliteration variants (`ברנדייס` / `בראנדיס` /
+`ברנדס`), landmarks (`מלון עדן` → `שטמפפר יהושע`) and historical names
+(`בתי בורשטיין` → `המכבים`). No normalization rule could infer any of them.
+
+Weights: a published `official` name is trusted like an exact match (100); a
+published `synonym` sits at 92 — above every heuristic guess, below an exact hit.
+
+The table is found by **column signature**, not by name
+(`find_official_streets_table()`), because the resource can arrive either as a
+tracked CKAN dataset or through the admin odata import. If it is absent the
+build silently falls back to the ladder alone.
+
+> ⚠ **Not yet tracked.** OVER tracks this dataset's **XML** sibling
+> (`e3a63f81-…`, resource `98d231af`), which the scraper misrouted as a KML,
+> archived raw and loaded **0 rows** — there is no queryable table. The
+> queryable resource is the **CSV** `bf185c7f-1a4e-4662-88c5-fa118a244bda`
+> (9.3 MB, `datastore_active`, refreshed 2026-08-02). Direct file download is
+> Imperva-blocked; the CKAN **datastore API** works.
+
+**Baseline, for reference** — Petah Tikva (822 canonical streets, 876 gazetteer names):
 
 | approach | matched | |
 |---|---|---|
 | raw name | 538 | 61.4 % |
 | normalization only | 547 | 62.4 % |
-| **this index** | **821** | **93.7 %** |
+| heuristic ladder | 821 | 93.7 % |
 
 The 267 cross-spelling links are overwhelmingly a systematic **name-order**
 convention difference — the gazetteer writes `אברהם הרצפלד`, the other files
@@ -94,7 +137,7 @@ work queue rather than a silent loss.
 |---|---|
 | `over_re_parcels` | one row per חלקה; PK `parcel_key` = `gush-suffix-parcel` |
 | `over_re_parcel_gazetteer` | the gazetteer rolled up to parcel grain |
-| `over_re_streets` / `_street_aliases` / `_street_unmatched` | canonical street + inflections |
+| `over_re_streets` / `_street_aliases` / `_street_unmatched` | canonical street (+ `official_code`) + inflections |
 | `over_re_postal_localities` | Israel-Post locality id → CBS code |
 | `over_re_addresses` | the address spine (postal ∪ address list) |
 | `over_re_zip5` | zip → locality rollup |

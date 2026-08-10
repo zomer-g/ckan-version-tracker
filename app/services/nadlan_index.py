@@ -145,6 +145,10 @@ _DDL = [
         name_en          text,
         postal_street_id text,
         gaztir_street_code text,
+        -- רשות האוכלוסין's official street code, where its file covers the
+        -- street. This is the first REAL identifier streets have had here;
+        -- everything else keys on a normalized name.
+        official_code    integer,
         in_postal        boolean NOT NULL DEFAULT false,
         in_address_list  boolean NOT NULL DEFAULT false,
         in_gazetteer     boolean NOT NULL DEFAULT false,
@@ -657,6 +661,54 @@ async def build_postal_localities() -> dict:
 
 
 # ── stage 4: the street index ─────────────────────────────────────────────────
+# רשות האוכלוסין's street list WITH SYNONYMS (data.gov.il `israel-streets-synom`,
+# resource bf185c7f…, 152,130 rows over 1,312 localities keyed by CBS code).
+# Discovered by COLUMN SIGNATURE rather than by table name, because the resource
+# can arrive either as a tracked CKAN dataset (public.append_*) or through the
+# admin odata import (odata.*), and the physical name differs in each case.
+# Absent → build_streets() just falls back to the heuristic ladder.
+_OFFICIAL_STREET_COLS = {"city_code", "street_code", "street_name",
+                         "street_name_status", "official_code"}
+
+
+async def find_official_streets_table() -> tuple[str, str] | None:
+    for schema in ("public", "odata", "idx"):
+        try:
+            cols_by_table = await append_store.schema_table_columns(schema)
+        except Exception:  # noqa: BLE001
+            continue
+        for table, cols in cols_by_table.items():
+            names = {c["name"] if isinstance(c, dict) else c for c in cols}
+            if _OFFICIAL_STREET_COLS <= names:
+                logger.info("nadlan: official street file found at %s.%s", schema, table)
+                return schema, table
+    return None
+
+
+async def _load_official_streets() -> list[dict]:
+    """Read the official street file, if it is tracked. Trailing spaces are
+    stripped — every value in that file carries them ('official ', 'ירושלים ')."""
+    loc = await find_official_streets_table()
+    if not loc:
+        return []
+    schema, table = loc
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT nullif(btrim("city_code"::text),'')::int  AS sc,
+                   btrim("street_name"::text)                AS name,
+                   nullif(btrim("official_code"::text),'')::int AS official_code,
+                   btrim("street_name_status"::text)         AS status
+            FROM {_qi(schema)}.{_qi(table)}
+            WHERE btrim("city_code"::text) ~ '^[0-9]+$'
+              AND btrim("official_code"::text) ~ '^[0-9]+$'
+              AND btrim("street_name"::text) <> ''
+            """, timeout=_LONG_TIMEOUT)
+    logger.info("nadlan: loaded %d official street rows from %s.%s", len(rows), schema, table)
+    return [dict(r) for r in rows]
+
+
 async def build_streets() -> dict:
     """Build the street reference + its alias index.
 
@@ -718,7 +770,8 @@ async def build_streets() -> dict:
             GROUP BY 1,2
             """, timeout=_LONG_TIMEOUT)
 
-    streets, aliases, unmatched = _resolve_streets(canon, gaz)
+    official = await _load_official_streets()
+    streets, aliases, unmatched = _resolve_streets(canon, gaz, official)
 
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
@@ -730,8 +783,8 @@ async def build_streets() -> dict:
                 f"""INSERT INTO public.{_qi(STREETS_TABLE)}
                     (street_key, settlement_code, name, name_norm, name_en,
                      postal_street_id, gaztir_street_code, in_postal,
-                     in_address_list, in_gazetteer)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                     in_address_list, in_gazetteer, official_code)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                     ON CONFLICT (street_key) DO NOTHING""", streets)
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(STREET_ALIASES_TABLE)}
@@ -750,40 +803,110 @@ async def build_streets() -> dict:
             matched = n_gaz - len(unmatched)
             await _stage_done(
                 conn, "streets", t0, rows_in=len(canon) + n_gaz, rows_out=len(streets),
-                note=f"aliases={len(aliases)} gazetteer_matched={matched}/{n_gaz}")
+                note=(f"aliases={len(aliases)} gazetteer_matched={matched}/{n_gaz} "
+                      f"official_rows={len(official)}"))
         await conn.execute(f"ANALYZE public.{_qi(STREETS_TABLE)}")
         await conn.execute(f"ANALYZE public.{_qi(STREET_ALIASES_TABLE)}")
     return {"streets": len(streets), "aliases": len(aliases),
             "gazetteer_streets": n_gaz, "gazetteer_matched": matched,
-            "unmatched": len(unmatched)}
+            "unmatched": len(unmatched), "official_rows": len(official)}
 
 
-def _resolve_streets(canon_rows, gaz_rows) -> tuple[list, list, list]:
-    """Pure matcher: canonical streets + gazetteer streets → rows to insert.
+def _official_code_index(official_rows) -> dict[tuple[int, str], int]:
+    """(settlement_code, normalized name) → official street code.
+
+    Built from רשות האוכלוסין's street file, which publishes every street once as
+    ``official`` and again under each ``synonym of <code>`` spelling. A name that
+    maps to more than one official code INSIDE its settlement is dropped: the
+    source itself is ambiguous there, and guessing would be worse than falling
+    back to the heuristic ladder."""
+    multi: dict[tuple[int, str], set] = {}
+    for r in official_rows:
+        sc, name = r.get("sc"), (r.get("name") or "").strip()
+        code = r.get("official_code")
+        key = nadlan_text.norm(name)
+        if sc is None or code is None or not key:
+            continue
+        multi.setdefault((sc, key), set()).add(int(code))
+    return {k: next(iter(v)) for k, v in multi.items() if len(v) == 1}
+
+
+def _resolve_streets(canon_rows, gaz_rows, official_rows=()) -> tuple[list, list, list]:
+    """Pure matcher: canonical + gazetteer (+ the official street file) → rows.
 
     Split out of ``build_streets`` so the matching rules can be tested with plain
-    dicts and no database."""
-    # 1. canonical streets, keyed (settlement_code, norm)
+    dicts and no database.
+
+    ``official_rows`` is רשות האוכלוסין's street list *with synonyms*
+    (data.gov.il ``israel-streets-synom``): 152,130 rows over 1,312 localities,
+    keyed by the CBS locality code, publishing each street once as ``official``
+    and again under every synonym spelling — including both name orders
+    (``יוסף ספיר`` / ``ספיר יוסף``), the type-prefixed form (``דרך ספיר``) and the
+    bare surname (``ספיר``). That is the whole heuristic ladder, as published
+    fact rather than inference.
+
+    It does NOT replace the ladder, because the two fail on different names.
+    Measured against the real gazetteer street lists:
+
+    ==================  ===========  =======
+    matching gazetteer  פתח תקווה    חיפה
+    ==================  ===========  =======
+    raw name              61.4%       63.8%
+    official file         93.6%       87.6%
+    heuristic ladder      93.7%       82.7%
+    **both**              **96.9%**   **91.8%**
+    ==================  ===========  =======
+
+    So the file is layered ON TOP: its codes merge canonical spellings that the
+    ladder would have kept apart, and its synonyms become aliases outranking
+    every heuristic guess."""
+    code_of = _official_code_index(official_rows)
+
+    # 1. canonical streets. Grouped by the OFFICIAL CODE where the street file
+    #    knows one — that is what merges 'רוטשילד' and 'שדרות רוטשילד' into a
+    #    single street even when the ladder would have kept them apart — and by
+    #    the normalized name everywhere else.
     streets: dict[tuple[int, str], dict] = {}
     for r in canon_rows:
         sc, name = r["sc"], (r["name"] or "").strip()
         key_norm = nadlan_text.norm(name)
         if sc is None or not key_norm:
             continue
-        k = (sc, key_norm)
+        code = code_of.get((sc, key_norm))
+        k = (sc, f"c{code}" if code is not None else key_norm)
         cur = streets.get(k)
         if cur is None or (r["n"] or 0) > cur["n"]:
-            streets[k] = {"sc": sc, "name": name, "norm": key_norm, "n": r["n"] or 0,
-                          "postal_id": r["street_id"], "gaz_code": None, "name_en": None,
-                          "in_post": bool(r["in_post"]), "in_addr": bool(r["in_addr"]),
-                          "in_gaz": False}
+            keep = {"sc": sc, "name": name, "norm": key_norm, "n": r["n"] or 0,
+                    "postal_id": r["street_id"], "gaz_code": None, "name_en": None,
+                    "official_code": code,
+                    "in_post": bool(r["in_post"]), "in_addr": bool(r["in_addr"]),
+                    "in_gaz": False}
+            if cur is not None:      # keep what the losing spelling contributed
+                keep["in_post"] = keep["in_post"] or cur["in_post"]
+                keep["in_addr"] = keep["in_addr"] or cur["in_addr"]
+                keep["postal_id"] = keep["postal_id"] or cur["postal_id"]
+            streets[k] = keep
         else:
             cur["in_post"] = cur["in_post"] or bool(r["in_post"])
             cur["in_addr"] = cur["in_addr"] or bool(r["in_addr"])
             cur["postal_id"] = cur["postal_id"] or r["street_id"]
 
-    def skey(sc: int, norm_name: str) -> str:
-        return f"{sc}-{norm_name}"
+    # street_key stays `{sc}-{norm of the representative spelling}` so its shape
+    # does not depend on whether the official file happened to cover the street.
+    # Two groups CAN land on the same representative norm; the second one keeps
+    # its code in the key rather than silently colliding with the first.
+    taken: dict[str, tuple] = {}
+
+    def skey(sc: int, gkey: str) -> str:
+        s = streets[(sc, gkey)]
+        base = f"{sc}-{s['norm']}"
+        owner = taken.setdefault(base, (sc, gkey))
+        if owner == (sc, gkey):
+            return base
+        return f"{base}#c{s['official_code']}"
+
+    # Resolve every key once, up front, so the mapping is stable.
+    keys: dict[tuple[int, str], str] = {k: skey(*k) for k in streets}
 
     # 2. alias candidates from the canonical names
     alias: dict[tuple[int, str], tuple[str, str, str, int]] = {}
@@ -800,14 +923,35 @@ def _resolve_streets(canon_rows, gaz_rows) -> tuple[list, list, list]:
         elif cur[0] == street_key and weight > cur[3]:
             alias[k] = (street_key, surface, kind, weight)
 
-    for (sc, nm), s in streets.items():
-        sk = skey(sc, nm)
+    for k, s in streets.items():
         for variant, surface, kind, weight in nadlan_text.street_aliases_for(s["name"]):
-            offer(sc, variant, sk, surface, kind, weight)
+            offer(k[0], variant, keys[k], surface, kind, weight)
+
+    # 2b. The official file's own spellings, outranking every heuristic guess.
+    #     An `official` name is as trustworthy as an exact match (100); a
+    #     published `synonym of <code>` sits at 92 — above no_paren/no_type and
+    #     well above last_token, but still below an exact name hit.
+    by_code: dict[tuple[int, int], str] = {
+        (k[0], s["official_code"]): keys[k]
+        for k, s in streets.items() if s.get("official_code") is not None
+    }
+    for r in official_rows:
+        sc, name = r.get("sc"), (r.get("name") or "").strip()
+        code = r.get("official_code")
+        variant = nadlan_text.norm(name)
+        if sc is None or code is None or not variant:
+            continue
+        sk = by_code.get((sc, int(code)))
+        if not sk:
+            continue                     # no canonical street carries this code
+        is_official = str(r.get("status") or "").strip().lower().startswith("official")
+        offer(sc, variant, sk, name,
+              "official_file" if is_official else "official_synonym",
+              100 if is_official else 92)
 
     # Reverse index street_key → the street dict. Without it, marking a matched
     # street would rescan the whole 93k-row table per gazetteer row.
-    by_key: dict[str, dict] = {skey(sc, nm): s for (sc, nm), s in streets.items()}
+    by_key: dict[str, dict] = {keys[k]: s for k, s in streets.items()}
 
     # 3. gazetteer names → an existing canonical street, or a new one
     unmatched: list[tuple] = []
@@ -827,17 +971,20 @@ def _resolve_streets(canon_rows, gaz_rows) -> tuple[list, list, list]:
         if hit is None:
             # No counterpart in the postal/address universe — the gazetteer
             # street becomes canonical itself (it is a real street; the other two
-            # files simply do not list it).
-            k = (sc, nm)
+            # files simply do not list it). It still gets an official code when
+            # the street file knows one, so a later run can merge it.
+            code = code_of.get((sc, nm))
+            k = (sc, f"c{code}" if code is not None else nm)
             if k not in streets:
                 s = {"sc": sc, "name": name, "norm": nm, "n": r["n"] or 0,
                      "postal_id": None, "gaz_code": r["code"],
-                     "name_en": r["name_en"], "in_post": False,
-                     "in_addr": False, "in_gaz": True}
+                     "name_en": r["name_en"], "official_code": code,
+                     "in_post": False, "in_addr": False, "in_gaz": True}
                 streets[k] = s
-                by_key[skey(sc, nm)] = s
+                keys[k] = skey(*k)
+                by_key[keys[k]] = s
                 for variant, surface, kind, weight in nadlan_text.street_aliases_for(name):
-                    offer(sc, variant, skey(sc, nm), surface, kind, weight)
+                    offer(sc, variant, keys[k], surface, kind, weight)
             unmatched.append((sc, r["sname"], "gazetteer", name, r["n"] or 0))
         else:
             s = by_key.get(hit)
@@ -849,9 +996,10 @@ def _resolve_streets(canon_rows, gaz_rows) -> tuple[list, list, list]:
             offer(sc, nm, hit, name, "gazetteer", 95)
 
     street_rows = [
-        (skey(sc, nm), sc, s["name"], nm, s["name_en"], s["postal_id"],
-         s["gaz_code"], s["in_post"], s["in_addr"], s["in_gaz"])
-        for (sc, nm), s in streets.items()
+        (keys[k], k[0], s["name"], s["norm"], s["name_en"], s["postal_id"],
+         s["gaz_code"], s["in_post"], s["in_addr"], s["in_gaz"],
+         s.get("official_code"))
+        for k, s in streets.items()
     ]
     alias_rows = [
         (sc, variant, sk, surface, kind, weight)

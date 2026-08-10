@@ -109,6 +109,64 @@ def test_rows_with_no_settlement_code_are_dropped():
     assert streets == []
 
 
+# ── the official street file (רשות האוכלוסין, with synonyms) ─────────────────
+def _off(sc, name, code, status="official"):
+    return {"sc": sc, "name": name, "official_code": code, "status": status}
+
+
+def test_official_code_merges_spellings_the_ladder_would_keep_apart():
+    """'רוטשילד' and 'שדרות רוטשילד' are one street; the file says so by code."""
+    official = [_off(7900, "שדרות רוטשילד", 103),
+                _off(7900, "רוטשילד", 103, "synonym of 103")]
+    streets, _a, _u = ni._resolve_streets(
+        [_canon(7900, "שדרות רוטשילד", n=9), _canon(7900, "רוטשילד", n=2)], [], official)
+    assert len(streets) == 1
+    assert streets[0][10] == 103          # official_code lands on the row
+
+
+def test_published_synonym_links_a_gazetteer_name_the_ladder_misses():
+    """A transliteration variant no normalization rule could infer.
+
+    Real pair from Petah Tikva, official code 115: 'ברנדייס' is also written
+    'בראנדיס'. They share no token and normalize differently, so every heuristic
+    rule fails — only the published synonym connects them. 373 such pairs exist
+    in Petah Tikva alone (spelling variants, landmark names like
+    'מלון עדן' → 'שטמפפר יהושע', and old names like 'בתי בורשטיין' → 'המכבים')."""
+    official = [_off(7900, "ברנדייס", 115),
+                _off(7900, "בראנדיס", 115, "synonym of 115")]
+    # Without the file the gazetteer spelling has no counterpart...
+    _s, _a, before = ni._resolve_streets(
+        [_canon(7900, "ברנדייס")], [_gaz(7900, "בראנדיס")])
+    assert len(before) == 1
+    # ...with it, it resolves onto the canonical street instead of forking one.
+    streets, _a2, after = ni._resolve_streets(
+        [_canon(7900, "ברנדייס")], [_gaz(7900, "בראנדיס")], official)
+    assert after == [] and len(streets) == 1
+
+
+def test_a_name_ambiguous_in_the_source_is_ignored():
+    """If the file maps one spelling to two official codes, trust neither."""
+    official = [_off(7900, "הרצל", 1), _off(7900, "הרצל", 2)]
+    assert ni._official_code_index(official) == {}
+
+
+def test_official_rows_are_optional_and_change_nothing_when_absent():
+    """The file is a layer on top; without it the ladder must behave as before."""
+    args = ([_canon(7900, "יבניאלי")], [_gaz(7900, "שמואל יבניאלי")])
+    a = ni._resolve_streets(*args)
+    b = ni._resolve_streets(*args, ())
+    assert a == b
+
+
+def test_two_streets_sharing_a_representative_spelling_do_not_collide():
+    """Distinct official codes must never end up on one street_key."""
+    official = [_off(7900, "הרצל", 1), _off(7900, "הרצל תיאודור", 2)]
+    streets, _a, _u = ni._resolve_streets(
+        [_canon(7900, "הרצל"), _canon(7900, "הרצל תיאודור")], [], official)
+    keys = [s[0] for s in streets]
+    assert len(keys) == len(set(keys)) == 2
+
+
 # ── invariants ────────────────────────────────────────────────────────────────
 def test_every_table_has_a_hebrew_title_in_the_data_catalog():
     """A new over_re_ table must not surface in /data under its raw name."""
