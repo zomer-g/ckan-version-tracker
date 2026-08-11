@@ -231,6 +231,36 @@ None of the three `odata` source tables had a single index before this; a
 one-gush gazetteer aggregate took 6.3 s. `ensure_source_indexes()` fixes that for
 every `/data` user, not just this project.
 
+## The first production build (2026-08-11)
+
+Every stage, as measured — not estimated:
+
+| stage | rows out | time | note |
+|---|---|---|---|
+| `source_indexes` | 7 | 19 s | 7/7 created |
+| `parcels` | 1,097,775 | 145 s | `gp_ambiguous` = 2,923 (**0.27 %**) |
+| `gazetteer` | 758,864 | 16 s | parcels carrying gazetteer data |
+| `postal_localities` | 91 | 1 s | **unresolved = 0** — all 91 bridged to CBS by name |
+| `streets` | 37,814 | 17 s | 98,537 aliases; gazetteer matched **26,270/34,734 = 75.6 %** |
+| `addresses` | 622,135 | 50 s | 357,806 with a point, 514,625 with a zip |
+| `zip5` | 14,450 | 1 s | |
+| `pip` | 340,317 | ~120 s | **95.1 %** of geocoded addresses landed in a parcel |
+
+Two estimates in this document were wrong in the good direction: `pip` was
+predicted at 15–60 minutes and took about two (geohash ordering plus the GiST
+index did the work), and the point-in-parcel hit rate came in at 95.1 % against
+the 90.4 % measured on a 3,000-row sample. The street match rate landed at
+exactly the 75.6 % predicted from the offline corpus run.
+
+Published coverage (`/api/nadlan/stats`): 57.5 % of addresses have a point,
+82.7 % a zip, 54.7 % a parcel link, 69.1 % of parcels have gazetteer data.
+
+**Known asymmetry.** The alias ladder expands STORED names; a query is only
+normalized. So for the 308 streets whose canonical name carries a type word
+(`שדרות X`), the full form resolves 308/308 but the bare form only 282/308
+(**91.6 %**) — the gap is where the stripped variant was poisoned as ambiguous.
+Stripping the type on the query side too would close it.
+
 ## Verifying
 
 ```bash
