@@ -320,7 +320,14 @@ export default function QuestionsPage() {
       >
         <strong>"מרכאות"</strong> לביטוי מדויק · <strong>-מילה</strong> להחרגה ·{" "}
         <strong>OR</strong> לחלופה. בעמודות הטקסט המלא החיפוש רץ בתוך גוף המסמך,
-        ובשאר לפי מטא-דאטה.
+        ובשאר לפי מטא-דאטה.{" "}
+        {/* Not a footnote: the full-text index does not stem, so a user who
+            searches תקציב and misses התקציב will read it as "no such document"
+            rather than "different prefix". */}
+        <span style={{ opacity: 0.85 }}>
+          שימו לב: החיפוש בגוף המסמך אינו מזהה הטיות — <strong>תקציב</strong> לא
+          ימצא <strong>התקציב</strong> או <strong>בתקציב</strong>.
+        </span>
       </div>
 
       {sourcesError && (

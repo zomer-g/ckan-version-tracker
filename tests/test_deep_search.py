@@ -280,14 +280,32 @@ def test_full_text_sources_are_operator_native_and_metadata_ones_are_not():
         assert by_id[sid].native_operators is False, sid
 
 
-def test_mmm_full_text_offers_no_date_filter():
-    """Measured 2026-08-11: 59 of 60 ממ״מ hits come back with an empty date, so
-    a date range would silently return nothing. Restore it once TAG-IT
-    populates the field."""
+def test_a_date_filter_is_offered_only_where_the_corpus_is_dated():
+    """A range filter over a half-dated corpus drops most of it and says
+    nothing — the failure this page keeps having to design against. So the
+    filter follows the measurement, and flips when the measurement does.
+
+    12.08.2026: ממ״מ is fully dated (529 hits in 2010-15, 490 in 2016-20, 235
+    in 2024-26) so its filter is ON. Protocols is mid-backfill — a 2010–2026
+    range accounts for ~2,353 of 22,034 documents — so its filter is OFF until
+    a wide range returns the whole count.
+
+    Both of these were the other way round a day earlier. Re-measure before
+    changing either.
+    """
     by_id = {s.id: s for s in deep_search_sources.SOURCES}
-    assert by_id["mmm_text"].filters == ()
-    # The protocols corpus DOES carry dates, so it keeps its range filter.
-    assert {f.id for f in by_id["protocols_text"].filters} == {"date_from", "date_to"}
+    assert {f.id for f in by_id["mmm_text"].filters} == {"date_from", "date_to"}
+    assert by_id["protocols_text"].filters == ()
+
+
+def test_mevaker_coverage_note_states_the_real_range():
+    """It claimed "local government, 2018–2019 only" — which described the top
+    of one result page, not the corpus (981 docs, 1989–2019). What IS true is the
+    ceiling: nothing after 24.06.2019."""
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    text = by_id["mevaker"].attribution["text"] + by_id["mevaker"].hint
+    assert "1989" in text and "2019" in text
+    assert "שלטון המקומי בלבד" not in text
 
 
 def test_total_belongs_to_whoever_applied_the_operators():

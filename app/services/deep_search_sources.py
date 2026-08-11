@@ -820,14 +820,21 @@ SOURCES: tuple[Source, ...] = (
         # document TEXT, but the TAG-IT workspace holds only the 2018-19
         # local-government slice. The hint says so — a user who searches 2023
         # here and gets nothing must know why.
+        # The coverage note here was WRONG until 2026-08-12: it said "local
+        # government, 2018–2019 only", which described the first page of one
+        # query rather than the corpus. Measured: ~981 documents spanning
+        # 1989–2019 (78 in 1989-99, 409 in 2000-09, 324 in 2010-17, 74 in
+        # 2018-19). What is true is the CEILING — nothing after 24.06.2019,
+        # because the import was taken from OVER's own corpus back when the
+        # scraper's enumeration bug had frozen it there.
         id="mevaker", name="מבקר המדינה — טקסט מלא", color="#075985",
         attribution={"text": "מקור חיצוני: מסמכי מבקר המדינה כפי שנסרקו ונותחו ב-TAG-IT; "
-                             "המסמך המלא באתר המבקר. הקורפוס כאן מכסה דוחות ביקורת "
-                             "על השלטון המקומי בלבד, 2018–2019.",
+                             "המסמך המלא באתר המבקר. הקורפוס כאן מכסה 1989–2019 "
+                             "(כ-981 מסמכים) ואינו כולל פרסומים מ-2020 והלאה.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True,
-        hint="חיפוש בגוף המסמך · שלטון מקומי 2018–2019 בלבד",
+        hint="חיפוש בגוף המסמך · 1989–2019 בלבד",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_tagit_runner("tagit_mevaker_scope"),
@@ -839,8 +846,13 @@ SOURCES: tuple[Source, ...] = (
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True,
-        hint="חיפוש בתוך דברי הדיון · כיסוי חלקי",
-        filters=DATE_RANGE,
+        hint="חיפוש בתוך דברי הדיון",
+        # NO date filter yet. TAG-IT's date backfill for this scope is still
+        # running (12.08.2026). Measured against it: of 22,034 documents, a
+        # 2010–2026 range accounts for only ~2,353 — so a date filter would
+        # silently drop most of the corpus. Restore DATE_RANGE once the
+        # backfill lands and a wide range returns the whole count.
+        filters=(),
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_tagit_runner("tagit_protocols_scope"),
     ),
@@ -851,12 +863,14 @@ SOURCES: tuple[Source, ...] = (
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True,
-        hint="חיפוש בתוך גוף המחקר",
-        # NO date filter, on purpose. Measured 2026-08-11: 59 of 60 ממ״מ hits
-        # come back with an empty `date`, so a date range here would silently
-        # return nothing — the exact failure mode this page keeps having to
-        # design against. Restore it once TAG-IT populates the field.
-        filters=(),
+        hint="חיפוש בתוך גוף המחקר · 1999–2026",
+        # Restored 2026-08-12. It was withheld while 59 of 60 hits came back
+        # undated; TAG-IT has since populated the field (the values were there
+        # all along, written as "02 ביולי 2026", which their numeric parser had
+        # been rejecting silently). Re-measured before restoring: 529 hits in
+        # 2010-2015, 490 in 2016-2020, 235 in 2024-2026, every date inside the
+        # range asked for.
+        filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_tagit_runner("tagit_mmm_scope"),
     ),
