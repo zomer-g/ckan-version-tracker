@@ -506,6 +506,11 @@ MEVAKER_DATASETS: tuple[dict, ...] = (
      "ds": "e808abed-db33-41f9-8423-0557b6c91d9d"},
     {"table": "mevaker_primaries_funding_683675f3_424b6993", "label": "מימון בחירות מקדימות",
      "ds": "424b6993-3ce8-4368-b89b-b1882760ad5c"},
+    # Re-listed 2026-08-11 after the enumeration fix proved the type is not
+    # empty (it was de-listed on a truncated scan). Small but current: 3 rows,
+    # both 2026, including a multi-national audit of government AI readiness.
+    {"table": "mevaker_international_9546ba7e_1d7401a7", "label": "דוחות בינלאומיים",
+     "ds": "1d7401a7-b91f-4825-ba12-3d79e00e4588"},
 )
 
 _MEVAKER_COLUMNS = ("title", "group_name", "main_audit_obj", "publication_name",
