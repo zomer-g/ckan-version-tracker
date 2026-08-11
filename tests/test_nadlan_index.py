@@ -257,3 +257,29 @@ def test_postal_synonyms_are_ignored_when_neither_side_is_known():
     streets, aliases, _u = ni._resolve_streets([_canon(7900, "אבימלך")], [], (), syn)
     assert len(streets) == 1
     assert all("דמיוני" not in (a[3] or "") for a in aliases)
+
+
+def test_an_exact_name_beats_another_streets_inferred_variant_either_order():
+    """Haifa has 'דרך עכו' AND a street simply named 'עכו'.
+
+    Asking for 'עכו' must return the street called 'עכו' — its exact name (100)
+    outranks the other's inferred no_type variant (85). The old rule poisoned the
+    key on `>=`, so the winner depended on which street the loop met first and
+    the exact name lost whenever it arrived second. 26 real streets were affected.
+    """
+    for order in ([_canon(8200, "דרך עכו"), _canon(8200, "עכו")],
+                  [_canon(8200, "עכו"), _canon(8200, "דרך עכו")]):
+        streets, aliases, _u = ni._resolve_streets(order, [])
+        keyed = {(a[0], a[1]): a[2] for a in aliases}
+        assert keyed.get((8200, "עכו")) == "8200-עכו", \
+            f"exact name lost for order {[c['name'] for c in order]}"
+        assert len(streets) == 2
+
+
+def test_a_genuine_tie_between_two_streets_still_designates_neither():
+    """The guard must survive the fix: equal weight from two streets = poison."""
+    streets, aliases, _u = ni._resolve_streets(
+        [_canon(7900, "דוד המלך"), _canon(7900, "שלמה המלך")], [])
+    keyed = {(a[0], a[1]): a[2] for a in aliases}
+    assert (7900, "המלך") not in keyed
+    assert len(streets) == 2

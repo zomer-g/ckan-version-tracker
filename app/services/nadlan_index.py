@@ -1042,12 +1042,21 @@ def _resolve_streets(canon_rows, gaz_rows, official_rows=(),
         cur = alias.get(k)
         if cur is None:
             alias[k] = (street_key, surface, kind, weight)
-        elif cur[0] != street_key and weight >= cur[3]:
-            # Ambiguous inside the settlement: a low-confidence variant must never
-            # pick a winner. Mark it poisoned so neither street claims it.
-            alias[k] = (None, surface, "ambiguous", weight)
-        elif cur[0] == street_key and weight > cur[3]:
+        elif cur[0] == street_key:
+            if weight > cur[3]:
+                alias[k] = (street_key, surface, kind, weight)
+        elif weight > cur[3]:
+            # A STRICTLY stronger claim wins outright — including over a poisoned
+            # entry. Haifa has both 'דרך עכו' and a street simply named 'עכו';
+            # whichever the loop met first, the exact name (100) must beat the
+            # other's inferred no_type variant (85). The old rule poisoned on
+            # `>=`, so the answer depended on iteration order and the exact name
+            # lost whenever it arrived second.
             alias[k] = (street_key, surface, kind, weight)
+        elif weight == cur[3]:
+            # A genuine tie between two different streets: designate NEITHER.
+            alias[k] = (None, surface, "ambiguous", weight)
+        # weight < cur[3]: the stronger existing claim stands.
 
     for k, s in streets.items():
         for variant, surface, kind, weight in nadlan_text.street_aliases_for(s["name"]):
