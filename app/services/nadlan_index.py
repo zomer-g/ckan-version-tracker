@@ -58,6 +58,13 @@ logger = logging.getLogger(__name__)
 PARCELS_SRC = ("public", "append_shape_ff3176b1")
 GAZTIR_SRC = ("odata", "gaztir_41720377")
 POSTAL_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_2a021675")
+# The SAME Israel-Post dataset publishes a LOCALITY-level file too: one zip for
+# each of 1,135 localities, plus `Location Symbol` — which IS the CBS code
+# (981/995 resolve), i.e. the post→CBS crosswalk the street file lacks.
+# Israeli postal reality: the big cities get a zip per street+house (the street
+# file, 91 localities); everywhere else has ONE zip for the whole place. Loading
+# only the street file left 98,139 addresses zip-less for no reason.
+POSTAL_LOCALITY_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_65b5335b")
 ADDR_SRC = ("odata", "ac1ae1fa_6d43_4685_8434_9953e950ca9b_19c5be7f")
 
 # The repo's canonical ITM is 6991, not 2039 — they differ only in datum
@@ -201,6 +208,10 @@ _DDL = [
         house_raw       text,
         zip5            text,
         zip7            text,
+        -- 'address'  → this doorway's own zip (street file, 91 localities)
+        -- 'locality' → the ONE zip covering the whole locality. Kept distinct so
+        --              a town-wide zip is never presented as the address's own.
+        zip_level       text,
         neighbourhood   text,
         district        text,
         lat             double precision,
@@ -260,11 +271,26 @@ _INDEXES = [
 ]
 
 
+# CREATE TABLE IF NOT EXISTS never evolves a table that already exists, so a
+# column added to _DDL after the table first shipped is silently absent in
+# production — the build then dies on "column ... does not exist" (zip_level did
+# exactly that). Every post-launch column therefore ALSO belongs here; Postgres
+# has ADD COLUMN IF NOT EXISTS, so this stays idempotent.
+_COLUMN_ADDITIONS = [
+    (STREETS_TABLE, "official_code", "integer"),
+    (ADDRESSES_TABLE, "zip_level", "text"),
+]
+
+
 async def ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         for stmt in _DDL:
             await conn.execute(stmt)
+        for table, column, coltype in _COLUMN_ADDITIONS:
+            await conn.execute(
+                f"ALTER TABLE public.{_qi(table)} "
+                f"ADD COLUMN IF NOT EXISTS {_qi(column)} {coltype}")
         for stmt in _INDEXES:
             await conn.execute(stmt, timeout=_LONG_TIMEOUT)
     await _grant_readonly()

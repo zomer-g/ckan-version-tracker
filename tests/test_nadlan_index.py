@@ -190,3 +190,42 @@ def test_default_build_skips_the_two_expensive_opt_ins():
     assert "pip" not in default and "source_indexes" not in default
     assert default == ["parcels", "gazetteer", "postal_localities",
                        "streets", "addresses", "zip5"]
+
+
+def test_every_ddl_column_added_after_launch_has_a_migration():
+    """CREATE TABLE IF NOT EXISTS does not evolve an existing table.
+
+    A column added to _DDL after the table shipped is absent in production until
+    an explicit ALTER runs, and the build then dies on "column does not exist" —
+    which is exactly what happened to `zip_level`. Anything in _COLUMN_ADDITIONS
+    must name a real table and appear in that table's DDL."""
+    ddl = "\n".join(ni._DDL)
+    for table, column, _type in ni._COLUMN_ADDITIONS:
+        assert table in ni.ALL_TABLES, f"{table} is not a known table"
+        assert column in ddl, f"{column} is migrated but missing from _DDL"
+
+
+def test_every_source_constant_is_defined_and_well_formed():
+    """A source referenced only inside an f-string in a build stage fails at RUN
+    time, not import — so an undefined constant reaches production and dies mid
+    build. (POSTAL_LOCALITY_SRC did exactly that: a patch was lost, the module
+    still imported, and the stage raised NameError in prod.)"""
+    for name in ("PARCELS_SRC", "GAZTIR_SRC", "POSTAL_SRC",
+                 "POSTAL_LOCALITY_SRC", "ADDR_SRC"):
+        src = getattr(ni, name, None)
+        assert isinstance(src, tuple) and len(src) == 2, f"{name} missing/malformed"
+        schema, table = src
+        assert schema in ("public", "odata", "idx"), f"{name} has odd schema {schema}"
+        assert table and isinstance(table, str)
+
+
+def test_build_stage_sql_references_only_defined_names():
+    """Compile every stage function so a NameError in an f-string is caught here."""
+    import inspect
+    for stage, fn in ni._BUILDERS.items():
+        src = inspect.getsource(fn)
+        for const in ("PARCELS_SRC", "GAZTIR_SRC", "POSTAL_SRC",
+                      "POSTAL_LOCALITY_SRC", "ADDR_SRC"):
+            if const in src:
+                assert getattr(ni, const, None) is not None, \
+                    f"stage {stage} references undefined {const}"
