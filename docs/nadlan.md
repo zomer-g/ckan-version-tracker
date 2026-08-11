@@ -39,8 +39,17 @@ approach that looked obvious first:
    `gp_key`, and the **0.63 %** of gush/parcel pairs covering more than one real
    parcel are flagged `gp_ambiguous` and downgraded to `confidence:
    "approximate"` rather than silently collapsed.
-7. **The postal file covers 91 localities only** (500,700 distinct ZIP7, last
-   updated 2017).
+7. **Zip granularity is two-tiered, and reading only one file hides that.** The
+   street file gives a zip per street+house for **91 localities** — because only
+   the big cities have one. The SAME dataset publishes a locality file (1,451
+   rows, 1,135 localities, every one with a ZIP7) giving each smaller locality
+   ONE zip. Loading only the street file left 98,139 addresses zip-less and made
+   the caveat read "מיקוד ל-91 יישובים בלבד", which was a property of the import,
+   not of the data. Both are loaded now, distinguished by `zip_level`
+   (`'address'` vs `'locality'`) so a town-wide zip is never presented as the
+   doorway's own. That file also carries `Location Symbol` = the **CBS code**
+   (981/995 resolve), so Israel Post → CBS is an authoritative crosswalk rather
+   than the name match the street file alone forced.
 8. **The address list covers 325 cities and 30 % of it has no coordinates**
    (164,089 rows at `X='0'`). Its `number` column is dirty — `'דוד אבידן 10'`.
 9. **Both files use `'?'` as "street unknown"** — 43,004 postal rows and 7,055
@@ -246,6 +255,10 @@ Every stage, as measured — not estimated:
 | `zip5` | 14,450 | 1 s | |
 | `pip` | 340,317 | ~120 s | **95.1 %** of geocoded addresses landed in a parcel |
 
+After the locality-zip fix was loaded (second run): `addresses` 622,135 with
+**612,764 carrying a zip — 98.5 %**, split `address=514,625 / locality=98,139 /
+none=9,371`; `zip5` grew 14,450 → 14,627.
+
 Two estimates in this document were wrong in the good direction: `pip` was
 predicted at 15–60 minutes and took about two (geohash ordering plus the GiST
 index did the work), and the point-in-parcel hit rate came in at 95.1 % against
@@ -253,7 +266,8 @@ the 90.4 % measured on a 3,000-row sample. The street match rate landed at
 exactly the 75.6 % predicted from the offline corpus run.
 
 Published coverage (`/api/nadlan/stats`): 57.5 % of addresses have a point,
-82.7 % a zip, 54.7 % a parcel link, 69.1 % of parcels have gazetteer data.
+**98.5 % a zip** (82.7 % of them the address's own, 15.8 % locality-wide),
+54.7 % a parcel link, 69.1 % of parcels have gazetteer data.
 
 **Known asymmetry.** The alias ladder expands STORED names; a query is only
 normalized. So for the 308 streets whose canonical name carries a type word
