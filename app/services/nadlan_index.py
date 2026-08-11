@@ -663,13 +663,27 @@ async def build_postal_localities() -> dict:
                   (post_location_id, post_name, settlement_code, settlement_name,
                    match_kind, n_rows, refreshed_at)
                 SELECT l.lid, l.lname,
-                       public.over_settlement_code(l.lname),
-                       public.over_settlement(l.lname),
-                       CASE WHEN public.over_settlement_code(l.lname) IS NULL
-                            THEN 'unresolved' ELSE 'name' END,
+                       coalesce(x.sc, public.over_settlement_code(l.lname)),
+                       coalesce(public.over_settlement(l.lname), s.name),
+                       CASE WHEN x.sc IS NOT NULL THEN 'symbol'
+                            WHEN public.over_settlement_code(l.lname) IS NOT NULL THEN 'name'
+                            ELSE 'unresolved' END,
                        l.n, now()
                 FROM (SELECT "LocationID" AS lid, min("Location Name") AS lname, count(*)::int AS n
                       FROM {_t(POSTAL_SRC)} GROUP BY 1) l
+                -- The locality file carries BOTH Israel Post's id and the CBS
+                -- code ("Location Symbol"), i.e. the authoritative crosswalk.
+                -- Prefer it; fall back to resolving the name, which is all the
+                -- street file alone could offer.
+                LEFT JOIN (
+                  SELECT btrim("Location ID") AS lid,
+                         max(nullif(btrim("Location Symbol"),'')::int) AS sc
+                  FROM {_t(POSTAL_LOCALITY_SRC)}
+                  WHERE btrim("Location Symbol") ~ '^[0-9]+$'
+                    AND nullif(btrim("Location Symbol"),'')::int > 0
+                  GROUP BY 1
+                ) x ON x.lid = btrim(l.lid)
+                LEFT JOIN public.over_settlements s ON s.code = x.sc
                 """, timeout=_LONG_TIMEOUT)
             n = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(POSTAL_LOC_TABLE)}")
             bad = await conn.fetchval(
@@ -1122,7 +1136,7 @@ async def build_addresses() -> dict:
                 )
                 INSERT INTO public.{_qi(ADDRESSES_TABLE)}
                   (address_key, settlement_code, settlement_name, street_key, street_name,
-                   house_num, house_suffix, entrance, house_raw, zip5, zip7,
+                   house_num, house_suffix, entrance, house_raw, zip5, zip7, zip_level,
                    neighbourhood, district,
                    lat, lon, point, in_postal, in_address_list, refreshed_at)
                 SELECT k.sc || '|' || k.key_part || '|' ||
@@ -1133,7 +1147,9 @@ async def build_addresses() -> dict:
                        -- it as NULL rather than showing a literal question mark.
                        coalesce(st.name, nullif(min(k.street_raw), '?')),
                        k.house_num, k.house_suffix, k.entrance, min(k.house_raw),
-                       max(k.zip5), max(k.zip7), max(k.hood), max(k.district),
+                       max(k.zip5), max(k.zip7),
+                       CASE WHEN max(k.zip7) IS NOT NULL THEN 'address' END,
+                       max(k.hood), max(k.district),
                        {_qi(PG_EXT_SCHEMA)}.ST_Y((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
                        {_qi(PG_EXT_SCHEMA)}.ST_X((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
                        (array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1],
@@ -1145,13 +1161,40 @@ async def build_addresses() -> dict:
                          k.entrance, s.name, st.name
                 ON CONFLICT (address_key) DO NOTHING
                 """, timeout=_LONG_TIMEOUT)
+            # Locality-level zips for everywhere the street file does not reach.
+            # Only 91 localities get a zip per street+house; the other ~1,000 have
+            # ONE zip for the whole place, published in a separate file of the
+            # same dataset. Marked zip_level='locality' so a town-wide zip is
+            # never mistaken for the doorway's own.
+            await conn.execute(
+                f"""
+                WITH loc AS (
+                  SELECT nullif(btrim("Location Symbol"),'')::int AS sc,
+                         max(nullif(btrim("ZIP 7"),'')) AS zip7,
+                         max(nullif(btrim("ZIP5"),''))  AS zip5
+                  FROM {_t(POSTAL_LOCALITY_SRC)}
+                  WHERE btrim("Location Symbol") ~ '^[0-9]+$'
+                    AND nullif(btrim("Location Symbol"),'')::int > 0
+                    AND nullif(btrim("ZIP 7"),'') IS NOT NULL
+                  GROUP BY 1
+                )
+                UPDATE public.{_qi(ADDRESSES_TABLE)} a
+                SET zip7 = loc.zip7, zip5 = coalesce(a.zip5, loc.zip5),
+                    zip_level = 'locality'
+                FROM loc
+                WHERE a.settlement_code = loc.sc AND a.zip7 IS NULL
+                """, timeout=_LONG_TIMEOUT)
             n = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}")
             with_pt = await conn.fetchval(
                 f"SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE point IS NOT NULL")
             with_zip = await conn.fetchval(
                 f"SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE zip7 IS NOT NULL")
+            by_lvl = await conn.fetchval(
+                f"""SELECT string_agg(lvl || '=' || c, ' ') FROM (
+                      SELECT coalesce(zip_level,'none') AS lvl, count(*) AS c
+                      FROM public.{_qi(ADDRESSES_TABLE)} GROUP BY 1 ORDER BY 1) x""")
             await _stage_done(conn, "addresses", t0, rows_out=n,
-                              note=f"with_point={with_pt} with_zip={with_zip}")
+                              note=f"with_point={with_pt} with_zip={with_zip} [{by_lvl}]")
         await conn.execute(f"ANALYZE public.{_qi(ADDRESSES_TABLE)}", timeout=_LONG_TIMEOUT)
     return {"addresses": n, "with_point": with_pt, "with_zip": with_zip}
 

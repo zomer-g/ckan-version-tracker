@@ -381,6 +381,10 @@ async def stats() -> dict:
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE point IS NOT NULL) AS addresses_with_point,
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE zip7 IS NOT NULL)  AS addresses_with_zip,
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
+             WHERE zip_level = 'address')                                             AS addresses_with_address_zip,
+          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
+             WHERE zip_level = 'locality')                                            AS addresses_with_locality_zip,
+          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
              WHERE parcel_match = 'pip')                                              AS addresses_linked_pip,
           (SELECT count(*) FROM public.{_qi(STREETS_TABLE)})                          AS streets,
           (SELECT count(*) FROM public.{_qi(STREETS_TABLE)} WHERE in_gazetteer)       AS streets_in_gazetteer,
@@ -395,6 +399,10 @@ async def stats() -> dict:
     s["coverage"] = {
         "addresses_with_point_pct": pct("addresses_with_point", "addresses"),
         "addresses_with_zip_pct": pct("addresses_with_zip", "addresses"),
+        # Split on purpose: a locality-wide zip is a weaker fact than the
+        # doorway's own, and collapsing them would overstate precision.
+        "addresses_with_address_zip_pct": pct("addresses_with_address_zip", "addresses"),
+        "addresses_with_locality_zip_pct": pct("addresses_with_locality_zip", "addresses"),
         "addresses_linked_pct": pct("addresses_linked_pip", "addresses"),
         "parcels_with_gazetteer_pct": pct("parcels_with_gazetteer", "parcels"),
         "streets_in_gazetteer_pct": pct("streets_in_gazetteer", "streets"),

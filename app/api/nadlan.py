@@ -34,9 +34,13 @@ router = APIRouter(prefix="/api/nadlan", tags=["nadlan"])
 # Stated on every response so a caller cannot mistake the crosswalk for a
 # primary source. Each is a measured limit, not a guess — see docs/nadlan.md.
 CAVEATS = [
-    "המיקוד זמין ל-91 יישובים בלבד (קובץ המיקוד של דואר ישראל).",
+    # Israeli postal reality: only the big cities get a zip per street+house.
+    # Everywhere else has ONE zip for the whole locality — a weaker fact, and
+    # flagged as such (`zip_level`) rather than passed off as the doorway's own.
+    "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא "
+    "מיקוד כלל-יישובי אחד (מסומן zip_level=locality).",
     "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד — לא למספר בית.",
-    "כ-30% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך לחלקה.",
+    "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
 ]
 
 

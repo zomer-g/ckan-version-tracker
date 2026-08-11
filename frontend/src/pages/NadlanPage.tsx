@@ -303,15 +303,16 @@ export default function NadlanPage() {
           </div>
           <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.8 }}>
             {(env?.caveats ?? [
-              "המיקוד זמין ל-91 יישובים בלבד (קובץ המיקוד של דואר ישראל).",
+              "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא מיקוד כלל-יישובי אחד.",
               "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד — לא למספר בית.",
-              "כ-30% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך לחלקה.",
+              "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
             ]).map((c, i) => <li key={i}>{c}</li>)}
             {stats?.coverage && (
               <li>
                 כיסוי בפועל: {stats.coverage.addresses_with_point_pct}% מהכתובות עם נקודה ·{" "}
                 {stats.coverage.addresses_linked_pct}% משויכות לחלקה ·{" "}
-                {stats.coverage.addresses_with_zip_pct}% עם מיקוד ·{" "}
+                {stats.coverage.addresses_with_zip_pct}% עם מיקוד (מתוכם{" "}
+                {stats.coverage.addresses_with_address_zip_pct}% ברמת הכתובת) ·{" "}
                 {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר.
               </li>
             )}
