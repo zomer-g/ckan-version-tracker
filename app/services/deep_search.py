@@ -359,6 +359,23 @@ def _apply_operators(source: Source, pq, cards: list, limit: int) -> list:
     return out
 
 
+def _truthful_total(source: Source, pq, backend_total, cards: list) -> int:
+    """How many hits to claim, given who actually applied the operators.
+
+    A source that parsed the operators itself counted the right thing, and its
+    total is the whole corpus answer — keep it, or a phrase search would report
+    the page size (2 of 234) as if that were all there was.
+
+    A source that could not parse them was asked a LOOSER question than the
+    user's, so its count belongs to that looser question. Only what survived
+    filtering here is a truthful answer, even though it is bounded by how much
+    we fetched — an undercount the page can live with, an overcount it cannot.
+    """
+    if pq.has_operators and not source.native_operators:
+        return len(cards)
+    return int(backend_total) if isinstance(backend_total, int) else len(cards)
+
+
 def _column(source: Source, *, configured: bool = True, error: str | None = None,
             results: list | None = None, total: int | None = None) -> dict:
     cards = results or []
@@ -396,7 +413,7 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
             cards = [c for c in (out.get("results") or []) if c]
             cards = _apply_operators(source, pq, cards, limit)
             return _column(source, results=cards,
-                           total=out.get("total") if not pq.has_operators else len(cards))
+                           total=_truthful_total(source, pq, out.get("total"), cards))
 
         payload = await call(source.tool, source.build_args(send_q, send_limit, filters))
         raw = payload.get(source.results_path)
@@ -414,13 +431,8 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
             if card and card.title:
                 cards.append(card)
         cards = _apply_operators(source, pq, cards, limit)
-        total = payload.get("total")
-        if pq.has_operators and not source.native_operators:
-            # The backend counted its own looser query; only what survived the
-            # operators is a truthful count for what the user asked.
-            return _column(source, results=cards, total=len(cards))
         return _column(source, results=cards,
-                       total=int(total) if isinstance(total, int) else len(cards))
+                       total=_truthful_total(source, pq, payload.get("total"), cards))
     finally:
         if aclose is not None:
             await aclose()

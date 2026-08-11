@@ -290,6 +290,23 @@ def test_mmm_full_text_offers_no_date_filter():
     assert {f.id for f in by_id["protocols_text"].filters} == {"date_from", "date_to"}
 
 
+def test_total_belongs_to_whoever_applied_the_operators():
+    """A phrase search on TAG-IT must report ITS count (234), not our page size.
+    A phrase search on an ILIKE source must report what survived our filter,
+    because the backend counted a looser question than the user asked."""
+    from app.services import deep_search_query as dsq
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    native, local = by_id["protocols_text"], by_id["mevaker_reports"]
+    plain, phrase = dsq.parse("תקציב"), dsq.parse('"תקציב הביטחון"')
+    cards = [Card(title="a"), Card(title="b")]
+
+    assert deep_search._truthful_total(native, phrase, 234, cards) == 234
+    assert deep_search._truthful_total(local, phrase, 5000, cards) == 2
+    # Without operators nobody filtered, so the backend count stands either way.
+    assert deep_search._truthful_total(local, plain, 5000, cards) == 5000
+    assert deep_search._truthful_total(local, plain, None, cards) == 2
+
+
 def test_session_servers_are_flagged():
     """מפתח התקציב refuses a bare tools/call with "Missing session ID"; ours and
     TAG-IT's are stateless. Getting this flag wrong is a dead column."""
