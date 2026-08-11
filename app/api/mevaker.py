@@ -31,15 +31,30 @@ MEVAKER_HOSTS = {"www.mevaker.gov.il", "mevaker.gov.il"}
 MEVAKER_SUBJECTS_RE = re.compile(r"^/subjects/?$")
 
 # The whole corpus (~37 GB of PDF+Word) is too big for one dataset, so we
-# split it by publication type. The service's ``publicationTypes`` endpoint
-# advertises 10 types, but one of them — "דוחות בינלאומיים" (international)
-# — has ZERO actual publications in the library (verified 2026-06-28 by
-# scanning all ~446 volumes, pages 1-697: 9 of the 10 types are populated,
-# international is not). It's a dropdown label with nothing behind it, so we
-# DON'T expose it as a trackable type — registering it only produced empty
-# versions every poll. The 9 populated types below each map a ``?type=<slug>``
-# to the exact Hebrew ``Type`` string the scraper matches against each
-# volume. Bare /subjects (no type) still means the whole corpus.
+# split it by publication type. The service advertises 10; all 10 are
+# populated and all 10 are listed below.
+#
+# "דוחות בינלאומיים" used to be excluded here, on the strength of a note that
+# read: "ZERO actual publications in the library (verified 2026-06-28 by
+# scanning all ~446 volumes, pages 1-697)". That verification was real, and it
+# was wrong — because the thing doing the scanning was broken. The worker
+# enumerated volumes by walking Pages/Publications/{n}.aspx and gave up after
+# 40 consecutive 404s, and the library has a 192-page gap at 428. So the walk
+# died at page 467 and saw 387 of 1,825 volumes. "~446 volumes, pages 1-697"
+# is a description of that truncation, not of the library.
+#
+# Fixed in govil-scraper f0e61ea (enumeration now reads the library's own
+# registry via SharePoint CSOM). The international type has 2 volumes / 3 rows
+# / 7 files, both from 2026 — including a multi-national parallel audit of
+# government AI readiness (09.06.2026). Re-listed 2026-08-11.
+#
+# The lesson worth keeping: an emptiness result is only as trustworthy as the
+# enumeration under it. "We looked and found nothing" and "we could not look"
+# produce the same output.
+#
+# Each slug maps a ``?type=<slug>`` to the exact Hebrew ``Type`` string the
+# scraper matches against each volume. Bare /subjects (no type) still means
+# the whole corpus.
 MEVAKER_TYPES: dict[str, str] = {
     "annual": "דוחות שנתיים",
     "special": "דוחות מיוחדים",
@@ -50,6 +65,7 @@ MEVAKER_TYPES: dict[str, str] = {
     "primaries-funding": "מימון בחירות מקדימות (פריימריז)",
     "local-elections-funding": "מימון בחירות ברשויות המקומיות",
     "studies": "עיונים, מאמרים, ספרים",
+    "international": "דוחות בינלאומיים",
 }
 
 
