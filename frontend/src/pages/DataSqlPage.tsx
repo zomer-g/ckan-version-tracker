@@ -445,6 +445,42 @@ WHERE v.yr BETWEEN 2010 AND 2026
 ORDER BY v.yr`,
   },
 
+  // ── נדל"ן לעם — ההצלבה ברמת הנכס ─────────────────────────────────────────
+  {
+    group: "JOIN בין מאגרים שונים",
+    label: 'נדל"ן: כתובת → גוש/חלקה → מיקוד',
+    sql: `-- טבלאות over_re_* מקשרות ארבע שכבות ברמת הנכס: חלקות, גזטיר הנכסים,
+-- קובץ המיקוד ורשימת הכתובות. הקישור כתובת→חלקה נעשה גיאומטרית
+-- (נקודה בתוך פוליגון), ולכן parcel_match='pip' הוא שיוך מדויק.
+-- שימו לב ל-zip_level: 'address' = מיקוד של הבית; 'locality' = מיקוד כלל-יישובי.
+SELECT a.settlement_name AS "יישוב", a.street_name AS "רחוב", a.house_num AS "מס׳",
+       a.zip7 AS "מיקוד", a.zip_level AS "רמת המיקוד",
+       p.gush AS "גוש", p.parcel AS "חלקה", p.legal_area AS "שטח רשום",
+       g.n_dwellings AS "דירות בגזטיר", a.parcel_match AS "אופן השיוך"
+FROM over_re_addresses a
+JOIN over_re_parcels p            ON p.parcel_key = a.parcel_key
+LEFT JOIN over_re_parcel_gazetteer g ON g.parcel_key = a.parcel_key
+WHERE a.settlement_name = 'פתח תקווה' AND a.street_name = 'אבימלך'
+ORDER BY a.house_num`,
+  },
+  {
+    group: "שאילתות מרחביות (מפה)",
+    label: 'נדל"ן: כל החלקות ברדיוס 300 מ׳ (עם גבולות)',
+    sql: `-- over_parcels_near() מחזירה חלקות לפי מרחק אווירי ממרכז החלקה.
+-- הגיאומטריה עצמה לא מועתקת לטבלאות ההצלבה — מושכים אותה מהשכבה המקורית
+-- לפי גוש/חלקה, ולכן התוצאה ניתנת להצגה על המפה.
+SELECT n.gush AS "גוש", n.parcel AS "חלקה", n.locality_name AS "יישוב",
+       round(ST_Distance(n.centroid::geography,
+             ST_SetSRID(ST_MakePoint(34.9171, 32.0789),4326)::geography)) AS "מרחק_מטר",
+       ST_AsText(ST_SimplifyPreserveTopology(s.geom, 0.00002)) AS geometry_wkt
+FROM over_parcels_near(32.0789, 34.9171, 300) n
+JOIN public.append_shape_ff3176b1 s
+  ON s."GUSH_NUM" = n.gush::text
+ AND split_part(s."PARCEL",'.',1)::int = n.parcel
+ AND coalesce(nullif(split_part(coalesce(s."GUSH_SUFFI",'0'),'.',1),'')::int,0) = n.gush_suffix
+ORDER BY "מרחק_מטר"`,
+  },
+
   // ── שאילתות מרחביות (PostGIS) ─────────────────────────────────────────────
   {
     group: "שאילתות מרחביות (מפה)",

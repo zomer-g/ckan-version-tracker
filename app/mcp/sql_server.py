@@ -70,6 +70,14 @@ SERVER_INSTRUCTIONS = (
     "בשקט כל כתיב שאינו זהה. פתרו את שני הצדדים לקוד עם over_settlement_code() / "
     "over_authority_code() וחברו עליו; over_settlement() מחזירה את השם הרשמי. "
     "רשימת הפונקציות המלאה מופיעה ב-describe_schema.\n\n"
+    "(4) נכסים: אל תחברו לפי מחרוזת גוש/חלקה ואל תנתחו כתובת ידנית. "
+    "טבלאות over_re_* כבר מצליבות חלקות, גזטיר, מיקוד וכתובות: "
+    "over_re_parcels (מפתח parcel_key = גוש-תת גוש-חלקה), over_re_addresses, "
+    "over_re_parcel_gazetteer, over_re_streets. פונקציות: over_parcel_key(), "
+    "over_gush_helka(גוש,חלקה), over_parcel_at(lat,lon), "
+    "over_parcels_near(lat,lon,מטרים), over_street_key(), over_zip(). "
+    "שימו לב ל-zip_level (address מול locality) ול-parcel_match "
+    "(pip = נקודה בתוך הפוליגון, כלומר שיוך מדויק).\n\n"
     "מגבלת זמן: 20 שניות לשאילתה. אם נגמר הזמן — צמצמו את הטבלה הגדולה ב-CTE "
     "עם GROUP BY לפני ה-JOIN במקום לחבר אליה ישירות, סננו טקסט לפני המרה "
     "(col LIKE '%/2024' לפני to_date), ולפלט ברמת שורה השתמשו ב-"
@@ -147,7 +155,9 @@ TOOLS: list[dict] = [
             "aggregate במקום לשלוף הכול. הריצו describe_schema קודם כדי לכתוב "
             "שמות עמודות נכונים. שימו לב לשלוש המלכודות שבהוראות השרת: "
             "NULLIF לפני ::numeric, סינון צורת התאריך לפני to_date, וחיבור בין "
-            "מאגרים דרך over_settlement_code() ולא לפי שם חופשי."
+            "מאגרים דרך over_settlement_code() ולא לפי שם חופשי. "
+            "לשאלות על נכסים/כתובות/גוש-חלקה השתמשו בטבלאות over_re_* "
+            "ובפונקציות over_gush_helka() / over_parcel_at()."
         ),
         "inputSchema": {
             "type": "object",
