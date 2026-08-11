@@ -46,7 +46,10 @@ def test_aliases_english_and_translit_no_hebrew_prefix():
 def test_manual_aliases_resolve_known_gaps():
     recs = si.load_seed()
     rows = si.manual_alias_rows(recs)
-    by_variant = {surf: (code, kind, w) for _, code, surf, kind, w in rows}
+    # admin-prefix rows ('מ.א. X') keep the bare variant as their surface — same
+    # convention as the auto layer — so exclude them when keying by surface.
+    by_variant = {surf: (code, kind, w) for _, code, surf, kind, w in rows
+                  if kind != "manual_admin_prefix"}
     # short form + rename must be present, weighted above prefixed guesses
     assert "תל אביב" in by_variant and by_variant["תל אביב"][1] == "manual"
     assert by_variant["תל אביב"][0] == 5000
@@ -65,6 +68,54 @@ def test_authorities_seed_and_aliases():
     r = auth[0]
     keys = {k for k, _, _, _ in si.aliases_for(r)}
     assert si.norm(r["name"]) in keys
+
+
+def test_authority_crosswalk_targets_are_real_authorities():
+    """Every entry of the 2022 Interior-Ministry crosswalk must name an authority
+    that exists in the seed — otherwise the variant silently resolves to nothing."""
+    manual = si._load_json(si.AUTH_MANUAL_PATH)
+    assert len(manual) > 50
+    names = {a["name"] for a in si._load_json(si.AUTH_SEED_PATH)}
+    assert [m for m in manual if m["name"] not in names] == []
+    # and each variant must actually ADD something: it must not already be an
+    # auto-generated alias of the authority it points at (dead weight otherwise).
+    auth = si._load_json(si.AUTH_SEED_PATH)
+    auto = {}
+    for a in auth:
+        for k, _, _, _ in si.aliases_for(a):
+            auto.setdefault(k, set()).add(a["code"])
+    code = {a["name"]: a["code"] for a in auth}
+    redundant = [m for m in manual if code[m["name"]] in auto.get(si.norm(m["variant"]), ())]
+    assert redundant == []
+
+
+def test_authority_crosswalk_resolves_on_both_indexes():
+    auth = si._load_json(si.AUTH_SEED_PATH)
+    manual = si._load_json(si.AUTH_MANUAL_PATH)
+    rows = si.manual_rows(manual, auth)
+    by_variant = {surf: code for _, code, surf, kind, _ in rows if kind == "manual"}
+    # ktiv-haser city spelling, and a regional council's pre-rename name
+    assert by_variant["קרית גת"] == next(a["code"] for a in auth if a["name"] == "קריית גת")
+    assert by_variant["עמק לוד"] == next(a["code"] for a in auth if a["name"] == "שדות דן")
+    # 'מ.א. עמק לוד' resolves too — the curated layer gets the administrative
+    # prefixes ('מ.א.' / 'עיריית' / …) expanded, like the auto layer.
+    keys = {k for k, _, _, _, _ in rows}
+    assert si.norm("מ.א. עמק לוד") in keys and si.norm("עיריית קרית גת") in keys
+    # the same file applied to the SETTLEMENT seed resolves the city spellings…
+    recs = si.load_seed()
+    s_rows = {surf: c for _, c, surf, kind, _ in si.manual_rows(manual, recs, quiet=True)
+              if kind == "manual"}
+    assert s_rows["קרית גת"] == next(r["code"] for r in recs if r["name"] == "קריית גת")
+    # …and quietly drops the regional councils, which are not settlements
+    assert "עמק לוד" not in s_rows
+
+
+def test_dedupe_aliases_keeps_highest_weight():
+    rows = [("k", 1, "a", "manual_prefix", 55), ("k", 1, "b", "official", 100),
+            ("k", 2, "c", "manual", 85)]
+    out = {(v, c): (surf, w) for v, c, surf, _, w in si.dedupe_aliases(rows)}
+    assert out[("k", 1)] == ("b", 100)     # official wins regardless of order
+    assert out[("k", 2)] == ("c", 85)      # other codes untouched
 
 
 def test_seed_loads_and_generates():

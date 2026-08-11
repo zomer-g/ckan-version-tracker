@@ -93,6 +93,10 @@ export default function SettlementNormalizePage() {
           הדביקו רשימת שמות יישובים או רשויות (שם בכל שורה, או עמודה מ-CSV) וקבלו בחזרה את השם הרשמי והסמל
           של כל אחד — כולל תיקון כתיב, קידומות, גרשיים ושמות ישנים.
         </p>
+        <p className="nz-src">
+          מבוסס על קובץ היישובים של הלמ"ס, רשימת הרשויות המקומיות, וטבלת המרת שמות הרשויות של משרד הפנים
+          (2022) — שממנה נלקחו האיותים שהמדינה עצמה משתמשת בהם לאותה רשות (קרית גת, עוספיה, עמק לוד).
+        </p>
       </header>
 
       <div className="nz-grid">
@@ -169,6 +173,7 @@ export default function SettlementNormalizePage() {
         .nz h1 { text-wrap: balance; }
         .nz-eyebrow { font-size: 0.72rem; letter-spacing: 0.12em; font-weight: 700; text-transform: uppercase; color: #a21caf; }
         .nz-lead { color: var(--text-muted, #64748b); line-height: 1.7; }
+        .nz-src { max-width: 68ch; margin: 0.4rem 0 0; font-size: 0.82rem; line-height: 1.65; color: var(--text-muted, #94a3b8); }
         .nz-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
         @media (max-width: 720px) { .nz-grid { grid-template-columns: 1fr; } }
         .nz-card { border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg, #fff); padding: 1.1rem 1.2rem; }

@@ -21,7 +21,13 @@ state data: SQL functions ``over_settlement(text)`` / ``over_settlement_code(tex
 (see ensure_functions) let a /data console user JOIN a locality value to its
 official settlement at query time, so the source table stays untouched.
 
-Seed: ``data/settlements_2024.json`` (generated from bycode2024.xlsx, committed).
+Seeds (all committed):
+* ``data/settlements_2024.json``        — CBS localities.
+* ``data/authorities_2024.json``        — local authorities incl. regional councils.
+* ``data/settlement_aliases_manual.json`` — curated locality gaps.
+* ``data/authority_aliases_2022.json``  — the Interior Ministry / CBS authority-name
+  crosswalk: the state's OWN alternate spellings per authority.
+
 Load via ``POST /api/admin/settlements/load`` (worker/admin).
 """
 from __future__ import annotations
@@ -46,6 +52,15 @@ AUTH_SEED_PATH = os.path.join(_DATA_DIR, "authorities_2024.json")
 # Curated supplement for what CBS official names miss: short forms (תל אביב →
 # תל אביב -יפו), renames (נצרת עילית → נוף הגליל), and ktiv-haser spellings.
 MANUAL_PATH = os.path.join(_DATA_DIR, "settlement_aliases_manual.json")
+# The Interior Ministry / CBS authority-name crosswalk ("המרת שמות רשויות", 2022,
+# sheet "שמות הרשויות ייחודיים"): the spellings the STATE itself uses for the same
+# local authority across its own publications — ktiv-haser city names (קרית גת),
+# Arabic-transliteration variants (עוספיה / עספיא), and pre-rename authority names
+# (עמק לוד → שדות דן). Each entry is (variant → official authority name); it feeds
+# the AUTHORITY alias index, and — for every authority whose official name is also
+# a settlement (all the cities and local councils) — the SETTLEMENT index too, so
+# over_settlement() picks them up on the /data console as well.
+AUTH_MANUAL_PATH = os.path.join(_DATA_DIR, "authority_aliases_2022.json")
 
 # Hebrew one-letter prepositions/conjunctions that attach to a place name, plus
 # the common two-letter combinations. Applied to the normalized base form.
@@ -286,24 +301,22 @@ def load_seed() -> list[dict]:
         return json.load(fh)
 
 
-def manual_alias_rows(recs: list[dict]) -> list[tuple]:
-    """Curated (variant→code) rows from MANUAL_PATH, resolved by official name.
+def manual_rows(manual: list[dict], recs: list[dict], *, quiet: bool = False) -> list[tuple]:
+    """Curated (variant→code) alias rows, resolved against ``recs`` by official name.
 
     weight 85 sits above prefixed guesses (50) and English/translit (70) but
     below an exact official-name hit (100). Entries whose target name is not in
-    the seed are skipped (logged), so a typo can't silently mis-map."""
-    try:
-        with open(MANUAL_PATH, encoding="utf-8") as fh:
-            manual = json.load(fh)
-    except FileNotFoundError:
-        return []
+    ``recs`` are skipped, so a typo can't silently mis-map — logged unless
+    ``quiet`` (the authority crosswalk is applied to the settlement index too,
+    where the regional councils legitimately have no settlement of that name)."""
     name2code = {r["name"]: r["code"] for r in recs}
     rows: list[tuple] = []
     seen: set[tuple[str, int]] = set()
     for m in manual:
         code = name2code.get(m.get("name"))
         if code is None:
-            logger.warning("manual alias target not found: %r", m.get("name"))
+            if not quiet:
+                logger.warning("manual alias target not found: %r", m.get("name"))
             continue
         variant = m.get("variant") or ""
         base = norm(variant)
@@ -311,19 +324,46 @@ def manual_alias_rows(recs: list[dict]) -> list[tuple]:
             continue
         if (base, code) not in seen:
             seen.add((base, code)); rows.append((base, code, variant, "manual", 85))
-        # Prefix-expand Hebrew manual variants too (so 'בתל אביב' resolves like
-        # the auto layer does for official names), one weight tier lower.
+        # Prefix-expand Hebrew manual variants too (so 'בתל אביב' and
+        # 'מ.א. עמק לוד' resolve like the auto layer does for official names),
+        # one weight tier lower.
         if re.search(r"[֐-׿]", base):
             for p in _PREFIXES:
                 k = p + base
                 if (k, code) not in seen:
                     seen.add((k, code)); rows.append((k, code, p + variant, "manual_prefix", 55))
+            for ap in _ADMIN_PREFIXES:
+                k = ap + base
+                if (k, code) not in seen:
+                    seen.add((k, code)); rows.append((k, code, variant, "manual_admin_prefix", 55))
     return rows
+
+
+def manual_alias_rows(recs: list[dict]) -> list[tuple]:
+    """The settlement-side curated aliases (MANUAL_PATH), resolved against recs."""
+    return manual_rows(_load_json(MANUAL_PATH), recs)
+
+
+def dedupe_aliases(rows: list[tuple]) -> list[tuple]:
+    """Collapse duplicate (variant, code) alias rows to the highest-weight one.
+
+    The layers overlap by design (auto-generated + curated), and the INSERT uses
+    ON CONFLICT DO UPDATE — so without this the row written LAST would win, and a
+    weight-55 prefixed guess could overwrite an exact official-name hit."""
+    best: dict[tuple[str, int], tuple] = {}
+    for row in rows:
+        key = (row[0], row[1])
+        cur = best.get(key)
+        if cur is None or row[4] > cur[4]:
+            best[key] = row
+    return list(best.values())
 
 
 async def load(*, rebuild: bool = True) -> dict:
     """(Re)load the settlements + regenerate the alias index from the seed."""
     recs = load_seed()
+    auth = _load_json(AUTH_SEED_PATH)
+    auth_manual = _load_json(AUTH_MANUAL_PATH)
     await ensure_tables()
     await ensure_functions()
     pool = await append_store.get_pool()
@@ -355,6 +395,11 @@ async def load(*, rebuild: bool = True) -> dict:
                 for key, surface, kind, weight in aliases_for(r):
                     alias_rows.append((key, r["code"], surface, kind, weight))
             alias_rows.extend(manual_alias_rows(recs))
+            # The state's own authority spellings also apply to the settlement of
+            # the same name (קרית גת → קריית גת); the regional councils have no
+            # such settlement and are skipped quietly.
+            alias_rows.extend(manual_rows(auth_manual, recs, quiet=True))
+            alias_rows = dedupe_aliases(alias_rows)
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(ALIASES_TABLE)} (variant,code,surface,kind,weight)
                     VALUES ($1,$2,$3,$4,$5)
@@ -363,7 +408,6 @@ async def load(*, rebuild: bool = True) -> dict:
                 alias_rows,
             )
             # ── Authorities (רשות מקומית) — same alias engine ──────────────
-            auth = _load_json(AUTH_SEED_PATH)
             if rebuild:
                 await conn.execute(f"TRUNCATE public.{_qi(AUTHORITIES_TABLE)}")
                 await conn.execute(f"DELETE FROM public.{_qi(AUTH_ALIASES_TABLE)} WHERE kind <> 'llm'")
@@ -381,6 +425,8 @@ async def load(*, rebuild: bool = True) -> dict:
             for r in auth:
                 for key, surface, kind, weight in aliases_for(r):
                     auth_alias_rows.append((key, r["code"], surface, kind, weight))
+            auth_alias_rows.extend(manual_rows(auth_manual, auth))
+            auth_alias_rows = dedupe_aliases(auth_alias_rows)
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(AUTH_ALIASES_TABLE)} (variant,code,surface,kind,weight)
                     VALUES ($1,$2,$3,$4,$5)
