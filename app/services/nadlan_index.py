@@ -304,9 +304,18 @@ _SOURCE_INDEXES = [
 
 
 async def ensure_source_indexes() -> dict:
+    """Index the three un-indexed odata source tables.
+
+    Records a build_state row like every other stage. It used to be the ONE
+    stage without one, so a run that reached it showed an EMPTY /state and looked
+    like nothing was happening; and per-index failures — caught individually so
+    one permission problem cannot abort the run — were visible only in the app
+    log. Both now land in ``note``."""
     pool = await append_store.get_pool()
-    made = []
+    made: list[str] = []
+    failed: list[str] = []
     async with pool.acquire() as conn:
+        t0 = await _stage_start(conn, "source_indexes")
         for (schema, table), name, cols in _SOURCE_INDEXES:
             try:
                 await conn.execute(
@@ -314,13 +323,18 @@ async def ensure_source_indexes() -> dict:
                     timeout=_LONG_TIMEOUT)
                 made.append(name)
             except Exception as e:  # noqa: BLE001
+                failed.append(f"{name}: {e}")
                 logger.warning("nadlan: source index %s failed: %s", name, e)
         for schema, table in (GAZTIR_SRC, POSTAL_SRC, ADDR_SRC):
             try:
                 await conn.execute(f"ANALYZE {_qi(schema)}.{_qi(table)}", timeout=_LONG_TIMEOUT)
             except Exception:  # noqa: BLE001
                 logger.debug("nadlan: analyze %s failed", table, exc_info=True)
-    return {"indexes": made}
+        await _stage_done(conn, "source_indexes", t0, rows_out=len(made),
+                          status="ok" if not failed else "partial",
+                          note=f"created={len(made)}/{len(_SOURCE_INDEXES)}"
+                               + (f" FAILED: {'; '.join(failed)[:400]}" if failed else ""))
+    return {"indexes": made, "failed": failed}
 
 
 # ── SQL cross-reference functions ─────────────────────────────────────────────
@@ -409,7 +423,12 @@ async def ensure_functions() -> None:
             RETURNS text LANGUAGE sql STABLE AS $$
               SELECT public.over_parcel_key(p."GUSH_NUM", p."GUSH_SUFFI", p."PARCEL")
               FROM {_t(PARCELS_SRC)} p
-              WHERE p.geom && {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+              -- OPERATOR(extensions.&&), not a bare &&: PostGIS's operators
+              -- live in the extensions schema and an OPERATOR cannot be
+              -- qualified with dot notation the way a function can. The worker
+              -- connection carries no search_path, so a bare && raises
+              -- "operator does not exist: extensions.geometry && extensions.geometry".
+              WHERE p.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
                                 {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
                 AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
                       p.geom,
@@ -1198,7 +1217,8 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
                   LEFT JOIN LATERAL (
                     SELECT p."GUSH_NUM", p."GUSH_SUFFI", p."PARCEL"
                     FROM {_t(PARCELS_SRC)} p
-                    WHERE p.geom && t.point AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(p.geom, t.point)
+                    WHERE p.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) t.point
+                      AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(p.geom, t.point)
                     LIMIT 1
                   ) p ON true
                 )

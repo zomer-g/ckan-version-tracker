@@ -45,6 +45,11 @@ async def _fetch(sql: str, *args) -> list[dict]:
     async with pool.acquire() as conn:
         async with conn.transaction(readonly=True):
             await conn.execute(f"SET LOCAL statement_timeout = {_TIMEOUT_MS}")
+            # The read-only pool carries no search_path of its own. Functions and
+            # casts here are schema-qualified, but OPERATORS resolve only through
+            # the path — so name it explicitly rather than depend on the role's
+            # default (see the OPERATOR(extensions.&&) note in nadlan_index).
+            await conn.execute(f"SET LOCAL search_path = public, {PG_EXT_SCHEMA}")
             rows = await conn.fetch(sql, *args)
     return [dict(r) for r in rows]
 
@@ -122,7 +127,7 @@ async def by_point(lat: float, lon: float, radius_m: float = 0.0,
         WITH hit AS (
           SELECT public.over_parcel_key(s."GUSH_NUM", s."GUSH_SUFFI", s."PARCEL") AS pk
           FROM {_t(PARCELS_SRC)} s
-          WHERE s.geom && {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+          WHERE s.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
                             {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1), {GEOM_SRID})
             AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
                   s.geom, {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
