@@ -18,8 +18,10 @@ doubles as the verification trail.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import time
 from urllib.parse import quote
 
 from app.services import append_store, nadlan_text
@@ -365,11 +367,49 @@ async def suggest_streets(q: str, settlement_code: int | None = None,
         """, q, settlement_code)
 
 
+# stats() is 12 COUNT(*)s over 1.1M parcels and 622k addresses — measured at
+# 2.1-2.7s against the 5s statement timeout, and the page calls it on EVERY load.
+# That is both a 500 waiting for a cold Neon compute (one was observed) and a
+# pointless compute bill on a plan that is ~98% compute. The numbers only move
+# when a build runs, so serve them from a short process-local cache — the same
+# convention data_catalog uses for the catalog.
+_STATS_TTL_SECONDS = 300.0
+_stats_cache: dict | None = None
+_stats_cache_at: float = 0.0
+_stats_lock = asyncio.Lock()
+
+
+def invalidate_stats_cache() -> None:
+    """Drop the cached counters so the next read recomputes them.
+
+    Called at the end of a build, so a rebuild's numbers show up at once
+    instead of up to five minutes later."""
+    global _stats_cache, _stats_cache_at
+    _stats_cache = None
+    _stats_cache_at = 0.0
+
+
 async def stats() -> dict:
     """Hero counters AND the coverage numbers.
 
     Coverage is published, not hidden: the whole point of the project is the
-    crosswalk, and a crosswalk whose gaps are invisible is worse than none."""
+    crosswalk, and a crosswalk whose gaps are invisible is worse than none.
+
+    Served from a 5-minute cache (see above); the lock means a burst of page
+    loads after the cache expires runs the counts ONCE, not once per request."""
+    global _stats_cache, _stats_cache_at
+    if _stats_cache is not None and time.monotonic() - _stats_cache_at < _STATS_TTL_SECONDS:
+        return _stats_cache
+    async with _stats_lock:
+        # Re-check: another request may have filled it while we waited.
+        if _stats_cache is not None and time.monotonic() - _stats_cache_at < _STATS_TTL_SECONDS:
+            return _stats_cache
+        out = await _stats_uncached()
+        _stats_cache, _stats_cache_at = out, time.monotonic()
+        return out
+
+
+async def _stats_uncached() -> dict:
     rows = await _fetch(f"""
         SELECT
           (SELECT count(*) FROM public.{_qi(PARCELS_TABLE)})                          AS parcels,

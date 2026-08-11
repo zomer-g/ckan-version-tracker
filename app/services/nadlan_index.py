@@ -1349,6 +1349,8 @@ async def build(stages: list[str] | None = None) -> dict:
             logger.exception("nadlan stage %s failed", stage)
             out[stage] = {"error": str(e)}
             break
-    from app.services import data_catalog
+    from app.services import data_catalog, nadlan_query
     data_catalog.invalidate_catalog_cache()
+    # A rebuild's numbers must show up at once, not up to 5 minutes later.
+    nadlan_query.invalidate_stats_cache()
     return out

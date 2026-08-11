@@ -236,3 +236,33 @@ def test_resolve_surfaces_the_five_digit_ambiguity(client, monkeypatch):
     body = client.get("/api/nadlan/resolve?q=49350").json()
     assert body["query"]["mode"] == "zip"
     assert body["alternatives"] == [{"mode": "gush", "parsed": {"gush": 49350}}]
+
+
+# ── the stats cache ───────────────────────────────────────────────────────────
+def test_stats_is_cached_and_invalidated_by_a_build(monkeypatch):
+    """stats() is 12 COUNT(*)s over 1.1M parcels and 622k addresses — 2.1-2.7s
+    against a 5s timeout, called on EVERY page load. Uncached it 500s the moment
+    the Neon compute is cold (observed once in production) and bills compute for
+    numbers that only move when a build runs."""
+    import asyncio
+    calls = []
+
+    async def _fetch(sql, *args):
+        calls.append(sql)
+        return [{"parcels": 1, "addresses": 2}]
+
+    monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    nadlan_query.invalidate_stats_cache()
+
+    async def run():
+        first = await nadlan_query.stats()
+        await nadlan_query.stats()
+        await nadlan_query.stats()
+        assert len(calls) == 1, "repeat reads must not hit the database"
+        assert "coverage" in first
+        nadlan_query.invalidate_stats_cache()
+        await nadlan_query.stats()
+        assert len(calls) == 2, "a build must make the new numbers visible at once"
+
+    asyncio.run(run())
+    nadlan_query.invalidate_stats_cache()
