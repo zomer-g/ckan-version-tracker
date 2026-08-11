@@ -65,6 +65,12 @@ POSTAL_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_2a021675")
 # file, 91 localities); everywhere else has ONE zip for the whole place. Loading
 # only the street file left 98,139 addresses zip-less for no reason.
 POSTAL_LOCALITY_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_65b5335b")
+# ...and a street-SYNONYM file: 68,802 rows of Israel Post's own alternative
+# spellings, keyed by `Location Symbol` (the CBS code again). It catches the same
+# families as רשות האוכלוסין's file but not the same rows — definite article
+# (המרגנית/מרגנית), name order (סנש חנה/חנה סנש), surname only
+# (קפלנסקי שלמה/קפלנסקי). A second authoritative source, not a replacement.
+POSTAL_STREET_SYN_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_068c856b")
 ADDR_SRC = ("odata", "ac1ae1fa_6d43_4685_8434_9953e950ca9b_19c5be7f")
 
 # The repo's canonical ITM is 6991, not 2039 — they differ only in datum
@@ -422,15 +428,39 @@ async def ensure_functions() -> None:
         # parameter and a column resolves to the COLUMN, so `WHERE p.gush = gush`
         # would silently be `gush = gush` — a tautology returning the whole
         # table. The prefix makes that collision impossible.
+        # Query-side type stripping. The alias ladder expands STORED names, but a
+        # query was only normalized — so asking for the bare form of a street
+        # whose canonical name carries a type word ("שדרות X" → "X") missed in
+        # 26 of 308 cases. Try the exact variant first, then the stripped one.
+        types = "|".join(nadlan_text._STREET_TYPES_SORTED)
+        await conn.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION public.over_street_norm_notype(q text)
+            RETURNS text LANGUAGE sql IMMUTABLE AS $$
+              SELECT CASE
+                WHEN length(regexp_replace(public.over_settlement_norm(q),
+                       '^({types})', '')) >= 3
+                THEN regexp_replace(public.over_settlement_norm(q), '^({types})', '')
+                ELSE public.over_settlement_norm(q)
+              END
+            $$;
+            """)
         await conn.execute(
             """
             CREATE OR REPLACE FUNCTION public.over_street_key(p_settlement_code integer, p_q text)
             RETURNS text LANGUAGE sql STABLE AS $$
-              SELECT a.street_key
-              FROM public.over_re_street_aliases a
-              WHERE a.settlement_code = p_settlement_code
-                AND a.variant = public.over_settlement_norm(p_q)
-              ORDER BY a.weight DESC
+              SELECT street_key FROM (
+                SELECT a.street_key, a.weight, 1 AS tier
+                FROM public.over_re_street_aliases a
+                WHERE a.settlement_code = p_settlement_code
+                  AND a.variant = public.over_settlement_norm(p_q)
+                UNION ALL
+                SELECT a.street_key, a.weight, 2
+                FROM public.over_re_street_aliases a
+                WHERE a.settlement_code = p_settlement_code
+                  AND a.variant = public.over_street_norm_notype(p_q)
+              ) x
+              ORDER BY tier, weight DESC
               LIMIT 1
             $$;
             """)
@@ -744,6 +774,34 @@ async def find_official_streets_table() -> tuple[str, str] | None:
     return None
 
 
+async def _load_postal_street_synonyms() -> list[dict]:
+    """Israel Post's street synonyms, as (settlement, name, synonym) triples.
+
+    Unlike the רשות האוכלוסין file this one gives PAIRS rather than a shared
+    code, so it is applied as "whatever street `name` resolved to, `synonym`
+    also names" — which keeps it out of the official-code namespace entirely
+    (the two files number streets differently and must never be mixed)."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                f"""
+                SELECT nullif(btrim("Location Symbol"),'')::int AS sc,
+                       btrim("Street Name")         AS name,
+                       btrim("Street Synonym Name") AS synonym
+                FROM {_t(POSTAL_STREET_SYN_SRC)}
+                WHERE btrim("Location Symbol") ~ '^[0-9]+$'
+                  AND nullif(btrim("Location Symbol"),'')::int > 0
+                  AND btrim("Street Name") <> '' AND btrim("Street Synonym Name") <> ''
+                  AND btrim("Street Name") <> btrim("Street Synonym Name")
+                """, timeout=_LONG_TIMEOUT)
+        except Exception as e:  # noqa: BLE001 — an absent file must not fail the build
+            logger.warning("nadlan: postal street synonyms unavailable: %s", e)
+            return []
+    logger.info("nadlan: loaded %d postal street synonym pairs", len(rows))
+    return [dict(r) for r in rows]
+
+
 async def _load_official_streets() -> list[dict]:
     """Read the official street file, if it is tracked. Trailing spaces are
     stripped — every value in that file carries them ('official ', 'ירושלים ')."""
@@ -830,7 +888,8 @@ async def build_streets() -> dict:
             """, timeout=_LONG_TIMEOUT)
 
     official = await _load_official_streets()
-    streets, aliases, unmatched = _resolve_streets(canon, gaz, official)
+    postal_syn = await _load_postal_street_synonyms()
+    streets, aliases, unmatched = _resolve_streets(canon, gaz, official, postal_syn)
 
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
@@ -863,7 +922,7 @@ async def build_streets() -> dict:
             await _stage_done(
                 conn, "streets", t0, rows_in=len(canon) + n_gaz, rows_out=len(streets),
                 note=(f"aliases={len(aliases)} gazetteer_matched={matched}/{n_gaz} "
-                      f"official_rows={len(official)}"))
+                      f"official_rows={len(official)} postal_syn={len(postal_syn)}"))
         await conn.execute(f"ANALYZE public.{_qi(STREETS_TABLE)}")
         await conn.execute(f"ANALYZE public.{_qi(STREET_ALIASES_TABLE)}")
     return {"streets": len(streets), "aliases": len(aliases),
@@ -890,7 +949,8 @@ def _official_code_index(official_rows) -> dict[tuple[int, str], int]:
     return {k: next(iter(v)) for k, v in multi.items() if len(v) == 1}
 
 
-def _resolve_streets(canon_rows, gaz_rows, official_rows=()) -> tuple[list, list, list]:
+def _resolve_streets(canon_rows, gaz_rows, official_rows=(),
+                     postal_syn_rows=()) -> tuple[list, list, list]:
     """Pure matcher: canonical + gazetteer (+ the official street file) → rows.
 
     Split out of ``build_streets`` so the matching rules can be tested with plain
@@ -1014,6 +1074,24 @@ def _resolve_streets(canon_rows, gaz_rows, official_rows=()) -> tuple[list, list
         offer(sc, variant, sk, name,
               "official_file" if is_official else "official_synonym",
               100 if is_official else 92)
+
+    # 2c. Israel Post's synonym PAIRS. No shared code here — the two files
+    #     number streets differently — so this simply says "whatever street
+    #     `name` already resolves to, `synonym` names it too". Weight 92, the
+    #     same tier as a published synonym, since it is equally authoritative.
+    for r in postal_syn_rows:
+        sc = r.get("sc")
+        nm, syn = (r.get("name") or "").strip(), (r.get("synonym") or "").strip()
+        if sc is None or not nm or not syn:
+            continue
+        k_nm, k_syn = nadlan_text.norm(nm), nadlan_text.norm(syn)
+        if not k_nm or not k_syn or k_nm == k_syn:
+            continue
+        hit = alias.get((sc, k_nm)) or alias.get((sc, k_syn))
+        if not (hit and hit[0]):
+            continue                      # neither spelling names a known street
+        for variant, surface in ((k_nm, nm), (k_syn, syn)):
+            offer(sc, variant, hit[0], surface, "postal_synonym", 92)
 
     # Reverse index street_key → the street dict. Without it, marking a matched
     # street would rescan the whole 93k-row table per gazetteer row.
@@ -1209,6 +1287,28 @@ async def build_addresses() -> dict:
                     zip_level = 'locality'
                 FROM loc
                 WHERE a.settlement_code = loc.sc AND a.zip7 IS NULL
+                """, timeout=_LONG_TIMEOUT)
+            # Third tier: an address whose exact street+house Israel Post never
+            # listed, on a street where other houses DO have a zip. Only ZIP5 is
+            # inherited — ZIP5 is the area code, but ZIP7 identifies the specific
+            # building, so copying a neighbour's ZIP7 would fabricate precision.
+            # Restricted to streets carrying exactly ONE zip5; a street that
+            # crosses several (383 addresses) is left alone rather than guessed.
+            await conn.execute(
+                f"""
+                WITH sd AS (
+                  SELECT settlement_code, street_key, min(zip5) AS zip5
+                  FROM public.{_qi(ADDRESSES_TABLE)}
+                  WHERE zip5 IS NOT NULL AND street_key IS NOT NULL
+                  GROUP BY 1,2
+                  HAVING count(DISTINCT zip5) = 1
+                )
+                UPDATE public.{_qi(ADDRESSES_TABLE)} a
+                SET zip5 = sd.zip5, zip_level = 'street'
+                FROM sd
+                WHERE a.zip7 IS NULL AND a.zip5 IS NULL
+                  AND a.settlement_code = sd.settlement_code
+                  AND a.street_key = sd.street_key
                 """, timeout=_LONG_TIMEOUT)
             n = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}")
             with_pt = await conn.fetchval(

@@ -229,3 +229,31 @@ def test_build_stage_sql_references_only_defined_names():
             if const in src:
                 assert getattr(ni, const, None) is not None, \
                     f"stage {stage} references undefined {const}"
+
+
+def test_postal_synonym_pairs_link_without_mixing_codespaces():
+    """Israel Post publishes PAIRS, רשות האוכלוסין publishes shared CODES.
+
+    The two number streets differently, so the pairs must never enter the
+    official-code namespace — they only say "whatever street `name` resolves to,
+    `synonym` names too". Real pair: סנש חנה / חנה סנש."""
+    syn = [{"sc": 7900, "name": "סנש חנה", "synonym": "חנה סנש"}]
+    # 'חנה סנש' is a word-order variant, so the ladder's token_set already links
+    # it; use a pair the ladder cannot reach to prove the file does the work.
+    syn2 = [{"sc": 7900, "name": "קפלנסקי שלמה", "synonym": "קפלן"}]
+    _s, _a, before = ni._resolve_streets(
+        [_canon(7900, "קפלנסקי שלמה")], [_gaz(7900, "קפלן")])
+    assert len(before) == 1, "the ladder should not reach this on its own"
+
+    streets, _a2, after = ni._resolve_streets(
+        [_canon(7900, "קפלנסקי שלמה")], [_gaz(7900, "קפלן")], (), syn2)
+    assert after == [] and len(streets) == 1
+    assert syn  # the order-variant pair is harmless either way
+
+
+def test_postal_synonyms_are_ignored_when_neither_side_is_known():
+    """A pair naming two streets we have never seen must create nothing."""
+    syn = [{"sc": 7900, "name": "רחוב דמיוני", "synonym": "שם אחר"}]
+    streets, aliases, _u = ni._resolve_streets([_canon(7900, "אבימלך")], [], (), syn)
+    assert len(streets) == 1
+    assert all("דמיוני" not in (a[3] or "") for a in aliases)
