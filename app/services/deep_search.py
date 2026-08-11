@@ -33,6 +33,7 @@ import time
 import httpx
 
 from app.config import settings
+from app.services import deep_search_query as dsq
 from app.services.deep_search_sources import Card, Source
 
 logger = logging.getLogger(__name__)
@@ -319,6 +320,45 @@ def _remote_caller(source: Source, token: str | None, budget_s: float):
 
 # ── the fan-out ─────────────────────────────────────────────────────────────
 
+def _apply_operators(source: Source, pq, cards: list, limit: int) -> list:
+    """Enforce the operators and give every card a highlighted match snippet.
+
+    Two things happen here, and they are deliberately central rather than
+    per-source so the page behaves identically whichever corpus answered.
+
+    FILTERING runs only for sources that could not do it themselves, and only
+    when the query actually carries operators — a plain one-word search must be
+    left exactly as the backend ranked it. The judgement is made on the text we
+    can see (title + snippet), which is the honest limit of the technique: a
+    row that matched on a column the card does not display can be dropped. That
+    is why it is gated on has_operators, where the user has explicitly asked for
+    precision over recall.
+
+    HIGHLIGHTING is applied to everyone. TAG-IT already returns «…» around the
+    match, so its cards are left alone; for the rest we build a window around
+    the first match and mark it the same way, so the client has one rule.
+    """
+    from dataclasses import replace
+
+    out = []
+    for c in cards:
+        if (pq.has_operators and not source.native_operators
+                and not dsq.matches(pq, c.title, c.snippet)):
+            continue
+        if not dsq.already_highlighted(c.snippet):
+            # Only ever from the snippet — falling back to the title would
+            # produce a "context" line that is just the title again, printed
+            # twice on the same card.
+            better = dsq.snippet_around(pq, c.snippet)
+            title = dsq.mark_all(pq, c.title)
+            if better or title != c.title:
+                c = replace(c, snippet=better or c.snippet, title=title)
+        out.append(c)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _column(source: Source, *, configured: bool = True, error: str | None = None,
             results: list | None = None, total: int | None = None) -> dict:
     cards = results or []
@@ -333,6 +373,17 @@ def _column(source: Source, *, configured: bool = True, error: str | None = None
 
 async def _query(request, source: Source, q: str, limit: int, filters: dict) -> dict:
     """Run one source and return its column. Raises — wrapped by run_source."""
+    pq = dsq.parse(q)
+    # A source that parses operators gets the user's words; one that does not
+    # gets a plain anchor it can actually match, and we enforce the operators
+    # on the way back. Over-fetch in that case, because post-filtering can only
+    # narrow what already came back.
+    if source.native_operators:
+        send_q, send_limit = dsq.native_query(pq), limit
+    else:
+        send_q = pq.anchor()
+        send_limit = min(limit * 4, 200) if pq.has_operators else limit
+
     aclose = None
     if source.local:
         call = _local_caller(request, source)
@@ -341,11 +392,13 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
                                       float(settings.deep_search_source_timeout))
     try:
         if source.run is not None:
-            out = await source.run(call, q, limit, filters)
+            out = await source.run(call, send_q, send_limit, filters)
             cards = [c for c in (out.get("results") or []) if c]
-            return _column(source, results=cards, total=out.get("total"))
+            cards = _apply_operators(source, pq, cards, limit)
+            return _column(source, results=cards,
+                           total=out.get("total") if not pq.has_operators else len(cards))
 
-        payload = await call(source.tool, source.build_args(q, limit, filters))
+        payload = await call(source.tool, source.build_args(send_q, send_limit, filters))
         raw = payload.get(source.results_path)
         rows = raw if isinstance(raw, list) else []
         cards = []
@@ -360,7 +413,12 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
                 continue
             if card and card.title:
                 cards.append(card)
+        cards = _apply_operators(source, pq, cards, limit)
         total = payload.get("total")
+        if pq.has_operators and not source.native_operators:
+            # The backend counted its own looser query; only what survived the
+            # operators is a truthful count for what the user asked.
+            return _column(source, results=cards, total=len(cards))
         return _column(source, results=cards,
                        total=int(total) if isinstance(total, int) else len(cards))
     finally:

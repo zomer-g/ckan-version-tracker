@@ -254,7 +254,7 @@ export default function QuestionsPage() {
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="למשל: תקציב, דיור, מים, שם של חברה או של בעל תפקיד…"
+          placeholder='למשל: תקציב · "תקציב הביטחון" · דיור -ירושלים'
           aria-label="טקסט לחיפוש בכל המקורות"
           style={{
             flex: "1 1 260px",
@@ -311,6 +311,18 @@ export default function QuestionsPage() {
         </div>
       </form>
 
+      {/* The syntax is only discoverable if we say it out loud. Grouping
+          parentheses are deliberately absent: the full-text backend does not
+          honour them, so offering them would quietly mislead. */}
+      <div
+        className="text-sm text-muted"
+        style={{ marginTop: "-0.5rem", marginBottom: "0.85rem", fontSize: "0.78rem" }}
+      >
+        <strong>"מרכאות"</strong> לביטוי מדויק · <strong>-מילה</strong> להחרגה ·{" "}
+        <strong>OR</strong> לחלופה. בעמודות הטקסט המלא החיפוש רץ בתוך גוף המסמך,
+        ובשאר לפי מטא-דאטה.
+      </div>
+
       {sourcesError && (
         <div role="alert" className="badge badge-danger mb-2">
           {sourcesError}
@@ -346,7 +358,9 @@ export default function QuestionsPage() {
           className="text-sm text-muted"
           style={{ marginBottom: "0.75rem" }}
         >
-          «{lastQuery}» · {totalCards.toLocaleString("he-IL")} תוצאות ·{" "}
+          {/* Plain quotes, not «» — those are the highlight markers, and using
+              them here too would read as if the whole query had matched. */}
+          “{lastQuery}” · {totalCards.toLocaleString("he-IL")} תוצאות ·{" "}
           {done}/{visible.length} מקורות
           {done < visible.length ? " · מחפש…" : ""}
         </div>

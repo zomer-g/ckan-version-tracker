@@ -49,6 +49,20 @@ def join_parts(*parts: Any, sep: str = " · ") -> str:
     return sep.join(str(p).strip() for p in parts if p is not None and str(p).strip())
 
 
+def _balance_marks(s: str) -> str:
+    """Drop a highlight marker left dangling by truncation.
+
+    Snippets carry «…» around the match. Cutting one to length can leave an
+    opener with no closer, which the client would render as an unterminated
+    highlight swallowing the rest of the line.
+    """
+    if not s or "«" not in s:
+        return s
+    if s.count("«") > s.count("»"):
+        return s[: s.rfind("«")].rstrip() + "…"
+    return s
+
+
 def first_of(row: dict, *keys: str) -> Any:
     """First present, non-empty value among keys. Corpora disagree on column
     names (the corporate registries alone use three different conventions), so
@@ -147,12 +161,17 @@ class Card:
     badges: tuple[str, ...] = ()
 
     MAX_TITLE = 180
-    MAX_SNIPPET = 240
+    # Roomier than the title because this is where the match context lives —
+    # the point of a hit inside a 300-page protocol is the sentence around it.
+    # The extra headroom over the ~220-char window also absorbs the highlight
+    # markers without eating into the text.
+    MAX_SNIPPET = 320
     MAX_BADGE = 40
 
     def __post_init__(self):
         object.__setattr__(self, "title", truncate(self.title, self.MAX_TITLE))
-        object.__setattr__(self, "snippet", truncate(self.snippet, self.MAX_SNIPPET))
+        object.__setattr__(self, "snippet", _balance_marks(
+            truncate(self.snippet, self.MAX_SNIPPET)))
         object.__setattr__(
             self, "badges",
             tuple(truncate(b, self.MAX_BADGE) for b in self.badges if b))
@@ -206,6 +225,12 @@ class Source:
     # Held by someone else. Surfaced in the UI as a "מקור חיצוני" marker so a
     # reader is never left thinking OVER produced the row.
     external: bool = False
+    # The backend parses "phrases", -exclusions and OR itself (TAG-IT does —
+    # measured, see deep_search_query). Such a source gets the user's query
+    # verbatim and its results are NOT re-filtered here: it searched full
+    # document bodies, so a match may legitimately sit outside the snippet we
+    # can see, and filtering on what we can see would drop real hits.
+    native_operators: bool = False
     run: Callable[..., Awaitable[dict]] | None = None
     filters: tuple[Filter, ...] = ()
     active: bool = True
@@ -440,9 +465,13 @@ def _n_tagit(d: dict) -> Card | None:
     if not title:
         return None
     badges = [b for b in (d.get("doc_type"),) if b]
+    # The SNIPPET first, not the abstract: TAG-IT returns the text around the
+    # match with the matched words already wrapped in «…», and that is the
+    # whole reason to search document bodies. An abstract describes the
+    # document; the snippet shows why THIS document answered THIS query.
     return Card(
         title=truncate(title, 160),
-        snippet=truncate(d.get("abstract") or d.get("snippet") or ""),
+        snippet=d.get("snippet") or truncate(d.get("abstract") or ""),
         url=d.get("link"),
         date=iso_date(d.get("date")),
         badges=tuple(badges),
@@ -797,10 +826,39 @@ SOURCES: tuple[Source, ...] = (
                              "על השלטון המקומי בלבד, 2018–2019.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        native_operators=True,
         hint="חיפוש בגוף המסמך · שלטון מקומי 2018–2019 בלבד",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_tagit_runner("tagit_mevaker_scope"),
+    ),
+    Source(
+        id="protocols_text", name="פרוטוקולי ועדות — טקסט מלא", color="#38AED0",
+        attribution={"text": "מקור חיצוני: פרוטוקולי ועדות הכנסת כפי שנסרקו ונותחו ב-TAG-IT; "
+                             "הפרוטוקול המלא בשרת הכנסת. הכיסוי חלקי ואינו כולל את כל הכנסות.",
+                     "href": "https://tag-it.biz"},
+        mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        native_operators=True,
+        hint="חיפוש בתוך דברי הדיון · כיסוי חלקי",
+        filters=DATE_RANGE,
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_tagit_runner("tagit_protocols_scope"),
+    ),
+    Source(
+        id="mmm_text", name="מסמכי ממ״מ — טקסט מלא", color="#68C4DE",
+        attribution={"text": "מקור חיצוני: מסמכי מרכז המחקר והמידע של הכנסת כפי שנסרקו "
+                             "ונותחו ב-TAG-IT; המסמך המלא בשרת הכנסת.",
+                     "href": "https://tag-it.biz"},
+        mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        native_operators=True,
+        hint="חיפוש בתוך גוף המחקר",
+        # NO date filter, on purpose. Measured 2026-08-11: 59 of 60 ממ״מ hits
+        # come back with an empty `date`, so a date range here would silently
+        # return nothing — the exact failure mode this page keeps having to
+        # design against. Restore it once TAG-IT populates the field.
+        filters=(),
+        build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        run=_tagit_runner("tagit_mmm_scope"),
     ),
     Source(
         id="gov_decisions", name="החלטות הממשלה", color="#7c3aed",
@@ -808,6 +866,7 @@ SOURCES: tuple[Source, ...] = (
                              "ההחלטה המלאה באתר gov.il.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
+        native_operators=True,
         hint="חיפוש בתוך גוף ההחלטות",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source

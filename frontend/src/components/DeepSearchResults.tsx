@@ -41,6 +41,39 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 const MUTED_CHIP = chip("var(--bg-muted, #eef2f5)", "var(--text-muted)");
 const EXTERNAL_CHIP = chip("var(--warning, #f59e0b)", "#fff");
 
+/**
+ * Snippets arrive with the matched text wrapped in «…» — TAG-IT's own
+ * convention, which the gateway also applies to locally-built snippets so
+ * there is exactly one thing to render here regardless of which corpus
+ * answered. Rendered as <mark> rather than styled spans so the highlight
+ * carries meaning for screen readers too.
+ */
+function Highlighted({ text }: { text: string }) {
+  if (!text.includes("«")) return <>{text}</>;
+  return (
+    <>
+      {text.split(/(«[^»]*»)/g).map((part, i) =>
+        part.startsWith("«") && part.endsWith("»") ? (
+          <mark
+            key={i}
+            style={{
+              background: "var(--primary-100, #CCEBF3)",
+              color: "inherit",
+              padding: "0 2px",
+              borderRadius: 2,
+              fontWeight: 600,
+            }}
+          >
+            {part.slice(1, -1)}
+          </mark>
+        ) : (
+          <React.Fragment key={i}>{part}</React.Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
 /** Round-robin across sources: every source's top hit, then every source's 2nd… */
 export function mergeInterleaved(
   sources: DeepSource[],
@@ -121,10 +154,10 @@ export function ResultCard({
               rel="noreferrer"
               style={{ color: "var(--primary)" }}
             >
-              {card.title}
+              <Highlighted text={card.title} />
             </a>
           ) : (
-            card.title
+            <Highlighted text={card.title} />
           )}
         </div>
         {card.date && (
@@ -137,9 +170,9 @@ export function ResultCard({
       {card.snippet && (
         <div
           className="text-sm text-muted"
-          style={{ marginTop: "0.3rem", lineHeight: 1.55 }}
+          style={{ marginTop: "0.3rem", lineHeight: 1.6 }}
         >
-          {card.snippet}
+          <Highlighted text={card.snippet} />
         </div>
       )}
 

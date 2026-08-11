@@ -169,7 +169,8 @@ def test_external_sources_are_declared_and_attributed():
     """Someone else's corpus must SAY so and link back to the owner — a reader
     has to be able to tell what OVER produced from what it merely surfaces."""
     external = [s for s in deep_search_sources.SOURCES if s.external]
-    assert {s.id for s in external} == {"mevaker", "gov_decisions", "obudget"}
+    assert {s.id for s in external} == {
+        "mevaker", "protocols_text", "mmm_text", "gov_decisions", "obudget"}
     for s in external:
         assert s.local is None, f"{s.id} is marked external but dispatches locally"
         assert "חיצוני" in s.attribution["text"], f"{s.id} attribution hides its origin"
@@ -200,6 +201,93 @@ def test_mevaker_catalog_targets_idx_tables_not_dataset_ids():
         assert deep_search._IDX_TABLE_RE.match(spec["table"]), spec
     opts = {o["value"] for o in deep_search_sources.MEVAKER_FILTER.options if o["value"]}
     assert opts == {s["table"] for s in deep_search_sources.MEVAKER_DATASETS}
+
+
+def test_operators_parse_into_the_right_buckets():
+    from app.services import deep_search_query as dsq
+    p = dsq.parse('"תקציב הביטחון" חינוך -ירושלים')
+    assert p.phrases == ("תקציב הביטחון",)
+    assert p.terms == ("חינוך",)
+    assert p.excludes == ("ירושלים",)
+    # The anchor is what a backend with no operator support gets: the phrase,
+    # because an exact run of text is far narrower than any single word.
+    assert p.anchor() == "תקציב הביטחון"
+    assert p.has_operators
+
+
+def test_or_is_not_silently_turned_into_and():
+    """`a OR b` widens. Enforcing every positive on a source that cannot
+    express OR would invert the operator into a narrowing one."""
+    from app.services import deep_search_query as dsq
+    p = dsq.parse("תקציב OR גירעון")
+    assert p.has_or and not p.enforce_positives
+    assert dsq.matches(p, "רק גירעון מוזכר כאן") is True
+    assert dsq.matches(p, "שום דבר רלוונטי") is False
+    # ...while a plain AND query still requires everything.
+    q = dsq.parse("תקציב גירעון")
+    assert dsq.matches(q, "רק גירעון מוזכר כאן") is False
+
+
+def test_exclusion_and_phrase_semantics():
+    from app.services import deep_search_query as dsq
+    ex = dsq.parse("תקציב -ביטחון")
+    assert dsq.matches(ex, "תקציב החינוך") is True
+    assert dsq.matches(ex, "תקציב הביטחון") is False
+    ph = dsq.parse('"תקציב הביטחון"')
+    assert dsq.matches(ph, "דיון על תקציב הביטחון היום") is True
+    assert dsq.matches(ph, "תקציב וגם הביטחון, בנפרד") is False
+
+
+def test_grouping_is_dropped_not_forwarded():
+    """Parentheses do NOT group on the full-text backend (measured). Passing
+    them through would mean the user thinks they grouped and they did not."""
+    from app.services import deep_search_query as dsq
+    p = dsq.parse("(תקציב OR גירעון) חינוך")
+    assert p.dropped_grouping
+    assert "(" not in dsq.native_query(p) and ")" not in dsq.native_query(p)
+
+
+def test_snippet_is_a_window_around_the_match():
+    from app.services import deep_search_query as dsq
+    p = dsq.parse("הביטחון")
+    long = "מבוא ארוך מאוד. " * 40 + "כאן דנים על הביטחון בהרחבה. " + "סיום ארוך. " * 40
+    sn = dsq.snippet_around(p, long, width=120)
+    assert sn and "«הביטחון»" in sn
+    assert len(sn) <= 160, "the window must stay a window"
+    assert sn.startswith("…") and sn.endswith("…"), "both sides were trimmed"
+    assert dsq.snippet_around(p, "טקסט בלי שום התאמה") is None
+
+
+def test_tagit_highlighting_is_never_rebuilt():
+    """TAG-IT already marks the match; re-marking would double-wrap it."""
+    from app.services import deep_search_query as dsq
+    assert dsq.already_highlighted("במשרד «הביטחון» מקבל") is True
+    assert dsq.already_highlighted("plain text") is False
+
+
+def test_truncation_never_leaves_a_dangling_highlight():
+    """A cut mid-marker would render as a highlight swallowing the line."""
+    c = Card(title="t", snippet="x" * 315 + " «הביטחון» ועוד טקסט")
+    assert c.snippet.count("«") == c.snippet.count("»")
+
+
+def test_full_text_sources_are_operator_native_and_metadata_ones_are_not():
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    for sid in ("mevaker", "protocols_text", "mmm_text", "gov_decisions"):
+        assert by_id[sid].native_operators is True, sid
+    for sid in ("datasets", "tables", "cbs", "protocols", "mmm", "ocal",
+                "mevaker_reports", "entities", "obudget"):
+        assert by_id[sid].native_operators is False, sid
+
+
+def test_mmm_full_text_offers_no_date_filter():
+    """Measured 2026-08-11: 59 of 60 ממ״מ hits come back with an empty date, so
+    a date range would silently return nothing. Restore it once TAG-IT
+    populates the field."""
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    assert by_id["mmm_text"].filters == ()
+    # The protocols corpus DOES carry dates, so it keeps its range filter.
+    assert {f.id for f in by_id["protocols_text"].filters} == {"date_from", "date_to"}
 
 
 def test_session_servers_are_flagged():
