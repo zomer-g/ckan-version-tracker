@@ -28,10 +28,14 @@ Seeds (all committed):
 * ``data/authority_aliases_2022.json``  — the Interior Ministry / CBS authority-name
   crosswalk: the state's OWN alternate spellings per authority.
 
+On top of those, ``ktiv_swap_rows`` derives a ת↔ט respelling layer (בוסתאן /
+בוסטאן), dropping anything that collides with a real name or is ambiguous.
+
 Load via ``POST /api/admin/settlements/load`` (worker/admin).
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -344,6 +348,58 @@ def manual_alias_rows(recs: list[dict]) -> list[tuple]:
     return manual_rows(_load_json(MANUAL_PATH), recs)
 
 
+# ת/ט are the one Hebrew pair that genuinely varies in the SAME name: Arabic ت is
+# transliterated both ways and the state's own files disagree ("בוסתאן אל-מרג'" in
+# the 2022 crosswalk, "בוסטאן" in the wild). norm() already folds spacing, hyphens
+# and geresh, so this is the remaining axis on which one place has two spellings.
+_SWAP_PAIR = {"ת": "ט", "ט": "ת"}
+# Cap simultaneous swaps: a misspelling flips one letter, occasionally two. Beyond
+# that the forms stop being plausible and the key count grows combinatorially
+# (unlimited buys ~350 more keys on ~1,900 names — not worth the blast radius).
+_MAX_SWAPS = 2
+
+
+def swap_variants(key: str, max_swaps: int = _MAX_SWAPS) -> set[str]:
+    """All ת↔ט respellings of one normalized key, up to ``max_swaps`` at once."""
+    pos = [i for i, ch in enumerate(key) if ch in _SWAP_PAIR]
+    out: set[str] = set()
+    for n in range(1, min(max_swaps, len(pos)) + 1):
+        for combo in itertools.combinations(pos, n):
+            buf = list(key)
+            for i in combo:
+                buf[i] = _SWAP_PAIR[buf[i]]
+            out.add("".join(buf))
+    out.discard(key)
+    return out
+
+
+def ktiv_swap_rows(rows: list[tuple]) -> list[tuple]:
+    """A ת↔ט spelling layer derived from the already-built alias rows.
+
+    Two guards make this safe to apply blanket-wide rather than only to names we
+    guess are Arabic (a guess that misses עראבה, כסיפה and עספיא):
+
+    * a swapped form that is ALREADY a real key is dropped — no respelling can
+      ever hijack a name the index actually knows (measured: 0 such cases today,
+      but it is the invariant that matters, not the count);
+    * a swapped form reachable from two different codes is dropped as ambiguous
+      (~363 on the settlement side) rather than resolved by weight.
+
+    Weight 30 sits below every real tier, so a swap only ever answers when
+    nothing genuine matched."""
+    existing = {r[0] for r in rows}
+    cand: dict[str, set[int]] = {}
+    surface: dict[str, str] = {}
+    for key, code, surf, _kind, _w in rows:
+        for v in swap_variants(key):
+            if v in existing:
+                continue
+            cand.setdefault(v, set()).add(code)
+            surface.setdefault(v, surf)
+    return [(v, next(iter(codes)), surface[v], "ktiv_swap", 30)
+            for v, codes in cand.items() if len(codes) == 1]
+
+
 def dedupe_aliases(rows: list[tuple]) -> list[tuple]:
     """Collapse duplicate (variant, code) alias rows to the highest-weight one.
 
@@ -400,6 +456,7 @@ async def load(*, rebuild: bool = True) -> dict:
             # such settlement and are skipped quietly.
             alias_rows.extend(manual_rows(auth_manual, recs, quiet=True))
             alias_rows = dedupe_aliases(alias_rows)
+            alias_rows += ktiv_swap_rows(alias_rows)
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(ALIASES_TABLE)} (variant,code,surface,kind,weight)
                     VALUES ($1,$2,$3,$4,$5)
@@ -427,6 +484,7 @@ async def load(*, rebuild: bool = True) -> dict:
                     auth_alias_rows.append((key, r["code"], surface, kind, weight))
             auth_alias_rows.extend(manual_rows(auth_manual, auth))
             auth_alias_rows = dedupe_aliases(auth_alias_rows)
+            auth_alias_rows += ktiv_swap_rows(auth_alias_rows)
             await conn.executemany(
                 f"""INSERT INTO public.{_qi(AUTH_ALIASES_TABLE)} (variant,code,surface,kind,weight)
                     VALUES ($1,$2,$3,$4,$5)

@@ -110,6 +110,42 @@ def test_authority_crosswalk_resolves_on_both_indexes():
     assert "עמק לוד" not in s_rows
 
 
+def test_swap_variants_bounded_and_symmetric():
+    assert si.swap_variants(si.norm("בוסתאן אל-מרג'")) >= {si.norm("בוסטאן אל-מרג'")}
+    assert si.swap_variants("אבג") == set()          # no ת/ט → nothing
+    # at most _MAX_SWAPS letters flip at once: 3 positions → 3 singles + 3 pairs
+    assert len(si.swap_variants("תתת")) == 6
+    assert "טטט" not in si.swap_variants("תתת")
+
+
+def test_ktiv_swap_layer_never_hijacks_a_real_name():
+    """The layer is applied blanket-wide, so its safety rests entirely on the two
+    guards — assert them against the real seeds, not a fixture."""
+    for seed, extra in ((si.load_seed(), si.manual_alias_rows(si.load_seed())),
+                        (si._load_json(si.AUTH_SEED_PATH), [])):
+        base = si.dedupe_aliases(
+            [(k, r["code"], s, kind, w) for r in seed for k, s, kind, w in si.aliases_for(r)] + extra)
+        real = {k for k, _, _, _, _ in base}
+        swaps = si.ktiv_swap_rows(base)
+        # guard 1: never shadows a key the index genuinely knows
+        assert not [r for r in swaps if r[0] in real]
+        # guard 2: one code per key, and always the bottom weight tier
+        assert len({r[0] for r in swaps}) == len(swaps)
+        assert {r[4] for r in swaps} == {30}
+        assert {r[3] for r in swaps} == {"ktiv_swap"}
+
+
+def test_ktiv_swap_resolves_the_taw_tet_spelling():
+    auth = si._load_json(si.AUTH_SEED_PATH)
+    base = si.dedupe_aliases(
+        [(k, a["code"], s, kind, w) for a in auth for k, s, kind, w in si.aliases_for(a)]
+        + si.manual_rows(si._load_json(si.AUTH_MANUAL_PATH), auth))
+    by_key = {r[0]: r[1] for r in base + si.ktiv_swap_rows(base)}
+    code = next(a["code"] for a in auth if a["name"] == "בוסתן אל-מרג'")
+    for spelling in ["בוסטאן אל-מרג'", "בוסטאן אל מרג", "מ.א. בוסטאן אל-מרג"]:
+        assert by_key.get(si.norm(spelling)) == code, spelling
+
+
 def test_dedupe_aliases_keeps_highest_weight():
     rows = [("k", 1, "a", "manual_prefix", 55), ("k", 1, "b", "official", 100),
             ("k", 2, "c", "manual", 85)]
