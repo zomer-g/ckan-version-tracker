@@ -361,7 +361,7 @@ def test_sync_one_records_failure_and_does_not_raise(monkeypatch):
     and must not abort the rest of the chunk."""
     recorded = {}
 
-    async def fake_load(value, table):
+    async def fake_load(value, table, *, force_rebuild=False):
         raise RuntimeError("object missing")
 
     async def fake_record(dsid, table, vnum, rows, error, **kw):
@@ -381,7 +381,7 @@ def test_sync_one_records_failure_and_does_not_raise(monkeypatch):
 def test_sync_one_records_success(monkeypatch):
     recorded = {}
 
-    async def fake_load(value, table):
+    async def fake_load(value, table, *, force_rebuild=False):
         return {"table": table, "rows": 42, "columns": 3}
 
     async def fake_record(dsid, table, vnum, rows, error, **kw):
@@ -410,7 +410,7 @@ def test_sync_due_invalidates_the_catalog_cache(monkeypatch):
 
     monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
 
-    async def fake_pending(db, limit=None, dataset_id=None):
+    async def fake_pending(db, limit=None, dataset_id=None, force=False):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:k"}]
 
@@ -434,7 +434,7 @@ def test_sync_due_reports_failures_without_invalidating(monkeypatch):
 
     monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
 
-    async def fake_pending(db, limit=None, dataset_id=None):
+    async def fake_pending(db, limit=None, dataset_id=None, force=False):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:k"}]
 
@@ -456,7 +456,7 @@ def test_results_never_leak_the_storage_key(monkeypatch):
     """The summary is returned to an admin endpoint; the r2 key is internal."""
     monkeypatch.setattr(append_store.settings, "append_database_url", "postgresql://x/y")
 
-    async def fake_pending(db, limit=None, dataset_id=None):
+    async def fake_pending(db, limit=None, dataset_id=None, force=False):
         return [{"dataset_id": "d1", "title": "T", "table": "t",
                  "version_number": 1, "r2_value": "r2:secret/key"}]
 
@@ -898,7 +898,7 @@ def test_oversized_csv_is_deferred_before_any_download(monkeypatch):
     async def fake_size(v):
         return 400 * 2**20
 
-    async def fake_load(v, t):
+    async def fake_load(v, t, *, force_rebuild=False):
         downloaded["n"] += 1
         return {"rows": 1, "columns": 1}
 
@@ -941,7 +941,7 @@ def test_within_the_cap_loads_normally(monkeypatch):
     async def fake_size(v):
         return 5 * 2**20
 
-    async def fake_load(v, t):
+    async def fake_load(v, t, *, force_rebuild=False):
         return {"rows": 7, "columns": 2}
 
     async def fake_record(dsid, table, vnum, rows, error, **kw):
@@ -965,7 +965,7 @@ def test_attempt_is_claimed_before_the_load(monkeypatch):
     async def fake_record(dsid, table, vnum, rows, error, **kw):
         order.append(("record", error, kw.get("bump_attempt")))
 
-    async def fake_load(v, t):
+    async def fake_load(v, t, *, force_rebuild=False):
         order.append(("load", None, None))
         return {"rows": 1, "columns": 1}
 
