@@ -62,6 +62,20 @@ def test_force_rebuild_skips_the_append_branch():
     assert "if not force_rebuild and _can_append(live, columns):" in src
 
 
+def test_force_clears_BOTH_checkpoint_gates_in_pending():
+    """pending() filters on the checkpoint twice — once in the PASS-1 version
+    diff, once again after the index CSV is resolved. The first attempt at this
+    cleared only the first, so a forced run answered "pending: 0" and read as
+    though the dataset were ineligible rather than as a flag that stopped
+    halfway. Both gates, or the lever does nothing.
+    """
+    src = inspect.getsource(index_mirror.pending)
+    assert "if force or done.get(str(r[0]), -1) < int(r[1])" in src, "PASS-1 gate"
+    assert "if not force and done.get(str(ds.id), -1) >= vnum:" in src, "second gate"
+    assert src.count("done.get(") == 2, (
+        "a third checkpoint test appeared — make sure it honours `force` too")
+
+
 def test_the_admin_endpoint_exposes_it():
     from app.api import admin
     sig = inspect.signature(admin.index_mirror_sync).parameters

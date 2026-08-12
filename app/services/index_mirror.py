@@ -1298,7 +1298,12 @@ async def pending(db, *, limit: int | None = None,
         if not got:
             continue          # no version yet, or it carries no index CSV
         vnum, value = got
-        if done.get(str(ds.id), -1) >= vnum:
+        # The SECOND checkpoint gate. `force` has to be honoured here as well as
+        # in the PASS-1 diff above: a corrected table is settled at its current
+        # version by definition, so a flag that clears only one of the two gates
+        # silently does nothing — which is how the first attempt at this
+        # returned "pending: 0" and looked like the dataset was ineligible.
+        if not force and done.get(str(ds.id), -1) >= vnum:
             continue                      # already mirrored at this version
         out.append({
             "dataset_id": ds.id,
