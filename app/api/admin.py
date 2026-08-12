@@ -2367,7 +2367,7 @@ _IDX_BG: set = set()
 
 
 async def _run_index_sync_bg(limit: int, who: str, max_csv_mb: int | None = None,
-                             dataset_id=None) -> None:
+                             dataset_id=None, force_rebuild: bool = False) -> None:
     """Background runner for a backfill chunk. Opens its own DB session — a
     multi-GB layer can stream for far longer than an HTTP request may live."""
     from app.database import async_session
@@ -2375,7 +2375,8 @@ async def _run_index_sync_bg(limit: int, who: str, max_csv_mb: int | None = None
     async with async_session() as db:
         try:
             s = await index_mirror.sync_due(db, limit=limit, dataset_id=dataset_id,
-                                            max_csv_mb=max_csv_mb)
+                                            max_csv_mb=max_csv_mb,
+                                            force_rebuild=force_rebuild)
             logger.info("Index mirror sync by %s: synced=%s failed=%s rows=%s "
                         "new=%s appended=%s rebuilt=%s",
                         who, s.get("synced"), s.get("failed"), s.get("rows"),
@@ -2461,6 +2462,7 @@ async def index_mirror_sync(
     dataset_id: str | None = None,
     max_csv_mb: int | None = None,
     wait: bool = False,
+    force_rebuild: bool = False,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2484,12 +2486,15 @@ async def index_mirror_sync(
     uid = parse_uuid(dataset_id, "dataset_id") if dataset_id else None
     if wait:
         s = await index_mirror.sync_due(db, limit=limit, dataset_id=uid,
-                                        max_csv_mb=max_csv_mb)
+                                        max_csv_mb=max_csv_mb,
+                                        force_rebuild=force_rebuild)
         logger.info("Index mirror sync (inline) by %s: %s", user.email,
                     {k: v for k, v in s.items() if k != "results"})
         return s
-    todo = await index_mirror.pending(db, limit=limit, dataset_id=uid)
-    background_tasks.add_task(_run_index_sync_bg, limit, user.email, max_csv_mb, uid)
+    todo = await index_mirror.pending(db, limit=limit, dataset_id=uid,
+                                      force=force_rebuild)
+    background_tasks.add_task(_run_index_sync_bg, limit, user.email, max_csv_mb,
+                              uid, force_rebuild)
     return {"started": True, "queued": len(todo),
             "note": "running in the background — poll /index-mirror/status"}
 

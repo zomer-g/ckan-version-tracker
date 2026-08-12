@@ -1024,7 +1024,8 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
             "mode": "append", "geom": geom}
 
 
-async def load_index_csv(r2_value: str, table: str) -> dict:
+async def load_index_csv(r2_value: str, table: str, *,
+                         force_rebuild: bool = False) -> dict:
     """Load one index CSV from R2 into ``idx.<table>``.
 
     ``r2_value`` is the ``r2:``-marked value straight out of
@@ -1065,7 +1066,7 @@ async def load_index_csv(r2_value: str, table: str) -> dict:
             await ensure_schema(conn)
             live = await _live_columns(conn, table)
             res = None
-            if _can_append(live, columns):
+            if not force_rebuild and _can_append(live, columns):
                 # None = the append path found the geometry frame had changed
                 # and handed the table back for a rebuild (see _append).
                 res = await _append(conn, tmp, table, _source_columns(live),
@@ -1187,7 +1188,7 @@ async def _record(dataset_id, table: str, version_number: int,
 
 
 async def pending(db, *, limit: int | None = None,
-                  dataset_id=None) -> list[dict]:
+                  dataset_id=None, force: bool = False) -> list[dict]:
     """Datasets whose latest version is newer than what ``idx`` holds.
 
     One query for the datasets, one for their latest versions, one for the
@@ -1266,8 +1267,11 @@ async def pending(db, *, limit: int | None = None,
             .order_by(VersionIndex.tracked_dataset_id,
                       VersionIndex.version_number.desc())
         )).all()
+        # `force` re-offers a dataset the checkpoint considers settled. It is
+        # the only way to reach a table whose CSV did NOT move but whose
+        # CONTENT has to be reloaded — see sync_due's force_rebuild.
         moved += [(r[0], int(r[1])) for r in rows
-                  if done.get(str(r[0]), -1) < int(r[1])]
+                  if force or done.get(str(r[0]), -1) < int(r[1])]
     if not moved:
         return []                 # the normal case: one cheap query, no JSONB
 
@@ -1329,7 +1333,8 @@ async def _table_is_live(table: str) -> bool:
         return False
 
 
-async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
+async def sync_one(item: dict, *, max_bytes: int | None = None,
+                   force_rebuild: bool = False) -> dict:
     """Mirror one pending dataset. Never raises.
 
     Two guards stand in front of the load, both learned from OOM-killing the web
@@ -1377,7 +1382,8 @@ async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
     await _record(item["dataset_id"], item["table"], item["version_number"],
                   None, "in progress", bump_attempt=True)
     try:
-        res = await load_index_csv(item["r2_value"], item["table"])
+        res = await load_index_csv(item["r2_value"], item["table"],
+                                   force_rebuild=force_rebuild)
         await _record(item["dataset_id"], item["table"], item["version_number"],
                       res["rows"], None,
                       postgis_rows=res.get("geom_rows"),
@@ -1395,22 +1401,41 @@ async def sync_one(item: dict, *, max_bytes: int | None = None) -> dict:
 
 
 async def sync_due(db, *, limit: int = 20, dataset_id=None,
-                   max_csv_mb: int | None = None) -> dict:
+                   max_csv_mb: int | None = None,
+                   force_rebuild: bool = False) -> dict:
     """Mirror up to ``limit`` datasets whose index CSV moved. Sequential on
     purpose: each load already streams a whole CSV through the dyno, and running
     several at once is what would put memory back at risk.
+
+    ``force_rebuild`` replaces the table instead of appending to it, and also
+    re-offers datasets the checkpoint considers settled. It exists for the one
+    case the automatic choice cannot see.
+
+    ``_can_append`` rebuilds when the column SET changes, because a new set is a
+    new identity and every row would read as new. But the hash is over VALUES,
+    so back-filling a column that already existed produces exactly the same
+    doubling with no schema change to detect: on 2026-08-12 repairing the
+    attachment join key on jda-tenders re-inserted 159 of 198 rows beside their
+    old copies, and idx went to 357 rows for a 198-row corpus. The version was
+    right; the queryable mirror was not.
+
+    There is no way to tell "these values were corrected" from "these are new
+    rows" by looking at the data, so it is an operator's call, and this is the
+    lever. Use it after any retroactive backfill; it costs one full reload.
 
     Returns a summary; the caller decides whether to keep going (the backfill
     driver just calls this repeatedly until ``pending`` is empty)."""
     if not append_store.is_configured():
         return {"skipped": "append DB not configured"}
-    todo = await pending(db, limit=limit, dataset_id=dataset_id)
+    todo = await pending(db, limit=limit, dataset_id=dataset_id,
+                        force=force_rebuild)
     if not todo:
         return {"pending": 0, "synced": 0, "failed": 0, "results": []}
 
     cap_mb = settings.index_mirror_max_csv_mb if max_csv_mb is None else max_csv_mb
     max_bytes = int(cap_mb) * 1024 * 1024 if cap_mb else None
-    results = [await sync_one(item, max_bytes=max_bytes) for item in todo]
+    results = [await sync_one(item, max_bytes=max_bytes,
+                             force_rebuild=force_rebuild) for item in todo]
     ok = [r for r in results if r.get("ok")]
     deferred = [r for r in results if r.get("deferred")]
     bad = [r for r in results if not r.get("ok") and not r.get("deferred")]
