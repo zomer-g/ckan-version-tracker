@@ -225,7 +225,21 @@ function downloadAllFiles(
     window.setTimeout(() => {
       const a = document.createElement("a");
       a.href = fileDownloadUrl(versionId, f);
+      // The href is same-origin but 302s to the object store, and whether the
+      // browser then downloads or RENDERS depends on the type it is served
+      // with. Without a target, the first file that renders navigates the page
+      // away — and every later click in this batch dies with it. Reported as
+      // "הורד הכל (3) מוריד רק csv": the CSV went first, and the GeoJSON and
+      // the symbology ZIP never got the chance.
+      //
+      // _blank keeps this page alive whatever any one file does. A file that
+      // downloads closes its tab immediately; one that renders opens in its
+      // own tab, which is a reasonable outcome and not a lost download.
+      a.target = "_blank";
       a.rel = "noopener";
+      // Ignored cross-origin, and harmless — it still names the file on the
+      // same-origin hop and states the intent.
+      a.download = f.name;
       document.body.appendChild(a);
       a.click();
       a.remove();
