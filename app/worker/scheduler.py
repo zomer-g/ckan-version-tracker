@@ -342,6 +342,44 @@ async def init_scheduler() -> None:
         misfire_grace_time=600,
     )
 
+    # נדל"ן לעם address geocoding: keep exactly ONE batch of 10k in the queue.
+    # This tick is the pacing mechanism — enqueue_next_batch() is a no-op while a
+    # batch is still pending or running, so the rate is set by how fast the
+    # worker drains one (~85 min at 2 req/s), not by this interval. It also
+    # does nothing at all until an admin has created the tracked dataset, so the
+    # feature stays off until someone turns it on.
+    async def geocode_enqueue_job() -> None:
+        if not _settings.append_database_url:
+            return
+        from app.database import async_session
+        from app.models.tracked_dataset import TrackedDataset
+        from sqlalchemy import select as _select
+        from app.services import geocode_queue
+        try:
+            async with async_session() as db:
+                ds = (await db.execute(
+                    _select(TrackedDataset).where(
+                        TrackedDataset.ckan_name == geocode_queue.DATASET_SLUG)
+                )).scalar_one_or_none()
+                if ds is None:
+                    return          # not switched on
+                await geocode_queue.ensure_tables()
+                await geocode_queue.enqueue_next_batch(db)
+                # Fold in whatever the last batch returned, so coverage moves
+                # without waiting for a manual merge.
+                await geocode_queue.merge_into_addresses()
+        except Exception:  # noqa: BLE001 — enrichment must never kill a tick
+            logger.exception("geocode enqueue tick failed")
+
+    scheduler.add_job(
+        geocode_enqueue_job,
+        trigger=IntervalTrigger(minutes=15),
+        id="geocode_enqueue",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the

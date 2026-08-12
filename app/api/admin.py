@@ -3214,6 +3214,57 @@ async def settlements_load(
     return {"status": "ok", **res}
 
 
+@router.post("/nadlan/geocode/enqueue")
+@limiter.limit("6/minute")
+async def nadlan_geocode_enqueue(
+    request: Request,
+    size: int = 10000,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue ONE geocoding batch (creates the tracked dataset on first call).
+
+    One at a time by design — the queue is shared, and a thousand queued
+    geocoding rows would bury every other job's visibility even though
+    PRIORITY_GEOCODE keeps them from being claimed first. Until this dataset
+    exists the worker's govmap_geocode scraper is inert."""
+    from app.services import append_store as _as
+    from app.services import geocode_queue
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    await geocode_queue.ensure_tables()
+    res = await geocode_queue.enqueue_next_batch(db, size=max(1, min(int(size), 50000)))
+    logger.info("geocode enqueue by %s: %s", user.email, res)
+    return res
+
+
+@router.post("/nadlan/geocode/merge")
+@limiter.limit("6/minute")
+async def nadlan_geocode_merge(request: Request, user: User = Depends(get_admin_user)):
+    """Fold geocoded points into over_re_addresses (never overwriting one)."""
+    from app.services import geocode_queue
+    return await geocode_queue.merge_into_addresses()
+
+
+@router.get("/nadlan/geocode/state")
+@limiter.limit("30/minute")
+async def nadlan_geocode_state(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services import geocode_queue
+    try:
+        st = await geocode_queue.stats()
+    except Exception as e:  # noqa: BLE001 — table may not exist before first use
+        return {"ready": False, "note": str(e)}
+    task = await geocode_queue.pending_task(db)
+    return {"ready": True, **st,
+            "in_flight": ({"id": str(task.id), "status": task.status,
+                           "phase": task.phase, "progress": task.progress}
+                          if task is not None else None)}
+
+
 async def _run_nadlan_bg(stages: list[str] | None):
     from app.services import nadlan_index
     try:

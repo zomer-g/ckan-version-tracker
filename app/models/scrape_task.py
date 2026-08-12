@@ -28,6 +28,10 @@ PRIORITY_MANUAL = 200      # admin "דגום" — a human is watching, jump the 
 PRIORITY_ROUTINE = 100     # scheduled polls: the normal cadence of the system
 PRIORITY_COVERAGE = 10     # GovMap coverage rollout's routine quarterly refresh
 PRIORITY_BACKFILL = 0      # one-shot whole-catalog re-scrapes; strictly last
+# Below BOTH GovMap bands on purpose: a GovMap layer entering the queue must be
+# claimed before the next geocoding batch. Geocoding is open-ended enrichment —
+# it must never delay the catalogue work the queue exists for.
+PRIORITY_GEOCODE = -10     # GovMap address geocoding batches; yields to everything
 
 
 # ── interrupted runs ────────────────────────────────────────────────────

@@ -3285,3 +3285,78 @@ async def complete_local(
     logger.info("Scrape task %s completed locally (no upload): %s files, %s records — %s",
                 task_id, body.file_count, body.record_count, task.message)
     return {"status": "completed_local"}
+
+
+# ── נדל"ן לעם: address geocoding batches ─────────────────────────────────────
+# Two endpoints, same worker Bearer as /poll. The worker fetches a batch, asks
+# GovMap one address at a time at ~2/s, and posts back what it got.
+#
+# The batch is re-selected from `point IS NULL` on EVERY call and never reserved:
+# the worker deliberately keeps no checkpoint, so an aborted batch is recovered
+# purely by the next selection seeing those addresses again. A reservation would
+# be a second copy of that state, free to disagree with the first.
+
+@router.get("/geocode/batch/{task_id}")
+async def geocode_batch(
+    request: Request,
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Addresses for this batch: ``{"addresses": [{address_key, query}, ...]}``.
+
+    The worker accepts either this shape or a bare array; the wrapped form is
+    used so the count and the batch size can travel with it."""
+    _verify_worker_key(request)
+    from app.services import geocode_queue
+
+    task = await db.get(ScrapeTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    size = int((task.params or {}).get("batch_size") or geocode_queue.BATCH_SIZE)
+    rows = await geocode_queue.batch_for_task(size)
+    logger.info("geocode: handing task %s a batch of %d", task_id, len(rows))
+    return {"task_id": str(task_id), "batch_size": size,
+            "count": len(rows), "addresses": rows}
+
+
+@router.post("/geocode/results")
+async def geocode_results(
+    request: Request,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record one batch's outcome and close its task.
+
+    The three outcomes are NOT interchangeable:
+      * ``results``   → recorded with the point.
+      * ``not_found`` (== ``misses``) → recorded as a miss so the address stops
+        being offered; without this, `point IS NULL` would re-offer it forever.
+      * ``failed``    → recorded NOWHERE, so it returns in the next batch. It
+        means "we could not ask", not "there is nothing there".
+    Anything in neither list was never attempted, and likewise returns.
+    """
+    _verify_worker_key(request)
+    from app.services import geocode_queue
+
+    summary = await geocode_queue.record_results(body)
+
+    task_id = body.get("task_id")
+    if task_id:
+        try:
+            task = await db.get(ScrapeTask, uuid.UUID(str(task_id)))
+        except (ValueError, AttributeError):
+            task = None
+        if task is not None:
+            aborted = bool(body.get("aborted"))
+            task.status = "completed"
+            task.phase = "aborted" if aborted else "done"
+            task.progress = 100
+            task.completed_at = datetime.now(timezone.utc)
+            task.message = (
+                f"גיאוקודינג: {summary['recorded_hits']} נמצאו, "
+                f"{summary['recorded_not_found']} לא קיימות, "
+                f"{summary['requeued_failed']} חוזרות לתור"
+                + (f" — נעצר: {body.get('abort_reason')}" if aborted else "")
+            )[:500]
+            await db.commit()
+    return {"status": "recorded", **summary}

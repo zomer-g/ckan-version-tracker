@@ -275,6 +275,49 @@ normalized. So for the 308 streets whose canonical name carries a type word
 (**91.6 %**) — the gap is where the stripped variant was poisoned as ambiguous.
 Stripping the type on the query side too would close it.
 
+## Filling the coordinate gap: GovMap geocoding
+
+~260k addresses have no point, and without a point there is no parcel. GovMap's
+search service geocodes them. Verified against 40 of our own confirmed addresses:
+**median 1.5 m** from the point we already had (33/36 within 10 m) — effectively
+the same MAPI source. Two outliers at ~2.2 km (`דרך בית לחם 16/34 ירושלים`).
+
+**The endpoint** (anonymous, no token; contract extracted from the site's own
+bundle): `POST https://www.govmap.gov.il/api/search-service/autocomplete` with
+`{searchText, language, filterType:"address", isAccurate:true, maxResults}` and
+the `x-fingerprint-id` / `x-user-id` / `x-trace-id` / `Referer` headers — without
+them it 400s. `shape` is a POINT in **EPSG:3857**. Hard cap of **100 results**
+and **no paging** (`from`/`offset`/`skip`/`page`/`startIndex` all return the same
+page), so the layer cannot be dumped — only geocoded address by address. GovMap's
+WFS has been shut to anonymous callers since their 2026 rebuild.
+
+**It runs on the WORKER, through the scrape queue**, in batches of 10,000 at
+~2 req/s (~85 min a batch). Two endpoints: `GET /api/worker/geocode/batch/{task_id}`
+and `POST /api/worker/geocode/results`.
+
+`PRIORITY_GEOCODE = -10` sits below **both** GovMap bands (`COVERAGE 10`,
+`BACKFILL 0`), so a GovMap layer entering the queue is always claimed before the
+next geocoding batch. Enrichment must never delay the catalogue work.
+
+Three rules that keep work from vanishing:
+
+* **The batch selection is idempotent** — re-derived from `point IS NULL` on
+  every call, never reserved. The worker keeps no checkpoint on purpose, so an
+  aborted batch recovers purely by those addresses being selected again. A
+  reservation would be a second copy of that state, free to disagree.
+* **`failed` is recorded nowhere.** It means "we could not ask", not "there is
+  nothing there"; writing it would retire an available address permanently.
+* **`not_found` is recorded** (terminal after `MAX_ATTEMPTS` refusals), or the
+  same address is handed to every future batch and the queue never drains.
+
+The merge accepts a geocoded point only if it falls within 3 km of a parcel in
+the address's **own locality** — that, not a score threshold, is what rejects the
+2.2 km outliers. It never overwrites a point that already exists.
+
+Off until switched on: the worker's scraper is inert until a `tracked_dataset`
+with `scraper_config.kind = "govmap_geocode"` exists, which
+`POST /api/admin/nadlan/geocode/enqueue` creates.
+
 ## Verifying
 
 ```bash
