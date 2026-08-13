@@ -757,6 +757,11 @@ _AUTOMATION_DDL = [
         updated_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT automation_settings_single CHECK (id = 1))""",
     "INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+    # Telemetry for the residential worker's diary-fetch poll (see
+    # app/api/worker.py ocal-candidates): "is a worker actually calling in?"
+    # answerable from SQL even while the throttle returns an empty candidate list.
+    "ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS worker_last_poll timestamptz",
+    "ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS worker_poll_count int NOT NULL DEFAULT 0",
     """CREATE TABLE IF NOT EXISTS auto_import_logs (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
@@ -785,7 +790,8 @@ async def get_automation_settings() -> dict:
     await ensure_automation_tables()
     try:
         row = await ocal_db.fetchrow(
-            "SELECT auto_scan_enabled, interval_hours, confidence, min_rows, updated_at "
+            "SELECT auto_scan_enabled, interval_hours, confidence, min_rows, updated_at, "
+            "worker_last_poll, worker_poll_count "
             "FROM automation_settings WHERE id=1")
         if row:
             return dict(row)

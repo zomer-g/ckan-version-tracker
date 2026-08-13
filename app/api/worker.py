@@ -3381,6 +3381,15 @@ async def ocal_worker_candidates(request: Request, limit: int = 25,
     from app.services import ocal_db, ocal_import
     if not ocal_db.is_configured():
         return {"candidates": [], "reason": "ocal_not_configured"}
+    # Stamp the poll (best-effort) so "is the residential worker actually
+    # reaching us?" is answerable from SQL even when the throttle returns [] —
+    # a successful stamp means an authenticated worker called in this minute.
+    try:
+        await ocal_db.execute(
+            "UPDATE automation_settings SET worker_last_poll = now(), "
+            "worker_poll_count = COALESCE(worker_poll_count, 0) + 1")
+    except Exception:  # noqa: BLE001 — a telemetry write must never fail the poll
+        pass
     last = await ocal_db.fetchval("SELECT max(created_at) FROM diary_sources")
     if last is not None:
         gap = await ocal_db.fetchval("SELECT EXTRACT(epoch FROM now() - $1)", last)
