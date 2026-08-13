@@ -57,6 +57,33 @@ class SkipImport(Exception):
     """Raised when a discovered resource does not pass the auto-import gate."""
 
 
+# odata serves some "diary" resources that are not tables at all — most often an
+# image mislabelled as .xlsx (a JPEG whose magic is FF D8, not a ZIP), or a file
+# whose declared format we don't parse. openpyxl/xlrd/csv then raise a hard error,
+# which the callers turn into a SkipImport (→ diary_exceptions) rather than a 500
+# so the worker's upload path degrades gracefully and discovery stops re-offering
+# the poison resource. Built defensively: the optional libs may be absent.
+import zipfile as _zipfile  # noqa: E402
+
+
+def _parse_error_types() -> tuple:
+    types: list = [_zipfile.BadZipFile, ValueError]
+    try:
+        from openpyxl.utils.exceptions import InvalidFileException
+        types.append(InvalidFileException)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from xlrd.biffh import XLRDError
+        types.append(XLRDError)
+    except Exception:  # noqa: BLE001
+        pass
+    return tuple(t for t in types if isinstance(t, type))
+
+
+_PARSE_ERRORS = _parse_error_types()
+
+
 # ── field mapping (ported from OCAL fieldMapper.ts HEURISTIC_PATTERNS) ───────
 # Ordered specific → general; the earliest matching pattern for a column wins,
 # and across columns the one with the lowest pattern index claims the target.
@@ -619,7 +646,12 @@ async def import_resource(resource_id: str, *, force: bool = False,
     if not ocal_db.is_configured():
         raise RuntimeError("OCAL_DATABASE_URL not configured")
     res, pkg = await _fetch_metadata(resource_id)
-    columns, rows = await _fetch_and_parse(res)
+    try:
+        columns, rows = await _fetch_and_parse(res)
+    except _PARSE_ERRORS as e:
+        await _record_exception(res, pkg, "unsupported_format")
+        raise SkipImport(
+            f"unparseable {(res.get('format') or 'file')}: {type(e).__name__}: {e}")
     return await _import_parsed(resource_id, res, pkg, columns, rows,
                                 force=force, enrich=enrich, refresh_matview=refresh_matview)
 
@@ -645,7 +677,14 @@ async def import_diary_bytes(resource_id: str, data: bytes, fmt: str, *,
     try:
         with open(tmp, "wb") as fh:
             fh.write(data)
-        columns, rows = await asyncio.to_thread(odi._parse_file, tmp, ufmt or "CSV")
+        try:
+            columns, rows = await asyncio.to_thread(odi._parse_file, tmp, ufmt or "CSV")
+        except _PARSE_ERRORS as e:
+            # Not a table (e.g. a JPEG served as .xlsx). Record it (as the
+            # constrained 'unsupported_format' reason) so discovery stops
+            # offering it, and skip instead of 500ing the worker upload.
+            await _record_exception(res, pkg, "unsupported_format")
+            raise SkipImport(f"unparseable {ufmt or 'file'}: {type(e).__name__}: {e}")
     finally:
         try:
             os.remove(tmp)
