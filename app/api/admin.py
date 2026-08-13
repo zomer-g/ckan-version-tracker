@@ -3238,6 +3238,20 @@ async def nadlan_geocode_enqueue(
     return res
 
 
+@router.post("/nadlan/geocode/reset-misses")
+@limiter.limit("6/minute")
+async def nadlan_geocode_reset_misses(
+    request: Request,
+    only_burned: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Return soft-blocked addresses to the work list (hits are never touched)."""
+    from app.services import geocode_queue
+    res = await geocode_queue.reset_misses(only_burned=only_burned)
+    logger.warning("geocode reset-misses by %s: %s", user.email, res)
+    return res
+
+
 @router.post("/nadlan/geocode/merge")
 @limiter.limit("6/minute")
 async def nadlan_geocode_merge(request: Request, user: User = Depends(get_admin_user)):

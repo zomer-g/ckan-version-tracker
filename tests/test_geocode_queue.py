@@ -157,3 +157,49 @@ def test_a_miss_becomes_terminal_only_after_several_refusals():
 
 def test_batch_size_is_ten_thousand():
     assert gq.BATCH_SIZE == 10_000
+
+
+# ── the soft block ────────────────────────────────────────────────────────────
+def test_a_batch_with_no_hits_is_quarantined_not_believed(sink):
+    """GovMap answers a soft block with HTTP 200 and an empty list — identical
+    to "no such address" in a single response. Believing it cost 25,548
+    addresses on the first night: they hit attempts=3 and left the selection
+    for good while every run reported success."""
+    out = asyncio.run(gq.record_results({
+        "results": [],
+        "not_found": [f"k{i}" for i in range(300)],
+        "attempted": 300, "batch_size": 10000,
+        "samples": ["נהלל 12 נהלל"],
+    }))
+    assert out["quarantined"], "300 asked with zero found must not be believed"
+    assert out["recorded_not_found"] == 0, "no miss may be written"
+    assert out["requeued_failed"] == 300, "every one returns to the queue"
+    assert _written_keys(sink, "over_re_geocode") == set()
+
+
+def test_a_plausible_batch_is_still_recorded_normally(sink):
+    """The guard must not swallow ordinary work — real slices run 15-60% hits."""
+    hits = [{"address_key": f"h{i}", "lat": 32.0, "lon": 34.9} for i in range(120)]
+    out = asyncio.run(gq.record_results({
+        "results": hits, "not_found": [f"m{i}" for i in range(180)]}))
+    assert out["quarantined"] is None
+    assert out["recorded_hits"] == 120 and out["recorded_not_found"] == 180
+
+
+def test_a_tiny_batch_is_never_quarantined(sink):
+    """Below the sample floor, zero hits is luck rather than evidence."""
+    out = asyncio.run(gq.record_results({"results": [], "not_found": ["a", "b"]}))
+    assert out["quarantined"] is None
+    assert out["recorded_not_found"] == 2
+
+
+def test_an_aborted_batch_never_spends_an_attempt(sink):
+    """The run that triggered the abort is the least trustworthy one there is."""
+    asyncio.run(gq.record_results({
+        "results": [{"address_key": f"h{i}", "lat": 32.0, "lon": 34.9} for i in range(60)],
+        "not_found": [f"m{i}" for i in range(60)],
+        "aborted": True, "abort_reason": "100 consecutive no-response",
+    }))
+    rows = [r for c in sink if c[0] == "many" and "not_found" in c[1] for r in c[2]]
+    assert rows, "the misses should still be recorded"
+    assert all(r[1] == 0 for r in rows), "an aborted batch must add 0 to attempts"

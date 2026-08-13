@@ -220,17 +220,64 @@ async def remaining_count() -> int:
         """) or 0
 
 
+# A batch that asked this many addresses and got essentially nothing was not
+# looking at empty countryside — it was being refused. GovMap answers a SOFT
+# block with HTTP 200 and an empty result list, which is byte-identical to "no
+# such address"; only the RUN distinguishes them. Ground truth from sampling:
+# even the worst slice (moshavim/kibbutzim, the head of ORDER BY address_key)
+# returns ~60% hits, and cities ~58%.
+#
+# This cost 25,548 addresses on the first night: they reached attempts=3 and left
+# the selection permanently, while every run reported success. The worker now
+# aborts on a run of 100 (GOVSCRAPER e386785); this is the second line of
+# defence, because the damage lands HERE and must be impossible to write.
+_IMPLAUSIBLE_MIN_ASKED = 50
+_IMPLAUSIBLE_HIT_RATE = 0.02
+
+
+def _looks_like_a_soft_block(hits: int, not_found: int, payload: dict) -> str | None:
+    """Why this payload's misses must NOT be believed — or None if they can be."""
+    asked = hits + not_found
+    if asked < _IMPLAUSIBLE_MIN_ASKED:
+        return None
+    if hits == 0:
+        return f"{asked} addresses asked, zero found"
+    if hits / asked < _IMPLAUSIBLE_HIT_RATE:
+        return f"{hits}/{asked} found ({100 * hits / asked:.1f}%)"
+    return None
+
+
 async def record_results(payload: dict) -> dict:
     """Persist one batch's outcome.
 
     ``failed`` is deliberately NOT written: the worker could not ask, so the
     address must reappear in the next selection. Writing it would make an
-    available address look like a settled miss."""
+    available address look like a settled miss.
+
+    Two further protections against burning an address's limited attempts on an
+    answer GovMap never really gave:
+
+    * a payload whose miss rate is implausible is QUARANTINED — its misses are
+      requeued instead of recorded (see ``_looks_like_a_soft_block``);
+    * an ``aborted`` payload never increments ``attempts``, because the run that
+      triggered the abort is exactly the run whose answers are least trustworthy.
+    """
     results = payload.get("results") or []
     # not_found and misses are the same list; the worker sends both for
     # backwards compatibility. Union them so either spelling works.
     not_found = list({*(payload.get("not_found") or []), *(payload.get("misses") or [])})
     failed = payload.get("failed") or []
+    aborted = bool(payload.get("aborted"))
+
+    quarantine = _looks_like_a_soft_block(len(results), len(not_found), payload)
+    if quarantine:
+        logger.error(
+            "geocode: QUARANTINED a batch — %s. Treating its %d misses as failed "
+            "(they return to the queue) rather than recording them. samples=%s",
+            quarantine, len(not_found), (payload.get("samples") or [])[:5])
+        failed = list(failed) + [{"address_key": k, "reason": f"quarantined: {quarantine}"}
+                                 for k in not_found]
+        not_found = []
 
     await ensure_tables()
     pool = await append_store.get_pool()
@@ -255,19 +302,65 @@ async def record_results(payload: dict) -> dict:
                 await conn.executemany(
                     f"""INSERT INTO public.{_qi(GEOCODE_TABLE)}
                         (address_key, status, attempts, fetched_at)
-                        VALUES ($1,'not_found',1,now())
+                        VALUES ($1,'not_found',$2,now())
                         ON CONFLICT (address_key) DO UPDATE SET
                           status='not_found',
-                          attempts = public.over_re_geocode.attempts + 1,
+                          -- An aborted batch's answers are the least trustworthy
+                          -- ones there are; do not spend an attempt on them.
+                          attempts = public.over_re_geocode.attempts + $2,
                           fetched_at=now()""",
-                    [(k,) for k in not_found if k])
+                    [(k, 0 if aborted else 1) for k in not_found if k])
     out = {"recorded_hits": len(results), "recorded_not_found": len(not_found),
-           "requeued_failed": len(failed),
+           "requeued_failed": len(failed), "quarantined": quarantine,
            "attempted": payload.get("attempted"), "batch_size": payload.get("batch_size"),
            "aborted": bool(payload.get("aborted")),
            "abort_reason": payload.get("abort_reason")}
     logger.info("geocode: batch recorded %s", out)
     return out
+
+
+async def reset_misses(*, only_burned: bool = False) -> dict:
+    """Give back every address a soft block retired.
+
+    On the first night 30,450 misses were recorded, 25,548 of them at
+    ``attempts = 3`` — permanently out of the selection — while GovMap was
+    answering HTTP 200 with an empty list. The hourly hit rate ran 100% → 6% →
+    64% → 15% with the first two hours showing ZERO misses, so a real absence
+    cannot be told from a refusal after the fact.
+
+    The asymmetry decides it: re-asking an address that genuinely is not in
+    GovMap costs one query, while leaving a false miss in place costs that
+    address permanently. So the misses are deleted rather than sifted, and the
+    addresses simply return to ``point IS NULL``.
+
+    Hits are never touched — they are evidence, not guesses."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        where = "status = 'not_found'" + (" AND attempts >= 3" if only_burned else "")
+        tag = await conn.execute(
+            f"DELETE FROM public.{_qi(GEOCODE_TABLE)} WHERE {where}", timeout=600)
+    freed = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+    logger.warning("geocode: reset %d recorded misses back into the work list", freed)
+    return {"reset": freed, "only_burned": only_burned,
+            "remaining": await remaining_count()}
+
+
+async def recent_hit_rate(hours: int = 2) -> float | None:
+    """Hit rate over the last N hours, or None if too little to judge.
+
+    The circuit breaker: a fresh batch is pointless while GovMap is refusing
+    us, and every one queued in that state is another chance to burn attempts."""
+    pool = await append_store.get_readonly_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(f"""
+            SELECT count(*) FILTER (WHERE status='hit')       AS hits,
+                   count(*)                                    AS total
+            FROM public.{_qi(GEOCODE_TABLE)}
+            WHERE fetched_at > now() - make_interval(hours => {int(hours)})
+        """)
+    if not row or (row["total"] or 0) < 200:
+        return None
+    return (row["hits"] or 0) / row["total"]
 
 
 async def merge_into_addresses() -> dict:
