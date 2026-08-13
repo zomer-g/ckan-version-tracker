@@ -388,3 +388,17 @@ Two refinements the first version needed, both found in production:
   could not be used, was never retried, and still counted toward `hits`. It now
   becomes `wrong_locality`, a terminal status the selection excludes. Re-asking
   would be pointless — GovMap answers חדרה every time.
+
+
+### Retries have to be spaced, or the queue re-asks itself
+
+A batch came back 0 for 1,800. Nothing was broken: every one of those 1,800 was
+an address GovMap had already refused. `ORDER BY address_key` put them at the
+head of the queue — misses accumulate at low keys, because that is where earlier
+passes walked — and `MAX_ATTEMPTS = 3` meant each one was worth two more asks of
+a deterministic API that had already answered. Two thirds of the throughput was
+re-confirming known misses while 165k never-asked addresses waited behind them.
+
+So a miss is now only re-offered after `RETRY_AFTER_DAYS = 30`, which is the
+timescale on which GovMap's index could actually change, and never-asked
+addresses sort ahead of previously-asked ones.
