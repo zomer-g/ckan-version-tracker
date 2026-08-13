@@ -3384,17 +3384,25 @@ async def ocal_worker_candidates(request: Request, limit: int = 25,
     # Stamp the poll (best-effort) so "is the residential worker actually
     # reaching us?" is answerable from SQL even when the throttle returns [] —
     # a successful stamp means an authenticated worker called in this minute.
+    # The same round-trip reads the throttle window (hours) so it is tunable from
+    # the admin without a redeploy — set worker_throttle_hours=0 to force the
+    # fleet to import immediately (e.g. to verify the path end-to-end).
+    throttle_h = 5.0
     try:
-        await ocal_db.execute(
+        row = await ocal_db.fetchrow(
             "UPDATE automation_settings SET worker_last_poll = now(), "
-            "worker_poll_count = COALESCE(worker_poll_count, 0) + 1")
+            "worker_poll_count = COALESCE(worker_poll_count, 0) + 1 "
+            "RETURNING worker_throttle_hours")
+        if row and row.get("worker_throttle_hours") is not None:
+            throttle_h = float(row["worker_throttle_hours"])
     except Exception:  # noqa: BLE001 — a telemetry write must never fail the poll
         pass
     last = await ocal_db.fetchval("SELECT max(created_at) FROM diary_sources")
-    if last is not None:
+    if last is not None and throttle_h > 0:
         gap = await ocal_db.fetchval("SELECT EXTRACT(epoch FROM now() - $1)", last)
-        if gap is not None and gap < 5 * 3600:
-            return {"candidates": [], "reason": "throttled", "next_in_s": int(5 * 3600 - gap)}
+        if gap is not None and gap < throttle_h * 3600:
+            return {"candidates": [], "reason": "throttled",
+                    "next_in_s": int(throttle_h * 3600 - gap)}
     cands = await ocal_import.discover_candidates(limit=max(1, min(limit, 50)))
     return {"candidates": [
         {"resource_id": c["resource_id"], "url": c.get("url"), "format": c.get("format")}

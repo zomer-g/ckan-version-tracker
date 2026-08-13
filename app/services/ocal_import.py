@@ -762,6 +762,11 @@ _AUTOMATION_DDL = [
     # answerable from SQL even while the throttle returns an empty candidate list.
     "ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS worker_last_poll timestamptz",
     "ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS worker_poll_count int NOT NULL DEFAULT 0",
+    # The fleet-throttle window in hours (default 5): the worker's ocal-candidates
+    # poll returns [] unless the newest source is older than this, so one worker
+    # per window does the discovery+import batch. 0 disables the throttle (force
+    # an immediate fleet import — e.g. to verify the path end-to-end).
+    "ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS worker_throttle_hours real NOT NULL DEFAULT 5",
     """CREATE TABLE IF NOT EXISTS auto_import_logs (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
@@ -791,7 +796,7 @@ async def get_automation_settings() -> dict:
     try:
         row = await ocal_db.fetchrow(
             "SELECT auto_scan_enabled, interval_hours, confidence, min_rows, updated_at, "
-            "worker_last_poll, worker_poll_count "
+            "worker_last_poll, worker_poll_count, worker_throttle_hours "
             "FROM automation_settings WHERE id=1")
         if row:
             return dict(row)
