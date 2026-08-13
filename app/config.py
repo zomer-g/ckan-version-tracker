@@ -140,6 +140,26 @@ class Settings(BaseSettings):
     ocal_import_confidence: float = 0.25
     ocal_import_min_rows: int = 10
 
+    # ── OCOI ("ניגוד עניינים לעם") data connection ──
+    # Where the ocoi app reads/writes its DATA tables (documents, persons,
+    # companies, associations, domains, entity_relationships, registry_records,
+    # sources, extraction_runs, suggestions, entity_match_proposals,
+    # ignored_resources, site_content). Same arrangement as ocal above: it points
+    # at the APPEND DB and app/services/ocoi_db.py sets search_path=ocoi, so the
+    # data is co-located with the public console and /data can JOIN it live.
+    #
+    # ocoi's SIX auth/billing tables (users, oauth_clients,
+    # oauth_authorization_codes, oauth_refresh_tokens, billing_accounts,
+    # usage_events) are deliberately NOT migrated here — they hold hashed OAuth
+    # codes, refresh tokens and Stripe customer ids. They are kept as a frozen
+    # dump, and the console's read-only role is granted SELECT on schema `ocoi`
+    # only, so it can never reach them. Admin identity comes from OVER's own
+    # admin users; MCP access from OVER's api_users allow-list.
+    #
+    # Empty ⇒ the /projects/ocoi feature is off (the /api/ocoi router answers 503).
+    # Set the VALUE in the Render dashboard (not in render.yaml).
+    ocoi_database_url: str = ""
+
     # ── Knesset ODATA mirror ("מסד הנתונים של הכנסת") ──
     # Syncs all ~48 Knesset ODATA-v4 entity sets into a `knesset` schema in the
     # append DB above, with a public read-only SQL console at /knesset. Requires
