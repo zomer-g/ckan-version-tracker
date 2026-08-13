@@ -143,7 +143,7 @@ def test_selection_reoffers_failed_but_not_settled_hits():
     sql = gq._selection_sql(10)
     assert "a.point IS NULL" in sql
     assert "g.address_key IS NULL" in sql          # never asked → offer
-    assert "g.status <> 'hit'" in sql              # a hit is done
+    assert "NOT IN ('hit', 'wrong_locality')" in sql  # both are settled
     assert f"g.attempts < {gq.MAX_ATTEMPTS}" in sql  # a repeated miss goes terminal
     assert "ORDER BY a.address_key" in sql
     # It must not filter on a reservation column — that would be the second copy
@@ -233,3 +233,24 @@ def test_the_control_addresses_are_ones_govmap_really_resolves():
     """Verified live 2026-08-13: 6, 10 and 203 results respectively."""
     assert len(gq.CANARIES) >= 3
     assert "אבימלך 8 פתח תקווה" in gq.CANARIES
+
+
+# ── the merge guard ───────────────────────────────────────────────────────────
+def test_a_wrong_locality_answer_is_terminal_not_limbo():
+    """Asked for גדרה, GovMap answers חדרה — one letter apart, 69 km away, full
+    confidence, high score. 196 of those landed in one locality. They must not
+    sit as `hit, merged=false` forever: unusable, unretryable, and still counted
+    as hits. `wrong_locality` is terminal, and re-asking is pointless because
+    GovMap will answer חדרה again."""
+    sql = gq._selection_sql(10)
+    assert "'wrong_locality'" in sql
+    assert "g.status NOT IN ('hit', 'wrong_locality')" in sql
+
+
+def test_a_locality_with_no_parcels_does_not_reject_its_points():
+    """אחוזת ברק has 0 parcels, so every point in it failed a guard it could
+    never satisfy. Absence of evidence is not evidence of a bad point."""
+    import inspect
+    src = inspect.getsource(gq.merge_into_addresses)
+    assert "checkable" in src
+    assert "j.near OR NOT j.checkable" in src,         "a point must be accepted when there is nothing to check it against"

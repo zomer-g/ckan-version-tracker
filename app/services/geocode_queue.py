@@ -184,7 +184,8 @@ def _selection_sql(limit: int) -> str:
           AND a.house_num IS NOT NULL
           AND a.settlement_name IS NOT NULL
           AND (g.address_key IS NULL
-               OR (g.status <> 'hit' AND g.attempts < {MAX_ATTEMPTS}))
+               OR (g.status NOT IN ('hit', 'wrong_locality')
+                   AND g.attempts < {MAX_ATTEMPTS}))
         ORDER BY a.address_key
         LIMIT {int(limit)}
     """
@@ -420,58 +421,80 @@ async def recent_hit_rate(hours: int = 2) -> float | None:
 async def merge_into_addresses() -> dict:
     """Fill missing points from the geocoder — never overwrite an existing one.
 
-    A geocoded point is accepted only if it falls inside the parcel-layer's
-    footprint for the address's OWN locality. That is the guard against the two
-    outliers found while validating: 'דרך בית לחם 16/34 ירושלים' geocoded 2.2 km
-    away. A score threshold could not separate those; locality does."""
+    A geocoded point is accepted only if it lands within 3 km of a parcel in the
+    address's OWN locality. This is not a formality: asked for גדרה, GovMap
+    answers חדרה — one letter apart, 69 km away — with full confidence and a
+    high score. 196 of those were caught in one locality alone. No score
+    threshold separates them; locality does.
+
+    Two cases the first version got wrong, both fixed here:
+
+    * a locality with **no parcels at all** (אחוזת ברק) could never satisfy the
+      guard, so every point in it was rejected for lack of anything to check
+      against. Absence of evidence is not evidence — those are accepted.
+    * a rejected point stayed ``status='hit', merged=false`` forever: it could
+      not be used, could not be retried, and still counted as a hit. It now
+      goes to the terminal status ``wrong_locality``, which the selection
+      excludes — re-asking is pointless, GovMap will answer חדרה again.
+    """
     await ensure_tables()
     pool = await append_store.get_pool()
     from app.services.nadlan_index import GEOM_SRID, PARCELS_TABLE, PG_EXT_SCHEMA
+    x = _qi(PG_EXT_SCHEMA)
+    point = (f"{x}.ST_SetSRID({x}.ST_MakePoint(c.lon, c.lat), {GEOM_SRID})"
+             f"::{x}.geography")
     async with pool.acquire() as conn:
         async with conn.transaction():
-            rejected = await conn.fetchval(f"""
+            await conn.execute(f"""
+                CREATE TEMP TABLE _geo_judged ON COMMIT DROP AS
                 WITH cand AS (
                   SELECT g.address_key, g.lat, g.lon, a.settlement_code
                   FROM public.{_qi(GEOCODE_TABLE)} g
                   JOIN public.{_qi(ADDRESSES_TABLE)} a USING (address_key)
-                  WHERE g.status='hit' AND NOT g.merged AND a.point IS NULL
+                  WHERE g.status = 'hit' AND NOT g.merged AND a.point IS NULL
                 )
-                SELECT count(*) FROM cand
-                WHERE settlement_code IS NOT NULL AND NOT EXISTS (
-                  SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
-                  WHERE p.settlement_code = cand.settlement_code
-                    AND {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
-                          p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                          {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                            {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(cand.lon, cand.lat),
-                            {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography, 3000))
-            """) or 0
+                SELECT c.address_key, c.lat, c.lon,
+                       EXISTS (SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
+                                WHERE p.settlement_code = c.settlement_code)
+                         AS checkable,
+                       EXISTS (SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
+                                WHERE p.settlement_code = c.settlement_code
+                                  AND {x}.ST_DWithin(
+                                        p.centroid::{x}.geography, {point}, 3000))
+                         AS near
+                FROM cand c
+                WHERE c.settlement_code IS NOT NULL
+                UNION ALL
+                SELECT c.address_key, c.lat, c.lon, false, true
+                FROM cand c WHERE c.settlement_code IS NULL
+            """, timeout=1800)
+            # Accepted: near a parcel of its own locality, or nothing to check.
             tag = await conn.execute(f"""
                 UPDATE public.{_qi(ADDRESSES_TABLE)} a
-                SET lat = g.lat, lon = g.lon,
-                    point = {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                              {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(g.lon, g.lat), {GEOM_SRID})
-                FROM public.{_qi(GEOCODE_TABLE)} g
-                WHERE g.address_key = a.address_key
-                  AND g.status = 'hit' AND NOT g.merged
-                  AND a.point IS NULL
-                  AND (a.settlement_code IS NULL OR EXISTS (
-                        SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
-                        WHERE p.settlement_code = a.settlement_code
-                          AND {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
-                                p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                                {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                                  {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(g.lon, g.lat),
-                                  {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography, 3000)))
+                SET lat = j.lat, lon = j.lon,
+                    point = {x}.ST_SetSRID({x}.ST_MakePoint(j.lon, j.lat), {GEOM_SRID})
+                FROM _geo_judged j
+                WHERE j.address_key = a.address_key AND a.point IS NULL
+                  AND (j.near OR NOT j.checkable)
             """, timeout=1800)
             merged = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+            # Rejected: we could check, and it was somewhere else entirely.
+            tag = await conn.execute(f"""
+                UPDATE public.{_qi(GEOCODE_TABLE)} g SET status = 'wrong_locality'
+                FROM _geo_judged j
+                WHERE j.address_key = g.address_key
+                  AND j.checkable AND NOT j.near
+            """)
+            rejected = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
             await conn.execute(
                 f"""UPDATE public.{_qi(GEOCODE_TABLE)} g SET merged = true
                     FROM public.{_qi(ADDRESSES_TABLE)} a
                     WHERE a.address_key = g.address_key
-                      AND g.status='hit' AND a.point IS NOT NULL""")
+                      AND g.status = 'hit' AND a.point IS NOT NULL""")
     from app.services import nadlan_query
     nadlan_query.invalidate_stats_cache()
+    if rejected:
+        logger.info("geocode: %d points rejected as wrong locality (terminal)", rejected)
     return {"merged": merged, "rejected_outside_locality": rejected}
 
 
@@ -483,6 +506,8 @@ async def stats() -> dict:
               (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)} WHERE status='hit')       AS hits,
               (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)} WHERE status='not_found') AS not_found,
               (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
-                 WHERE status='hit' AND NOT merged)                                       AS unmerged
+                 WHERE status='hit' AND NOT merged)                                       AS unmerged,
+              (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
+                 WHERE status='wrong_locality')                                           AS wrong_locality
         """)
     return {**dict(row or {}), "remaining": await remaining_count()}

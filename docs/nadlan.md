@@ -368,3 +368,23 @@ block (15%) also stalls קריית שמונה forever. So the queue asks GovMap 
 is only quarantined if those controls fail too, which costs three requests and
 only on a batch that already looks wrong. `attempts` is never incremented for an
 `aborted` payload.
+
+
+### The locality guard is what makes the geocoder safe
+
+Asked for **גדרה**, GovMap answers **חדרה** — one letter apart (ג/ח), 69 km
+away, high score, no hedging. 196 of those arrived in that one locality. The
+same shape appears wherever an Israeli place name has a near twin, and no score
+threshold separates them, because the wrong answer is a perfectly good match for
+a different town. Only the locality does: a point is accepted if it lands within
+3 km of a parcel in the address's **own** locality.
+
+Two refinements the first version needed, both found in production:
+
+* A locality with **no parcels at all** (אחוזת ברק, 66 points) could never
+  satisfy the guard and had everything rejected — a guard failing closed on
+  missing evidence rather than on bad evidence. Those are now accepted.
+* A rejected point used to stay `status='hit', merged=false` indefinitely: it
+  could not be used, was never retried, and still counted toward `hits`. It now
+  becomes `wrong_locality`, a terminal status the selection excludes. Re-asking
+  would be pointless — GovMap answers חדרה every time.
