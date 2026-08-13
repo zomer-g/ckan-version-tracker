@@ -364,14 +364,15 @@ async def init_scheduler() -> None:
                 if ds is None:
                     return          # not switched on
                 await geocode_queue.ensure_tables()
-                # Circuit breaker: do not queue work while GovMap is refusing
-                # us. A soft block answers 200-with-nothing, so a batch queued
-                # in that state is just another chance to burn attempts.
+                # Circuit breaker. Note it does NOT look at the hit rate:
+                # measured per-locality rates run 6.9% to 64.4%, so any
+                # threshold that would catch a block also stalls the periphery.
+                # Only a near-total zero asks GovMap directly.
                 rate = await geocode_queue.recent_hit_rate(2)
-                if rate is not None and rate < 0.15:
+                if rate is not None and rate < 0.01 and                         await geocode_queue.govmap_is_answering() is False:
                     logger.warning(
-                        "geocode: skipping enqueue — recent hit rate %.1f%% looks "
-                        "like a block, not empty countryside", 100 * rate)
+                        "geocode: skipping enqueue — GovMap is not answering its "
+                        "own control addresses")
                 else:
                     await geocode_queue.enqueue_next_batch(db)
                 # Fold in whatever the last batch returned, so coverage moves

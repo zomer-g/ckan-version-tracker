@@ -159,34 +159,58 @@ def test_batch_size_is_ten_thousand():
     assert gq.BATCH_SIZE == 10_000
 
 
-# ── the soft block ────────────────────────────────────────────────────────────
-def test_a_batch_with_no_hits_is_quarantined_not_believed(sink):
-    """GovMap answers a soft block with HTTP 200 and an empty list — identical
-    to "no such address" in a single response. Believing it cost 25,548
-    addresses on the first night: they hit attempts=3 and left the selection
-    for good while every run reported success."""
+# ── a low hit rate is normal; a refusal is not ────────────────────────────────
+@pytest.fixture
+def govmap_answering(monkeypatch):
+    """GovMap resolves its control addresses — i.e. it is up and talking."""
+    async def _yes(): return True
+    monkeypatch.setattr(gq, "govmap_is_answering", _yes)
+
+
+@pytest.fixture
+def govmap_silent(monkeypatch):
+    async def _no(): return False
+    monkeypatch.setattr(gq, "govmap_is_answering", _no)
+
+
+def test_a_sparse_batch_is_believed_when_govmap_answers(sink, govmap_answering):
+    """The correction that matters. GovMap's address index is sparse at the
+    house-number level outside the metro core — "חטיבת הנגב 10 שדרות" returns
+    nothing while "חטיבת הנגב שדרות" returns 2,184 — so misses are usually
+    real. Measured per-locality hit rates run 6.9% to 64.4%. Throwing those
+    away would re-ask 170k addresses forever and never drain the queue."""
     out = asyncio.run(gq.record_results({
-        "results": [],
-        "not_found": [f"k{i}" for i in range(300)],
-        "attempted": 300, "batch_size": 10000,
-        "samples": ["נהלל 12 נהלל"],
-    }))
-    assert out["quarantined"], "300 asked with zero found must not be believed"
-    assert out["recorded_not_found"] == 0, "no miss may be written"
-    assert out["requeued_failed"] == 300, "every one returns to the queue"
+        "results": [{"address_key": "h1", "lat": 32.0, "lon": 34.9}],
+        "not_found": [f"m{i}" for i in range(400)]}))
+    assert out["quarantined"] is None, "0.25% is low, but GovMap is answering"
+    assert out["recorded_not_found"] == 400
+
+
+def test_misses_are_requeued_when_govmap_fails_its_own_controls(sink, govmap_silent):
+    """The only signature that actually distinguishes a refusal: addresses
+    GovMap is known to resolve stop resolving."""
+    out = asyncio.run(gq.record_results({
+        "results": [], "not_found": [f"k{i}" for i in range(400)],
+        "samples": ["נהלל 12 נהלל"]}))
+    assert out["quarantined"]
+    assert out["recorded_not_found"] == 0
+    assert out["requeued_failed"] == 400
     assert _written_keys(sink, "over_re_geocode") == set()
 
 
-def test_a_plausible_batch_is_still_recorded_normally(sink):
-    """The guard must not swallow ordinary work — real slices run 15-60% hits."""
-    hits = [{"address_key": f"h{i}", "lat": 32.0, "lon": 34.9} for i in range(120)]
-    out = asyncio.run(gq.record_results({
-        "results": hits, "not_found": [f"m{i}" for i in range(180)]}))
-    assert out["quarantined"] is None
-    assert out["recorded_hits"] == 120 and out["recorded_not_found"] == 180
+def test_an_ordinary_batch_never_reaches_the_canary(monkeypatch, sink):
+    """Three requests to GovMap on every batch would be a rude way to find out
+    what a hit rate already tells you."""
+    called = []
+    async def _spy(): called.append(1); return True
+    monkeypatch.setattr(gq, "govmap_is_answering", _spy)
+    asyncio.run(gq.record_results({
+        "results": [{"address_key": f"h{i}", "lat": 32.0, "lon": 34.9} for i in range(120)],
+        "not_found": [f"m{i}" for i in range(180)]}))
+    assert not called
 
 
-def test_a_tiny_batch_is_never_quarantined(sink):
+def test_a_small_batch_is_never_questioned(sink, govmap_silent):
     """Below the sample floor, zero hits is luck rather than evidence."""
     out = asyncio.run(gq.record_results({"results": [], "not_found": ["a", "b"]}))
     assert out["quarantined"] is None
@@ -203,3 +227,9 @@ def test_an_aborted_batch_never_spends_an_attempt(sink):
     rows = [r for c in sink if c[0] == "many" and "not_found" in c[1] for r in c[2]]
     assert rows, "the misses should still be recorded"
     assert all(r[1] == 0 for r in rows), "an aborted batch must add 0 to attempts"
+
+
+def test_the_control_addresses_are_ones_govmap_really_resolves():
+    """Verified live 2026-08-13: 6, 10 and 203 results respectively."""
+    assert len(gq.CANARIES) >= 3
+    assert "אבימלך 8 פתח תקווה" in gq.CANARIES

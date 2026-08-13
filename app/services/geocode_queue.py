@@ -231,12 +231,53 @@ async def remaining_count() -> int:
 # the selection permanently, while every run reported success. The worker now
 # aborts on a run of 100 (GOVSCRAPER e386785); this is the second line of
 # defence, because the damage lands HERE and must be impossible to write.
-_IMPLAUSIBLE_MIN_ASKED = 50
-_IMPLAUSIBLE_HIT_RATE = 0.02
+_IMPLAUSIBLE_MIN_ASKED = 200
+_IMPLAUSIBLE_HIT_RATE = 0.01
+
+#: Addresses GovMap is known to resolve. If these come back empty the endpoint
+#: is refusing us; if they resolve, a batch of misses is simply a batch of
+#: misses. This replaced a hit-rate threshold, which cannot tell the two apart:
+#: measured per-locality rates run 6.9% (קריית שמונה) to 64.4% (מזכרת בתיה),
+#: so any threshold high enough to catch a block also stalls the periphery.
+CANARIES = ("אבימלך 8 פתח תקווה", "הרצל 1 תל אביב", "דיזנגוף 100 תל אביב יפו")
 
 
-def _looks_like_a_soft_block(hits: int, not_found: int, payload: dict) -> str | None:
-    """Why this payload's misses must NOT be believed — or None if they can be."""
+async def govmap_is_answering() -> bool | None:
+    """Ask GovMap about addresses it certainly knows. None = could not tell.
+
+    Three requests, only on a batch that already looks wrong, so this costs
+    GovMap nothing in the normal case."""
+    import uuid
+    import httpx
+    ok = 0
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            for q in CANARIES:
+                r = await client.post(
+                    "https://www.govmap.gov.il/api/search-service/autocomplete",
+                    json={"searchText": q, "language": "he", "filterType": "address",
+                          "isAccurate": True, "maxResults": 10},
+                    headers={"Referer": "https://www.govmap.gov.il/",
+                             "User-Agent": "Mozilla/5.0",
+                             "x-fingerprint-id": str(uuid.uuid4()),
+                             "x-user-id": str(uuid.uuid4()),
+                             "x-trace-id": str(uuid.uuid4())})
+                if r.status_code == 200 and (r.json().get("results") or []):
+                    ok += 1
+    except Exception as exc:                                  # network, shape, anything
+        logger.warning("geocode: canary check failed to run: %s", exc)
+        return None
+    logger.info("geocode: canary %d/%d control addresses resolved", ok, len(CANARIES))
+    return ok >= 2
+
+
+def _looks_implausible(hits, not_found, payload) -> str | None:
+    """Whether a payload is worth spending three canary requests on.
+
+    Deliberately narrow. GovMap's address index is sparse at the house-number
+    level outside the metro core — "חטיבת הנגב 10 שדרות" returns nothing while
+    "חטיבת הנגב שדרות" returns 2,184 — so a low hit rate is normal and only a
+    near-total zero over a large ask is odd enough to question."""
     asked = hits + not_found
     if asked < _IMPLAUSIBLE_MIN_ASKED:
         return None
@@ -257,8 +298,9 @@ async def record_results(payload: dict) -> dict:
     Two further protections against burning an address's limited attempts on an
     answer GovMap never really gave:
 
-    * a payload whose miss rate is implausible is QUARANTINED — its misses are
-      requeued instead of recorded (see ``_looks_like_a_soft_block``);
+    * a payload with almost no hits is checked against GovMap directly, using
+      addresses it is known to resolve, and only quarantined if those control
+      addresses fail too — a low hit rate on its own is normal;
     * an ``aborted`` payload never increments ``attempts``, because the run that
       triggered the abort is exactly the run whose answers are least trustworthy.
     """
@@ -269,11 +311,23 @@ async def record_results(payload: dict) -> dict:
     failed = payload.get("failed") or []
     aborted = bool(payload.get("aborted"))
 
-    quarantine = _looks_like_a_soft_block(len(results), len(not_found), payload)
+    quarantine = _looks_implausible(len(results), len(not_found), payload)
+    if quarantine:
+        # Suspicion is not evidence. Ask GovMap about addresses it is known to
+        # answer: if it answers them, this batch really did miss.
+        answering = await govmap_is_answering()
+        if answering:
+            logger.info("geocode: batch looked odd (%s) but GovMap answers its "
+                        "control addresses — recording the misses as real", quarantine)
+            quarantine = None
+        elif answering is None:
+            logger.warning("geocode: batch looked odd (%s) and the canary could not "
+                           "run — requeuing rather than guessing", quarantine)
     if quarantine:
         logger.error(
-            "geocode: QUARANTINED a batch — %s. Treating its %d misses as failed "
-            "(they return to the queue) rather than recording them. samples=%s",
+            "geocode: QUARANTINED a batch — %s, and GovMap failed its own control "
+            "addresses. Treating its %d misses as failed (they return to the "
+            "queue) rather than recording them. samples=%s",
             quarantine, len(not_found), (payload.get("samples") or [])[:5])
         failed = list(failed) + [{"address_key": k, "reason": f"quarantined: {quarantine}"}
                                  for k in not_found]

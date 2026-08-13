@@ -341,3 +341,30 @@ and/or `address_key` — both deterministic text derived from source values, so
 they survive every rebuild. The alias layer *is* the matcher that will resolve a
 raw transaction row to them, which is the strongest reason the street index is a
 general resolver rather than a one-off join.
+
+
+## GovMap's address index is sparse, and that is not a failure
+
+The first night of geocoding looked like a soft block: a batch returned 0 hits
+out of 1,075, and the recorded misses climbed past 30,000. It was not a block.
+Measured against GovMap directly on 2026-08-13:
+
+* 40 addresses recorded as `not_found` were re-asked one by one — **0 of 40**
+  resolved, while three control addresses asked in the same session resolved
+  immediately (6, 10 and 203 results). The misses are real.
+* `חטיבת הנגב 10 שדרות` returns nothing, but `חטיבת הנגב שדרות` returns 2,184
+  results including `חטיבת הנגב 3 שדרות`. The street is there; that doorway is
+  not. GovMap's index thins out at the house-number level away from the centre.
+* Per-locality hit rates form a smooth gradient — מזכרת בתיה 64.4%, ירושלים
+  35.5%, שדרות 17.4%, קריית שמונה 6.9% — with nothing at 0% or 100%. A block
+  produces flat zeroes over a time window; this is coverage.
+
+Overall: 16,360 hits of 46,810 asked, **34.9%**.
+
+The consequence for the guards is the important part. A hit-rate threshold
+cannot separate a refusal from the periphery: anything high enough to catch a
+block (15%) also stalls קריית שמונה forever. So the queue asks GovMap instead —
+`CANARIES`, three addresses it is known to resolve. A batch with almost no hits
+is only quarantined if those controls fail too, which costs three requests and
+only on a batch that already looks wrong. `attempts` is never incremented for an
+`aborted` payload.
