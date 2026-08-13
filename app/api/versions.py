@@ -256,6 +256,146 @@ async def delete_version(
     )
 
 
+SYMBOLOGY_KEY = "_symbology"
+MAX_CONVERTIBLE_BUNDLE_BYTES = 32 * 1024 * 1024
+
+
+def _mapping_value(mappings: dict | None, key: str, index: int = 0) -> str | None:
+    """One resource out of a mapping entry, list-valued or not."""
+    value = (mappings or {}).get(key)
+    if isinstance(value, list):
+        valid = [x for x in value if x]
+        return valid[index] if index < len(valid) else (valid[0] if valid else None)
+    return value or None
+
+
+async def _resolve_symbology(
+    db: AsyncSession, version: VersionIndex,
+) -> tuple[str | None, VersionIndex]:
+    """This version's symbology bundle — or the newest one the dataset has.
+
+    A GovMap layer's cartography belongs to the LAYER, not to the snapshot: the
+    scraper only started attaching the bundle in July 2026, and even now it is
+    re-uploaded only when it changes, so most versions carry data with no style
+    beside it. Downloading a layer and getting no symbology because it happened
+    to be captured one version earlier is not a useful archive, so the lookup
+    falls back to the newest version that does carry one. The caller is
+    expected to SAY it fell back (the UI labels it) — an older version's files
+    must never silently pass as that version's own.
+    """
+    own = _mapping_value(version.resource_mappings, SYMBOLOGY_KEY)
+    if own:
+        return own, version
+    result = await db.execute(
+        select(VersionIndex)
+        .where(VersionIndex.tracked_dataset_id == version.tracked_dataset_id)
+        .order_by(VersionIndex.version_number.desc())
+    )
+    for candidate in result.scalars().all():
+        value = _mapping_value(candidate.resource_mappings, SYMBOLOGY_KEY)
+        if value:
+            return value, candidate
+    return None, version
+
+
+async def _read_resource_bytes(value: str, ds: TrackedDataset | None,
+                               dataset_id) -> bytes | None:
+    """The bytes behind a mapping value, wherever they are stored."""
+    if storage.is_storage_value(value):
+        return await storage_client.get_object_bytes(value)
+    import httpx
+
+    odata_pkg = ds.odata_dataset_id if ds and ds.odata_dataset_id else dataset_id
+    url = f"{settings.odata_url}/dataset/{odata_pkg}/resource/{value}/download"
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return None
+        return resp.content
+
+
+@router.get("/versions/{version_id}/symbology.lyrx.zip")
+@limiter.limit("20/minute")
+async def download_symbology_lyrx(
+    version_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """The version's symbology as an ArcGIS Pro bundle (``.lyrx`` per style).
+
+    Converted on the fly from the archived SLD bundle rather than stored: the
+    conversion is milliseconds on a file of a few hundred KB, and doing it here
+    means every version ever archived — including the ~870 layers captured long
+    before ArcGIS support existed — has an ArcGIS download without re-scraping
+    anything.
+    """
+    from fastapi.responses import Response
+    from urllib.parse import quote
+
+    from app.services.lyrx import LyrxError, convert_bundle
+
+    vid = parse_uuid(version_id, "version_id")
+    version = (
+        await db.execute(select(VersionIndex).where(VersionIndex.id == vid))
+    ).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    value, source_version = await _resolve_symbology(db, version)
+    if not value:
+        raise HTTPException(
+            status_code=404,
+            detail="No symbology bundle is archived for this dataset",
+        )
+    ds = (
+        await db.execute(
+            select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
+        )
+    ).scalar_one_or_none()
+    raw = await _read_resource_bytes(value, ds, version.tracked_dataset_id)
+    if not raw:
+        raise HTTPException(status_code=502, detail="Symbology bundle is unreadable")
+    # Conversion holds the bundle and its output in memory. Real bundles are
+    # tiny (median ~3 KB, largest seen ~2 MB), so this ceiling only exists so a
+    # pathological one can never be the thing that OOMs a 512 MB instance —
+    # this service has been killed that way before (see the poll memory guards).
+    if len(raw) > MAX_CONVERTIBLE_BUNDLE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Symbology bundle is too large to convert on the fly; "
+                   "download the SLD bundle and convert it locally",
+        )
+
+    page = f"{settings.app_base_url.rstrip('/')}/versions/{version.tracked_dataset_id}"
+    try:
+        converted = convert_bundle(raw, source_url=page)
+    except LyrxError as e:
+        logger.warning("lyrx conversion failed for version %s: %s", version_id, e)
+        raise HTTPException(
+            status_code=422,
+            detail=f"This symbology bundle cannot be converted to ArcGIS: {e}",
+        )
+
+    base = (ds.title if ds and ds.title else "symbology").strip()
+    ascii_name = "symbology_arcgis.zip"
+    utf8_name = quote(f"{base} — ArcGIS.zip".replace("/", "-"))
+    logger.info(
+        "Served ArcGIS symbology for version %s (bundle from v%d, %d → %d bytes)",
+        version_id, source_version.version_number, len(raw), len(converted),
+    )
+    return Response(
+        content=converted,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}',
+            # The archived bundle for a given version never changes, so this is
+            # safe to keep — and it keeps a re-download off the converter.
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 @router.get("/versions/{version_id}/download/{resource_id}")
 @limiter.limit("60/minute")
 async def download_resource(
@@ -291,6 +431,11 @@ async def download_resource(
     if not mapped:
         if resource_id == "metadata":
             mapped = version.odata_metadata_resource_id
+        elif resource_id == SYMBOLOGY_KEY:
+            # A layer's style is the layer's, not the snapshot's — serve the
+            # newest one the dataset has rather than 404-ing a version that was
+            # captured before the bundle existed (see _resolve_symbology).
+            mapped, _ = await _resolve_symbology(db, version)
         if not mapped:
             raise HTTPException(status_code=404, detail="Resource not found in this version")
 

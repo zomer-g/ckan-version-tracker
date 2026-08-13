@@ -228,6 +228,33 @@ what changed and where to download the snapshot data on odata.org.il.
   (`_zip_parts_0`, `_zip_parts_1`, …); `_geojson` alone keeps its bare name
   in the single-file case, as it always has.
 
+> **`_symbology` is answered for every version of a layer**, not only the one
+> that captured it. A GovMap style belongs to the layer, and the scraper
+> re-uploads the bundle only when it changes, so
+> `GET /api/versions/{id}/download/_symbology` falls back to the newest bundle
+> the dataset has. The `resources` array above still lists only what a version
+> literally holds — the fallback lives on the download route.
+
+---
+
+## `GET /api/versions/{version_id}/symbology.lyrx.zip`
+
+The same symbology as an **ArcGIS Pro** bundle: one `.lyrx` (Esri CIM layer
+file) per style, converted on the fly from the archived SLD, plus the field
+dictionary, the original icons and a README. Works on any version of a GovMap
+layer — including every version archived before this existed — under the same
+newest-bundle fallback as `_symbology`.
+
+```
+GET /api/versions/f4df90c5-.../symbology.lyrx.zip   → application/zip
+```
+
+Apply it with *Apply Symbology From Layer*; the `.lyrx` deliberately points at
+a placeholder data source, since it carries cartography, not features.
+
+`404` when the dataset has no symbology archived at all, `422` when the bundle
+holds no convertible SLD.
+
 `404` if the dataset UUID does not exist. An empty array means the
 dataset has been registered but no versions have been detected yet.
 

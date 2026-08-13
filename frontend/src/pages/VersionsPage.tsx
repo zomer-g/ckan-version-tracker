@@ -73,10 +73,26 @@ function formatHebrewDate(value: string | null | undefined, withTime = true): st
 // wins over the generic per-key fallback. When several files share the same
 // title (the source publishes many same-named resources with different
 // content), a 1-based index is appended so each link is distinguishable.
+// `versionId` overrides which version the download endpoint is asked for — set
+// only on the symbology entry a version inherits from a later one (see
+// symbologyCarry below). `href` short-circuits the endpoint entirely, for a
+// derived file (the ArcGIS conversion) that is not a stored resource.
+// `alternate` marks a file that is another FORM of one already in the list (the
+// ArcGIS conversion of the same symbology): it gets its own link but stays out
+// of "הורד הכל", which should hand over one copy of each thing, not two.
+type VersionFile = {
+  name: string;
+  index: number;
+  label: string;
+  versionId?: string;
+  href?: string;
+  alternate?: boolean;
+};
+
 function versionFiles(
   mappings: Record<string, unknown> | null | undefined,
   onlyKeys?: Set<string> | null,
-): Array<{ name: string; index: number; label: string }> {
+): VersionFile[] {
   if (!mappings) return [];
   const names = (mappings._names as Record<string, string> | undefined) || {};
   const skip = ["_hashes", "_resource_ids", "_appendonly_seen", "_names", "_filedates", "append_table", "_append_tables"];
@@ -91,7 +107,7 @@ function versionFiles(
     if (nm) nameCounts[nm] = (nameCounts[nm] || 0) + 1;
   }
   const nameSeen: Record<string, number> = {};
-  const out: Array<{ name: string; index: number; label: string }> = [];
+  const out: VersionFile[] = [];
   for (const [key, val] of Object.entries(mappings)) {
     if (!include(key)) continue;
     const friendly = names[key];
@@ -113,7 +129,7 @@ function versionFiles(
             : key === "_parquet"
               ? "GeoParquet (WGS84)"
               : key === "_symbology"
-                ? "סימבולוגיה ומילון שדות (ZIP)"
+                ? SYMBOLOGY_LABEL
               : key === "_zip" || key === "_zip_parts"
             ? "קבצים מצורפים (ZIP)"
             : key === "metadata"
@@ -204,11 +220,69 @@ function changedKeys(
 
 // Build the backend download URL for one version file (same endpoint the
 // per-file links use; it 302-redirects to the file's real storage).
-function fileDownloadUrl(versionId: string, f: { name: string; index: number }): string {
+function fileDownloadUrl(versionId: string, f: VersionFile): string {
+  if (f.href) return f.href;
+  const vid = f.versionId || versionId;
   return (
-    `/api/versions/${versionId}/download/${encodeURIComponent(f.name)}` +
+    `/api/versions/${vid}/download/${encodeURIComponent(f.name)}` +
     (f.index > 0 ? `?index=${f.index}` : "")
   );
+}
+
+// The newest version that actually carries the layer's symbology bundle.
+//
+// A GovMap layer's cartography belongs to the LAYER: the scraper attaches the
+// bundle only when it changes (and only started attaching it at all in July
+// 2026), so on most versions the date/diff filters below leave the file list
+// holding the GeoJSON alone. Downloading a spatial layer without its
+// symbology is downloading half of it — and there was no way to get both in
+// one action — so every version offers the newest bundle, labelled as
+// inherited when it is not the version's own. The backend applies the same
+// fallback (app/api/versions.py::_resolve_symbology) so the link resolves even
+// when it is asked for on a version that has none.
+function newestSymbologyVersion(versions: Version[]): Version | null {
+  for (const v of versions) {
+    const m = v.resource_mappings as Record<string, unknown> | null;
+    const value = m?.["_symbology"];
+    const has = Array.isArray(value)
+      ? value.some((x) => typeof x === "string" && x.length > 10)
+      : typeof value === "string" && value.length > 10;
+    if (has) return v;
+  }
+  return null;
+}
+
+const SYMBOLOGY_LABEL = "סימבולוגיה ומילון שדות (ZIP · QGIS)";
+const LYRX_LABEL = "סימבולוגיה ל-ArcGIS Pro (LYRX)";
+
+// The symbology entries to add to a version's file list: the newest bundle
+// (unless the version's own is already listed) plus the ArcGIS conversion of
+// whichever applies. `alreadyListed` — not identity — decides, because the
+// date/diff filters can drop a version's own bundle from the list.
+function symbologyFiles(
+  v: Version,
+  carry: Version | null,
+  alreadyListed: boolean,
+): VersionFile[] {
+  if (!carry) return [];
+  const suffix = carry.id === v.id ? "" : ` (מגרסה ${carry.version_number})`;
+  const out: VersionFile[] = [];
+  if (!alreadyListed) {
+    out.push({
+      name: "_symbology",
+      index: 0,
+      label: SYMBOLOGY_LABEL + suffix,
+      versionId: carry.id,
+    });
+  }
+  out.push({
+    name: "_symbology_lyrx",
+    index: 0,
+    label: LYRX_LABEL + suffix,
+    href: `/api/versions/${carry.id}/symbology.lyrx.zip`,
+    alternate: true,
+  });
+  return out;
 }
 
 // "Download all" — trigger each file's download in turn. We stagger the
@@ -217,10 +291,7 @@ function fileDownloadUrl(versionId: string, f: { name: string; index: number }):
 // rapid back-to-back navigations. Each file streams straight from its
 // storage via the redirect, so this scales to large GeoJSON/ZIP parts
 // without pulling bytes through the page.
-function downloadAllFiles(
-  versionId: string,
-  files: Array<{ name: string; index: number }>,
-): void {
+function downloadAllFiles(versionId: string, files: VersionFile[]): void {
   files.forEach((f, i) => {
     window.setTimeout(() => {
       const a = document.createElement("a");
@@ -361,6 +432,13 @@ export default function VersionsPage() {
     if (!dataset.odata_dataset_id) return null;
     return `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${rid}/download`;
   }, [dataset, versionsList]);
+
+  // The version whose symbology bundle every version of this layer offers.
+  // versionsList is newest-first (the API orders by version_number desc).
+  const symbologyCarry = useMemo<Version | null>(
+    () => newestSymbologyVersion(versionsList),
+    [versionsList],
+  );
 
   // True when the dataset's latest version stores files on R2 (an "r2:<key>"
   // mapping). R2 versions have no ODATA mirror page, so the ODATA-archive CTAs
@@ -823,19 +901,34 @@ export default function VersionsPage() {
                       (olderVersion.resource_mappings as Record<string, unknown> | null) ?? null,
                     );
                   }
-                  const files = versionFiles(v.resource_mappings, keyset);
+                  // Symbology rides along by default: the data files of a
+                  // spatial layer are not the layer, and "הורד הכל" used to
+                  // hand over a bare GeoJSON on every version but the one that
+                  // happened to capture the style.
+                  const own = versionFiles(v.resource_mappings, keyset);
+                  const files = [
+                    ...own,
+                    ...symbologyFiles(
+                      v, symbologyCarry, own.some((f) => f.name === "_symbology"),
+                    ),
+                  ];
                   if (files.length === 0) return null;
+                  const batch = files.filter((f) => !f.alternate);
                   return (
                     <div
                       className="mt-1 flex"
                       style={{ gap: "1rem", flexWrap: "wrap", alignItems: "center" }}
                     >
-                      {files.length > 1 && (
+                      {batch.length > 1 && (
                         <button
                           type="button"
-                          onClick={() => downloadAllFiles(v.id, files)}
+                          onClick={() => downloadAllFiles(v.id, batch)}
                           className="text-sm"
-                          title="הורדת כל הקבצים בגרסה זו"
+                          title={
+                            symbologyCarry
+                              ? "הורדת כל הקבצים בגרסה זו — כולל קובץ הסימבולוגיה של השכבה"
+                              : "הורדת כל הקבצים בגרסה זו"
+                          }
                           style={{
                             color: "var(--primary)",
                             background: "none",
@@ -846,7 +939,7 @@ export default function VersionsPage() {
                             fontWeight: 600,
                           }}
                         >
-                          &#8595; הורד הכל ({files.length})
+                          &#8595; הורד הכל ({batch.length})
                         </button>
                       )}
                       {isAdmin && (
