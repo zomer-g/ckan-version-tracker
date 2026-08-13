@@ -1,8 +1,15 @@
 # OVER — Looker Studio Community Connector
 
-מחבר את Looker Studio ל-SQL הציבורי של גרסאות לעם דרך ה-API המוגן במפתח
-(`/api/connector`, ראו `app/api/connector.py`). המשתמשים לא רואים שום credentials —
-המפתח יושב ב-Script Properties של פרויקט ה-Apps Script ורץ בצד של גוגל.
+מחבר את Looker Studio ל-SQL הציבורי של גרסאות לעם דרך `/api/connector`
+(ראו `app/api/connector.py`).
+
+**אין סוד בצד הלקוח — בכוונה.** הפצה-בקישור מחייבת לשתף את פרויקט ה-Apps
+Script כ-"Anyone with the link: Viewer", וצופים רואים גם את ה-Script
+Properties — כלומר שום ערך בפרויקט אינו סוד. לכן הסקריפט לא שולח שום מפתח;
+השרת מזהה תעבורת connector לפי טווחי ה-IP הרשמיים של גוגל (`goog.json`,
+נטען ב-`app/services/google_ips.py` ומתרענן יומית), שמהם Apps Script יוצא
+תמיד. ‏`CONNECTOR_API_KEY` קיים רק ב-Render env: מתג הפעלה (ריק ⇒ 503)
+ו-override לבדיקות curl — לעולם לא בצד של גוגל.
 
 ```
 src/
@@ -22,8 +29,9 @@ src/
    clasp push -f
    ```
    (`.clasp.json` שנוצר מכיל רק scriptId — בטוח לקומיט.)
-5. `clasp open` → Project Settings → Script Properties → להוסיף
-   `OVER_CONNECTOR_KEY` = הערך של `CONNECTOR_API_KEY` מ-Render.
+5. שיתוף: כפתור השיתוף בעורך → General access → **Anyone with the link:
+   Viewer** (בלעדיו משתמשים אחרים נופלים לרשימת המחברים הכללית במקום
+   למסך ההגדרה). אין להוסיף שום Script Property — ראו למעלה.
 
 ## צד השרת
 
@@ -43,9 +51,9 @@ src/
 
 ## רוטציית מפתח
 
-שני מקומות, באותו סדר: (1) ערך חדש ל-`CONNECTOR_API_KEY` ב-Render (deploy),
-(2) אותו ערך ל-`OVER_CONNECTOR_KEY` ב-Script Properties. חלון קצר של 401 בין
-השניים מקובל — Looker Studio מנסה שוב ברענון הבא.
+מקום אחד בלבד: `CONNECTOR_API_KEY` ב-Render (ואז deploy). המפתח משמש רק
+לבדיקות curl ולמתג הפעלה — המחבר עצמו לא תלוי בערכו, אז רוטציה לא משביתה
+אף דשבורד.
 
 ## מגבלות מובנות
 
@@ -57,9 +65,7 @@ src/
 
 ## בדיקת עשן מתוך העורך
 
-```js
-function smoke() { Logger.log(apiSql('SELECT 1 AS x', 1)); }
-```
-זו הבדיקה האמיתית של Cloudflare מול IP של גוגל (UrlFetchApp יוצא מהתשתית של
-גוגל, לא מהמחשב שלך). אם חוזר HTML/403 — להוסיף ב-Cloudflare כלל WAF skip
-ל-`/api/connector/*`, מותנה בנוכחות ה-header ‏`X-Connector-Key` (לא בערכו).
+`api.gs` כולל פונקציית `smoke()` — לבחור אותה בתפריט הפונקציות ולהריץ.
+‏HTTP 200 = המסלול המלא תקין (כולל סיווג ה-IP של גוגל בשרת); ‏401 = השרת לא
+סיווג את הבקשה כתעבורת גוגל (לבדוק את `google_ips.py` והלוגים); ‏HTML/403 =
+‏Cloudflare חוסם — להוסיף כלל WAF skip ל-`/api/connector/*`.
