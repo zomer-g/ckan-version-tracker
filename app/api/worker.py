@@ -3360,3 +3360,60 @@ async def geocode_results(
             )[:500]
             await db.commit()
     return {"status": "recorded", **summary}
+
+
+# ── יומן לעם (Ocal) diary import via the residential worker ────────────────────
+# odata.org.il's file downloads 403 Render's datacenter IP, so the Render backend
+# can discover diaries + parse/import their bytes but cannot DOWNLOAD them. The
+# GOVSCRAPER worker (residential IP) closes the gap: it asks for candidates, fetches
+# each file, and POSTs the bytes back here to import — the same client-upload
+# pattern as /odata/import-file, but automated on the always-on worker fleet
+# instead of a browser, so it runs even when the operator's own machine is off.
+
+@router.get("/ocal-candidates")
+async def ocal_worker_candidates(request: Request, limit: int = 25,
+                                 _: None = Depends(_verify_worker_key)):
+    """New diary resources for a residential worker to fetch + upload. Throttled
+    to ~every 6h across the fleet: returns [] unless the newest diary source is
+    >5h old, so one worker per window does the batch (the unique index on
+    resource_id makes an overlapping fetch harmless). Cheap when throttled — one
+    fast query, no odata discovery."""
+    from app.services import ocal_db, ocal_import
+    if not ocal_db.is_configured():
+        return {"candidates": [], "reason": "ocal_not_configured"}
+    last = await ocal_db.fetchval("SELECT max(created_at) FROM diary_sources")
+    if last is not None:
+        gap = await ocal_db.fetchval("SELECT EXTRACT(epoch FROM now() - $1)", last)
+        if gap is not None and gap < 5 * 3600:
+            return {"candidates": [], "reason": "throttled", "next_in_s": int(5 * 3600 - gap)}
+    cands = await ocal_import.discover_candidates(limit=max(1, min(limit, 50)))
+    return {"candidates": [
+        {"resource_id": c["resource_id"], "url": c.get("url"), "format": c.get("format")}
+        for c in cands if c.get("url")]}
+
+
+@router.post("/ocal-import")
+async def ocal_worker_import(request: Request,
+                             resource_id: str = Form(...),
+                             file: UploadFile = File(...),
+                             fmt: str = Form(""),
+                             refresh: bool = Form(False),
+                             _: None = Depends(_verify_worker_key)):
+    """Import a diary from the bytes a residential worker downloaded from odata.
+    Applies the SAME auto-gate as the scheduler (title+date mapped, conf/min_rows)
+    so non-diaries land in diary_exceptions. ``refresh=true`` (set by the worker on
+    the last file of its batch) refreshes mv_entity_counts once, not per file."""
+    from app.services import ocal_import
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    try:
+        res = await ocal_import.import_diary_bytes(resource_id, data, fmt, refresh_matview=refresh)
+        logger.info("worker ocal-import ok: %s -> %s events", resource_id, res.get("events_upserted"))
+        return {"ok": True, "imported": True,
+                **{k: res.get(k) for k in ("events_upserted", "source_id", "map_method", "confidence")}}
+    except ocal_import.SkipImport as e:
+        return {"ok": True, "imported": False, "skipped": True, "reason": str(e)}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("worker ocal-import failed for %s", resource_id)
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")

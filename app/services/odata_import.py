@@ -553,10 +553,17 @@ def _parse_file(path: str, fmt: str) -> tuple[list[str], list[list]]:
     f = (fmt or "").upper()
     if f in ICAL_FORMATS:
         return _parse_ical(path)
-    if f == "XLSX":
-        return _parse_xlsx(path)
-    if f == "XLS":
-        return _parse_xls(path)
+    if f in SPREADSHEET_FORMATS:
+        # odata mislabels some resources (an .xlsx served as format "XLS", etc.),
+        # so trust the file's magic bytes over the declared format: a ZIP header
+        # (PK) is xlsx/xlsm; an OLE2 header is a legacy .xls.
+        with open(path, "rb") as fh:
+            head = fh.read(8)
+        if head[:2] == b"PK":
+            return _parse_xlsx(path)
+        if head[:4] == b"\xd0\xcf\x11\xe0":
+            return _parse_xls(path)
+        return _parse_xlsx(path) if f == "XLSX" else _parse_xls(path)
     if f == "CSV":
         return _parse_csv_file(path)
     raise ValueError(f"unsupported format: {fmt}")

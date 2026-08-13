@@ -590,17 +590,9 @@ async def _record_exception(res: dict, pkg: dict, reason: str) -> None:
 
 # ── the import ────────────────────────────────────────────────────────────────
 
-async def import_resource(resource_id: str, *, force: bool = False,
-                          enrich: bool = True, refresh_matview: bool = True) -> dict:
-    """Import one odata diary resource into the ocal DB.
-
-    ``force`` (manual admin action) bypasses the auto-import gate. Without it, a
-    resource that fails the gate raises SkipImport and is recorded in
-    diary_exceptions so discovery won't re-evaluate it. ``enrich`` runs the free
-    entity-extraction / cross-ref / matching chain afterwards (non-fatal)."""
-    if not ocal_db.is_configured():
-        raise RuntimeError("OCAL_DATABASE_URL not configured")
-
+async def _fetch_metadata(resource_id: str) -> tuple[dict, dict]:
+    """resource_show + package_show. The CKAN *API* works from Render (only the
+    static file download is Cloudflare-IP-blocked), so this is safe server-side."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
         res = await odi._fetch_json(client, "resource_show", id=resource_id)
         pkg: dict = {}
@@ -609,8 +601,65 @@ async def import_resource(resource_id: str, *, force: bool = False,
                 pkg = await odi._fetch_json(client, "package_show", id=res["package_id"])
             except Exception:  # noqa: BLE001 — package metadata is nice-to-have
                 logger.debug("ocal_import: package_show failed for %s", res.get("package_id"))
+    return res, pkg
 
+
+async def import_resource(resource_id: str, *, force: bool = False,
+                          enrich: bool = True, refresh_matview: bool = True) -> dict:
+    """Import one odata diary resource into the ocal DB (downloads the file here).
+
+    ``force`` (manual admin action) bypasses the auto-import gate. Without it, a
+    resource that fails the gate raises SkipImport and is recorded in
+    diary_exceptions so discovery won't re-evaluate it. ``enrich`` runs the free
+    entity-extraction / cross-ref / matching chain afterwards (non-fatal).
+
+    NOTE: the file download 403s from datacenter (Render) IPs — on the server use
+    the worker path (import_diary_bytes) instead; this path works from a
+    residential IP (the scripts/ocal_scan.py CLI, or local runs)."""
+    if not ocal_db.is_configured():
+        raise RuntimeError("OCAL_DATABASE_URL not configured")
+    res, pkg = await _fetch_metadata(resource_id)
     columns, rows = await _fetch_and_parse(res)
+    return await _import_parsed(resource_id, res, pkg, columns, rows,
+                                force=force, enrich=enrich, refresh_matview=refresh_matview)
+
+
+async def import_diary_bytes(resource_id: str, data: bytes, fmt: str, *,
+                             force: bool = False, enrich: bool = True,
+                             refresh_matview: bool = True) -> dict:
+    """Import a diary from RAW FILE BYTES fetched by a residential-IP worker.
+
+    Render can't download odata files (Cloudflare 403s its IP) but CAN parse +
+    import them — so the GOVSCRAPER worker downloads the file and POSTs the bytes
+    here. Same gate/mapping/enrich as import_resource; parses with OVER's parser
+    (preserves Hebrew headers). ``force=False`` keeps the auto-gate so non-diaries
+    are recorded as exceptions."""
+    if not ocal_db.is_configured():
+        raise RuntimeError("OCAL_DATABASE_URL not configured")
+    res, pkg = await _fetch_metadata(resource_id)
+    ufmt = (fmt or res.get("format") or "").upper()
+    suffix = (".ics" if ufmt in odi.ICAL_FORMATS
+              else ".xlsx" if ufmt in odi.SPREADSHEET_FORMATS else ".csv")
+    fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="ocal-diary-up-")
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        columns, rows = await asyncio.to_thread(odi._parse_file, tmp, ufmt or "CSV")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return await _import_parsed(resource_id, res, pkg, columns, rows,
+                                force=force, enrich=enrich, refresh_matview=refresh_matview)
+
+
+async def _import_parsed(resource_id: str, res: dict, pkg: dict,
+                         columns: list[str], rows: list, *,
+                         force: bool, enrich: bool, refresh_matview: bool) -> dict:
+    """Shared core: map → gate → upsert → enrich, given already-parsed rows.
+    Used by both import_resource (server download) and import_diary_bytes (worker)."""
     mapping, conf, map_method = await map_fields_best(columns, rows)
 
     if not force:
@@ -790,6 +839,7 @@ async def discover_candidates(limit: int | None = None) -> list[dict]:
                 "format": r.get("format"), "dataset_title": pkg.get("title"),
                 "dataset_id": pkg.get("id"), "organization": org,
                 "last_modified": r.get("last_modified"),
+                "url": r.get("url"),  # the residential worker downloads this
             })
             if limit and len(cands) >= limit:
                 return cands
