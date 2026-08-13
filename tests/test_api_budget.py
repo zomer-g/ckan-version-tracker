@@ -131,8 +131,14 @@ class _Req:
         self.client = type("C", (), {"host": host})()
 
 
-def test_budget_bucket_routes_valid_connector_key_to_shared_bucket():
+def _no_google(monkeypatch):
+    from app.services import google_ips
+    monkeypatch.setattr(google_ips, "is_google_ip", lambda ip: False)
+
+
+def test_budget_bucket_routes_valid_connector_key_to_shared_bucket(monkeypatch):
     from app.api_budget_middleware import _budget_bucket
+    _no_google(monkeypatch)
     settings.connector_api_key = "sekret"
     settings.connector_daily_byte_budget = 10 * 1024 ** 3
     try:
@@ -144,8 +150,27 @@ def test_budget_bucket_routes_valid_connector_key_to_shared_bucket():
         settings.connector_api_key = ""
 
 
-def test_budget_bucket_wrong_or_absent_key_stays_per_ip():
+def test_budget_bucket_google_ip_routes_to_shared_bucket(monkeypatch):
+    # Apps Script traffic carries no secret — Google egress IPs classify it.
     from app.api_budget_middleware import _budget_bucket
+    from app.services import google_ips
+    monkeypatch.setattr(google_ips, "is_google_ip", lambda ip: True)
+    settings.connector_api_key = "sekret"
+    settings.connector_daily_byte_budget = 10 * 1024 ** 3
+    try:
+        assert _budget_bucket(_Req(host="8.8.8.8"), "/api/connector/sql") == (
+            "connector", 10 * 1024 ** 3)
+        # Feature off (no env key) → per-IP even from Google infra.
+        settings.connector_api_key = ""
+        assert _budget_bucket(_Req(host="8.8.8.8"), "/api/connector/sql") == (
+            "8.8.8.8", None)
+    finally:
+        settings.connector_api_key = ""
+
+
+def test_budget_bucket_wrong_or_absent_key_stays_per_ip(monkeypatch):
+    from app.api_budget_middleware import _budget_bucket
+    _no_google(monkeypatch)
     settings.connector_api_key = "sekret"
     try:
         assert _budget_bucket(
@@ -162,8 +187,9 @@ def test_budget_bucket_wrong_or_absent_key_stays_per_ip():
         settings.connector_api_key = ""
 
 
-def test_budget_bucket_header_on_other_paths_is_ignored():
+def test_budget_bucket_header_on_other_paths_is_ignored(monkeypatch):
     from app.api_budget_middleware import _budget_bucket
+    _no_google(monkeypatch)
     settings.connector_api_key = "sekret"
     try:
         assert _budget_bucket(

@@ -24,10 +24,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.client_ip import get_client_ip
 from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
-from app.services import append_store, data_catalog
+from app.services import append_store, data_catalog, google_ips
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +45,27 @@ class ConnectorSqlBody(BaseModel):
 
 
 def _require_key(request: Request) -> None:
+    """Admit the Looker Studio connector without a client-side secret.
+
+    A script shared "anyone with link: Viewer" (required for by-link
+    connector distribution) exposes its Script Properties to viewers, so a
+    key stored there is not a secret. Instead: requests from Google's egress
+    ranges (where Apps Script runs) are admitted as connector traffic. The
+    CONNECTOR_API_KEY header remains as a server-side-only override for
+    curl/manual testing — its value lives in Render env alone, and it still
+    doubles as the feature kill-switch (unset ⇒ 503).
+    """
     # strip(): a value pasted into the Render dashboard with an invisible
     # trailing space/newline must not 401 every single call.
     key = (getattr(settings, "connector_api_key", "") or "").strip()
     if not key:
         raise HTTPException(status_code=503, detail="Connector API is not enabled")
     supplied = request.headers.get("X-Connector-Key", "").strip()
-    if not secrets.compare_digest(supplied, key):
-        raise HTTPException(status_code=401, detail="Invalid connector key")
+    if supplied and secrets.compare_digest(supplied, key):
+        return
+    if google_ips.is_google_ip(get_client_ip(request)):
+        return
+    raise HTTPException(status_code=401, detail="Invalid connector key")
 
 
 def _require_enabled() -> None:

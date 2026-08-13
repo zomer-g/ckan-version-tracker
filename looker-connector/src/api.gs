@@ -1,23 +1,14 @@
 /**
- * HTTP layer: talks to OVER's key-gated connector API (app/api/connector.py).
+ * HTTP layer: talks to OVER's connector API (app/api/connector.py).
  *
- * The shared secret lives in Script Properties (key OVER_CONNECTOR_KEY), never
- * in source — set it once in the Apps Script editor (Project Settings →
- * Script Properties). It must equal the backend's CONNECTOR_API_KEY env.
+ * There is deliberately NO client-side secret here: the script is shared
+ * "anyone with link: Viewer" (required for by-link connector distribution),
+ * and viewers can see Script Properties — so nothing stored in this project
+ * can be secret. The backend instead recognizes connector traffic by
+ * Google's egress IP ranges (where Apps Script always runs).
  */
 
 var BASE = 'https://over.org.il';
-
-function _key() {
-  var key = PropertiesService.getScriptProperties().getProperty('OVER_CONNECTOR_KEY');
-  if (key) {
-    key = key.trim(); // a pasted trailing space/newline must not 401 every call
-  }
-  if (!key) {
-    _userError('ה-connector אינו מוגדר (חסר OVER_CONNECTOR_KEY ב-Script Properties).');
-  }
-  return key;
-}
 
 function _userError(text) {
   DataStudioApp.createCommunityConnector()
@@ -46,7 +37,6 @@ function apiSql(sql, maxRows) {
   var response = UrlFetchApp.fetch(BASE + '/api/connector/sql', {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'X-Connector-Key': _key() },
     payload: JSON.stringify({ sql: sql, max_rows: maxRows }),
     muteHttpExceptions: true,
   });
@@ -57,21 +47,19 @@ function apiSql(sql, maxRows) {
 }
 
 /**
- * Dev-only smoke test — run from the Apps Script editor after setting
- * OVER_CONNECTOR_KEY. Deliberately does a RAW fetch (no _userError): a
- * CommunityConnector userError thrown outside a real Data Studio request
- * still shows the run as "Completed", which reads as false success. Here
- * the log always tells the truth:
+ * Dev-only smoke test — run from the Apps Script editor. Deliberately does
+ * a RAW fetch (no _userError): a CommunityConnector userError thrown
+ * outside a real Data Studio request still shows the run as "Completed",
+ * which reads as false success. Here the log always tells the truth:
  *   HTTP 200 + {"columns":["x"],...} → end-to-end OK
- *   HTTP 401 → OVER_CONNECTOR_KEY ≠ Render's CONNECTOR_API_KEY
- *   HTTP 503 → CONNECTOR_API_KEY not set on the server
+ *   HTTP 401 → the server did not classify this as Google-infra traffic
+ *   HTTP 503 → CONNECTOR_API_KEY not set on the server (feature off)
  *   HTML/403 → Cloudflare challenging Google IPs → WAF skip rule needed
  */
 function smoke() {
   var response = UrlFetchApp.fetch(BASE + '/api/connector/sql', {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'X-Connector-Key': _key() },
     payload: JSON.stringify({ sql: 'SELECT 1 AS x', max_rows: 1 }),
     muteHttpExceptions: true,
   });
@@ -82,7 +70,6 @@ function smoke() {
 /** The trimmed table catalog for the config dropdown. */
 function fetchTables() {
   var response = UrlFetchApp.fetch(BASE + '/api/connector/tables', {
-    headers: { 'X-Connector-Key': _key() },
     muteHttpExceptions: true,
   });
   if (response.getResponseCode() !== 200) {

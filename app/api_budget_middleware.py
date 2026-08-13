@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.client_ip import get_client_ip
 from app.config import settings
+from app.services import google_ips
 from app.services.api_budget import budget
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,9 @@ def _budget_bucket(request: Request, path: str) -> tuple[str, int | None]:
     if path.startswith("/api/connector"):
         key = (getattr(settings, "connector_api_key", "") or "").strip()
         supplied = request.headers.get("x-connector-key", "").strip()
-        if key and secrets.compare_digest(supplied, key):
+        if (key and supplied and secrets.compare_digest(supplied, key)) or (
+            key and google_ips.is_google_ip(_client_ip(request))
+        ):
             return "connector", int(getattr(settings, "connector_daily_byte_budget", 0) or 0)
     return _client_ip(request), None
 

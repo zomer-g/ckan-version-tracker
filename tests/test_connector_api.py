@@ -18,7 +18,7 @@ from app.api import connector
 from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
-from app.services import append_store, data_catalog
+from app.services import append_store, data_catalog, google_ips
 
 
 async def _fake_db():
@@ -39,6 +39,8 @@ def _client() -> TestClient:
 def configured(monkeypatch):
     monkeypatch.setattr(settings, "connector_api_key", "testkey")
     monkeypatch.setattr(append_store, "is_configured", lambda: True)
+    # TestClient traffic must not accidentally classify as Google infra.
+    monkeypatch.setattr(google_ips, "is_google_ip", lambda ip: False)
 
 
 def test_feature_off_when_key_unset(monkeypatch):
@@ -100,6 +102,28 @@ def test_max_rows_clamp(configured, monkeypatch, requested, effective):
                headers={"X-Connector-Key": "testkey"})
     assert r.status_code == 200
     assert seen["max_rows"] == effective
+
+
+def test_google_ip_admits_without_key(configured, monkeypatch):
+    # The Looker connector carries no client-side secret — Apps Script
+    # egress (Google IP ranges) is admitted on its own.
+    monkeypatch.setattr(google_ips, "is_google_ip", lambda ip: True)
+
+    async def fake_sql(sql, **kw):
+        return {"columns": [], "fields": [], "rows": [],
+                "truncated": False, "row_count": 0}
+
+    monkeypatch.setattr(append_store, "run_readonly_sql", fake_sql)
+    c = _client()
+    assert c.post("/api/connector/sql", json={"sql": "SELECT 1"}).status_code == 200
+
+
+def test_google_ip_still_503_when_feature_off(monkeypatch):
+    # The env key stays the kill-switch even for Google-infra traffic.
+    monkeypatch.setattr(settings, "connector_api_key", "")
+    monkeypatch.setattr(google_ips, "is_google_ip", lambda ip: True)
+    c = _client()
+    assert c.post("/api/connector/sql", json={"sql": "SELECT 1"}).status_code == 503
 
 
 def test_sql_validation_error_becomes_400(configured, monkeypatch):
