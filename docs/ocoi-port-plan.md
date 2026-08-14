@@ -120,6 +120,15 @@ OVER  POST /api/worker/ocoi-push   (מאחורי WORKER_API_KEY)
 4. `documents.pdf_content` → R2; להוסיף עמודת מפתח אובייקט; לאפס את הבלוב.
 5. תפקיד `ocoi_app` + `ALTER ROLE ocoi_app SET search_path` (הלקח מ-Ocal: default של role שורד
    `RESET ALL` של ה-pooler; `SET` פר-חיבור לא).
+5b. **חובה — אינדקס trigram על `registry_records.name`** (נמדד, לא תיאורטי):
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+   CREATE INDEX ix_registry_name_trgm ON ocoi.registry_records
+     USING gin (name extensions.gin_trgm_ops);
+   ```
+   בלעדיו `/registry/lookup?q=בע` לקח **39 שניות** מול הקורפוס החי (711,689 התאמות מתוך 798k,
+   סריקה סדרתית + מיון). ספירה חסומה ב-API הורידה ל-22 שניות; את השאר עושה האינדקס.
+   לאחר ההגירה — למדוד שוב ולוודא שזה יורד לטווח המילי-שניות.
 6. `over_readonly` ← `GRANT USAGE, SELECT ON SCHEMA ocoi` בלבד.
 7. `app/services/ocoi_db.py` — pool asyncpg עצל (`statement_cache_size=0` ל-pooler של Neon).
 8. **סריקת יתומים אחרי הטעינה** — `entity_relationships` הוא polymorphic **בלי FK**, וידוע שיש

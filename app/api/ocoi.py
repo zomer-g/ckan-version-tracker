@@ -171,19 +171,38 @@ def _entity_row(rec, entity_type: str) -> dict:
 # Hidden-entity pruning
 # ---------------------------------------------------------------------------
 
-async def _hidden_ids() -> dict[str, set[str]]:
-    """Ids flagged ``hidden`` per entity type.
+# `hidden` is a curation flag an admin toggles by hand, not a bulk state, so the
+# id set is tiny and changes rarely — but it is needed by EVERY graph and
+# document read. Re-reading four tables per request cost measurable latency
+# against the live corpus, so it is cached briefly. The TTL is the staleness an
+# admin sees after hiding an entity; a minute is well inside "it took effect".
+_hidden_cache: tuple[float, dict[str, set[str]]] | None = None
+_HIDDEN_TTL = 60.0
 
-    Read once per request and applied in Python rather than joined per query:
-    the graph walk returns type-tagged endpoints with no FK, so there is nothing
-    to join against without four LEFT JOINs per row. The set is small (hidden is
-    a curation flag on placeholder names, not a bulk state).
+
+async def _hidden_ids() -> dict[str, set[str]]:
+    """Ids flagged ``hidden`` per entity type (cached ~60s).
+
+    Applied in Python rather than joined per query: the graph walk returns
+    type-tagged endpoints with no FK, so there is nothing to join against
+    without four LEFT JOINs per row.
     """
+    global _hidden_cache
+    now = time.time()
+    if _hidden_cache is not None and now - _hidden_cache[0] < _HIDDEN_TTL:
+        return _hidden_cache[1]
     out: dict[str, set[str]] = {}
     for etype, table in _ENTITY_TABLES.items():
         rows = await ocoi_db.fetch(f"SELECT id FROM {table} WHERE hidden IS TRUE")
         out[etype] = {r["id"] for r in rows}
+    _hidden_cache = (now, out)
     return out
+
+
+def _invalidate_hidden_cache() -> None:
+    """Called by the admin surface after toggling `hidden` (later phase)."""
+    global _hidden_cache
+    _hidden_cache = None
 
 
 def _prune_hidden(edges: list[dict], hidden: dict[str, set[str]]) -> list[dict]:
@@ -219,6 +238,9 @@ _EDGE_COLS = """
 # here it would take the whole site down. The cap bounds the blast radius, and
 # `truncated` tells the caller the view is partial rather than silently lying.
 _MAX_EDGES = 4000
+
+# Ceiling for exact row counting on the big mirrored table — see registry_lookup.
+_COUNT_CAP = 10_000
 
 
 async def _walk(anchor_type: str, anchor_id: str, depth: int,
@@ -780,15 +802,31 @@ async def registry_lookup(
         where.append(f"source_type = ${len(params)}")
     w = " AND ".join(where)
 
+    # BOUNDED count. registry_records holds ~798k rows and `name` has no trigram
+    # index, so a substring search is a sequential scan: an exact COUNT(*) for a
+    # common fragment matched 711,689 rows and took 39 SECONDS against the live
+    # corpus. Nobody pages to result 700,000 — stop counting at the cap and say
+    # so, which turns a 39s request into a bounded one.
+    #
+    # The proper fix is a pg_trgm GIN index on the migrated table; this stays
+    # regardless, because an unbounded count over a growing mirror is a latency
+    # bomb waiting for the next big sync.
     total = await ocoi_db.fetchval(
-        f"SELECT COUNT(*) FROM registry_records WHERE {w}", *params) or 0
+        f"SELECT COUNT(*) FROM ("
+        f"  SELECT 1 FROM registry_records WHERE {w} LIMIT {_COUNT_CAP + 1}"
+        f") t", *params) or 0
+    capped = int(total) > _COUNT_CAP
     rows = await ocoi_db.fetch(
         f"SELECT id, source_type, name, registration_number, status, updated_at "
         f"FROM registry_records WHERE {w} ORDER BY name "
         f"LIMIT ${len(params)+1} OFFSET ${len(params)+2}",
         *params, limit, (page - 1) * limit,
     )
-    return _ok([dict(r) for r in rows], _page_meta(int(total), page, limit))
+    meta = _page_meta(min(int(total), _COUNT_CAP), page, limit)
+    if capped:
+        # "at least this many" — the UI must not print it as an exact figure.
+        meta["total_capped"] = True
+    return _ok([dict(r) for r in rows], meta)
 
 
 # ---------------------------------------------------------------------------
@@ -873,7 +911,17 @@ async def document_markdown(request: Request, doc_id: str):
 
 @router.get("/documents/{doc_id}/entities")
 @limiter.limit("60/minute")
-async def document_entities(request: Request, doc_id: str):
+async def document_entities(
+    request: Request, doc_id: str,
+    limit: int = Query(_MAX_EDGES, ge=1, le=_MAX_EDGES),
+):
+    """Relationship rows extracted from one document.
+
+    Capped like the graph walk. A single document really can carry thousands of
+    edges — the MK-expenses workbook is imported as one "document" and produced
+    5,218 — so an uncapped read here is a multi-megabyte response built from a
+    single id, which is precisely the shape the walk cap exists to prevent.
+    """
     _require_configured()
     doc_id = _require_id(doc_id, "doc_id")
     rows = await ocoi_db.fetch("""
@@ -883,7 +931,8 @@ async def document_entities(request: Request, doc_id: str):
                r.origin_kind, r.confidence, r.verified
         FROM entity_relationships r
         WHERE r.document_id = $1
-    """, doc_id)
+        LIMIT $2
+    """, doc_id, limit)
     edges = [dict(r) for r in rows]
     edges = _prune_hidden(edges, await _hidden_ids())
     names = await _hydrate_names(edges)
@@ -907,9 +956,11 @@ async def document_graph(request: Request, doc_id: str):
         FROM entity_relationships r
         LEFT JOIN documents d ON d.id = r.document_id
         WHERE r.document_id = $1
+        LIMIT {_MAX_EDGES}
     """, doc_id)
+    truncated = len(rows) >= _MAX_EDGES
     edges = _prune_hidden([dict(r) for r in rows], await _hidden_ids())
-    return _ok(_subgraph(edges, await _hydrate_names(edges)))
+    return _ok(_subgraph(edges, await _hydrate_names(edges), truncated))
 
 
 # RFC 5987: a Hebrew filename must not go out as a raw Latin-1 header value.
