@@ -311,6 +311,47 @@ def test_labels_become_a_label_class_with_an_arcade_expression():
     assert text["haloSize"] == pytest.approx(1.5)
 
 
+def test_a_label_computed_by_a_function_names_the_field_once():
+    """Layer 240871 (כתובות בתכנון) labels with
+    `if_then_else(strMatches(house_num,…), numberFormat('#,##0', house_num), house_num)`.
+    Those three PropertyName elements are ARGUMENTS of one computation — reading
+    them as a concatenation labelled every address "5 5 5"."""
+    body = """
+    <Rule><LineSymbolizer><Stroke>
+      <CssParameter name="stroke">#C287F4</CssParameter></Stroke></LineSymbolizer></Rule>
+    <Rule><TextSymbolizer><Label>
+      <ogc:Function name="if_then_else">
+        <ogc:Function name="strMatches">
+          <ogc:PropertyName>house_num</ogc:PropertyName>
+          <ogc:Literal>^-?\\d+$</ogc:Literal></ogc:Function>
+        <ogc:Function name="numberFormat">
+          <ogc:Literal>#,##0</ogc:Literal>
+          <ogc:PropertyName>house_num</ogc:PropertyName></ogc:Function>
+        <ogc:PropertyName>house_num</ogc:PropertyName>
+      </ogc:Function></Label>
+      <Font><CssParameter name="font-size">12</CssParameter></Font>
+      <Fill><CssParameter name="fill">#000000</CssParameter></Fill>
+    </TextSymbolizer></Rule>"""
+    doc, warnings = _convert(body)
+    lc = _layer(doc)["labelClasses"][0]
+    assert lc["expression"] == "$feature.house_num"
+    # And the reader is told the numeric formatting did not come across.
+    assert any("פונקציה" in w for w in warnings)
+
+
+def test_a_mixed_content_label_keeps_its_literals_in_order():
+    body = """
+    <Rule><PolygonSymbolizer><Fill>
+      <CssParameter name="fill">#ffffff</CssParameter></Fill></PolygonSymbolizer>
+      <TextSymbolizer><Label>
+        <ogc:PropertyName>street</ogc:PropertyName> - <ogc:PropertyName>num</ogc:PropertyName>
+      </Label>
+      <Font><CssParameter name="font-size">10</CssParameter></Font></TextSymbolizer></Rule>"""
+    doc, _ = _convert(body)
+    assert _layer(doc)["labelClasses"][0]["expression"] == \
+        '$feature.street + " - " + $feature.num'
+
+
 def test_scale_denominators_land_on_the_layer_the_way_arcgis_reads_them():
     body = """
     <Rule><Title>קרוב</Title>

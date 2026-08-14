@@ -782,21 +782,63 @@ def _text_symbol(sym) -> dict:
     return out
 
 
-def _label_expression(sym) -> str | None:
+def _quote(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _label_expression(sym) -> tuple[str | None, str]:
+    """The label's Arcade expression, plus a note when it had to be simplified.
+
+    Two shapes occur in GovMap's styles and they must not be read the same way:
+
+    * **Mixed content** — ``<Label><PropertyName>street</> - <PropertyName>num</></Label>``
+      — is a concatenation, and is rebuilt in document order, literals included.
+    * **A wrapped ``ogc:Function``** — e.g. layer 240871's
+      ``if_then_else(strMatches(house_num,…), numberFormat('#,##0', house_num), house_num)``
+      — is a computation. Its inner ``PropertyName`` elements are ARGUMENTS,
+      not fields to concatenate: reading them as mixed content labelled every
+      feature "5 5 5", because ``house_num`` appears three times in the one
+      expression. Distinct fields are taken, deduplicated, and the caller is
+      told the conditional/formatting logic did not survive.
+    """
     label = _kid(sym, "Label")
     if label is None:
-        return None
-    props = [_text(p) for p in _deep(label, "PropertyName") if _text(p)]
-    if not props:
-        literal = _text(label)
-        return f'"{literal}"' if literal else None
-    if len(props) == 1:
-        return f"$feature.{props[0]}"
-    return " + ' ' + ".join(f"$feature.{p}" for p in props)
+        return None, ""
+    if _deep(label, "Function"):
+        props: list[str] = []
+        for p in _deep(label, "PropertyName"):
+            name = _text(p)
+            if name and name not in props:
+                props.append(name)
+        if not props:
+            return None, "תווית שנשענת על פונקציה ללא שדה לא הומרה"
+        expr = " + ' ' + ".join(f"$feature.{p}" for p in props)
+        return expr, ("תווית התכתיב חושבה בפונקציה של GeoServer "
+                      "(תנאי/עיצוב מספרים) — הועתק השדה עצמו, בלי החישוב")
+
+    parts: list[str] = []
+
+    def _push_text(raw: str | None) -> None:
+        if raw and raw.strip():
+            parts.append(_quote(re.sub(r"\s+", " ", raw)))
+
+    _push_text(label.text)
+    for node in label:
+        name = _ln(node.tag)
+        if name == "PropertyName" and _text(node):
+            parts.append(f"$feature.{_text(node)}")
+        elif name == "Literal":
+            _push_text(_text(node))
+        _push_text(node.tail)
+    if not parts:
+        return None, ""
+    return " + ".join(parts), ""
 
 
-def _label_class(sym, name: str, geom: str) -> dict | None:
-    expr = _label_expression(sym)
+def _label_class(sym, name: str, geom: str, warnings: list[str]) -> dict | None:
+    expr, note = _label_expression(sym)
+    if note:
+        warnings.append(note)
     if not expr:
         return None
     return {
@@ -1125,7 +1167,7 @@ def convert_sld(xml: str | bytes, *, name: str,
     label_classes: list[dict] = []
     for r in rules:
         for i, sym in enumerate(r.labels):
-            lc = _label_class(sym, f"{r.title or 'Class'} {i + 1}".strip(), geom)
+            lc = _label_class(sym, f"{r.title or 'Class'} {i + 1}".strip(), geom, warnings)
             if lc:
                 label_classes.append(lc)
 
