@@ -88,7 +88,36 @@ async def ensure_tables() -> None:
         for stmt in _INDEXES:
             await conn.execute(stmt)
     from app.services.nadlan_index import _grant_readonly
-    await _grant_readonly()
+    await _grant_readonly()          # grants the nine PUBLISHED tables, not this one
+    await _revoke_from_public_console()
+
+
+async def _revoke_from_public_console() -> None:
+    """Keep this table out of reach of the public SQL console.
+
+    Removing it from the /data catalog (`data_catalog._OVER_HIDDEN`) hides the
+    signpost, but the console runs free-form SQL, so the table still answers a
+    direct `SELECT` — verified: 111,908 rows to an anonymous caller. The
+    console's read-only role never gets an explicit grant here; it inherits one
+    from `ALTER DEFAULT PRIVILEGES IN SCHEMA public` in the role's provisioning
+    script, which re-applies on any recreate. So the revoke is re-asserted on
+    every `ensure_tables()` rather than run once by hand.
+
+    Admin and worker paths read this table on the READ-WRITE pool for exactly
+    this reason (`stats`, `batch_for_task`, `remaining_count`, `recent_hit_rate`)
+    — they are never anonymous-facing.
+    """
+    from app.services.index_mirror import _readonly_role
+    role = _readonly_role()
+    if not role:
+        return
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                f"REVOKE ALL ON public.{_qi(GEOCODE_TABLE)} FROM {_qi(role)}")
+        except Exception:  # noqa: BLE001 — a missing role must not fail a build
+            logger.debug("geocode: revoke on %s failed", GEOCODE_TABLE, exc_info=True)
 
 
 # ── the queue side (main DB) ──────────────────────────────────────────────────
@@ -110,6 +139,10 @@ async def ensure_dataset(db) -> TrackedDataset:
         organization="govmap.gov.il",
         source_type="scraper",
         source_url="https://www.govmap.gov.il/",
+        # Unpublished on purpose (migration 063): tracked and polled, but kept
+        # out of the public list and the SQL console. This is a working ledger,
+        # not a dataset — the finished points live in over_re_addresses.
+        status="hidden",
         scraper_config={
             "kind": KIND,
             # Read by the worker. 2/s was chosen deliberately over the ~4.4/s
@@ -220,7 +253,7 @@ def build_query(settlement: str | None, street: str | None,
 
 
 async def batch_for_task(limit: int = BATCH_SIZE) -> list[dict]:
-    pool = await append_store.get_readonly_pool()
+    pool = await append_store.get_pool()   # not the console role: see _revoke_from_public_console
     async with pool.acquire() as conn:
         rows = await conn.fetch(_selection_sql(limit))
     return [{"address_key": r["address_key"],
@@ -230,7 +263,7 @@ async def batch_for_task(limit: int = BATCH_SIZE) -> list[dict]:
 
 
 async def remaining_count() -> int:
-    pool = await append_store.get_readonly_pool()
+    pool = await append_store.get_pool()   # not the console role: see _revoke_from_public_console
     async with pool.acquire() as conn:
         return await conn.fetchval(f"""
             SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} a
@@ -425,7 +458,7 @@ async def recent_hit_rate(hours: int = 2) -> float | None:
 
     The circuit breaker: a fresh batch is pointless while GovMap is refusing
     us, and every one queued in that state is another chance to burn attempts."""
-    pool = await append_store.get_readonly_pool()
+    pool = await append_store.get_pool()   # not the console role: see _revoke_from_public_console
     async with pool.acquire() as conn:
         row = await conn.fetchrow(f"""
             SELECT count(*) FILTER (WHERE status='hit')       AS hits,
@@ -519,7 +552,7 @@ async def merge_into_addresses() -> dict:
 
 
 async def stats() -> dict:
-    pool = await append_store.get_readonly_pool()
+    pool = await append_store.get_pool()   # not the console role: see _revoke_from_public_console
     async with pool.acquire() as conn:
         row = await conn.fetchrow(f"""
             SELECT

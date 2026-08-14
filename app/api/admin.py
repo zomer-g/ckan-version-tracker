@@ -1857,7 +1857,10 @@ def _admin_dataset_conds(
     storage_expr = _storage_target_expr()
 
     conds = [
-        TrackedDataset.status == "active",
+        # 'hidden' is unpublished, NOT untracked: it must stay administrable,
+        # which is the difference between this and the public list's
+        # `status IN (active, pending)`.
+        TrackedDataset.status.in_(("active", "hidden")),
         # Same exclusion as the public list: ~2,900 auto-generated
         # one-per-committee-meeting rows are bulk-managed, not individually
         # administered, and would drown the tab.

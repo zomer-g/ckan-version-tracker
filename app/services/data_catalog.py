@@ -237,6 +237,22 @@ _OVER_TITLES = {
     "over_re_build_state": "נדל\"ן לעם — מצב בניית האינדקס",
 }
 
+#: `over_*` tables kept OUT of the public /data catalog.
+#:
+#: This is a curation decision, not a security one. `over_re_geocode` is the
+#: GovMap geocoding ledger: a per-address work log (asked / found / missed /
+#: wrong locality) that is only ~46% answered and exists to fill edge cases in
+#: `over_re_addresses`. Published on its own it invites being read as "the
+#: addresses GovMap knows", which it is not. The finished product — the point
+#: itself — is already in `over_re_addresses`.
+#:
+#: Dropping a table here also 404s its /detail, /profile and DDL endpoints
+#: (`table_detail` returns None → callers 404) and removes it from the Looker
+#: connector, the /data MCP server, /api/stats and the NL-query semantic model.
+#: It does NOT stop free-form SQL — that needs the REVOKE in
+#: `geocode_queue.ensure_tables()`. Both are required; neither alone is enough.
+_OVER_HIDDEN = {"over_re_geocode"}
+
 
 async def _over_index_records() -> list[dict]:
     """Catalog rows for OVER's own PROCESSED index tables (public.over_*).
@@ -254,6 +270,8 @@ async def _over_index_records() -> list[dict]:
     recs: list[dict] = []
     for table, columns in sorted(cols_by_table.items()):
         if not table.startswith("over_") or not columns:
+            continue
+        if table in _OVER_HIDDEN:
             continue
         recs.append({
             "table": table,

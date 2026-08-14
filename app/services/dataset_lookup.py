@@ -147,7 +147,10 @@ async def find_datasets_for_url(
                 candidate_filter,
                 # Demoted duplicates (migration 035) are not somewhere to send
                 # anyone; the surviving dataset is in the same result set.
-                TrackedDataset.status != "duplicate",
+                # 'hidden' (migration 063) is deliberately unpublished — this
+                # filter is `!=` rather than `IN (active, pending)` like the
+                # rest, so a hidden row leaks from here unless named.
+                TrackedDataset.status.notin_(("duplicate", "hidden")),
                 # ~2,900 auto-generated one-per-committee-meeting rows are
                 # bulk-managed and excluded from the public catalog — same
                 # exclusion as GET /api/datasets.
