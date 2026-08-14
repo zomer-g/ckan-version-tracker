@@ -497,13 +497,20 @@ def _n_tagit(d: dict) -> Card | None:
         return None
     badges = [b for b in (d.get("doc_type"),) if b]
     # The SNIPPET first, not the abstract: TAG-IT returns the text around the
-    # match with the matched words already wrapped in «…», and that is the
-    # whole reason to search document bodies. An abstract describes the
-    # document; the snippet shows why THIS document answered THIS query.
+    # match, and that is the whole reason to search document bodies. An abstract
+    # describes the document; the snippet shows why THIS document answered THIS
+    # query. Offsets are preferred over the pre-marked string — see
+    # deep_search_query.mark_from_spans for why parsing «…» cannot be made safe.
+    from app.services import deep_search_query as _dsq
+    snippet = (_dsq.mark_from_spans(d.get("snippet_text"), d.get("highlights"))
+               or d.get("snippet")
+               or truncate(d.get("abstract") or ""))
     return Card(
         title=truncate(title, 160),
-        snippet=d.get("snippet") or truncate(d.get("abstract") or ""),
-        url=d.get("link"),
+        snippet=snippet,
+        # The publisher's file, not TAG-IT's SSO-gated viewer: this page is
+        # anonymous, so a link that demands a login is a dead end.
+        url=d.get("source_url") or d.get("link"),
         date=iso_date(d.get("date")),
         badges=tuple(badges),
     )
@@ -515,11 +522,19 @@ def _tagit_runner(scope_setting: str):
         from app.services import tagit_mcp
 
         args = {"scope": int(getattr(settings, scope_setting)),
-                "text_query": q, "page": 1, "size": max(1, min(limit, 50))}
+                "text_query": q, "page": 1, "size": max(1, min(limit, 50)),
+                # Counting the whole match set costs about as much as finding
+                # the page: measured by TAG-IT, skipping it took "תקציב הביטחון"
+                # from 34.4s to 17.5s and "ועדת הכספים" from 21.1s to 11.0s.
+                # A column here shows a handful of cards, and latency is what
+                # forced the 60s ceiling — so we buy the speed and show the
+                # number of cards instead of a corpus-wide count.
+                "total_mode": "skip"}
         args.update(date_args(filters))
         result = await tagit_mcp._rpc(
             "tools/call", {"name": "search_documents", "arguments": args})
-        items, total = tagit_mcp._as_items_and_total(tagit_mcp._tool_payload(result))
+        payload = tagit_mcp._tool_payload(result)
+        items, total = tagit_mcp._as_items_and_total(payload)
         cards: list[Card] = []
         for it in items:
             if not isinstance(it, dict):
@@ -530,19 +545,28 @@ def _tagit_runner(scope_setting: str):
                 continue
             if c:
                 cards.append(c)
-        return {"results": cards, "total": total if total is not None else len(cards)}
+        # A missing total is UNKNOWN, never zero. We asked for it to be skipped,
+        # and TAG-IT also drops it (total_omitted / timed_out) when counting
+        # would blow its budget. Reporting len(cards) there would state the page
+        # size as if it were the whole answer — the "2 of 234" lie inverted.
+        return {"results": cards, "total": total, "total_unknown": total is None}
 
     return run
 
 
 # ── מבקר המדינה: OVER's own catalog of the reports ──────────────────────────
-# The TAG-IT column above searches document BODIES but holds only the 2018-19
-# local-government slice. This one is OVER's own scrape of the State
-# Comptroller's library: metadata + a link to the PDF rather than full text,
-# but every report type back to 1989 — and it extends itself as the scraper
-# runs. (Its coverage currently stops at 2019 because the scraper's page walk
-# gave up on a 192-page gap; fixed in govil-scraper ed6db15, so this column
-# grows on its own once that lands.)
+# The TAG-IT column above searches document BODIES; this one is OVER's own
+# scrape of the State Comptroller's library — metadata + a link to the PDF
+# rather than full text, but every report TYPE rather than the subset TAG-IT
+# has imported.
+#
+# Do not write either one's coverage down here. Both move: TAG-IT re-imports
+# (scope 13 went 981 → 6,168 → 6,851 → 9,074 documents in four days, now
+# 1949-2026), and this catalog grew by 7,971 rows when the scraper's page walk
+# was fixed (govil-scraper ed6db15 — it had been giving up on a 192-page gap
+# and publishing a confident weekly version of 387 volumes out of 1,825). The
+# live number comes from tagit_meta.coverage_label; a test forbids a year
+# literal in any scope-backed hint.
 
 # Addressed by their idx-mirror TABLE, not by dataset_id: these corpora have no
 # ``append_`` table, so query_dataset_rows resolves a name that does not exist

@@ -322,6 +322,100 @@ def test_the_date_filter_is_declared_but_can_be_withdrawn_by_the_service():
     assert tagit_meta.dates_usable(None) is None
 
 
+def test_an_isError_result_raises_instead_of_normalizing_to_no_results():
+    """An isError result carries a MESSAGE where the payload would be.
+
+    Digging for `items` in it finds nothing and yields an empty column, so a
+    filter rejection or a query timeout renders as "this corpus has nothing".
+    TAG-IT flagged this as the one remaining data-losing bug on our side.
+    """
+    from app.services import tagit_mcp
+
+    err = {"isError": True,
+           "content": [{"type": "text", "text": "statement timeout after 25s"}]}
+
+    with pytest.raises(deep_search.SourceError, match="statement timeout"):
+        deep_search._tool_payload(err)
+    with pytest.raises(tagit_mcp.DeepSearchError, match="statement timeout"):
+        tagit_mcp._tool_payload(err)
+
+    # An isError with no text part must still raise rather than return {}.
+    with pytest.raises(deep_search.SourceError):
+        deep_search._tool_payload({"isError": True, "content": []})
+    # And a normal result is untouched.
+    assert deep_search._tool_payload(
+        {"content": [{"type": "text", "text": '{"items": [1]}'}]}) == {"items": [1]}
+
+
+def test_an_unknown_total_stays_null_and_never_becomes_the_page_size():
+    """null total means "not counted", which is not the same as zero.
+
+    We ask TAG-IT for total_mode=skip (it halves the latency), so the count is
+    absent by design. Substituting len(cards) would state the page size as the
+    whole answer — the "2 of 234" lie, inverted.
+    """
+    src = next(s for s in deep_search_sources.SOURCES if s.id == "mevaker")
+    cards = [Card(title="דוח א"), Card(title="דוח ב")]
+
+    unknown = deep_search._column(src, results=cards, total_unknown=True)
+    assert unknown["total"] is None
+    assert len(unknown["results"]) == 2
+
+    # Without the flag the old fallback still applies, for sources that do count.
+    assert deep_search._column(src, results=cards)["total"] == 2
+    assert deep_search._column(src, results=cards, total=234)["total"] == 234
+    # Zero must stay a real, reportable zero.
+    assert deep_search._column(src, results=[], total=0)["total"] == 0
+
+
+def test_tagit_asks_for_the_count_to_be_skipped():
+    import inspect
+    src = inspect.getsource(deep_search_sources._tagit_runner)
+    assert '"total_mode": "skip"' in src
+
+
+def test_highlight_offsets_survive_a_document_containing_the_marker():
+    """The reason to take offsets over a pre-marked string.
+
+    Once « is in the text, the marker and the content are the same character
+    and no parser can separate them. Offsets are immune, provided the clean
+    text is neutralized before insertion — and that the insertion runs
+    backwards, or each mark shifts every span still to be applied.
+    """
+    from app.services import deep_search_query as dsq
+
+    # "אמר «כך» ותקציב" — the span covers "ותקציב" at offset 9, and the offsets
+    # are stated against the CLEAN text, so the document's own « must not move
+    # them. Neutralizing is length-preserving for exactly that reason.
+    out = dsq.mark_from_spans("אמר «כך» ותקציב", [{"start": 9, "length": 6}])
+    assert out == "אמר ‹כך› «ותקציב»"
+
+    two = dsq.mark_from_spans("תקציב וגם ביטחון",
+                              [{"start": 0, "length": 5}, {"start": 10, "length": 6}])
+    assert two == "«תקציב» וגם «ביטחון»"      # second span not shifted by the first
+
+    # Overlapping spans merge instead of nesting into unbalanced markers.
+    assert dsq.mark_from_spans("תקציב", [{"start": 0, "length": 3},
+                                         {"start": 1, "length": 4}]) == "«תקציב»"
+    # Nothing usable ⇒ None, so the caller falls back to the pre-marked snippet.
+    assert dsq.mark_from_spans("תקציב", []) is None
+    assert dsq.mark_from_spans("", [{"start": 0, "length": 2}]) is None
+    assert dsq.mark_from_spans("תקציב", [{"start": 99, "length": 2}]) is None
+    assert dsq.mark_from_spans("תקציב", ["junk", {"start": "x"}]) is None
+
+
+def test_a_card_links_to_the_publisher_not_to_the_sso_viewer():
+    """TAG-IT's `link` is anchored to the passage but sits behind SSO, and this
+    page is anonymous — a link that demands a login is a dead end."""
+    card = deep_search_sources._n_tagit({
+        "title": "דוח שנתי", "link": "https://tag-it.biz/doc/1?anchor=5",
+        "source_url": "https://library.mevaker.gov.il/x.pdf"})
+    assert card.url == "https://library.mevaker.gov.il/x.pdf"
+    # Fall back to link when the publisher URL is absent.
+    assert deep_search_sources._n_tagit(
+        {"title": "דוח", "link": "https://tag-it.biz/doc/1"}).url == "https://tag-it.biz/doc/1"
+
+
 def test_every_full_text_source_declares_the_backends_own_cut_off():
     """Without upstream_timeout_s a silent upstream timeout reads as "no hits"."""
     by_id = {s.id: s for s in deep_search_sources.SOURCES}

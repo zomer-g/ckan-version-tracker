@@ -128,9 +128,27 @@ def _extract_json(resp: httpx.Response) -> dict:
     return resp.json()
 
 
+def _error_text(result: dict) -> str:
+    for part in result.get("content") or []:
+        if part.get("type") == "text" and part.get("text"):
+            return str(part["text"])[:300]
+    return ""
+
+
 def _tool_payload(result: dict) -> dict | list:
     """A tools/call result wraps the tool's real return as JSON text inside
-    ``content[0].text`` (per the MCP spec). Unwrap and parse it."""
+    ``content[0].text`` (per the MCP spec). Unwrap and parse it.
+
+    An ``isError`` result carries a MESSAGE where the payload would be, so it
+    has no ``items`` — and every caller here reads ``items``. Left unchecked
+    that path turns a filter rejection, a query timeout or any transient fault
+    into an empty list, which reads on the page as "this corpus has nothing"
+    rather than "the search did not run". Raise instead: the column then says
+    so, and says why. (TAG-IT reported this as the one remaining data-losing
+    bug on our side, 2026-08-14 — they were right.)
+    """
+    if result.get("isError"):
+        raise DeepSearchError(_error_text(result) or "TAG-IT returned an error")
     if isinstance(result.get("structuredContent"), (dict, list)):
         return result["structuredContent"]
     for part in result.get("content") or []:
@@ -153,6 +171,8 @@ _ABSTRACT_KEYS = ("תקציר", "abstract", "summary", "description")
 _TYPE_KEYS = ("doc_type", "document_type", "type", "category", "report_group")
 _LINK_KEYS = ("pdf_url", "source_url", "url", "link", "original_pdf_url",
               "file_url", "document_url", "incident_url")
+# The original publisher's copy, reachable without a TAG-IT login.
+_SOURCE_URL_KEYS = ("source_url", "original_url", "publisher_url")
 
 
 def _flatten(hit: dict) -> dict:
@@ -191,7 +211,16 @@ def _normalize(hit: dict) -> dict:
         "abstract": _first(flat, _ABSTRACT_KEYS),
         "doc_type": _first(flat, _TYPE_KEYS),
         "link": _first(flat, _LINK_KEYS),
+        # The publisher's own file (fs.knesset.gov.il, library.mevaker.gov.il,
+        # gov.il) — no login. ``link`` is TAG-IT's viewer page, which is anchored
+        # to the matching passage but sits behind SSO, so it is useless to an
+        # anonymous reader on our page. Prefer source_url, keep link as fallback.
+        "source_url": _first(flat, _SOURCE_URL_KEYS),
         "snippet": hit.get("snippet") or flat.get("snippet"),
+        # Clean text + [{start, length}] offsets, which survive a document that
+        # contains the marker character itself. See deep_search_query.mark_from_spans.
+        "snippet_text": hit.get("snippet_text") or flat.get("snippet_text"),
+        "highlights": hit.get("highlights") or flat.get("highlights"),
         "rank": hit.get("rank") or flat.get("rank"),
         "fields": raw,
     }

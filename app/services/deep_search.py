@@ -202,7 +202,19 @@ def _extract_json(resp: httpx.Response) -> dict:
 
 def _tool_payload(result: dict) -> dict:
     """A tools/call result wraps the tool's real return as JSON text inside
-    ``content[0].text`` (per the MCP spec). Unwrap and parse it."""
+    ``content[0].text`` (per the MCP spec). Unwrap and parse it.
+
+    ``isError`` first: such a result holds a MESSAGE, not a payload, so it has
+    no results key and normalizing it yields []. That is the silent-zero bug in
+    its purest form — the remote said "I failed" and the column would say "no
+    results". Every remote source runs through here, so the check belongs here
+    rather than in each normalizer.
+    """
+    if result.get("isError"):
+        for part in result.get("content") or []:
+            if part.get("type") == "text" and part.get("text"):
+                raise SourceError(str(part["text"])[:300])
+        raise SourceError("המקור החזיר שגיאה")
     if isinstance(result.get("structuredContent"), dict):
         return result["structuredContent"]
     for part in result.get("content") or []:
@@ -387,13 +399,21 @@ def _truthful_total(source: Source, pq, backend_total, cards: list) -> int:
 
 
 def _column(source: Source, *, configured: bool = True, error: str | None = None,
-            results: list | None = None, total: int | None = None) -> dict:
+            results: list | None = None, total: int | None = None,
+            total_unknown: bool = False) -> dict:
+    """One column. ``total_unknown`` keeps ``total`` null instead of falling
+    back to the page size — the client renders a bare count for null, and a
+    count is honest where an invented corpus total would not be."""
     cards = results or []
+    if total_unknown:
+        resolved = None
+    else:
+        resolved = total if total is not None else len(cards)
     return {
         "id": source.id, "name": source.name, "color": source.color,
         "attribution": dict(source.attribution), "server": source.server,
         "configured": configured, "error": error,
-        "total": total if total is not None else len(cards),
+        "total": resolved,
         "results": [c.as_dict() if isinstance(c, Card) else c for c in cards],
     }
 
@@ -422,7 +442,11 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
             out = await source.run(call, send_q, send_limit, filters)
             cards = [c for c in (out.get("results") or []) if c]
             cards = _apply_operators(source, pq, cards, limit)
-            return _column(source, results=cards,
+            # A source that ran its own calls may know its count is unavailable
+            # rather than zero — only it can tell the two apart.
+            unknown = bool(out.get("total_unknown")) and not (
+                pq.has_operators and not source.native_operators)
+            return _column(source, results=cards, total_unknown=unknown,
                            total=_truthful_total(source, pq, out.get("total"), cards))
 
         payload = await call(source.tool, source.build_args(send_q, send_limit, filters))
@@ -451,10 +475,23 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
 def _empty_because_it_gave_up(source: Source, column: dict, elapsed: float) -> bool:
     """Was this empty column a real zero, or an upstream timeout in disguise?
 
+    BACKSTOP ONLY, and deliberately last in line. An explicit signal always
+    wins: ``isError`` raises in _tool_payload long before this runs, and a
+    payload that reports its own ``timed_out`` is believed. This fires only for
+    the case nothing explains — a 200, an empty list, and a clock reading past
+    the backend's own limit.
+
+    TAG-IT asked for it to be deleted (2026-08-14) on the grounds that it would
+    misread slow successes, citing "ועדת הכספים" at 21.1s with 3,720 hits. That
+    particular query is safe: the guard requires an EMPTY column and returns
+    early on any result at all, so a 3,720-hit answer never reaches the clock.
+    Their underlying point stands, though — the certain signals are theirs, not
+    ours — hence the ordering above rather than the removal.
+
     Only asked of a source that declared the cut-off it applies to itself
-    (Source.upstream_timeout_s). TAG-IT answers 200-with-zero-rows when its 25s
-    statement_timeout trips, so on the wire a dead query and an honestly empty
-    corpus are the same response.
+    (Source.upstream_timeout_s). TAG-IT answered 200-with-zero-rows when its 25s
+    statement_timeout tripped, so on the wire a dead query and an honestly empty
+    corpus were the same response.
 
     The clock separates them, and the argument is the declared cut-off rather
     than any reasoning about cost: past its own limit the backend CANNOT have

@@ -226,3 +226,53 @@ def mark_all(pq: ParsedQuery, text: str | None) -> str:
 def already_highlighted(text: str | None) -> bool:
     """Did the source hand us its own highlighting? (TAG-IT does.)"""
     return bool(text) and MARK_OPEN in text
+
+
+def mark_from_spans(text: str | None, spans) -> str | None:
+    """Apply ``[{start, length}]`` character offsets as ``«…»`` markers.
+
+    Offsets beat parsing a pre-marked string, and the difference is not
+    theoretical: a document that itself contains « shifts every position after
+    it, and no amount of care in the parser can recover the intent — the
+    marker and the content are the same character by then. TAG-IT added clean
+    ``snippet_text`` + ``highlights`` for exactly this, so the ambiguity is
+    resolved at the source and never re-enters here.
+
+    Returns None when there is nothing usable, so callers fall back to the
+    pre-marked ``snippet``.
+    """
+    if not text or not isinstance(spans, (list, tuple)) or not spans:
+        return None
+    picked: list[tuple[int, int]] = []
+    for s in spans:
+        if not isinstance(s, dict):
+            continue
+        try:
+            start, length = int(s["start"]), int(s["length"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Clamp rather than skip: a span running past the end still tells us
+        # where the match begins, and a truncated highlight beats none.
+        if length <= 0 or start < 0 or start >= len(text):
+            continue
+        picked.append((start, min(length, len(text) - start)))
+    if not picked:
+        return None
+    # Sort and drop overlaps, then insert from the END so each insertion cannot
+    # move the offsets still to be applied.
+    picked.sort()
+    merged: list[tuple[int, int]] = []
+    for start, length in picked:
+        if merged and start < merged[-1][0] + merged[-1][1]:
+            prev_start, prev_len = merged[-1]
+            merged[-1] = (prev_start, max(prev_len, start + length - prev_start))
+        else:
+            merged.append((start, length))
+    # The clean text may legitimately contain our marker characters; neutralize
+    # them BEFORE inserting, or the client would split on the document's own
+    # punctuation. Same length in, same length out, so the offsets still hold.
+    out = text.replace(MARK_OPEN, "‹").replace(MARK_CLOSE, "›")
+    for start, length in reversed(merged):
+        out = (out[:start] + MARK_OPEN + out[start:start + length]
+               + MARK_CLOSE + out[start + length:])
+    return out
