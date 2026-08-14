@@ -222,8 +222,10 @@ async def _mark_tracked(db: AsyncSession, files: list[dict]) -> list[dict]:
             # A rejected dataset is NOT "already tracked" — nothing will ever
             # scrape it. Showing those files as taken is what left a whole
             # publication un-addable after one batch rejection.
+            # 'hidden' is excluded for the opposite reason to 'rejected': it
+            # IS tracked, but saying so would disclose it on a public page.
             .where(TrackedDataset.source_url.in_(urls),
-                   TrackedDataset.status != "rejected")
+                   TrackedDataset.status.notin_(("rejected", "hidden")))
         )).all()
     except Exception:  # noqa: BLE001
         logger.warning("preview: could not mark tracked files", exc_info=True)

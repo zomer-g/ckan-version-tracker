@@ -973,9 +973,11 @@ export default function AdminPage() {
 
   if (loading) return <div className="loading" role="status">{t("common.loading")}</div>;
 
-  // The server already returns only active rows for the current page; the
-  // filter stays as a belt-and-braces guard.
-  const activeDatasets = allDatasets.filter((d) => d.status === "active");
+  // The server already returns only administrable rows for the current page;
+  // the filter stays as a belt-and-braces guard. "hidden" is unpublished but
+  // still administered, so it belongs here — see _admin_dataset_conds.
+  const activeDatasets = allDatasets.filter(
+    (d) => d.status === "active" || d.status === "hidden");
   const dsFrom = dsTotal === 0 ? 0 : dsOffset + 1;
   const dsTo = Math.min(dsOffset + dsLimit, dsTotal);
   const datasetPager = dsTotal > dsLimit ? (
