@@ -278,10 +278,16 @@ function symbologyLabelFor(value: string | null): string {
   return hasSld(value) ? SYMBOLOGY_LABEL : FIELDS_LABEL;
 }
 
-// The symbology entries to add to a version's file list: the newest bundle
-// (unless the version's own is already listed) plus the ArcGIS conversion of
-// whichever applies. `alreadyListed` — not identity — decides, because the
-// date/diff filters can drop a version's own bundle from the list.
+// The symbology entries to add to a version's file list: a bundle to download,
+// plus the ArcGIS conversion of it.
+//
+// A version's OWN bundle always wins — this is a version archive, and offering
+// v1 the style captured at v3 would show the reader today's cartography as
+// though it were the one archived then. The newest bundle is a FALLBACK, for
+// the (common) versions that carry none, and it says so in the label.
+// `alreadyListed` — not identity — decides whether the download link is still
+// needed, because the date/diff filters can drop a version's own bundle from
+// the list even when it has one.
 function symbologyFiles(
   v: Version,
   carry: Version | null,
@@ -289,22 +295,25 @@ function symbologyFiles(
   alreadyListed: boolean,
 ): VersionFile[] {
   const out: VersionFile[] = [];
+  const own = symbologyValueOf(v);
   const from = (c: Version) => (c.id === v.id ? "" : ` (מגרסה ${c.version_number})`);
-  if (carry && !alreadyListed) {
+  const zipFrom = own ? v : carry;
+  if (zipFrom && !alreadyListed) {
     out.push({
       name: "_symbology",
       index: 0,
-      label: symbologyLabelFor(symbologyValueOf(carry)) + from(carry),
-      versionId: carry.id,
+      label: symbologyLabelFor(symbologyValueOf(zipFrom)) + from(zipFrom),
+      versionId: zipFrom.id,
     });
   }
   // Only where there is an SLD to convert — see hasSld.
-  if (lyrxCarry) {
+  const lyrxFrom = hasSld(own) ? v : lyrxCarry;
+  if (lyrxFrom) {
     out.push({
       name: "_symbology_lyrx",
       index: 0,
-      label: LYRX_LABEL + from(lyrxCarry),
-      href: `/api/versions/${lyrxCarry.id}/symbology.lyrx.zip`,
+      label: LYRX_LABEL + from(lyrxFrom),
+      href: `/api/versions/${lyrxFrom.id}/symbology.lyrx.zip`,
       alternate: true,
     });
   }
