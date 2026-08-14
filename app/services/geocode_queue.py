@@ -53,6 +53,11 @@ BATCH_SIZE = 10_000
 # A miss is terminal, but not on a single word: GovMap can answer "no" for a
 # transient reason of its own. Three separate refusals is a real absence.
 MAX_ATTEMPTS = 3
+#: A miss is only worth re-asking once GovMap's index could plausibly have
+#: changed. Their answer is deterministic within a day: re-asking immediately
+#: returned 0 hits on 1,800 addresses, because all 1,800 were already-refused
+#: rows that a plain key order had parked at the head of the queue.
+RETRY_AFTER_DAYS = 30
 
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS public.{_qi(GEOCODE_TABLE)} (
@@ -185,8 +190,11 @@ def _selection_sql(limit: int) -> str:
           AND a.settlement_name IS NOT NULL
           AND (g.address_key IS NULL
                OR (g.status NOT IN ('hit', 'wrong_locality')
-                   AND g.attempts < {MAX_ATTEMPTS}))
-        ORDER BY a.address_key
+                   AND g.attempts < {MAX_ATTEMPTS}
+                   AND g.fetched_at < now() - interval '{RETRY_AFTER_DAYS} days'))
+        -- Never-asked first. Misses cluster at low address_keys from earlier
+        -- passes, so a plain key order parks them permanently at the head.
+        ORDER BY (g.address_key IS NOT NULL), a.address_key
         LIMIT {int(limit)}
     """
 
