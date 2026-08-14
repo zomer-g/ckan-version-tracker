@@ -180,6 +180,42 @@ def test_a_dataset_with_no_symbology_at_all_says_so(client, monkeypatch):
     assert client.get(f"/api/versions/{V3}/symbology.lyrx.zip").status_code == 502
 
 
+def test_a_fields_only_bundle_is_not_offered_to_the_converter(client, monkeypatch):
+    """`_symbology` also carries `<layer>_fields.zip` — the field dictionary
+    alone, which is what a layer GovMap publishes no style for archives. Found
+    on the live catalog (גבול אזורי כיבוי): about one layer in twenty. It is a
+    legitimate download and has no SLD to convert, so the ArcGIS route must say
+    "no style archived", not "conversion failed"."""
+    async def _fields_only(_self, _key):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("שכבה_fields.csv", "machine_name\r\nname_h\r\n")
+        return buf.getvalue()
+
+    async def _only_fields_mapping(db, version, *, require_sld=False):
+        value = f"r2:datasets/{DS}/v3/a106dcaa_fields.zip"
+        from app.api.versions import _holds_sld
+        if require_sld and not _holds_sld(value):
+            return None, version
+        return value, version
+
+    monkeypatch.setattr(storage.StorageClient, "get_object_bytes", _fields_only)
+    from app.api import versions as versions_api
+
+    monkeypatch.setattr(versions_api, "_resolve_symbology", _only_fields_mapping)
+    r = client.get(f"/api/versions/{V3}/symbology.lyrx.zip")
+    assert r.status_code == 404
+    assert "no style" in r.json()["detail"].lower()
+
+
+def test_the_two_bundle_kinds_are_told_apart_by_their_filename():
+    from app.api.versions import _holds_sld
+
+    assert _holds_sld(f"r2:datasets/{DS}/v3/309eb7f7_symbology.zip")
+    assert not _holds_sld(f"r2:datasets/{DS}/v3/a106dcaa_fields.zip")
+    assert not _holds_sld(None)
+
+
 def test_an_oversized_bundle_is_refused_rather_than_loaded(client, monkeypatch):
     # Real bundles are a few KB; the ceiling exists so no single request can be
     # what fills a 512 MB instance.

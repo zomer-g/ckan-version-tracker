@@ -269,8 +269,20 @@ def _mapping_value(mappings: dict | None, key: str, index: int = 0) -> str | Non
     return value or None
 
 
+def _holds_sld(value: str | None) -> bool:
+    """Does this `_symbology` value hold the layer's STYLE, or only its fields?
+
+    The key carries two different bundles: ``<layer>_symbology.zip`` (SLD +
+    icons + dictionary) and ``<layer>_fields.zip`` — the dictionary alone,
+    which is what a layer GovMap publishes no style for gets (see the scraper's
+    ``field_dictionary.documentation_zip``). About one layer in twenty is the
+    second kind, and it has nothing for the ArcGIS converter to read.
+    """
+    return bool(value) and value.lower().endswith("_symbology.zip")
+
+
 async def _resolve_symbology(
-    db: AsyncSession, version: VersionIndex,
+    db: AsyncSession, version: VersionIndex, *, require_sld: bool = False,
 ) -> tuple[str | None, VersionIndex]:
     """This version's symbology bundle — or the newest one the dataset has.
 
@@ -282,9 +294,16 @@ async def _resolve_symbology(
     falls back to the newest version that does carry one. The caller is
     expected to SAY it fell back (the UI labels it) — an older version's files
     must never silently pass as that version's own.
+
+    ``require_sld`` restricts the search to bundles that hold a style, for the
+    ArcGIS conversion: a field dictionary is a legitimate `_symbology` value
+    and a useless thing to convert.
     """
+    def _wanted(value: str | None) -> bool:
+        return bool(value) and (not require_sld or _holds_sld(value))
+
     own = _mapping_value(version.resource_mappings, SYMBOLOGY_KEY)
-    if own:
+    if _wanted(own):
         return own, version
     result = await db.execute(
         select(VersionIndex)
@@ -293,7 +312,7 @@ async def _resolve_symbology(
     )
     for candidate in result.scalars().all():
         value = _mapping_value(candidate.resource_mappings, SYMBOLOGY_KEY)
-        if value:
+        if _wanted(value):
             return value, candidate
     return None, version
 
@@ -341,11 +360,12 @@ async def download_symbology_lyrx(
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    value, source_version = await _resolve_symbology(db, version)
+    value, source_version = await _resolve_symbology(db, version, require_sld=True)
     if not value:
         raise HTTPException(
             status_code=404,
-            detail="No symbology bundle is archived for this dataset",
+            detail="No symbology bundle is archived for this dataset "
+                   "(GovMap publishes no style for this layer)",
         )
     ds = (
         await db.execute(

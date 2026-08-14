@@ -172,6 +172,26 @@ async def enqueue_next_batch(db, *, size: int = BATCH_SIZE) -> dict:
 
 
 # ── the data side (append DB) ─────────────────────────────────────────────────
+#: The work list, as one predicate. `remaining_count()` and `_selection_sql()`
+#: MUST agree: they drifted once, and the state endpoint then reported 130,096
+#: pending against a real work list of 100,475 — counting settled
+#: `wrong_locality` rows and misses that were not yet due for a retry.
+_ELIGIBLE = """
+          a.point IS NULL
+          AND a.street_name IS NOT NULL
+          AND a.house_num IS NOT NULL
+          AND a.settlement_name IS NOT NULL
+          AND (g.address_key IS NULL
+               OR (g.status NOT IN ('hit', 'wrong_locality')
+                   AND g.attempts < {max_attempts}
+                   AND g.fetched_at < now() - interval '{retry_days} days'))
+"""
+
+
+def _eligible() -> str:
+    return _ELIGIBLE.format(max_attempts=MAX_ATTEMPTS, retry_days=RETRY_AFTER_DAYS)
+
+
 def _selection_sql(limit: int) -> str:
     """Addresses still worth asking about.
 
@@ -184,14 +204,7 @@ def _selection_sql(limit: int) -> str:
                a.settlement_name, a.street_name, a.house_num, a.house_suffix
         FROM public.{_qi(ADDRESSES_TABLE)} a
         LEFT JOIN public.{_qi(GEOCODE_TABLE)} g ON g.address_key = a.address_key
-        WHERE a.point IS NULL
-          AND a.street_name IS NOT NULL
-          AND a.house_num IS NOT NULL
-          AND a.settlement_name IS NOT NULL
-          AND (g.address_key IS NULL
-               OR (g.status NOT IN ('hit', 'wrong_locality')
-                   AND g.attempts < {MAX_ATTEMPTS}
-                   AND g.fetched_at < now() - interval '{RETRY_AFTER_DAYS} days'))
+        WHERE {_eligible()}
         -- Never-asked first. Misses cluster at low address_keys from earlier
         -- passes, so a plain key order parks them permanently at the head.
         ORDER BY (g.address_key IS NOT NULL), a.address_key
@@ -222,24 +235,23 @@ async def remaining_count() -> int:
         return await conn.fetchval(f"""
             SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} a
             LEFT JOIN public.{_qi(GEOCODE_TABLE)} g ON g.address_key = a.address_key
-            WHERE a.point IS NULL AND a.street_name IS NOT NULL
-              AND a.house_num IS NOT NULL AND a.settlement_name IS NOT NULL
-              AND (g.address_key IS NULL
-                   OR (g.status <> 'hit' AND g.attempts < {MAX_ATTEMPTS}))
+            WHERE {_eligible()}
         """) or 0
 
 
-# A batch that asked this many addresses and got essentially nothing was not
-# looking at empty countryside — it was being refused. GovMap answers a SOFT
-# block with HTTP 200 and an empty result list, which is byte-identical to "no
-# such address"; only the RUN distinguishes them. Ground truth from sampling:
-# even the worst slice (moshavim/kibbutzim, the head of ORDER BY address_key)
-# returns ~60% hits, and cities ~58%.
+# When a batch with almost no hits is worth questioning at all.
 #
-# This cost 25,548 addresses on the first night: they reached attempts=3 and left
-# the selection permanently, while every run reported success. The worker now
-# aborts on a run of 100 (GOVSCRAPER e386785); this is the second line of
-# defence, because the damage lands HERE and must be impossible to write.
+# The story this constant was born from was wrong, and the correction is the
+# reason it is set so low. A batch of 1,075 came back empty and was read as a
+# soft block — GovMap does answer one with HTTP 200 and an empty list, which is
+# byte-identical to "no such address". It was not a block. Two independent
+# checks, ours and GOVSCRAPER's, found the endpoint answering its control
+# addresses before and after; the misses were real, and the empty batch was
+# simply one drawn entirely from addresses GovMap had already refused.
+#
+# Measured hit rates per locality run 6.9% (קריית שמונה) to 64.4% (מזכרת בתיה),
+# so no threshold on the RATE can separate a refusal from thin coverage. Only
+# the canary can. This number decides when to spend three requests asking it.
 _IMPLAUSIBLE_MIN_ASKED = 200
 _IMPLAUSIBLE_HIT_RATE = 0.01
 
