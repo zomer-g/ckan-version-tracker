@@ -456,12 +456,19 @@ def _empty_because_it_gave_up(source: Source, column: dict, elapsed: float) -> b
     statement_timeout trips, so on the wire a dead query and an honestly empty
     corpus are the same response.
 
-    The clock separates them. An empty result is the cheapest full-text query
-    there is — nothing matches the index, so not one candidate document is
-    loaded — while every slow query is slow BECAUSE it had many candidates to
-    weigh. An empty answer that took most of the backend's own budget did not
-    finish; it ran out. Measured proof on the מבקר scope, 2026-08-14: "מכרז" →
-    2,103 hits in 1.3s, "ביטחון" → 0 hits in 26.1s.
+    The clock separates them, and the argument is the declared cut-off rather
+    than any reasoning about cost: past its own limit the backend CANNOT have
+    finished, so an empty answer that took longer than that did not search the
+    corpus and come back with nothing — it was stopped. Measured proof on the
+    מבקר scope, 2026-08-14: "מכרז" → 2,103 hits in 1.3s, "ביטחון" → 0 hits in
+    26.1s, and the phrase "תקציב הביטחון" → 112 hits while the same two words
+    unquoted → 0.
+
+    (An earlier version of this argued that a zero is the cheapest query there
+    is — true of an index-backed search, where nothing matches so no candidate
+    is ever loaded, but backwards under a sequential scan, where finding nothing
+    means having read everything. The cut-off argument holds either way, which
+    is why it is the one used.)
 
     The margin is generous (80%) because the wrong direction here is the costly
     one: calling a real zero a timeout invites someone to re-run a query that
