@@ -129,7 +129,7 @@ function versionFiles(
             : key === "_parquet"
               ? "GeoParquet (WGS84)"
               : key === "_symbology"
-                ? SYMBOLOGY_LABEL
+                ? symbologyLabelFor(firstValue(val))
               : key === "_zip" || key === "_zip_parts"
             ? "קבצים מצורפים (ZIP)"
             : key === "metadata"
@@ -240,20 +240,43 @@ function fileDownloadUrl(versionId: string, f: VersionFile): string {
 // inherited when it is not the version's own. The backend applies the same
 // fallback (app/api/versions.py::_resolve_symbology) so the link resolves even
 // when it is asked for on a version that has none.
-function newestSymbologyVersion(versions: Version[]): Version | null {
+function firstValue(val: unknown): string | null {
+  if (Array.isArray(val)) {
+    const hit = val.find((x) => typeof x === "string" && x.length > 10);
+    return (hit as string) ?? null;
+  }
+  return typeof val === "string" && val.length > 10 ? val : null;
+}
+
+function symbologyValueOf(v: Version): string | null {
+  return firstValue((v.resource_mappings as Record<string, unknown> | null)?.["_symbology"]);
+}
+
+// The `_symbology` key carries TWO different bundles, told apart by the
+// filename the worker uploaded: `<layer>_symbology.zip` holds the SLD (plus the
+// dictionary), while `<layer>_fields.zip` is the dictionary ALONE — what a
+// layer GovMap publishes no style for gets. Roughly one layer in twenty is the
+// second kind, and offering it as "symbology" (or handing it to the ArcGIS
+// converter, which has no SLD to convert) is a link that can only disappoint.
+function hasSld(value: string | null): boolean {
+  return !!value && /_symbology\.zip$/i.test(value);
+}
+
+function newestSymbologyVersion(versions: Version[], requireSld = false): Version | null {
   for (const v of versions) {
-    const m = v.resource_mappings as Record<string, unknown> | null;
-    const value = m?.["_symbology"];
-    const has = Array.isArray(value)
-      ? value.some((x) => typeof x === "string" && x.length > 10)
-      : typeof value === "string" && value.length > 10;
-    if (has) return v;
+    const value = symbologyValueOf(v);
+    if (value && (!requireSld || hasSld(value))) return v;
   }
   return null;
 }
 
 const SYMBOLOGY_LABEL = "סימבולוגיה ומילון שדות (ZIP · QGIS)";
+const FIELDS_LABEL = "מילון שדות (ZIP)";
 const LYRX_LABEL = "סימבולוגיה ל-ArcGIS Pro (LYRX)";
+
+function symbologyLabelFor(value: string | null): string {
+  return hasSld(value) ? SYMBOLOGY_LABEL : FIELDS_LABEL;
+}
 
 // The symbology entries to add to a version's file list: the newest bundle
 // (unless the version's own is already listed) plus the ArcGIS conversion of
@@ -262,26 +285,29 @@ const LYRX_LABEL = "סימבולוגיה ל-ArcGIS Pro (LYRX)";
 function symbologyFiles(
   v: Version,
   carry: Version | null,
+  lyrxCarry: Version | null,
   alreadyListed: boolean,
 ): VersionFile[] {
-  if (!carry) return [];
-  const suffix = carry.id === v.id ? "" : ` (מגרסה ${carry.version_number})`;
   const out: VersionFile[] = [];
-  if (!alreadyListed) {
+  const from = (c: Version) => (c.id === v.id ? "" : ` (מגרסה ${c.version_number})`);
+  if (carry && !alreadyListed) {
     out.push({
       name: "_symbology",
       index: 0,
-      label: SYMBOLOGY_LABEL + suffix,
+      label: symbologyLabelFor(symbologyValueOf(carry)) + from(carry),
       versionId: carry.id,
     });
   }
-  out.push({
-    name: "_symbology_lyrx",
-    index: 0,
-    label: LYRX_LABEL + suffix,
-    href: `/api/versions/${carry.id}/symbology.lyrx.zip`,
-    alternate: true,
-  });
+  // Only where there is an SLD to convert — see hasSld.
+  if (lyrxCarry) {
+    out.push({
+      name: "_symbology_lyrx",
+      index: 0,
+      label: LYRX_LABEL + from(lyrxCarry),
+      href: `/api/versions/${lyrxCarry.id}/symbology.lyrx.zip`,
+      alternate: true,
+    });
+  }
   return out;
 }
 
@@ -437,6 +463,12 @@ export default function VersionsPage() {
   // versionsList is newest-first (the API orders by version_number desc).
   const symbologyCarry = useMemo<Version | null>(
     () => newestSymbologyVersion(versionsList),
+    [versionsList],
+  );
+  // The ArcGIS link needs a bundle that actually holds an SLD, which is not
+  // every `_symbology` (a styleless layer archives its field dictionary alone).
+  const lyrxCarry = useMemo<Version | null>(
+    () => newestSymbologyVersion(versionsList, true),
     [versionsList],
   );
 
@@ -909,7 +941,8 @@ export default function VersionsPage() {
                   const files = [
                     ...own,
                     ...symbologyFiles(
-                      v, symbologyCarry, own.some((f) => f.name === "_symbology"),
+                      v, symbologyCarry, lyrxCarry,
+                      own.some((f) => f.name === "_symbology"),
                     ),
                   ];
                   if (files.length === 0) return null;
