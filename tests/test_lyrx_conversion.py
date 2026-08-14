@@ -197,6 +197,49 @@ def test_an_else_rule_becomes_the_default_symbol():
     assert r["defaultSymbol"]["symbol"]["symbolLayers"][0]["color"]["values"][:3] == [204, 204, 204]
 
 
+def test_a_hand_written_catch_all_becomes_the_default_symbol():
+    """GovMap's styles never use ElseFilter; layer 213420 writes the catch-all
+    out as `Or(And(type != a, type != b), type IS NULL)`. That is exactly
+    "<all other values>", and reading it as an ordinary predicate dropped the
+    symbol that most of the layer's features draw with."""
+    body = POLY_RULE + """
+    <Rule><Title>אחר</Title>
+      <ogc:Filter><ogc:Or>
+        <ogc:And>
+          <ogc:PropertyIsNotEqualTo><ogc:PropertyName>name_h</ogc:PropertyName>
+            <ogc:Literal>אילת</ogc:Literal></ogc:PropertyIsNotEqualTo>
+          <ogc:PropertyIsNotEqualTo><ogc:PropertyName>name_h</ogc:PropertyName>
+            <ogc:Literal>אילות</ogc:Literal></ogc:PropertyIsNotEqualTo>
+          <ogc:PropertyIsNotEqualTo><ogc:PropertyName>name_h</ogc:PropertyName>
+            <ogc:Literal>אשדוד</ogc:Literal></ogc:PropertyIsNotEqualTo>
+        </ogc:And>
+        <ogc:PropertyIsNull><ogc:PropertyName>name_h</ogc:PropertyName></ogc:PropertyIsNull>
+      </ogc:Or></ogc:Filter>
+      <PolygonSymbolizer><Fill><CssParameter name="fill">#cccccc</CssParameter>
+      </Fill></PolygonSymbolizer></Rule>"""
+    doc, warnings = _convert(body)
+    r = _layer(doc)["renderer"]
+    assert r["useDefaultSymbol"] is True
+    assert r["defaultSymbol"]["symbol"]["symbolLayers"][0]["color"]["values"][:3] == [204, 204, 204]
+    assert len(r["groups"][0]["classes"]) == 2   # the catch-all is not a class
+    assert not warnings
+
+
+def test_a_negation_over_other_values_is_not_mistaken_for_the_default():
+    # "everything except אילת" while אשדוד is also classified is a real
+    # predicate, not <all other values> — it must stay a reported gap.
+    body = POLY_RULE + """
+    <Rule><Title>לא אילת</Title>
+      <ogc:Filter><ogc:PropertyIsNotEqualTo>
+        <ogc:PropertyName>name_h</ogc:PropertyName>
+        <ogc:Literal>אילת</ogc:Literal></ogc:PropertyIsNotEqualTo></ogc:Filter>
+      <PolygonSymbolizer><Fill><CssParameter name="fill">#111111</CssParameter>
+      </Fill></PolygonSymbolizer></Rule>"""
+    doc, warnings = _convert(body)
+    assert _layer(doc)["renderer"].get("useDefaultSymbol") is False
+    assert any("לא אילת" in w for w in warnings)
+
+
 def test_a_filter_arcgis_cannot_express_is_reported_not_dropped_quietly():
     body = POLY_RULE + """
     <Rule><Title>לא ידוע</Title>
