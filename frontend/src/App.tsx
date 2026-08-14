@@ -19,6 +19,7 @@ import DecisionAnalysisPage from "./pages/DecisionAnalysisPage";
 import ApiPage from "./pages/ApiPage";
 import ProjectImportPage from "./pages/ProjectImportPage";
 import OcalPage from "./pages/OcalPage";
+import OcoiPage from "./pages/OcoiPage";
 import NadlanPage from "./pages/NadlanPage";
 import QuestionsPage from "./pages/QuestionsPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
@@ -144,7 +145,7 @@ export default function App() {
           <Route path="/projects/questions" element={<QuestionsPage />} />
           <Route path="/projects/odata" element={<ProjectImportPage project="odata" />} />
           <Route path="/projects/ocal" element={<OcalPage />} />
-          <Route path="/projects/ocoi" element={<ProjectImportPage project="ocoi" />} />
+          <Route path="/projects/ocoi" element={<OcoiPage />} />
           <Route path="/projects/nadlan" element={<NadlanPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />

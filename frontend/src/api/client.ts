@@ -2999,3 +2999,166 @@ export const deepSearch = {
     );
   },
 };
+
+// ── ניגוד עניינים לעם (OCOI) ────────────────────────────────────────────────
+// Backed by app/api/ocoi.py over the migrated corpus (Neon schema `ocoi`).
+// OCOI's own {status, data, meta} envelope is preserved end to end, so these
+// types mirror the documented public API rather than re-shaping it.
+
+export type OcoiEntityType = "person" | "company" | "association" | "domain";
+
+export interface OcoiEnvelope<T> {
+  status: string;
+  data: T;
+  meta?: OcoiMeta;
+}
+export interface OcoiMeta {
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+  /** Set when the count hit the server's cap — render as "10,000+", not exact. */
+  total_capped?: boolean;
+}
+export interface OcoiEntity {
+  id: string;
+  entity_type: OcoiEntityType;
+  name_hebrew?: string | null;
+  name_english?: string | null;
+  title?: string | null;
+  position?: string | null;
+  ministry?: string | null;
+  registration_number?: string | null;
+  company_type?: string | null;
+  status?: string | null;
+  description?: string | null;
+  aliases?: string[];
+}
+export interface OcoiSearchHit {
+  id: string;
+  name: string;
+  entity_type: OcoiEntityType;
+}
+export interface OcoiDocument {
+  id: string;
+  title: string;
+  file_url: string;
+  file_format: string;
+  file_size?: number | null;
+  conversion_status?: string;
+  extraction_status?: string;
+  verified?: boolean;
+  verified_at?: string | null;
+  created_at?: string | null;
+  source_title?: string | null;
+  source_type?: string | null;
+  source_url?: string | null;
+  relationships_count?: number;
+}
+export interface OcoiGraphNode {
+  id: string;
+  entity_type: OcoiEntityType;
+  name: string;
+  position?: string | null;
+  ministry?: string | null;
+  registration_number?: string | null;
+}
+export interface OcoiGraphEdge {
+  source_id: string;
+  source_type: OcoiEntityType;
+  target_id: string;
+  target_type: OcoiEntityType;
+  relationship_type: string;
+  details?: string | null;
+  origin_kind?: string | null;
+  verified?: boolean | null;
+  document_id?: string | null;
+  document_title?: string | null;
+  document_url?: string | null;
+}
+export interface OcoiGraph {
+  nodes: OcoiGraphNode[];
+  edges: OcoiGraphEdge[];
+  /** The server capped the walk — the view is partial, say so in the UI. */
+  truncated?: boolean;
+}
+export interface OcoiStats {
+  documents: number;
+  persons: number;
+  companies: number;
+  associations: number;
+  domains: number;
+  relationships: number;
+}
+export interface OcoiMinistry {
+  ministry: string;
+  person_count: number;
+  connection_count: number;
+}
+export interface OcoiTopConnected extends OcoiGraphNode {
+  connections: number;
+}
+
+/** Plural path segment for an entity type — the API lists live under these. */
+export const OCOI_PATHS: Record<OcoiEntityType, string> = {
+  person: "persons",
+  company: "companies",
+  association: "associations",
+  domain: "domains",
+};
+
+export const OCOI_TYPE_LABELS: Record<OcoiEntityType, string> = {
+  person: "אדם",
+  company: "חברה",
+  association: "עמותה",
+  domain: "תחום",
+};
+
+// The public site hides Knesset expense edges by default: they are an order of
+// magnitude more numerous than the conflict-of-interest declarations and would
+// otherwise dominate every graph. Same default the legacy site used.
+export const OCOI_DEFAULT_EXCLUDE = "mk_expense";
+
+export const ocoi = {
+  stats: () => request<OcoiEnvelope<OcoiStats>>("/ocoi/stats"),
+  search: (params: { q: string; type?: OcoiEntityType; page?: number; limit?: number }) =>
+    request<OcoiEnvelope<OcoiSearchHit[]>>(`/ocoi/search${ocalQS(params as Record<string, unknown>)}`),
+  suggest: (q: string) =>
+    request<OcoiEnvelope<{ text: string; type: OcoiEntityType; id: string }[]>>(
+      `/ocoi/search/suggest${ocalQS({ q })}`,
+    ),
+  list: (type: OcoiEntityType, params: { page?: number; limit?: number; q?: string } = {}) =>
+    request<OcoiEnvelope<OcoiEntity[]>>(
+      `/ocoi/${OCOI_PATHS[type]}${ocalQS(params as Record<string, unknown>)}`,
+    ),
+  entity: (type: OcoiEntityType, id: string) =>
+    request<OcoiEnvelope<OcoiEntity>>(`/ocoi/${OCOI_PATHS[type]}/${id}`),
+  entityDocuments: (type: OcoiEntityType, id: string) =>
+    request<OcoiEnvelope<OcoiDocument[]>>(`/ocoi/${OCOI_PATHS[type]}/${id}/documents`),
+  topConnected: (params: { type?: OcoiEntityType; limit?: number; exclude_origins?: string } = {}) =>
+    request<OcoiEnvelope<OcoiTopConnected[]>>(
+      `/ocoi/entities/top-connected${ocalQS(params as Record<string, unknown>)}`,
+    ),
+  ministries: (exclude_origins?: string) =>
+    request<OcoiEnvelope<OcoiMinistry[]>>(`/ocoi/entities/ministries${ocalQS({ exclude_origins })}`),
+  neighbors: (
+    id: string,
+    params: { type: OcoiEntityType; depth?: number; exclude_origins?: string },
+  ) =>
+    request<OcoiEnvelope<OcoiGraph>>(
+      `/ocoi/graph/neighbors/${id}${ocalQS(params as Record<string, unknown>)}`,
+    ),
+  showcase: (exclude_origins?: string) =>
+    request<OcoiEnvelope<OcoiGraph | null>>(`/ocoi/graph/showcase${ocalQS({ exclude_origins })}`),
+  documents: (
+    params: { page?: number; limit?: number; q?: string; status?: string; verified?: string } = {},
+  ) => request<OcoiEnvelope<OcoiDocument[]>>(`/ocoi/documents${ocalQS(params as Record<string, unknown>)}`),
+  document: (id: string) => request<OcoiEnvelope<OcoiDocument>>(`/ocoi/documents/${id}`),
+  documentGraph: (id: string) => request<OcoiEnvelope<OcoiGraph>>(`/ocoi/documents/${id}/graph`),
+  registryLookup: (params: { q?: string; registration_number?: string; page?: number; limit?: number }) =>
+    request<OcoiEnvelope<Record<string, unknown>[]>>(
+      `/ocoi/registry/lookup${ocalQS(params as Record<string, unknown>)}`,
+    ),
+  /** Public GET — safe as a plain href / iframe src (no auth needed). */
+  fileUrl: (id: string) => `${BASE}/ocoi/documents/${id}/file`,
+};
