@@ -38,6 +38,7 @@ from app.mcp.config import (
     sql_mcp_url,
     mcp_jwt_secret,
     mcp_url,
+    ocoi_mcp_url,
 )
 from app.models.mcp import ApiUser, McpOauthClient, McpOauthCode
 
@@ -116,6 +117,19 @@ def ocal_protected_resource_metadata(request: Request) -> JSONResponse:
         "authorization_servers": [mcp_url(request)],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base_url(request)}/projects/ocal",
+        "scopes_supported": ["mcp"],
+    })
+
+
+def ocoi_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728 metadata for the ניגוד עניינים לעם (OCOI) MCP. Same authorization
+    server as the main MCP — one login + one api_users invite (or the service
+    token) grants all resources."""
+    return JSONResponse({
+        "resource": ocoi_mcp_url(request),
+        "authorization_servers": [mcp_url(request)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{base_url(request)}/projects/ocoi",
         "scopes_supported": ["mcp"],
     })
 

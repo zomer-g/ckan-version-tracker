@@ -281,6 +281,9 @@ app.include_router(knesset_mcp_router)
 from app.mcp.ocal_routes import ocal_mcp_router, ocal_mcp_wellknown_router
 app.include_router(ocal_mcp_wellknown_router)
 app.include_router(ocal_mcp_router)
+from app.mcp.ocoi_routes import ocoi_mcp_router, ocoi_mcp_wellknown_router
+app.include_router(ocoi_mcp_wellknown_router)
+app.include_router(ocoi_mcp_router)
 
 # Dedicated whole-site SQL MCP at /data/mcp (same OAuth server + api_users gate;
 # the MCP twin of the public /data console — table catalog, DDL and free

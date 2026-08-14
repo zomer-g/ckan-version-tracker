@@ -24,6 +24,9 @@ KNESSET_MCP_PREFIX = "/knesset/mcp"
 # Dedicated יומן לעם (Ocal) MCP — a FOURTH protected resource on the same
 # authorization server (officials' public work-calendars, migrated into OVER).
 OCAL_MCP_PREFIX = "/ocal/mcp"
+# Dedicated ניגוד עניינים לעם (OCOI) MCP — conflict-of-interest declarations
+# and the entity graph extracted from them, migrated into OVER.
+OCOI_MCP_PREFIX = "/ocoi/mcp"
 # Dedicated whole-site SQL MCP — a FIFTH protected resource on the same
 # authorization server (the MCP twin of the public /data console: the full table
 # catalog, its DDL, and free read-only SELECT across every schema).
@@ -79,6 +82,17 @@ def ocal_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the Ocal resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/ocal/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{OCAL_MCP_PREFIX}"
+
+
+def ocoi_mcp_url(request: Request, path: str = "") -> str:
+    """The OCOI MCP resource URL, e.g. https://www.over.org.il/ocoi/mcp."""
+    return f"{base_url(request)}{OCOI_MCP_PREFIX}{path}"
+
+
+def ocoi_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the OCOI resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/ocoi/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{OCOI_MCP_PREFIX}"
 
 
 def sql_mcp_url(request: Request, path: str = "") -> str:

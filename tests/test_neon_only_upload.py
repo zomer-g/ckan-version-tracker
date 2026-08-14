@@ -222,12 +222,22 @@ def test_an_r2_dataset_still_uploads_to_r2(monkeypatch):
 
 # ── 3. a real absence of a backend is refused — with a reason ────────────
 
-def test_a_dataset_with_no_backend_at_all_is_refused_and_told_why():
+def test_a_dataset_with_no_backend_at_all_is_refused_and_told_why(monkeypatch):
     """Storage plan says files, but there is no ODATA mirror and R2 is not
     configured. Refused — and NOT as "not found", which is what sent a whole
-    investigation looking for a missing dataset."""
-    monkeypatch_free = _ds({"storage_backend": "r2"})  # R2 unconfigured in tests
-    resp = _upload(_client(_DB(monkeypatch_free)))
+    investigation looking for a missing dataset.
+
+    The unconfigured half is ENFORCED, not assumed. This test used to rely on
+    the developer's .env happening to carry no S3 credentials; the moment real
+    ones were added it began failing with 502 — the code correctly took the R2
+    path — which reads as a regression in the guard rather than in the fixture.
+    """
+    from app.config import settings
+    for field in ("s3_endpoint", "s3_bucket", "s3_access_key",
+                  "s3_secret_key", "s3_public_base_url"):
+        monkeypatch.setattr(settings, field, "", raising=False)
+    ds_no_backend = _ds({"storage_backend": "r2"})
+    resp = _upload(_client(_DB(ds_no_backend)))
     assert resp.status_code == 409
     assert "no storage backend" in resp.json()["detail"]
 

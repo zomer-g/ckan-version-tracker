@@ -352,6 +352,14 @@ const MCP_SERVERS: {
     purpose: "חיפוש אירועי יומן, שליפת אירוע, רשימת ישויות ומקורות, איתור פגישות משותפות בין שני אישים, וסטטיסטיקות.",
     tools: ["search_events", "get_event", "list_entities", "list_sources", "find_meetings_between", "get_stats"],
   },
+  {
+    key: "ocoi",
+    label: "ניגוד עניינים לעם — הסדרי ניגוד עניינים",
+    path: "/ocoi/mcp",
+    purpose:
+      "חיפוש אנשים, חברות, עמותות ותחומים; רשת הקשרים של ישות ומסלול בין שתי ישויות; מסמכי ההצהרות והקשרים שחולצו מהם; דירוג המקושרים ביותר, פילוח לפי משרד, ומראת רשם החברות.",
+    tools: ["search", "entity_get", "graph_neighbors", "graph_path", "document_get", "document_entities", "top_connected", "by_ministry", "registry_lookup", "stats"],
+  },
 ];
 
 function CopyUrlButton({ value }: { value: string }) {
