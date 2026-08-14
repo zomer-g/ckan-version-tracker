@@ -231,6 +231,18 @@ class Source:
     # document bodies, so a match may legitimately sit outside the snippet we
     # can see, and filtering on what we can see would drop real hits.
     native_operators: bool = False
+    # Per-source ceiling, overriding settings.deep_search_source_timeout.
+    #
+    # The global 25s was set for OUR in-process servers, which answer in ~1-2s.
+    # Measured against TAG-IT on 2026-08-12: a plain AND on the protocols scope
+    # is 3.5s, but a PHRASE on the same scope is 21.7s, ממ״מ's AND is 24.5s and
+    # a מבקר phrase is 24.2s — the corpus is searched as text, and phrase
+    # matching over 22k documents is simply slower. Three of those are inside a
+    # second of the ceiling, so the column did not fail, it flickered: the same
+    # query returned 234 hits earlier today and "המקור לא הספיק לענות בזמן"
+    # three times in a row later. A margin that thin is indistinguishable from
+    # an outage to whoever is reading the page.
+    timeout_s: float | None = None
     run: Callable[..., Awaitable[dict]] | None = None
     filters: tuple[Filter, ...] = ()
     active: bool = True
@@ -833,7 +845,7 @@ SOURCES: tuple[Source, ...] = (
                              "(כ-981 מסמכים) ואינו כולל פרסומים מ-2020 והלאה.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True,
+        native_operators=True, timeout_s=60.0,
         hint="חיפוש בגוף המסמך · 1989–2019 בלבד",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
@@ -845,7 +857,7 @@ SOURCES: tuple[Source, ...] = (
                              "הפרוטוקול המלא בשרת הכנסת. הכיסוי חלקי ואינו כולל את כל הכנסות.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True,
+        native_operators=True, timeout_s=60.0,
         hint="חיפוש בתוך דברי הדיון",
         # NO date filter yet. TAG-IT's date backfill for this scope is still
         # running (12.08.2026). Measured against it: of 22,034 documents, a
@@ -862,7 +874,7 @@ SOURCES: tuple[Source, ...] = (
                              "ונותחו ב-TAG-IT; המסמך המלא בשרת הכנסת.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True,
+        native_operators=True, timeout_s=60.0,
         hint="חיפוש בתוך גוף המחקר · 1999–2026",
         # Restored 2026-08-12. It was withheld while 59 of 60 hits came back
         # undated; TAG-IT has since populated the field (the values were there
@@ -880,7 +892,7 @@ SOURCES: tuple[Source, ...] = (
                              "ההחלטה המלאה באתר gov.il.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True,
+        native_operators=True, timeout_s=60.0,
         hint="חיפוש בתוך גוף ההחלטות",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source

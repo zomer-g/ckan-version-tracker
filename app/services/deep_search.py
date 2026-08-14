@@ -359,6 +359,16 @@ def _apply_operators(source: Source, pq, cards: list, limit: int) -> list:
     return out
 
 
+def _timeout_for(source: Source) -> float:
+    """This source's ceiling: its own if it declares one, else the global.
+
+    The global is sized for the in-process servers (~1-2s). A remote full-text
+    backend is a different animal and says so in its own entry — see
+    Source.timeout_s for the measurements that forced this.
+    """
+    return float(source.timeout_s or settings.deep_search_source_timeout)
+
+
 def _truthful_total(source: Source, pq, backend_total, cards: list) -> int:
     """How many hits to claim, given who actually applied the operators.
 
@@ -406,7 +416,7 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
         call = _local_caller(request, source)
     else:
         call, aclose = _remote_caller(source, resolve_token(source),
-                                      float(settings.deep_search_source_timeout))
+                                      _timeout_for(source))
     try:
         if source.run is not None:
             out = await source.run(call, send_q, send_limit, filters)
@@ -447,7 +457,7 @@ async def run_source(request, source: Source, q: str, limit: int,
     try:
         return await asyncio.wait_for(
             _query(request, source, q, limit, filters or {}),
-            timeout=float(settings.deep_search_source_timeout),
+            timeout=_timeout_for(source),
         )
     except asyncio.TimeoutError:
         return _column(source, error="המקור לא הספיק לענות בזמן")

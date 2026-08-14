@@ -325,6 +325,24 @@ def test_total_belongs_to_whoever_applied_the_operators():
     assert deep_search._truthful_total(local, plain, None, cards) == 2
 
 
+def test_full_text_sources_get_a_wider_ceiling_than_the_local_ones():
+    """The global 25s was sized for the in-process servers (~1-2s). Measured
+    against TAG-IT on 2026-08-12: protocols AND 3.5s, protocols PHRASE 21.7s,
+    ממ״מ AND 24.5s, מבקר phrase 24.2s — three of them within a second of the
+    ceiling. That is not a failure, it is a flicker: the same phrase returned
+    234 hits earlier in the day and timed out three times in a row later.
+    """
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    for sid in ("mevaker", "protocols_text", "mmm_text", "gov_decisions"):
+        t = deep_search._timeout_for(by_id[sid])
+        assert t >= 45, f"{sid} has only {t}s — measured queries reach 25s"
+    # The in-process servers keep the tight global: they answer in seconds, and
+    # a slow one there means something is wrong, not merely large.
+    for sid in ("datasets", "cbs", "ocal", "mevaker_reports"):
+        assert deep_search._timeout_for(by_id[sid]) == \
+            float(deep_search.settings.deep_search_source_timeout)
+
+
 def test_session_servers_are_flagged():
     """מפתח התקציב refuses a bare tools/call with "Missing session ID"; ours and
     TAG-IT's are stateless. Getting this flag wrong is a dead column."""
