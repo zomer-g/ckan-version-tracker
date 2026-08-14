@@ -49,3 +49,51 @@ def test_no_read_of_the_ledger_uses_the_console_role():
 
 def test_the_dataset_is_created_unpublished():
     assert 'status="hidden"' in inspect.getsource(gq.ensure_dataset)
+
+
+# ── the by-id paths ───────────────────────────────────────────────────────────
+def test_by_id_endpoints_are_gated():
+    """The lists filter `status IN (active, pending)`, so a hidden dataset drops
+    out of them for free. The BY-ID paths do not: they load by primary key and
+    404 only if the row is missing. Measured in production before this fix —
+    `/api/v1/datasets/{id}` returned 200 for the hidden dataset while
+    `/api/datasets/public/{id}` correctly returned 404. Its versions and its
+    files were reachable to anyone holding the UUID."""
+    import app.api.v1 as v1
+    import app.api.versions as versions_api
+
+    v1_src = inspect.getsource(v1)
+    assert "require_visible(ds)" in v1_src
+    # the shared helper covers /status and all three version routes
+    assert "return require_visible(ds)" in inspect.getsource(v1._get_dataset_or_404)
+
+    src = inspect.getsource(versions_api)
+    assert src.count("require_visible") >= 4, \
+        "list, detail, download and symbology all resolve by id"
+
+
+def test_only_hidden_is_excluded_not_every_non_public_status():
+    """Restricting the by-id paths to the public statuses would 404 duplicates
+    and failed datasets too — behaviour well beyond the request, and it would
+    break existing links."""
+    from app.services import dataset_visibility as dv
+
+    class _DS:
+        def __init__(self, status): self.status = status
+
+    assert dv.is_hidden(_DS("hidden"))
+    for still_served in ("active", "pending", "duplicate", "failed", "rejected"):
+        assert not dv.is_hidden(_DS(still_served))
+        dv.require_visible(_DS(still_served))   # must not raise
+
+
+def test_a_hidden_dataset_404s_rather_than_403s():
+    """A 403 would confirm the id is real."""
+    import pytest
+    from fastapi import HTTPException
+    from app.services import dataset_visibility as dv
+
+    class _DS: status = "hidden"
+    with pytest.raises(HTTPException) as e:
+        dv.require_visible(_DS())
+    assert e.value.status_code == 404
