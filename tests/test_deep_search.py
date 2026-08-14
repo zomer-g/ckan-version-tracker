@@ -280,67 +280,45 @@ def test_full_text_sources_are_operator_native_and_metadata_ones_are_not():
         assert by_id[sid].native_operators is False, sid
 
 
-def test_a_date_filter_is_offered_only_where_the_corpus_is_dated():
-    """A range filter over a half-dated corpus drops most of it and says
-    nothing — the failure this page keeps having to design against. So the
-    filter follows the measurement, and flips when the measurement does.
+def test_no_source_hardcodes_a_coverage_range():
+    """Every hand-written range on these columns has gone stale, twice.
 
-    12.08.2026: ממ״מ is fully dated (529 hits in 2010-15, 490 in 2016-20, 235
-    in 2024-26) so its filter is ON. Protocols is mid-backfill — a 2010–2026
-    range accounts for ~2,353 of 22,034 documents — so its filter is OFF until
-    a wide range returns the whole count.
-
-    Both of these were the other way round a day earlier. Re-measure before
-    changing either.
+    The מבקר note first said "local government, 2018–2019 only" (the first page
+    of one query), was corrected to "1989–2019 · 981 documents", and was stale
+    again within two days because TAG-IT re-imported the corpus to 6,168
+    documents spanning 1949–2026. Coverage is now read from list_scopes at
+    request time and appended to the hint, so there is nothing left to rot.
     """
-    by_id = {s.id: s for s in deep_search_sources.SOURCES}
-    assert {f.id for f in by_id["mmm_text"].filters} == {"date_from", "date_to"}
-    assert by_id["protocols_text"].filters == ()
+    import re
+    for s in deep_search_sources.SOURCES:
+        if not s.scope_setting:
+            continue
+        text = f"{s.hint} {s.attribution['text']}"
+        years = re.findall(r"(?<!\d)(19|20)\d{2}(?!\d)", text)
+        assert not years, (
+            f"{s.id} states a coverage year by hand: {text!r} — let "
+            f"tagit_meta.coverage_label supply it")
 
 
-def test_mevaker_coverage_note_states_the_real_range():
-    """It claimed "local government, 2018–2019 only" — which described the top
-    of one result page, not the corpus (981 docs, 1989–2019). What IS true is the
-    ceiling: nothing after 24.06.2019."""
-    by_id = {s.id: s for s in deep_search_sources.SOURCES}
-    text = by_id["mevaker"].attribution["text"] + by_id["mevaker"].hint
-    assert "1989" in text and "2019" in text
-    assert "שלטון המקומי בלבד" not in text
+def test_the_date_filter_is_declared_but_can_be_withdrawn_by_the_service():
+    """The registry states intent; the corpus gets a veto.
 
-
-def test_total_belongs_to_whoever_applied_the_operators():
-    """A phrase search on TAG-IT must report ITS count (234), not our page size.
-    A phrase search on an ILIKE source must report what survived our filter,
-    because the backend counted a looser question than the user asked."""
-    from app.services import deep_search_query as dsq
-    by_id = {s.id: s for s in deep_search_sources.SOURCES}
-    native, local = by_id["protocols_text"], by_id["mevaker_reports"]
-    plain, phrase = dsq.parse("תקציב"), dsq.parse('"תקציב הביטחון"')
-    cards = [Card(title="a"), Card(title="b")]
-
-    assert deep_search._truthful_total(native, phrase, 234, cards) == 234
-    assert deep_search._truthful_total(local, phrase, 5000, cards) == 2
-    # Without operators nobody filtered, so the backend count stands either way.
-    assert deep_search._truthful_total(local, plain, 5000, cards) == 5000
-    assert deep_search._truthful_total(local, plain, None, cards) == 2
-
-
-def test_full_text_sources_get_a_wider_ceiling_than_the_local_ones():
-    """The global 25s was sized for the in-process servers (~1-2s). Measured
-    against TAG-IT on 2026-08-12: protocols AND 3.5s, protocols PHRASE 21.7s,
-    ממ״מ AND 24.5s, מבקר phrase 24.2s — three of them within a second of the
-    ceiling. That is not a failure, it is a flicker: the same phrase returned
-    234 hits earlier in the day and timed out three times in a row later.
+    Protocols lost its filter while only 4 of 22,036 documents were dated, and
+    got it back once the backfill landed — two manual flips in two days. Now the
+    filter is declared once and tagit_meta.dates_usable withdraws it whenever
+    the corpus cannot honour it.
     """
+    from app.services import tagit_meta
     by_id = {s.id: s for s in deep_search_sources.SOURCES}
     for sid in ("mevaker", "protocols_text", "mmm_text", "gov_decisions"):
-        t = deep_search._timeout_for(by_id[sid])
-        assert t >= 45, f"{sid} has only {t}s — measured queries reach 25s"
-    # The in-process servers keep the tight global: they answer in seconds, and
-    # a slow one there means something is wrong, not merely large.
-    for sid in ("datasets", "cbs", "ocal", "mevaker_reports"):
-        assert deep_search._timeout_for(by_id[sid]) == \
-            float(deep_search.settings.deep_search_source_timeout)
+        assert {f.id for f in by_id[sid].filters} >= {"date_from", "date_to"}, sid
+    assert tagit_meta.dates_usable({"doc_count": 22036, "dated_doc_count": 4,
+                                    "has_dates": True}) is False
+    assert tagit_meta.dates_usable({"doc_count": 22036, "dated_doc_count": 22036,
+                                    "has_dates": True}) is True
+    # Unknown must NOT read as False, or an unreachable TAG-IT would strip every
+    # date filter on the page.
+    assert tagit_meta.dates_usable(None) is None
 
 
 def test_session_servers_are_flagged():

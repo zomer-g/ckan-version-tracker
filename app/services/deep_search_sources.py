@@ -243,6 +243,10 @@ class Source:
     # three times in a row later. A margin that thin is indistinguishable from
     # an outage to whoever is reading the page.
     timeout_s: float | None = None
+    # The settings attribute holding this source's TAG-IT scope id, when it has
+    # one. The sources endpoint uses it to ask the service what the corpus
+    # actually covers, instead of repeating a hand-written claim that ages.
+    scope_setting: str | None = None
     run: Callable[..., Awaitable[dict]] | None = None
     filters: tuple[Filter, ...] = ()
     active: bool = True
@@ -841,14 +845,15 @@ SOURCES: tuple[Source, ...] = (
         # scraper's enumeration bug had frozen it there.
         id="mevaker", name="מבקר המדינה — טקסט מלא", color="#075985",
         attribution={"text": "מקור חיצוני: מסמכי מבקר המדינה כפי שנסרקו ונותחו ב-TAG-IT; "
-                             "המסמך המלא באתר המבקר. הקורפוס כאן מכסה 1989–2019 "
-                             "(כ-981 מסמכים) ואינו כולל פרסומים מ-2020 והלאה.",
+                             "המסמך המלא באתר המבקר. טווח הכיסוי מוצג לצד שם העמודה "
+                             "ונקרא מהשירות עצמו.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True, timeout_s=60.0,
-        hint="חיפוש בגוף המסמך · 1989–2019 בלבד",
+        hint="חיפוש בגוף המסמך",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        scope_setting="tagit_mevaker_scope",
         run=_tagit_runner("tagit_mevaker_scope"),
     ),
     Source(
@@ -859,13 +864,14 @@ SOURCES: tuple[Source, ...] = (
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True, timeout_s=60.0,
         hint="חיפוש בתוך דברי הדיון",
-        # NO date filter yet. TAG-IT's date backfill for this scope is still
-        # running (12.08.2026). Measured against it: of 22,034 documents, a
-        # 2010–2026 range accounts for only ~2,353 — so a date filter would
-        # silently drop most of the corpus. Restore DATE_RANGE once the
-        # backfill lands and a wide range returns the whole count.
-        filters=(),
+        # Withheld while TAG-IT's date backfill ran (a 2010–2026 range then
+        # accounted for ~2,353 of 22,034 documents). Restored 14.08.2026 after
+        # re-measuring: 2015–2026 now returns all 22,034. The registry declares
+        # the intent; tagit_meta.dates_usable withdraws the filter on its own if
+        # the corpus ever stops being able to honour it.
+        filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        scope_setting="tagit_protocols_scope",
         run=_tagit_runner("tagit_protocols_scope"),
     ),
     Source(
@@ -875,7 +881,7 @@ SOURCES: tuple[Source, ...] = (
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
         native_operators=True, timeout_s=60.0,
-        hint="חיפוש בתוך גוף המחקר · 1999–2026",
+        hint="חיפוש בתוך גוף המחקר",
         # Restored 2026-08-12. It was withheld while 59 of 60 hits came back
         # undated; TAG-IT has since populated the field (the values were there
         # all along, written as "02 ביולי 2026", which their numeric parser had
@@ -884,6 +890,7 @@ SOURCES: tuple[Source, ...] = (
         # range asked for.
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        scope_setting="tagit_mmm_scope",
         run=_tagit_runner("tagit_mmm_scope"),
     ),
     Source(
@@ -896,6 +903,7 @@ SOURCES: tuple[Source, ...] = (
         hint="חיפוש בתוך גוף ההחלטות",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
+        scope_setting="tagit_gov_decisions_scope",
         run=_tagit_runner("tagit_gov_decisions_scope"),
     ),
     Source(

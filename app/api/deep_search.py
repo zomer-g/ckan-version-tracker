@@ -55,12 +55,49 @@ async def list_sources(request: Request):
     Only a ``configured`` boolean is exposed — never a token value.
     """
     _require_enabled()
-    return {
-        "sources": [
-            s.as_dict(configured=deep_search.is_configured(s))
-            for s in deep_search_sources.active_sources()
-        ]
-    }
+    out = [s.as_dict(configured=deep_search.is_configured(s))
+           for s in deep_search_sources.active_sources()]
+    await _describe_full_text_sources(out)
+    return {"sources": out}
+
+
+async def _describe_full_text_sources(sources: list[dict]) -> None:
+    """Let each TAG-IT column state its own coverage, and warm it.
+
+    Two hand-written claims about these corpora have already been wrong — a
+    coverage note taken from the first page of one query, and a date filter over
+    a corpus that was 4/22,036 dated. The service reports doc_count, date range
+    and has_dates per scope, so the label comes from the number and the date
+    filter is withdrawn when the corpus cannot honour it.
+
+    Warming happens here because this is the request that precedes a search: it
+    is the only moment we know a query is coming. Best-effort throughout — if
+    TAG-IT is unreachable the static hints stand and the page is unchanged.
+    """
+    from app.config import settings
+    from app.services import tagit_meta
+
+    by_scope: dict[int, dict] = {}
+    for s, entry in zip(deep_search_sources.active_sources(), sources):
+        if not s.scope_setting:
+            continue
+        try:
+            by_scope[int(getattr(settings, s.scope_setting))] = entry
+        except (TypeError, ValueError):
+            continue
+    if not by_scope:
+        return
+
+    tagit_meta.warm_in_background(by_scope)
+    meta = await tagit_meta.scopes()
+    for scope_id, entry in by_scope.items():
+        m = meta.get(scope_id)
+        label = tagit_meta.coverage_label(m)
+        if label:
+            entry["hint"] = f"{entry['hint']} · {label}" if entry.get("hint") else label
+        if tagit_meta.dates_usable(m) is False and entry.get("filters"):
+            entry["filters"] = [f for f in entry["filters"]
+                                if f["id"] not in ("date_from", "date_to")] or None
 
 
 @router.get("/search")
