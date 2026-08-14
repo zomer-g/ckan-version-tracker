@@ -243,6 +243,21 @@ class Source:
     # three times in a row later. A margin that thin is indistinguishable from
     # an outage to whoever is reading the page.
     timeout_s: float | None = None
+    # The cut-off the BACKEND applies to itself, when it has told us of one.
+    #
+    # This is not our ceiling (timeout_s) — it is the point past which the
+    # backend abandons its own query. TAG-IT runs a 25s statement_timeout and,
+    # when it trips, answers 200 with zero rows rather than an error. That is
+    # indistinguishable from "nothing matched" unless we look at the clock, and
+    # measured on 2026-08-14 it mattered: "מכרז" returned 2,103 hits in 1.3s
+    # while "ביטחון" returned 0 in 26.1s, and the phrase "תקציב הביטחון"
+    # returned 112 while the same two words unquoted returned 0 — an AND cannot
+    # find less than the phrase inside it. Both zeros were the timeout.
+    #
+    # A genuine zero is the CHEAPEST full-text query there is: nothing matches
+    # the index, so no candidate document is ever loaded. A slow zero is a
+    # contradiction, and run_source reports it as one.
+    upstream_timeout_s: float | None = None
     # The settings attribute holding this source's TAG-IT scope id, when it has
     # one. The sources endpoint uses it to ask the service what the corpus
     # actually covers, instead of repeating a hand-written claim that ages.
@@ -849,7 +864,7 @@ SOURCES: tuple[Source, ...] = (
                              "ונקרא מהשירות עצמו.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0,
+        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בגוף המסמך",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
@@ -862,7 +877,7 @@ SOURCES: tuple[Source, ...] = (
                              "הפרוטוקול המלא בשרת הכנסת. הכיסוי חלקי ואינו כולל את כל הכנסות.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0,
+        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך דברי הדיון",
         # Withheld while TAG-IT's date backfill ran (a 2010–2026 range then
         # accounted for ~2,353 of 22,034 documents). Restored 14.08.2026 after
@@ -880,7 +895,7 @@ SOURCES: tuple[Source, ...] = (
                              "ונותחו ב-TAG-IT; המסמך המלא בשרת הכנסת.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0,
+        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך גוף המחקר",
         # Restored 2026-08-12. It was withheld while 59 of 60 hits came back
         # undated; TAG-IT has since populated the field (the values were there
@@ -899,7 +914,7 @@ SOURCES: tuple[Source, ...] = (
                              "ההחלטה המלאה באתר gov.il.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0,
+        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך גוף ההחלטות",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source

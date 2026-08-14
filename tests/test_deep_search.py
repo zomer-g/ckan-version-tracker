@@ -15,6 +15,7 @@ router alone, no DB, limiter reset per client, outbound HTTP monkeypatched.
 import asyncio
 import importlib
 import os
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -319,6 +320,57 @@ def test_the_date_filter_is_declared_but_can_be_withdrawn_by_the_service():
     # Unknown must NOT read as False, or an unreachable TAG-IT would strip every
     # date filter on the page.
     assert tagit_meta.dates_usable(None) is None
+
+
+def test_every_full_text_source_declares_the_backends_own_cut_off():
+    """Without upstream_timeout_s a silent upstream timeout reads as "no hits"."""
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    for sid in ("mevaker", "protocols_text", "mmm_text", "gov_decisions"):
+        assert by_id[sid].upstream_timeout_s == 25.0, sid
+        # Ours must stay ABOVE theirs, or we would cut the query off before the
+        # backend has had its own budget and never see the empty-plus-slow case.
+        assert by_id[sid].timeout_s > by_id[sid].upstream_timeout_s, sid
+
+
+def test_a_slow_empty_answer_is_reported_as_unfinished_not_as_zero_hits():
+    """The measured contradiction: 0 hits in 26.1s next to 2,103 hits in 1.3s.
+
+    A genuine zero loads no candidate documents, so it is fast. An empty answer
+    that consumed most of the backend's own 25s budget ran out of time, and
+    saying "אין תוצאות" there tells the reader the documents do not exist.
+    """
+    src = next(s for s in deep_search_sources.SOURCES if s.id == "mevaker")
+    empty, full = {"results": []}, {"results": [{"title": "דוח"}]}
+
+    assert deep_search._empty_because_it_gave_up(src, empty, 26.1) is True
+    # Fast and empty is an honest zero — the common case, and it must stay quiet.
+    assert deep_search._empty_because_it_gave_up(src, empty, 1.3) is False
+    # Slow but not empty is just a heavy query that finished.
+    assert deep_search._empty_because_it_gave_up(src, full, 26.1) is False
+    # A source that never told us its cut-off gets no inference drawn about it.
+    metadata_col = next(s for s in deep_search_sources.SOURCES if s.id == "datasets")
+    assert deep_search._empty_because_it_gave_up(metadata_col, empty, 99.0) is False
+
+
+def test_the_unfinished_search_surfaces_as_an_error_on_that_column(
+        stub_local, monkeypatch):
+    """End to end: an empty-and-slow column must not render as "no results"."""
+    src = next(s for s in deep_search_sources.SOURCES if s.id == "datasets")
+    monkeypatch.setattr(deep_search_sources, "SOURCES", tuple(
+        replace(s, upstream_timeout_s=0.05) if s.id == "datasets" else s
+        for s in deep_search_sources.SOURCES))
+
+    async def _slow_and_empty(_args):
+        await asyncio.sleep(0.2)
+        return {"items": []}
+
+    stub_local["payloads"]["search_datasets"] = _slow_and_empty
+    r = _client().get("/api/deep-search/search",
+                      params={"q": "ביטחון", "sources": "datasets"})
+    col = r.json()["sources"][0]
+    assert col["results"] == []
+    assert "לא הושלם" in (col["error"] or ""), col
+    assert src.upstream_timeout_s is None      # the real registry is untouched
 
 
 def test_session_servers_are_flagged():

@@ -448,17 +448,51 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
             await aclose()
 
 
+def _empty_because_it_gave_up(source: Source, column: dict, elapsed: float) -> bool:
+    """Was this empty column a real zero, or an upstream timeout in disguise?
+
+    Only asked of a source that declared the cut-off it applies to itself
+    (Source.upstream_timeout_s). TAG-IT answers 200-with-zero-rows when its 25s
+    statement_timeout trips, so on the wire a dead query and an honestly empty
+    corpus are the same response.
+
+    The clock separates them. An empty result is the cheapest full-text query
+    there is — nothing matches the index, so not one candidate document is
+    loaded — while every slow query is slow BECAUSE it had many candidates to
+    weigh. An empty answer that took most of the backend's own budget did not
+    finish; it ran out. Measured proof on the מבקר scope, 2026-08-14: "מכרז" →
+    2,103 hits in 1.3s, "ביטחון" → 0 hits in 26.1s.
+
+    The margin is generous (80%) because the wrong direction here is the costly
+    one: calling a real zero a timeout invites someone to re-run a query that
+    will never return anything, while calling a timeout a zero tells them the
+    documents do not exist.
+    """
+    if not source.upstream_timeout_s or column.get("results"):
+        return False
+    return elapsed >= 0.8 * float(source.upstream_timeout_s)
+
+
 async def run_source(request, source: Source, q: str, limit: int,
                      filters: dict | None = None) -> dict:
     """One source's column. NEVER raises — every failure becomes ``error``."""
     if not is_configured(source):
         return _column(source, configured=False,
                        error=None if source.local else "המקור אינו מוגדר בשרת")
+    started = time.monotonic()
     try:
-        return await asyncio.wait_for(
+        column = await asyncio.wait_for(
             _query(request, source, q, limit, filters or {}),
             timeout=_timeout_for(source),
         )
+        elapsed = time.monotonic() - started
+        if _empty_because_it_gave_up(source, column, elapsed):
+            logger.info("deep_search: %s returned 0 rows after %.1fs — reporting "
+                        "an unfinished search, not an empty corpus",
+                        source.id, elapsed)
+            return _column(source, error="החיפוש במקור לא הושלם — נסו לצמצם "
+                                         "את השאילתה או להוסיף טווח תאריכים")
+        return column
     except asyncio.TimeoutError:
         return _column(source, error="המקור לא הספיק לענות בזמן")
     except SourceError as e:

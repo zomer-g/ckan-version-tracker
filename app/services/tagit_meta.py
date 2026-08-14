@@ -39,6 +39,7 @@ _lock = asyncio.Lock()
 # Warming is per-scope and cheap, but not free; once per TTL is plenty.
 _warmed: dict[int, float] = {}
 _WARM_TTL_SECONDS = 300
+_pending_warms: set = set()
 
 
 async def _call(tool: str, args: dict) -> dict:
@@ -98,7 +99,7 @@ def coverage_label(meta: dict | None) -> str | None:
     lo, hi = (meta.get("date_min") or "")[:4], (meta.get("date_max") or "")[:4]
     n = meta.get("doc_count")
     span = f"{lo}–{hi}" if lo and hi else None
-    count = f"{int(n):,} מסמכים".replace(",", ",") if isinstance(n, int) else None
+    count = f"{int(n):,} מסמכים" if isinstance(n, int) else None
     parts = [p for p in (span, count) if p]
     return " · ".join(parts) if parts else None
 
@@ -140,6 +141,12 @@ def warm_in_background(scope_ids) -> None:
     """Start a warm per scope without making the caller wait for any of them."""
     for sid in scope_ids:
         try:
-            asyncio.get_running_loop().create_task(warm(sid))
+            task = asyncio.get_running_loop().create_task(warm(sid))
         except RuntimeError:      # no loop (sync context) — nothing to warm into
             return
+        # asyncio holds only a weak reference to a running task, so a fire-and-
+        # forget task with no other referent can be collected mid-flight — which
+        # would cancel the warm-up this function exists to perform, silently and
+        # only under memory pressure. Hold it until it finishes.
+        _pending_warms.add(task)
+        task.add_done_callback(_pending_warms.discard)
