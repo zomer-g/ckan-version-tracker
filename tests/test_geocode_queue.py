@@ -270,3 +270,16 @@ def test_a_miss_is_not_re_asked_the_same_day():
 def test_never_asked_addresses_go_first():
     sql = gq._selection_sql(10)
     assert "ORDER BY (g.address_key IS NOT NULL), a.address_key" in sql
+
+
+def test_the_count_and_the_work_list_cannot_drift():
+    """They did drift: the state endpoint reported 130,096 pending against a
+    real work list of 100,475, because `remaining_count()` kept the old
+    predicate — counting settled `wrong_locality` rows and misses not yet due
+    for a retry. Both now build from `_eligible()`."""
+    import inspect
+    sel = gq._selection_sql(10)
+    cnt = inspect.getsource(gq.remaining_count)
+    assert "_eligible()" in cnt, "the count must share the selection's predicate"
+    for clause in ("wrong_locality", "a.point IS NULL", "days'"):
+        assert clause in sel and clause in gq._eligible()
