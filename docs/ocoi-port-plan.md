@@ -120,19 +120,38 @@ OVER  POST /api/worker/ocoi-push   (מאחורי WORKER_API_KEY)
 4. `documents.pdf_content` → R2; להוסיף עמודת מפתח אובייקט; לאפס את הבלוב.
 5. תפקיד `ocoi_app` + `ALTER ROLE ocoi_app SET search_path` (הלקח מ-Ocal: default של role שורד
    `RESET ALL` של ה-pooler; `SET` פר-חיבור לא).
-5b. **חובה — אינדקס trigram על `registry_records.name`** (נמדד, לא תיאורטי):
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
-   CREATE INDEX ix_registry_name_trgm ON ocoi.registry_records
-     USING gin (name extensions.gin_trgm_ops);
-   ```
-   בלעדיו `/registry/lookup?q=בע` לקח **39 שניות** מול הקורפוס החי (711,689 התאמות מתוך 798k,
-   סריקה סדרתית + מיון). ספירה חסומה ב-API הורידה ל-22 שניות; את השאר עושה האינדקס.
-   לאחר ההגירה — למדוד שוב ולוודא שזה יורד לטווח המילי-שניות.
+5b. **אינדקס trigram — התברר כלא נחוץ. נמדד אחרי ההגירה:**
+   `/registry/lookup?q=בע` לקח **39 שניות** מול Render, ו-**900 מילישניות** מול Neon —
+   אותה שאילתה בדיוק, בלי אינדקס חדש. כלומר הזמן היה של ה-free tier והרשת, לא של חוסר אינדקס.
+   הספירה החסומה ב-API נשארת (הגנה מפני צמיחה), האינדקס יורד לרשימת "נחמד שיהיה".
+   ⚠ אם בכל זאת יוסיפו אותו: `pg_trgm` **מותקן ב-schema `ocal`** (לא ב-`extensions`, שם יושב
+   רק PostGIS), ול-`ocoi_app` אין USAGE על `ocal` — מכוון. הפתרון הנכון הוא
+   `ALTER EXTENSION pg_trgm SET SCHEMA extensions` (נבדק שבטוח: אין הפניה מפורשת ל-`ocal.similarity`
+   בקוד, ו-6 האינדקסים הקיימים של ocal נקשרים ב-OID ולכן לא נשברים).
 6. `over_readonly` ← `GRANT USAGE, SELECT ON SCHEMA ocoi` בלבד.
 7. `app/services/ocoi_db.py` — pool asyncpg עצל (`statement_cache_size=0` ל-pooler של Neon).
 8. **סריקת יתומים אחרי הטעינה** — `entity_relationships` הוא polymorphic **בלי FK**, וידוע שיש
    יתומים בפרודקשן (יש endpoint `/audit/orphans-and-garbage` בדיוק בשביל זה).
+
+> ### ✅ Phase 0 בוצע (14.8.2026) — מה קרה בפועל
+> **DB:** schema `ocoi` ב-append DB (Neon `over-datastore-archive`), בבעלות תפקיד חדש `ocoi_app`
+> (`search_path = ocoi, extensions, public` כברירת מחדל של ה-role). `over_readonly` קיבל
+> USAGE+SELECT על `ocoi` בלבד → הנתונים ניתנים לתשאול ב-`/data`, ו-6 טבלאות ה-auth/billing
+> **לא הועברו כלל**. כל 14 הטבלאות הועתקו עם התאמת ספירה מלאה (`ALL TABLES MATCH`),
+> כולל 797,900 שורות registry.
+> **PDF:** 854 קבצים (417MB) → R2 `over-files` תחת `ocoi/documents/<id>.<ext>`; 0 כשלונות.
+> 2,117 המסמכים הנותרים מעולם לא אחסנו bytes (metadata בלבד — כך ב-OCOI במקור).
+> `documents.pdf_content` הושמט מהיעד, `pdf_r2_key` נוסף במקומו.
+> **מיפוי משתמשים:** `verified_by`/`reviewed_by` הומרו למייל (`*_email`) בזמן ההעתקה.
+>
+> **שלוש הפתעות:**
+> 1. `pg_dump` שבור במכונה (DLL חסר) → המיגרציה נכתבה ב-asyncpg. יצא לטובה — אפשר לשנות את
+>    `documents` תוך כדי מעבר.
+> 2. העתקה מלאה של טבלת ה-798k **נתקעה** ב-127MB (Render free tier ניתק את הזרם, asyncpg נתלה
+>    עד ה-timeout) → הוחלף ב-**keyset pagination** במקטעים של 20k, ניתן להמשך. לא OFFSET —
+>    הוא סורק מחדש את הקידומת בכל מקטע והופך העתקה לינארית לריבועית.
+> 3. `is_configured()` של `storage_client` דורש גם `S3_PUBLIC_BASE_URL`, אחרת גם נתיב **הקריאה**
+>    מסרב. הערך: `https://pub-63c02556dabd4956af9500eb8fe7198c.r2.dev`.
 
 ### Phase 1 — API ציבורי → `app/api/ocoi.py`
 ~25 endpoints ציבוריים, בקבוצות:

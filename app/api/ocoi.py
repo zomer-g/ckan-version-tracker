@@ -986,21 +986,34 @@ async def document_file(request: Request, doc_id: str):
     frontend iframes this, which is why OVER's X-Frame-Options must stay
     SAMEORIGIN for it.
 
-    NOTE: reads the ``pdf_content`` BYTEA column. When the migration moves blobs
-    to R2 (see docs/ocoi-port-plan.md §2.2), only this handler changes.
+    Bytes come from R2, not from Postgres. OCOI kept them in a `pdf_content`
+    BYTEA column and spent the project fighting the consequences (a 4.5GB storage
+    guard, a disabled backfill endpoint, a CKAN path that stores metadata only).
+    The migration moved the 854 stored files to the `ocoi/` prefix of OVER's
+    bucket, because the append DB backs the PUBLIC SQL console and has no
+    business holding hundreds of megabytes of PDF.
+
+    2,117 of the 2,971 documents never had bytes stored at all — they are
+    re-fetchable from `file_url` and OCOI deliberately kept only metadata. Those
+    404 with a message that says so rather than pretending the file is missing.
     """
     _require_configured()
     doc_id = _require_id(doc_id, "doc_id")
     row = await ocoi_db.fetchrow(
-        "SELECT title, file_format, pdf_content FROM documents WHERE id = $1", doc_id)
+        "SELECT title, file_format, pdf_r2_key FROM documents WHERE id = $1", doc_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    data = row["pdf_content"]
-    if not data:
+    if not row["pdf_r2_key"]:
         raise HTTPException(
             status_code=404,
             detail="הקובץ אינו מאוחסן אצלנו — יש להוריד אותו מהמקור.",
         )
+    from app.services.storage_client import storage_client
+    data = await storage_client.get_object_bytes(row["pdf_r2_key"])
+    if not data:
+        # Key recorded but the object is gone/unreachable — a real fault, not
+        # the ordinary "we never stored this one" case above.
+        raise HTTPException(status_code=502, detail="הקובץ אינו זמין כרגע מהאחסון.")
     fmt = (row["file_format"] or "pdf").lower()
     name = _UNSAFE_FILENAME.sub("_", (row["title"] or "document").strip())
     if not name.lower().endswith(f".{fmt}"):
