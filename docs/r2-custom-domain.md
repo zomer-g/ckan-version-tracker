@@ -1,6 +1,8 @@
 # Serving R2 files from `files.over.org.il` instead of `r2.dev`
 
-**Status:** planned. Needs one Cloudflare dashboard action + one Render env change.
+**Status:** planned, and **blocked on a prerequisite** — `over.org.il` is not yet
+a zone in the Cloudflare account (see below). Once it is, the rest is one
+dashboard action and one env change.
 **Code change required: none.**
 
 ## Why
@@ -54,15 +56,49 @@ worked around it **locally** — the fix never reached the path every external
 consumer uses. Worth remembering: a workaround in a script is not a fix in a
 system, and it hides the evidence that would have prompted one.
 
+## Prerequisite: `over.org.il` must be a zone in the Cloudflare account
+
+**This is the part that is not yet true, and it is the whole cost of the change.**
+
+Cloudflare requires that *"the domain being used must have been added as a zone
+in the same account as the R2 bucket"*. The domain does **not** need to use
+Cloudflare nameservers — a partial (CNAME) setup satisfies it — but the zone
+must exist in the account that owns the bucket.
+
+Today it does not. Checked 2026-08-15:
+
+```
+over.org.il  nameserver = ns1.sitesdepot.com
+over.org.il  nameserver = ns2.sitesdepot.com
+```
+
+Responses from `www.over.org.il` do carry `Server: cloudflare` and a `CF-RAY`
+header, which looks like the domain is already on Cloudflare. It is not
+evidence of that: Render fronts every `*.onrender.com` service with its OWN
+Cloudflare, so those headers appear on any Render-hosted site regardless of who
+holds the zone. Do not read them as "the zone is ours".
+
+So step 1 is one of:
+
+* **Full setup** — move `over.org.il` to Cloudflare nameservers at the registrar
+  (internic). Cloudflare imports the existing records first; the cutover is the
+  nameserver change. This also affects mail and every other record on the
+  domain, so it is a real change to review, not a formality.
+* **Partial (CNAME) setup** — add the zone in CNAME mode and keep DNS at
+  sitesdepot. Historically a Business-plan feature; confirm it is available on
+  the current plan before choosing this path.
+
 ## The change
 
-1. **Cloudflare dashboard** → R2 → the OVER bucket → *Settings* → *Public access*
-   → **Custom domains** → *Connect domain* → `files.over.org.il`.
-   `over.org.il` is already on Cloudflare, so the DNS record is created
-   automatically. Wait for the status to read *Active* (certificate issuance is
-   usually a minute or two).
+1. Satisfy the prerequisite above — add `over.org.il` as a zone in the same
+   Cloudflare account as the `over-files` bucket.
 
-2. **Render** → `ckan-version-tracker` → *Environment* → set
+2. **Cloudflare dashboard** → R2 → the OVER bucket → *Settings* → *Public access*
+   → **Custom domains** → *Connect domain* → `files.over.org.il`.
+   Wait for the status to read *Active* (certificate issuance is usually a
+   minute or two).
+
+3. **Render** → `ckan-version-tracker` → *Environment* → set
 
    ```
    S3_PUBLIC_BASE_URL=https://files.over.org.il
@@ -70,7 +106,7 @@ system, and it hides the evidence that would have prompted one.
 
    (It is currently the `pub-….r2.dev` host.)
 
-3. Leave `r2.dev` public access **enabled** for now. Nothing OVER serves depends
+4. Leave `r2.dev` public access **enabled** for now. Nothing OVER serves depends
    on it after step 2, but anyone holding an old URL keeps working. Disable it
    later, deliberately, not as part of this change.
 
