@@ -209,6 +209,23 @@ top_connected, by_ministry, registry_lookup, stats`.
 - ⚠ להפעיל מ-`worker_supervisor.py main()` — **העדכון-העצמי לא מריץ מחדש את הסופרווייזר**
   (הלקח הכי יקר מהיום)
 
+> ### ✅ Phase 4a בוצע (14.8.2026) — צד OVER
+> `app/services/ocoi_ingest.py` + שלושה endpoints מאחורי `WORKER_API_KEY`:
+> `GET /api/worker/ocoi-candidates` (throttle 5ש'), `POST /api/worker/ocoi-push`
+> (multipart: JSON + bytes), `POST /api/worker/ocoi-check-duplicates`.
+> קבצים → R2 תחת אותו prefix של ההגירה. **multipart ולא base64-ב-JSON**: PDF של
+> 40MB הופך ל-53MB בבסיס64 ואין סיבה לשלם על זה בכל דחיפה.
+>
+> **באג התכנסות שנמצא באימות מול נתונים חיים ותוקן:** odata מפרסם את **אותה הצהרה
+> תחת כמה כתובות resource**, כך ש-URL שלא ראינו מעולם נושא bytes שכבר יש לנו.
+> ה-push דחה אותם נכון (`duplicate content_hash`) — אבל **שום דבר לא רשם את
+> ה-URL**, אז ה-discovery היה מציע אותו בכל סבב והוורקר היה מוריד שוב ושוב את
+> אותם קבצים לנצח. זו בדיוק לולאת פצצת-הרעל שעלתה ל-ocal שבועות. עכשיו כפילות-תוכן
+> נרשמת ב-`ignored_resources`. **נמדד:** כל 7 המועמדים שהוצעו היו כפילויות תוכן
+> (~2MB לכל סבב נחסכו), `ignored` עלה 7→14, וה-discovery לא מציע אותם שוב.
+>
+> נותר: צד GOVSCRAPER (`ocoi_pipeline.py`) — ראה הפרומפט שנמסר בנפרד.
+
 ### Phase 5 — פורט האדמין (בגלים, כמו Ocal)
 ~80 endpoints, 15 עמודים, ~6,700 שורות. `app/api/ocoi_admin.py` + `OcoiAdminPanel.tsx`.
 - **גל 1** — מסמכים: רשימה/פירוט/העלאה/מחיקה/אימות (`PATCH /verify` מדורג לכל הקשרים)/reconvert/reextract
