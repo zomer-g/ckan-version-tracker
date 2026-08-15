@@ -24,6 +24,51 @@ export interface ColState {
   error?: string;
 }
 
+/**
+ * What a source chip shows where the ✓ used to be.
+ *
+ * Once a run finishes the useful thing is HOW MANY that source found, so the
+ * count replaces the tick. Before a run there is nothing to count, so the tick
+ * still marks the selection.
+ *
+ * A failed source shows ⚠ and NEVER a number. Rendering "0" for a source that
+ * could not answer is the same lie this whole feature has been hunting all
+ * week — TAG-IT's 25s timeout arriving as an empty 200, a tool error digging
+ * out to an empty list — and it is worse in a chip than anywhere else, because
+ * a chip is the one place a reader takes in every source at a glance and
+ * concludes "nothing there".
+ *
+ * The count is the number of results actually IN the column, not the corpus
+ * total: the total is null whenever we ask a full-text backend to skip
+ * counting, and a badge that is sometimes a page size and sometimes a corpus
+ * total would mean nothing. When a bigger total IS known it goes in the
+ * tooltip, where there is room to say which is which.
+ */
+export function chipOutcome(st: ColState | undefined): {
+  kind: "idle" | "pending" | "count" | "error";
+  text: string;
+  title?: string;
+} {
+  if (!st) return { kind: "idle", text: "✓" };
+  if (st.status === "queued") return { kind: "pending", text: "ממתין" };
+  if (st.status === "loading") return { kind: "pending", text: "מחפש…" };
+  if (st.status === "error") {
+    return { kind: "error", text: "⚠", title: st.error || "שגיאה בשליפה מהמקור" };
+  }
+  const col = st.column;
+  if (col?.error) return { kind: "error", text: "⚠", title: col.error };
+  const n = col?.results?.length ?? 0;
+  const total = typeof col?.total === "number" ? col.total : null;
+  return {
+    kind: "count",
+    text: String(n),
+    title:
+      total !== null && total > n
+        ? `${n} מוצגות מתוך ${total.toLocaleString("he-IL")} תוצאות`
+        : `${n} תוצאות`,
+  };
+}
+
 // Radius tokens follow the rule documented in index.css :root — buttons and
 // inputs get --radius (8px), chips and badges get --radius-full. Nothing here
 // hardcodes a radius, so the feature can never drift from the site.
@@ -391,8 +436,10 @@ export function SourceChips({
         {sources.map((s) => {
           const on = !hidden.has(s.id);
           const st = states[s.id];
-          const status =
-            st?.status === "queued" ? "ממתין" : st?.status === "loading" ? "מחפש…" : "";
+          // Only a selected source has an outcome worth showing — an excluded
+          // one was never asked, and a stale count next to it would read as
+          // "this source found nothing".
+          const outcome = on ? chipOutcome(st) : null;
           return (
             <span
               key={s.id}
@@ -418,7 +465,11 @@ export function SourceChips({
                 type="button"
                 role="checkbox"
                 aria-checked={on}
-                aria-label={s.name}
+                aria-label={
+                  outcome && outcome.kind !== "idle"
+                    ? `${s.name} — ${outcome.title || outcome.text}`
+                    : s.name
+                }
                 disabled={!s.configured}
                 onClick={() => onToggle(s.id)}
                 style={{
@@ -430,7 +481,36 @@ export function SourceChips({
                   font: "inherit",
                 }}
               >
-                {on ? "✓ " : ""}
+                {outcome && (
+                  <span
+                    title={outcome.title}
+                    aria-hidden="true"
+                    style={
+                      outcome.kind === "count"
+                        ? {
+                            // A count needs to read as a number at a glance, so
+                            // it gets its own plate rather than sitting inline
+                            // where it could be mistaken for part of the name.
+                            display: "inline-block",
+                            minWidth: "1.15rem",
+                            padding: "0 0.3rem",
+                            marginInlineEnd: "0.3rem",
+                            borderRadius: "var(--radius-full, 9999px)",
+                            background: "rgba(255,255,255,0.28)",
+                            fontWeight: 700,
+                            fontVariantNumeric: "tabular-nums",
+                            textAlign: "center",
+                          }
+                        : {
+                            marginInlineEnd: "0.3rem",
+                            fontSize: outcome.kind === "pending" ? "0.68rem" : "inherit",
+                            opacity: 0.9,
+                          }
+                    }
+                  >
+                    {outcome.text}
+                  </span>
+                )}
                 {s.name}
                 {s.external && (
                   <span aria-label="מקור חיצוני" style={{ opacity: 0.85 }}>
@@ -438,9 +518,6 @@ export function SourceChips({
                   </span>
                 )}
               </button>
-              {status && (
-                <span style={{ fontSize: "0.68rem", opacity: 0.85 }}>{status}</span>
-              )}
               {s.filters && s.filters.length > 0 && (
                 <button
                   type="button"
