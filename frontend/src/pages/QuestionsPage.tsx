@@ -266,13 +266,24 @@ export default function QuestionsPage() {
         />
         {/* btn-primary rather than a hand-rolled style, so this button is the
             site's button — same radius, colour, hover and focus ring. */}
+        {/* The button needs the source list to know what to query, so it stays
+            disabled until /sources lands — but it must SAY that. It previously
+            showed a spinner cursor and nothing else, which reads as a broken
+            button rather than a page still loading. */}
         <button
           type="submit"
           className="btn-primary"
           disabled={sources.length === 0}
-          style={{ cursor: sources.length === 0 ? "wait" : "pointer" }}
+          title={
+            sourcesError
+              ? sourcesError
+              : sources.length === 0
+                ? "טוען את רשימת המקורות…"
+                : undefined
+          }
+          style={{ cursor: sources.length === 0 ? "progress" : "pointer" }}
         >
-          🔍 חיפוש רוחבי
+          {sources.length === 0 && !sourcesError ? "טוען מקורות…" : "🔍 חיפוש רוחבי"}
         </button>
 
         <div

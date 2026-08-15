@@ -89,7 +89,10 @@ async def _describe_full_text_sources(sources: list[dict]) -> None:
         return
 
     tagit_meta.warm_in_background(by_scope)
-    meta = await tagit_meta.scopes()
+    # Bounded: this request gates the search button, so it must return whether
+    # or not TAG-IT is awake. A cold upstream costs the labels on this load, not
+    # the page.
+    meta = await tagit_meta.scopes(max_wait=tagit_meta.DEFAULT_MAX_WAIT_S)
     for scope_id, entry in by_scope.items():
         m = meta.get(scope_id)
         label = tagit_meta.coverage_label(m)

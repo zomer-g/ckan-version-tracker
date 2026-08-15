@@ -34,7 +34,12 @@ logger = logging.getLogger(__name__)
 # costs only a slightly-off coverage label, so this is cached generously.
 _TTL_SECONDS = 900
 _cache: dict = {"at": 0.0, "scopes": {}}
-_lock = asyncio.Lock()
+_refresh_task = None
+
+# How long a REQUEST may wait on the coverage fetch before rendering without it.
+# Small on purpose: this runs on the request that draws the search UI, and the
+# labels are worth a fraction of a second, never a page that cannot be used.
+DEFAULT_MAX_WAIT_S = 1.0
 
 # Warming is per-scope and cheap, but not free; once per TTL is plenty.
 _warmed: dict[int, float] = {}
@@ -54,38 +59,75 @@ async def _call(tool: str, args: dict) -> dict:
     return tagit_mcp._tool_payload(result) or {}
 
 
-async def scopes() -> dict[int, dict]:
+def _cache_is_fresh() -> bool:
+    return bool(_cache["scopes"]) and time.time() - _cache["at"] < _TTL_SECONDS
+
+
+async def _refresh() -> None:
+    """Fetch list_scopes into the cache. Never raises."""
+    try:
+        payload = await _call("list_scopes", {})
+    except Exception:  # noqa: BLE001 — never break the page over a label
+        logger.info("tagit list_scopes unavailable; keeping static hints",
+                    exc_info=True)
+        return
+    out: dict[int, dict] = {}
+    for s in (payload.get("scopes") or []):
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id", s.get("scope"))
+        try:
+            out[int(sid)] = s
+        except (TypeError, ValueError):
+            continue
+    if out:
+        _cache["scopes"], _cache["at"] = out, time.time()
+
+
+def _ensure_refresh() -> asyncio.Task:
+    """One in-flight refresh at a time, shared by every waiter."""
+    global _refresh_task
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = asyncio.get_running_loop().create_task(_refresh())
+    return _refresh_task
+
+
+async def scopes(max_wait: float | None = None) -> dict[int, dict]:
     """``{scope_id: {name, doc_count, dated_doc_count, has_dates, date_min,
     date_max, updated_at}}``, cached. Empty dict when TAG-IT cannot be reached.
+
+    ``max_wait`` bounds how long the CALLER waits, not how long the fetch takes.
+    This distinction is the whole point: TAG-IT runs on a spin-down tier and
+    tagit_mcp will patiently retry a cold start for up to 100s, so awaiting this
+    on a request path hands a third party's boot time to our own page. That is
+    exactly what happened — /api/deep-search/sources gates the שאלות לעם search
+    button, and a cold TAG-IT left the button un-clickable with a spinner cursor
+    and no explanation.
+
+    So the refresh is a shared background task and the caller merely watches it
+    for ``max_wait``. asyncio.shield keeps a timed-out wait from cancelling the
+    fetch, so the work still lands in the cache and the NEXT request has the
+    labels. A coverage note is a nice-to-have; it may never be on the critical
+    path of a page load.
 
     NOTE the key: over MCP the field is ``id``; the REST twin calls the same
     field ``scope``. Both spellings are accepted so a switch between them does
     not silently produce an empty map.
     """
-    now = time.time()
-    if _cache["scopes"] and now - _cache["at"] < _TTL_SECONDS:
+    if _cache_is_fresh():
         return _cache["scopes"]
-    async with _lock:
-        if _cache["scopes"] and time.time() - _cache["at"] < _TTL_SECONDS:
-            return _cache["scopes"]
-        try:
-            payload = await _call("list_scopes", {})
-        except Exception:  # noqa: BLE001 — never break the page over a label
-            logger.info("tagit list_scopes unavailable; keeping static hints",
-                        exc_info=True)
-            return _cache["scopes"]
-        out: dict[int, dict] = {}
-        for s in (payload.get("scopes") or []):
-            if not isinstance(s, dict):
-                continue
-            sid = s.get("id", s.get("scope"))
-            try:
-                out[int(sid)] = s
-            except (TypeError, ValueError):
-                continue
-        if out:
-            _cache["scopes"], _cache["at"] = out, time.time()
-        return out
+    task = _ensure_refresh()
+    try:
+        if max_wait is None:
+            await asyncio.shield(task)
+        else:
+            await asyncio.wait_for(asyncio.shield(task), max_wait)
+    except asyncio.TimeoutError:
+        logger.debug("tagit list_scopes still in flight after %.1fs; "
+                     "serving without coverage labels this time", max_wait)
+    except Exception:  # noqa: BLE001 — _refresh already swallows its own
+        logger.debug("tagit list_scopes refresh failed", exc_info=True)
+    return _cache["scopes"]
 
 
 def coverage_label(meta: dict | None) -> str | None:

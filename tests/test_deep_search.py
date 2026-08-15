@@ -15,6 +15,7 @@ router alone, no DB, limiter reset per client, outbound HTTP monkeypatched.
 import asyncio
 import importlib
 import os
+import time
 from dataclasses import replace
 
 import httpx
@@ -331,6 +332,74 @@ def test_the_date_filter_is_declared_but_can_be_withdrawn_by_the_service():
     # Unknown must NOT read as False, or an unreachable TAG-IT would strip every
     # date filter on the page.
     assert tagit_meta.dates_usable(None) is None
+
+
+def test_sources_never_waits_on_a_cold_tagit(monkeypatch):
+    """/sources gates the search button, so it must not await a third party.
+
+    The coverage labels put a TAG-IT call on this request, and tagit_mcp will
+    retry a spun-down Render service for up to 100s — which left the שאלות לעם
+    button disabled with a spinner cursor until TAG-IT woke up. The fetch is now
+    a shared background task the request merely watches for a moment.
+    """
+    import asyncio as aio
+
+    from app.services import tagit_meta
+
+    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {}, 0.0
+    tagit_meta._refresh_task = None
+    started = aio.Event()
+
+    async def _slow(tool, args):
+        started.set()
+        await aio.sleep(0.30)                     # a cold upstream, in miniature
+        return {"scopes": [{"id": 13, "doc_count": 9074}]}
+
+    monkeypatch.setattr(tagit_meta, "_call", _slow)
+
+    async def go():
+        loop = aio.get_running_loop()
+        t0 = loop.time()
+        out = await tagit_meta.scopes(max_wait=0.05)
+        waited = loop.time() - t0
+        # The timed-out wait must NOT have cancelled the fetch — shield keeps it
+        # alive, so letting the loop run a little longer finds the cache warm.
+        # (Checked here, inside the loop: asyncio.run cancels pending tasks on
+        # teardown, which would look like a shield failure and is not one.)
+        alive = not tagit_meta._refresh_task.cancelled()
+        await aio.sleep(0.45)
+        return out, waited, alive, dict(tagit_meta._cache["scopes"])
+
+    out, waited, alive, later = aio.run(go())
+    assert out == {}, "a cold upstream must yield no labels, not a hang"
+    assert waited < 0.25, f"the request waited {waited:.2f}s on a third party"
+    assert alive, "the bounded wait cancelled the fetch instead of shielding it"
+    assert 13 in later, "the shielded fetch never landed, so it is pure waste"
+
+    # A warm cache is returned immediately and never re-fetches.
+    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {13: {"doc_count": 1}}, time.time()
+    tagit_meta._refresh_task = None
+    assert aio.run(tagit_meta.scopes(max_wait=0.01)) == {13: {"doc_count": 1}}
+    assert tagit_meta._refresh_task is None, "a fresh cache must not spawn a fetch"
+
+
+def test_the_sources_endpoint_answers_even_when_tagit_is_down(monkeypatch):
+    """End to end: TAG-IT unreachable ⇒ the registry still renders."""
+    from app.services import tagit_meta
+
+    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {}, 0.0
+    tagit_meta._refresh_task = None
+
+    async def _boom(tool, args):
+        raise RuntimeError("TAG-IT is asleep")
+
+    monkeypatch.setattr(tagit_meta, "_call", _boom)
+    monkeypatch.setattr(tagit_meta, "warm_in_background", lambda ids: None)
+
+    r = _client().get("/api/deep-search/sources")
+    assert r.status_code == 200
+    ids = {s["id"] for s in r.json()["sources"]}
+    assert {"mevaker", "protocols_text", "datasets", "odata"} <= ids
 
 
 def test_odata_is_dispatched_in_process_and_declared_external():
