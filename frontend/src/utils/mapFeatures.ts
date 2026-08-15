@@ -49,24 +49,35 @@ export function findGeomColumn(columns: string[], rows: Row[]): string | null {
  *  a colour. Judged by SHAPE, not by name, so it works on any query. */
 export function categoryColumns(columns: string[], rows: Row[], geomCol: string,
                                 maxDistinct = 8): string[] {
-  const out: { col: string; n: number }[] = [];
+  const out: { col: string; n: number; numeric: boolean }[] = [];
   for (const c of columns) {
     if (c === geomCol) continue;
     const seen = new Set<string>();
     let nonEmpty = 0;
     let bail = false;
+    let numeric = true;
     for (const r of rows) {
       const v = r[c];
       if (v === null || v === undefined || v === "") continue;
       if (typeof v === "object") { bail = true; break; }
       nonEmpty++;
       seen.add(String(v));
+      if (numeric && !(typeof v === "number" || /^-?[0-9]+(\.[0-9]+)?$/.test(String(v)))) {
+        numeric = false;
+      }
       if (seen.size > maxDistinct) { bail = true; break; }
     }
     if (bail || seen.size < 2 || nonEmpty < seen.size * 2) continue;
-    out.push({ col: c, n: seen.size });
+    out.push({ col: c, n: seen.size, numeric });
   }
-  out.sort((a, b) => a.n - b.n);          // fewest distinct values first
+  // A LABEL beats a number of the same shape. A multi-layer map query carries
+  // both — `layer` with four names, and styling artefacts like fill_opacity or
+  // stroke_width with three numbers — and ranking purely by "fewest distinct"
+  // opened on `fill_opacity`, giving a legend that reads 0.12 / 0 / 0.05. The
+  // numbers stay available in the picker; they just stop being the default,
+  // because a number with a handful of values is usually a measure or a flag
+  // and a text column with a handful of values is usually the thing itself.
+  out.sort((a, b) => (a.numeric === b.numeric ? a.n - b.n : a.numeric ? 1 : -1));
   return out.map((o) => o.col);
 }
 
