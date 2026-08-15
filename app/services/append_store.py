@@ -1028,6 +1028,45 @@ def validate_readonly_sql(sql: str) -> str:
     return s
 
 
+# PostGIS lives in its own schema (see index_mirror.PG_EXT_SCHEMA); qualify the
+# call so the rewrite works even for a caller that did not put it on the path.
+_PG_EXT_SCHEMA = "extensions"
+_GEOMETRY_TYPES = ("geometry", "geography")
+
+
+def wkt_projection(attrs: list[tuple[str, str | None]]) -> str | None:
+    """A SELECT list that renders geometry columns as WKT, or None to leave the
+    query alone.
+
+    asyncpg has no codec for PostGIS types, so a selected ``geom`` arrives as
+    the hex EWKB Postgres prints for an unknown type — ``0106000020E6100000…``.
+    That is unreadable to a person, unusable to the /data map (which decides
+    mappability by the SHAPE of the value) and unparseable by every client that
+    is not itself PostGIS. Telling users to remember ST_AsText did not hold:
+    three separate assistants wrote three correct queries that could not be
+    drawn, because nothing between the SQL and the screen said anything was
+    wrong.
+
+    So the geometry is rendered where it is read, and only there — the stored
+    column is untouched, and a query that selects no geometry is not rewritten
+    at all.
+
+    Returns None when there is nothing to do, or when the result has duplicate
+    column names: projecting those by name would silently reorder or drop one,
+    and a wrong result is worse than a hex blob.
+    """
+    names = [n for n, _ in attrs]
+    if len(set(names)) != len(names):
+        return None
+    if not any((t or "") in _GEOMETRY_TYPES for _, t in attrs):
+        return None
+    return ", ".join(
+        f'{_qi(_PG_EXT_SCHEMA)}.ST_AsText({_qi(n)}) AS {_qi(n)}'
+        if (t or "") in _GEOMETRY_TYPES else _qi(n)
+        for n, t in attrs
+    )
+
+
 async def run_readonly_sql(sql: str, *, table: str | None = None,
                            search_path: str | None = None,
                            max_rows: int = 1000, timeout_ms: int = 10000) -> dict:
@@ -1058,6 +1097,19 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
                     await conn.execute(f"SET LOCAL search_path = {_safe_search_path(search_path)}")
                 stmt = await conn.prepare(wrapped)
                 attrs = stmt.get_attributes()
+                # Geometry out as WKT — see wkt_projection. Best-effort: if the
+                # rewritten statement will not prepare (an exotic result shape),
+                # keep the one that already did rather than fail the query.
+                proj = wkt_projection(
+                    [(a.name, getattr(a.type, "name", None)) for a in attrs])
+                if proj:
+                    try:
+                        stmt = await conn.prepare(
+                            f"SELECT {proj} FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}")
+                        attrs = stmt.get_attributes()
+                    except asyncpg.PostgresError:
+                        logger.debug("append_store: WKT projection skipped",
+                                     exc_info=True)
                 cols = [a.name for a in attrs]
                 fields = [{"id": a.name, "type": _ckan_type(getattr(a.type, "name", None))} for a in attrs]
                 recs = await stmt.fetch()
