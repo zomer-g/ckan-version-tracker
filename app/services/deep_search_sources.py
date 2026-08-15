@@ -347,6 +347,34 @@ def _n_cbs(r: dict) -> Card | None:
     )
 
 
+def _n_odata(r: dict) -> Card | None:
+    """One מידע לעם dataset.
+
+    The badge carries the PUBLISHING organization, which on this catalog is
+    whoever filed the freedom-of-information request — not the authority that
+    produced the data. Showing it is the honest thing; labelling it "מקור" would
+    misattribute a ministry's document to the requester who obtained it.
+    """
+    title = r.get("title") or r.get("name")
+    if not title:
+        return None
+    n = r.get("num_resources")
+    badges = [b for b in (r.get("organization"),) if b]
+    if isinstance(n, int) and n:
+        badges.append(f"{n} קבצים" if n > 1 else "קובץ אחד")
+    fmts = [f for f in dict.fromkeys(
+        (res.get("format") for res in (r.get("resources") or []) if isinstance(res, dict))) if f]
+    if fmts:
+        badges.append(" · ".join(fmts[:3]))
+    return Card(
+        title=truncate(title, 160),
+        snippet=truncate(r.get("notes") or ""),
+        url=r.get("url"),
+        date=iso_date(r.get("metadata_modified") or r.get("metadata_created")),
+        badges=tuple(badges),
+    )
+
+
 def _n_protocol(r: dict) -> Card | None:
     committee = r.get("committee_name")
     knesset = r.get("knessetnum")
@@ -732,6 +760,25 @@ OBUDGET_DATASETS: tuple[dict, ...] = (
     {"id": "contracts_data", "label": "התקשרויות", "norm": _n_ob_contract},
 )
 
+# The publishers who between them hold most of the odata catalog. Slugs are
+# stable (they are the CKAN organization names); the COUNTS deliberately are not
+# listed, because a number printed in a label is a number that goes stale — the
+# live list is one `list_organizations` call on the odata MCP.
+ODATA_ORGS: tuple[dict, ...] = (
+    {"value": "hatzlacha", "label": "עמותת הצלחה"},
+    {"value": "zomer", "label": "גיא זומר"},
+    {"value": "freedom-of-information-israel", "label": "התנועה לחופש המידע"},
+    {"value": "jerusalem_muni", "label": "עיריית ירושלים"},
+    {"value": "transparency-coalition", "label": "קואליציית השקיפות"},
+    {"value": "tolaat", "label": "תולעת המשפט"},
+    {"value": "haifa_city", "label": "עיריית חיפה"},
+    {"value": "keren", "label": "שקוף"},
+)
+
+ODATA_ORG_FILTER = Filter("organization", "גוף מפרסם", "select", tuple(
+    [{"value": "", "label": "כל הגופים"}] + [dict(o) for o in ODATA_ORGS]
+))
+
 OBUDGET_FILTER = Filter("dataset", "מאגר", "select", tuple(
     [{"value": "", "label": "כל המאגרים"}]
     + [{"value": d["id"], "label": d["label"]} for d in OBUDGET_DATASETS]
@@ -959,6 +1006,27 @@ SOURCES: tuple[Source, ...] = (
         filters=(OBUDGET_FILTER,),
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_run_obudget,
+    ),
+    Source(
+        id="odata", name="מידע לעם", color="#0f766e",
+        attribution={
+            "text": "מקור חיצוני ומידע מעובד: קטלוג מידע לעם (odata.org.il) — "
+                    "ברובו תשובות לבקשות חופש מידע שפורסמו על-ידי המבקשים. "
+                    "הקבצים מאוחסנים באתר המקור, לא בגרסאות לעם.",
+            "href": "https://www.odata.org.il",
+        },
+        # Dispatched in-process through OVER's own odata MCP server, which is a
+        # pass-through to odata.org.il's public CKAN — so `local` here means
+        # "no network hop to reach the TOOL", not "the data is ours".
+        local="odata", tool="search_datasets", results_path="items",
+        external=True,
+        hint="בקשות חופש מידע ומסמכים שהתקבלו בעקבותיהן",
+        filters=(ODATA_ORG_FILTER,),
+        build_args=lambda q, limit, f: {
+            "query": q, "limit": limit,
+            **({"organization": f["organization"]} if f.get("organization") else {}),
+        },
+        normalize=_n_odata,
     ),
     Source(
         id="entities", name="תאגידים", color="#003647",

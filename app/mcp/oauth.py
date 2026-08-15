@@ -35,6 +35,7 @@ from app.mcp.config import (
     google_callback_url,
     knesset_mcp_url,
     ocal_mcp_url,
+    odata_mcp_url,
     sql_mcp_url,
     mcp_jwt_secret,
     mcp_url,
@@ -130,6 +131,19 @@ def ocoi_protected_resource_metadata(request: Request) -> JSONResponse:
         "authorization_servers": [mcp_url(request)],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base_url(request)}/projects/ocoi",
+        "scopes_supported": ["mcp"],
+    })
+
+
+def odata_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728 metadata for the מידע לעם (odata.org.il) MCP. Same authorization
+    server as the main MCP — one login + one api_users invite (or the service
+    token) grants all resources."""
+    return JSONResponse({
+        "resource": odata_mcp_url(request),
+        "authorization_servers": [mcp_url(request)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{base_url(request)}/projects/odata",
         "scopes_supported": ["mcp"],
     })
 

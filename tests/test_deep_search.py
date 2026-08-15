@@ -168,13 +168,24 @@ def test_normalizers_are_total():
 
 def test_external_sources_are_declared_and_attributed():
     """Someone else's corpus must SAY so and link back to the owner — a reader
-    has to be able to tell what OVER produced from what it merely surfaces."""
+    has to be able to tell what OVER produced from what it merely surfaces.
+
+    ``external`` and ``local`` are INDEPENDENT axes and this test used to
+    conflate them: external described whose data it is, local describes how the
+    tool is reached, and until odata every external source happened to be remote
+    too. מידע לעם is a sibling project's catalog reached through OVER's own
+    in-process pass-through server — external data, local transport. What must
+    hold is the attribution, not the transport.
+    """
     external = [s for s in deep_search_sources.SOURCES if s.external]
     assert {s.id for s in external} == {
-        "mevaker", "protocols_text", "mmm_text", "gov_decisions", "obudget"}
+        "mevaker", "protocols_text", "mmm_text", "gov_decisions", "obudget", "odata"}
     for s in external:
-        assert s.local is None, f"{s.id} is marked external but dispatches locally"
         assert "חיצוני" in s.attribution["text"], f"{s.id} attribution hides its origin"
+        assert s.attribution["href"], f"{s.id} does not link back to its owner"
+        # Whoever owns the data, the link must leave OVER — pointing an external
+        # corpus at our own domain would claim it as ours.
+        assert "over.org.il" not in s.attribution["href"], s.id
     ob = deep_search_sources.source_by_id("obudget")
     # The brief was explicit: say it is external AND processed, and link out.
     assert "מעובד" in ob.attribution["text"]
@@ -320,6 +331,71 @@ def test_the_date_filter_is_declared_but_can_be_withdrawn_by_the_service():
     # Unknown must NOT read as False, or an unreachable TAG-IT would strip every
     # date filter on the page.
     assert tagit_meta.dates_usable(None) is None
+
+
+def test_odata_is_dispatched_in_process_and_declared_external():
+    """"local" means the TOOL is in-process, not that the data is ours.
+
+    odata_server is a pass-through to odata.org.il's CKAN. Dispatching it
+    locally saves a token and a cold start; the `external` flag is what tells
+    the reader the corpus is a sibling project's, not OVER's.
+    """
+    from app.mcp import odata_server
+
+    src = deep_search_sources.source_by_id("odata")
+    assert src.local == "odata"
+    assert deep_search.LOCAL_MODULES["odata"] == "app.mcp.odata_server"
+    assert src.tool in deep_search.ALLOWED_TOOLS
+    assert src.tool in odata_server._IMPL, "registry names a tool the server lacks"
+    assert src.external is True, "a sibling project's catalog must be badged external"
+    # The attribution has to say the files are not ours — this corpus is
+    # processed FOI responses, and implying OVER holds them would be false.
+    assert "odata.org.il" in src.attribution["href"]
+    assert "מעובד" in src.attribution["text"]
+
+
+def test_odata_card_credits_the_publisher_without_claiming_it_is_the_source():
+    """The badge is the requester, not the authority that produced the data.
+
+    On this catalog the publishing organization is whoever filed the freedom-of
+    -information request. Labelling that as the document's source would credit
+    a ministry's data to the NGO that obtained it.
+    """
+    card = deep_search_sources._n_odata({
+        "title": "מכרז לשירותי מחשוב", "notes": "מכרז מספר 13-2014",
+        "organization": "עמותת הצלחה", "num_resources": 2,
+        "url": "https://www.odata.org.il/dataset/contract-13-2014",
+        "metadata_modified": "2019-03-04T10:00:00",
+        "resources": [{"format": "PDF"}, {"format": "XLSX"}]})
+    assert card.url.startswith("https://www.odata.org.il/dataset/")
+    assert "עמותת הצלחה" in card.badges
+    assert card.date == "2019-03-04"
+    # A dataset with no title is dropped rather than rendered as an empty card.
+    assert deep_search_sources._n_odata({"notes": "x"}) is None
+    # Singular/plural on the file count.
+    one = deep_search_sources._n_odata(
+        {"title": "א", "num_resources": 1, "resources": [{"format": "CSV"}]})
+    assert "קובץ אחד" in one.badges
+
+
+def test_odata_search_requires_a_query_and_clamps_the_page_size():
+    """A catalog of 11.5k datasets must not be exportable through this tool."""
+    import asyncio
+
+    from app.mcp import odata_server
+
+    assert odata_server.MAX_ROWS == 50
+    assert odata_server._clamp(999, 1, 50, 20) == 50
+    assert odata_server._clamp(0, 1, 50, 20) == 1
+    assert odata_server._clamp("junk", 1, 50, 20) == 20
+    with pytest.raises(ValueError, match="חסר טקסט"):
+        asyncio.run(odata_server._tool_search(None, None, None, {"query": "  "}))
+    # A slug with a dash must reach CKAN quoted, or fq reads it as two terms.
+    assert odata_server.dataset_url({"name": "contract-13-2014"}).endswith(
+        "/dataset/contract-13-2014")
+    # Prefer the slug over the uuid — same dataset, readable address.
+    assert odata_server.dataset_url(
+        {"name": "amidar-shivook", "id": "4031842c"}).endswith("/dataset/amidar-shivook")
 
 
 def test_an_isError_result_raises_instead_of_normalizing_to_no_results():

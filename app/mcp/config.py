@@ -30,6 +30,7 @@ OCOI_MCP_PREFIX = "/ocoi/mcp"
 # Dedicated whole-site SQL MCP — a FIFTH protected resource on the same
 # authorization server (the MCP twin of the public /data console: the full table
 # catalog, its DDL, and free read-only SELECT across every schema).
+ODATA_MCP_PREFIX = "/odata/mcp"
 SQL_MCP_PREFIX = "/data/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
@@ -93,6 +94,17 @@ def ocoi_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the OCOI resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/ocoi/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{OCOI_MCP_PREFIX}"
+
+
+def odata_mcp_url(request: Request, path: str = "") -> str:
+    """The מידע לעם MCP resource URL, e.g. https://www.over.org.il/odata/mcp."""
+    return f"{base_url(request)}{ODATA_MCP_PREFIX}{path}"
+
+
+def odata_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the odata resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/odata/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{ODATA_MCP_PREFIX}"
 
 
 def sql_mcp_url(request: Request, path: str = "") -> str:

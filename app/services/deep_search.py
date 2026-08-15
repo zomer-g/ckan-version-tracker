@@ -38,13 +38,19 @@ from app.services.deep_search_sources import Card, Source
 
 logger = logging.getLogger(__name__)
 
-# The five in-process MCP servers, by the registry's ``local`` key.
+# The in-process MCP servers, by the registry's ``local`` key.
 LOCAL_MODULES: dict[str, str] = {
     "over": "app.mcp.server",
     "sql": "app.mcp.sql_server",
     "cbs": "app.mcp.cbs_server",
     "knesset": "app.mcp.knesset_server",
     "ocal": "app.mcp.ocal_server",
+    # "local" here means dispatched in-process, NOT that the data is ours:
+    # odata_server is a pass-through to odata.org.il's CKAN. It still belongs
+    # on this side because that is where the tool contract lives — and because
+    # a column that reaches a sibling site through our own server needs no
+    # token and no second cold start.
+    "odata": "app.mcp.odata_server",
 }
 
 # Marks this traffic in mcp_usage_events.mcp_session_id so the admin usage view

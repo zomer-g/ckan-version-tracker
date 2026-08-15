@@ -285,6 +285,14 @@ from app.mcp.ocoi_routes import ocoi_mcp_router, ocoi_mcp_wellknown_router
 app.include_router(ocoi_mcp_wellknown_router)
 app.include_router(ocoi_mcp_router)
 
+# Dedicated מידע לעם MCP at /odata/mcp (same OAuth server + api_users gate; a
+# pass-through to odata.org.il's public CKAN — OVER stores nothing for it).
+# Registered before the SPA fallback so /odata/mcp isn't swallowed by the React
+# /projects/odata route.
+from app.mcp.odata_routes import odata_mcp_router, odata_mcp_wellknown_router
+app.include_router(odata_mcp_wellknown_router)
+app.include_router(odata_mcp_router)
+
 # Dedicated whole-site SQL MCP at /data/mcp (same OAuth server + api_users gate;
 # the MCP twin of the public /data console — table catalog, DDL and free
 # read-only SELECT across every schema). Registered before the SPA fallback so
