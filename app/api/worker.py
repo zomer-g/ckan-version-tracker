@@ -1595,6 +1595,14 @@ async def push_version(
                 # that holds nothing of this version.
                 _record_neon_table(res_name)
                 await _check_neon_landed(table, res_name, len(n_records))
+                # Same step the streaming loaders run, for the same reason: a
+                # table that holds geometry gets a PostGIS `geom`. It was only
+                # wired to _neon_stream_load_file, which is reached exclusively
+                # by the >50MB out-of-band path — so a spatial corpus whose rows
+                # fit inline (every CBS GIS layer but two) landed its
+                # geometry_wkt in NEON and never got a geometry column at all,
+                # with nothing in the logs to say so. Swallows its own failures.
+                await append_store.fill_geometry(table, cols)
                 logger.info(
                     "NEON archive: +%d new rows into %s for %s", n, table, res_name,
                 )
@@ -3434,3 +3442,84 @@ async def ocal_worker_import(request: Request,
     except Exception as e:  # noqa: BLE001
         logger.exception("worker ocal-import failed for %s", resource_id)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+# ── ניגוד עניינים לעם (OCOI) document pipeline via the residential worker ─────
+# Same split as the ocal diary path above, for the same reason: odata.org.il
+# 403s Render's datacenter IP, so OVER discovers candidates (metadata is
+# allowed) and the worker downloads + converts + extracts on a residential IP
+# with real RAM and the poppler/tesseract binaries OVER cannot install. OCOI
+# already shipped this contract as /api/v1/push/documents + tools/local_processor;
+# this is that contract on OVER's worker auth and storage.
+
+@router.get("/ocoi-candidates")
+async def ocoi_worker_candidates(request: Request, limit: int = 25,
+                                 _: None = Depends(_verify_worker_key)):
+    """Conflict-of-interest PDFs on CKAN that we have not imported yet.
+
+    Throttled across the fleet the same way the diary endpoint is: returns []
+    unless the newest document is >5h old, so one worker per window does the
+    batch. Cheap when throttled — one fast query, no CKAN round trip.
+    """
+    from app.services import ocoi_db, ocoi_ingest
+    if not ocoi_db.is_configured():
+        return {"candidates": [], "reason": "ocoi_not_configured"}
+    last = await ocoi_db.fetchval("SELECT max(created_at) FROM documents")
+    if last is not None:
+        gap = await ocoi_db.fetchval("SELECT EXTRACT(epoch FROM now() - $1)", last)
+        if gap is not None and gap < 5 * 3600:
+            return {"candidates": [], "reason": "throttled",
+                    "next_in_s": int(5 * 3600 - gap)}
+    cands = await ocoi_ingest.discover_candidates(limit=max(1, min(limit, 50)))
+    return {"candidates": cands}
+
+
+@router.post("/ocoi-push")
+async def ocoi_worker_push(request: Request,
+                           payload: str = Form(...),
+                           file: UploadFile | None = File(None),
+                           _: None = Depends(_verify_worker_key)):
+    """Store one worker-processed declaration.
+
+    ``payload`` is the JSON metadata + markdown + extraction (OCOI's
+    PushDocumentItem shape, minus pdf_base64); ``file`` carries the raw bytes.
+    Multipart rather than base64-in-JSON because a 40MB PDF becomes ~53MB of
+    base64 and the worker has no reason to pay that on every push.
+    """
+    from app.services import ocoi_ingest
+    try:
+        item = json.loads(payload)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"payload is not JSON: {e}")
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    data = await file.read() if file is not None else None
+    try:
+        res = await ocoi_ingest.push_document(item, data)
+        logger.info("worker ocoi-push ok: %s -> doc %s (%s relationships)",
+                    item.get("file_url"), res.get("document_id"), res.get("relationships"))
+        return {"ok": True, "created": True, **res}
+    except ocoi_ingest.SkipDocument as e:
+        return {"ok": True, "created": False, "skipped": True, "reason": str(e)}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("worker ocoi-push failed for %s", item.get("file_url"))
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+@router.post("/ocoi-check-duplicates")
+async def ocoi_worker_check_duplicates(request: Request,
+                                       body: dict,
+                                       _: None = Depends(_verify_worker_key)):
+    """Which of these URLs do we already hold? Lets the worker skip downloading
+    a file it would only be told to discard — the download is the expensive part
+    of its cycle, not the push."""
+    from app.services import ocoi_db
+    urls = [u for u in (body or {}).get("urls") or [] if isinstance(u, str)]
+    if not urls:
+        return {"existing_urls": []}
+    rows = await ocoi_db.fetch(
+        "SELECT file_url FROM documents WHERE file_url = ANY($1::text[]) "
+        "UNION SELECT file_url FROM ignored_resources WHERE file_url = ANY($1::text[])",
+        urls)
+    return {"existing_urls": [r["file_url"] for r in rows]}
