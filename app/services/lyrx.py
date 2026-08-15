@@ -935,6 +935,11 @@ class _Rule:
     eq_values: list[str] = field(default_factory=list)
     range_field: str | None = None
     upper: float | None = None
+    # A filter shaped as "none of these values" — GeoServer's spelling of an
+    # ElseFilter. Becomes the renderer's default symbol when the values it
+    # excludes are exactly the ones the other rules classify.
+    neg_field: str | None = None
+    neg_values: list[str] = field(default_factory=list)
     unsupported: str = ""
     min_scale: float | None = None   # SLD MaxScaleDenominator
     max_scale: float | None = None   # SLD MinScaleDenominator
@@ -954,6 +959,52 @@ def _binary(op) -> tuple[str, str] | None:
     return prop, literal
 
 
+def _negation_shape(op) -> tuple[str, list[str]] | None:
+    """Read a filter that says "anything but these values", or None.
+
+    GovMap's styles do not use ``ElseFilter``; the catch-all rule is written
+    out, e.g. layer 213420's::
+
+        Or( And(type != 'מבנים לשימור', type != 'מבנים פרטיים לשימור'),
+            type IS NULL )
+
+    which is precisely a unique-value renderer's ``<all other values>``. Read
+    as an ordinary predicate it is untranslatable, and the rule — the symbol
+    every OTHER feature in the layer draws with — was being dropped from the
+    classification with a note.
+
+    Accepts ``!=`` chains under ``And``/``Or``, and tolerates an ``IsNull`` on
+    the same field (null is "no value", which the default covers anyway).
+    Returns ``(field, excluded values)``; the caller decides whether those
+    values really are the classified set.
+    """
+    fields: set[str] = set()
+    values: list[str] = []
+
+    def _walk(el) -> bool:
+        name = _ln(el.tag)
+        if name in ("And", "Or"):
+            return all(_walk(c) for c in el)
+        if name == "PropertyIsNotEqualTo":
+            pair = _binary(el)
+            if not pair:
+                return False
+            fields.add(pair[0])
+            values.append(pair[1])
+            return True
+        if name == "PropertyIsNull":
+            prop = _kid(el, "PropertyName")
+            if prop is None:
+                return False
+            fields.add(_text(prop))
+            return True
+        return False
+
+    if not _walk(op) or len(fields) != 1 or not values:
+        return None
+    return fields.pop(), values
+
+
 def _analyse_filter(filt, rule: _Rule) -> None:
     """Read as much of one ``ogc:Filter`` as CIM can express.
 
@@ -967,6 +1018,10 @@ def _analyse_filter(filt, rule: _Rule) -> None:
         return
     op = ops[0]
     name = _ln(op.tag)
+    negation = _negation_shape(op)
+    if negation:
+        rule.neg_field, rule.neg_values = negation
+        return
     if name == "Or":
         values: list[str] = []
         fields: set[str] = set()
@@ -1065,6 +1120,15 @@ def _build_renderer(rules: list[_Rule], warnings: list[str]) -> dict | None:
     default = next((r for r in drawable if r.is_else), None)
 
     eq_fields = {r.eq_field for r in classified}
+    # A "not any of these" rule IS the default — but only when the values it
+    # excludes are exactly the ones the other rules classify. Anything else is
+    # a genuine predicate CIM cannot hold, and stays a warning.
+    if default is None and len(eq_fields) == 1:
+        seen = {v for r in classified for v in r.eq_values}
+        for r in drawable:
+            if r.neg_field and r.neg_field in eq_fields and set(r.neg_values) == seen:
+                default = r
+                break
     if classified and len(eq_fields) == 1:
         field_name = classified[0].eq_field
         groups = [{

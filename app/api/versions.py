@@ -19,6 +19,7 @@ from app.services.odata_client import odata_client
 from app.services import storage_client as storage
 from app.services.storage_client import storage_client
 from app.config import settings
+from app.services.dataset_visibility import require_visible, require_visible_version
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,7 @@ async def list_versions(
     ds = ds_result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    require_visible(ds)
 
     result = await db.execute(
         select(VersionIndex)
@@ -163,6 +165,7 @@ async def get_version(
     ds = ds_result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Version not found")
+    require_visible(ds, detail="Version not found")
 
     return VersionResponse(
         id=str(version.id),
@@ -359,6 +362,7 @@ async def download_symbology_lyrx(
     ).scalar_one_or_none()
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
+    await require_visible_version(db, version)
 
     value, source_version = await _resolve_symbology(db, version, require_sld=True)
     if not value:
@@ -436,6 +440,7 @@ async def download_resource(
     version = result.scalar_one_or_none()
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
+    await require_visible_version(db, version)
 
     mappings = version.resource_mappings or {}
     # Conditional-source versions reuse the previous version's

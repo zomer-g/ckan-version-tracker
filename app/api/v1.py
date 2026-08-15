@@ -25,6 +25,7 @@ from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
 from app.services import storage_client as storage
 from app.services.archive_state import ROW_ARCHIVE_KEYS
+from app.services.dataset_visibility import require_visible, require_visible_version
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +539,7 @@ async def get_dataset(
     if not row:
         raise HTTPException(status_code=404, detail="Dataset not found")
     ds, org = row
+    require_visible(ds)
     version_count = (
         await db.execute(
             select(func.count(VersionIndex.id)).where(
@@ -645,7 +647,8 @@ async def _get_dataset_or_404(dataset_id: str, db: AsyncSession) -> TrackedDatas
     ).scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    return ds
+    # One gate for /status and the three version routes that share this helper.
+    return require_visible(ds)
 
 
 @router.get(
