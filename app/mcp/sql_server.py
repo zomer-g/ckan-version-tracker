@@ -25,6 +25,7 @@ login and one invite grant every resource. Usage logged to mcp_usage_events.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 
@@ -372,6 +373,26 @@ async def _tool_describe_schema(request, db, user, a) -> tuple[dict, int]:
             "search_path": data_catalog.CONSOLE_SEARCH_PATH}, 1
 
 
+# A PostGIS value that came back un-decoded: EWKB as hex. The first byte is the
+# endianness (00/01) and the type word follows, so every one of these starts
+# 00/01 + a geometry type — and they are long. Matching on the SHAPE of the
+# value rather than on the column name, exactly as the console's map does when
+# it decides whether a result can be drawn.
+_WKB_HEX_RE = re.compile(r"^0[01][0-9A-Fa-f]{16,}$")
+
+
+def _wkb_columns(rows: list[dict]) -> list[str]:
+    """Columns whose values are WKB hex — i.e. geometry the map cannot read."""
+    out: list[str] = []
+    for col in (rows[0].keys() if rows else []):
+        for row in rows[:5]:
+            v = row.get(col)
+            if isinstance(v, str) and _WKB_HEX_RE.match(v):
+                out.append(col)
+                break
+    return out
+
+
 async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
     _require_configured()
     sql = a.get("sql") or ""
@@ -379,9 +400,23 @@ async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
     res = await append_store.run_readonly_sql(
         sql, search_path=data_catalog.CONSOLE_SEARCH_PATH,
         max_rows=max_rows, timeout_ms=SQL_TIMEOUT_MS)
+    notes: list[str] = []
     if res.get("truncated"):
-        res["note"] = (f"התוצאה נקטעה ב-{max_rows} שורות. השתמשו ב-GROUP BY / "
-                       "aggregate, או בהעלאת max_rows / הוספת LIMIT ו-OFFSET.")
+        notes.append(f"התוצאה נקטעה ב-{max_rows} שורות. השתמשו ב-GROUP BY / "
+                     "aggregate, או בהעלאת max_rows / הוספת LIMIT ו-OFFSET.")
+    # Said on the RESULT, not only in the server instructions: a model that did
+    # not read them (or a client holding an older copy) still finds out here,
+    # while it is looking at the very query that produced it. The query is not
+    # wrong — it simply cannot be drawn, and nothing else in the response says so.
+    wkb = _wkb_columns(res.get("rows") or [])
+    if wkb:
+        cols = ", ".join(wkb)
+        notes.append(
+            f"עמודה {cols} חזרה כגאומטריה בקידוד WKB (hex). המפה של /data מזהה "
+            f"גאומטריה לפי התוכן, ולכן לא תזהה את התוצאה הזו כניתנת למיפוי — "
+            f"עטפו ב-ST_AsText({wkb[0]}) (או ST_AsGeoJSON) אם המטרה היא מפה.")
+    if notes:
+        res["note"] = " ".join(notes)
     res["source"] = "over.org.il — גרסאות לעם (קונסולת SQL)"
     return res, res.get("row_count") or 0
 

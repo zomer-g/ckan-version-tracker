@@ -294,3 +294,54 @@ def test_instructions_warn_that_the_row_cap_eats_later_layers():
 
 def t_instructions() -> str:
     return S.SERVER_INSTRUCTIONS
+
+
+# ── the note that fires on the result, not on the instructions ───────────
+#
+# The instructions were extended to say "return ST_AsText" — and the next query
+# the MCP wrote still selected `geom` raw. Instructions are advisory and a
+# client may be holding an older copy of them; a note on the RESULT arrives no
+# matter what, while the model is looking at the query that produced it.
+
+# The real shape: a MULTIPOLYGON from public.append_cbs_pub_file_*, as the
+# driver hands it back when the SELECT does not wrap it in ST_AsText.
+WKB_HEX = "0106000020E6100000010000000103000000010000003D000000A40119D403534140"
+
+
+def test_run_sql_says_when_the_result_cannot_be_mapped(monkeypatch):
+    async def run_readonly_sql(sql, **kw):
+        return {"rows": [{"layer": "שכונות", "geom": WKB_HEX}],
+                "row_count": 1, "truncated": False}
+    monkeypatch.setattr(A, "run_readonly_sql", run_readonly_sql)
+    out, _ = _call("run_sql", {"sql": "SELECT layer, geom FROM x"})
+    assert "WKB" in out["note"]
+    assert "ST_AsText(geom)" in out["note"]
+
+
+def test_a_mappable_result_gets_no_such_note(monkeypatch):
+    async def run_readonly_sql(sql, **kw):
+        return {"rows": [{"geom": "MULTIPOLYGON(((34.8 31.9,34.9 31.9,34.8 32.0,34.8 31.9)))"}],
+                "row_count": 1, "truncated": False}
+    monkeypatch.setattr(A, "run_readonly_sql", run_readonly_sql)
+    out, _ = _call("run_sql", {"sql": "SELECT ST_AsText(geom) AS geom FROM x"})
+    assert "note" not in out
+
+
+def test_ordinary_text_is_not_mistaken_for_geometry(monkeypatch):
+    """Hex-looking content that is not WKB — an id, a hash — must not trigger
+    the note, or it fires on half the corpus."""
+    async def run_readonly_sql(sql, **kw):
+        return {"rows": [{"row_hash": "9f2b1c" * 8, "code": "0123456789",
+                          "name": "תל אביב"}],
+                "row_count": 1, "truncated": False}
+    monkeypatch.setattr(A, "run_readonly_sql", run_readonly_sql)
+    out, _ = _call("run_sql", {"sql": "SELECT * FROM x"})
+    assert "note" not in out
+
+
+def test_both_notes_travel_together(monkeypatch):
+    async def run_readonly_sql(sql, **kw):
+        return {"rows": [{"geom": WKB_HEX}], "row_count": 1, "truncated": True}
+    monkeypatch.setattr(A, "run_readonly_sql", run_readonly_sql)
+    out, _ = _call("run_sql", {"sql": "SELECT geom FROM x", "max_rows": 1})
+    assert "נקטעה" in out["note"] and "WKB" in out["note"]

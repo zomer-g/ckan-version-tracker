@@ -272,13 +272,31 @@ function sqlFromUrl(params: URLSearchParams): string {
   return params.get("sql") || "";
 }
 
+// How much encoded query the URL will carry. The cap is on the ENCODED length
+// because that is what actually travels: base64 of UTF-8 inflates a Hebrew
+// query ~2.7x (two bytes a letter) and an ASCII one ~1.33x, so the old cap on
+// `sql.length` measured the wrong string in both directions — it let a Hebrew
+// query through at 4,800 encoded characters and refused a plain one at 2,400.
+// 4,000 keeps the whole URL inside 4 KB, well under every proxy and server
+// limit in the path (Cloudflare, uvicorn), and covers the long multi-layer map
+// queries that motivated raising it.
+const MAX_URL_SQL_B64 = 4000;
+
+/** The query as a URL-safe payload, or null when it is too long to travel. */
+function encodedSql(sql: string): string | null {
+  if (!sql) return null;
+  const q = utf8ToBase64(sql);
+  return q.length <= MAX_URL_SQL_B64 ? q : null;
+}
+
 // Keeps the two forms from ever coexisting: whoever writes the query writes `q`
 // and clears the legacy key, so a stale `sql=` cannot linger in the URL and keep
 // poisoning the Referer.
 function putSqlInUrl(next: URLSearchParams, sql: string): void {
   next.delete("sql");
   next.delete("q");
-  if (sql.length <= 1800) next.set("q", utf8ToBase64(sql));
+  const q = encodedSql(sql);
+  if (q) next.set("q", q);
 }
 
 const PLACEHOLDER_SQL =
@@ -1085,6 +1103,42 @@ export default function DataSqlPage() {
     sqlEditorRef.current?.focus();
   }, [sqlText, setSearchParams]);
 
+  // Share: the link that reopens this console — the query AND whatever chart or
+  // map settings are in the URL, so what the other person gets is the view, not
+  // just the SQL.
+  //
+  // A query too long for a URL still has to be shareable, which is the case the
+  // old silent cap left with nothing at all: the console simply stopped writing
+  // `q` and the address bar quietly held a stale query (or none). So the button
+  // degrades to copying the SQL itself and says which of the two it did.
+  const [shared, setShared] = useState<"link" | "sql" | "failed" | null>(null);
+  const sharedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(sharedTimer.current), []);
+
+  const shareQuery = useCallback(async () => {
+    const sql = sqlText.trim();
+    if (!sql) return;
+    const q = encodedSql(sql);
+    let payload = sql;
+    if (q) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("sql");
+      next.set("q", q);
+      payload = `${window.location.origin}/data?${next.toString()}`;
+    }
+    let state: "link" | "sql" | "failed" = q ? "link" : "sql";
+    try {
+      await navigator.clipboard.writeText(payload);
+    } catch {
+      // Clipboard blocked (insecure context, permission). Saying so beats a
+      // button that looks like it worked.
+      state = "failed";
+    }
+    setShared(state);
+    window.clearTimeout(sharedTimer.current);
+    sharedTimer.current = window.setTimeout(() => setShared(null), 6000);
+  }, [sqlText, searchParams]);
+
   const undoClear = useCallback(() => {
     if (clearedRef.current === null) return;
     setSqlText(clearedRef.current);
@@ -1204,6 +1258,24 @@ export default function DataSqlPage() {
               }}
             >
               ✕ נקה
+            </button>
+          )}
+          {sqlText.trim() && (
+            <button
+              type="button"
+              onClick={shareQuery}
+              title="העתקת קישור שפותח את הקונסולה עם השאילתה הזו (וגם עם הגדרות המפה/התרשים)"
+              style={{
+                fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
+                border: "1px solid var(--border, #d1d5db)", background: "none",
+                color: shared === "failed" ? "var(--danger, #b91c1c)" : "var(--text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              {shared === "link" ? "✓ הקישור הועתק"
+                : shared === "sql" ? "✓ הועתק ה-SQL (ארוך מדי לקישור)"
+                : shared === "failed" ? "העתקה נחסמה — סמנו והעתיקו ידנית"
+                : "🔗 שיתוף"}
             </button>
           )}
           {cleared && (
