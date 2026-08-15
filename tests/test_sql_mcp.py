@@ -345,3 +345,14 @@ def test_both_notes_travel_together(monkeypatch):
     monkeypatch.setattr(A, "run_readonly_sql", run_readonly_sql)
     out, _ = _call("run_sql", {"sql": "SELECT geom FROM x", "max_rows": 1})
     assert "נקטעה" in out["note"] and "WKB" in out["note"]
+
+
+def test_instructions_tell_the_model_not_to_simplify_on_its_own():
+    """Simplification was suggested here as a payload tip, and the next query
+    came back with a 15 m tolerance that moved Jerusalem's neighbourhood
+    outlines by up to 15 m — invisible at city zoom, wrong at street zoom, and
+    exactly where someone comparing two boundary schemes is looking. Fidelity
+    is the default; shrinking a response is done by returning fewer rows."""
+    t = t_instructions()
+    assert "אל תפשטו" in t
+    assert "ST_Simplify" in t
