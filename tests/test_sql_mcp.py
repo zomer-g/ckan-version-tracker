@@ -262,3 +262,35 @@ def test_profile_is_looked_up_in_the_tables_own_schema(monkeypatch):
     monkeypatch.setattr(table_profiler, "get_profile", get_profile)
     _call("get_table_profile", {"table": "kns_bill"})
     assert seen == {"schema": "knesset", "table": "kns_bill"}
+
+
+# ── the map contract the instructions have to state ──────────────────────
+#
+# A user asked this MCP for a map query. It produced valid SQL that ran in 3.8s
+# and could not be drawn: it selected `geom` (which serialises as WKB hex, so
+# the console never recognises a geometry column), carried a `color` column of
+# hex values (inert — the console colours from its own picker), and UNIONed four
+# layers of >1,000 rows ordered so that everything but the first layer fell off
+# the display cap. Each of those is invisible from the SQL side: the query
+# succeeds and the map stays blank.
+
+def test_instructions_name_the_wkb_trap():
+    """`SELECT geom` is the single most likely way to produce an unmappable
+    result, so the instructions must say so — not merely recommend ST_AsText."""
+    t = S.SERVER_INSTRUCTIONS
+    assert "WKB" in t
+    assert "ST_AsText" in t
+
+
+def test_instructions_say_where_colour_comes_from():
+    assert "צבע לפי" in t_instructions()
+
+
+def test_instructions_warn_that_the_row_cap_eats_later_layers():
+    t = t_instructions()
+    assert str(S.MAX_SQL_ROWS) in t
+    assert "UNION" in t
+
+
+def t_instructions() -> str:
+    return S.SERVER_INSTRUCTIONS
