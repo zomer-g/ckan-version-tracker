@@ -4,11 +4,17 @@ import { useTranslation } from "react-i18next";
 /**
  * /api page — public API documentation + MCP cards.
  *
- * Covers all three data sources OVER serves:
- *   • OVER   — tracked government datasets   (/api/v1, /api/append)
- *   • CBS    — הלמ״ס content index           (/api/cbs)
- *   • Knesset— committee protocols + ODATA   (/api/knesset-db, /api/knesset-protocols)
- * Each source also has a dedicated MCP server (see McpCard).
+ * Covers every source OVER serves:
+ *   • OVER    — tracked government datasets  (/api/v1, /api/append)
+ *   • CBS     — הלמ״ס content index          (/api/cbs)
+ *   • Knesset — committee protocols + ODATA  (/api/knesset-db, /api/knesset-protocols)
+ *   • Ocal    — public-figure diaries        (/api/ocal)
+ *   • שאלות לעם — cross-source deep search   (/api/deep-search)
+ * Each source also has a dedicated MCP server (see MCP_SERVERS / McpCard) —
+ * including two with no public REST surface of their own (SQL, מידע לעם).
+ *
+ * Counts in the prose are DERIVED from the arrays below, never written out:
+ * the lead said "ארבעה שרתי MCP" while the list already held six.
  *
  * Visual contract: matches the "API ציבורי" pages in Ocoi and Ocal so the
  * לעם sites read as siblings (amber MCP card, primary base-URL card, GET
@@ -307,6 +313,31 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       },
     ],
   },
+  {
+    id: "deep-search",
+    title: "שאלות לעם — חיפוש רוחבי בכל המקורות",
+    note: "שאילתה אחת שנשלחת במקביל לכל הקורפוסים שגרסאות לעם מגיעה אליהם — מאגרים במעקב, טבלאות SQL, הלמ״ס, פרוטוקולי ועדות, ממ״מ, דוחות מבקר המדינה, החלטות ממשלה, יומני נבחרי ציבור, תאגידים, מפתח התקציב ומידע לעם. כתובת בסיס: /api/deep-search. · שני דברים שכדאי לדעת לפני שמשתמשים: (1) בקשה אחת לכל מקור — הדף שולח את המקורות בנפרד כדי שכל עמודה תיצבע ברגע שהיא חוזרת, וזו גם הסיבה שהמסננים שטוחים (f_<id>) ולא ממוענים לפי מקור. (2) total יכול לחזור null, וזה לעולם לא אומר אפס — הוא אומר שהספירה לא בוצעה (בקורפוסי טקסט מלא מוותרים עליה כי היא מכפילה את זמן התשובה). המספר האמיתי של התוצאות שהוחזרו הוא אורך results.",
+    endpoints: [
+      {
+        path: "/api/deep-search/sources",
+        description:
+          "קטלוג המקורות שאפשר לחפש בהם: מזהה, שם, צבע, ייחוס, האם המקור חיצוני, אילו מסננים הוא מציע, והאם הוא מוגדר בשרת. קורפוסי הטקסט המלא מדווחים כאן גם את הכיסוי שלהם בזמן אמת (טווח שנים ומספר מסמכים) — הוא נקרא מהשירות ולא כתוב בקוד, ומסנן תאריכים נמשך אוטומטית ממקור שלא יכול לכבד אותו. אף ערך סוד אינו נחשף — רק configured.",
+        example: "/api/deep-search/sources",
+      },
+      {
+        path: "/api/deep-search/search",
+        description:
+          "הרצת שאילתה על מקור אחד או על תת-קבוצה. כל עמודה מוחזרת עם results, total, ו-error משלה — כשל במקור אחד לעולם לא מפיל את השאר, ומקור שלא סיים לחפש מדווח שגיאה ולא רשימה ריקה. תומך באופרטורים: \"ציטוט מדויק\", מינוס להחרגה, ו-OR. מקור שיודע לפרסר אותם בעצמו מקבל את השאילתה כלשונה; מקור שלא — נשאל שאלה רחבה יותר והתוצאות מסוננות כאן.",
+        params: [
+          { name: "q", desc: "טקסט חופשי (עד 200 תווים), כולל אופרטורים" },
+          { name: "sources", desc: "רשימת מזהי מקורות מופרדת בפסיקים; ריק ⇒ כל המקורות הפעילים" },
+          { name: "limit", desc: "מספר תוצאות לכל מקור (1-50, ברירת מחדל 15)" },
+          { name: "f_<id>", desc: "מסנן של אותו מקור, לפי המזהה שמופיע ב-/sources — למשל f_organization=jerusalem_muni או f_date_from=2020-01-01" },
+        ],
+        example: "/api/deep-search/search?q=%22תקציב%20הביטחון%22&sources=gov_decisions,mmm_text&limit=5",
+      },
+    ],
+  },
 ];
 
 const MCP_SERVERS: {
@@ -360,7 +391,36 @@ const MCP_SERVERS: {
       "חיפוש אנשים, חברות, עמותות ותחומים; רשת הקשרים של ישות ומסלול בין שתי ישויות; מסמכי ההצהרות והקשרים שחולצו מהם; דירוג המקושרים ביותר, פילוח לפי משרד, ומראת רשם החברות.",
     tools: ["search", "entity_get", "graph_neighbors", "graph_path", "document_get", "document_entities", "top_connected", "by_ministry", "registry_lookup", "stats"],
   },
+  {
+    key: "odata",
+    label: "מידע לעם — בקשות חופש מידע",
+    path: "/odata/mcp",
+    purpose:
+      "חיפוש בקטלוג מידע לעם (odata.org.il): מאגרים שהתקבלו בעקבות בקשות חופש מידע, סינון לפי הגוף המפרסם, ושליפת מאגר בודד עם כל קבציו. מעבר ישיר לאתר המקור — הקבצים אינם מאוחסנים בגרסאות לעם, והגוף המפרסם הוא מי שביקש את המידע ולא בהכרח מי שהפיק אותו.",
+    tools: ["search_datasets", "get_dataset", "list_organizations"],
+  },
 ];
+
+// Hebrew number words for the lead sentence. Derived from MCP_SERVERS.length
+// rather than written out, because the previous hardcoded "ארבעה" was still
+// there when the list had already grown to six — the same way every hardcoded
+// coverage number on this site has gone stale.
+const HE_COUNT: Record<number, string> = {
+  1: "שרת MCP אחד",
+  2: "שני שרתי MCP",
+  3: "שלושה שרתי MCP",
+  4: "ארבעה שרתי MCP",
+  5: "חמישה שרתי MCP",
+  6: "שישה שרתי MCP",
+  7: "שבעה שרתי MCP",
+  8: "שמונה שרתי MCP",
+  9: "תשעה שרתי MCP",
+  10: "עשרה שרתי MCP",
+};
+
+export function mcpServerCountLabel(n: number): string {
+  return HE_COUNT[n] ?? `${n} שרתי MCP`;
+}
 
 function CopyUrlButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -397,8 +457,8 @@ function McpCard() {
 
       <p className="api-mcp-lead">
         גישה מובנית לדאטה דרך Model Context Protocol — ה-LLM מחפש ומושך נתונים
-        מתוך השיחה, בלי לעבור דרך ה-API הציבורי. ארבעה שרתי MCP <strong>חיים</strong>,
-        אחד לכל מקור. הגישה בהזמנה (Google + רשימת מוזמנים) — לקבלת גישה שלחו
+        מתוך השיחה, בלי לעבור דרך ה-API הציבורי. {mcpServerCountLabel(MCP_SERVERS.length)}{" "}
+        <strong>חיים</strong>, אחד לכל מקור. הגישה בהזמנה (Google + רשימת מוזמנים) — לקבלת גישה שלחו
         אימייל ל-<a href="mailto:guy@z-g.co.il">guy@z-g.co.il</a> עם כתובת ה-Google
         שאיתה תתחברו ושורה על השימוש המתוכנן.
       </p>
