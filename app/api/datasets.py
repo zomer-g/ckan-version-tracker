@@ -220,6 +220,16 @@ def apply_storage_target(scraper_config: dict | None, target: str) -> dict | Non
 # appears for the dataset.
 TABULAR_SCRAPER_KINDS = {"registries", "munidata", "servicescompass", "emun"}
 
+# gov.il's three catch-all page types. Unlike every other hardcoded parser,
+# which is keyed to a host of its own, these match ANY page on www.gov.il — so
+# they claim a URL first and would leave a manifest source written for one
+# specific gov.il page permanently unreachable. A registered source is allowed
+# to take a URL from these three, and only these three; the specific hardcoded
+# sources (idf, health, knesset, …) stay unshadowable.
+GENERIC_GOVIL_PAGE_TYPES = {
+    "content_page", "dynamic_collector", "traditional_collector",
+}
+
 
 def dataset_is_neon_eligible(ds) -> bool:
     """Whether the NEON (tabular-rows) archive is meaningful for this dataset.
@@ -763,8 +773,12 @@ async def track_dataset(
         # Declarative sources the worker registered (app/services/source_registry).
         # Deliberately LAST: a manifest regex can never capture a URL one of the
         # hardcoded parsers above already claims, however broadly it's written.
+        # The one exception is gov.il's own catch-alls (see
+        # GENERIC_GOVIL_PAGE_TYPES) — those match every page on the site by
+        # construction, so a source written for ONE of those pages has to be
+        # able to claim it, or it could never be written at all.
         registry_match = None
-        if not collector_name:
+        if not collector_name or page_type in GENERIC_GOVIL_PAGE_TYPES:
             registry_match = await source_registry.classify_url(db, body.source_url)
             if registry_match:
                 page_type = registry_match.page_type
@@ -2234,9 +2248,10 @@ async def submit_tracking_request(
                 origin = "www.gov.il"
                 slug_prefix = "servicescompass-scraper"
         # Worker-declared sources — last, so a manifest can never shadow one of
-        # the hardcoded parsers above. Mirror of the admin-POST branch.
+        # the hardcoded parsers above, except gov.il's catch-alls. Mirror of
+        # the admin-POST branch.
         registry_match = None
-        if not collector_name:
+        if not collector_name or page_type in GENERIC_GOVIL_PAGE_TYPES:
             registry_match = await source_registry.classify_url(db, body.source_url)
             if registry_match:
                 page_type = registry_match.page_type

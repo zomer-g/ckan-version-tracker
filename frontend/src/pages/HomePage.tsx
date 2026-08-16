@@ -533,6 +533,20 @@ export default function HomePage() {
 
       // 2. Check for gov.il collector URL
       if (detectGovIlUrl(query)) {
+        // A registered source written for ONE specific gov.il page beats the
+        // generic gov.il handling, which matches every page on the site by
+        // construction. Same precedence the backend applies when it creates
+        // the dataset (GENERIC_GOVIL_PAGE_TYPES); without it the card would
+        // say gov.il while the dataset came out as the specific source.
+        const registry = await sources.validate(query.trim());
+        if (registry.valid) {
+          setRegistryResult(registry);
+          setRequestFormFor(registry.source_id || "registry");
+          setResults([]);
+          setCount(0);
+          setLoading(false);
+          return;
+        }
         const validation = await govil.validate(query.trim());
         if (validation.valid) {
           setGovIlResult(validation);
