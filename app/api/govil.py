@@ -1,6 +1,7 @@
 """Gov.il URL validation and title extraction endpoint."""
 
 import hashlib
+import json
 import logging
 import re
 from urllib.parse import parse_qs, urlparse
@@ -95,26 +96,96 @@ def _format_collector_name(name: str) -> str:
     return name.replace("-", " ").replace("_", " ").title()
 
 
-async def _fetch_content_page_title(collector_name: str) -> str | None:
+# www.gov.il/ContentPageWebApi/api/... is behind Cloudflare and answers a
+# plain client with 403 + an "Attention Required" page, which is why this
+# used to return None for every page and the form fell back to a title made
+# out of the URL slug ("Grants Grants"). The SPA itself calls an Apigee
+# gateway that is NOT behind Cloudflare — it wants the site's public client
+# id plus a gov.il Origin (with the id but no Origin it answers
+# RF-OriginError; with neither, FailedToResolveAPIKey). Both the gateway
+# host and the id come from a static client-config.js that IS servable to a
+# plain client.
+_GOVIL_CLIENT_CONFIG_JS = "https://www.gov.il/ContentpageWebApi/client-config.js"
+_GOVIL_RUN_CONFIG_RE = re.compile(r"govilRunConfig'\]\s*=\s*(\{.*?\})\s*;", re.DOTALL)
+_GOVIL_API_HEADERS = {"Origin": "https://www.gov.il", "Accept": "application/json"}
+_GOVIL_API_FALLBACK = "https://www.gov.il/ContentPageWebApi/api/content-pages"
+
+# (api_base, client_id), resolved once per process. gov.il rotates neither
+# often, and a stale value only costs us a title.
+_content_page_api_cache: tuple[str, str] | None = None
+
+
+async def _content_page_api(client: httpx.AsyncClient) -> tuple[str, str]:
+    """Resolve the content-page API base + client id from client-config.js."""
+    global _content_page_api_cache
+    if _content_page_api_cache is not None:
+        return _content_page_api_cache
+    api_base, client_id = _GOVIL_API_FALLBACK, ""
+    try:
+        resp = await client.get(_GOVIL_CLIENT_CONFIG_JS)
+        m = _GOVIL_RUN_CONFIG_RE.search(resp.text or "")
+        if m:
+            cfg = json.loads(m.group(1))
+            base = (cfg.get("contentPageWebApi") or "").rstrip("/")
+            if base:
+                api_base = f"{base}/api/content-pages"
+            client_id = (cfg.get("clientId") or "").strip()
+    except Exception as e:
+        logger.debug("govil client-config fetch failed, using www fallback: %s", e)
+    _content_page_api_cache = (api_base, client_id)
+    return _content_page_api_cache
+
+
+def _chapter_index_of(url: str) -> str | None:
+    """The ?chapterIndex=N a /he/pages/ URL was pasted with, if any."""
+    qs = {k.lower(): v for k, v in parse_qs(urlparse(url).query).items()}
+    value = (qs.get("chapterindex") or [""])[0].strip()
+    return value if value.isdigit() else None
+
+
+async def _fetch_content_page_title(collector_name: str, url: str = "") -> str | None:
     """Fetch the real title for /he/pages/{name} via ContentPageWebApi.
 
     These pages are React SPAs whose HTML <title> is just the generic shell
     ("גוב.איל" or similar). The API returns the actual page title in
     ``contentHead.title``.
+
+    A page can be a stack of unrelated tabs, and ``contentHead.title`` names
+    the stack rather than the tab: every one of grants-grants' eleven
+    chapters reports "תמיכות ומענקים", though chapterIndex=5 is the balance
+    grants and chapterIndex=7 is the minister's grant. Each tab is tracked as
+    its own dataset (the slug hashes the full URL), so when the pasted URL
+    pins a chapter, prefer that tab's own name from the side-nav.
     """
     try:
-        api_url = f"https://www.gov.il/ContentPageWebApi/api/content-pages/{collector_name}?culture=he"
+        chapter = _chapter_index_of(url)
+        query = "?culture=he" + (f"&chapterIndex={chapter}" if chapter else "")
         async with httpx.AsyncClient(
             timeout=10,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (compatible; over.org.il)"},
         ) as client:
-            resp = await client.get(api_url)
-            if resp.status_code == 200:
+            api_base, client_id = await _content_page_api(client)
+            resp = await client.get(
+                f"{api_base}/{collector_name}{query}",
+                headers=_GOVIL_API_HEADERS | ({"x-client-id": client_id} if client_id else {}),
+            )
+            if resp.status_code == 200 and "json" in (resp.headers.get("content-type") or ""):
                 data = resp.json()
-                title = ((data.get("contentHead") or {}).get("title") or "").strip()
-                if title:
-                    return title
+                content_main = data.get("contentMain") or {}
+                page_title = ((data.get("contentHead") or {}).get("title") or "").strip()
+                if chapter:
+                    tabs = (content_main.get("sideNav") or {}).get("tagItems") or []
+                    for tab in tabs:
+                        m = re.search(r"chapterIndex=(\d+)", tab.get("url") or "")
+                        if (m.group(1) if m else "1") != chapter:
+                            continue
+                        tab_title = (tab.get("title") or "").strip()
+                        if tab_title:
+                            return f"{page_title} — {tab_title}" if page_title else tab_title
+                        break
+                if page_title:
+                    return page_title
     except Exception as e:
         logger.debug("Failed to fetch content-page title for %s: %s", collector_name, e)
     return None
@@ -252,7 +323,7 @@ async def validate_govil_url(request: Request, body: ValidateRequest):
     # ContentPageWebApi since the raw HTML title is just the shell.
     title = None
     if page_type == "content_page":
-        title = await _fetch_content_page_title(collector_name)
+        title = await _fetch_content_page_title(collector_name, url)
     if not title:
         title = await _fetch_page_title(url)
     if not title:

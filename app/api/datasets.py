@@ -1071,6 +1071,15 @@ async def track_dataset(
             if scope:
                 sc.setdefault("committee_scope", scope[0])   # "category" | "single"
                 sc.setdefault("committee_scope_id", scope[1])
+        elif page_type == "content_page":
+            # gov.il /he/pages/{name} — a guide page whose substance IS its
+            # attachments (grants-grants chapterIndex=5 is 21 balance-grant
+            # spreadsheets + 23 explanatory PDFs, and nothing else). With no
+            # branch here the config stayed empty and the worker fell back to
+            # download_files=False, so we tracked the list of documents and
+            # archived none of them. The lists are small — tens of files, not
+            # thousands — so there is no cap to set.
+            sc.setdefault("download_files", True)
         elif registry_match:
             # A worker-declared source: its whole config (including the ``kind``
             # the worker dispatches on) comes from the manifest, so there is no
