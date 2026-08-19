@@ -50,8 +50,13 @@ export function chipOutcome(st: ColState | undefined): {
   title?: string;
 } {
   if (!st) return { kind: "idle", text: "✓" };
-  if (st.status === "queued") return { kind: "pending", text: "ממתין" };
-  if (st.status === "loading") return { kind: "pending", text: "מחפש…" };
+  // The visible glyph is a narrow "⋯" so the fixed slot need not be sized for
+  // the widest word; the word itself lives in the tooltip and the aria-label,
+  // which is where it can be read without moving anything.
+  if (st.status === "queued") {
+    return { kind: "pending", text: "⋯", title: "ממתין בתור" };
+  }
+  if (st.status === "loading") return { kind: "pending", text: "⋯", title: "מחפש…" };
   if (st.status === "error") {
     return { kind: "error", text: "⚠", title: st.error || "שגיאה בשליפה מהמקור" };
   }
@@ -432,7 +437,24 @@ export function SourceChips({
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+      {/* A GRID, not a wrapping flex row.
+          The chips used to be inline-flex in flex-wrap, so every chip's width
+          followed its own content — and the content changes throughout a run
+          (✓ → "מחפש…" → a count → ⚠). Each change re-measured that chip, which
+          re-flowed the whole row, which re-packed the rows below it. The result
+          was a source list that shuffled under the cursor exactly while someone
+          was trying to click it.
+          Fixed tracks mean a chip's cell is decided by the container, never by
+          its contents, so a source cannot move because its own status changed —
+          nor because a NEIGHBOUR's did. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(15.5rem, 1fr))",
+          gap: "0.4rem",
+          alignItems: "stretch",
+        }}
+      >
         {sources.map((s) => {
           const on = !hidden.has(s.id);
           const st = states[s.id];
@@ -440,18 +462,23 @@ export function SourceChips({
           // one was never asked, and a stale count next to it would read as
           // "this source found nothing".
           const outcome = on ? chipOutcome(st) : null;
+          const hasFilters = !!(s.filters && s.filters.length > 0);
           return (
             <span
               key={s.id}
               style={{
-                display: "inline-flex",
+                display: "grid",
+                // slot | name | filters — the outer two are fixed, so only the
+                // name column ever absorbs a difference, and it never changes.
+                gridTemplateColumns: `1.6rem minmax(0, 1fr) ${hasFilters ? "auto" : "0px"}`,
                 alignItems: "center",
                 gap: "0.35rem",
                 borderRadius: "var(--radius-full, 9999px)",
                 border: `1px solid ${on ? s.color : "var(--border, #d1d5db)"}`,
                 background: on ? s.color : "transparent",
                 color: on ? "#fff" : "var(--text-muted)",
-                padding: "0.2rem 0.6rem",
+                padding: "0.25rem 0.7rem",
+                minHeight: "2rem",
                 fontSize: "0.8rem",
                 opacity: s.configured ? 1 : 0.5,
               }}
@@ -461,6 +488,31 @@ export function SourceChips({
                   : (s.external ? "מקור חיצוני — " : "") + s.hint
               }
             >
+              {/* The status slot is a FIXED-WIDTH cell of the chip grid. Its
+                  contents swap between a tick, a count, a spinner and ⚠ during
+                  one run; without a reserved cell each swap would shove the
+                  name sideways. */}
+              <span
+                aria-hidden="true"
+                title={outcome?.title}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "1.6rem",
+                  height: "1.3rem",
+                  borderRadius: "var(--radius-full, 9999px)",
+                  background:
+                    outcome?.kind === "count" ? "rgba(255,255,255,0.28)" : "transparent",
+                  fontWeight: outcome?.kind === "count" ? 700 : 400,
+                  fontVariantNumeric: "tabular-nums",
+                  fontSize: outcome?.kind === "pending" ? "0.9rem" : "inherit",
+                  lineHeight: 1,
+                }}
+              >
+                {outcome?.text ?? ""}
+              </span>
+
               <button
                 type="button"
                 role="checkbox"
@@ -479,38 +531,15 @@ export function SourceChips({
                   cursor: s.configured ? "pointer" : "not-allowed",
                   color: "inherit",
                   font: "inherit",
+                  textAlign: "start",
+                  // One line, clipped: a name that wrapped would change the
+                  // chip's height and take the whole grid row with it.
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minWidth: 0,
                 }}
               >
-                {outcome && (
-                  <span
-                    title={outcome.title}
-                    aria-hidden="true"
-                    style={
-                      outcome.kind === "count"
-                        ? {
-                            // A count needs to read as a number at a glance, so
-                            // it gets its own plate rather than sitting inline
-                            // where it could be mistaken for part of the name.
-                            display: "inline-block",
-                            minWidth: "1.15rem",
-                            padding: "0 0.3rem",
-                            marginInlineEnd: "0.3rem",
-                            borderRadius: "var(--radius-full, 9999px)",
-                            background: "rgba(255,255,255,0.28)",
-                            fontWeight: 700,
-                            fontVariantNumeric: "tabular-nums",
-                            textAlign: "center",
-                          }
-                        : {
-                            marginInlineEnd: "0.3rem",
-                            fontSize: outcome.kind === "pending" ? "0.68rem" : "inherit",
-                            opacity: 0.9,
-                          }
-                    }
-                  >
-                    {outcome.text}
-                  </span>
-                )}
                 {s.name}
                 {s.external && (
                   <span aria-label="מקור חיצוני" style={{ opacity: 0.85 }}>
@@ -518,7 +547,8 @@ export function SourceChips({
                   </span>
                 )}
               </button>
-              {s.filters && s.filters.length > 0 && (
+
+              {hasFilters && (
                 <button
                   type="button"
                   onClick={() => onOpenFilter(openFilter === s.id ? null : s.id)}
@@ -532,6 +562,7 @@ export function SourceChips({
                     color: "inherit",
                     fontSize: "0.72rem",
                     textDecoration: "underline",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   מסננים
