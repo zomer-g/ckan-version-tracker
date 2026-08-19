@@ -41,6 +41,13 @@ _UA = "OVER/1.0 (+https://www.over.org.il) ocoi-ingest"
 
 PDF_FORMATS = {"pdf", "PDF", "application/pdf"}
 
+# Packages per CKAN request, and the safety bound on how many we will walk in
+# one pass. The bound exists only so a runaway catalog cannot spin forever — it
+# is deliberately far above the ~994 the query matches today, because the point
+# of the rewrite was that a FIXED page ceiling silently truncated discovery.
+_PAGE = 50
+_MAX_PACKAGES = 5000
+
 _CONTENT_TYPES = {
     "pdf": "application/pdf",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -64,6 +71,19 @@ async def discover_candidates(limit: int = 25) -> list[dict]:
     `ignored_resources`, so the list converges instead of re-offering the same
     files forever — the lesson from ocal, where an unrecordable failure made one
     resource a permanent poison pill.
+
+    Pages the WHOLE result set, bounded by the count CKAN reports rather than by
+    a fixed number of pages. The first version stopped at start<400 while the
+    query matches 994 packages, so 594 of them were unreachable: a declaration
+    published in any of those would never have been discovered, and the corpus
+    would have quietly stopped growing over most of the catalog. Twenty requests
+    once every five hours is not a cost worth trading correctness for.
+
+    Sorted by ``metadata_modified desc``. CKAN's default ordering is by
+    relevance score, which is not stable across requests — the same package can
+    land on two pages or on none, so paging without an explicit sort silently
+    skips rows. Newest-first is also the right order for the early exit below:
+    what we are hunting for is new declarations.
     """
     known: set[str] = set()
     rows = await ocoi_db.fetch("SELECT file_url FROM documents")
@@ -77,13 +97,23 @@ async def discover_candidates(limit: int = 25) -> list[dict]:
         headers={"User-Agent": _UA},
     ) as client:
         start = 0
-        while len(out) < limit and start < 400:
+        total = None       # filled from CKAN's own count on the first response
+        while len(out) < limit and start < _MAX_PACKAGES:
             r = await client.get(
                 f"{CKAN_BASE}/api/3/action/package_search",
-                params={"q": CKAN_QUERY, "rows": 50, "start": start},
+                params={"q": CKAN_QUERY, "rows": _PAGE, "start": start,
+                        "sort": "metadata_modified desc"},
             )
             r.raise_for_status()
-            results = ((r.json() or {}).get("result") or {}).get("results") or []
+            result = (r.json() or {}).get("result") or {}
+            results = result.get("results") or []
+            if total is None:
+                total = result.get("count")
+                if isinstance(total, int) and total > _MAX_PACKAGES:
+                    logger.warning(
+                        "ocoi discovery: %d packages match but the safety bound is "
+                        "%d — %d will not be scanned this pass",
+                        total, _MAX_PACKAGES, total - _MAX_PACKAGES)
             if not results:
                 break
             for pkg in results:
@@ -108,7 +138,9 @@ async def discover_candidates(limit: int = 25) -> list[dict]:
                         break
                 if len(out) >= limit:
                     break
-            start += 50
+            start += _PAGE
+            if isinstance(total, int) and start >= total:
+                break
     return out
 
 
