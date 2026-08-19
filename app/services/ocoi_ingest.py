@@ -25,7 +25,6 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 
 import httpx
 
@@ -200,9 +199,11 @@ def _has_column(etype: str, col: str) -> bool:
 
 # ── the push ────────────────────────────────────────────────────────────────
 
-def _now() -> datetime:
-    # Naive Asia/Jerusalem, matching the rest of the corpus (see ocoi_db).
-    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+# Naive Jerusalem for `timestamp` columns, aware UTC for the `timestamptz`
+# ones. See ocoi_db: the pooler drops the session timezone, so neither the DB
+# clock nor the container clock can be trusted to supply this.
+_now = ocoi_db.now_local
+_now_tz = ocoi_db.now_utc
 
 
 async def _ignore_url(file_url: str, title: str | None, source_type: str) -> None:
@@ -298,7 +299,7 @@ async def push_document(item: dict, pdf_bytes: bytes | None = None) -> dict:
     """, doc_id, src, (item.get("title") or "")[:2000], fmt, file_url,
         item.get("file_size"), content_hash, markdown,
         "converted" if markdown else "no_text",
-        _now(), _now() if markdown else None, r2_key)
+        _now(), _now_tz() if markdown else None, r2_key)
 
     # ── extraction ──
     extracted = 0
@@ -308,7 +309,7 @@ async def push_document(item: dict, pdf_bytes: bytes | None = None) -> dict:
             extracted = await _store_extraction(doc_id, extraction)
             await ocoi_db.execute(
                 "UPDATE documents SET extraction_status='completed', extracted_at=$2 "
-                "WHERE id=$1", doc_id, _now())
+                "WHERE id=$1", doc_id, _now_tz())
         except Exception as e:  # noqa: BLE001 — the document is still worth keeping
             logger.exception("ocoi push: extraction failed for %s", file_url)
             await ocoi_db.execute(

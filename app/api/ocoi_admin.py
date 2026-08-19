@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -63,13 +63,11 @@ def _rows(rows) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _now() -> datetime:
-    """Naive Asia/Jerusalem, matching the corpus.
-
-    OCOI was inconsistent — document writes used Israel time while match and
-    suggestion writes used naive UTC, into the same column type. One clock here.
-    """
-    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+# Naive Asia/Jerusalem, matching the corpus. OCOI was inconsistent — document
+# writes used Israel time while match and suggestion writes used naive UTC, into
+# the same column type. One clock here, and it comes from ocoi_db rather than
+# the container clock (see the note there).
+_now = ocoi_db.now_local
 
 
 def _ok(data=None, **extra) -> dict:
@@ -1455,3 +1453,323 @@ async def cleanup_proposals(request: Request, body: CleanupProposalsBody,
         await ocoi_db.execute(
             f"DELETE FROM entity_match_proposals WHERE {w}", *args)
     return _ok({"dry_run": body.dry_run, "matched": int(n)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WAVE 4 — registry, ignore list, public suggestions, site content
+# ═══════════════════════════════════════════════════════════════════════════
+
+from app.services import ocoi_registry  # noqa: E402
+
+_SUGGESTION_STATUSES = ("pending", "approved", "rejected")
+# The keys the public site reads. An unknown key is refused rather than silently
+# stored, so a typo cannot create a row nothing will ever render.
+_CONTENT_KEYS = ("header_links", "footer_text", "about_content", "extraction_prompt")
+
+
+# ── registry ──────────────────────────────────────────────────────────────────
+
+@router.get("/registry/sources")
+@limiter.limit("60/minute")
+async def registry_sources(request: Request, user: User = Depends(get_admin_user)):
+    """The five mirrored registries and how fresh each one is."""
+    _require_configured()
+    state = {r["source_type"]: dict(r) for r in await ocoi_db.fetch(
+        "SELECT source_type, last_synced_at, record_count, sync_status, error_message "
+        "FROM registry_sync_status")}
+    held = {r["source_type"]: r["n"] for r in await ocoi_db.fetch(
+        "SELECT source_type, count(*) AS n FROM registry_records GROUP BY source_type")}
+    out = []
+    for key, cfg in ocoi_registry.REGISTRY_SOURCES.items():
+        s = state.get(key, {})
+        out.append({
+            "key": key, "label": cfg["label"], "entity_type": cfg["entity_type"],
+            "rows_held": int(held.get(key, 0)),
+            "last_synced_at": s.get("last_synced_at"),
+            "sync_status": s.get("sync_status") or "never",
+            "error_message": s.get("error_message"),
+            # A source can be permanently unusable at the origin rather than
+            # merely un-synced; the UI must be able to tell those apart.
+            "enabled": cfg.get("enabled", True),
+            "note": cfg.get("note"),
+        })
+    return _ok(out)
+
+
+class RegistrySyncBody(BaseModel):
+    sources: list[str] | None = None
+
+
+@router.post("/registry/sync")
+@limiter.limit("6/minute")
+async def registry_sync(request: Request, body: RegistrySyncBody,
+                        background: BackgroundTasks,
+                        user: User = Depends(get_admin_user)):
+    """Mirror one or more registries. Runs on OVER — data.gov.il is not the
+    Cloudflare-blocked host; only odata.org.il is."""
+    _require_configured()
+    srcs = tuple(s for s in (body.sources or ocoi_registry._ENABLED)
+                 if s in ocoi_registry.REGISTRY_SOURCES
+                 and ocoi_registry.REGISTRY_SOURCES[s].get("enabled", True))
+    if not srcs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sources must be from: {', '.join(ocoi_registry._ENABLED)}")
+    if not await ocoi_match.claim_job(ocoi_registry.JOB_SYNC):
+        raise HTTPException(status_code=409, detail="סנכרון מאגרים כבר רץ")
+    background.add_task(ocoi_registry.run_sync_all, srcs)
+    logger.info("ocoi admin: %s started registry sync %s",
+                getattr(user, "email", "?"), srcs)
+    return _ok({"started": True, "sources": list(srcs)})
+
+
+class RegistryMatchBody(BaseModel):
+    limit: int | None = None
+
+
+@router.post("/registry/match")
+@limiter.limit("6/minute")
+async def registry_match(request: Request, body: RegistryMatchBody,
+                         background: BackgroundTasks,
+                         user: User = Depends(get_admin_user)):
+    """Attach registration numbers to companies/associations that lack one."""
+    _require_configured()
+    if not await ocoi_match.claim_job(ocoi_registry.JOB_MATCH):
+        raise HTTPException(status_code=409, detail="התאמת מאגרים כבר רצה")
+    background.add_task(ocoi_registry.run_match_all, body.limit)
+    return _ok({"started": True, "limit": body.limit})
+
+
+@router.get("/registry/records")
+@limiter.limit("60/minute")
+async def registry_records(request: Request,
+                           q: str | None = Query(None),
+                           source: str | None = Query(None),
+                           registration_number: str | None = Query(None),
+                           limit: int = Query(50, ge=1, le=200),
+                           offset: int = Query(0, ge=0),
+                           user: User = Depends(get_admin_user)):
+    """Search the mirror. The count is BOUNDED — this table holds ~800k rows and
+    an exact count over a substring scan is the 39-second query the public API
+    already learned about."""
+    _require_configured()
+    where, args = ["1=1"], []
+    if source:
+        args.append(source)
+        where.append(f"source_type = ${len(args)}")
+    if registration_number:
+        args.append(registration_number)
+        where.append(f"registration_number = ${len(args)}")
+    if q:
+        args.append(f"%{q}%")
+        where.append(f"name ILIKE ${len(args)}")
+    w = " AND ".join(where)
+    cap = 10_000
+    total = await ocoi_db.fetchval(
+        f"SELECT count(*) FROM (SELECT 1 FROM registry_records WHERE {w} "
+        f"LIMIT {cap + 1}) t", *args) or 0
+    rows = await ocoi_db.fetch(
+        f"SELECT id, source_type, name, registration_number, status, updated_at "
+        f"FROM registry_records WHERE {w} ORDER BY name "
+        f"LIMIT ${len(args)+1} OFFSET ${len(args)+2}", *args, limit, offset)
+    meta = {"total": min(int(total), cap), "limit": limit, "offset": offset}
+    if int(total) > cap:
+        meta["total_capped"] = True
+    return _ok(_rows(rows), **meta)
+
+
+# ── ignore list (discovery reads this) ────────────────────────────────────────
+
+@router.get("/ignored")
+@limiter.limit("60/minute")
+async def list_ignored(request: Request, q: str | None = Query(None),
+                       limit: int = Query(50, ge=1, le=200),
+                       offset: int = Query(0, ge=0),
+                       user: User = Depends(get_admin_user)):
+    """URLs discovery will never offer again.
+
+    Populated by hand AND automatically: a push whose bytes duplicate an
+    existing document records its URL here, which is what stops the worker
+    re-downloading the same declaration forever.
+    """
+    _require_configured()
+    where, args = ["1=1"], []
+    if q:
+        args.append(f"%{q}%")
+        where.append(f"(file_url ILIKE ${len(args)} OR coalesce(title,'') ILIKE ${len(args)})")
+    w = " AND ".join(where)
+    total = await ocoi_db.fetchval(
+        f"SELECT count(*) FROM ignored_resources WHERE {w}", *args) or 0
+    rows = await ocoi_db.fetch(
+        f"SELECT id, file_url, title, source_type, created_at FROM ignored_resources "
+        f"WHERE {w} ORDER BY created_at DESC "
+        f"LIMIT ${len(args)+1} OFFSET ${len(args)+2}", *args, limit, offset)
+    return _ok(_rows(rows), total=int(total), limit=limit, offset=offset)
+
+
+class IgnoreBody(BaseModel):
+    urls: list[str]
+    title: str | None = None
+
+
+@router.post("/ignored")
+@limiter.limit("30/minute")
+async def add_ignored(request: Request, body: IgnoreBody,
+                      user: User = Depends(get_admin_user)):
+    _require_configured()
+    urls = [u.strip() for u in body.urls if u and u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="urls is required")
+    await ocoi_db.execute("""
+        INSERT INTO ignored_resources (id, file_url, title, source_type, created_at)
+        SELECT gen_random_uuid()::text, u, $2, 'manual',
+               now() AT TIME ZONE 'Asia/Jerusalem'
+          FROM unnest($1::text[]) AS u
+        ON CONFLICT (file_url) DO NOTHING
+    """, urls, (body.title or "")[:2000])
+    n = await ocoi_db.fetchval(
+        "SELECT count(*) FROM ignored_resources WHERE file_url = ANY($1::text[])", urls)
+    return _ok({"requested": len(urls), "now_ignored": int(n or 0)})
+
+
+@router.delete("/ignored")
+@limiter.limit("30/minute")
+async def remove_ignored(request: Request, body: IgnoreBody,
+                         user: User = Depends(get_admin_user)):
+    """Un-ignore, so discovery may offer these again."""
+    _require_configured()
+    urls = [u.strip() for u in body.urls if u and u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="urls is required")
+    before = await ocoi_db.fetchval(
+        "SELECT count(*) FROM ignored_resources WHERE file_url = ANY($1::text[])", urls)
+    await ocoi_db.execute(
+        "DELETE FROM ignored_resources WHERE file_url = ANY($1::text[])", urls)
+    return _ok({"removed": int(before or 0)})
+
+
+# ── public suggestions ────────────────────────────────────────────────────────
+
+@router.get("/suggestions")
+@limiter.limit("60/minute")
+async def list_suggestions(request: Request,
+                           status: str | None = Query("pending"),
+                           target_kind: str | None = Query(None),
+                           limit: int = Query(50, ge=1, le=200),
+                           offset: int = Query(0, ge=0),
+                           user: User = Depends(get_admin_user)):
+    """The public correction queue. Anyone can POST one from the site."""
+    _require_configured()
+    where, args = ["1=1"], []
+    if status and status != "all":
+        if status not in _SUGGESTION_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"status must be one of: {', '.join(_SUGGESTION_STATUSES)}, all")
+        args.append(status)
+        where.append(f"status = ${len(args)}")
+    if target_kind:
+        args.append(target_kind)
+        where.append(f"target_kind = ${len(args)}")
+    w = " AND ".join(where)
+    total = await ocoi_db.fetchval(
+        f"SELECT count(*) FROM suggestions WHERE {w}", *args) or 0
+    rows = await ocoi_db.fetch(
+        f"SELECT id, target_kind, target_id, field_name, document_id, current_value,"
+        f" proposed_value, comment, submitter_email, status, admin_notes,"
+        f" resolved_at, created_at FROM suggestions WHERE {w} "
+        f"ORDER BY created_at DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}",
+        *args, limit, offset)
+    return _ok(_rows(rows), total=int(total), limit=limit, offset=offset)
+
+
+class SuggestionReviewBody(BaseModel):
+    status: str
+    admin_notes: str | None = None
+
+
+@router.patch("/suggestions/{suggestion_id}")
+@limiter.limit("60/minute")
+async def review_suggestion(request: Request, suggestion_id: str,
+                            body: SuggestionReviewBody,
+                            user: User = Depends(get_admin_user)):
+    """Record a decision on a public correction.
+
+    Approving does NOT apply the change — it is a review flag, exactly as in
+    OCOI. Applying it is a separate, deliberate edit through the entity or
+    document endpoints, because a submitted "correction" is a claim, not a fact.
+    """
+    _require_configured()
+    sid = _id(suggestion_id, "suggestion_id")
+    if body.status not in _SUGGESTION_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of: {', '.join(_SUGGESTION_STATUSES)}")
+    if not await ocoi_db.fetchval("SELECT 1 FROM suggestions WHERE id = $1", sid):
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    # resolved_at is decided in Python, not with a CASE on $2: `status` is
+    # varchar and the literal 'pending' is text, so reusing the one parameter
+    # for both makes Postgres deduce two types for it and refuse the statement.
+    resolved = None if body.status == "pending" else _now()
+    await ocoi_db.execute("""
+        UPDATE suggestions
+           SET status = $2, resolved_at = $3,
+               admin_notes = COALESCE($4, admin_notes)
+         WHERE id = $1""", sid, body.status, resolved,
+        (body.admin_notes or None))
+    return _ok({"id": sid, "status": body.status})
+
+
+@router.delete("/suggestions/{suggestion_id}")
+@limiter.limit("30/minute")
+async def delete_suggestion(request: Request, suggestion_id: str,
+                            user: User = Depends(get_admin_user)):
+    _require_configured()
+    sid = _id(suggestion_id, "suggestion_id")
+    if not await ocoi_db.fetchval("SELECT 1 FROM suggestions WHERE id = $1", sid):
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    await ocoi_db.execute("DELETE FROM suggestions WHERE id = $1", sid)
+    return _ok({"id": sid})
+
+
+# ── site content (includes the extraction prompt) ─────────────────────────────
+
+@router.get("/content/{key}")
+@limiter.limit("60/minute")
+async def get_content(request: Request, key: str,
+                      user: User = Depends(get_admin_user)):
+    _require_configured()
+    if key not in _CONTENT_KEYS:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown key: {', '.join(_CONTENT_KEYS)}")
+    row = await ocoi_db.fetchrow(
+        "SELECT key, value, updated_at FROM site_content WHERE key = $1", key)
+    return _ok(dict(row) if row else {"key": key, "value": "", "updated_at": None})
+
+
+class ContentBody(BaseModel):
+    value: str = ""
+
+
+@router.put("/content/{key}")
+@limiter.limit("30/minute")
+async def put_content(request: Request, key: str, body: ContentBody,
+                      user: User = Depends(get_admin_user)):
+    """Edit site copy, and the extraction prompt.
+
+    The prompt lives here rather than on disk: OCOI kept it in
+    `data/extraction_prompt.json` on an ephemeral filesystem, so every admin
+    edit was silently reverted by the next deploy. The worker reads it from
+    /api/worker/ocoi-config, so an edit here actually reaches extraction.
+    """
+    _require_configured()
+    if key not in _CONTENT_KEYS:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown key: {', '.join(_CONTENT_KEYS)}")
+    await ocoi_db.execute("""
+        INSERT INTO site_content (key, value, updated_at) VALUES ($1, $2, $3)
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3
+    """, key, body.value, _now())
+    logger.info("ocoi admin: %s updated content %s (%d chars)",
+                getattr(user, "email", "?"), key, len(body.value))
+    return _ok({"key": key, "length": len(body.value)})

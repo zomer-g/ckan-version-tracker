@@ -3523,3 +3523,21 @@ async def ocoi_worker_check_duplicates(request: Request,
         "UNION SELECT file_url FROM ignored_resources WHERE file_url = ANY($1::text[])",
         urls)
     return {"existing_urls": [r["file_url"] for r in rows]}
+
+
+@router.get("/ocoi-config")
+async def ocoi_worker_config(request: Request,
+                             _: None = Depends(_verify_worker_key)):
+    """Runtime config for the OCOI pipeline — currently the extraction prompt.
+
+    OCOI kept this in a JSON file on an ephemeral disk, so every admin edit was
+    silently reverted by the next deploy and the pipeline always ran the
+    hardcoded default. Serving it from the DB is what makes editing it mean
+    anything. An empty value tells the worker to use its own built-in prompt.
+    """
+    from app.services import ocoi_db
+    if not ocoi_db.is_configured():
+        return {"extraction_prompt": "", "reason": "ocoi_not_configured"}
+    val = await ocoi_db.fetchval(
+        "SELECT value FROM site_content WHERE key = 'extraction_prompt'")
+    return {"extraction_prompt": val or ""}

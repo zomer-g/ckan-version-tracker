@@ -44,3 +44,4 @@ icalendar==5.0.13
 # whichever key is set: DeepSeek (OpenAI-compatible SDK) preferred, then Anthropic.
 openai==2.26.0
 anthropic==0.96.0
+rapidfuzz==3.14.3

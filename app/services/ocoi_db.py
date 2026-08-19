@@ -40,6 +40,8 @@ import asyncio
 import json
 import logging
 import ssl
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import asyncpg
@@ -104,6 +106,27 @@ _SEARCH_PATH = "ocoi, extensions, public"
 # See the module docstring: matches what ocoi's own engine did, so timestamps
 # written by OVER stay on the same clock as the rows already in the table.
 _TIMEZONE = "Asia/Jerusalem"
+
+# The pooler honours ``search_path`` but NOT ``timezone`` — measured against
+# ep-restless-tree: SHOW search_path returns ours, SHOW TimeZone returns GMT.
+# So SQL ``now()`` cast to a naive ``timestamp`` yields UTC, three hours off the
+# corpus. Never rely on the session clock: use these two helpers, or write
+# ``now() AT TIME ZONE 'Asia/Jerusalem'`` explicitly in SQL.
+_JERUSALEM = ZoneInfo(_TIMEZONE)
+
+# Naive Jerusalem wall clock — for the schema's ``timestamp`` columns, which is
+# almost all of them. Note this must NOT be `datetime.now().astimezone()`: that
+# reads the container clock, which is UTC on Render and Jerusalem on a dev box,
+# so the same code wrote two different times depending on where it ran.
+def now_local() -> datetime:
+    return datetime.now(timezone.utc).astimezone(_JERUSALEM).replace(tzinfo=None)
+
+
+# Aware UTC — for the five ``timestamptz`` columns (registry_sync_status.
+# last_synced_at, documents.converted_at/extracted_at, ocoi_jobs.started_at/
+# finished_at). Binding a naive value there would be read as UTC by asyncpg.
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def get_pool() -> asyncpg.Pool:

@@ -357,7 +357,8 @@ async def run_duplicate_scan(kinds: tuple[str, ...] = SCAN_KINDS) -> dict:
                       (id, proposal_kind, entity_type, entity_id, target_kind,
                        target_type, target_id, score, reasons, status, created_at)
                     SELECT gen_random_uuid()::text, 'duplicate', x.k, x.a, 'entity',
-                           x.k, x.b, x.s, x.r, 'pending', now()
+                           x.k, x.b, x.s, x.r, 'pending',
+                           now() AT TIME ZONE 'Asia/Jerusalem'
                       FROM unnest($1::text[], $2::text[], $3::text[],
                                   $4::float8[], $5::text[]) AS x(k, a, b, s, r)
                     ON CONFLICT DO NOTHING
