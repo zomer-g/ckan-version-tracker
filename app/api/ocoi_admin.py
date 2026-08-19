@@ -628,10 +628,15 @@ async def _merge_entities(keep_type: str, keep_id: str,
         f"UPDATE {ktab} SET {', '.join(sets)} WHERE id = $1", *vals)
 
     # 6. repoint referrers OCOI left dangling, then drop the loser
+    # Only PENDING proposals go: the losing id is gone, so they can never be
+    # acted on. Resolved ones stay — they record that a human made a decision,
+    # and the list renders a vanished side as "(נמחק)". Deleting them all is
+    # what erased the very approval that triggered the merge.
     await ocoi_db.execute("""
         DELETE FROM entity_match_proposals
-         WHERE (entity_type = $1 AND entity_id = $2)
-            OR (target_type = $1 AND target_id = $2)""", merge_type, merge_id)
+         WHERE status = 'pending'
+           AND ((entity_type = $1 AND entity_id = $2)
+             OR (target_type = $1 AND target_id = $2))""", merge_type, merge_id)
     await ocoi_db.execute("""
         UPDATE suggestions SET target_kind = $1, target_id = $2
          WHERE target_kind = $3 AND target_id = $4""",
@@ -1148,3 +1153,305 @@ async def audit_cleanup(request: Request, body: CleanupBody,
         logger.warning("ocoi admin: %s ran audit cleanup -> %s",
                        getattr(user, "email", "?"), out)
     return _ok(out)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WAVE 3 — duplicate proposals, clusters, jobs
+# ═══════════════════════════════════════════════════════════════════════════
+
+from fastapi import BackgroundTasks  # noqa: E402
+
+from app.services import ocoi_match  # noqa: E402
+
+_PROPOSAL_STATUSES = ("pending", "approved", "rejected", "dismissed")
+
+
+# NOTE: every literal /matches/... path below is declared BEFORE the
+# /matches/{proposal_id}/... ones. Same trap as /entities/merge — Starlette
+# matches in registration order and would read "clusters" as a proposal id.
+
+@router.get("/jobs")
+@limiter.limit("60/minute")
+async def list_jobs(request: Request, user: User = Depends(get_admin_user)):
+    """State of every long-running job.
+
+    Lives in a table rather than a module dict: OCOI's status endpoint answered
+    from whichever process happened to serve it, so a poll could report "not
+    running" for a job that was, and a redeploy mid-run left the flag stuck true
+    with nothing able to clear it.
+    """
+    _require_configured()
+    return _ok(await ocoi_match.job_status())
+
+
+@router.post("/jobs/{kind}/reset")
+@limiter.limit("20/minute")
+async def reset_job(request: Request, kind: str,
+                    user: User = Depends(get_admin_user)):
+    """Force-clear a stuck slot — the escape hatch OCOI needed and lacked."""
+    _require_configured()
+    await ocoi_match.reset_job(kind)
+    logger.warning("ocoi admin: %s reset job %s", getattr(user, "email", "?"), kind)
+    return _ok({"kind": kind, "status": "idle"})
+
+
+class ScanBody(BaseModel):
+    kinds: list[str] | None = None
+
+
+@router.post("/matches/scan")
+@limiter.limit("6/minute")
+async def start_duplicate_scan(request: Request, body: ScanBody,
+                               background: BackgroundTasks,
+                               user: User = Depends(get_admin_user)):
+    """Start the duplicate scan. 409 if one is already running."""
+    _require_configured()
+    kinds = tuple(k for k in (body.kinds or ocoi_match.SCAN_KINDS)
+                  if k in ocoi_match.SCAN_KINDS)
+    if not kinds:
+        raise HTTPException(
+            status_code=400,
+            detail=f"kinds must be from: {', '.join(ocoi_match.SCAN_KINDS)}")
+    if not await ocoi_match.claim_job(ocoi_match.JOB_SCAN):
+        raise HTTPException(status_code=409, detail="סריקת כפילויות כבר רצה")
+    background.add_task(ocoi_match.run_duplicate_scan, kinds)
+    logger.info("ocoi admin: %s started duplicate scan %s",
+                getattr(user, "email", "?"), kinds)
+    return _ok({"started": True, "kinds": list(kinds)})
+
+
+@router.get("/matches/clusters")
+@limiter.limit("30/minute")
+async def match_clusters(request: Request,
+                         entity_type: str | None = Query(None),
+                         min_score: float = Query(0.85, ge=0.0, le=1.0),
+                         limit: int = Query(30, ge=1, le=500),
+                         user: User = Depends(get_admin_user)):
+    """Connected components of pending duplicate proposals.
+
+    A cluster is the useful review unit: three rows that are all the same
+    official arrive as three pairwise proposals, and approving them one at a
+    time is both slower and easy to get wrong.
+    """
+    _require_configured()
+    if entity_type:
+        _etype(entity_type)
+    clusters, meta = await ocoi_match.build_clusters(entity_type, min_score, limit)
+    return _ok(clusters, **meta)
+
+
+class ClusterMergeBody(BaseModel):
+    entity_type: str
+    canonical_id: str
+    member_ids: list[str]
+
+
+@router.post("/matches/clusters/merge")
+@limiter.limit("20/minute")
+async def merge_cluster(request: Request, body: ClusterMergeBody,
+                        user: User = Depends(get_admin_user)):
+    """Fold every member of a cluster into the canonical row.
+
+    Members that fail individually are reported rather than aborting the rest —
+    a cluster is a review decision, and losing the whole decision because one
+    member was already merged elsewhere would be needlessly brittle.
+    """
+    _require_configured()
+    t = _etype(body.entity_type)
+    if t not in ocoi_match.SCAN_KINDS:
+        raise HTTPException(status_code=400,
+                            detail=f"{t} is not mergeable")
+    keep = _id(body.canonical_id, "canonical_id")
+    members = [_id(m, "member_ids[]") for m in body.member_ids if m != keep]
+    if not members:
+        raise HTTPException(status_code=400, detail="member_ids is required")
+
+    merged, failed = [], []
+    for mid in members:
+        try:
+            await _merge_entities(t, keep, t, mid)
+            merged.append(mid)
+        except HTTPException as e:
+            failed.append({"id": mid, "error": e.detail})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("ocoi cluster merge: %s failed", mid)
+            failed.append({"id": mid, "error": str(e)[:200]})
+
+    # Close every proposal that touched the cluster, so the next scan and the
+    # cluster view do not re-offer a decision the admin already made.
+    ids = [keep] + merged
+    if ids:
+        await ocoi_db.execute("""
+            UPDATE entity_match_proposals
+               SET status = 'approved', reviewed_by_email = $2, reviewed_at = $3
+             WHERE proposal_kind = 'duplicate' AND status = 'pending'
+               AND entity_type = $1
+               AND (entity_id = ANY($4::text[]) OR target_id = ANY($4::text[]))
+        """, t, getattr(user, "email", None), _now(), ids)
+    logger.info("ocoi admin: %s merged cluster of %s into %s (%s failed)",
+                getattr(user, "email", "?"), len(merged), keep, len(failed))
+    return _ok({"canonical_id": keep, "merged": merged, "failed": failed})
+
+
+@router.get("/matches")
+@limiter.limit("60/minute")
+async def list_proposals(request: Request,
+                         status: str | None = Query("pending"),
+                         entity_type: str | None = Query(None),
+                         min_score: float | None = Query(None, ge=0.0, le=1.0),
+                         limit: int = Query(50, ge=1, le=200),
+                         offset: int = Query(0, ge=0),
+                         user: User = Depends(get_admin_user)):
+    """Duplicate proposals with both sides hydrated. `status=all` disables the
+    filter (OCOI silently ignored an unknown status instead — a filter that
+    quietly does nothing is worse than one that refuses)."""
+    _require_configured()
+    where, args = ["proposal_kind = 'duplicate'"], []
+    if status and status != "all":
+        if status not in _PROPOSAL_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"status must be one of: {', '.join(_PROPOSAL_STATUSES)}, all")
+        args.append(status)
+        where.append(f"status = ${len(args)}")
+    if entity_type:
+        args.append(_etype(entity_type))
+        where.append(f"entity_type = ${len(args)}")
+    if min_score is not None:
+        args.append(min_score)
+        where.append(f"score >= ${len(args)}")
+    w = " AND ".join(where)
+
+    total = await ocoi_db.fetchval(
+        f"SELECT count(*) FROM entity_match_proposals WHERE {w}", *args) or 0
+    rows = _rows(await ocoi_db.fetch(f"""
+        SELECT id, entity_type, entity_id, target_type, target_id, score,
+               reasons, status, reviewed_by_email, reviewed_at, created_at
+        FROM entity_match_proposals WHERE {w}
+        ORDER BY score DESC, created_at DESC
+        LIMIT ${len(args)+1} OFFSET ${len(args)+2}
+    """, *args, limit, offset))
+
+    # hydrate both sides, one query per entity type
+    want: dict[str, set[str]] = {}
+    for r in rows:
+        want.setdefault(r["entity_type"], set()).add(r["entity_id"])
+        want.setdefault(r["target_type"], set()).add(r["target_id"])
+    info: dict[tuple, dict] = {}
+    for t, ids in want.items():
+        if t not in _ENTITY_TABLES:
+            continue
+        for e in await ocoi_db.fetch(
+                f"SELECT id, name_hebrew, aliases FROM {_ENTITY_TABLES[t]} "
+                f"WHERE id = ANY($1::text[])", list(ids)):
+            info[(t, e["id"])] = {"id": e["id"], "type": t,
+                                  "name": e["name_hebrew"] or "",
+                                  "aliases": _aliases_of(e["aliases"])}
+    for r in rows:
+        r["reasons"] = ocoi_match._reasons(r.get("reasons"))
+        r["score"] = float(r["score"]) if r["score"] is not None else None
+        r["left"] = info.get((r["entity_type"], r["entity_id"]),
+                             {"id": r["entity_id"], "type": r["entity_type"],
+                              "name": "(נמחק)", "aliases": []})
+        r["right"] = info.get((r["target_type"], r["target_id"]),
+                              {"id": r["target_id"], "type": r["target_type"],
+                               "name": "(נמחק)", "aliases": []})
+    return _ok(rows, total=int(total), limit=limit, offset=offset)
+
+
+class ReviewBody(BaseModel):
+    action: str            # approve | reject | dismiss
+
+
+@router.post("/matches/{proposal_id}/review")
+@limiter.limit("60/minute")
+async def review_proposal(request: Request, proposal_id: str, body: ReviewBody,
+                          user: User = Depends(get_admin_user)):
+    """Approve (merge), reject (not the same) or dismiss (revisit later).
+
+    Approving merges `target_id` INTO `entity_id` — the same direction OCOI
+    used, so a reviewer's mental model carries over. Every other pending
+    proposal touching the row that disappears is dismissed in the same breath,
+    or the cluster view would keep offering a decision about an id that is gone.
+    """
+    _require_configured()
+    pid = _id(proposal_id, "proposal_id")
+    if body.action not in ("approve", "reject", "dismiss"):
+        raise HTTPException(status_code=400,
+                            detail="action must be approve, reject or dismiss")
+    p = await ocoi_db.fetchrow(
+        "SELECT * FROM entity_match_proposals WHERE id = $1", pid)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if p["status"] != "pending":
+        raise HTTPException(status_code=409,
+                            detail=f"ההצעה כבר טופלה ({p['status']})")
+
+    new_status = {"approve": "approved", "reject": "rejected",
+                  "dismiss": "dismissed"}[body.action]
+    # Stamp the decision FIRST. The merge below clears pending proposals that
+    # reference the disappearing row, and this proposal is one of them — writing
+    # the status afterwards updated nothing and lost the audit record.
+    await ocoi_db.execute("""
+        UPDATE entity_match_proposals
+           SET status = $2, reviewed_at = $3, reviewed_by_email = $4
+         WHERE id = $1""", pid, new_status, _now(), getattr(user, "email", None))
+
+    result = {}
+    if body.action == "approve":
+        if p["proposal_kind"] != "duplicate":
+            raise HTTPException(status_code=400,
+                                detail="only duplicate proposals can be merged")
+        result = await _merge_entities(p["entity_type"], p["entity_id"],
+                                       p["target_type"], p["target_id"])
+        await ocoi_db.execute("""
+            UPDATE entity_match_proposals
+               SET status = 'dismissed', reviewed_at = $3, reviewed_by_email = $4
+             WHERE id <> $1 AND status = 'pending'
+               AND ((entity_type = $5 AND entity_id = $2)
+                 OR (target_type = $5 AND target_id = $2))
+        """, pid, p["target_id"], _now(), getattr(user, "email", None),
+            p["target_type"])
+
+    logger.info("ocoi admin: %s %s proposal %s",
+                getattr(user, "email", "?"), new_status, pid)
+    return _ok({"id": pid, "status": new_status, **result})
+
+
+class CleanupProposalsBody(BaseModel):
+    entity_type: str
+    reasons_any: list[str] | None = None
+    dry_run: bool = True
+
+
+@router.post("/matches/cleanup")
+@limiter.limit("10/minute")
+async def cleanup_proposals(request: Request, body: CleanupProposalsBody,
+                            user: User = Depends(get_admin_user)):
+    """Delete pending proposals matching a reason substring.
+
+    A hard delete, so the pairs become re-proposable on the next scan — that is
+    the point: it is for discarding a batch produced by a rule that turned out
+    to be wrong, not for recording a review decision. `dry_run` defaults to true
+    because OCOI's version deleted immediately.
+    """
+    _require_configured()
+    t = _etype(body.entity_type)
+    where = ["proposal_kind = 'duplicate'", "status = 'pending'", "entity_type = $1"]
+    args: list = [t]
+    if body.reasons_any:
+        ors = []
+        for rsn in body.reasons_any:
+            if not rsn:
+                continue
+            args.append(f"%{rsn}%")
+            ors.append(f"reasons ILIKE ${len(args)}")
+        if ors:
+            where.append("(" + " OR ".join(ors) + ")")
+    w = " AND ".join(where)
+    n = await ocoi_db.fetchval(
+        f"SELECT count(*) FROM entity_match_proposals WHERE {w}", *args) or 0
+    if not body.dry_run and n:
+        await ocoi_db.execute(
+            f"DELETE FROM entity_match_proposals WHERE {w}", *args)
+    return _ok({"dry_run": body.dry_run, "matched": int(n)})
