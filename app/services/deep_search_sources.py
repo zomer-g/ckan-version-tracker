@@ -312,18 +312,22 @@ def _n_table(r: dict) -> Card | None:
     tbl = r.get("table")
     if not tbl:
         return None
-    badges = []
+    # The table NAME used to lead, on the reasoning that it is the actionable
+    # identifier (it is what you type into /data). That was the wrong trade for
+    # a search result: "govmap_22_bd519a1c_f6a7046f" tells a reader nothing
+    # about whether this row answers their question, and the heading is the one
+    # line they scan. The human title leads; the identifier stays a badge, so it
+    # is still there the moment they have decided the row is worth using.
+    badges = [tbl]
     if r.get("schema"):
         badges.append(r["schema"])
     if r.get("est_rows"):
-        badges.append(f"~{int(r['est_rows']):,} שורות".replace(",", ","))
+        badges.append(f"~{int(r['est_rows']):,} שורות")
     matched = r.get("matched_columns") or []
     return Card(
-        # The table name is the actionable identifier here (it is what you type
-        # into /data), so it leads; the human title is the subtitle.
-        title=truncate(tbl, 160),
+        title=truncate(r.get("title") or tbl, 160),
         snippet=join_parts(
-            r.get("title"), r.get("organization"),
+            r.get("organization"),
             ("עמודות תואמות: " + ", ".join(matched[:4])) if matched else None,
         ),
         url=r.get("page_url") or r.get("source_url"),
@@ -760,10 +764,11 @@ OBUDGET_DATASETS: tuple[dict, ...] = (
     {"id": "contracts_data", "label": "התקשרויות", "norm": _n_ob_contract},
 )
 
-# The publishers who between them hold most of the odata catalog. Slugs are
-# stable (they are the CKAN organization names); the COUNTS deliberately are not
-# listed, because a number printed in a label is a number that goes stale — the
-# live list is one `list_organizations` call on the odata MCP.
+# FALLBACK ONLY. The live list of publishers comes from the catalog itself
+# (odata_meta.organizations, filled in by the /sources endpoint) — there are 44,
+# and shipping this shortlist as the whole filter made the other 36 unreachable
+# from the UI. These eight remain so that an unreachable odata degrades to a
+# smaller menu rather than to an empty control.
 ODATA_ORGS: tuple[dict, ...] = (
     {"value": "hatzlacha", "label": "עמותת הצלחה"},
     {"value": "zomer", "label": "גיא זומר"},

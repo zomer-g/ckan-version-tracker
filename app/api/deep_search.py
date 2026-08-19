@@ -58,7 +58,32 @@ async def list_sources(request: Request):
     out = [s.as_dict(configured=deep_search.is_configured(s))
            for s in deep_search_sources.active_sources()]
     await _describe_full_text_sources(out)
+    await _list_odata_publishers(out)
     return {"sources": out}
+
+
+async def _list_odata_publishers(sources: list[dict]) -> None:
+    """Fill the מידע לעם publisher filter from the catalog, not from memory.
+
+    The filter shipped with eight organizations read off one facet query. There
+    are 44, so the other 36 were unreachable through the UI — a filter that
+    quietly cannot express most of its own domain. Same failure as every
+    hardcoded coverage label here, and wrong the day it was written.
+
+    Bounded like the coverage fetch: this is the request that draws the search
+    UI, so an unreachable odata costs the long menu (falling back to the seeded
+    shortlist), never the page.
+    """
+    from app.services import odata_meta
+
+    entry = next((e for e in sources if e["id"] == "odata"), None)
+    if not entry or not entry.get("filters"):
+        return
+    orgs = await odata_meta.organizations()
+    opts = odata_meta.options(orgs, deep_search_sources.ODATA_ORGS)
+    for f in entry["filters"]:
+        if f["id"] == "organization":
+            f["options"] = opts
 
 
 async def _describe_full_text_sources(sources: list[dict]) -> None:

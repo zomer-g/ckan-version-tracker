@@ -346,12 +346,9 @@ def test_sources_never_waits_on_a_cold_tagit(monkeypatch):
 
     from app.services import tagit_meta
 
-    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {}, 0.0
-    tagit_meta._refresh_task = None
-    started = aio.Event()
+    tagit_meta.reset_for_tests()
 
     async def _slow(tool, args):
-        started.set()
         await aio.sleep(0.30)                     # a cold upstream, in miniature
         return {"scopes": [{"id": 13, "doc_count": 9074}]}
 
@@ -366,9 +363,9 @@ def test_sources_never_waits_on_a_cold_tagit(monkeypatch):
         # alive, so letting the loop run a little longer finds the cache warm.
         # (Checked here, inside the loop: asyncio.run cancels pending tasks on
         # teardown, which would look like a shield failure and is not one.)
-        alive = not tagit_meta._refresh_task.cancelled()
+        alive = not tagit_meta._cache._task.cancelled()
         await aio.sleep(0.45)
-        return out, waited, alive, dict(tagit_meta._cache["scopes"])
+        return out, waited, alive, dict(tagit_meta._cache.value)
 
     out, waited, alive, later = aio.run(go())
     assert out == {}, "a cold upstream must yield no labels, not a hang"
@@ -377,18 +374,17 @@ def test_sources_never_waits_on_a_cold_tagit(monkeypatch):
     assert 13 in later, "the shielded fetch never landed, so it is pure waste"
 
     # A warm cache is returned immediately and never re-fetches.
-    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {13: {"doc_count": 1}}, time.time()
-    tagit_meta._refresh_task = None
+    tagit_meta._cache._value, tagit_meta._cache._at = {13: {"doc_count": 1}}, time.time()
+    tagit_meta._cache._task = None
     assert aio.run(tagit_meta.scopes(max_wait=0.01)) == {13: {"doc_count": 1}}
-    assert tagit_meta._refresh_task is None, "a fresh cache must not spawn a fetch"
+    assert tagit_meta._cache._task is None, "a fresh cache must not spawn a fetch"
 
 
 def test_the_sources_endpoint_answers_even_when_tagit_is_down(monkeypatch):
     """End to end: TAG-IT unreachable ⇒ the registry still renders."""
     from app.services import tagit_meta
 
-    tagit_meta._cache["scopes"], tagit_meta._cache["at"] = {}, 0.0
-    tagit_meta._refresh_task = None
+    tagit_meta.reset_for_tests()
 
     async def _boom(tool, args):
         raise RuntimeError("TAG-IT is asleep")
@@ -400,6 +396,164 @@ def test_the_sources_endpoint_answers_even_when_tagit_is_down(monkeypatch):
     assert r.status_code == 200
     ids = {s["id"] for s in r.json()["sources"]}
     assert {"mevaker", "protocols_text", "datasets", "odata"} <= ids
+
+
+async def _noop_describe(sources):
+    """Skip the TAG-IT enrichment in tests that are about something else."""
+    return None
+
+
+def test_no_card_leads_with_a_machine_identifier():
+    """A heading is the one line a reader scans, so it has to mean something.
+
+    The טבלאות column led with the physical table name — "govmap_22_bd519a1c
+    _f6a7046f" — while "שכונות — המרכז למיפוי ישראל" sat in the preview below
+    it. The identifier is what you type into /data, so it is still shown; it is
+    just not what decides whether the row is worth reading.
+    """
+    import re
+
+    card = deep_search_sources._n_table({
+        "table": "govmap_22_bd519a1c_f6a7046f",
+        "title": "שכונות — המרכז למיפוי ישראל",
+        "organization": "israel_mapping_center",
+        "schema": "idx", "est_rows": 5863})
+    assert card.title == "שכונות — המרכז למיפוי ישראל"
+    assert "govmap_22_bd519a1c_f6a7046f" in card.badges, (
+        "the actionable identifier must survive somewhere")
+
+    # No title at all ⇒ fall back to the identifier rather than render blank.
+    assert deep_search_sources._n_table({"table": "append_x"}).title == "append_x"
+
+    # And the rule holds for every normalizer given a realistic row: an
+    # ascii-only slug/hash heading is a bug wherever it appears.
+    machine = re.compile(r"^[A-Za-z0-9_\-\.]+$")
+    rows = {
+        "tables": {"table": "append_x", "title": "רישום קבלנים", "schema": "public"},
+        "datasets": {"title": "רישום קבלנים", "organization": "משרד הבינוי",
+                     "page_url": "https://o/1"},
+        "odata": {"title": "תגובת העירייה", "organization": "עמותת הצלחה",
+                  "url": "https://www.odata.org.il/dataset/x"},
+    }
+    for sid, row in rows.items():
+        src = deep_search_sources.source_by_id(sid)
+        card = src.normalize(row)
+        assert card and not machine.match(card.title), f"{sid} leads with {card.title!r}"
+
+
+def test_the_publisher_filter_is_read_from_the_catalog_not_hardcoded(monkeypatch):
+    """44 publishers exist; the filter shipped with 8, hiding the other 36.
+
+    A select that cannot express most of its own domain is a broken control,
+    not a shortcut — and the shortlist was wrong the day it was written, like
+    every other hardcoded list on this site.
+    """
+    from app.services import odata_meta
+
+    odata_meta.reset_for_tests()
+
+    async def _catalog():
+        return [
+            {"id": "hatzlacha", "title": "עמותת הצלחה", "datasets": 6063},
+            {"id": "zomer", "title": "גיא זומר", "datasets": 3449},
+            {"id": "nadavglaw", "title": "נדב גדליהו", "datasets": 41},
+        ]
+
+    monkeypatch.setattr(odata_meta._cache, "_fetch", _catalog)
+    monkeypatch.setattr(deep_search_api, "_describe_full_text_sources",
+                        _noop_describe)
+
+    r = _client().get("/api/deep-search/sources")
+    assert r.status_code == 200
+    odata = next(s for s in r.json()["sources"] if s["id"] == "odata")
+    opt = next(f for f in odata["filters"] if f["id"] == "organization")["options"]
+    assert opt[0] == {"value": "", "label": "כל הגופים"}
+    values = [o["value"] for o in opt]
+    # A publisher absent from the seeded shortlist must still be selectable.
+    assert "nadavglaw" in values, "the live catalog did not reach the filter"
+    # The count rides along, because it tells the reader whether narrowing to
+    # this body leaves them anything.
+    assert any("6,063" in o["label"] for o in opt)
+
+
+def test_the_publisher_filter_degrades_to_a_shortlist_not_to_nothing(monkeypatch):
+    """An unreachable catalog costs options, never the control itself."""
+    from app.services import odata_meta
+
+    odata_meta.reset_for_tests()
+
+    async def _down():
+        raise RuntimeError("odata unreachable")
+
+    monkeypatch.setattr(odata_meta._cache, "_fetch", _down)
+    monkeypatch.setattr(deep_search_api, "_describe_full_text_sources",
+                        _noop_describe)
+
+    r = _client().get("/api/deep-search/sources")
+    assert r.status_code == 200
+    odata = next(s for s in r.json()["sources"] if s["id"] == "odata")
+    opt = next(f for f in odata["filters"] if f["id"] == "organization")["options"]
+    values = {o["value"] for o in opt}
+    assert "" in values and "hatzlacha" in values, "the filter lost its options"
+    assert len(opt) == len(deep_search_sources.ODATA_ORGS) + 1
+
+
+def test_a_bounded_cache_answers_fast_and_keeps_the_fetch_alive():
+    """The shared primitive behind both metadata reads.
+
+    Two numbers that must stay separate: how long the fetch takes, and how long
+    a request waits for it. Merging them is what put a third party's cold start
+    on the search page.
+    """
+    import asyncio as aio
+
+    from app.services.refresh_cache import BoundedRefreshCache
+
+    async def go():
+        calls = []
+
+        async def slow():
+            calls.append(1)
+            await aio.sleep(0.30)
+            return {"a": 1}
+
+        c = BoundedRefreshCache("t", slow, ttl_seconds=60, empty={},
+                                default_max_wait=0.05)
+        loop = aio.get_running_loop()
+        t0 = loop.time()
+        first = await c.get()
+        waited = loop.time() - t0
+        alive = not c._task.cancelled()
+        await aio.sleep(0.45)
+        return first, waited, alive, c.value, len(calls)
+
+    first, waited, alive, later, n = aio.run(go())
+    assert first == {} and waited < 0.25, "the reader was not bounded"
+    assert alive, "the bounded wait cancelled the fetch instead of shielding it"
+    assert later == {"a": 1}, "the shielded fetch never landed"
+    assert n == 1, "each waiter started its own fetch"
+
+
+def test_a_bounded_cache_never_overwrites_good_data_with_an_empty_answer():
+    """An upstream answering with nothing is having a bad day, not reporting
+    that it lost all of its content."""
+    import asyncio as aio
+
+    from app.services.refresh_cache import BoundedRefreshCache
+
+    async def go():
+        state = {"give": {"a": 1}}
+
+        async def fetch():
+            return state["give"]
+
+        c = BoundedRefreshCache("t", fetch, ttl_seconds=0, empty={})
+        await c.get(max_wait=None)
+        state["give"] = {}                       # upstream goes quiet
+        await c.get(max_wait=None)
+        return c.value
+
+    assert aio.run(go()) == {"a": 1}
 
 
 def test_odata_is_dispatched_in_process_and_declared_external():
@@ -711,7 +865,10 @@ def test_results_path_is_per_source(stub_local):
     r = _client().get("/api/deep-search/search", params={"q": "x", "sources": "ocal,tables"})
     cols = {c["id"]: c for c in r.json()["sources"]}
     assert [c["title"] for c in cols["ocal"]["results"]] == ["פגישה"]
-    assert cols["tables"]["results"][0]["title"] == "append_x"
+    # Read from "tables", not "items" — the point of this test. The heading is
+    # the human title; the physical name rides along as a badge.
+    assert cols["tables"]["results"][0]["title"] == "טבלה"
+    assert "append_x" in cols["tables"]["results"][0]["badges"]
 
 
 def test_one_malformed_row_does_not_empty_the_column(stub_local):
