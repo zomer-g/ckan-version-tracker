@@ -49,6 +49,7 @@ from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
 from app.api.ocal import router as ocal_router
 from app.api.ocoi import router as ocoi_router
+from app.api.ocoi_admin import router as ocoi_admin_router
 from app.api.ocal_admin import router as ocal_admin_router
 from app.api.nadlan import router as nadlan_router
 from app.api.organizations import router as organizations_router
@@ -239,6 +240,7 @@ app.include_router(cbs_router)
 app.include_router(cbs_ask_router)
 app.include_router(ocal_router)
 app.include_router(ocoi_router)
+app.include_router(ocoi_admin_router)
 app.include_router(ocal_admin_router)
 app.include_router(nadlan_router)
 app.include_router(organizations_router)
