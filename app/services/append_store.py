@@ -1326,6 +1326,95 @@ async def sample_rows(table: str, *, schema: str = "public", limit: int = 20) ->
     return out
 
 
+# The frame every mirrored geometry is stored in (index_mirror.GEOM_SRID) —
+# WGS84 lon/lat degrees, so a caller works in the coordinates a web map already
+# speaks and never has to know that the SOURCE published ITM metres.
+GEOM_SRID = 4326
+
+# Hard ceiling on one /features page. A GeoJSON feature carries its whole
+# polygon, and the national layers hold million-vertex geometries: 5,000 parcels
+# is already tens of MB on the wire, which is the point past which a caller
+# should be paging or filtering, not downloading.
+MAX_FEATURES = 5000
+
+
+async def geo_features(
+    table: str,
+    *,
+    schema: str = "public",
+    columns: list[str],
+    bbox: tuple[float, float, float, float] | None = None,
+    limit: int = 500,
+    offset: int = 0,
+    precision: int = 7,
+    timeout_ms: int = 15000,
+) -> dict:
+    """GeoJSON features from a table's PostGIS ``geom`` column.
+
+    ``{features, number_returned, exceeded_transfer_limit}`` — the caller wraps
+    them in a FeatureCollection. ``bbox`` is (min_lon, min_lat, max_lon, max_lat)
+    in WGS84 and filters with ``&&``, which is the GiST index's operator, so the
+    filter is an index probe rather than a scan.
+
+    ``table``/``schema``/``columns`` are NOT user input in the trusted sense —
+    every one is validated against the live catalog by the caller before it gets
+    here — but they are quoted anyway, and the bbox numbers are bound as
+    parameters. Runs through the least-privilege read-only role inside a READ
+    ONLY transaction with a statement_timeout, like every other public path.
+
+    Geometry goes out via ST_AsGeoJSON at reduced ``precision``: 7 decimal places
+    is ~1 cm, well past what the sources actually survey, and the default 15
+    roughly doubles the payload to encode float noise.
+    """
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", schema or ""):
+        raise ValueError(f"invalid schema: {schema!r}")
+    limit = max(1, min(int(limit or 500), MAX_FEATURES))
+    offset = max(0, int(offset or 0))
+    ref = f"{_qi(schema)}.{_qi(table)}"
+    ext = _qi(_PG_EXT_SCHEMA)
+    props = ", ".join(f"{_qi(c)}::text AS {_qi(c)}" for c in columns)
+    select_props = f"{props}, " if props else ""
+
+    where, params = "", []
+    if bbox is not None:
+        # && on the GiST index. Deliberately NOT ST_Intersects: a bbox filter is
+        # what a map viewport asks for, and the exact-geometry test costs a
+        # recheck per candidate for an answer no one can see at viewport scale.
+        where = (f" WHERE {_qi('geom')} OPERATOR({ext}.&&) "
+                 f"{ext}.ST_MakeEnvelope($1, $2, $3, $4, {GEOM_SRID})")
+        params = [float(v) for v in bbox]
+
+    sql = (f"SELECT {select_props}"
+           f"{ext}.ST_AsGeoJSON({_qi('geom')}, {int(precision)}) AS _geojson "
+           f"FROM {ref}{where} "
+           f"LIMIT ${len(params)+1} OFFSET ${len(params)+2}")
+
+    pool = await get_readonly_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+            try:
+                recs = await conn.fetch(sql, *params, limit + 1, offset)
+            except asyncpg.UndefinedTableError:
+                return {"features": [], "number_returned": 0,
+                        "exceeded_transfer_limit": False}
+
+    exceeded = len(recs) > limit
+    features = []
+    for r in recs[:limit]:
+        d = dict(r)
+        gj = d.pop("_geojson", None)
+        features.append({
+            "type": "Feature",
+            # PostGIS serialises the geometry; this only re-parses it so the
+            # response carries a real JSON object rather than a quoted string.
+            "geometry": json.loads(gj) if gj else None,
+            "properties": d,
+        })
+    return {"features": features, "number_returned": len(features),
+            "exceeded_transfer_limit": exceeded}
+
+
 async def iter_sql_csv(sql: str, *, search_path: str | None = None,
                        max_rows: int = 200_000, timeout_ms: int = 60_000):
     """Async generator streaming a user SELECT's full result as CSV (utf-8-sig)

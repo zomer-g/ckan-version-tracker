@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
  *   • Knesset — committee protocols + ODATA  (/api/knesset-db, /api/knesset-protocols)
  *   • Ocal    — public-figure diaries        (/api/ocal)
  *   • שאלות לעם — cross-source deep search   (/api/deep-search)
+ *   • SQL       — every queryable table + GeoJSON (/api/tables)
  * Each source also has a dedicated MCP server (see MCP_SERVERS / McpCard) —
  * including two with no public REST surface of their own (SQL, מידע לעם).
  *
@@ -170,6 +171,67 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         description:
           "סכמת תוכן המאגר ב-NEON: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות.",
         example: "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/schema",
+      },
+    ],
+  },
+  {
+    id: "sql",
+    title: "SQL מרכזי + שכבות מפה — /api/tables",
+    note:
+      "אותו מנוע שמאחורי הקונסולה ב-/data, פתוח כ-API: קטלוג של כל הטבלאות השאילתיות באתר — מאגרי data.gov.il, מראה ה-ODATA של הכנסת, אינדקסי האוספים (סכימת idx), מידע לעם ויומן לעם — ו-SQL חופשי לקריאה בלבד מעליהן. · שאילתות מרחביות: 815 משכבות ממ״ג מוחזקות עם עמודת geom מסוג PostGIS ב-EPSG:4326, כלומר WGS84 במעלות lon/lat. חיתוך לפי מלבן, מרחק ושטח רצים בצד השרת, ואין שום צורך בהמרת קואורדינטות בצד הלקוח — גאומטריה שפורסמה במקור ב-ITM (EPSG:6991) כבר הומרה בעת המראה. שכבה עם גאומטריה מסומנת ב-field_flags.has_geometry בקטלוג.",
+    endpoints: [
+      {
+        path: "/api/tables",
+        description:
+          "קטלוג כל הטבלאות: שם הטבלה, הסכימה, כותרת, ארגון, תגיות, רשימת העמודות, הערכת מספר שורות ו-field_flags (has_geometry, has_date, has_parcel, has_locality). זו נקודת ההתחלה — שם הטבלה מכאן הוא הקלט לכל שאר הקריאות בקבוצה.",
+        example: "/api/tables",
+      },
+      {
+        path: "/api/tables/{table}/detail",
+        description:
+          "קוביית פירוט לטבלה אחת: ספירת שורות מדויקת, 20 שורות דוגמה, קישור למקור ולקבצי הגרסה, ופרופיל העמודות אם הורץ. עמודות גאומטריה כבדות מדווחות ב-omitted_columns ולא נשלפות בדוגמה (הן TOASTed — שליפתן הופכת סריקה של שנייה ל-46 שניות).",
+        example: "/api/tables/govmap_200541_b19acb42_c2bd90e1/detail",
+      },
+      {
+        path: "/api/tables/{table}/features",
+        description:
+          "שכבת מפה כ-GeoJSON FeatureCollection, עם סינון אופציונלי לפי מלבן — התשובה הישירה ל״תן לי רק את מה שנמצא בחלון התצוגה״. הקואורדינטות ב-WGS84 (lon,lat) ונכנסות כמו שהן ל-Leaflet או ל-MapLibre. numberReturned ו-exceededTransferLimit אומרים אם הדף נחתך ויש להמשיך ב-offset.",
+        params: [
+          { name: "bbox", desc: "min_lon,min_lat,max_lon,max_lat במעלות WGS84 — בדיוק הסדר של getBounds().toBBoxString()" },
+          { name: "columns", desc: "רשימת עמודות לתכונות (properties), מופרדת בפסיקים. ברירת מחדל: כל העמודות למעט הגאומטריה" },
+          { name: "limit / offset", desc: "עימוד (limit 1-5000, ברירת מחדל 500)" },
+        ],
+        example:
+          "/api/tables/govmap_200541_b19acb42_c2bd90e1/features?bbox=35.0,31.8,35.3,32.0&limit=50",
+      },
+      {
+        path: "/api/tables/sql",
+        method: "POST",
+        description:
+          "משפט SELECT/WITH יחיד מעל כל הסכימות יחד (search_path = public, knesset, idx, odata, ocal, extensions), כך שאפשר להצליב בין מקורות בשאילתה אחת. רץ בטרנזקציית READ ONLY תחת תפקיד DB עם הרשאת SELECT בלבד, 10 שניות, עד 1,000 שורות. גוף הבקשה: {sql} או {sql_b64} — הגרסה ה-base64 קיימת כדי שחוקי WAF שחוסמים מילות SQL בכתובת לא יפילו שאילתה תקינה. לסינון מרחבי: geom OPERATOR(extensions.&&) extensions.ST_MakeEnvelope(min_lon, min_lat, max_lon, max_lat, 4326), ולפלט גאומטרי extensions.ST_AsGeoJSON(geom).",
+        params: [
+          { name: "sql", desc: "משפט SELECT/WITH יחיד, ללא ; בסוף" },
+          { name: "sql_b64", desc: "אותו משפט מקודד base64 (חלופה ל-sql)" },
+        ],
+        example: "/api/tables/sql",
+      },
+      {
+        path: "/api/tables/export.csv",
+        description:
+          "אותה שאילתה בדיוק, בזרימה כ-CSV מלא — עד 200,000 שורות ו-60 שניות, במקום 1,000 ו-10 שניות של /sql. זו הדרך למשוך שכבה שלמה או תוצאת הצלבה גדולה בקריאה אחת.",
+        params: [{ name: "sql / sql_b64", desc: "כמו ב-POST /api/tables/sql" }],
+        example:
+          "/api/tables/export.csv?sql=SELECT name_name FROM idx.govmap_200541_b19acb42_c2bd90e1 LIMIT 20",
+      },
+      {
+        path: "/api/tables/schema.txt",
+        description:
+          "ה-DDL של הקטלוג כטקסט רגיל: ?table= לטבלה אחת, ?schema=public|knesset|idx לסכימה שלמה, ובלי פרמטרים — שורת CREATE TABLE אחת לכל טבלה באתר. נועד להדבקה למודל שפה שיכתוב את השאילתה במקומכם.",
+        params: [
+          { name: "table", desc: "טבלה אחת, ב-DDL מלא" },
+          { name: "schema", desc: "public | knesset | idx" },
+        ],
+        example: "/api/tables/schema.txt?table=govmap_200541_b19acb42_c2bd90e1",
       },
     ],
   },
@@ -634,7 +696,7 @@ export default function ApiPage() {
           <p>
             {t(
               "api.intro",
-              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 ו-/api/append, הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal.",
+              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API, ו-CORS פתוח כך שאפשר לקרוא להם ישירות מדפדפן. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 (מטא-דאטה) ו-/api/append (שורות), הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal. מעליהם כולם יושב /api/tables — SQL חופשי לקריאה בלבד על כל הטבלאות באתר, כולל שכבות ממ״ג עם PostGIS ופלט GeoJSON לפי מלבן.",
             )}
           </p>
           <p>
