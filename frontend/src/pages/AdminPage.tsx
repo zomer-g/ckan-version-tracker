@@ -849,6 +849,27 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   };
 
+  // is_active is the POLLING switch, and it is not the same thing as
+  // `status` (the public catalog state) even though both read as "active" in
+  // Hebrew. A paused dataset makes both "דגום" and the sampling endpoints
+  // return 409 (see app/api/datasets.py), so the switch has to be reachable
+  // from the same card as the button it blocks.
+  const handleToggleActive = async (id: string, is_active: boolean) => {
+    setProcessing((prev) => new Set(prev).add(id));
+    try {
+      const updated = await datasetsApi.update(id, { is_active });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, is_active: updated.is_active } : d))
+      );
+      setPollToast({ id, ok: true, msg: is_active ? "הופעל ✓" : "הושהה" });
+      setTimeout(() => setPollToast(null), 4000);
+    } catch (e: any) {
+      setPollToast({ id, ok: false, msg: e?.message || "שגיאה בעדכון" });
+      setTimeout(() => setPollToast(null), 4000);
+    }
+    setProcessing((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  };
+
   const handleUpdateStorageMode = async (
     id: string,
     storage_mode: "full_snapshot" | "append_only",
@@ -2392,6 +2413,29 @@ export default function AdminPage() {
                   {/* ── Actions ── */}
                   <div style={{ marginTop: "0.75rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)", display: "flex", gap: "0.4rem", alignItems: "center" }}>
                     <div className="flex" style={{ gap: "0.4rem" }}>
+                      <label
+                        title={ds.is_active
+                          ? "מתג הפולינג. השהיה עוצרת בדיקות תקופתיות ודגימות ידניות — אבל לא מסתירה את המאגר מהאתר (זה שדה 'סטטוס' הנפרד)."
+                          : "המאגר מושהה: הבדיקות התקופתיות לא רצות ו'דגום' יחזיר שגיאה. הפעל כדי לחדש."}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "0.35rem",
+                          fontSize: "0.75rem", whiteSpace: "nowrap", cursor: "pointer",
+                          padding: "0.3rem 0.6rem", borderRadius: "4px",
+                          border: `1px solid ${ds.is_active ? "var(--border)" : "var(--tint-bad-bd)"}`,
+                          background: ds.is_active ? "transparent" : "var(--tint-bad-bg)",
+                          color: ds.is_active ? "var(--text-muted)" : "var(--tint-bad-fg)",
+                          fontWeight: ds.is_active ? 400 : 600,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label={`מאגר פעיל — ${ds.title}`}
+                          checked={ds.is_active}
+                          disabled={processing.has(ds.id)}
+                          onChange={(e) => handleToggleActive(ds.id, e.target.checked)}
+                        />
+                        {ds.is_active ? "פעיל" : "מושהה"}
+                      </label>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
                         <button
                           className="btn-secondary"
