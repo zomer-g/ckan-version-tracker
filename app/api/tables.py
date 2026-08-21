@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.rate_limit import limiter
-from app.services import append_store, data_catalog
+from app.services import append_store, data_catalog, sql_shares
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +232,42 @@ async def run_sql(request: Request, body: SqlBody):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — SQL/timeout errors go to the user
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+
+
+class ShareBody(BaseModel):
+    sql: str | None = None
+    sql_b64: str | None = None
+    # The view around the query (chart type, axes, selected table) as a query
+    # string. Filtered server-side to the console's own keys.
+    params: str | None = None
+
+
+@router.post("/share")
+@limiter.limit("10/minute")
+async def create_share(request: Request, body: ShareBody, db: AsyncSession = Depends(get_db)):
+    """Store a console view and return its short slug.
+
+    Anonymous on purpose — the console is public, and a share button that needs
+    a login is a share button the audience cannot use. What bounds it is this
+    route's rate limit, the size cap and content dedup in the service, and the
+    fact that only the console's known view keys survive from ``params``.
+    """
+    try:
+        sql = _decode_sql(body.sql, body.sql_b64)
+        slug = await sql_shares.create(db, sql, body.params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"slug": slug, "path": f"/s/{slug}"}
+
+
+@router.get("/share/{slug}")
+@limiter.limit("60/minute")
+async def read_share(request: Request, slug: str, db: AsyncSession = Depends(get_db)):
+    """Resolve a slug back to the stored query + view settings."""
+    share = await sql_shares.resolve(db, slug)
+    if share is None:
+        raise HTTPException(status_code=404, detail="הקישור לא נמצא")
+    return share
 
 
 @router.get("/schema.txt", response_class=PlainTextResponse)

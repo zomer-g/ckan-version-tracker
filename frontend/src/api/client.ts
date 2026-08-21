@@ -1373,6 +1373,17 @@ export const dataCatalog = {
     `/api/tables/export.csv?sql_b64=${encodeURIComponent(utf8ToBase64(sql))}`,
   schemaTxtUrl: (table?: string) =>
     `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
+  // Short share links: the query is stored server-side and addressed by slug,
+  // so the link stops growing with the query — and a query too long to fit a
+  // URL at all becomes shareable for the first time. base64 for the same WAF
+  // reason as `sql` above.
+  createShare: (sql: string, params: string) =>
+    request<{ slug: string; path: string }>("/tables/share", {
+      method: "POST",
+      body: JSON.stringify({ sql_b64: utf8ToBase64(sql), params }),
+    }),
+  readShare: (slug: string) =>
+    request<{ sql: string; params: string }>(`/tables/share/${encodeURIComponent(slug)}`),
 };
 
 // ---- Free-text query over the semantic model (/api/nl) ----

@@ -16,6 +16,7 @@ from app.models.source_registry import SourceRegistry
 from app.models.source_limit import SourceLimit
 from app.models.worker_node import WorkerNode
 from app.models.decision_analysis import DecisionAnalysis
+from app.models.sql_share import SqlShare
 
 __all__ = [
     "User",
@@ -37,4 +38,5 @@ __all__ = [
     "SourceLimit",
     "WorkerNode",
     "DecisionAnalysis",
+    "SqlShare",
 ]

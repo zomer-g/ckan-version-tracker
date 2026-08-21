@@ -854,6 +854,36 @@ export default function DataSqlPage() {
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
   const placeholderRef = useRef(!sqlFromUrl(searchParams));
 
+  // ?share=<slug> — a short link (/s/<slug>) redirects here. The query lives
+  // server-side, so the address bar never had to carry it. Once resolved the
+  // console behaves exactly as if the long `?q=` link had been opened, EXCEPT
+  // for a query too long to encode into a URL: there the slug stays in the
+  // address bar as the only way back, which is strictly better than the old
+  // behaviour of silently dropping the query on reload.
+  const [shareError, setShareError] = useState<string | null>(null);
+  const hydratedShare = useRef<string | null>(null);
+  useEffect(() => {
+    const slug = searchParams.get("share");
+    if (!slug || hydratedShare.current === slug) return;
+    hydratedShare.current = slug;
+    dataCatalog
+      .readShare(slug)
+      .then(({ sql, params }) => {
+        setShareError(null);
+        setSqlText(sql);
+        placeholderRef.current = false;
+        const next = new URLSearchParams(params || "");
+        putSqlInUrl(next, sql);
+        // Only keep the slug when the query itself could not travel in the URL.
+        if (!next.get("q")) next.set("share", slug);
+        setSearchParams(next, { replace: true });
+        setSelected(next.get("table"));
+        runFetch(sql);
+      })
+      .catch(() => setShareError("הקישור המקוצר לא נמצא או שפג תוקפו"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   useEffect(() => {
     dataCatalog
       .tables()
@@ -1122,15 +1152,39 @@ export default function DataSqlPage() {
   const shareQuery = useCallback(async () => {
     const sql = sqlText.trim();
     if (!sql) return;
-    const q = encodedSql(sql);
-    let payload = sql;
-    if (q) {
-      const next = new URLSearchParams(searchParams);
-      next.delete("sql");
-      next.set("q", q);
-      payload = `${window.location.origin}/data?${next.toString()}`;
+
+    // Preferred form: store the view server-side and hand out /s/<slug>. The
+    // link stops growing with the query, and a query too long for a URL becomes
+    // shareable at all — which the `?q=` form could never do.
+    let payload: string | null = null;
+    let state: "link" | "sql" | "failed" = "sql";
+    const view = new URLSearchParams();
+    for (const k of [...CHART_PARAM_KEYS, "table"]) {
+      const v = searchParams.get(k);
+      if (v) view.set(k, v);
     }
-    let state: "link" | "sql" | "failed" = q ? "link" : "sql";
+    try {
+      const { path } = await dataCatalog.createShare(sql, view.toString());
+      payload = `${window.location.origin}${path}`;
+      state = "link";
+    } catch {
+      // Share store unreachable (offline, rate-limited, migration not applied).
+      // Fall back to the long self-contained link, and to the raw SQL when even
+      // that cannot carry the query — the pre-existing behaviour, unchanged.
+      const q = encodedSql(sql);
+      if (q) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("sql");
+        next.delete("share");
+        next.set("q", q);
+        payload = `${window.location.origin}/data?${next.toString()}`;
+        state = "link";
+      } else {
+        payload = sql;
+        state = "sql";
+      }
+    }
+
     try {
       await navigator.clipboard.writeText(payload);
     } catch {
@@ -1269,11 +1323,23 @@ export default function DataSqlPage() {
               <span aria-hidden="true">✕</span> נקה
             </button>
           )}
+          {shareError && (
+            <span
+              role="status"
+              style={{
+                fontSize: "0.78rem", padding: "0.2rem 0.5rem", borderRadius: 4,
+                background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)",
+                border: "1px solid var(--tint-bad-bd)",
+              }}
+            >
+              {shareError}
+            </span>
+          )}
           {sqlText.trim() && (
             <button
               type="button"
               onClick={shareQuery}
-              title="העתקת קישור שפותח את הקונסולה עם השאילתה הזו (וגם עם הגדרות המפה/התרשים)"
+              title="העתקת קישור קצר שפותח את הקונסולה עם השאילתה הזו (וגם עם הגדרות המפה/התרשים)"
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
                 border: "1px solid var(--border, var(--border))", background: "none",

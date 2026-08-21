@@ -5,10 +5,11 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from urllib.parse import quote
 
 from app.api.auth import router as auth_router
 from app.api.oauth import router as oauth_router
@@ -302,6 +303,19 @@ app.include_router(odata_mcp_router)
 from app.mcp.sql_routes import sql_mcp_router, sql_mcp_wellknown_router
 app.include_router(sql_mcp_wellknown_router)
 app.include_router(sql_mcp_router)
+
+# Short links for shared /data console views: /s/<slug>. Registered before the
+# SPA fallback so the path resolves here rather than being swallowed as a React
+# route. This handler stays deliberately dumb — it does not touch the DB, it
+# just hands the slug to the console, which resolves it through
+# /api/tables/share/<slug>. Keeping the query OUT of this URL is the whole
+# point: the link's length no longer tracks the query's, so a 40 KB query
+# shares as cleanly as a one-liner. An unknown slug is reported by the console
+# itself, which can say so in Hebrew in the page rather than as a bare 404.
+@app.get("/s/{slug}")
+async def short_share_link(slug: str):
+    return RedirectResponse(url=f"/data?share={quote(slug, safe='')}", status_code=302)
+
 
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
