@@ -151,7 +151,9 @@
     "picker_tracked": "tracked",
     "picker_pending": "awaiting approval",
     "picker_tracked_count": "{{n}} already tracked",
-    "split_files_none": "Every picked file is already tracked or awaiting approval — no new datasets were opened."
+    "split_files_none": "Every picked file is already tracked or awaiting approval — no new datasets were opened.",
+    "tracked_range": "Showing {{from}}–{{to}} of {{total}} · page {{page}} of {{pages}}",
+    "tracked_total": "{{total}} datasets"
   },
   "search": {
     "title": "Search Government Datasets",
@@ -414,7 +416,11 @@
   "common": {
     "loading": "Loading...",
     "error": "Error",
-    "back": "Back"
+    "back": "Back",
+    "pagination": "pagination",
+    "page": "Page",
+    "prev_page": "Previous",
+    "next_page": "Next"
   },
   "map": {
     "title": "Layer map",

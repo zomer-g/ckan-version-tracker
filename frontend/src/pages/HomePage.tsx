@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, FormEvent } from "react";
+import { useState, useEffect, useMemo, useRef, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 import TagChips from "../components/TagChips";
+import Pagination from "../components/Pagination";
 import SourceChip from "../components/SourceChip";
 import RequestForm from "../components/RequestForm";
 import RegistrySourceCard from "../components/RegistrySourceCard";
@@ -281,6 +282,73 @@ export default function HomePage() {
       versions: list.reduce((s, d) => s + (d.version_count || 0), 0),
     };
   }, [trackedDatasets]);
+
+  // ── Paging the tracked list ───────────────────────────────────────────────
+  //
+  // The section used to render every tracked dataset at once: ~1,250 cards,
+  // 17,000 DOM nodes and 5,500 links on one screen. That is slow to paint, and
+  // it is worse than slow to use — tabbing to the footer meant passing every
+  // link on the site.
+  //
+  // 24 a page because the grid is `repeat(auto-fill, minmax(320px, 1fr))`, so
+  // the column count follows the viewport: 24 divides evenly by 1, 2, 3 and 4
+  // and never leaves a ragged last row at any of those widths.
+  const PAGE_SIZE = 24;
+
+  // What is actually on screen: search hits while searching, otherwise the
+  // whole tracked list with the Knesset committees folded into one card.
+  const shownTracked = submittedQuery ? matchedTracked : restTracked;
+
+  // The committee card is a tile in the same grid, so it takes a slot rather
+  // than sitting outside the count — otherwise page 1 would render 25 tiles and
+  // break the 3- and 4-column rows, which is the whole point of 24.
+  const showCommitteeCard = !submittedQuery && !!committeeGroup;
+  const tileCount = shownTracked.length + (showCommitteeCard ? 1 : 0);
+  const pageCount = Math.max(1, Math.ceil(tileCount / PAGE_SIZE));
+
+  // Derived from the URL, not held in state: a page is a place, so it should
+  // survive a reload, be linkable, and answer the back button. Clamped on read
+  // because the list arrives asynchronously — a deep link to ?page=7 lands
+  // while pageCount is still 1, and recomputes to 7 the moment the data does.
+  const trackedPage = Math.min(
+    Math.max(1, Number(searchParams.get("page")) || 1),
+    pageCount,
+  );
+
+  const pageTracked = useMemo(() => {
+    const slotStart = (trackedPage - 1) * PAGE_SIZE;
+    const offset = showCommitteeCard ? 1 : 0;
+    return shownTracked.slice(
+      Math.max(0, slotStart - offset),
+      Math.max(0, slotStart + PAGE_SIZE - offset),
+    );
+  }, [shownTracked, trackedPage, showCommitteeCard]);
+
+  const trackedHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  // Set when the pager is used, consumed once the new page has rendered.
+  // A requestAnimationFrame inside the click handler is NOT enough: React
+  // commits the new list after that frame, and the commit puts focus back on
+  // the button that was clicked — so the caret never actually moved.
+  const pagerMovedRef = useRef(false);
+  const goToTrackedPage = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next <= 1) params.delete("page");
+    else params.set("page", String(next));
+    pagerMovedRef.current = true;
+    setSearchParams(params, { replace: false });
+  };
+
+  // Land the reader at the top of the new list rather than wherever the old one
+  // left them. Focus, not just scroll: without it the next Tab carries on from
+  // the pager at the bottom, and a screen reader is left reading the old page's
+  // position in a list that has already been replaced.
+  useEffect(() => {
+    if (!pagerMovedRef.current) return;
+    pagerMovedRef.current = false;
+    trackedHeadingRef.current?.focus();
+    trackedHeadingRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+  }, [trackedPage]);
 
   // Request form state — which dataset has form open
   const [requestFormFor, setRequestFormFor] = useState<string | null>(null);
@@ -1891,11 +1959,43 @@ export default function HomePage() {
             search covers "my own site", not just data.gov.il; otherwise it
             lists everything tracked. */}
         <section aria-labelledby="tracked-heading" style={{ marginTop: "1rem" }}>
-          <h2 id="tracked-heading" style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>
+          <h2
+            id="tracked-heading"
+            ref={trackedHeadingRef}
+            // Focusable so a page change can put the caret here — see
+            // goToTrackedPage. tabIndex -1 keeps it out of the Tab order.
+            tabIndex={-1}
+            style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.35rem", outline: "none" }}
+          >
             {submittedQuery
               ? `${t("home.tracked_matches_title")} (${matchedTracked.length})`
               : t("home.tracked_title")}
           </h2>
+
+          {/* Which slice of what — announced on every page change, because the
+              cards themselves swap silently under a screen reader. */}
+          {!trackedLoading && tileCount > 0 && (
+            <p
+              className="text-sm text-muted"
+              role="status"
+              aria-live="polite"
+              style={{ marginBottom: "1rem" }}
+            >
+              {pageCount > 1
+                ? t("home.tracked_range", {
+                    from: ((trackedPage - 1) * PAGE_SIZE + 1).toLocaleString("he-IL"),
+                    to: Math.min(trackedPage * PAGE_SIZE, tileCount).toLocaleString("he-IL"),
+                    total: tileCount.toLocaleString("he-IL"),
+                    page: trackedPage.toLocaleString("he-IL"),
+                    pages: pageCount.toLocaleString("he-IL"),
+                    defaultValue: "מוצגים {{from}}–{{to}} מתוך {{total}} · עמוד {{page}} מתוך {{pages}}",
+                  })
+                : t("home.tracked_total", {
+                    total: tileCount.toLocaleString("he-IL"),
+                    defaultValue: "{{total}} מאגרים",
+                  })}
+            </p>
+          )}
 
           {trackedLoading ? (
             <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>
@@ -1905,7 +2005,7 @@ export default function HomePage() {
             </div>
           ) : (
             <div className="grid grid-2">
-              {!submittedQuery && committeeGroup && (
+              {showCommitteeCard && trackedPage === 1 && committeeGroup && (
                 <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid var(--tint-indigo-fg)" }}>
                   <div className="flex-between mb-1">
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
@@ -1929,7 +2029,7 @@ export default function HomePage() {
                   </div>
                 </article>
               )}
-              {(submittedQuery ? matchedTracked : restTracked).map((ds) => (
+              {pageTracked.map((ds) => (
                 <article key={ds.id} className="card">
                   <div className="flex-between mb-1">
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
@@ -2041,6 +2141,15 @@ export default function HomePage() {
                 </article>
               ))}
             </div>
+          )}
+
+          {!trackedLoading && (
+            <Pagination
+              page={trackedPage}
+              pageCount={pageCount}
+              onChange={goToTrackedPage}
+              label={t("home.tracked_title")}
+            />
           )}
         </section>
       </div>

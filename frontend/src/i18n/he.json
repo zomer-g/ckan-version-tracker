@@ -151,7 +151,9 @@
     "picker_tracked": "במעקב",
     "picker_pending": "ממתין לאישור",
     "picker_tracked_count": "{{n}} כבר במעקב",
-    "split_files_none": "כל הקבצים שנבחרו כבר במעקב או ממתינים לאישור — לא נפתחו מאגרים חדשים."
+    "split_files_none": "כל הקבצים שנבחרו כבר במעקב או ממתינים לאישור — לא נפתחו מאגרים חדשים.",
+    "tracked_range": "מוצגים {{from}}–{{to}} מתוך {{total}} · עמוד {{page}} מתוך {{pages}}",
+    "tracked_total": "{{total}} מאגרים"
   },
   "search": {
     "title": "חיפוש מאגרי מידע ממשלתיים",
@@ -414,7 +416,11 @@
   "common": {
     "loading": "טוען...",
     "error": "שגיאה",
-    "back": "חזרה"
+    "back": "חזרה",
+    "pagination": "עימוד",
+    "page": "עמוד",
+    "prev_page": "הקודם",
+    "next_page": "הבא"
   },
   "map": {
     "title": "מפת השכבה",

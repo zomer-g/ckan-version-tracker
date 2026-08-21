@@ -98,8 +98,17 @@ export default function App() {
   // preventScroll stops the a11y focus from re-introducing the same jump:
   // #main-content sits below the navbar, so focusing it can pull the header
   // back out of view on pages where it doesn't span the viewport.
+  //   · A query-string change — ?q=, ?page= and friends are a change WITHIN a
+  //     page, not a move to a new one. The component that owns the parameter
+  //     knows where focus belongs (the pager sends it to the list heading);
+  //     stealing it back to <main> a frame later undid that. navigationType is
+  //     read here but must not TRIGGER this effect: pushing a query string
+  //     flips it from POP to PUSH, which is what used to re-fire it.
   const navigationType = useNavigationType();
+  const lastPath = useRef<string | null>(null);
   useEffect(() => {
+    if (lastPath.current === location.pathname) return;
+    lastPath.current = location.pathname;
     mainRef.current?.focus({ preventScroll: true });
     if (navigationType !== "POP" && !location.hash) window.scrollTo(0, 0);
   }, [location.pathname, location.hash, navigationType]);

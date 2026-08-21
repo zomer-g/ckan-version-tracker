@@ -289,7 +289,9 @@ export function RouteAnnouncer() {
     // announcing before that reads out the previous page's name.
     const id = window.setTimeout(() => setMsg(document.title), 250);
     return () => window.clearTimeout(id);
-  }, [location.pathname, location.search]);
+    // pathname only: a ?page= or ?q= change keeps the same title, and
+    // re-reading it would talk over the region that DID change.
+  }, [location.pathname]);
   return (
     <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
       {msg}
