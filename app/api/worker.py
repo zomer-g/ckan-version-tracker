@@ -1205,6 +1205,13 @@ def _landed_resource_count(resource_mappings: dict) -> int:
     )
 
 
+# How big a pre-uploaded CSV may be before the append path stops reading it
+# back to merge it. Parsing happens on the request path of a 512MB dyno, so
+# this is a memory bound, not a policy one; every append corpus that arrives
+# pre-uploaded today is orders of magnitude below it.
+APPEND_MERGE_MAX_BYTES = 32 * 1024 * 1024
+
+
 def _split_doc_bundles(
     zip_ids: list[str], declared: list[str] | None,
 ) -> tuple[list[str], list[str]]:
@@ -1477,8 +1484,11 @@ async def push_version(
 
     if is_append and latest is not None:
         seen_keys = list((latest.resource_mappings or {}).get("_appendonly_seen", []) or [])
-        if (not seen_keys
-                and _use_r2(ds)
+        # Keyed on the cumulative object's absence, NOT on an empty seen-set:
+        # a dataset can carry a seen-set from a version that never wrote a
+        # cumulative file, and reading that as "already converted" would
+        # publish an empty archive. Re-seeding identities is idempotent.
+        if (_use_r2(ds)
                 and not storage.is_storage_value(ds.appendonly_resource_id)):
             append_seed = await _append_seed_from_snapshot(ds, latest)
             for _rows in append_seed.values():
@@ -1716,6 +1726,34 @@ async def push_version(
                     res.name, res.row_count, _table,
                 )
                 continue
+
+            # ...unless the dataset is append_only, where mapping the file in
+            # whole makes the version a snapshot of whatever the source lists
+            # right now — the exact loss append mode exists to prevent. Read
+            # the object back so the record path below can dedupe it against
+            # the archive. Bounded by size: the >100MB payloads this branch was
+            # written for are not append-shaped and stay mapped as-is.
+            if (pre_uploaded and is_append and not res.records
+                    and storage.is_storage_value(pre_uploaded)):
+                size = await storage_client.object_size(pre_uploaded)
+                if size is not None and size <= APPEND_MERGE_MAX_BYTES:
+                    raw = await storage_client.get_object_bytes(pre_uploaded)
+                    if raw:
+                        _pf, _pr = parse_csv(raw)
+                        res.records = _pr
+                        res.fields = res.fields or _pf
+                        pre_uploaded = None
+                        logger.info(
+                            "Append: read back the pre-uploaded CSV for %s "
+                            "(%d rows, %s bytes) so it can be merged",
+                            res.name, len(_pr), size,
+                        )
+                else:
+                    logger.warning(
+                        "Append: pre-uploaded CSV for %s is %s bytes — too big "
+                        "to merge on the request path, stored as a snapshot",
+                        res.name, size,
+                    )
 
             if pre_uploaded:
                 resource_mappings[res.name] = pre_uploaded

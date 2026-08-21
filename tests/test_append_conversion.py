@@ -122,3 +122,48 @@ def test_shrink_guard_exempts_append_only():
            / "app" / "api" / "worker.py").read_text(encoding="utf-8")
     guard = src.split("# ---- Shrink guard")[1].split("min_fraction")[0]
     assert 'ds.storage_mode != "append_only"' in guard
+
+
+# ── the pre-uploaded CSV path ──────────────────────────────────────────────
+# The archive worker uploads its index CSV out-of-band and pushes a reference
+# instead of inline records. That branch mapped the file in whole, on purpose,
+# because "append mode can't dedupe a file we never parsed" — so the eden
+# conversion published a 7-row snapshot wearing an append label: seen-set 196,
+# rows_added 0, and a version pointing at 7 rows.
+
+
+def test_a_pre_uploaded_csv_is_read_back_in_append_mode():
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "api" / "worker.py").read_text(encoding="utf-8")
+    branch = (src.split("pre_uploaded = csv_resource_ids.get(res.name)")[1]
+                 .split("\n            if pre_uploaded:")[0])
+    assert "is_append" in branch, "append mode must not map the file in whole"
+    assert "APPEND_MERGE_MAX_BYTES" in branch, "the read-back must stay bounded"
+
+
+def test_the_seed_is_keyed_on_the_cumulative_not_the_seen_set():
+    """A seen-set can outlive a push that never wrote a cumulative file (that
+    is exactly what the botched conversion left behind). Reading it as
+    'already converted' would publish an empty archive."""
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "api" / "worker.py").read_text(encoding="utf-8")
+    seed_call = src.split("append_seed = await _append_seed_from_snapshot")[0]
+    guard = seed_call.rsplit("if is_append and latest is not None:", 1)[1]
+    assert "storage.is_storage_value(ds.appendonly_resource_id)" in guard
+    assert "not seen_keys" not in guard
+
+
+def test_csv_shaped_rows_dedupe_against_the_seed():
+    """Both sides now arrive as CSV rows — every column present, blank where
+    empty — so the hash identity matches and nothing re-appends."""
+    from app.services.csv_parser import parse_csv
+
+    _f, seeded = parse_csv(_csv(_ARCHIVED))
+    _f2, current = parse_csv(_csv([_ARCHIVED[3], _ARCHIVED[7]]))
+
+    seen: list[str] = []
+    _, seen = compute_new_rows(seen, seeded, None)
+    new_rows, seen = compute_new_rows(seen, current, None)
+
+    assert new_rows == [], "a row already in the archive must not re-append"
+    assert len(seen) == 39
