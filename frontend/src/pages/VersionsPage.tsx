@@ -697,8 +697,8 @@ export default function VersionsPage() {
                 fontSize: "0.8rem",
                 padding: "0.3rem 0.7rem",
                 background: "none",
-                border: "1px solid var(--danger, var(--danger))",
-                color: "var(--danger, #992C2C)",
+                border: "1px solid var(--danger)",
+                color: "var(--danger)",
                 borderRadius: 4,
                 cursor: "pointer",
               }}
@@ -862,8 +862,8 @@ export default function VersionsPage() {
                           fontSize: "0.75rem",
                           padding: "0.2rem 0.55rem",
                           background: "none",
-                          border: "1px solid var(--danger, var(--danger))",
-                          color: "var(--danger, #992C2C)",
+                          border: "1px solid var(--danger)",
+                          color: "var(--danger)",
                           borderRadius: 4,
                           cursor: deleting === v.id ? "not-allowed" : "pointer",
                           opacity: deleting === v.id ? 0.6 : 1,
@@ -1069,7 +1069,7 @@ function NeonArchiveExplanation({
         marginBottom: "1.5rem",
         padding: "1rem 1.25rem",
         background: "var(--surface-2)",
-        borderInlineStart: "3px solid var(--primary, var(--tint-teal-fg))",
+        borderInlineStart: "3px solid var(--primary)",
       }}
     >
       <div className="flex-between" style={{ alignItems: "flex-start", gap: "1rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
@@ -1145,7 +1145,7 @@ function ArchiveExplanation(props: {
         marginBottom: "1.5rem",
         padding: "1rem 1.25rem",
         background: "var(--surface-2)",
-        borderInlineStart: "3px solid var(--primary, var(--tint-teal-fg))",
+        borderInlineStart: "3px solid var(--primary)",
       }}
     >
       <div

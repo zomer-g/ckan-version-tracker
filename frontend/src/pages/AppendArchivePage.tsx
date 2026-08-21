@@ -232,8 +232,8 @@ export default function AppendArchivePage() {
               href={downloadHref}
               style={{
                 fontSize: "0.85rem", padding: "0.4rem 0.9rem",
-                background: "none", color: "var(--primary, #0C5E58)",
-                border: "1px solid var(--primary, var(--tint-teal-fg))",
+                background: "none", color: "var(--primary)",
+                border: "1px solid var(--primary)",
                 borderRadius: 4, textDecoration: "none", fontWeight: 500,
               }}
               title="הורדת התוצאה המסוננת הנוכחית כ-CSV"
@@ -289,7 +289,7 @@ export default function AppendArchivePage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="חיפוש חופשי בכל העמודות…"
-          style={{ flex: "1 1 280px", padding: "0.45rem 0.7rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+          style={{ flex: "1 1 280px", padding: "0.45rem 0.7rem", border: "1px solid var(--border)", borderRadius: 4 }}
           aria-label="חיפוש חופשי"
         />
         <label className="text-sm text-muted">
@@ -303,9 +303,9 @@ export default function AppendArchivePage() {
           onClick={() => setSqlOpen((o) => !o)}
           style={{
             padding: "0.45rem 0.9rem", borderRadius: 4, cursor: "pointer", fontWeight: 600,
-            border: "1px solid var(--primary, var(--tint-teal-fg))",
-            background: sqlOpen ? "var(--primary, #0C5E58)" : "none",
-            color: sqlOpen ? "white" : "var(--primary, #0C5E58)",
+            border: "1px solid var(--primary)",
+            background: sqlOpen ? "var(--primary)" : "none",
+            color: sqlOpen ? "white" : "var(--primary)",
           }}
           title="כתיבת שאילתות SQL (קריאה בלבד)"
         >
@@ -363,8 +363,8 @@ export default function AppendArchivePage() {
                     onClick={() => downloadRowsCsv(`${schema?.table || "query"}_sql.csv`, sqlResult.columns, sqlResult.rows)}
                     style={{
                       fontSize: "0.82rem", padding: "0.3rem 0.7rem",
-                      background: "none", color: "var(--primary, #0C5E58)",
-                      border: "1px solid var(--primary, var(--tint-teal-fg))", borderRadius: 4, cursor: "pointer",
+                      background: "none", color: "var(--primary)",
+                      border: "1px solid var(--primary)", borderRadius: 4, cursor: "pointer",
                     }}
                     title="הורדת תוצאת ה-SQL כ-CSV"
                   >
@@ -375,7 +375,7 @@ export default function AppendArchivePage() {
             )}
           </div>
           {sqlError && (
-            <div style={{ marginTop: "0.6rem", color: "var(--danger, #992C2C)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
               {sqlError}
             </div>
           )}
@@ -385,13 +385,13 @@ export default function AppendArchivePage() {
                 <thead>
                   <tr>
                     {sqlResult.columns.map((c) => (
-                      <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>{c}</th>
+                      <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border)" }}>{c}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {sqlResult.rows.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                       {sqlResult.columns.map((c) => (
                         <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
                       ))}
@@ -437,7 +437,7 @@ export default function AppendArchivePage() {
                 </th>
               ))}
             </tr>
-            <tr style={{ borderBottom: "1px solid var(--border, var(--border))", background: "var(--bg, #fff)" }}>
+            <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg)" }}>
               {cols.map((c) => (
                 <th scope="col" key={c} style={{ padding: "0.25rem 0.4rem" }}>
                   <input
@@ -445,7 +445,7 @@ export default function AppendArchivePage() {
                     onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
                     placeholder="סנן…"
                     aria-label={`סנן ${c}`}
-                    style={{ width: "100%", minWidth: 80, padding: "0.2rem 0.35rem", border: "1px solid var(--border, var(--border))", borderRadius: 3, fontSize: "0.78rem", fontWeight: 400 }}
+                    style={{ width: "100%", minWidth: 80, padding: "0.2rem 0.35rem", border: "1px solid var(--border)", borderRadius: 3, fontSize: "0.78rem", fontWeight: 400 }}
                   />
                 </th>
               ))}
@@ -459,7 +459,7 @@ export default function AppendArchivePage() {
               <tr><td colSpan={cols.length || 1} style={{ padding: "1rem", textAlign: "center", color: "var(--text-muted)" }}>אין שורות תואמות</td></tr>
             )}
             {!loading && data?.rows.map((row, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                 {cols.map((c) => (
                   <td key={c} style={{ padding: "0.4rem 0.7rem" }}>
                     {c === "first_seen" ? fmtDate(row[c]) : (row[c] ?? "")}
@@ -477,11 +477,11 @@ export default function AppendArchivePage() {
         </span>
         <div className="flex" style={{ gap: "0.5rem" }}>
           <button type="button" className="btn" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - limit))}
-            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
+            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border)", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
             &rarr; הקודם
           </button>
           <button type="button" className="btn" disabled={pageEnd >= total || loading} onClick={() => setOffset(offset + limit)}
-            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: pageEnd >= total ? "not-allowed" : "pointer" }}>
+            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border)", borderRadius: 4, background: "none", cursor: pageEnd >= total ? "not-allowed" : "pointer" }}>
             הבא &larr;
           </button>
         </div>
@@ -530,9 +530,9 @@ function TablePicker({
                 cursor: active ? "default" : "pointer",
                 borderRadius: 4,
                 fontWeight: active ? 600 : 400,
-                border: "1px solid var(--primary, var(--tint-teal-fg))",
-                background: active ? "var(--primary, #0C5E58)" : "none",
-                color: active ? "white" : "var(--primary, #0C5E58)",
+                border: "1px solid var(--primary)",
+                background: active ? "var(--primary)" : "none",
+                color: active ? "white" : "var(--primary)",
               }}
             >
               {t.resource_name || t.table}
@@ -571,7 +571,7 @@ function StorageExplainBox({ schema }: { schema: AppendSchema }) {
       style={{
         marginBottom: "1rem", padding: "0.9rem 1.1rem",
         background: "var(--surface-2)",
-        borderInlineStart: `3px solid ${diff ? "#873E07" : "var(--primary, #0C5E58)"}`,
+        borderInlineStart: `3px solid ${diff ? "#873E07" : "var(--primary)"}`,
       }}
     >
       <h2 style={{ margin: "0 0 0.4rem", fontSize: "0.95rem", fontWeight: 600 }}>

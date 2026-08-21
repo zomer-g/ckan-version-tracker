@@ -51,7 +51,7 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 8, padding: "0.7rem 0.85rem",
-      background: "var(--surface,#fff)",
+      background: "var(--surface)",
     }}>
       <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.4rem" }}>
         {SOURCE_LABELS[id] ?? id}
@@ -97,7 +97,7 @@ export default function NadlanResultCard({
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 10, padding: "0.9rem 1rem",
-      marginBottom: "0.75rem", background: "var(--surface,#fff)",
+      marginBottom: "0.75rem", background: "var(--surface)",
     }}>
       <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: "1.05rem" }}>

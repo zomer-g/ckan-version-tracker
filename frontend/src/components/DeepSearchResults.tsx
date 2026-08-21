@@ -137,7 +137,7 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 });
 
 const MUTED_CHIP = chip("var(--surface-2)", "var(--text-muted)");
-const EXTERNAL_CHIP = chip("var(--warning, #f59e0b)", "#fff");
+const EXTERNAL_CHIP = chip("var(--warning)", "#fff");
 
 /**
  * Snippets arrive with the matched text wrapped in «…» — TAG-IT's own
@@ -155,7 +155,7 @@ function Highlighted({ text }: { text: string }) {
           <mark
             key={i}
             style={{
-              background: "var(--primary-100, #CCEBF3)",
+              background: "var(--primary-100)",
               color: "inherit",
               padding: "0 2px",
               borderRadius: 2,
@@ -324,7 +324,7 @@ function ColumnBody({ source, state }: { source: DeepSource; state?: ColState })
     return (
       <div
         className="text-sm"
-        style={{ padding: "0.6rem 0", color: "var(--danger, #992C2C)" }}
+        style={{ padding: "0.6rem 0", color: "var(--danger)" }}
       >
         שגיאה בשליפה מהמקור — {err}
       </div>
@@ -628,7 +628,7 @@ export function SourceChips({
 
 const inputStyle: React.CSSProperties = {
   padding: "0.3rem 0.5rem",
-  border: "1px solid var(--border, var(--border))",
+  border: "1px solid var(--border)",
   borderRadius: "var(--radius, 8px)",
   fontSize: "0.85rem",
   width: "auto",

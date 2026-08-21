@@ -145,7 +145,7 @@ export default function OcoiSearch({
                   gap: "0.6rem",
                   alignItems: "center",
                   padding: "0.6rem 0.75rem",
-                  border: "1px solid var(--border, var(--border))",
+                  border: "1px solid var(--border)",
                   borderRadius: 8,
                   background: "var(--surface)",
                   cursor: "pointer",

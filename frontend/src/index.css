@@ -7,6 +7,8 @@
 }
 
 :root {
+  color-scheme: light;
+
   /* לעם family canonical palette — synced with Ocoi/Ocal tailwind.config */
   --primary-50:  #E8F5F9;
   --primary-100: #CCEBF3;
@@ -117,6 +119,7 @@
    apply in one state and vanish in another. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #0B1519;
     --surface: #122229;
     --surface-2: #182F38;
@@ -180,6 +183,7 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0B1519;
   --surface: #122229;
   --surface-2: #182F38;
@@ -360,14 +364,25 @@ button,
 
 /* Form elements */
 input,
-select {
+select,
+textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   font-family: inherit;
-  width: 100%;
+  /* Fields used to inherit the UA's own Field/FieldText colours, which do not
+     follow our tokens: in dark mode every input stayed a white box with black
+     text inside a dark page, and a light placeholder on that white measured
+     1.93:1. Naming both ends keeps the control inside the theme. */
+  background: var(--surface);
+  color: var(--text);
   transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input,
+select {
+  width: 100%;
 }
 
 /* A tick is a glyph, not a field. The rule above is written for text inputs,
@@ -3076,4 +3091,14 @@ li > a:only-child,
   display: inline-flex;
   align-items: center;
   min-height: var(--target-min);
+}
+
+/* Placeholders. Only the home search box styled its own, so every other field
+   fell through to the browser default — Chrome paints #757575, which measures
+   4.61:1 on white: fine for AA, short of the 7:1 this site holds itself to.
+   A placeholder is also never the accessible name here (see the aria-labels on
+   the fields themselves), so this is about legibility, not about labelling. */
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;               /* Firefox dims placeholders by default */
 }

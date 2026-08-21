@@ -342,7 +342,7 @@ export default function GrowthPage() {
               role="alert"
               style={{
                 padding: "1rem",
-                color: "var(--danger, #992C2C)",
+                color: "var(--danger)",
                 fontSize: "0.9rem",
               }}
             >
@@ -639,7 +639,7 @@ function LoadingPlaceholder(props: {
             width: "70%",
             maxWidth: 320,
             height: 4,
-            background: "var(--border, #e2e8f0)",
+            background: "var(--border)",
             borderRadius: 2,
             overflow: "hidden",
           }}

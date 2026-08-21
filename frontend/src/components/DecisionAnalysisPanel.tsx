@@ -306,7 +306,7 @@ export default function DecisionAnalysisPanel() {
           target="_blank"
           rel="noopener noreferrer"
           className="text-sm"
-          style={{ color: "var(--primary, #2563eb)" }}
+          style={{ color: "var(--primary)" }}
         >
           פתח את העמוד ↗
         <span className="sr-only"> (נפתח בחלון חדש)</span></a>

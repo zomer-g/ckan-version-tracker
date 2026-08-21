@@ -33,8 +33,8 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
  */
 
 const card: React.CSSProperties = {
-  border: "1px solid var(--border, var(--border))", borderRadius: 8,
-  padding: "0.85rem 1rem", marginBottom: "0.9rem", background: "var(--bg, #fff)",
+  border: "1px solid var(--border)", borderRadius: 8,
+  padding: "0.85rem 1rem", marginBottom: "0.9rem", background: "var(--bg)",
 };
 const chip = (bg: string, fg: string): React.CSSProperties => ({
   display: "inline-block", padding: "0.05rem 0.45rem", borderRadius: 4,
@@ -51,8 +51,8 @@ function StepHead({ n, title, done, children }: {
       <span style={{
         width: 24, height: 24, borderRadius: "50%", display: "inline-flex",
         alignItems: "center", justifyContent: "center", fontSize: "0.8rem", fontWeight: 700,
-        background: done ? "var(--primary, #0C5E58)" : "var(--surface-2)",
-        color: done ? "#fff" : "var(--text-muted, #475569)",
+        background: done ? "var(--primary)" : "var(--surface-2)",
+        color: done ? "#fff" : "var(--text-muted)",
       }}>{done ? "✓" : n}</span>
       <span style={{ fontWeight: 600 }}>{title}</span>
       {children}
@@ -182,7 +182,7 @@ export default function DataExplorePage() {
             placeholder="למשל: מעיינות, עמותות רשומות, החלטות ממשלה, רישיונות עסק"
             style={{ flex: "1 1 340px", minWidth: 240, padding: "0.45rem 0.65rem",
                      fontSize: "0.95rem", borderRadius: 4,
-                     border: "1px solid var(--border, var(--border))" }}
+                     border: "1px solid var(--border)" }}
           />
           <button type="button" onClick={() => search(text)} disabled={searching || !text.trim()}
             style={{ padding: "0.45rem 1.3rem", borderRadius: 4, border: "none", fontWeight: 600,
@@ -217,16 +217,16 @@ export default function DataExplorePage() {
               <button key={s.table} type="button" onClick={() => choose(s.table)}
                 style={{
                   display: "block", width: "100%", textAlign: "start", cursor: "pointer",
-                  border: on ? "2px solid var(--primary, #0C5E58)" : "1px solid var(--border, #e5e7eb)",
+                  border: on ? "2px solid var(--primary)" : "1px solid var(--border)",
                   background: on ? "var(--surface-2)" : "transparent",
                   borderRadius: 6, padding: "0.55rem 0.7rem", marginBottom: 6,
                 }}>
                 <div className="flex" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 600, fontSize: "0.92rem" }}>{s.title}</span>
                   {s.rows != null && (
-                    <span style={chip("#f1f5f9", "#475569")}>{fmt(s.rows)} שורות</span>
+                    <span style={chip("var(--tint-neutral-bg)", "var(--tint-neutral-fg)")}>{fmt(s.rows)} שורות</span>
                   )}
-                  {s.can_join && <span style={chip("#e0f2fe", "#035887")}>ניתן להצלבה</span>}
+                  {s.can_join && <span style={chip("var(--tint-sky-bg)", "var(--tint-sky-fg)")}>ניתן להצלבה</span>}
                   {s.approximate && (
                     <span style={chip("var(--tint-note-bg)", "var(--tint-note-fg)")}
                           title="התאמה על בסיס דמיון בכתיב בלבד — ייתכן שאינה קשורה.">
@@ -234,13 +234,13 @@ export default function DataExplorePage() {
                     </span>
                   )}
                   {!s.official && (
-                    <span style={chip("#fef3c7", "#833909")}
+                    <span style={chip("var(--tint-warn-bg)", "var(--tint-warn-fg)")}
                           title={`מקור מעובד או תרומת ציבור${s.organization ? ` (${s.organization})` : ""} — לא פרסום ממשלתי רשמי. מאגרים רשמיים מדורגים לפניו.`}>
                       לא רשמי
                     </span>
                   )}
                   {s.schema === "idx" && (
-                    <span style={chip("#f1f5f9", "#464F5E")}
+                    <span style={chip("var(--tint-neutral-bg)", "var(--tint-neutral-fg)")}
                           title="שכבת אינדקס/מיפוי — כותרת שנגזרה אוטומטית, בלי תיאור מוגה.">
                       אינדקס
                     </span>
@@ -300,7 +300,7 @@ export default function DataExplorePage() {
                 <div style={{ maxHeight: 260, overflowY: "auto", marginTop: 6 }}>
                   <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse" }}>
                     <thead>
-                      <tr style={{ color: "var(--text-muted, #464F5E)", textAlign: "start" }}>
+                      <tr style={{ color: "var(--text-muted)", textAlign: "start" }}>
                         <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>עמודה</th>
                         <th scope="col" style={{ textAlign: "start" }}>סוג</th>
                         <th scope="col" style={{ textAlign: "start" }}>מלא</th>
@@ -314,7 +314,7 @@ export default function DataExplorePage() {
                           .map((v) => `${v.value} (${fmt(v.count)})`).join(" · ");
                         const range = p?.min != null ? `${p.min} … ${p.max}` : "";
                         return (
-                          <tr key={c.name} style={{ borderTop: "1px solid var(--border, var(--border))" }}>
+                          <tr key={c.name} style={{ borderTop: "1px solid var(--border)" }}>
                             <td style={{ padding: "0.22rem 0", fontWeight: 500 }}>{c.name}</td>
                             <td className="text-muted">{p?.detected_kind || c.type}</td>
                             <td className="text-muted">
@@ -344,8 +344,8 @@ export default function DataExplorePage() {
             <div className="flex" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <button type="button" onClick={() => setShowJoin(true)}
                 style={{ padding: "0.35rem 1rem", borderRadius: 4, fontWeight: 600, cursor: "pointer",
-                         border: "1px solid var(--primary, var(--tint-teal-fg))", background: "transparent",
-                         color: "var(--primary, #0C5E58)" }}>
+                         border: "1px solid var(--primary)", background: "transparent",
+                         color: "var(--primary)" }}>
                 הצג מאגרים להצלבה
               </button>
               <span className="text-muted" style={{ fontSize: "0.78rem" }}>
@@ -361,17 +361,17 @@ export default function DataExplorePage() {
                   <input aria-label="סננו את הרשימה…" value={joinFilter} onChange={(e) => setJoinFilter(e.target.value)}
                     placeholder="סננו את הרשימה…"
                     style={{ padding: "0.3rem 0.5rem", fontSize: "0.85rem", borderRadius: 4,
-                             border: "1px solid var(--border, var(--border))", marginBottom: 8,
+                             border: "1px solid var(--border)", marginBottom: 8,
                              minWidth: 240 }} />
                   <div style={{ maxHeight: 300, overflowY: "auto" }}>
                     {joinable.map((j) => (
                       <div key={j.table} className="flex"
                         style={{ gap: 8, alignItems: "center", flexWrap: "wrap",
-                                 padding: "0.35rem 0", borderTop: "1px solid var(--border, var(--border))" }}>
+                                 padding: "0.35rem 0", borderTop: "1px solid var(--border)" }}>
                         <span style={{ fontSize: "0.85rem", flex: "1 1 240px" }}>{j.title}</span>
-                        <span style={chip("#f1f5f9", "#475569")}>{fmt(j.rows)} שורות</span>
+                        <span style={chip("var(--tint-neutral-bg)", "var(--tint-neutral-fg)")}>{fmt(j.rows)} שורות</span>
                         {!j.official && (
-                          <span style={chip("#fef3c7", "#833909")} title="מקור מעובד או תרומת ציבור">לא רשמי</span>
+                          <span style={chip("var(--tint-warn-bg)", "var(--tint-warn-fg)")} title="מקור מעובד או תרומת ציבור">לא רשמי</span>
                         )}
                         <span className="text-muted" style={{ fontSize: "0.72rem" }}>לפי {j.via}</span>
                         {/* THE button this step exists for. The first version

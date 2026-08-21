@@ -77,7 +77,7 @@ export default function TagDetailPage() {
             width: 64,
             height: 64,
             borderRadius: 8,
-            background: "var(--primary-50, #e0e7ff)",
+            background: "var(--primary-50)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

@@ -157,7 +157,7 @@ export default function DataGuidePage() {
             התשאול. מי שרוצה את ההצלבה מקבל אותה; הטבלה המקורית לא זזה.</div>
         </div>
         <p style={{ textAlign: "center", marginTop: "1rem" }}>
-          <Link to="/data?table=append_moj_amutot_73f3cd78" style={{ color: "var(--primary,#0C5E58)", fontWeight: 600 }}>
+          <Link to="/data?table=append_moj_amutot_73f3cd78" style={{ color: "var(--primary)", fontWeight: 600 }}>
             ← פתחו מאגר עם שדה יישוב בקונסולה ותראו את "בונה ההצלבה" בעצמכם
           </Link>
         </p>

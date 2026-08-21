@@ -261,7 +261,7 @@ export default function QuestionsPage() {
           style={{
             flex: "1 1 260px",
             padding: "0.5rem 0.7rem",
-            border: "1px solid var(--border, var(--border))",
+            border: "1px solid var(--border)",
             borderRadius: "var(--radius, 8px)",
             fontSize: "0.95rem",
           }}
@@ -312,7 +312,7 @@ export default function QuestionsPage() {
                 cursor: "pointer",
                 fontSize: "0.82rem",
                 fontWeight: 600,
-                border: `1px solid ${mode === m ? "var(--primary-700, #06607C)" : "var(--border, #d1d5db)"}`,
+                border: `1px solid ${mode === m ? "var(--primary-700)" : "var(--border)"}`,
                 background: mode === m ? "var(--fill-brand)" : "transparent",
                 color: mode === m ? "var(--on-fill)" : "var(--primary-700)",
               }}
@@ -472,7 +472,7 @@ function MergedList({
       {errored.length > 0 && (
         <div
           className="text-sm"
-          style={{ marginTop: "0.75rem", color: "var(--danger, #992C2C)" }}
+          style={{ marginTop: "0.75rem", color: "var(--danger)" }}
         >
           מקורות שנכשלו:{" "}
           {errored
@@ -482,7 +482,7 @@ function MergedList({
       )}
 
       {/* Attribution is required per source, in both display modes. */}
-      <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border, var(--border))", paddingTop: "0.6rem" }}>
+      <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border)", paddingTop: "0.6rem" }}>
         {sources.map((s) => (
           <Attribution key={s.id} source={s} />
         ))}

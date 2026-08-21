@@ -121,7 +121,7 @@ export default function CbsResultCard({
             href={r.url}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: "var(--text, inherit)" }}
+            style={{ color: "var(--text)" }}
           >
             {(he ? r.title : r.title_en) || r.title || r.title_en || r.url}
           <span className="sr-only"> (נפתח בחלון חדש)</span></a>
@@ -341,7 +341,7 @@ export default function CbsResultCard({
                     marginBottom: "0.25rem",
                     background: "var(--surface-2)",
                     borderRadius: "4px",
-                    border: "1px solid var(--border, var(--border))",
+                    border: "1px solid var(--border)",
                   }}
                 >
                   <a

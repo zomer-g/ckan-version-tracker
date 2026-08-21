@@ -121,7 +121,7 @@ function OrgCard({ org, muted = false }: { org: Organization; muted?: boolean })
           width: 56,
           height: 56,
           borderRadius: 8,
-          background: "var(--primary-50, #e0e7ff)",
+          background: "var(--primary-50)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

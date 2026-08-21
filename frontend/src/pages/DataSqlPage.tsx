@@ -1257,7 +1257,7 @@ export default function DataSqlPage() {
               const ex = EXAMPLES.find((x) => x.label === e.target.value);
               if (ex) { setSqlText(ex.sql); setSqlResult(null); setSqlError(null); placeholderRef.current = false; }
             }}
-            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
+            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border)", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
           >
             <option value="">דוגמאות…</option>
             {EXAMPLE_GROUPS.map((g) => (
@@ -1277,7 +1277,7 @@ export default function DataSqlPage() {
         <div className="text-sm" style={{ marginBottom: "0.6rem", padding: "0.45rem 0.7rem",
                                           background: "var(--surface-2)", borderRadius: 6 }}>
           לא בטוחים באיזה מאגר להשתמש?{" "}
-          <Link to="/data/explore" style={{ color: "var(--primary, #0C5E58)", fontWeight: 600 }}>
+          <Link to="/data/explore" style={{ color: "var(--primary)", fontWeight: 600 }}>
             תארו מה אתם מחפשים ונציע מאגרים →
           </Link>
         </div>
@@ -1316,7 +1316,7 @@ export default function DataSqlPage() {
               title="ניקוי העורך, התוצאה והתרשים — והסרת השאילתה מכתובת העמוד"
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--border, var(--border))", background: "none",
+                border: "1px solid var(--border)", background: "none",
                 color: "var(--text-muted)", cursor: "pointer",
               }}
             >
@@ -1342,8 +1342,8 @@ export default function DataSqlPage() {
               title="העתקת קישור קצר שפותח את הקונסולה עם השאילתה הזו (וגם עם הגדרות המפה/התרשים)"
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--border, var(--border))", background: "none",
-                color: shared === "failed" ? "var(--danger, #992C2C)" : "var(--text-muted)",
+                border: "1px solid var(--border)", background: "none",
+                color: shared === "failed" ? "var(--danger)" : "var(--text-muted)",
                 cursor: "pointer",
               }}
             >
@@ -1359,8 +1359,8 @@ export default function DataSqlPage() {
               onClick={undoClear}
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--primary, var(--tint-teal-fg))", background: "none",
-                color: "var(--primary, #0C5E58)", cursor: "pointer",
+                border: "1px solid var(--primary)", background: "none",
+                color: "var(--primary)", cursor: "pointer",
               }}
             >
               ↩ החזר את השאילתה
@@ -1377,7 +1377,7 @@ export default function DataSqlPage() {
               onClick={() => downloadRowsCsv("over_query.csv", sqlResult.columns, sqlResult.rows)}
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", background: "none",
-                color: "var(--primary, #0C5E58)", border: "1px solid var(--primary, var(--tint-teal-fg))",
+                color: "var(--primary)", border: "1px solid var(--primary)",
                 borderRadius: 4, cursor: "pointer",
               }}
               title="הורדת התוצאה המוצגת כ-CSV"
@@ -1425,7 +1425,7 @@ export default function DataSqlPage() {
           </div>
         )}
         {sqlError && (
-          <div style={{ marginTop: "0.6rem", color: "var(--danger, #992C2C)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+          <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {sqlError}
           </div>
         )}
@@ -1442,13 +1442,13 @@ export default function DataSqlPage() {
               <thead>
                 <tr>
                   {sqlResult.columns.map((c) => (
-                    <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>{c}</th>
+                    <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border)" }}>{c}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {sqlResult.rows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     {sqlResult.columns.map((c) => (
                       <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
                     ))}
@@ -1480,7 +1480,7 @@ export default function DataSqlPage() {
             onChange={(e) => setFilter(e.target.value)}
             placeholder="חיפוש טבלה, מאגר, מקור או תגית…"
             aria-label="חיפוש טבלאות"
-            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, marginBottom: "0.5rem" }}
+            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4, marginBottom: "0.5rem" }}
           />
           {/* Expand/collapse all + total count */}
           {!loading && groups.length > 0 && (
@@ -1517,7 +1517,7 @@ export default function DataSqlPage() {
                         display: "inline-flex", gap: "0.3rem", alignItems: "center",
                         fontSize: "0.72rem", fontWeight: 600, cursor: "pointer",
                         padding: "0.15rem 0.45rem", borderRadius: 9999,
-                        border: `1px solid ${on ? f.fg : "var(--border, #cbd5e1)"}`,
+                        border: `1px solid ${on ? f.fg : "var(--border)"}`,
                         background: on ? f.bg : "transparent",
                         color: on ? f.fg : "var(--text-muted)",
                       }}
@@ -1538,7 +1538,7 @@ export default function DataSqlPage() {
           )}
 
           {loading && <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>טוען את רשימת הטבלאות…</div>}
-          {loadError && <div className="text-sm" style={{ padding: "0.5rem", color: "var(--danger, #992C2C)" }}>{loadError}</div>}
+          {loadError && <div className="text-sm" style={{ padding: "0.5rem", color: "var(--danger)" }}>{loadError}</div>}
           {!loading && shownTables.length === 0 && !loadError && (
             <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>אין טבלאות תואמות.</div>
           )}
@@ -1616,7 +1616,7 @@ export default function DataSqlPage() {
                             display: "flex", width: "100%", gap: "0.5rem", alignItems: "center",
                             textAlign: "start", padding: "0.3rem 0.45rem", borderRadius: 4, cursor: "pointer",
                             border: "none", marginBottom: 1,
-                            background: active ? "var(--bg, #fff)" : used ? "var(--tint-note-bg)" : "transparent",
+                            background: active ? "var(--bg)" : used ? "var(--tint-note-bg)" : "transparent",
                             boxShadow: active ? `inset 2px 0 0 ${badge.accent}` : "none",
                           }}
                         >
@@ -1701,7 +1701,7 @@ export default function DataSqlPage() {
                 </div>
               </div>
               {FIELD_FACETS.some((f) => facetCounts[f.key] > 0) && (
-                <div style={{ padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--surface-2, #f8fafc)", border: "1px solid var(--border, var(--border))", marginTop: "0.5rem" }}>
+                <div style={{ padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--surface-2)", border: "1px solid var(--border)", marginTop: "0.5rem" }}>
                   <strong style={{ display: "block", marginBottom: "0.4rem" }}>שדות תוכן — מפתחות ל-JOIN בין מאגרים</strong>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                     {FIELD_FACETS.filter((f) => facetCounts[f.key] > 0).map((f) => (
@@ -1789,7 +1789,7 @@ export default function DataSqlPage() {
                   {"</>"} שאילתה מוכנה
                 </button>
                 <a href={selectedTable.source_url} target="_blank" rel="noreferrer"
-                   style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
+                   style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none" }}>
                   ↗ מקור
                 <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 {selectedTable.kind === "dataset" && detail?.csv_url && (
@@ -1806,13 +1806,13 @@ export default function DataSqlPage() {
                 )}
                 {selectedTable.archive_url && (
                   <Link to={selectedTable.archive_url}
-                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
+                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none" }}>
                     ארכיון מלא →
                   </Link>
                 )}
                 {selectedTable.page_url && (
                   <Link to={selectedTable.page_url}
-                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
+                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none" }}>
                     עמוד הכנסת →
                   </Link>
                 )}
@@ -1862,12 +1862,12 @@ export default function DataSqlPage() {
                   <div className="text-sm text-muted">אין עדיין שורות בטבלה.</div>
                 )}
                 {detail && detail.sample.rows.length > 0 && (
-                  <div tabIndex={0} role="region" aria-label="דוגמת שורות מהטבלה" className="scroll-region" style={{ overflowX: "auto", maxHeight: 360, border: "1px solid var(--border, var(--border))", borderRadius: 4 }}>
+                  <div tabIndex={0} role="region" aria-label="דוגמת שורות מהטבלה" className="scroll-region" style={{ overflowX: "auto", maxHeight: 360, border: "1px solid var(--border)", borderRadius: 4 }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                       <thead>
                         <tr>
                           {detail.sample.columns.map((c) => (
-                            <th scope="col" key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>
+                            <th scope="col" key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--surface-2)", borderBottom: "2px solid var(--border)" }}>
                               {c}
                               {/* The caption under the name, where the source
                                   documents one: the header is the machine name
@@ -1884,7 +1884,7 @@ export default function DataSqlPage() {
                       </thead>
                       <tbody>
                         {detail.sample.rows.map((row, i) => (
-                          <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                          <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                             {detail.sample.columns.map((c) => (
                               <td key={c} style={{ padding: "0.3rem 0.6rem" }}>
                                 {c === "first_seen" ? fmtDate(row[c]) : String(row[c] ?? "")}

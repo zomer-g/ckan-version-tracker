@@ -31,7 +31,7 @@ const PAGE = 50;
 const DEEP_PAGE = 20;
 const inputStyle: React.CSSProperties = {
   padding: "0.4rem 0.6rem",
-  border: "1px solid var(--border, var(--border))",
+  border: "1px solid var(--border)",
   borderRadius: 4,
   fontSize: "0.9rem",
 };
@@ -164,7 +164,7 @@ export default function KnessetProtocolSearch() {
       <DetailRow label="עודכן" value={fmtDate(r.last_updated)} />
       {r.file_url && (
         <div style={{ marginTop: "0.35rem" }}>
-          <a href={r.file_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary, #0C5E58)", fontWeight: 600 }}>
+          <a href={r.file_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600 }}>
             הורדת הפרוטוקול ({(r.application || "DOC").toUpperCase()}) ↓
           <span className="sr-only"> (נפתח בחלון חדש)</span></a>
         </div>
@@ -191,7 +191,7 @@ export default function KnessetProtocolSearch() {
             style={{
               padding: "0.35rem 0.9rem", borderRadius: 999, cursor: "pointer",
               fontSize: "0.85rem", fontWeight: 600,
-              border: `1px solid ${mode === m ? "var(--primary, #0C5E58)" : "var(--border, #d1d5db)"}`,
+              border: `1px solid ${mode === m ? "var(--primary)" : "var(--border)"}`,
               background: mode === m ? "var(--fill-brand)" : "transparent",
               color: mode === m ? "var(--on-fill)" : "var(--text)",
             }}
@@ -272,7 +272,7 @@ export default function KnessetProtocolSearch() {
         </button>
       </form>
 
-      {error && <div style={{ color: "var(--danger, #992C2C)", fontSize: "0.88rem", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger)", fontSize: "0.88rem", marginBottom: "0.6rem" }}>{error}</div>}
 
       {loading && (
         <div className="loading" role="status" style={{ marginBottom: "0.6rem" }}>
@@ -302,7 +302,7 @@ export default function KnessetProtocolSearch() {
               <thead>
                 <tr>
                   {["", "כנסת", "ועדה", "מס׳ ישיבה", "תאריך", "פרוטוקול", ""].map((h, i) => (
-                    <th scope="col" key={i} style={{ textAlign: "start", padding: "0.4rem 0.6rem", borderBottom: "2px solid var(--border, var(--border))", background: "var(--surface-2)", whiteSpace: "nowrap" }}>{h}</th>
+                    <th scope="col" key={i} style={{ textAlign: "start", padding: "0.4rem 0.6rem", borderBottom: "2px solid var(--border)", background: "var(--surface-2)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -336,14 +336,14 @@ export default function KnessetProtocolSearch() {
                         <td style={{ padding: "0.35rem 0.6rem" }}>{r.document_name}</td>
                         <td style={{ padding: "0.35rem 0.6rem", whiteSpace: "nowrap" }}>
                           {r.file_url && (
-                            <a href={r.file_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--primary, #0C5E58)", fontWeight: 600 }}>
+                            <a href={r.file_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--primary)", fontWeight: 600 }}>
                               פתח ({(r.application || "DOC").toUpperCase()})
                             <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                           )}
                         </td>
                       </tr>
                       {isOpen && (
-                        <tr style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
                           <td colSpan={7} style={{ padding: 0 }}>{detail(r)}</td>
                         </tr>
                       )}
@@ -359,12 +359,12 @@ export default function KnessetProtocolSearch() {
           {total > PAGE && (
             <div className="flex" style={{ gap: "0.75rem", alignItems: "center", justifyContent: "center", marginTop: "0.75rem" }}>
               <button type="button" disabled={offset === 0 || loading} onClick={() => doSearch(Math.max(0, offset - PAGE))}
-                style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.5 : 1 }}>
+                style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.5 : 1 }}>
                 ← הקודם
               </button>
               <span className="text-sm text-muted">עמוד {Math.floor(offset / PAGE) + 1} מתוך {Math.ceil(total / PAGE)}</span>
               <button type="button" disabled={offset + PAGE >= total || loading} onClick={() => doSearch(offset + PAGE)}
-                style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", cursor: offset + PAGE >= total ? "default" : "pointer", opacity: offset + PAGE >= total ? 0.5 : 1 }}>
+                style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: offset + PAGE >= total ? "default" : "pointer", opacity: offset + PAGE >= total ? 0.5 : 1 }}>
                 הבא →
               </button>
             </div>
@@ -412,7 +412,7 @@ export default function KnessetProtocolSearch() {
                       </div>
                     )}
                     {d.snippet && (
-                      <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border, var(--border))", paddingInlineStart: "0.6rem" }}>
+                      <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border)", paddingInlineStart: "0.6rem" }}>
                         …{cleanSnippet(d.snippet)}…
                       </div>
                     )}
@@ -423,12 +423,12 @@ export default function KnessetProtocolSearch() {
             {deepResult.items.length > 0 && (
               <div className="flex" style={{ gap: "0.75rem", alignItems: "center", justifyContent: "center", marginTop: "0.75rem" }}>
                 <button type="button" disabled={offset === 0 || loading} onClick={() => doSearch(Math.max(0, offset - DEEP_PAGE))}
-                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.5 : 1 }}>
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.5 : 1 }}>
                   ← הקודם
                 </button>
                 <span className="text-sm text-muted">עמוד {Math.floor(offset / DEEP_PAGE) + 1}</span>
                 <button type="button" disabled={!hasNext || loading} onClick={() => doSearch(offset + DEEP_PAGE)}
-                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", cursor: !hasNext ? "default" : "pointer", opacity: !hasNext ? 0.5 : 1 }}>
+                  style={{ padding: "0.35rem 0.9rem", borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: !hasNext ? "default" : "pointer", opacity: !hasNext ? 0.5 : 1 }}>
                   הבא →
                 </button>
               </div>

@@ -284,7 +284,7 @@ export default function OdataImportPanel() {
           <div tabIndex={0} role="region" aria-label="תצוגה מקדימה של הייבוא" className="scroll-region" style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
               <thead>
-                <tr style={{ textAlign: "start", borderBottom: "2px solid var(--border, var(--border))" }}>
+                <tr style={{ textAlign: "start", borderBottom: "2px solid var(--border)" }}>
                   <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>כותרת</th>
                   <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>טבלה</th>
                   <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>שורות</th>
@@ -294,7 +294,7 @@ export default function OdataImportPanel() {
               </thead>
               <tbody>
                 {imports.map((imp) => (
-                  <tr key={imp.resource_id} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                  <tr key={imp.resource_id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.4rem 0.5rem" }}>
                       {imp.source_url ? (
                         <a href={imp.source_url} target="_blank" rel="noopener noreferrer">{imp.title || imp.resource_id}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
@@ -327,7 +327,7 @@ export default function OdataImportPanel() {
           style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", maxWidth: 520 }}>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="חיפוש פריט במידע לעם…" aria-label="חיפוש פריט במידע לעם"
-            style={{ flex: 1, minWidth: 0, padding: "0.45rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }} />
+            style={{ flex: 1, minWidth: 0, padding: "0.45rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }} />
           <button type="submit" disabled={loading}
             style={{ padding: "0.45rem 1rem", border: "none", borderRadius: 4, background: "var(--fill-warn)", color: "var(--on-fill-warn)", fontWeight: 600, cursor: "pointer" }}>
             {loading ? "מחפש…" : "חפש"}

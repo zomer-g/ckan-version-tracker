@@ -156,7 +156,7 @@ export default function OcoiGraphView({
         style={{
           height,
           width: "100%",
-          border: "1px solid var(--border, var(--border))",
+          border: "1px solid var(--border)",
           borderRadius: 8,
           background: "var(--surface)",
         }}
@@ -181,7 +181,7 @@ export default function OcoiGraphView({
         ))}
         <span>· {graph.nodes.length.toLocaleString()} צמתים, {graph.edges.length.toLocaleString()} קשרים</span>
         {graph.truncated && (
-          <span style={{ color: "var(--warning, #873E07)", fontWeight: 600 }}>
+          <span style={{ color: "var(--warning)", fontWeight: 600 }}>
             · תצוגה חלקית — הגרף נחתך בתקרת השרת
           </span>
         )}

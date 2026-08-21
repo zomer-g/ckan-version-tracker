@@ -131,7 +131,7 @@ export default function OcalSearch() {
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
   const inputStyle: React.CSSProperties = {
-    padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.9rem",
+    padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4, fontSize: "0.9rem",
   };
 
   return (
@@ -182,7 +182,7 @@ export default function OcalSearch() {
         </select>
       </div>
 
-      {error && <div style={{ color: "var(--danger, #992C2C)", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger)", marginBottom: "0.6rem" }}>{error}</div>}
 
       <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }} role="status">
         {loading ? "טוען…" : `${total.toLocaleString()} תוצאות`}

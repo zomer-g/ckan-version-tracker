@@ -59,11 +59,11 @@ export default function KnessetGuidePage() {
 
       <style>{`
         .kns-guide h1 { font-size: 1.6rem; margin: 0 0 1rem; }
-        .kns-guide h2 { font-size: 1.25rem; margin: 2rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); }
+        .kns-guide h2 { font-size: 1.25rem; margin: 2rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border); }
         .kns-guide h3 { font-size: 1.02rem; margin: 1.4rem 0 0.5rem; }
         .kns-guide p, .kns-guide li { font-size: 0.93rem; }
-        .kns-guide a { color: var(--primary, #0C5E58); }
-        .kns-guide hr { border: none; border-top: 1px solid var(--border, #e5e7eb); margin: 1.5rem 0; }
+        .kns-guide a { color: var(--primary); }
+        .kns-guide hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
         .kns-guide code {
           direction: ltr; unicode-bidi: embed;
           background: var(--surface-2); border-radius: 3px;
@@ -71,7 +71,7 @@ export default function KnessetGuidePage() {
         }
         .kns-guide pre {
           direction: ltr; text-align: left;
-          background: var(--surface-2); border: 1px solid var(--border, #e5e7eb);
+          background: var(--surface-2); border: 1px solid var(--border);
           border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto;
         }
         .kns-guide pre code { background: none; padding: 0; font-size: 0.84rem; }
@@ -80,13 +80,13 @@ export default function KnessetGuidePage() {
           font-size: 0.86rem; display: block; overflow-x: auto;
         }
         .kns-guide th, .kns-guide td {
-          border: 1px solid var(--border, #e5e7eb); padding: 0.35rem 0.6rem;
+          border: 1px solid var(--border); padding: 0.35rem 0.6rem;
           text-align: start; vertical-align: top;
         }
         .kns-guide th { background: var(--surface-2); }
         .kns-guide blockquote {
           margin: 0.8rem 0; padding: 0.4rem 1rem;
-          border-inline-start: 3px solid var(--primary, #0C5E58);
+          border-inline-start: 3px solid var(--primary);
           background: var(--surface-2); color: var(--text-muted);
         }
       `}</style>

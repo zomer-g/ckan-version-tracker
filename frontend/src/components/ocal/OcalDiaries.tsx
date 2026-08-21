@@ -71,7 +71,7 @@ export default function OcalDiaries() {
     }
   };
 
-  const th: React.CSSProperties = { textAlign: "start", padding: "0.45rem 0.6rem", borderBottom: "2px solid var(--border, var(--border))", fontSize: "0.82rem", position: "sticky", top: 0, background: "var(--surface-2)" };
+  const th: React.CSSProperties = { textAlign: "start", padding: "0.45rem 0.6rem", borderBottom: "2px solid var(--border)", fontSize: "0.82rem", position: "sticky", top: 0, background: "var(--surface-2)" };
   const td: React.CSSProperties = { padding: "0.4rem 0.6rem", fontSize: "0.85rem", verticalAlign: "top" };
   const dl: React.CSSProperties = { fontSize: "0.78rem", color: "var(--primary)", textDecoration: "underline" };
 
@@ -84,7 +84,7 @@ export default function OcalDiaries() {
           onChange={(e) => setFilter(e.target.value)}
           placeholder="סינון יומנים לפי שם / בעלים…"
           aria-label="סינון יומנים"
-          style={{ flex: "1 1 280px", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+          style={{ flex: "1 1 280px", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }}
         />
         <span className="text-sm text-muted">
           {loading ? "טוען…" : `${shown.length.toLocaleString()} יומנים`}
@@ -92,9 +92,9 @@ export default function OcalDiaries() {
         </span>
       </div>
 
-      {error && <div style={{ color: "var(--danger, #992C2C)", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger)", marginBottom: "0.6rem" }}>{error}</div>}
 
-      <div tabIndex={0} role="region" aria-label="יומני הפגישות" className="scroll-region" style={{ overflowX: "auto", maxHeight: 620, border: "1px solid var(--border, var(--border))", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="יומני הפגישות" className="scroll-region" style={{ overflowX: "auto", maxHeight: 620, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
           <thead>
             <tr>
@@ -110,7 +110,7 @@ export default function OcalDiaries() {
           </thead>
           <tbody>
             {shown.map((s) => (
-              <tr key={s.id} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+              <tr key={s.id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={td}>
                   <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)} aria-label={`בחר ${s.name}`} />
                 </td>
@@ -142,7 +142,7 @@ export default function OcalDiaries() {
       {selected.size > 0 && (
         <div style={{
           position: "sticky", bottom: 0, marginTop: "0.6rem", padding: "0.6rem 0.9rem",
-          background: "var(--bg, #fff)", border: "1px solid var(--border, var(--border))", borderRadius: 6,
+          background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6,
           display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap",
           boxShadow: "0 -2px 8px rgba(0,0,0,0.06)",
         }}>

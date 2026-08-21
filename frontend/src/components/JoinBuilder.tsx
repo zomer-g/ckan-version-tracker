@@ -30,7 +30,7 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 });
 const box: React.CSSProperties = {
   fontSize: "0.8rem", padding: "0.2rem 0.4rem", borderRadius: 4,
-  border: "1px solid var(--border)", background: "var(--bg,#fff)",
+  border: "1px solid var(--border)", background: "var(--bg)",
 };
 
 // over_settlements / over_authorities columns offered for enrichment.
@@ -152,21 +152,21 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
           {/* left */}
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: "0.5rem" }}>
             <b>צד שמאל:</b>
-            <span style={chip("#f1f5f9", "#475569")}>{profile.table_name}</span>
+            <span style={chip("var(--tint-neutral-bg)", "var(--tint-neutral-fg)")}>{profile.table_name}</span>
             <span>שדה יישוב:</span>
             {leftCols.length > 1 ? (
               <select value={leftCol} onChange={(e) => setLeftCol(e.target.value)} aria-label="שדה היישוב בצד שמאל" style={box}>
                 {leftCols.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            ) : <span style={chip("#e0f2fe", "#035887")}>{leftCol}</span>}
+            ) : <span style={chip("var(--tint-sky-bg)", "var(--tint-sky-fg)")}>{leftCol}</span>}
             <button style={box} onClick={() => checkCoverage("left", profile.schema_name, profile.table_name, leftCol)}>בדוק כיסוי</button>
             {covChip(cov.left)}
           </div>
 
           {/* mode toggle */}
           <div style={{ display: "flex", gap: 6, marginBottom: "0.5rem" }}>
-            <button onClick={() => setMode("dataset")} style={{ ...box, fontWeight: mode === "dataset" ? 700 : 400, background: mode === "dataset" ? "#dbeafe" : "var(--bg,#fff)" }}>הצלבה למאגר אחר</button>
-            <button onClick={() => setMode("enrich")} style={{ ...box, fontWeight: mode === "enrich" ? 700 : 400, background: mode === "enrich" ? "#dbeafe" : "var(--bg,#fff)" }}>העשרה מהאינדקס</button>
+            <button onClick={() => setMode("dataset")} style={{ ...box, fontWeight: mode === "dataset" ? 700 : 400, background: mode === "dataset" ? "#dbeafe" : "var(--bg)" }}>הצלבה למאגר אחר</button>
+            <button onClick={() => setMode("enrich")} style={{ ...box, fontWeight: mode === "enrich" ? 700 : 400, background: mode === "enrich" ? "#dbeafe" : "var(--bg)" }}>העשרה מהאינדקס</button>
           </div>
 
           {mode === "dataset" ? (
@@ -184,7 +184,7 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
                     <select value={rightCol} onChange={(e) => setRightCol(e.target.value)} aria-label="שדה היישוב בצד ימין" style={box}>
                       {rightLocCols.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                  ) : <span style={chip("#e0f2fe", "#035887")}>{rightCol}</span>}
+                  ) : <span style={chip("var(--tint-sky-bg)", "var(--tint-sky-fg)")}>{rightCol}</span>}
                   <button style={box} onClick={() => rightTableRec && checkCoverage("right", rightTableRec.schema, rightTableRec.table, rightCol)}>בדוק כיסוי</button>
                   {covChip(cov.right)}
                 </>

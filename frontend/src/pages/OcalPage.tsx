@@ -62,7 +62,7 @@ export default function OcalPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, var(--border))", marginBottom: "1rem", flexWrap: "wrap" }}>
+        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border)", marginBottom: "1rem", flexWrap: "wrap" }}>
           {TAB_LABELS.map(([id, label]) => (
             <button
               key={id}
@@ -71,8 +71,8 @@ export default function OcalPage() {
               style={{
                 padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
                 fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
-                borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
+                color: tab === id ? "var(--primary)" : "var(--text-muted)",
+                borderBottom: tab === id ? "3px solid var(--primary)" : "3px solid transparent",
                 marginBottom: -2,
               }}
             >

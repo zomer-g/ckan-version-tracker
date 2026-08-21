@@ -32,7 +32,7 @@ const chip = (stage: string) => {
 };
 const box: React.CSSProperties = {
   fontSize: "0.82rem", padding: "0.25rem 0.45rem", borderRadius: 4,
-  border: "1px solid var(--border, var(--border))", background: "var(--bg, #fff)",
+  border: "1px solid var(--border)", background: "var(--bg)",
 };
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : Number(n).toLocaleString("he-IL");
@@ -87,7 +87,7 @@ export default function NlQueryAdminPanel() {
       {err && <div style={{ color: "var(--danger)", marginBottom: "0.6rem" }}>{err}</div>}
 
       {/* ── switches ───────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
         <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>מתגי הפעלה</div>
         {cfg && (
           <>
@@ -154,7 +154,7 @@ export default function NlQueryAdminPanel() {
       </div>
 
       {/* ── cost ───────────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
         <div className="flex" style={{ alignItems: "center", gap: 10, marginBottom: "0.5rem" }}>
           <span style={{ fontWeight: 600 }}>עלות ושימוש</span>
           <select value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="טווח ימים לחישוב העלות" style={box}>
@@ -207,7 +207,7 @@ export default function NlQueryAdminPanel() {
             </div>
             <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ textAlign: "start", color: "var(--text-muted, #464F5E)" }}>
+                <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
                   <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>שלב</th>
                   <th scope="col" style={{ textAlign: "start" }}>שאלות</th>
                   <th scope="col" style={{ textAlign: "start" }}>נענו</th>
@@ -219,7 +219,7 @@ export default function NlQueryAdminPanel() {
               </thead>
               <tbody>
                 {stats.by_stage.map((s) => (
-                  <tr key={s.stage} style={{ borderTop: "1px solid var(--border, var(--border))" }}>
+                  <tr key={s.stage} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem 0" }}><span style={chip(s.stage)}>{STAGE_LABEL[s.stage] || s.stage}</span></td>
                     <td>{fmt(s.n)}</td><td>{fmt(s.answered)}</td><td>{fmt(s.escalated)}</td>
                     <td>{fmt(s.input_tokens)}</td><td>{fmt(s.output_tokens)}</td>
@@ -234,7 +234,7 @@ export default function NlQueryAdminPanel() {
 
       {/* ── explorer: searches, picks, synonym candidates ──────────── */}
       {sug && (
-        <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+        <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
           <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>
             מצא נתונים — חיפושים ובחירות
           </div>
@@ -278,7 +278,7 @@ export default function NlQueryAdminPanel() {
               {sug.synonym_candidates.map((c) => (
                 <div key={`${c.query}|${c.picked_table}`} className="flex"
                      style={{ gap: 8, alignItems: "center", flexWrap: "wrap", padding: "0.25rem 0",
-                              borderTop: "1px solid var(--border, var(--border))", fontSize: "0.82rem" }}>
+                              borderTop: "1px solid var(--border)", fontSize: "0.82rem" }}>
                   <b>{c.query}</b>
                   <span className="text-muted">← {c.picked_table}</span>
                   <span style={chip("cache")}>{c.n}</span>
@@ -303,7 +303,7 @@ export default function NlQueryAdminPanel() {
             </summary>
             <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse", marginTop: 6 }}>
               <thead>
-                <tr style={{ color: "var(--text-muted, #464F5E)" }}>
+                <tr style={{ color: "var(--text-muted)" }}>
                   <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
                   <th scope="col" style={{ textAlign: "start" }}>חיפוש</th>
                   <th scope="col" style={{ textAlign: "start" }}>הצעות</th>
@@ -313,7 +313,7 @@ export default function NlQueryAdminPanel() {
               </thead>
               <tbody>
                 {sug.rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: "1px solid var(--border, var(--border))" }}>
+                  <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
                     <td className="text-muted" style={{ padding: "0.22rem 0", whiteSpace: "nowrap" }}>
                       {new Date(r.created_at).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })}
                     </td>
@@ -337,7 +337,7 @@ export default function NlQueryAdminPanel() {
       )}
 
       {/* ── log ────────────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem" }}>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.7rem 0.85rem" }}>
         <div className="flex" style={{ alignItems: "center", gap: 10, marginBottom: "0.5rem", flexWrap: "wrap" }}>
           <span style={{ fontWeight: 600 }}>לוג שאלות</span>
           <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="סינון הלוג לפי שלב" style={box}>
@@ -351,7 +351,7 @@ export default function NlQueryAdminPanel() {
         </div>
         <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
           <thead>
-            <tr style={{ color: "var(--text-muted, #464F5E)" }}>
+            <tr style={{ color: "var(--text-muted)" }}>
               <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
               <th scope="col" style={{ textAlign: "start" }}>שאלה</th>
               <th scope="col" style={{ textAlign: "start" }}>שלב</th>
@@ -363,7 +363,7 @@ export default function NlQueryAdminPanel() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} style={{ borderTop: "1px solid var(--border, var(--border))", verticalAlign: "top" }}>
+              <tr key={r.id} style={{ borderTop: "1px solid var(--border)", verticalAlign: "top" }}>
                 <td style={{ padding: "0.3rem 0", whiteSpace: "nowrap" }} className="text-muted">
                   {new Date(r.created_at).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })}
                 </td>
@@ -373,7 +373,7 @@ export default function NlQueryAdminPanel() {
                     <>
                       {" "}
                       <button onClick={() => setOpenSql(openSql === r.id ? null : r.id)}
-                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0C5E58)", fontSize: "0.72rem", textDecoration: "underline" }}>
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary)", fontSize: "0.72rem", textDecoration: "underline" }}>
                         SQL
                       </button>
                       {openSql === r.id && (

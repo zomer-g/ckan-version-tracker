@@ -157,7 +157,7 @@ export default function OrganizationDetailPage() {
                 ) : (
                   <div style={{
                     width: 40, height: 40, borderRadius: 6,
-                    background: "var(--primary-50, #e0e7ff)",
+                    background: "var(--primary-50)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: "1.1rem", color: "var(--primary)", flexShrink: 0,
                   }}>🏛</div>

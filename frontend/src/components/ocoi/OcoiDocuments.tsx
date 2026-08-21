@@ -142,7 +142,7 @@ export default function OcoiDocuments({
                     {d.verified && (
                       <span
                         title="אומת על ידי עורך תוכן"
-                        style={{ marginInlineStart: "0.4rem", color: "var(--success, #0F5A2A)" }}
+                        style={{ marginInlineStart: "0.4rem", color: "var(--success)" }}
                       >
                         ✔
                       </span>

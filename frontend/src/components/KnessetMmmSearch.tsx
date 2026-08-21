@@ -124,7 +124,7 @@ export default function KnessetMmmSearch() {
               style={{
                 padding: "0.35rem 0.9rem", borderRadius: 999, cursor: "pointer",
                 fontSize: "0.85rem", fontWeight: 600,
-                border: `1px solid ${mode === m ? "var(--primary, #0C5E58)" : "var(--border, #d1d5db)"}`,
+                border: `1px solid ${mode === m ? "var(--primary)" : "var(--border)"}`,
                 background: mode === m ? "var(--fill-brand)" : "transparent",
                 color: mode === m ? "var(--on-fill)" : "var(--text)",
               }}
@@ -141,7 +141,7 @@ export default function KnessetMmmSearch() {
             onChange={(e) => setQ(e.target.value)}
             placeholder={mode === "deep" ? "חיפוש בתוך תוכן המסמכים המלא…" : "חיפוש בכותרת, במילות המפתח ובתמצית…"}
             aria-label="חיפוש במסמכי ממ״מ"
-            style={{ flex: "2 1 280px", padding: "0.5rem 0.75rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+            style={{ flex: "2 1 280px", padding: "0.5rem 0.75rem", border: "1px solid var(--border)", borderRadius: 4 }}
           />
           {mode === "fast" && (
             <>
@@ -151,13 +151,13 @@ export default function KnessetMmmSearch() {
                 onChange={(e) => setAuthor(e.target.value)}
                 placeholder="כותב/ת או מאשר/ת…"
                 aria-label="סינון לפי כותב"
-                style={{ flex: "1 1 170px", padding: "0.5rem 0.75rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+                style={{ flex: "1 1 170px", padding: "0.5rem 0.75rem", border: "1px solid var(--border)", borderRadius: 4 }}
               />
               <select
                 value={docType}
                 onChange={(e) => setDocType(e.target.value)}
                 aria-label="סוג מסמך"
-                style={{ flex: "1 1 150px", padding: "0.5rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+                style={{ flex: "1 1 150px", padding: "0.5rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }}
               >
                 <option value="">כל סוגי המסמכים</option>
                 {facets?.doc_types.map((t) => (
@@ -186,7 +186,7 @@ export default function KnessetMmmSearch() {
           {error}
           <div style={{ marginTop: "0.6rem" }}>
             <button type="button" onClick={retry}
-              style={{ padding: "0.35rem 1rem", borderRadius: 4, border: "1px solid var(--primary, var(--tint-teal-fg))", background: "none", color: "var(--primary, #0C5E58)", cursor: "pointer", fontWeight: 600 }}>
+              style={{ padding: "0.35rem 1rem", borderRadius: 4, border: "1px solid var(--primary)", background: "none", color: "var(--primary)", cursor: "pointer", fontWeight: 600 }}>
               נסו שוב
             </button>
           </div>
@@ -214,13 +214,13 @@ export default function KnessetMmmSearch() {
               <thead>
                 <tr>
                   {["תאריך", "כותרת", "סוג", "כתיבה", "נכתב לבקשת", "PDF"].map((h) => (
-                    <th scope="col" key={h} style={{ textAlign: "start", padding: "0.5rem 0.7rem", background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))", whiteSpace: "nowrap" }}>{h}</th>
+                    <th scope="col" key={h} style={{ textAlign: "start", padding: "0.5rem 0.7rem", background: "var(--surface-2)", borderBottom: "2px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {result.items.map((d) => (
-                  <tr key={d.rid} style={{ borderBottom: "1px solid var(--border, var(--border))", verticalAlign: "top" }}>
+                  <tr key={d.rid} style={{ borderBottom: "1px solid var(--border)", verticalAlign: "top" }}>
                     <td style={{ padding: "0.45rem 0.7rem", whiteSpace: "nowrap" }}>{d.date_text || d.date || ""}</td>
                     <td style={{ padding: "0.45rem 0.7rem", maxWidth: 420 }}>
                       <button
@@ -294,7 +294,7 @@ export default function KnessetMmmSearch() {
                     </div>
                   )}
                   {d.snippet && (
-                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border, var(--border))", paddingInlineStart: "0.6rem" }}>
+                    <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--text-muted)", lineHeight: 1.6, borderInlineStart: "3px solid var(--border)", paddingInlineStart: "0.6rem" }}>
                       …{cleanSnippet(d.snippet)}…
                     </div>
                   )}
@@ -316,12 +316,12 @@ export default function KnessetMmmSearch() {
           <div className="flex" style={{ gap: "0.5rem" }}>
             <button type="button" disabled={offset === 0 || loading}
               onClick={() => { const o = Math.max(0, offset - PAGE); setOffset(o); load(o); }}
-              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
+              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border)", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
               &rarr; הקודם
             </button>
             <button type="button" disabled={!hasNext || loading}
               onClick={() => { const o = offset + PAGE; setOffset(o); load(o); }}
-              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: !hasNext ? "not-allowed" : "pointer" }}>
+              style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border)", borderRadius: 4, background: "none", cursor: !hasNext ? "not-allowed" : "pointer" }}>
               הבא &larr;
             </button>
           </div>

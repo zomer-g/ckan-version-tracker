@@ -70,7 +70,7 @@ export function ErrorNote({ error }: { error: string }) {
         padding: "0.7rem 0.9rem",
         borderRadius: 8,
         background: "var(--tint-bad-bg)",
-        color: "var(--danger, #992C2C)",
+        color: "var(--danger)",
         fontSize: "0.9rem",
         margin: "0.75rem 0",
       }}

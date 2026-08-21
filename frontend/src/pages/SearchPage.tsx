@@ -2195,7 +2195,7 @@ export default function SearchPage() {
                     padding: "0.75rem",
                     background: "var(--surface-2)",
                     borderRadius: "6px",
-                    border: "1px solid var(--border, var(--border))",
+                    border: "1px solid var(--border)",
                   }}
                 >
                   <div className="flex-between">
@@ -2227,7 +2227,7 @@ export default function SearchPage() {
                         marginBottom: "0.3rem",
                         background: "var(--surface-2)",
                         borderRadius: "4px",
-                        border: "1px solid var(--border, var(--border))",
+                        border: "1px solid var(--border)",
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",

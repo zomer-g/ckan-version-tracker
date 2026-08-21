@@ -139,7 +139,7 @@ export default function PageContentPanel() {
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
         <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">📝</span> טקסטים של עמודים</h2>
-        <a href={pageDef.path} target="_blank" rel="noopener noreferrer" className="text-sm" style={{ color: "var(--primary, #2563eb)" }}>
+        <a href={pageDef.path} target="_blank" rel="noopener noreferrer" className="text-sm" style={{ color: "var(--primary)" }}>
           פתח את עמוד {pageDef.label} ↗
         <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       </div>
@@ -201,7 +201,7 @@ export default function PageContentPanel() {
                   border: "1px solid var(--border)",
                   borderRadius: "8px",
                   padding: "0.6rem 0.75rem",
-                  background: overridden ? "var(--surface, #f8fafc)" : "transparent",
+                  background: overridden ? "var(--surface)" : "transparent",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.35rem", flexWrap: "wrap" }}>

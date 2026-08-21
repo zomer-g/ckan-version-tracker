@@ -45,7 +45,7 @@ function kindOf(type: string, profiled?: string): "text" | "number" | "date" {
 }
 
 const box: React.CSSProperties = {
-  padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))",
+  padding: "0.25rem 0.4rem", border: "1px solid var(--border)",
   borderRadius: 4, fontSize: "0.82rem", maxWidth: 240,
 };
 
@@ -148,7 +148,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
   if (!cols.length) return null;
 
   return (
-    <div dir="rtl" style={{ border: "1px dashed var(--border, var(--border))", borderRadius: 6, margin: "0.6rem 0 0.4rem", overflow: "hidden" }}>
+    <div dir="rtl" style={{ border: "1px dashed var(--border)", borderRadius: 6, margin: "0.6rem 0 0.4rem", overflow: "hidden" }}>
       <button onClick={() => setOpen((o) => !o)}
         style={{ width: "100%", textAlign: "start", padding: "0.5rem 0.8rem", background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: "0.85rem" }}>
         <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>

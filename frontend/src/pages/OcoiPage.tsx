@@ -113,7 +113,7 @@ export default function OcoiPage() {
           className="flex"
           style={{
             gap: "0.3rem",
-            borderBottom: "2px solid var(--border, var(--border))",
+            borderBottom: "2px solid var(--border)",
             marginBottom: "1rem",
             flexWrap: "wrap",
           }}
@@ -130,8 +130,8 @@ export default function OcoiPage() {
                 background: "none",
                 fontSize: "0.95rem",
                 fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
-                borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
+                color: tab === id ? "var(--primary)" : "var(--text-muted)",
+                borderBottom: tab === id ? "3px solid var(--primary)" : "3px solid transparent",
                 marginBottom: -2,
               }}
             >

@@ -66,7 +66,7 @@ export default function OcalCalendar() {
   };
 
   const navBtn: React.CSSProperties = {
-    padding: "0.35rem 0.8rem", borderRadius: 4, border: "1px solid var(--border, var(--border))",
+    padding: "0.35rem 0.8rem", borderRadius: 4, border: "1px solid var(--border)",
     background: "none", cursor: "pointer", fontSize: "0.85rem",
   };
 
@@ -86,9 +86,9 @@ export default function OcalCalendar() {
         </span>
       </div>
 
-      {error && <div style={{ color: "var(--danger, #992C2C)", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger)", marginBottom: "0.6rem" }}>{error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1, background: "var(--border, #e2e8f0)", border: "1px solid var(--border, var(--border))", borderRadius: 6, overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1, background: "var(--border)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
         {HE_DOW.map((d) => (
           <div key={d} style={{ background: "var(--surface-2)", textAlign: "center", padding: "0.35rem 0", fontWeight: 600, fontSize: "0.8rem", color: "var(--text-muted)" }}>{d}</div>
         ))}
@@ -100,7 +100,7 @@ export default function OcalCalendar() {
               type="button"
               onClick={() => setSelected(c.dateStr === selected ? null : c.dateStr)}
               style={{
-                background: c.dateStr === selected ? "var(--surface-2)" : "var(--bg, #fff)",
+                background: c.dateStr === selected ? "var(--surface-2)" : "var(--bg)",
                 minHeight: 92, padding: "0.3rem", textAlign: "start", border: "none",
                 cursor: "pointer", opacity: c.inMonth ? 1 : 0.4, display: "flex", flexDirection: "column", gap: 2,
               }}
@@ -132,7 +132,7 @@ export default function OcalCalendar() {
           <span className="text-sm text-muted">· {selectedEvents.length} אירועים</span>
           <ul style={{ margin: "0.6rem 0 0", padding: 0, listStyle: "none" }}>
             {selectedEvents.map((ev) => (
-              <li key={ev.id} style={{ padding: "0.4rem 0", borderTop: "1px solid var(--border, var(--border))", display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+              <li key={ev.id} style={{ padding: "0.4rem 0", borderTop: "1px solid var(--border)", display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
                 <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: ev.source_color || "#3B82F6", flex: "0 0 auto" }} />
                 <span className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>{[fmtTime(ev.start_time), fmtTime(ev.end_time)].filter(Boolean).join("–") || "—"}</span>
                 <span style={{ fontWeight: 500 }}>

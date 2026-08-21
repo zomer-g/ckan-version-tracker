@@ -90,7 +90,7 @@ export default function NlQueryBox({ onUseSql }: {
              + "על מה ששאלתם." };
 
   return (
-    <div dir="rtl" style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.8rem", marginBottom: "0.7rem", background: "var(--surface-2)" }}>
+    <div dir="rtl" style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.7rem 0.8rem", marginBottom: "0.7rem", background: "var(--surface-2)" }}>
       <div className="flex" style={{ alignItems: "center", gap: 8, marginBottom: "0.45rem", flexWrap: "wrap" }}>
         <span style={{ fontWeight: 600, fontSize: "0.9rem" }}><span aria-hidden="true">💬</span> שאלו בשפה חופשית</span>
         {/* Stated up front, not buried in a tooltip. The feature can pick the
@@ -110,7 +110,7 @@ export default function NlQueryBox({ onUseSql }: {
           onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
           maxLength={400}
           placeholder="למשל: כמה רישיונות עסק לפי יישוב"
-          style={{ flex: "1 1 320px", minWidth: 240, padding: "0.4rem 0.6rem", fontSize: "0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))" }}
+          style={{ flex: "1 1 320px", minWidth: 240, padding: "0.4rem 0.6rem", fontSize: "0.9rem", borderRadius: 4, border: "1px solid var(--border)" }}
         />
         <button
           type="button" onClick={() => ask()} disabled={busy || !q.trim()}
@@ -129,7 +129,7 @@ export default function NlQueryBox({ onUseSql }: {
             <span key={ex.question}>
               {i > 0 && " · "}
               <button type="button" onClick={() => ask(ex.question)}
-                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0C5E58)", textDecoration: "underline", fontSize: "0.75rem" }}>
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary)", textDecoration: "underline", fontSize: "0.75rem" }}>
                 {ex.question}
               </button>
             </span>

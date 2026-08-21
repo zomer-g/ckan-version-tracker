@@ -19,15 +19,15 @@ const SECTIONS: [Section, string][] = [
 
 const btn: React.CSSProperties = {
   padding: "0.25rem 0.6rem", fontSize: "0.78rem", borderRadius: 4,
-  border: "1px solid var(--border, var(--border))", background: "none", cursor: "pointer",
+  border: "1px solid var(--border)", background: "none", cursor: "pointer",
 };
 const th: React.CSSProperties = {
-  textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border, var(--border))",
+  textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border)",
   fontSize: "0.78rem", position: "sticky", top: 0, background: "var(--surface-2)",
 };
 const td: React.CSSProperties = { padding: "0.35rem 0.55rem", fontSize: "0.82rem", verticalAlign: "top" };
 const inp: React.CSSProperties = {
-  padding: "0.35rem 0.5rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.85rem",
+  padding: "0.35rem 0.5rem", border: "1px solid var(--border)", borderRadius: 4, fontSize: "0.85rem",
 };
 
 // CKAN resource last-modified/upload timestamp → readable he-IL date (or —).
@@ -44,7 +44,7 @@ function useMsg() {
   const fail = (e: unknown) => { setErr((e as Error)?.message || "שגיאה"); setMsg(null); };
   const node = (
     <>
-      {err && <div style={{ color: "var(--danger, #992C2C)", margin: "0.4rem 0" }}>{err}</div>}
+      {err && <div style={{ color: "var(--danger)", margin: "0.4rem 0" }}>{err}</div>}
       {msg && <div style={{ color: "var(--primary)", margin: "0.4rem 0" }}>{msg}</div>}
     </>
   );

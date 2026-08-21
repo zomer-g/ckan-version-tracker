@@ -773,7 +773,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         position: "fixed",
         inset: 0,
         zIndex: 1000,
-        background: "var(--bg, #fff)",
+        background: "var(--bg)",
         margin: 0,
         padding: "0.5rem",
         display: "flex",
@@ -815,7 +815,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             left: "0.5rem",
             zIndex: 500,
             background: "var(--surface)",
-            border: "1px solid var(--border, var(--border))",
+            border: "1px solid var(--border)",
             borderRadius: 4,
             padding: "0.25rem 0.6rem",
             fontSize: "0.75rem",
@@ -832,7 +832,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             role="alert"
             style={{
               padding: "1rem",
-              color: "var(--danger, #992C2C)",
+              color: "var(--danger)",
               fontSize: "0.9rem",
             }}
           >
@@ -895,7 +895,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
                   padding: "0.45rem 1rem",
                   fontSize: "0.85rem",
                   background: "none",
-                  border: "1px solid var(--border, var(--border))",
+                  border: "1px solid var(--border)",
                   color: "var(--text-muted)",
                   borderRadius: 4,
                   cursor: "pointer",
@@ -980,7 +980,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
                   width: "70%",
                   maxWidth: 320,
                   height: 4,
-                  background: "var(--border, #e2e8f0)",
+                  background: "var(--border)",
                   borderRadius: 2,
                   overflow: "hidden",
                 }}
@@ -1084,7 +1084,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               fontSize: "0.75rem",
               padding: "0.2rem 0.55rem",
               background: "none",
-              border: "1px solid var(--border, var(--border))",
+              border: "1px solid var(--border)",
               color: "var(--text-muted)",
               borderRadius: 4,
               cursor: "pointer",
@@ -1146,7 +1146,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               padding: "0.3rem 0.5rem",
               fontSize: "0.7rem",
               background: "none",
-              border: "1px dashed var(--border, var(--border))",
+              border: "1px dashed var(--border)",
               color: "var(--text-muted)",
               borderRadius: 4,
               cursor: "pointer",
@@ -1262,7 +1262,7 @@ function FieldFilter(props: {
   return (
     <fieldset
       style={{
-        border: "1px solid var(--border, var(--border))",
+        border: "1px solid var(--border)",
         borderRadius: 6,
         padding: "0.5rem 0.6rem",
         margin: "0 0 0.6rem 0",
@@ -1357,7 +1357,7 @@ function SortToggle(props: {
   const { mode, onChange, t } = props;
   const baseStyle: React.CSSProperties = {
     background: "none",
-    border: "1px solid var(--border, var(--border))",
+    border: "1px solid var(--border)",
     padding: "0.15rem 0.55rem",
     fontSize: "0.7rem",
     cursor: "pointer",
@@ -1366,7 +1366,7 @@ function SortToggle(props: {
   };
   const activeStyle: React.CSSProperties = {
     background: "var(--fill-brand)",
-    borderColor: "var(--primary, var(--tint-teal-fg))",
+    borderColor: "var(--primary)",
     color: "var(--on-fill-brand)",
   };
   return (
@@ -1407,7 +1407,7 @@ function StylePanel(props: {
   return (
     <fieldset
       style={{
-        border: "1px solid var(--border, var(--border))",
+        border: "1px solid var(--border)",
         borderRadius: 6,
         padding: open ? "0.5rem 0.6rem" : "0.25rem 0.6rem",
         margin: "0 0 0.6rem 0",
@@ -1492,7 +1492,7 @@ function StylePanel(props: {
             style={{
               alignSelf: "flex-start",
               background: "none",
-              border: "1px solid var(--border, var(--border))",
+              border: "1px solid var(--border)",
               color: "var(--text-muted)",
               fontSize: "0.7rem",
               padding: "0.15rem 0.5rem",

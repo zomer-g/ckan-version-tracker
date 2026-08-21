@@ -49,7 +49,7 @@ export default function CopyLookupLinkButton({
         fontSize: "0.85rem",
         padding: "0.3rem 0.7rem",
         background: "none",
-        border: "1px solid var(--border, var(--border))",
+        border: "1px solid var(--border)",
         color: "var(--text-muted)",
         borderRadius: 4,
         cursor: "pointer",

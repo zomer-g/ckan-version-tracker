@@ -104,7 +104,7 @@ export default function KnessetBatchTab() {
               setKnesset(e.target.value === "" ? "" : Number(e.target.value));
               setCommitteeId("");
             }}
-            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }}
           >
             <option value="">כל הכנסות</option>
             {facets?.knessets.map((k) => (
@@ -122,13 +122,13 @@ export default function KnessetBatchTab() {
             value={committeeQuery}
             onChange={(e) => { setCommitteeQuery(e.target.value); setCommitteeId(""); }}
             placeholder="חיפוש שם ועדה… (ריק = כל הוועדות)"
-            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
+            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }}
           />
         </label>
-        {facetsError && <div className="text-sm" style={{ color: "var(--danger, #992C2C)" }}>{facetsError}</div>}
+        {facetsError && <div className="text-sm" style={{ color: "var(--danger)" }}>{facetsError}</div>}
         {!facets && !facetsError && <div className="text-sm text-muted">טוען רשימת ועדות…</div>}
         {facets && committeeQuery.trim() && (
-          <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}>
+          <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 4 }}>
             {committees.slice(0, 60).map((c) => (
               <button
                 key={c.id}
@@ -193,7 +193,7 @@ export default function KnessetBatchTab() {
                 aria-disabled={tooBig || !count}
                 style={{
                   fontSize: "0.9rem", padding: "0.5rem 1.1rem", borderRadius: 4, fontWeight: 600,
-                  background: tooBig || !count ? "var(--surface-2)" : "var(--primary, #0C5E58)",
+                  background: tooBig || !count ? "var(--surface-2)" : "var(--primary)",
                   color: tooBig || !count ? "var(--text-muted)" : "white",
                   textDecoration: "none", pointerEvents: tooBig || !count ? "none" : "auto",
                 }}
@@ -206,7 +206,7 @@ export default function KnessetBatchTab() {
                 aria-disabled={!count}
                 style={{
                   fontSize: "0.85rem", padding: "0.45rem 0.9rem", borderRadius: 4,
-                  border: "1px solid var(--primary, var(--tint-teal-fg))", color: "var(--primary, #0C5E58)",
+                  border: "1px solid var(--primary)", color: "var(--primary)",
                   textDecoration: "none", pointerEvents: count ? "auto" : "none",
                   opacity: count ? 1 : 0.5,
                 }}

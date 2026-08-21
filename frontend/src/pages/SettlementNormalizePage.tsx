@@ -182,7 +182,7 @@ export default function SettlementNormalizePage() {
         .nz-card { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 1.1rem 1.2rem; }
         .nz-cardhead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.6rem; }
         .nz-count { font-size: 0.8rem; color: var(--text-muted); }
-        .nz-ta { width: 100%; min-height: 260px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.9rem; line-height: 1.6; direction: rtl; background: var(--bg); color: var(--text, inherit); }
+        .nz-ta { width: 100%; min-height: 260px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.9rem; line-height: 1.6; direction: rtl; background: var(--bg); color: var(--text); }
         .nz-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 0.7rem; }
         .nz-btn { padding: 0.42rem 1rem; border-radius: 6px; font-weight: 600; font-size: 0.88rem; cursor: pointer; background: var(--fill-brand); color: var(--on-fill); border: 1px solid var(--fill-brand); }
         .nz-btn:disabled { opacity: 0.55; cursor: not-allowed; }

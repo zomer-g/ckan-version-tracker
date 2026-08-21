@@ -118,7 +118,7 @@ export default function TagsPage() {
                     width: 48,
                     height: 48,
                     borderRadius: 8,
-                    background: "var(--primary-50, #e0e7ff)",
+                    background: "var(--primary-50)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -151,7 +151,7 @@ export default function TagsPage() {
                     padding: "0.25rem 0.45rem",
                     fontSize: "0.85rem",
                     cursor: "pointer",
-                    color: "var(--danger, #992C2C)",
+                    color: "var(--danger)",
                   }}
                 >
                   🗑

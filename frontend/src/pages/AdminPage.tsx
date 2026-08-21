@@ -1116,7 +1116,7 @@ export default function AdminPage() {
                   borderRadius: "6px",
                   border: "1px solid",
                   borderColor: isActive ? "var(--primary)" : "transparent",
-                  background: isActive ? "var(--primary-50, #e0e7ff)" : "transparent",
+                  background: isActive ? "var(--primary-50)" : "transparent",
                   color: isActive ? "var(--primary)" : "var(--text)",
                   fontWeight: isActive ? 600 : 400,
                   cursor: "pointer",

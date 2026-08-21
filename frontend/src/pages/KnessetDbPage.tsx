@@ -270,14 +270,14 @@ export default function KnessetDbPage() {
           </div>
         )}
         {syncMsg && <div className="text-sm" style={{ marginTop: "0.3rem", color: "var(--primary)" }}>{syncMsg}</div>}
-        {loadError && <div className="text-sm" style={{ marginTop: "0.3rem", color: "var(--danger, #992C2C)" }}>{loadError}</div>}
+        {loadError && <div className="text-sm" style={{ marginTop: "0.3rem", color: "var(--danger)" }}>{loadError}</div>}
       </div>
       <PlainSummary>
         העמוד הזה מחזיק עותק של הנתונים הפתוחים של הכנסת — חברי כנסת, הצעות חוק, הצבעות, ועדות ועוד. אפשר לחפש בו, ואפשר לשאול שאלות בשפת SQL. הנתונים מתעדכנים מהכנסת עצמה; האתר רק שומר עותק שנוח לחפש בו, ואפשר לתשאל אותו ב<Abbr>SQL</Abbr>.
       </PlainSummary>
 
       {/* Tabs */}
-      <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, var(--border))", marginBottom: "1rem", flexWrap: "wrap" }}>
+      <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border)", marginBottom: "1rem", flexWrap: "wrap" }}>
         {([
           ["protocols", "🔍 חיפוש פרוטוקולים"],
           ["batch", "⬇ אצוות (Batch)"],
@@ -291,8 +291,8 @@ export default function KnessetDbPage() {
             style={{
               padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
               fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
-              color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
-              borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
+              color: tab === id ? "var(--primary)" : "var(--text-muted)",
+              borderBottom: tab === id ? "3px solid var(--primary)" : "3px solid transparent",
               marginBottom: -2,
             }}
           >
@@ -322,7 +322,7 @@ export default function KnessetDbPage() {
               const ex = EXAMPLES.find((x) => x.label === e.target.value);
               if (ex) { setSqlText(ex.sql); setSqlResult(null); setSqlError(null); }
             }}
-            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
+            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border)", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
           >
             <option value="">דוגמאות…</option>
             {EXAMPLES.map((ex) => <option key={ex.label} value={ex.label}>{ex.label}</option>)}
@@ -364,7 +364,7 @@ export default function KnessetDbPage() {
               onClick={() => downloadRowsCsv("knesset_query.csv", sqlResult.columns, sqlResult.rows)}
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", background: "none",
-                color: "var(--primary, #0C5E58)", border: "1px solid var(--primary, var(--tint-teal-fg))",
+                color: "var(--primary)", border: "1px solid var(--primary)",
                 borderRadius: 4, cursor: "pointer",
               }}
               title="הורדת התוצאה המוצגת כ-CSV"
@@ -383,7 +383,7 @@ export default function KnessetDbPage() {
           )}
         </div>
         {sqlError && (
-          <div style={{ marginTop: "0.6rem", color: "var(--danger, #992C2C)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+          <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {sqlError}
           </div>
         )}
@@ -396,13 +396,13 @@ export default function KnessetDbPage() {
               <thead>
                 <tr>
                   {sqlResult.columns.map((c) => (
-                    <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>{c}</th>
+                    <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border)" }}>{c}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {sqlResult.rows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     {sqlResult.columns.map((c) => (
                       <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
                     ))}
@@ -423,7 +423,7 @@ export default function KnessetDbPage() {
             onChange={(e) => setFilter(e.target.value)}
             placeholder="סינון טבלאות…"
             aria-label="סינון טבלאות"
-            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, marginBottom: "0.5rem" }}
+            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4, marginBottom: "0.5rem" }}
           />
           {[...groups.entries()].map(([group, list]) => (
             <div key={group} style={{ marginBottom: "0.6rem" }}>
@@ -499,7 +499,7 @@ export default function KnessetDbPage() {
                 <p className="text-sm" style={{ margin: "0.5rem 0 0.75rem", lineHeight: 1.6 }}>{selectedTable.description}</p>
               )}
               {selectedTable.error && (
-                <p className="text-sm" style={{ color: "var(--danger, #992C2C)" }}>{selectedTable.error}</p>
+                <p className="text-sm" style={{ color: "var(--danger)" }}>{selectedTable.error}</p>
               )}
               {user?.is_admin && (
                 <div className="flex" style={{ gap: "0.5rem", marginBottom: "0.5rem" }}>
@@ -517,13 +517,13 @@ export default function KnessetDbPage() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
                   <thead>
                     <tr>
-                      <th scope="col" style={{ textAlign: "start", padding: "0.35rem 0.6rem", borderBottom: "2px solid var(--border, var(--border))", position: "sticky", top: 0, background: "var(--surface-2)" }}>עמודה</th>
-                      <th scope="col" style={{ textAlign: "start", padding: "0.35rem 0.6rem", borderBottom: "2px solid var(--border, var(--border))", position: "sticky", top: 0, background: "var(--surface-2)" }}>טיפוס</th>
+                      <th scope="col" style={{ textAlign: "start", padding: "0.35rem 0.6rem", borderBottom: "2px solid var(--border)", position: "sticky", top: 0, background: "var(--surface-2)" }}>עמודה</th>
+                      <th scope="col" style={{ textAlign: "start", padding: "0.35rem 0.6rem", borderBottom: "2px solid var(--border)", position: "sticky", top: 0, background: "var(--surface-2)" }}>טיפוס</th>
                     </tr>
                   </thead>
                   <tbody>
                     {selectedTable.columns.map((c) => (
-                      <tr key={c.name} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
+                      <tr key={c.name} style={{ borderBottom: "1px solid var(--border)" }}>
                         <td style={{ padding: "0.3rem 0.6rem" }}><code>{c.name}</code></td>
                         <td style={{ padding: "0.3rem 0.6rem", color: "var(--text-muted)" }}>{c.type}</td>
                       </tr>

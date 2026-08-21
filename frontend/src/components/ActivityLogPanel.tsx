@@ -124,7 +124,7 @@ export default function ActivityLogPanel() {
             style={{
               fontSize: "0.78rem", padding: "0.25rem 0.7rem", borderRadius: "999px",
               border: "1px solid var(--border)", cursor: "pointer",
-              background: event === f.id ? "var(--primary, #035887)" : "var(--surface)",
+              background: event === f.id ? "var(--primary)" : "var(--surface)",
               color: event === f.id ? "#fff" : "var(--text)",
               fontWeight: event === f.id ? 600 : 400,
             }}

@@ -122,7 +122,7 @@ export default function OcoiEntities({
                     alignItems: "center",
                     textAlign: "start",
                     padding: "0.5rem 0.7rem",
-                    border: "1px solid var(--border, var(--border))",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
                     background: "var(--surface)",
                     cursor: "pointer",

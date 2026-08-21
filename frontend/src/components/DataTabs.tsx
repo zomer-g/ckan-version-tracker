@@ -12,9 +12,9 @@ export default function DataTabs({ active }: { active: "console" | "explore" | "
         style={{
           padding: "0.5rem 1rem", textDecoration: "none", fontWeight: 600, fontSize: "0.9rem",
           borderRadius: "6px 6px 0 0", whiteSpace: "nowrap",
-          color: on ? "var(--primary, #0C5E58)" : "var(--text-muted, #464F5E)",
+          color: on ? "var(--primary)" : "var(--text-muted)",
           background: on ? "var(--surface-2)" : "transparent",
-          borderBottom: on ? "2px solid var(--primary, #0C5E58)" : "2px solid transparent",
+          borderBottom: on ? "2px solid var(--primary)" : "2px solid transparent",
         }}
         aria-current={on ? "page" : undefined}
       >
