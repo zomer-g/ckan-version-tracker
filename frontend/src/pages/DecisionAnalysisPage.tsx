@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 // The government-decision analysis page. Three layers, revealed in order:
 //
 //   1. the decision's full text, clause by clause — always visible;
@@ -46,6 +47,7 @@ export default function DecisionAnalysisPage() {
   const { user } = useAuth();
 
   const [view, setView] = useState<DecisionAnalysisView | null>(null);
+  useDocumentTitle(view?.doc?.title ? `ניתוח החלטה — ${view.doc.title}` : "ניתוח החלטת ממשלה");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -168,7 +170,7 @@ export default function DecisionAnalysisPage() {
           <p className="decision-meta">
             <a href={doc.decision_url} target="_blank" rel="noopener noreferrer">
               {t("decision.meta_decision", "החלטת ממשלה")} {doc.decision_number}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             {doc.decision_date ? ` · ${doc.decision_date}` : ""}
             {` · ${parts.reduce((n, p) => n + p.sections.length, 0)} ${t("decision.meta_sections", "סעיפים")}`}
             {` · ${taskCount} ${t("decision.meta_tasks", "משימות אופרטיביות")}`}

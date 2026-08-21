@@ -19,6 +19,10 @@ interface AuthContextType {
   loading: boolean;
   loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
+  /** Set when the silent refresh has failed and the session is about to end. */
+  sessionWarning: boolean;
+  /** Retry the refresh from the warning banner. */
+  renewSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>(null!);
@@ -26,6 +30,12 @@ const AuthContext = createContext<AuthContextType>(null!);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  // A failed silent refresh used to be swallowed: the next real call returned
+  // 401 and the user was thrown out mid-task, losing whatever they had typed.
+  // WCAG 2.2.1 wants warning before a time limit expires, and 2.2.5 wants the
+  // work to survive re-authentication — so the failure is surfaced here and
+  // the banner offers to renew in place.
+  const [sessionWarning, setSessionWarning] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,10 +94,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const id = window.setInterval(() => {
       authApi
         .refresh()
-        .then(({ token }) => setToken(token))
-        .catch(() => {
-          /* transient; the next tick (or a 401 on a real call) handles it */
-        });
+        .then(({ token }) => {
+          setToken(token);
+          setSessionWarning(false);
+        })
+        .catch(() => setSessionWarning(true));
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(id);
   }, [user]);
@@ -101,10 +112,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     clearToken();
     setUser(null);
+    setSessionWarning(false);
+  };
+
+  const renewSession = async () => {
+    const { token } = await authApi.refresh();
+    setToken(token);
+    setSessionWarning(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginWithToken, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginWithToken, logout, sessionWarning, renewSession }}>
       {children}
     </AuthContext.Provider>
   );

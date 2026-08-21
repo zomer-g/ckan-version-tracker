@@ -16,6 +16,8 @@ import CbsFeedbackButtons from "../components/CbsFeedbackButtons";
 import CbsFeatured from "../components/CbsFeatured";
 import CbsResultCard from "../components/CbsResultCard";
 import { geoLabel, productFormLabel, sectionLabel } from "../utils/cbsLabels";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Tabs, TabPanel } from "../components/a11y";
 import {
   seriesQuery,
   historicalVersions,
@@ -40,6 +42,7 @@ const ADVANCED_PARAMS = [
 ];
 
 export default function CbsPage() {
+  useDocumentTitle("חיפוש בנתוני הלמ\"ס");
   const { t } = useTranslation();
   const { user } = useAuth();
   const canPin = !!user?.is_admin;
@@ -395,49 +398,39 @@ export default function CbsPage() {
         </p>
       </div>
 
-      {/* Mode tabs. The advanced tab is the original interface, untouched. */}
-      <div
-        className="flex mb-2"
-        style={{ gap: "0.4rem" }}
-        role="tablist"
-        aria-label={t("cbs.mode", "מצב חיפוש")}
-      >
-        {([
-          ["ask", t("cbs.mode_ask", "שאלה בשפה טבעית")],
-          ["advanced", t("cbs.mode_advanced", "חיפוש מתקדם")],
-          ["about", t("cbs.mode_about", "איך זה עובד")],
-        ] as [Mode, string][]).map(([m, label]) => (
-          <button
-            key={m}
-            type="button"
-            role="tab"
-            aria-selected={mode === m}
-            className={mode === m ? "btn-primary" : "btn-secondary"}
-            onClick={() => switchMode(m)}
-            style={{ fontSize: "0.85rem", padding: "0.35rem 0.8rem" }}
+      {/* Three real panels, so this is a real tab set: the shared <Tabs>
+          brings the tabpanel wiring, the roving tabindex and the arrow keys
+          that role="tab" promises (WCAG 4.1.2). The feedback link moved OUT of
+          the strip — a link is not a valid child of a tablist. */}
+      <Tabs<Mode>
+        idPrefix="cbs"
+        label={t("cbs.mode", "מצב חיפוש")}
+        value={mode}
+        onChange={switchMode}
+        tabs={[
+          { id: "ask", label: t("cbs.mode_ask", "שאלה בשפה טבעית") },
+          { id: "advanced", label: t("cbs.mode_advanced", "חיפוש מתקדם") },
+          { id: "about", label: t("cbs.mode_about", "איך זה עובד") },
+        ]}
+        aside={
+          <a
+            href={feedbackHref}
+            className="btn-secondary"
+            style={{
+              fontSize: "0.8rem",
+              padding: "0.35rem 0.7rem",
+              marginInlineStart: "auto",
+              textDecoration: "none",
+            }}
+            title={t("cbs.feedback_title", "שלחו לנו במייל מה עבד ומה לא — הקשר החיפוש יצורף אוטומטית")}
           >
-            {label}
-          </button>
-        ))}
-        {/* Quick feedback — opens the user's mail client with the current
-            question/filters + shareable URL prefilled. */}
-        <a
-          href={feedbackHref}
-          className="btn-secondary"
-          style={{
-            fontSize: "0.8rem",
-            padding: "0.35rem 0.7rem",
-            marginInlineStart: "auto",
-            textDecoration: "none",
-          }}
-          title={t("cbs.feedback_title", "שלחו לנו במייל מה עבד ומה לא — הקשר החיפוש יצורף אוטומטית")}
-        >
-          📧 {t("cbs.feedback", "פידבק")}
-        </a>
-      </div>
+            <span aria-hidden="true">📧</span> {t("cbs.feedback", "פידבק")}
+          </a>
+        }
+      />
 
       {mode === "ask" && (
-        <>
+        <TabPanel id="ask" idPrefix="cbs">
           <form onSubmit={onAskSubmit} className="flex mb-2" role="search">
             <label
               htmlFor="cbs-ask"
@@ -508,13 +501,17 @@ export default function CbsPage() {
               history={featuredHistory}
             />
           )}
-        </>
+        </TabPanel>
       )}
 
-      {mode === "about" && <CbsAbout />}
+      {mode === "about" && (
+        <TabPanel id="about" idPrefix="cbs">
+          <CbsAbout />
+        </TabPanel>
+      )}
 
       {mode === "advanced" && (
-        <>
+        <TabPanel id="advanced" idPrefix="cbs">
       <form onSubmit={onSubmit} className="flex mb-2" role="search">
         <label
           htmlFor="cbs-search"
@@ -782,7 +779,7 @@ export default function CbsPage() {
           </button>
         </div>
       )}
-        </>
+        </TabPanel>
       )}
     </div>
   );

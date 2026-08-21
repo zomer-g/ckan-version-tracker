@@ -169,6 +169,7 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value)}
+            aria-label="סטטוס לדגימה"
             style={{ fontSize: "0.75rem", padding: "0.25rem", maxWidth: "22rem" }}
           >
             <option value="">— בחר סטטוס —</option>
@@ -200,7 +201,7 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
             רשימת הישויות ממאגר אחר (אופציונלי) — מדלג על גילוי מחדש
           </label>
           <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
-            <input
+            <input aria-label="מזהה מאגר המקור (UUID)"
               value={targetsFrom}
               onChange={(e) => setTargetsFrom(e.target.value)}
               placeholder="מזהה מאגר המקור (UUID)"
@@ -220,7 +221,7 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
 
       {opts.modes.includes("item") && (
         <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
-          <input
+          <input aria-label={opts.item_key || "מזהה ישות"}
             value={item}
             onChange={(e) => setItem(e.target.value)}
             placeholder={opts.item_key || "מזהה ישות"}
@@ -243,8 +244,8 @@ export default function SamplingRunPanel({ datasetId }: { datasetId: string }) {
             fontSize: "0.72rem",
             padding: "0.25rem 0.5rem",
             borderRadius: "4px",
-            background: toast.ok ? "#dcfce7" : "#fee2e2",
-            color: toast.ok ? "#166534" : "#991b1b",
+            background: toast.ok ? "var(--tint-good-bg)" : "var(--tint-bad-bg)",
+            color: toast.ok ? "var(--success)" : "#941A1A",
           }}
         >
           {toast.msg}

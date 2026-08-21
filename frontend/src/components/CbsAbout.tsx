@@ -30,7 +30,7 @@ const ulStyle: CSSProperties = {
 export default function CbsAbout() {
   return (
     <div style={{ maxWidth: "52rem" }}>
-      <div className="card" style={{ ...sectionStyle, borderInlineStart: "4px solid #2563eb" }}>
+      <div className="card" style={{ ...sectionStyle, borderInlineStart: "4px solid var(--tint-sky-fg)" }}>
         <h2 style={h2Style}>מה זה העמוד הזה</h2>
         <p style={pStyle}>
           זהו מנוע חיפוש עצמאי מעל תוכן אתר הלשכה המרכזית לסטטיסטיקה
@@ -43,7 +43,7 @@ export default function CbsAbout() {
       </div>
 
       <div className="card" style={sectionStyle}>
-        <h2 style={h2Style}>🔍 שתי צורות החיפוש</h2>
+        <h2 style={h2Style}><span aria-hidden="true">🔍</span> שתי צורות החיפוש</h2>
         <p style={pStyle}>
           <strong>שאלה בשפה טבעית</strong> — כותבים שאלה כמו שכותבים לקבוצת
           וואטסאפ (&quot;כמה תושבים יש בבית שמש?&quot;), והמערכת מחזירה תשובה
@@ -84,7 +84,7 @@ export default function CbsAbout() {
       </div>
 
       <div className="card" style={sectionStyle}>
-        <h2 style={h2Style}>🗂️ מה נאסף</h2>
+        <h2 style={h2Style}><span aria-hidden="true">🗂️</span> מה נאסף</h2>
         <ul style={ulStyle}>
           <li>
             <strong>~53.5 אלף עמודים</strong> מאתר הלמ&quot;ס: פרסומים ולוחות
@@ -111,7 +111,7 @@ export default function CbsAbout() {
       </div>
 
       <div className="card" style={sectionStyle}>
-        <h2 style={h2Style}>⚙️ איך זה נותח</h2>
+        <h2 style={h2Style}><span aria-hidden="true">⚙️</span> איך זה נותח</h2>
         <p style={pStyle}>
           ניתוח השאלות האמיתיות הראה שמשתמשים מחפשים בשבעה ממדים — הנתון עצמו,
           יחידת התצפית, סוג המדד, חתך האוכלוסייה, גאוגרפיה (ישות + רזולוציה),
@@ -133,8 +133,8 @@ export default function CbsAbout() {
         </p>
       </div>
 
-      <div className="card" style={{ ...sectionStyle, borderInlineStart: "4px solid #b45309" }}>
-        <h2 style={h2Style}>📏 מה מצב הדיוק, ומה המגבלות</h2>
+      <div className="card" style={{ ...sectionStyle, borderInlineStart: "4px solid var(--warning)" }}>
+        <h2 style={h2Style}><span aria-hidden="true">📏</span> מה מצב הדיוק, ומה המגבלות</h2>
         <ul style={ulStyle}>
           <li>
             האיכות נמדדת כל שינוי מול מדד קבוע: 171 שאלות מהקהילה שיש להן קישור

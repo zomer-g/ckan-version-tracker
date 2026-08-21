@@ -9,6 +9,7 @@ import {
 } from "../api/client";
 import ResolvedMatches from "../components/ResolvedMatches";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 /**
  * ONE link that is correct before and after a source is onboarded, in two
  * spellings that mean the same thing:
@@ -27,6 +28,7 @@ import ResolvedMatches from "../components/ResolvedMatches";
  * With no URL at all it renders the generator: paste a source URL, get the link.
  */
 export default function LookupPage() {
+  useDocumentTitle("איתור מאגר לפי כתובת");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();

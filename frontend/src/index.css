@@ -15,7 +15,7 @@
   --primary-400: #38AED0;
   --primary-500: #1094B8;
   --primary-600: #0A7A9A;
-  --primary-700: #06607C;  /* key brand — buttons, links, hero end */
+  --primary-700: #065B76;  /* key brand — buttons, links, hero end */
   --primary-800: #044E66;  /* header bg, hero start */
   --primary-900: #003647;  /* footer bg */
 
@@ -27,17 +27,238 @@
   --bg: #F6F6F6;
   --surface: #ffffff;
   --text: #111827;
-  --text-muted: #4B5563;
+  --text-muted: #464F5E;
   --border: #E5E7EB;          /* aligned with Tailwind gray-200 used by Ocoi/Ocal */
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  /* Semantic colours are dual-purpose ON PURPOSE: each one clears 7:1 both as
+     text on a light surface AND as a solid fill under white text, so a call
+     site can use it either way without re-checking (WCAG 1.4.6). */
+  --success: #0F5A2A;
+  --warning: #833909;
+  --danger: #992C2C;
+
+  --surface-2: #F1F5F9;       /* inset panels, table headers, code chrome */
+  /* Historic aliases. They were referenced ~60 times with a hardcoded
+     light fallback and never actually declared, which is exactly why the
+     dark theme could not reach those surfaces. */
+  --bg-muted: var(--surface-2);
+  --bg-secondary: var(--surface-2);
+  --code-bg: #292524;
+  --code-fg: #FAFAF9;
+
+  /* Status tints. Each family is a background, the ONE foreground allowed on
+     it (>=7:1), and a border (>=3:1 against its own background). They travel
+     as a set so the dark theme swaps all three at once and nothing can end up
+     as one theme's ink on the other theme's ground. Generated and verified —
+     do not hand-edit a single member without re-checking the trio. */
+  --tint-good-bg: #DCFCE7;    --tint-good-fg: #0F5A2A;    --tint-good-bd: #5D9872;
+  --tint-bad-bg: #FEE2E2;     --tint-bad-fg: #941A1A;     --tint-bad-bd: #BF6C6C;
+  --tint-warn-bg: #FEF3C7;    --tint-warn-fg: #833909;    --tint-warn-bd: #B28051;
+  --tint-note-bg: #FEF9C3;    --tint-note-fg: #6B3D11;    --tint-note-bd: #A68858;
+  --tint-info-bg: #E8F5F9;    --tint-info-fg: #044E66;    --tint-info-bd: #6192A2;
+  --tint-teal-bg: #CCFBF1;    --tint-teal-fg: #12564F;    --tint-teal-bd: #59958D;
+  --tint-indigo-bg: #E0E7FF;  --tint-indigo-fg: #2F2E8F;  --tint-indigo-bd: #7B7EBF;
+  --tint-violet-bg: #EDE9FE;  --tint-violet-fg: #5B21B6;  --tint-violet-bd: #9773D4;
+  --tint-sky-bg: #DBEAFE;     --tint-sky-fg: #14458F;     --tint-sky-bd: #6285BA;
+  --tint-lime-bg: #ECFCCB;    --tint-lime-fg: #385810;    --tint-lime-bd: #7B9555;
+  --tint-pink-bg: #FCE7F3;    --tint-pink-fg: #8C1548;    --tint-pink-bd: #BC6F92;
+  --tint-neutral-bg: #F1F5F9; --tint-neutral-fg: #464F5E; --tint-neutral-bd: #848C97;
+
   --radius: 8px;              /* rounded-lg — canonical for buttons + cards */
   --radius-sm: 6px;
   --radius-full: 9999px;      /* chips, badges, language toggle only */
   --radius-pill: 9999px;      /* deprecated alias — use --radius-full */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* Focus. One ring, one width, used by every focusable thing — WCAG 2.4.13
+     wants a perimeter at least 2px thick, so nothing here goes below 3px. */
+  --focus-ring: 3px;
+  --focus-color: var(--primary-700);
+
+  /* Solid buttons need their ink named, not assumed: the brand ramp inverts in
+     dark mode, so "white on --primary-700" is correct in one theme and
+     unreadable in the other. */
+  --btn-primary-bg: var(--primary-700);  --btn-primary-fg: #ffffff;
+  --btn-primary-bg-hover: var(--primary-800);
+  --btn-danger-bg: var(--danger);        --btn-danger-fg: #ffffff;
+  --btn-danger-bg-hover: #7E2424;
+  /* Solid fills and the ink that must sit on them. The pair inverts together,
+     so a call site writes background:var(--fill-x); color:var(--on-fill-x) and
+     stays legible in both themes. */
+  --fill-brand: #065B76;   --on-fill-brand: #ffffff;
+  --fill-good: #0F5A2A;    --on-fill-good: #ffffff;
+  --fill-warn: #833909;    --on-fill-warn: #ffffff;
+  --fill-danger: #992C2C;  --on-fill-danger: #ffffff;
+  --fill-neutral: #464F5E; --on-fill-neutral: #ffffff;
+  --fill-sky: #14458F;     --fill-violet: #5B21B6;
+  --fill-teal: #12564F;    --fill-indigo: #2F2E8F;
+  --fill-pink: #8C1548;    --fill-lime: #385810;
+  /* One ink for every fill above: white while the fills are dark, dark once
+     they invert. Nothing may sit on a --fill-* except --on-fill. */
+  --on-fill: #ffffff;
+
+  /* Minimum interactive target. 44px (WCAG 2.5.5, AAA) for standalone
+     controls; links inside a sentence are exempt and opt out via .inline-link. */
+  --target-min: 44px;
+
+  /* Cleared under the reduced-motion query so a single token silences every
+     transition instead of each rule opting in. */
+  --motion-fast: 0.15s;
+  --motion-base: 0.2s;
+}
+
+/* ── Dark theme (WCAG 1.4.8 — the user picks foreground and background) ──────
+   Three states, not two. An explicit choice stamps data-theme on <html>; the
+   default "system" setting stamps nothing, and only prefers-color-scheme
+   separates light from dark there. So the tokens are redefined twice: once
+   behind the media query (guarded so an explicit light choice still beats a
+   dark OS) and once behind the attribute (so the toggle wins either way).
+   Only tokens live in these blocks — never a component rule, or it would
+   apply in one state and vanish in another. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0B1519;
+    --surface: #122229;
+    --surface-2: #182F38;
+    --text: #EAF2F4;
+    --text-muted: #A9BEC6;
+    --border: #2A424C;
+    --code-bg: #0A1417;
+    --code-fg: #EAF2F4;
+
+    /* The brand ramp inverts: on a dark ground the light end carries the ink
+       and the dark end becomes the fill. */
+    --primary-50:  #0C2A34;
+    --primary-100: #10333F;
+    --primary-200: #164352;
+    --primary-600: #7FCDE4;
+    --primary-700: #8FD5EA;
+    --primary-800: #A9DFF0;
+    --primary-900: #C6EBF7;
+    --primary: var(--primary-700);
+    --primary-dark: var(--primary-800);
+    --primary-light: var(--primary-600);
+
+    --success: #8FE3B0;
+    --warning: #F0C08A;
+    --danger: #F5A9A9;
+
+    --tint-good-bg: #0E2A1B;    --tint-good-fg: #8FE3B0;    --tint-good-bd: #457A5B;
+    --tint-bad-bg: #2E1616;     --tint-bad-fg: #F5A9A9;     --tint-bad-bd: #8E5D5D;
+    --tint-warn-bg: #2C1D0B;    --tint-warn-fg: #F0C08A;    --tint-warn-bd: #846644;
+    --tint-note-bg: #2A250C;    --tint-note-fg: #E9D896;    --tint-note-bd: #7A7046;
+    --tint-info-bg: #0C2A34;    --tint-info-fg: #A9DCEC;    --tint-info-bd: #507783;
+    --tint-teal-bg: #0B2A27;    --tint-teal-fg: #8ED9CF;    --tint-teal-bd: #467973;
+    --tint-indigo-bg: #1A1B3A;  --tint-indigo-fg: #B7BDF2;  --tint-indigo-bd: #646790;
+    --tint-violet-bg: #231A3A;  --tint-violet-fg: #CDB8F5;  --tint-violet-bd: #736492;
+    --tint-sky-bg: #101F3A;     --tint-sky-fg: #A9C7F5;     --tint-sky-bd: #566C90;
+    --tint-lime-bg: #1D2A0E;    --tint-lime-fg: #C6E28A;    --tint-lime-bd: #647742;
+    --tint-pink-bg: #2E1322;    --tint-pink-fg: #F2A9C8;    --tint-pink-bd: #8A5A70;
+    --tint-neutral-bg: #1B2830; --tint-neutral-fg: #C3D0DA; --tint-neutral-bd: #67747C;
+
+    --focus-color: #8FD5EA;
+    --btn-primary-bg: #8FD5EA;  --btn-primary-fg: #05222C;
+    --btn-primary-bg-hover: #A9DFF0;
+    --btn-danger-bg: #F5A9A9;   --btn-danger-fg: #2E0B0B;
+    --btn-danger-bg-hover: #FBC4C4;
+    --fill-brand: #8FD5EA;   --on-fill-brand: #05222C;
+    --fill-good: #8FE3B0;    --on-fill-good: #0A2416;
+    --fill-warn: #F0C08A;    --on-fill-warn: #2A1A06;
+    --fill-danger: #F5A9A9;  --on-fill-danger: #2E0B0B;
+    --fill-neutral: #C3D0DA; --on-fill-neutral: #16232B;
+  --fill-sky: #A9C7F5;     --fill-violet: #CDB8F5;
+  --fill-teal: #8ED9CF;    --fill-indigo: #B7BDF2;
+  --fill-pink: #F2A9C8;    --fill-lime: #C6E28A;
+  --on-fill: #08171D;
+    --fill-sky: #A9C7F5;     --fill-violet: #CDB8F5;
+    --fill-teal: #8ED9CF;    --fill-indigo: #B7BDF2;
+    --fill-pink: #F2A9C8;    --fill-lime: #C6E28A;
+    --on-fill: #08171D;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0B1519;
+  --surface: #122229;
+  --surface-2: #182F38;
+  --text: #EAF2F4;
+  --text-muted: #A9BEC6;
+  --border: #2A424C;
+  --code-bg: #0A1417;
+  --code-fg: #EAF2F4;
+
+  --primary-50:  #0C2A34;
+  --primary-100: #10333F;
+  --primary-200: #164352;
+  --primary-600: #7FCDE4;
+  --primary-700: #8FD5EA;
+  --primary-800: #A9DFF0;
+  --primary-900: #C6EBF7;
+  --primary: var(--primary-700);
+  --primary-dark: var(--primary-800);
+  --primary-light: var(--primary-600);
+
+  --success: #8FE3B0;
+  --warning: #F0C08A;
+  --danger: #F5A9A9;
+
+  --tint-good-bg: #0E2A1B;    --tint-good-fg: #8FE3B0;    --tint-good-bd: #457A5B;
+  --tint-bad-bg: #2E1616;     --tint-bad-fg: #F5A9A9;     --tint-bad-bd: #8E5D5D;
+  --tint-warn-bg: #2C1D0B;    --tint-warn-fg: #F0C08A;    --tint-warn-bd: #846644;
+  --tint-note-bg: #2A250C;    --tint-note-fg: #E9D896;    --tint-note-bd: #7A7046;
+  --tint-info-bg: #0C2A34;    --tint-info-fg: #A9DCEC;    --tint-info-bd: #507783;
+  --tint-teal-bg: #0B2A27;    --tint-teal-fg: #8ED9CF;    --tint-teal-bd: #467973;
+  --tint-indigo-bg: #1A1B3A;  --tint-indigo-fg: #B7BDF2;  --tint-indigo-bd: #646790;
+  --tint-violet-bg: #231A3A;  --tint-violet-fg: #CDB8F5;  --tint-violet-bd: #736492;
+  --tint-sky-bg: #101F3A;     --tint-sky-fg: #A9C7F5;     --tint-sky-bd: #566C90;
+  --tint-lime-bg: #1D2A0E;    --tint-lime-fg: #C6E28A;    --tint-lime-bd: #647742;
+  --tint-pink-bg: #2E1322;    --tint-pink-fg: #F2A9C8;    --tint-pink-bd: #8A5A70;
+  --tint-neutral-bg: #1B2830; --tint-neutral-fg: #C3D0DA; --tint-neutral-bd: #67747C;
+
+  --focus-color: #8FD5EA;
+  --btn-primary-bg: #8FD5EA;  --btn-primary-fg: #05222C;
+  --btn-primary-bg-hover: #A9DFF0;
+  --btn-danger-bg: #F5A9A9;   --btn-danger-fg: #2E0B0B;
+  --btn-danger-bg-hover: #FBC4C4;
+  --fill-brand: #8FD5EA;   --on-fill-brand: #05222C;
+  --fill-good: #8FE3B0;    --on-fill-good: #0A2416;
+  --fill-warn: #F0C08A;    --on-fill-warn: #2A1A06;
+  --fill-danger: #F5A9A9;  --on-fill-danger: #2E0B0B;
+  --fill-neutral: #C3D0DA; --on-fill-neutral: #16232B;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.6);
+}
+
+/* Header, footer and hero keep a dark ground in BOTH themes, so they cannot
+   read from the brand ramp — that inverts, and white ink on an inverted ramp
+   is white on pale blue. They get their own surface instead.
+
+   Declared on bare :root first. The earlier draft defined them only on
+   `[data-theme="dark"], :not([data-theme="light"])`, which left every token
+   undefined the moment a reader chose light explicitly — and an undefined
+   token inside a gradient drops the whole declaration, so the hero rendered
+   with no background at all. */
+:root {
+  --chrome-bg: #044E66;
+  --chrome-bg-2: #065B76;
+  --chrome-bg-deep: #003647;
+  --chrome-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chrome-bg: #0E2833;
+    --chrome-bg-2: #113543;
+    --chrome-bg-deep: #081C24;
+    --chrome-ink: #EAF2F4;
+  }
+}
+:root[data-theme="dark"] {
+  --chrome-bg: #0E2833;
+  --chrome-bg-2: #113543;
+  --chrome-bg-deep: #081C24;
+  --chrome-ink: #EAF2F4;
 }
 
 body {
@@ -72,8 +293,13 @@ a:hover {
   opacity: 0.85;
 }
 
-a:focus-visible {
-  outline: 2px solid var(--primary);
+/* One focus rule for everything focusable. Written on the universal selector
+   so a component that invents its own clickable element cannot forget it — the
+   old per-type rules covered <a> and <button> only, and every custom control
+   in between fell back to whatever the UA drew (or, where a rule set
+   `outline: none`, to nothing at all). */
+:focus-visible {
+  outline: var(--focus-ring) solid var(--focus-color);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -90,19 +316,25 @@ button {
   transition: background 0.2s, opacity 0.2s, box-shadow 0.2s;
 }
 
-button:focus-visible {
-  outline: 2px solid var(--primary-700);
-  outline-offset: 2px;
+/* Standalone controls carry the AAA target size. Links inside running text are
+   exempt by the criterion itself and opt out with .inline-link. */
+button,
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+[role="tab"],
+[role="button"] {
+  min-height: var(--target-min);
 }
 
 .btn-primary {
-  background: var(--primary-700);
-  color: white;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
   border-radius: var(--radius);
 }
 
 .btn-primary:hover {
-  background: var(--primary-800);
+  background: var(--btn-primary-bg-hover);
 }
 
 .btn-secondary {
@@ -117,13 +349,13 @@ button:focus-visible {
 }
 
 .btn-danger {
-  background: var(--danger);
-  color: white;
+  background: var(--btn-danger-bg);
+  color: var(--btn-danger-fg);
   border-radius: var(--radius);
 }
 
 .btn-danger:hover {
-  background: #dc2626;
+  background: var(--btn-danger-bg-hover);
 }
 
 /* Form elements */
@@ -149,11 +381,15 @@ input[type="radio"] {
   flex: none;
 }
 
-input:focus,
-select:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-50);
+/* The old rule replaced the outline with a --primary-50 ring, which measures
+   1.06:1 against a white field — invisible. The only thing that actually
+   signalled focus was a 1px border colour change, under the 2px perimeter
+   WCAG 2.4.13 asks for. The universal :focus-visible rule above now draws the
+   ring; all this adds is the matching border. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--primary-700);
 }
 
 label {
@@ -188,23 +424,23 @@ label {
 }
 
 .badge-success {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--tint-good-bg);
+  color: var(--tint-good-fg);
 }
 
 .badge-warning {
-  background: #fef9c3;
-  color: #713f12;
+  background: var(--tint-note-bg);
+  color: var(--tint-note-fg);
 }
 
 .badge-danger {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
 }
 
 .badge-info {
-  background: var(--primary-50);
-  color: var(--primary);
+  background: var(--tint-info-bg);
+  color: var(--tint-info-fg);
 }
 
 /* Grid & Flex utilities */
@@ -263,7 +499,7 @@ label {
 
 /* Hero section */
 .hero {
-  background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-700) 100%);
+  background: linear-gradient(180deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
   color: white;
   padding: 2rem 0;
 }
@@ -280,28 +516,27 @@ label {
 
 /* Footer */
 .footer {
-  background: var(--primary-900);
-  color: var(--primary-100);
+  background: var(--chrome-bg-deep);
+  color: #E4F1F5;
   padding: 1.5rem 0;
   margin-top: auto;
 }
 
 .footer a {
-  color: white;
-  opacity: 0.9;
+  color: #ffffff;
 }
 
 .footer a:hover {
-  opacity: 1;
+  text-decoration: underline;
 }
 
 /* Skip to content link */
 .skip-link {
   position: absolute;
   top: -40px;
-  left: 0;
-  background: var(--primary-700);
-  color: white;
+  inset-inline-start: 0;
+  background: var(--chrome-bg);
+  color: #ffffff;
   padding: 0.5rem 1rem;
   z-index: 100;
   transition: top 0.2s;
@@ -314,7 +549,7 @@ label {
 
 /* Navbar */
 .navbar {
-  background: var(--primary-800);
+  background: var(--chrome-bg);
   padding: 0.75rem 0;
   position: sticky;
   top: 0;
@@ -357,7 +592,9 @@ label {
   width: 1.5rem;
   height: 1.5rem;
   flex-shrink: 0;
-  color: var(--primary-200);
+  /* On the header's fixed-dark ground, so a fixed light value — the ramp
+     inverts and would put a dark mark on a dark bar. */
+  color: #CFE9F2;
 }
 
 .navbar .brand-text {
@@ -374,7 +611,7 @@ label {
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 9999px;
-  background: #ffffff;
+  background: var(--surface);
   box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7);
   animation: pending-dot-pulse 2.4s ease-out infinite;
   cursor: help;
@@ -413,7 +650,7 @@ label {
 }
 
 .navbar .nav-link {
-  color: rgba(255, 255, 255, 0.85);
+  color: #ffffff;
   padding: 0.4rem 0.75rem;
   border-radius: var(--radius);
   font-size: 0.9rem;
@@ -424,12 +661,12 @@ label {
 
 .navbar .nav-link:hover {
   color: white;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .navbar .nav-link.is-active {
   color: white;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.28);
 }
 
 /* — Desktop dropdown groups (second hierarchy level) — */
@@ -463,7 +700,7 @@ label {
   top: calc(100% + 0.4rem);
   inset-inline-start: 0;
   min-width: 12rem;
-  background: var(--primary-800);
+  background: var(--chrome-bg);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.25));
@@ -478,7 +715,7 @@ label {
   display: block;
   padding: 0.5rem 0.7rem;
   border-radius: var(--radius);
-  color: rgba(255, 255, 255, 0.88);
+  color: #ffffff;
   font-size: 0.9rem;
   font-weight: 500;
   white-space: nowrap;
@@ -486,13 +723,13 @@ label {
 }
 
 .navbar .nav-dropdown-link:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.2);
   color: white;
   opacity: 1;
 }
 
 .navbar .nav-dropdown-link.is-active {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.3);
   color: white;
 }
 
@@ -503,7 +740,7 @@ label {
   border: 0;
   padding: 0;
   border-radius: var(--radius);
-  color: rgba(255, 255, 255, 0.9);
+  color: #ffffff;
   cursor: pointer;
   width: 44px;                    /* a11y touch target */
   height: 44px;
@@ -511,12 +748,17 @@ label {
   justify-content: center;
 }
 .navbar-hamburger:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
   color: white;
 }
-.navbar-hamburger:focus-visible {
-  outline: 2px solid white;
-  outline-offset: 2px;
+.navbar :focus-visible,
+.footer :focus-visible,
+.hero :focus-visible,
+.home-hero :focus-visible,
+.about-hero :focus-visible,
+.login-hero :focus-visible,
+.processed-banner :focus-visible {
+  outline-color: #ffffff;
 }
 .hamburger-icon {
   width: 22px;
@@ -525,7 +767,7 @@ label {
 
 /* — Mobile dropdown panel — */
 .navbar-mobile-panel {
-  background: var(--primary-700);
+  background: var(--chrome-bg-2);
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   padding: 0.4rem 0 0.6rem;
 }
@@ -534,7 +776,7 @@ label {
   display: block;
   padding: 0.7rem 0.8rem;
   border-radius: var(--radius);
-  color: rgba(255, 255, 255, 0.9);
+  color: #ffffff;
   font-weight: 500;
   font-size: 0.95rem;
   text-decoration: none;
@@ -542,7 +784,7 @@ label {
 }
 .navbar-mobile-link:hover,
 .navbar-mobile-link.is-active {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.28);
   color: white;
 }
 
@@ -558,8 +800,8 @@ label {
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.6);
+  text-transform: none;
+  color: #ffffff;
 }
 
 .navbar-mobile-sublink {
@@ -574,13 +816,13 @@ label {
   text-align: center;
   padding: 0.55rem 0.75rem;
   font-size: 0.85rem;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.24);
   color: white;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   border-radius: var(--radius-full);
 }
 .navbar-mobile-lang:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.34);
 }
 
 /* Breakpoint switch — same 640px used across the family */
@@ -601,39 +843,39 @@ label {
 }
 
 .navbar .btn-lang {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.24);
   color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   padding: 0.25rem 0.75rem;
   font-size: 0.8rem;
   border-radius: var(--radius-full);
 }
 
 .navbar .btn-lang:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.34);
 }
 
 .navbar .btn-logout {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.24);
   color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   padding: 0.25rem 0.75rem;
   font-size: 0.8rem;
   border-radius: var(--radius-full);
 }
 
 .navbar .btn-logout:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.34);
 }
 
 .navbar .user-name {
-  color: rgba(255, 255, 255, 0.85);
+  color: #ffffff;
   font-size: 0.85rem;
 }
 
 /* Login page */
 .login-hero {
-  background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-700) 100%);
+  background: linear-gradient(180deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
   color: white;
   padding: 2.5rem 0;
   text-align: center;
@@ -647,7 +889,7 @@ label {
 }
 
 .login-hero p {
-  color: rgba(255, 255, 255, 0.85);
+  color: #ffffff;
   margin-top: 0.5rem;
 }
 
@@ -687,7 +929,7 @@ label {
 
 /* About page */
 .about-hero {
-  background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-700) 100%);
+  background: linear-gradient(180deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
   color: white;
   padding: 3rem 0;
   text-align: center;
@@ -703,8 +945,8 @@ label {
    These surface PROCESSED, derived data — the banner must read loudly as
    "not an original source". */
 .processed-banner {
-  background: #92400e;                       /* amber-900 */
-  background: linear-gradient(90deg, #b45309 0%, #92400e 100%);
+  background: #6E3106;                       /* amber-900, darkened for 1.4.6 */
+  background: linear-gradient(90deg, #7C3A08 0%, #6E3106 100%);
   color: #fff8ec;
   border-bottom: 2px solid #f59e0b;          /* amber-500 */
 }
@@ -723,7 +965,7 @@ label {
   display: inline-flex;
   align-items: center;
   background: #f59e0b;                        /* amber-500 */
-  color: #3b2606;
+  color: #352205;
   font-weight: 800;
   font-size: 0.8rem;
   letter-spacing: 0.03em;
@@ -738,7 +980,7 @@ label {
 }
 
 .project-hero-desc {
-  color: rgba(255, 255, 255, 0.9);
+  color: #ffffff;
   font-size: 1.05rem;
   margin-top: 0.75rem;
   max-width: 42rem;
@@ -788,7 +1030,7 @@ label {
 }
 
 .odata-search-intro {
-  color: var(--text-muted, #556);
+  color: var(--text-muted, #464F5E);
   font-size: 0.95rem;
   margin-bottom: 1rem;
 }
@@ -829,13 +1071,13 @@ label {
 }
 
 .odata-search-error {
-  background: #fdecec;
-  color: #9b1c1c;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
 }
 
 .odata-search-count {
   font-size: 0.85rem;
-  color: var(--text-muted, #556);
+  color: var(--text-muted, #464F5E);
   margin-bottom: 0.75rem;
   font-weight: 600;
 }
@@ -890,7 +1132,7 @@ label {
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--text-muted, #556);
+  color: var(--text-muted, #464F5E);
   margin-bottom: 0.4rem;
 }
 
@@ -937,7 +1179,7 @@ label {
 .odata-facet-count {
   flex-shrink: 0;
   font-size: 0.78rem;
-  color: var(--text-muted, #667);
+  color: var(--text-muted, #464F5E);
   font-variant-numeric: tabular-nums;
 }
 .odata-facet-item.is-active .odata-facet-count {
@@ -1001,7 +1243,7 @@ label {
   gap: 0.4rem 0.9rem;
   margin-top: 0.35rem;
   font-size: 0.82rem;
-  color: var(--text-muted, #556);
+  color: var(--text-muted, #464F5E);
 }
 
 .odata-result-org {
@@ -1130,7 +1372,7 @@ label {
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #b45309;
+  color: var(--warning);
   text-transform: none;
 }
 .sql-processed-divider::before,
@@ -1149,9 +1391,9 @@ label {
    it apart from the queryable system-table groups. */
 .odata-group {
   margin-top: 0.4rem;
-  border-inline-start: 3px solid #b45309;
+  border-inline-start: 3px solid #873E07;
   border-radius: 4px;
-  background: #fffdf9;
+  background: var(--tint-warn-bg);
 }
 
 .odata-group-header {
@@ -1167,7 +1409,7 @@ label {
 }
 
 .odata-group-caret {
-  color: #b45309;
+  color: var(--warning);
   font-size: 0.7rem;
   width: 10px;
   flex: 0 0 auto;
@@ -1178,7 +1420,7 @@ label {
   padding: 0.1rem 0.45rem;
   border-radius: 9999px;
   background: #f59e0b;
-  color: #3b2606;
+  color: #352205;
   font-weight: 800;
   font-size: 0.66rem;
   white-space: nowrap;
@@ -1187,13 +1429,13 @@ label {
 .odata-group-name {
   font-weight: 700;
   font-size: 0.8rem;
-  color: #7c2d12;
+  color: var(--warning);
   flex: 0 0 auto;
 }
 
 .odata-group-sub {
   font-size: 0.68rem;
-  color: #92400e;
+  color: var(--warning);
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1208,7 +1450,7 @@ label {
   margin: 0.15rem 0 0.5rem;
   font-size: 0.72rem;
   line-height: 1.55;
-  color: #7c2d12;
+  color: var(--warning);
 }
 
 .odata-group-form {
@@ -1223,14 +1465,14 @@ label {
   border: 1px solid #fcd9a8;
   border-radius: 4px;
   font-size: 0.82rem;
-  background: #fff;
+  background: var(--surface);
 }
 .odata-group-form button {
   flex: 0 0 auto;
   padding: 0.35rem 0.7rem;
   border: none;
   border-radius: 4px;
-  background: #b45309;
+  background: #873E07;
   color: #fff;
   font-weight: 600;
   font-size: 0.8rem;
@@ -1244,15 +1486,15 @@ label {
 .odata-group-msg {
   padding: 0.4rem 0.6rem;
   border-radius: 4px;
-  background: #fdecec;
-  color: #9b1c1c;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
   font-size: 0.8rem;
 }
 
 .odata-group-count {
   font-size: 0.7rem;
   font-weight: 600;
-  color: #92400e;
+  color: var(--warning);
   margin-bottom: 0.4rem;
 }
 
@@ -1265,7 +1507,7 @@ label {
 .odata-item {
   border: 1px solid #fde3c2;
   border-radius: 5px;
-  background: #fff;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -1282,11 +1524,11 @@ label {
   font-size: 0.8rem;
 }
 .odata-item-head:hover {
-  background: #fffbeb;
+  background: var(--tint-warn-bg);
 }
 
 .odata-item-caret {
-  color: #b45309;
+  color: var(--warning);
   font-size: 0.7rem;
   flex: 0 0 auto;
 }
@@ -1305,8 +1547,8 @@ label {
   flex: 0 0 auto;
   font-size: 0.68rem;
   font-weight: 700;
-  color: #92400e;
-  background: #ffedd5;
+  color: var(--warning);
+  background: var(--tint-warn-bg);
   border-radius: 9999px;
   padding: 0.02rem 0.45rem;
 }
@@ -1318,13 +1560,13 @@ label {
 
 .odata-item-org {
   font-size: 0.7rem;
-  color: var(--text-muted, #667);
+  color: var(--text-muted, #464F5E);
   margin: 0.3rem 0;
 }
 
 .odata-item-empty {
   font-size: 0.75rem;
-  color: var(--text-muted, #667);
+  color: var(--text-muted, #464F5E);
   padding: 0.25rem 0;
 }
 
@@ -1342,7 +1584,7 @@ label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--primary-700, #0f766e);
+  color: var(--primary-700, #0C5E58);
 }
 
 .odata-item-open {
@@ -1350,24 +1592,24 @@ label {
   margin-top: 0.45rem;
   font-size: 0.74rem;
   font-weight: 600;
-  color: #b45309;
+  color: var(--warning);
 }
 
 /* Import-to-SQL action button (admin odata panel). */
 .odata-sql-query-btn {
   flex: 0 0 auto;
   padding: 0.2rem 0.6rem;
-  border: 1px solid #b45309;
+  border: 1px solid #873E07;
   border-radius: 4px;
-  background: #fff7ed;
-  color: #b45309;
+  background: var(--tint-warn-bg);
+  color: var(--warning);
   font-size: 0.75rem;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
 }
 .odata-sql-query-btn:hover:not(:disabled) {
-  background: #b45309;
+  background: #873E07;
   color: #fff;
 }
 .odata-sql-query-btn:disabled {
@@ -1475,12 +1717,12 @@ label {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.25rem 0.75rem;
-  background: #FEF3C7;
+  background: var(--tint-warn-bg);
   border: 1px solid var(--warning);
   border-radius: var(--radius);
   padding: 0.75rem 1.25rem;
   margin-bottom: 1.5rem;
-  color: #78350F;
+  color: var(--warning);
   font-size: 0.9rem;
   line-height: 1.6;
 }
@@ -1607,23 +1849,23 @@ label {
 }
 
 .decision-status-done {
-  background: #DCFCE7;
-  color: #166534;
+  background: var(--tint-good-bg);
+  color: var(--success);
 }
 
 .decision-status-partial {
-  background: #FEF3C7;
-  color: #92400E;
+  background: var(--tint-warn-bg);
+  color: var(--warning);
 }
 
 .decision-status-not-done {
-  background: #FEE2E2;
-  color: #991B1B;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
 }
 
 .decision-status-unknown {
-  background: var(--border);
-  color: var(--text-muted);
+  background: var(--tint-neutral-bg);
+  color: var(--tint-neutral-fg);
 }
 
 .decision-task-obligation {
@@ -1701,7 +1943,7 @@ label {
 }
 
 .decision-analysis-actual h6 {
-  color: #92400E;
+  color: var(--warning);
 }
 
 .decision-analysis-damage {
@@ -1709,7 +1951,7 @@ label {
 }
 
 .decision-analysis-damage h6 {
-  color: #991B1B;
+  color: var(--tint-bad-fg);
 }
 
 @media (max-width: 720px) {
@@ -1810,7 +2052,7 @@ label {
 
 /* Home page hero — לעם family canonical (matches Ocoi DESIGN_SYSTEM.md) */
 .home-hero {
-  background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-700) 100%);
+  background: linear-gradient(180deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);
   color: white;
   padding: 3rem 0 3rem;
 }
@@ -1829,7 +2071,7 @@ label {
 }
 
 .home-hero-subtitle {
-  color: var(--primary-100);
+  color: #E4F1F5;
   font-size: 0.95rem;
   margin-bottom: 2rem;
   line-height: 1.5;
@@ -1852,17 +2094,25 @@ label {
   align-items: center;
   max-width: 40rem;             /* ~max-w-2xl */
   margin: 0 auto;
-  background: #ffffff;
+  background: var(--surface);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-md);
   overflow: hidden;
+}
+
+/* The field itself is borderless by design, so the pill wears the focus ring
+   on its behalf. Without this the site's primary control had no focus
+   indicator at all (WCAG 2.4.7). */
+.home-search-form:focus-within {
+  outline: var(--focus-ring) solid #ffffff;
+  outline-offset: 2px;
 }
 
 .home-search-icon {
   flex-shrink: 0;
   margin-inline-start: 1rem;
   margin-inline-end: 0.5rem;
-  color: #9CA3AF;               /* gray-400 */
+  color: var(--text-muted);               /* gray-400 */
 }
 
 .home-search-input {
@@ -1878,14 +2128,11 @@ label {
 }
 
 .home-search-input::placeholder {
-  color: #9CA3AF;
+  color: var(--text-muted);
 }
 
-.home-search-input:focus {
-  box-shadow: none;
-  border-color: transparent;
-  outline: none;
-}
+/* No :focus override here on purpose — .home-search-form:focus-within draws
+   the indicator around the whole pill. */
 
 /* sr-only — used for the hidden form label + hidden submit button.
    Matches the standard accessibility class so screen readers pick it up
@@ -1937,12 +2184,14 @@ label {
   font-size: 0.5em;
   font-weight: 600;
   letter-spacing: 0.01em;
-  color: var(--primary-100);
+  /* Fixed light ink: the hero keeps a dark ground in both themes, so it
+     cannot borrow from the brand ramp, which inverts. */
+  color: #E4F1F5;
   margin-inline-start: 0.35em;
 }
 
 .home-stat-label {
-  color: var(--primary-200);
+  color: #D3E7EE;
   font-size: 0.875rem;
   margin-top: 0.25rem;
 }
@@ -1963,12 +2212,7 @@ label {
   }
 }
 
-/* Textarea focus (matches input focus) */
-textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-50);
-}
+/* Textarea focus is handled by the shared :focus-visible rule near the top. */
 
 /* Reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
@@ -2165,7 +2409,7 @@ a.tag-chip:hover {
 
 /* — MCP card (canonical amber tint, matching Ocoi) — */
 .api-mcp-card {
-  background: #FFFBEB;            /* amber-50 */
+  background: var(--tint-warn-bg);            /* amber-50 */
   border: 1px solid #FDE68A;       /* amber-200 */
   border-radius: var(--radius);
   padding: 1.5rem;
@@ -2183,13 +2427,13 @@ a.tag-chip:hover {
 .api-mcp-title {
   font-size: 1.15rem;
   font-weight: 700;
-  color: #111827;
+  color: var(--text);
   margin: 0;
 }
 
 .api-mcp-badge {
-  background: #FEF3C7;            /* yellow-100 */
-  color: #92400E;                  /* yellow-800 */
+  background: var(--tint-warn-bg);            /* yellow-100 */
+  color: var(--warning);                  /* yellow-800 */
   border-radius: var(--radius-full);
   padding: 0.15rem 0.55rem;
   font-size: 0.7rem;
@@ -2198,7 +2442,7 @@ a.tag-chip:hover {
 }
 
 .api-mcp-lead {
-  color: #4B5563;
+  color: var(--text-muted);
   font-size: 0.95rem;
   line-height: 1.65;
   margin-bottom: 1rem;
@@ -2211,7 +2455,7 @@ a.tag-chip:hover {
 }
 
 .api-mcp-subcard {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid #FDE68A;       /* amber-100ish to keep family with container */
   border-radius: var(--radius);
   padding: 1rem 1.1rem;
@@ -2220,13 +2464,13 @@ a.tag-chip:hover {
 .api-mcp-subtitle {
   font-size: 0.95rem;
   font-weight: 700;
-  color: #111827;
+  color: var(--text);
   margin: 0 0 0.5rem;
 }
 
 .api-mcp-subcard p,
 .api-mcp-subcard li {
-  color: #374151;
+  color: var(--text-muted);
   font-size: 0.875rem;
   line-height: 1.65;
 }
@@ -2254,7 +2498,7 @@ a.tag-chip:hover {
 }
 
 .api-mcp-url {
-  background: #292524;             /* stone-800 */
+  background: var(--code-bg);             /* stone-800 */
   color: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8rem;
@@ -2263,9 +2507,11 @@ a.tag-chip:hover {
 }
 
 .api-copy-btn {
-  background: #fff;
-  color: #292524;
-  border: 1px solid #D6D3D1;       /* stone-300 */
+  background: var(--surface);
+  /* Was --code-fg, which is the ink for the DARK code block — on the light
+     button surface it came out near-white on white. */
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.3rem 0.65rem;
   font-size: 0.75rem;
@@ -2275,14 +2521,14 @@ a.tag-chip:hover {
 }
 
 .api-copy-btn:hover {
-  background: #F5F5F4;
+  background: var(--surface-2);
 }
 
 /* — Endpoints list — */
 .api-endpoints-heading {
   font-size: 1.1rem;
   font-weight: 700;
-  color: #111827;
+  color: var(--text);
   margin: 0.5rem 0 0.9rem;
 }
 
@@ -2301,7 +2547,7 @@ a.tag-chip:hover {
 
 .api-endpoint-group-note {
   font-size: 0.85rem;
-  color: #4b5563;
+  color: var(--text-muted);
   margin: 0 0 0.8rem;
   line-height: 1.5;
 }
@@ -2328,8 +2574,8 @@ a.tag-chip:hover {
 }
 
 .api-method-badge {
-  background: #DCFCE7;             /* green-100 */
-  color: #166534;                  /* green-800 */
+  background: var(--tint-good-bg);             /* green-100 */
+  color: var(--success);                  /* green-800 */
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -2341,12 +2587,12 @@ a.tag-chip:hover {
 .api-endpoint-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
-  color: #1F2937;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
 .api-endpoint-desc {
-  color: #4B5563;
+  color: var(--text-muted);
   font-size: 0.875rem;
   margin-bottom: 0.5rem;
 }
@@ -2359,11 +2605,11 @@ a.tag-chip:hover {
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.8rem;
-  color: #4B5563;
+  color: var(--text-muted);
 }
 
 .api-param-name {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.05rem 0.35rem;
@@ -2382,16 +2628,452 @@ a.tag-chip:hover {
 }
 
 .api-endpoint-example-label {
-  color: #9CA3AF;
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
 .api-endpoint-example-link {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--primary-600);
+  /* --primary-600 is a mid-ramp value that never clears 7:1 as ink. Links use
+     the 700 step, which does. */
+  color: var(--primary-700);
   word-break: break-all;
 }
 
 .api-endpoint-example-link:hover {
   text-decoration: underline;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Accessibility layer — WCAG 2.2 AAA
+   Everything below exists to satisfy a named success criterion. The criterion
+   is cited so a future edit knows what it would be breaking.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 2.4.11/2.4.12 Focus Not Obscured — .navbar is sticky at the top, so a
+   keyboard user tabbing down a long list had the focused element scrolled to
+   the very top edge, i.e. underneath the header. */
+html {
+  scroll-padding-top: 5rem;
+}
+:target,
+[id] {
+  scroll-margin-top: 5rem;
+}
+
+/* 1.4.8 Visual Presentation — running text stops at ~80 characters. Applied to
+   the prose containers only; tables and the SQL console want the full width. */
+.prose,
+.about-card p,
+.about-section p,
+.page-intro,
+.sub {
+  max-width: 72ch;
+}
+/* Paragraph spacing at 1.5x the line spacing, also 1.4.8. */
+.prose p + p,
+.about-card p + p {
+  margin-top: 1.5em;
+}
+
+/* 2.5.5 Target Size (Enhanced) — standalone controls reach 44x44. Links that
+   sit inside a sentence are exempt by the criterion and opt out explicitly. */
+.tag-chip,
+.source-chip,
+.nav-link,
+.nav-dropdown-link,
+.navbar-mobile-link,
+.footer-group a,
+.catalog-tab,
+.data-tab {
+  min-height: var(--target-min);
+  display: inline-flex;
+  align-items: center;
+}
+.inline-link,
+p a,
+li a,
+td a,
+.prose a {
+  min-height: 0;
+  display: inline;
+}
+
+/* 2.5.8 Target Size (Minimum) fallback for anything genuinely too dense to
+   reach 44px — a 24px floor with the spacing the criterion allows. */
+.target-dense {
+  min-height: 24px;
+  min-width: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 4.1.2 — a scroll container is only reachable by keyboard when it can hold
+   focus. Components add tabIndex={0}; this gives the focus something to show. */
+.scroll-region:focus-visible {
+  outline: var(--focus-ring) solid var(--focus-color);
+  outline-offset: -3px;
+}
+
+/* 1.3.1 — data tables. Sticky headers need an opaque background or rows show
+   through them as they scroll under. */
+table caption.sr-only {
+  position: absolute !important;
+}
+th {
+  text-align: start;
+}
+thead th {
+  background: var(--surface-2);
+}
+
+/* 3.3.1/3.3.3 — the field that failed and the message that explains it. */
+[aria-invalid="true"] {
+  border-color: var(--danger) !important;
+  border-width: 2px !important;
+}
+.field-error {
+  color: var(--danger);
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+/* 1.4.13 — the theme control lives in the header next to the language toggle. */
+.navbar .btn-theme {
+  background: rgba(0, 0, 0, 0.24);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: var(--radius-full);
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.navbar .btn-theme:hover {
+  background: rgba(0, 0, 0, 0.34);
+}
+
+/* 2.2.2/2.2.4 — the control that stops auto-refreshing regions. */
+.autorefresh-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-full);
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.autorefresh-toggle[aria-pressed="true"] {
+  background: var(--tint-info-bg);
+  color: var(--tint-info-fg);
+  border-color: var(--tint-info-bd);
+}
+
+/* Dialogs — one shell for every modal in the app (4.1.2, 2.4.3). */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 200;
+}
+.modal-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  max-height: 90vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.modal-body {
+  padding: 1rem 1.1rem;
+  overflow-y: auto;
+}
+.modal-foot {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0.8rem 1.1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Breadcrumbs — 2.4.8 Location. */
+.breadcrumbs {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+.breadcrumbs ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+}
+.breadcrumbs li::after {
+  content: "‹";
+  margin-inline-start: 0.35rem;
+  color: var(--border);
+}
+.breadcrumbs li:last-child::after {
+  content: "";
+}
+.breadcrumbs a {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.breadcrumbs [aria-current="page"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 3.1.4 Abbreviations — an expandable abbreviation must look expandable. */
+abbr[title] {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+/* 3.1.5 Reading Level — the plain-language summary that opens a dense page. */
+.plain-summary {
+  background: var(--tint-info-bg);
+  color: var(--tint-info-fg);
+  border-inline-start: 4px solid var(--tint-info-bd);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  max-width: 72ch;
+}
+.plain-summary h2 {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.3rem;
+}
+.plain-summary p {
+  margin: 0;
+}
+
+/* 1.4.11 — the sticky table header must not let rows bleed through. */
+[data-sticky-head] thead th {
+  background: var(--surface-2);
+}
+
+/* Windows high-contrast mode: forced colours strip our palette, so anything
+   that carried meaning purely through background colour needs a border. */
+@media (forced-colors: active) {
+  .badge,
+  .tag-chip,
+  .source-chip,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    border: 1px solid currentColor;
+  }
+  :focus-visible {
+    outline: 3px solid Highlight;
+  }
+}
+
+/* ── Target size, the honest way ────────────────────────────────────────────
+   WCAG 2.5.5 measures the TARGET — the region that accepts the click — not the
+   painted pill. Growing every chip to 44px of visible ink would wreck the
+   density these lists depend on, so instead each small standalone control
+   keeps its look and grows its hit area with a transparent pseudo-element.
+   The rule is only sound while neighbours are far enough apart not to overlap,
+   which is why it is applied per-component rather than globally. */
+.source-chip,
+.tag-chip,
+.card-source-link,
+.chip-target {
+  position: relative;
+}
+.source-chip::after,
+.tag-chip::after,
+.card-source-link::after,
+.chip-target::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  width: max(100%, var(--target-min));
+  height: max(100%, var(--target-min));
+  /* Behind the text, above nothing — purely a hit area. */
+  z-index: 0;
+}
+
+/* Where a chip sits in a row of chips, the rows need enough gap that the
+   enlarged hit areas do not overlap each other (2.5.5 forbids overlap). */
+.tag-chips,
+.card-source-row {
+  gap: 0.75rem 0.6rem;
+  row-gap: 0.85rem;
+}
+
+/* The dataset title is the primary target on every card and was 19px tall —
+   the height of its own text. Unlike the chips it deserves the room, so this
+   one grows for real rather than hiding a bigger hit area behind it. */
+.card h3 > a,
+.card h2 > a,
+.odata-result-title {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+}
+
+/* Header controls: the brand lockup, the language pill and the skip link all
+   sat just under 44px. */
+.navbar .brand,
+.navbar .btn-lang,
+.navbar .btn-logout,
+.skip-link {
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  display: inline-flex;
+  align-items: center;
+}
+.skip-link {
+  justify-content: center;
+}
+
+/* A card title short enough to be narrower than it is tall ("גנים", "עצים")
+   still has to clear 44px in BOTH axes. */
+.card h3 > a,
+.card h2 > a {
+  min-width: var(--target-min);
+  justify-content: flex-start;
+}
+
+/* The catalog and data tab strips sat at 41px — three short of the minimum. */
+.catalog-tab,
+.data-tab {
+  min-height: var(--target-min);
+}
+
+/* Standalone links that are their own row — an API example URL, the glossary
+   pointer in a plain-language summary, a "read more" under a card. None sit
+   inside a sentence, so none is exempt from 2.5.5. */
+.api-endpoint-example-link,
+.plain-summary a,
+.api-mcp-lead a,
+.breadcrumbs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+}
+
+/* Small form controls in dense admin/filter rows. index.css already sets a
+   comfortable padding; this puts a floor under the ones that override it. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+select,
+textarea {
+  min-height: var(--target-min);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  /* A tick is a glyph. The label beside it is part of the same target, so the
+     pair is measured together — the label carries the height. */
+  min-width: 24px;
+  min-height: 24px;
+}
+/* Deliberately NOT `label:has(> input[type=checkbox])`. :has() invalidates
+   style on every DOM mutation, and on a page with ~17k nodes that turned a
+   render into hundreds of milliseconds. A label that wraps its control is
+   already a flex row at every call site; the padding below is what lifts the
+   pair to 44px, and it costs nothing to match. */
+label > input[type="checkbox"],
+label > input[type="radio"] {
+  margin-block: 0.55rem;
+}
+
+/* Leaflet ships its own control chrome. The zoom buttons are 30px wide and the
+   attribution runs at 4.94:1 — both below what the rest of the site now meets,
+   and neither is something the map library will fix for us. */
+.leaflet-control-zoom a {
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+}
+.leaflet-control-attribution {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+.leaflet-control-attribution a {
+  color: var(--primary) !important;
+}
+
+/* Standalone links and buttons that were still short of the target minimum. */
+.odata-file,
+.odata-facet-item,
+.odata-facet-more,
+.odata-clear,
+.odata-search-more,
+.odata-visit-link,
+.odata-files-summary,
+.card-export-link {
+  min-height: var(--target-min);
+  display: inline-flex;
+  align-items: center;
+}
+.odata-file,
+.odata-facet-item {
+  /* These are full-width rows, so the flex must not centre them. */
+  justify-content: flex-start;
+}
+
+/* A button whose label is one short word ("נקה", "מסננים") was 35–40px wide. */
+button,
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+[role="tab"] {
+  min-width: var(--target-min);
+}
+
+/* A block-level link that is its own paragraph — a citation line, a "open the
+   dataset" pointer. Not inside a sentence, so 2.5.5 applies to it. */
+li > a:only-child,
+.rationale-source a,
+.jg-card p > a:only-child,
+.about-card p > a:only-child {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
 }

@@ -76,24 +76,24 @@ export default function DriveConnectionPanel() {
       <h2 style={{ fontSize: "1.15rem", marginBottom: "0.75rem" }}>
         חיבור Google Drive
       </h2>
-      <p style={{ fontSize: "0.85rem", color: "#475569", marginBottom: "1rem", lineHeight: 1.6 }}>
+      <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "1rem", lineHeight: 1.6 }}>
         משמש לייצוא כל הקבצים של גרסה ישירות לתיקיית Drive (הכפתור "ייצוא לדרייב"
         בעמוד גרסה). החיבור שמור על חשבון האדמין המחובר.
       </p>
 
       <div style={{
-        border: "1px solid #e2e8f0", borderRadius: 8, padding: "1rem",
-        background: "#f8fafc", display: "flex", alignItems: "center",
+        border: "1px solid var(--border)", borderRadius: 8, padding: "1rem",
+        background: "var(--surface-2)", display: "flex", alignItems: "center",
         gap: "0.75rem", flexWrap: "wrap",
       }}>
         <span style={{
           display: "inline-flex", alignItems: "center", gap: "0.4rem",
           fontSize: "0.9rem", fontWeight: 600,
-          color: connected ? "#166534" : "#991b1b",
+          color: connected ? "var(--success)" : "#941A1A",
         }}>
           <span style={{
             width: 10, height: 10, borderRadius: "50%",
-            background: connected ? "#22c55e" : "#ef4444", display: "inline-block",
+            background: connected ? "var(--success)" : "var(--danger)", display: "inline-block",
           }} />
           {connected === null ? "טוען..." : connected ? "מחובר" : "לא מחובר"}
         </span>
@@ -116,20 +116,20 @@ export default function DriveConnectionPanel() {
         <div style={{
           marginTop: "0.75rem", fontSize: "0.85rem", padding: "0.5rem 0.75rem",
           borderRadius: 6,
-          background: returnMsg.ok ? "#dcfce7" : "#fee2e2",
-          color: returnMsg.ok ? "#166534" : "#991b1b",
+          background: returnMsg.ok ? "var(--tint-good-bg)" : "var(--tint-bad-bg)",
+          color: returnMsg.ok ? "var(--success)" : "#941A1A",
         }}>{returnMsg.text}</div>
       )}
       {error && (
         <div style={{
           marginTop: "0.75rem", fontSize: "0.85rem", padding: "0.5rem 0.75rem",
-          borderRadius: 6, background: "#fee2e2", color: "#991b1b",
+          borderRadius: 6, background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)",
         }}>{error}</div>
       )}
 
       <div style={{
-        marginTop: "1.25rem", fontSize: "0.8rem", color: "#64748b",
-        lineHeight: 1.7, borderTop: "1px solid #e2e8f0", paddingTop: "0.75rem",
+        marginTop: "1.25rem", fontSize: "0.8rem", color: "var(--text-muted)",
+        lineHeight: 1.7, borderTop: "1px solid var(--border)", paddingTop: "0.75rem",
       }}>
         <strong>הטוקן פג כל 7 ימים?</strong> זה קורה כשמסך ההסכמה של OAuth
         ב-Google Cloud Console במצב "Testing". פרסום ל-Production

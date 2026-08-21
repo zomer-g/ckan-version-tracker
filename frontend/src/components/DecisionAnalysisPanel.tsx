@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   decisionAnalysis,
   DecisionAnalysisView,
@@ -84,11 +84,15 @@ function Field({
   rows?: number;
   dir?: string;
 }) {
+  // The label used to sit beside the control with nothing tying them together,
+  // so a screen reader announced an unnamed edit box (WCAG 1.3.1).
+  const fieldId = useId();
   return (
     <div style={{ marginBottom: "0.6rem" }}>
-      <label style={labelStyle}>{label}</label>
+      <label style={labelStyle} htmlFor={fieldId}>{label}</label>
       {rows ? (
         <textarea
+          id={fieldId}
           value={value}
           rows={rows}
           dir={dir}
@@ -97,6 +101,7 @@ function Field({
         />
       ) : (
         <input
+          id={fieldId}
           type="text"
           value={value}
           dir={dir}
@@ -276,7 +281,7 @@ export default function DecisionAnalysisPanel() {
 
   if (!doc || !view) {
     return (
-      <div className="text-sm" style={{ color: "#b91c1c" }}>
+      <div className="text-sm" style={{ color: "var(--danger)" }}>
         {err ?? "לא נטען"}
       </div>
     );
@@ -294,7 +299,7 @@ export default function DecisionAnalysisPanel() {
         }}
       >
         <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>
-          📑 ניתוח החלטת ממשלה
+          <span aria-hidden="true">📑</span> ניתוח החלטת ממשלה
         </h2>
         <a
           href={`/rationale/${key}`}
@@ -304,7 +309,7 @@ export default function DecisionAnalysisPanel() {
           style={{ color: "var(--primary, #2563eb)" }}
         >
           פתח את העמוד ↗
-        </a>
+        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       </div>
 
       <div
@@ -390,8 +395,8 @@ export default function DecisionAnalysisPanel() {
         </span>
       </div>
 
-      {err && <div className="text-sm" style={{ color: "#b91c1c", marginBottom: "0.5rem" }}>{err}</div>}
-      {toast && <div className="text-sm" style={{ color: "#065f46", marginBottom: "0.5rem" }}>{toast}</div>}
+      {err && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{err}</div>}
+      {toast && <div className="text-sm" style={{ color: "var(--success)", marginBottom: "0.5rem" }}>{toast}</div>}
 
       {/* Document header */}
       <div style={{ ...boxStyle, marginBottom: "0.85rem" }}>
@@ -685,8 +690,9 @@ export default function DecisionAnalysisPanel() {
                             />
                           </div>
                           <div style={{ flex: "1 1 8rem", marginBottom: "0.6rem" }}>
-                            <label style={labelStyle}>סטטוס</label>
+                            <label style={labelStyle} htmlFor={`task-status-${sIdx}-${tIdx}`}>סטטוס</label>
                             <select
+                              id={`task-status-${sIdx}-${tIdx}`}
                               value={task.status}
                               onChange={(e) =>
                                 patchTask(sIdx, tIdx, {

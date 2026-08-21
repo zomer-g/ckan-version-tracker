@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Modal from "./a11y/Modal";
+import { ProgressBar } from "./a11y";
 import { drive, DriveExportJob } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
@@ -115,37 +117,16 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
         style={btnStyle}
         title="העברת כל קבצי הגרסה לתיקייה ב-Google Drive"
       >
-        ⬆ ייצוא לדרייב
+        <span aria-hidden="true">⬆</span> ייצוא לדרייב
       </button>
 
       {open && (
-        <div
-          onClick={() => !submitting && setOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
+        <Modal
+          title="ייצוא לדרייב"
+          width="min(440px, 92vw)"
+          closeOnBackdrop={!submitting}
+          onClose={() => !submitting && setOpen(false)}
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            dir="rtl"
-            style={{
-              background: "var(--bg, #fff)",
-              color: "var(--text, #111)",
-              borderRadius: "8px",
-              padding: "1.25rem 1.4rem",
-              width: "min(440px, 92vw)",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 0.6rem", fontSize: "1.05rem" }}>
-              ייצוא לדרייב
-            </h3>
 
             {connected === null && <p>טוען…</p>}
 
@@ -161,14 +142,14 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                   </button>
                   <button
                     type="button"
-                    style={{ ...btnStyle, color: "#666", borderColor: "#bbb" }}
+                    style={{ ...btnStyle, color: "var(--text-muted)", borderColor: "var(--border)" }}
                     onClick={() => setOpen(false)}
                   >
                     ביטול
                   </button>
                 </div>
                 {error && (
-                  <p style={{ color: "#b91c1c", fontSize: "0.8rem", margin: "0.6rem 0 0" }}>
+                  <p style={{ color: "var(--danger)", fontSize: "0.8rem", margin: "0.6rem 0 0" }}>
                     {error}
                   </p>
                 )}
@@ -183,7 +164,7 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                   שמשמש כאינדקס יועבר גם הוא). התיקייה חייבת להיות בבעלות החשבון
                   המחובר או משותפת לו עם הרשאת עריכה.
                 </p>
-                <input
+                <input aria-label="https://drive.google.com/drive/folders/…"
                   type="text"
                   value={folderUrl}
                   onChange={(e) => setFolderUrl(e.target.value)}
@@ -192,14 +173,14 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                   style={{
                     width: "100%",
                     padding: "0.45rem 0.6rem",
-                    border: "1px solid #ccc",
+                    border: "1px solid var(--border)",
                     borderRadius: "5px",
                     fontSize: "0.85rem",
                     boxSizing: "border-box",
                   }}
                 />
                 {error && (
-                  <p style={{ color: "#b91c1c", fontSize: "0.8rem", margin: "0.5rem 0 0" }}>
+                  <p style={{ color: "var(--danger)", fontSize: "0.8rem", margin: "0.5rem 0 0" }}>
                     {error}
                   </p>
                 )}
@@ -209,7 +190,7 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                   </button>
                   <button
                     type="button"
-                    style={{ ...btnStyle, color: "#666", borderColor: "#bbb" }}
+                    style={{ ...btnStyle, color: "var(--text-muted)", borderColor: "var(--border)" }}
                     onClick={() => setOpen(false)}
                     disabled={submitting}
                   >
@@ -222,13 +203,13 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
             {job && (
               <div style={{ fontSize: "0.9rem", lineHeight: 1.6 }}>
                 {job.status === "success" ? (
-                  <p style={{ color: "#166534" }}>
-                    ✓ הסתיים — {job.documents_uploaded.toLocaleString()} מסמכים
+                  <p style={{ color: "var(--success)" }}>
+                    <span aria-hidden="true">✓</span> הסתיים — {job.documents_uploaded.toLocaleString()} מסמכים
                     הועברו לדרייב.
                   </p>
                 ) : job.status === "failed" ? (
-                  <p style={{ color: "#b91c1c" }}>
-                    ✗ נכשל: {job.error || "שגיאה לא ידועה"}
+                  <p style={{ color: "var(--danger)" }}>
+                    <span aria-hidden="true">✗</span> נכשל: {job.error || "שגיאה לא ידועה"}
                   </p>
                 ) : (
                   <>
@@ -237,34 +218,20 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                       <strong>{job.documents_uploaded.toLocaleString()}</strong>{" "}
                       הועברו (חבילה {job.completed_files}/{job.total_files})
                     </p>
-                    <div
-                      style={{
-                        height: "8px",
-                        background: "#eee",
-                        borderRadius: "4px",
-                        overflow: "hidden",
-                        margin: "0.4rem 0",
-                      }}
-                    >
-                      <div
-                        style={{
-                          height: "100%",
-                          width: `${
-                            job.total_files
-                              ? Math.round((job.completed_files / job.total_files) * 100)
-                              : 0
-                          }%`,
-                          background: "var(--primary)",
-                          transition: "width 0.4s",
-                        }}
+                    <div style={{ margin: "0.4rem 0" }}>
+                      <ProgressBar
+                        label="התקדמות הייצוא לדרייב"
+                        value={job.completed_files}
+                        max={job.total_files || 1}
+                        height={8}
                       />
                     </div>
                     {job.current_file && (
-                      <p style={{ fontSize: "0.75rem", color: "#666" }} dir="ltr">
+                      <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }} dir="ltr">
                         {job.current_file}
                       </p>
                     )}
-                    <p style={{ fontSize: "0.75rem", color: "#666" }}>
+                    <p style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       העברה רצה ברקע — אפשר לסגור את החלון, היא תמשיך.
                     </p>
                   </>
@@ -272,7 +239,7 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                 <div style={{ marginTop: "0.8rem" }}>
                   <button
                     type="button"
-                    style={{ ...btnStyle, color: "#666", borderColor: "#bbb" }}
+                    style={{ ...btnStyle, color: "var(--text-muted)", borderColor: "var(--border)" }}
                     onClick={() => setOpen(false)}
                   >
                     סגור
@@ -280,8 +247,7 @@ export default function DriveExportButton({ versionId, fileCount }: Props) {
                 </div>
               </div>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </>
   );

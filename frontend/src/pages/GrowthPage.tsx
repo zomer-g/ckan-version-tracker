@@ -42,6 +42,7 @@ import {
 } from "../config/growthLayers";
 import type { MinimalFeature } from "../utils/geoFilters";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 // Rebind the default marker icon paths — same workaround GovmapView
 // uses. Polygons (the common case) ignore this, but if a future
 // layer carries Point geometries we don't want broken icons.
@@ -83,6 +84,7 @@ interface Diagnostics {
 }
 
 export default function GrowthPage() {
+  useDocumentTitle("גידולים חקלאיים");
   const { t, i18n } = useTranslation();
   const isHe = i18n.language === "he";
 
@@ -340,7 +342,7 @@ export default function GrowthPage() {
               role="alert"
               style={{
                 padding: "1rem",
-                color: "var(--danger, #b91c1c)",
+                color: "var(--danger, #992C2C)",
                 fontSize: "0.9rem",
               }}
             >
@@ -424,7 +426,7 @@ export default function GrowthPage() {
             style={{
               padding: "0.75rem 1rem",
               fontSize: "0.85rem",
-              background: "var(--bg-muted, #f8fafc)",
+              background: "var(--surface-2)",
             }}
           >
             <button
@@ -627,7 +629,12 @@ function LoadingPlaceholder(props: {
       </div>
       {progress !== null && !parsing && (
         <div
-          aria-hidden
+          role="progressbar"
+          aria-label="התקדמות טעינת הנתונים"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+          aria-valuetext={`${Math.round(progress * 100)}%`}
           style={{
             width: "70%",
             maxWidth: 320,
@@ -641,7 +648,7 @@ function LoadingPlaceholder(props: {
             style={{
               height: "100%",
               width: `${progress * 100}%`,
-              background: "var(--primary, #0f766e)",
+              background: "var(--fill-brand)",
               transition: "width 120ms linear",
             }}
           />

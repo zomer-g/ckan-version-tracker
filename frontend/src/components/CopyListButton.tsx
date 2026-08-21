@@ -59,8 +59,8 @@ export default function CopyListButton({
       title={title}
       style={{
         background: "none",
-        border: "1px solid var(--border, #cbd5e1)",
-        color: state === "done" ? "#166534" : state === "fail" ? "#991b1b" : "var(--text-muted)",
+        border: "1px solid var(--border, var(--border))",
+        color: state === "done" ? "var(--success)" : state === "fail" ? "#941A1A" : "var(--text-muted)",
         cursor: "pointer",
         fontSize: "0.7rem",
         padding: "0.15rem 0.5rem",

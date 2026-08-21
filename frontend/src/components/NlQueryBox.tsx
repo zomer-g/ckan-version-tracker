@@ -82,40 +82,40 @@ export default function NlQueryBox({ onUseSql }: {
 
   const src = res?.answered ? res.source : null;
   const srcBadge = src === "template"
-    ? { text: "התאמה מדויקת", bg: "#dcfce7", fg: "#15803d",
+    ? { text: "התאמה מדויקת", bg: "var(--tint-good-bg)", fg: "var(--success)",
         title: "השאלה נענתה על ידי התאמת תבנית — בלי מודל שפה, ובלי אפשרות להזיה." }
-    : { text: "נוצר במודל שפה", bg: "#fef9c3", fg: "#a16207",
+    : { text: "נוצר במודל שפה", bg: "var(--tint-note-bg)", fg: "var(--tint-note-fg)",
         title: `מודל שפה (${res?.model || src}) בחר את המאגר והשדות מתוך מודל מוצהר. `
              + "השאילתה אומתה מול המודל לפני ההרצה — אבל כדאי לוודא שהיא אכן עונה "
              + "על מה ששאלתם." };
 
   return (
-    <div dir="rtl" style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.8rem", marginBottom: "0.7rem", background: "var(--bg-muted, #f8fafc)" }}>
+    <div dir="rtl" style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.8rem", marginBottom: "0.7rem", background: "var(--surface-2)" }}>
       <div className="flex" style={{ alignItems: "center", gap: 8, marginBottom: "0.45rem", flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>💬 שאלו בשפה חופשית</span>
+        <span style={{ fontWeight: 600, fontSize: "0.9rem" }}><span aria-hidden="true">💬</span> שאלו בשפה חופשית</span>
         {/* Stated up front, not buried in a tooltip. The feature can pick the
             wrong dataset or the wrong filter and still look confident, and the
             reader has to know that before they trust a number off it. */}
-        <span style={{ ...badge, background: "#fee2e2", color: "#b91c1c" }}>ניסיוני</span>
+        <span style={{ ...badge, background: "var(--tint-bad-bg)", color: "var(--danger)" }}>ניסיוני</span>
         <span className="text-muted" style={{ fontSize: "0.72rem" }}>
           התכונה בבדיקה — השאילתה שנוצרת מוצגת תמיד, וכדאי לוודא אותה לפני שמסתמכים על התוצאה.
         </span>
       </div>
 
       <div className="flex" style={{ gap: 6, flexWrap: "wrap" }}>
-        <input
+        <input aria-label="למשל: כמה רישיונות עסק לפי יישוב"
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
           maxLength={400}
           placeholder="למשל: כמה רישיונות עסק לפי יישוב"
-          style={{ flex: "1 1 320px", minWidth: 240, padding: "0.4rem 0.6rem", fontSize: "0.9rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)" }}
+          style={{ flex: "1 1 320px", minWidth: 240, padding: "0.4rem 0.6rem", fontSize: "0.9rem", borderRadius: 4, border: "1px solid var(--border, var(--border))" }}
         />
         <button
           type="button" onClick={() => ask()} disabled={busy || !q.trim()}
           style={{ padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
-                   background: "var(--primary, #0f766e)", color: "white",
+                   background: "var(--fill-brand)", color: "var(--on-fill-brand)",
                    cursor: busy ? "wait" : "pointer", opacity: busy || !q.trim() ? 0.7 : 1 }}
         >
           {busy ? "מנסח…" : "שאל"}
@@ -129,7 +129,7 @@ export default function NlQueryBox({ onUseSql }: {
             <span key={ex.question}>
               {i > 0 && " · "}
               <button type="button" onClick={() => ask(ex.question)}
-                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0f766e)", textDecoration: "underline", fontSize: "0.75rem" }}>
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0C5E58)", textDecoration: "underline", fontSize: "0.75rem" }}>
                 {ex.question}
               </button>
             </span>
@@ -138,13 +138,13 @@ export default function NlQueryBox({ onUseSql }: {
       )}
 
       {err && (
-        <div style={{ marginTop: "0.5rem", fontSize: "0.8rem", color: "#b91c1c" }}>{err}</div>
+        <div style={{ marginTop: "0.5rem", fontSize: "0.8rem", color: "var(--danger)" }}>{err}</div>
       )}
 
       {res && !res.answered && (
         // The semantic layer's designed failure mode. A refusal that names the
         // nearby datasets is navigation; a bare "לא נמצא" is a dead end.
-        <div style={{ marginTop: "0.55rem", padding: "0.5rem 0.65rem", borderRadius: 4, background: "#fff7ed", border: "1px solid #fed7aa", fontSize: "0.82rem" }}>
+        <div style={{ marginTop: "0.55rem", padding: "0.5rem 0.65rem", borderRadius: 4, background: "var(--tint-warn-bg)", border: "1px solid var(--tint-warn-bd)", fontSize: "0.82rem" }}>
           <b>אין לי תשובה לשאלה הזו.</b>
           <div style={{ marginTop: "0.25rem", lineHeight: 1.6 }}>{res.reason}</div>
           {!!res.candidates?.length && (
@@ -170,13 +170,13 @@ export default function NlQueryBox({ onUseSql }: {
               {srcBadge.text}
             </span>
             {res.cached && (
-              <span style={{ ...badge, background: "#e0f2fe", color: "#0369a1" }}
+              <span style={{ ...badge, background: "var(--tint-sky-bg)", color: "var(--tint-sky-fg)" }}
                     title="נענה מתוך מטמון של שאלה זהה שנשאלה קודם — לא נעשתה קריאה למודל.">
                 מהמטמון
               </span>
             )}
             {res.escalated && (
-              <span style={{ ...badge, background: "#ede9fe", color: "#6d28d9" }}
+              <span style={{ ...badge, background: "var(--tint-violet-bg)", color: "var(--tint-violet-fg)" }}
                     title="המודל הזול לא הצליח לבנות שאילתה תקינה, והשאלה הועברה למודל חזק יותר.">
                 הוסלם
               </span>

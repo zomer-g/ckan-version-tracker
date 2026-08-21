@@ -123,15 +123,15 @@ export default function OcoiDocuments({
       {!loading && rows.length === 0 && !error && <Empty>לא נמצאו מסמכים.</Empty>}
 
       {!loading && rows.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="מסמכי ניגוד עניינים" className="scroll-region" style={{ overflowX: "auto" }}>
           <table className="table" style={{ width: "100%", fontSize: "0.9rem" }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "start" }}>כותרת</th>
-                <th style={{ textAlign: "start" }}>מקור</th>
-                <th style={{ textAlign: "center" }}>קשרים</th>
-                <th style={{ textAlign: "center" }}>סטטוס</th>
-                <th style={{ textAlign: "center" }}>פעולות</th>
+                <th scope="col" style={{ textAlign: "start" }}>כותרת</th>
+                <th scope="col" style={{ textAlign: "start" }}>מקור</th>
+                <th scope="col" style={{ textAlign: "center" }}>קשרים</th>
+                <th scope="col" style={{ textAlign: "center" }}>סטטוס</th>
+                <th scope="col" style={{ textAlign: "center" }}>פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -142,7 +142,7 @@ export default function OcoiDocuments({
                     {d.verified && (
                       <span
                         title="אומת על ידי עורך תוכן"
-                        style={{ marginInlineStart: "0.4rem", color: "var(--success, #15803d)" }}
+                        style={{ marginInlineStart: "0.4rem", color: "var(--success, #0F5A2A)" }}
                       >
                         ✔
                       </span>
@@ -174,7 +174,7 @@ export default function OcoiDocuments({
                       rel="noopener noreferrer"
                     >
                       קובץ
-                    </a>{" "}
+                    <span className="sr-only"> (נפתח בחלון חדש)</span></a>{" "}
                     {d.file_url && !d.file_url.startsWith("upload://") && (
                       <a
                         className="btn btn-sm"
@@ -184,7 +184,7 @@ export default function OcoiDocuments({
                         title="המקור באתר המפרסם"
                       >
                         מקור
-                      </a>
+                      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                     )}
                   </td>
                 </tr>

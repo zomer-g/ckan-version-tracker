@@ -208,8 +208,19 @@ export default function RequestForm({
     });
   };
 
+  // WCAG 3.3.6 (Error Prevention, All) asks that a submission be reversible,
+  // checked, or confirmed. A tracking request is none of those once it lands in
+  // the admin queue, so it gets the third: the user sees exactly what is about
+  // to be sent and confirms it.
+  const [reviewing, setReviewing] = useState(false);
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!reviewing) {
+      setReviewing(true);
+      return;
+    }
+    setReviewing(false);
     setSubmitting(true);
     setError("");
     try {
@@ -300,15 +311,15 @@ export default function RequestForm({
       <div
         className="card"
         style={{
-          background: "#dcfce7",
-          border: "1px solid #86efac",
+          background: "var(--tint-good-bg)",
+          border: "1px solid var(--tint-good-bd)",
           padding: "1.25rem",
           marginTop: "0.75rem",
         }}
         role="status"
         aria-live="polite"
       >
-        <p style={{ color: "#166534", fontWeight: 500, margin: 0 }}>
+        <p style={{ color: "var(--success)", fontWeight: 500, margin: 0 }}>
           {fileResults
             ? t("home.split_files_success", {
                 n: fileResults.filter((r) => r.status === "pending").length,
@@ -320,14 +331,14 @@ export default function RequestForm({
               : t("home.request_success")}
         </p>
         {fileResults && fileResults.some((r) => r.status !== "pending") && (
-          <p className="text-sm" style={{ color: "#166534", margin: "0.5rem 0 0 0" }}>
+          <p className="text-sm" style={{ color: "var(--success)", margin: "0.5rem 0 0 0" }}>
             {t("home.request_split_skipped", {
               n: fileResults.filter((r) => r.status !== "pending").length,
             })}
           </p>
         )}
         {splitResults && splitResults.some((r) => r.status === "duplicate") && (
-          <p className="text-sm" style={{ color: "#166534", margin: "0.5rem 0 0 0" }}>
+          <p className="text-sm" style={{ color: "var(--success)", margin: "0.5rem 0 0 0" }}>
             {t("home.request_split_skipped", {
               n: splitResults.filter((r) => r.status === "duplicate").length,
             })}
@@ -383,7 +394,12 @@ export default function RequestForm({
       </p>
 
       {error && (
-        <div role="alert" className="badge badge-danger mb-1" style={{ display: "block" }}>
+        <div
+          id={`req-error-${formId}`}
+          role="alert"
+          className="badge badge-danger mb-1"
+          style={{ display: "block" }}
+        >
           {error}
         </div>
       )}
@@ -429,7 +445,7 @@ export default function RequestForm({
               padding: "0.7rem 0.8rem",
               border: "1px solid var(--primary-100)",
               borderRadius: "var(--radius)",
-              background: "white",
+              background: "var(--surface)",
             }}
           >
             <div
@@ -443,7 +459,7 @@ export default function RequestForm({
             >
               <div className="text-sm" style={{ fontWeight: 600 }}>
                 {t("home.request_pick_files_label")}
-                <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
+                <span style={{ color: "var(--danger)", marginInlineStart: "0.25rem" }}>*</span>
               </div>
               <div style={{ display: "flex", gap: "0.25rem" }}>
                 <button
@@ -492,7 +508,7 @@ export default function RequestForm({
                 overflowY: "auto",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--radius)",
-                background: "var(--bg-secondary, #f8f9fa)",
+                background: "var(--surface-2)",
               }}
             >
               {availableResources!.map((res, idx) => {
@@ -517,7 +533,7 @@ export default function RequestForm({
                       background: checked
                         ? "var(--primary-50)"
                         : held
-                          ? "var(--bg-secondary, #f8f9fa)"
+                          ? "var(--surface-2)"
                           : "transparent",
                       opacity: held ? 0.72 : 1,
                     }}
@@ -552,21 +568,21 @@ export default function RequestForm({
                           style={{
                             fontSize: "0.7rem",
                             flexShrink: 0,
-                            background: "#dcfce7",
-                            color: "#166534",
+                            background: "var(--tint-good-bg)",
+                            color: "var(--success)",
                             textDecoration: "none",
                           }}
                         >
                           {t("home.picker_tracked")} &#8599;
-                        </a>
+                        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                       ) : (
                         <span
                           className="badge"
                           style={{
                             fontSize: "0.7rem",
                             flexShrink: 0,
-                            background: "#fef3c7",
-                            color: "#92400e",
+                            background: "var(--tint-warn-bg)",
+                            color: "var(--warning)",
                           }}
                         >
                           {t("home.picker_pending")}
@@ -643,6 +659,8 @@ export default function RequestForm({
             value={datasetName}
             onChange={(e) => setDatasetName(e.target.value)}
             placeholder={t("home.request_name")}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? `req-error-${formId}` : undefined}
           />
         </div>
 
@@ -712,14 +730,58 @@ export default function RequestForm({
           )}
         </div>
 
-        <button
-          type="submit"
-          className="btn-primary"
-          disabled={submitting || (showResourcePicker && selectedResources.size === 0)}
-          style={{ alignSelf: "flex-start" }}
-        >
-          {submitting ? t("common.loading") : t("home.request_submit")}
-        </button>
+        {reviewing && (
+          <div
+            role="group"
+            aria-label="אישור הבקשה"
+            style={{
+              background: "var(--tint-info-bg)",
+              color: "var(--tint-info-fg)",
+              border: "1px solid var(--tint-info-bd)",
+              borderRadius: "var(--radius)",
+              padding: "0.85rem 1rem",
+              fontSize: "0.9rem",
+              lineHeight: 1.7,
+            }}
+          >
+            <strong style={{ display: "block", marginBottom: "0.35rem" }}>
+              זה מה שיישלח:
+            </strong>
+            <ul style={{ margin: 0, paddingInlineStart: "1.2rem" }}>
+              <li>מאגר: {datasetName.trim() || datasetTitle}</li>
+              <li>
+                תדירות בדיקה:{" "}
+                {(() => {
+                  const opt = INTERVAL_OPTIONS.find((o) => o.value === interval);
+                  return opt ? (i18n.language === "he" ? opt.labelHe : opt.labelEn) : interval;
+                })()}
+              </li>
+              {notes.trim() && <li>הערות: {notes.trim()}</li>}
+              {showFilePicker && selectedFiles.size > 0 && (
+                <li>{selectedFiles.size} קבצים נבחרו</li>
+              )}
+            </ul>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "0.5rem", alignSelf: "flex-start", flexWrap: "wrap" }}>
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={submitting || (showResourcePicker && selectedResources.size === 0)}
+          >
+            {submitting
+              ? t("common.loading")
+              : reviewing
+                ? "אישור ושליחה"
+                : t("home.request_submit")}
+          </button>
+          {reviewing && (
+            <button type="button" className="btn-secondary" onClick={() => setReviewing(false)}>
+              חזרה לעריכה
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

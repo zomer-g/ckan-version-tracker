@@ -7,10 +7,13 @@ import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 import { fmtDateHe } from "../utils/dates";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Breadcrumbs } from "../components/a11y";
 export default function TagDetailPage() {
   const { t } = useTranslation();
   const { tagId } = useParams<{ tagId: string }>();
   const [tag, setTag] = useState<TagDetail | null>(null);
+  useDocumentTitle(tag?.name || "תגית");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -86,6 +89,7 @@ export default function TagDetailPage() {
           🏷
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
+          <Breadcrumbs items={[{ label: t("nav.tags", "תגיות"), to: "/tags" }, { label: tag.name }]} />
           <h1 style={{ margin: "0 0 0.25rem 0", fontSize: "1.5rem" }}>{tag.name}</h1>
           <div className="text-sm text-muted">
             {tag.dataset_count} {t("tags.datasets_count", "מאגרים")}
@@ -107,9 +111,9 @@ export default function TagDetailPage() {
           {tag.datasets.map((d) => (
             <article key={d.id} className="card">
               <div className="flex-between mb-1">
-                <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                   <Link to={`/versions/${d.id}`}>{d.title}</Link>
-                </h3>
+                </h2>
                 {/* ckanId is not optional decoration: its prefix is what tells
                     the scraper sources apart. Omitting it collapsed every
                     non-CKAN dataset on this page into one "GOV.IL" chip. */}

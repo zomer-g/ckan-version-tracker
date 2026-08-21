@@ -71,7 +71,7 @@ export default function OcalDiaries() {
     }
   };
 
-  const th: React.CSSProperties = { textAlign: "start", padding: "0.45rem 0.6rem", borderBottom: "2px solid var(--border, #cbd5e1)", fontSize: "0.82rem", position: "sticky", top: 0, background: "var(--bg-muted, #eef2f5)" };
+  const th: React.CSSProperties = { textAlign: "start", padding: "0.45rem 0.6rem", borderBottom: "2px solid var(--border, var(--border))", fontSize: "0.82rem", position: "sticky", top: 0, background: "var(--surface-2)" };
   const td: React.CSSProperties = { padding: "0.4rem 0.6rem", fontSize: "0.85rem", verticalAlign: "top" };
   const dl: React.CSSProperties = { fontSize: "0.78rem", color: "var(--primary)", textDecoration: "underline" };
 
@@ -84,7 +84,7 @@ export default function OcalDiaries() {
           onChange={(e) => setFilter(e.target.value)}
           placeholder="סינון יומנים לפי שם / בעלים…"
           aria-label="סינון יומנים"
-          style={{ flex: "1 1 280px", padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+          style={{ flex: "1 1 280px", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
         />
         <span className="text-sm text-muted">
           {loading ? "טוען…" : `${shown.length.toLocaleString()} יומנים`}
@@ -92,25 +92,25 @@ export default function OcalDiaries() {
         </span>
       </div>
 
-      {error && <div style={{ color: "var(--danger, #dc2626)", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger, #992C2C)", marginBottom: "0.6rem" }}>{error}</div>}
 
-      <div style={{ overflowX: "auto", maxHeight: 620, border: "1px solid var(--border, #e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="יומני הפגישות" className="scroll-region" style={{ overflowX: "auto", maxHeight: 620, border: "1px solid var(--border, var(--border))", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
           <thead>
             <tr>
-              <th style={{ ...th, width: 34 }}>
+              <th scope="col" style={{ ...th, width: 34 }}>
                 <input type="checkbox" checked={allShownSelected} onChange={toggleAll} aria-label="בחר הכל" />
               </th>
-              <th style={th}>יומן</th>
-              <th style={th}>בעלים</th>
-              <th style={{ ...th, textAlign: "end" }}>אירועים</th>
-              <th style={th}>טווח תאריכים</th>
-              <th style={th}>הורדה</th>
+              <th scope="col" style={th}>יומן</th>
+              <th scope="col" style={th}>בעלים</th>
+              <th scope="col" style={{ ...th, textAlign: "end" }}>אירועים</th>
+              <th scope="col" style={th}>טווח תאריכים</th>
+              <th scope="col" style={th}>הורדה</th>
             </tr>
           </thead>
           <tbody>
             {shown.map((s) => (
-              <tr key={s.id} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+              <tr key={s.id} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                 <td style={td}>
                   <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)} aria-label={`בחר ${s.name}`} />
                 </td>
@@ -142,7 +142,7 @@ export default function OcalDiaries() {
       {selected.size > 0 && (
         <div style={{
           position: "sticky", bottom: 0, marginTop: "0.6rem", padding: "0.6rem 0.9rem",
-          background: "var(--bg, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 6,
+          background: "var(--bg, #fff)", border: "1px solid var(--border, var(--border))", borderRadius: 6,
           display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap",
           boxShadow: "0 -2px 8px rgba(0,0,0,0.06)",
         }}>
@@ -151,7 +151,7 @@ export default function OcalDiaries() {
             {bulking ? "מכין…" : "⬇ הורד ZIP (CSV)"}
           </button>
           <button type="button" className="btn-secondary" disabled={bulking} onClick={() => bulk("json")}>
-            ⬇ ZIP (JSON)
+            <span aria-hidden="true">⬇</span> ZIP (JSON)
           </button>
           <button type="button" className="btn-secondary" onClick={() => setSelected(new Set())}>נקה בחירה</button>
         </div>

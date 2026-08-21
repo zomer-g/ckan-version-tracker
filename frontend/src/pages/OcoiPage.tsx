@@ -7,6 +7,7 @@ import OcoiGraphTab, { GraphTarget } from "../components/ocoi/OcoiGraphTab";
 import OcoiDocuments from "../components/ocoi/OcoiDocuments";
 import OcoiEntities from "../components/ocoi/OcoiEntities";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 type OcoiTab = "search" | "graph" | "entities" | "documents";
 const TAB_IDS: OcoiTab[] = ["search", "graph", "entities", "documents"];
 const TAB_LABELS: [OcoiTab, string][] = [
@@ -28,6 +29,7 @@ const TAB_LABELS: [OcoiTab, string][] = [
  * send each other about this corpus.
  */
 export default function OcoiPage() {
+  useDocumentTitle("ניגוד עניינים לעם");
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -111,7 +113,7 @@ export default function OcoiPage() {
           className="flex"
           style={{
             gap: "0.3rem",
-            borderBottom: "2px solid var(--border, #e2e8f0)",
+            borderBottom: "2px solid var(--border, var(--border))",
             marginBottom: "1rem",
             flexWrap: "wrap",
           }}
@@ -128,8 +130,8 @@ export default function OcoiPage() {
                 background: "none",
                 fontSize: "0.95rem",
                 fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? "var(--primary, #0f766e)" : "var(--text-muted)",
-                borderBottom: tab === id ? "3px solid var(--primary, #0f766e)" : "3px solid transparent",
+                color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
+                borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
                 marginBottom: -2,
               }}
             >

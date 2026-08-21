@@ -70,7 +70,7 @@ export default function McpUsersPanel() {
   return (
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>🔌 גישת MCP (בטא סגורה)</h2>
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">🔌</span> גישת MCP (בטא סגורה)</h2>
         <span className="text-muted" style={{ fontSize: "0.85rem" }}>{users.length} מוזמנים</span>
       </div>
 
@@ -81,12 +81,12 @@ export default function McpUsersPanel() {
       </div>
 
       <form onSubmit={invite} style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: "0.85rem 0" }}>
-        <input
+        <input aria-label="כתובת Google להזמנה"
           type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
           placeholder="כתובת Google להזמנה" dir="ltr"
           style={{ flex: "1 1 16rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
         />
-        <input
+        <input aria-label="שם (אופציונלי)"
           type="text" value={name} onChange={(e) => setName(e.target.value)}
           placeholder="שם (אופציונלי)"
           style={{ flex: "0 1 12rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
@@ -96,24 +96,24 @@ export default function McpUsersPanel() {
         </button>
       </form>
 
-      {err && <div className="text-sm" style={{ color: "#b91c1c", marginBottom: "0.5rem" }}>{err}</div>}
+      {err && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{err}</div>}
 
       {loading ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>טוען…</div>
       ) : users.length === 0 ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>אין עדיין משתמשים מוזמנים. הזמן את עצמך כדי להתחבר.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="משתמשי MCP" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
             <thead>
               <tr style={{ textAlign: "right", color: "var(--text-muted)", borderBottom: "2px solid var(--border)" }}>
-                <th style={{ padding: "0.5rem 0.6rem" }}>אימייל</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>שם</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>סטטוס</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>רמה</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>קריאות (30 יום)</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>נראה לאחרונה</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>פעולות</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>אימייל</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>שם</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>סטטוס</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>רמה</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>קריאות (30 יום)</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>נראה לאחרונה</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -124,11 +124,12 @@ export default function McpUsersPanel() {
                   <td style={{ padding: "0.5rem 0.6rem" }}>
                     <span style={{
                       padding: "0.1rem 0.5rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600,
-                      background: u.is_active ? "#ecfdf5" : "#fef2f2", color: u.is_active ? "#065f46" : "#991b1b",
+                      background: u.is_active ? "#ecfdf5" : "#fef2f2", color: u.is_active ? "var(--success)" : "#941A1A",
                     }}>{u.is_active ? "פעיל" : "מושבת"}</span>
                   </td>
                   <td style={{ padding: "0.5rem 0.6rem" }}>
                     <select value={u.tier} onChange={(e) => setTier(u, e.target.value)}
+                      aria-label={`רמת שימוש עבור ${u.email}`}
                       style={{ padding: "0.15rem 0.4rem", fontSize: "0.78rem", border: "1px solid var(--border)", borderRadius: "4px" }}>
                       <option value="beta">beta</option>
                       <option value="free">free</option>

@@ -1,20 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { admin as adminApi, ActivityLogEntry } from "../api/client";
 import CopyListButton from "./CopyListButton";
 
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
+import { AutoRefreshToggle } from "./AutoRefreshToggle";
 // Append-only event stream of the dataset/scrape lifecycle: a row per
 // requested / approved / rejected / queued / started / completed / failed
 // event, with the error message expandable on failed or rejected steps.
 
 const EVENT_META: Record<string, { label: string; emoji: string; color: string; bg: string }> = {
-  requested: { label: "בקשה", emoji: "📨", color: "#3730a3", bg: "#eef2ff" },
-  approved: { label: "אושר", emoji: "✅", color: "#065f46", bg: "#ecfdf5" },
-  rejected: { label: "נדחה", emoji: "🚫", color: "#991b1b", bg: "#fef2f2" },
-  queued: { label: "בתור", emoji: "⏳", color: "#92400e", bg: "#fffbeb" },
-  started: { label: "התחיל", emoji: "▶️", color: "#1e40af", bg: "#eff6ff" },
-  completed: { label: "הסתיים", emoji: "🏁", color: "#065f46", bg: "#ecfdf5" },
-  failed: { label: "נכשל", emoji: "❌", color: "#991b1b", bg: "#fef2f2" },
+  requested: { label: "בקשה", emoji: "📨", color: "var(--tint-indigo-fg)", bg: "var(--tint-indigo-bg)" },
+  approved: { label: "אושר", emoji: "✅", color: "var(--success)", bg: "var(--tint-good-bg)" },
+  rejected: { label: "נדחה", emoji: "🚫", color: "var(--tint-bad-fg)", bg: "var(--tint-bad-bg)" },
+  queued: { label: "בתור", emoji: "⏳", color: "var(--warning)", bg: "var(--tint-warn-bg)" },
+  started: { label: "התחיל", emoji: "▶️", color: "var(--tint-sky-fg)", bg: "var(--tint-sky-bg)" },
+  completed: { label: "הסתיים", emoji: "🏁", color: "var(--success)", bg: "var(--tint-good-bg)" },
+  failed: { label: "נכשל", emoji: "❌", color: "var(--tint-bad-fg)", bg: "var(--tint-bad-bg)" },
 };
 
 const EVENT_FILTERS: { id: string; label: string }[] = [
@@ -63,10 +65,12 @@ export default function ActivityLogPanel() {
   };
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000);
-    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [event, q, offset]);
+  // The refresh itself lives in the hook so it can be paused, and so it holds
+  // off while the user's focus is inside the log (WCAG 2.2.2).
+  const logRef = useRef<HTMLDivElement>(null);
+  const { paused, toggle: toggleAutoRefresh } = useAutoRefresh(load, 20000, logRef);
 
   const toggle = (id: string) =>
     setExpanded((s) => {
@@ -82,7 +86,7 @@ export default function ActivityLogPanel() {
   return (
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.75rem", marginBottom: "0.75rem" }}>
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>📜 לוג משימות</h2>
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">📜</span> לוג משימות</h2>
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.6rem" }}>
           {/* Copies the CURRENT view — the active event filter + search are
               respected, so "כשלים" + a query yields exactly that error list,
@@ -120,7 +124,7 @@ export default function ActivityLogPanel() {
             style={{
               fontSize: "0.78rem", padding: "0.25rem 0.7rem", borderRadius: "999px",
               border: "1px solid var(--border)", cursor: "pointer",
-              background: event === f.id ? "var(--primary, #0369a1)" : "var(--surface)",
+              background: event === f.id ? "var(--primary, #035887)" : "var(--surface)",
               color: event === f.id ? "#fff" : "var(--text)",
               fontWeight: event === f.id ? 600 : 400,
             }}
@@ -132,7 +136,7 @@ export default function ActivityLogPanel() {
           onSubmit={(e) => { e.preventDefault(); setOffset(0); setQ(qInput.trim()); }}
           style={{ marginInlineStart: "auto", display: "flex", gap: "0.3rem" }}
         >
-          <input
+          <input aria-label="חיפוש לפי מאגר / הודעה / שגיאה…"
             value={qInput}
             onChange={(e) => setQInput(e.target.value)}
             placeholder="חיפוש לפי מאגר / הודעה / שגיאה…"
@@ -143,23 +147,24 @@ export default function ActivityLogPanel() {
             <button type="button" className="btn-secondary" onClick={() => { setQInput(""); setQ(""); setOffset(0); }} style={{ fontSize: "0.78rem", padding: "0.3rem 0.6rem" }}>×</button>
           )}
         </form>
+        <AutoRefreshToggle paused={paused} onToggle={toggleAutoRefresh} seconds={20} />
       </div>
 
-      {errorMsg && <div className="text-sm" style={{ color: "#b91c1c", marginBottom: "0.5rem" }}>{errorMsg}</div>}
+      {errorMsg && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{errorMsg}</div>}
       {loading && entries.length === 0 ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>טוען…</div>
       ) : entries.length === 0 ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>אין אירועים להצגה.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div ref={logRef} tabIndex={0} role="region" aria-label="לוג המשימות" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
             <thead>
               <tr style={{ textAlign: "right", color: "var(--text-muted)", borderBottom: "2px solid var(--border)" }}>
-                <th style={{ padding: "0.5rem 0.6rem", whiteSpace: "nowrap" }}>מתי</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>אירוע</th>
-                <th style={{ padding: "0.5rem 0.6rem", width: "30%" }}>מאגר</th>
-                <th style={{ padding: "0.5rem 0.6rem" }}>פירוט</th>
-                <th style={{ padding: "0.5rem 0.6rem", whiteSpace: "nowrap" }}>מקור</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem", whiteSpace: "nowrap" }}>מתי</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>אירוע</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem", width: "30%" }}>מאגר</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>פירוט</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem", whiteSpace: "nowrap" }}>מקור</th>
               </tr>
             </thead>
             <tbody>
@@ -190,17 +195,17 @@ export default function ActivityLogPanel() {
                       )}
                     </td>
                     <td style={{ padding: "0.5rem 0.6rem" }}>
-                      <div style={{ color: isErr ? "#b91c1c" : "var(--text)" }}>{e.message || "—"}</div>
+                      <div style={{ color: isErr ? "var(--danger)" : "var(--text)" }}>{e.message || "—"}</div>
                       {e.detail && (
                         <div style={{ marginTop: "0.2rem" }}>
                           <button
                             onClick={() => toggle(e.id)}
-                            style={{ fontSize: "0.72rem", color: "#b91c1c", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                            style={{ fontSize: "0.72rem", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}
                           >
                             {open ? "הסתר שגיאה" : "הצג שגיאה"}
                           </button>
                           {open && (
-                            <pre style={{ marginTop: "0.3rem", padding: "0.5rem", background: "#fff", border: "1px solid #fecaca", borderRadius: "6px", fontSize: "0.72rem", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: "12rem", overflow: "auto", direction: "ltr", textAlign: "left" }}>
+                            <pre style={{ marginTop: "0.3rem", padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--tint-bad-bd)", borderRadius: "6px", fontSize: "0.72rem", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: "12rem", overflow: "auto", direction: "ltr", textAlign: "left" }}>
                               {e.detail}
                             </pre>
                           )}

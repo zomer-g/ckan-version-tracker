@@ -101,7 +101,7 @@ export default function NadlanMap({
       center={center}
       zoom={lat != null ? 17 : 8}
       preferCanvas
-      style={{ height: 460, width: "100%", borderRadius: 8, border: "1px solid var(--border,#e2e8f0)" }}
+      style={{ height: 460, width: "100%", borderRadius: 8, border: "1px solid var(--border)" }}
     >
       <TileLayer url={tile.url} attribution={tile.attr} maxZoom={19} />
       <ClickHandler onPick={onPick} />
@@ -112,14 +112,14 @@ export default function NadlanMap({
         <CircleMarker
           center={[lat, lon]}
           radius={7}
-          pathOptions={{ color: "#b91c1c", fillColor: "#ef4444", fillOpacity: 0.9, weight: 2 }}
+          pathOptions={{ color: "var(--danger)", fillColor: "var(--danger)", fillOpacity: 0.9, weight: 2 }}
         />
       )}
       {lat != null && lon != null && radiusM > 0 && (
         <Circle
           center={[lat, lon]}
           radius={radiusM}
-          pathOptions={{ color: "#0f766e", fillOpacity: 0.06, weight: 1 }}
+          pathOptions={{ color: "var(--tint-teal-fg)", fillOpacity: 0.06, weight: 1 }}
         />
       )}
 
@@ -134,7 +134,7 @@ export default function NadlanMap({
               key={`${p.parcel_key}:${isSel}`}
               data={JSON.parse(p.geometry) as GeoJsonObject}
               style={() => ({
-                color: isSel ? "#0f766e" : "#15803d",
+                color: isSel ? "#0C5E58" : "var(--success)",
                 weight: isSel ? 3 : 1.5,
                 fillOpacity: isSel ? 0.28 : 0.1,
               })}
@@ -148,7 +148,7 @@ export default function NadlanMap({
             center={[p.identity.point.lat, p.identity.point.lon]}
             radius={isSel ? 8 : 5}
             pathOptions={{
-              color: isSel ? "#0f766e" : "#15803d",
+              color: isSel ? "#0C5E58" : "var(--success)",
               fillOpacity: 0.75,
               weight: isSel ? 3 : 1,
             }}
@@ -163,7 +163,7 @@ export default function NadlanMap({
         <GeoJSON
           key={selected ?? "poly"}
           data={polygon}
-          style={() => ({ color: "#0f766e", weight: 3, fillOpacity: 0.2 })}
+          style={() => ({ color: "var(--tint-teal-fg)", weight: 3, fillOpacity: 0.2 })}
         />
       )}
     </MapContainer>

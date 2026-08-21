@@ -50,7 +50,7 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
     !(Array.isArray(v) && v.length === 0));
   return (
     <div style={{
-      border: "1px solid var(--border,#e2e8f0)", borderRadius: 8, padding: "0.7rem 0.85rem",
+      border: "1px solid var(--border)", borderRadius: 8, padding: "0.7rem 0.85rem",
       background: "var(--surface,#fff)",
     }}>
       <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.4rem" }}>
@@ -76,7 +76,7 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
         title={block.console_sql}
       >
         צפייה בשורות המקור ב-/data ↗
-      </a>
+      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       <div className="text-sm text-muted" style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
         {block.table}
       </div>
@@ -96,7 +96,7 @@ export default function NadlanResultCard({
 
   return (
     <div style={{
-      border: "1px solid var(--border,#e2e8f0)", borderRadius: 10, padding: "0.9rem 1rem",
+      border: "1px solid var(--border)", borderRadius: 10, padding: "0.9rem 1rem",
       marginBottom: "0.75rem", background: "var(--surface,#fff)",
     }}>
       <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
@@ -111,8 +111,8 @@ export default function NadlanResultCard({
           )}
           <span style={{
             fontSize: "0.75rem", padding: "0.12rem 0.5rem", borderRadius: 999,
-            background: approx ? "#fef3c7" : "#dcfce7",
-            color: approx ? "#92400e" : "#166534",
+            background: approx ? "#fef3c7" : "var(--tint-good-bg)",
+            color: approx ? "#833909" : "var(--success)",
           }}>
             {approx ? "התאמה משוערת" : "התאמה מדויקת"}
           </span>
@@ -133,7 +133,7 @@ export default function NadlanResultCard({
       </div>
 
       {property.match.notes.length > 0 && (
-        <ul style={{ margin: "0.5rem 0 0", paddingInlineStart: "1.1rem", fontSize: "0.82rem", color: "#92400e" }}>
+        <ul style={{ margin: "0.5rem 0 0", paddingInlineStart: "1.1rem", fontSize: "0.82rem", color: "var(--warning)" }}>
           {property.match.notes.map((n, i) => <li key={i}>{n}</li>)}
         </ul>
       )}
@@ -143,7 +143,7 @@ export default function NadlanResultCard({
         onClick={onToggle}
         style={{
           marginTop: "0.6rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem", cursor: "pointer",
-          border: "1px solid var(--border,#e2e8f0)", borderRadius: 6, background: "none",
+          border: "1px solid var(--border)", borderRadius: 6, background: "none",
         }}
       >
         {expanded ? "הסתרת ההצלבה המלאה" : "ההצלבה המלאה בכל המקורות"}
@@ -161,20 +161,20 @@ export default function NadlanResultCard({
           </div>
 
           {id.addresses.length > 0 && (
-            <div style={{ marginTop: "0.8rem", overflowX: "auto" }}>
+            <div tabIndex={0} role="region" aria-label="פרטי הנכס" className="scroll-region" style={{ marginTop: "0.8rem", overflowX: "auto" }}>
               <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                    <th style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>רחוב</th>
-                    <th style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מס׳</th>
-                    <th style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מיקוד</th>
-                    <th style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שכונה</th>
-                    <th style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שיוך</th>
+                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>רחוב</th>
+                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מס׳</th>
+                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מיקוד</th>
+                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שכונה</th>
+                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שיוך</th>
                   </tr>
                 </thead>
                 <tbody>
                   {id.addresses.slice(0, 40).map((a, i) => (
-                    <tr key={i} style={{ borderTop: "1px solid var(--border,#eee)" }}>
+                    <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
                       <td style={{ padding: "0.2rem 0.4rem" }}>{a.street ?? "—"}</td>
                       <td style={{ padding: "0.2rem 0.4rem" }}>{a.house ?? "—"}{a.suffix ?? ""}</td>
                       <td style={{ padding: "0.2rem 0.4rem" }}>{a.zip7 ?? "—"}</td>

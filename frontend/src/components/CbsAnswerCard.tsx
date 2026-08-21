@@ -24,43 +24,43 @@ const TYPE_META: Record<
   guidance: {
     icon: "🎯",
     label: "הפניה מומלצת",
-    accent: "#2563eb",
+    accent: "var(--fill-sky)",
     cta: "למקור בלמ\"ס",
   },
   generator: {
     icon: "⚙️",
     label: "מחולל / דשבורד",
-    accent: "#7c3aed",
+    accent: "var(--fill-violet)",
     cta: "להפעלת המחולל",
   },
   data_file: {
     icon: "📊",
     label: "קובץ נתונים",
-    accent: "#059669",
+    accent: "var(--fill-good)",
     cta: "לעמוד ההורדה",
   },
   publication: {
     icon: "📄",
     label: "פרסום",
-    accent: "#0891b2",
+    accent: "var(--fill-teal)",
     cta: "לפרסום",
   },
   special_processing: {
     icon: "✉️",
     label: 'קיים — בעיבוד מיוחד',
-    accent: "#c2410c",
+    accent: "var(--fill-warn)",
     cta: "לפנייה ללמ\"ס",
   },
   not_available: {
     icon: "🚫",
     label: 'אין בלמ"ס',
-    accent: "#b45309",
+    accent: "var(--fill-warn)",
     cta: "לחלופה",
   },
   no_results: {
     icon: "🤷",
     label: "לא נמצא",
-    accent: "#6b7280",
+    accent: "var(--fill-neutral)",
     cta: "",
   },
 };
@@ -117,12 +117,12 @@ export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
         <span aria-hidden="true" style={{ fontSize: "1.05rem" }}>{meta.icon}</span>
         <span
           className="badge"
-          style={{ background: meta.accent, color: "#fff", fontSize: "0.72rem" }}
+          style={{ background: meta.accent, color: "var(--on-fill)", fontSize: "0.72rem" }}
         >
           {meta.label}
         </span>
         {primary?.data_vintage && (
-          <span className="badge" style={{ fontSize: "0.72rem", background: "#ecfdf5", color: "#065f46" }}>
+          <span className="badge" style={{ fontSize: "0.72rem", background: "var(--tint-good-bg)", color: "var(--success)" }}>
             {t("cbs.data_year", "שנת נתונים")}: {primary.data_vintage}
           </span>
         )}
@@ -147,7 +147,7 @@ export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
             <span
               key={c}
               className="badge"
-              style={{ fontSize: "0.72rem", background: "#f1f5f9", color: "#334155" }}
+              style={{ fontSize: "0.72rem", background: "var(--surface-2)", color: "var(--text-muted)" }}
             >
               {c}
             </span>
@@ -180,7 +180,7 @@ export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
           {primary.product_form ? `${PRODUCT_FORM_ICONS[primary.product_form] || ""} ` : ""}
           {meta.cta}
           {primary.title ? ` — ${primary.title}` : ""} ↗
-        </a>
+        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       )}
 
       {/* Availability by resolution — the community's own answer format
@@ -200,7 +200,7 @@ export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
               style={{
                 fontSize: "0.72rem",
                 background: ok ? "#ecfdf5" : "#fef2f2",
-                color: ok ? "#065f46" : "#991b1b",
+                color: ok ? "var(--success)" : "#941A1A",
               }}
             >
               {geoLabel(lvl)} {ok ? "✓" : "✗"}
@@ -228,14 +228,14 @@ export default function CbsAnswerCard({ data, onEditInAdvanced }: Props) {
               className="badge"
               style={{
                 fontSize: "0.72rem",
-                background: "#fffbeb",
-                color: "#92400e",
-                border: "1px solid #fde68a",
+                background: "var(--tint-warn-bg)",
+                color: "var(--warning)",
+                border: "1px solid var(--tint-warn-bd)",
                 textDecoration: "none",
               }}
             >
               {e.edition_year ?? "—"}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           ))}
         </div>
       )}

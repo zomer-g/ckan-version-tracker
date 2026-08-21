@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { cbs, CbsFeedbackReport, CbsFeedbackOrder } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 // Admin-only report of search like/dislike feedback, grouped by query. Default
 // order puts the most-disliked queries first — the concrete list of searches
 // whose results most need improving. Each query links straight into the search
@@ -17,6 +18,7 @@ const ORDERS: [CbsFeedbackOrder, string][] = [
 ];
 
 export default function CbsFeedbackPage() {
+  useDocumentTitle("משוב — למ\"ס");
   const { t } = useTranslation();
   const { user } = useAuth();
   const [order, setOrder] = useState<CbsFeedbackOrder>("dislikes");
@@ -43,7 +45,7 @@ export default function CbsFeedbackPage() {
     );
   }
 
-  const cell: React.CSSProperties = { padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border,#e2e8f0)" };
+  const cell: React.CSSProperties = { padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" };
   const numCell: React.CSSProperties = { ...cell, textAlign: "center", fontVariantNumeric: "tabular-nums" };
 
   return (
@@ -60,13 +62,13 @@ export default function CbsFeedbackPage() {
 
       {data && (
         <div className="flex mb-2" style={{ gap: "1rem", flexWrap: "wrap" }}>
-          <span className="badge" style={{ background: "#f1f5f9" }}>
+          <span className="badge" style={{ background: "var(--surface-2)" }}>
             סה"כ הצבעות: {data.total_votes.toLocaleString("he-IL")}
           </span>
-          <span className="badge" style={{ background: "#ecfdf5", color: "#065f46" }}>
+          <span className="badge" style={{ background: "var(--tint-good-bg)", color: "var(--success)" }}>
             👍 {data.likes.toLocaleString("he-IL")}
           </span>
-          <span className="badge" style={{ background: "#fef2f2", color: "#991b1b" }}>
+          <span className="badge" style={{ background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)" }}>
             👎 {data.dislikes.toLocaleString("he-IL")}
           </span>
         </div>
@@ -75,6 +77,7 @@ export default function CbsFeedbackPage() {
       <div className="flex mb-2" style={{ gap: "0.4rem", alignItems: "center" }}>
         <span className="text-sm text-muted">{t("cbs.sort_by", "מיון")}:</span>
         <select
+          aria-label={t("cbs.sort_by", "מיון")}
           value={order}
           onChange={(e) => setOrder(e.target.value as CbsFeedbackOrder)}
           style={{ width: "auto", padding: "0.25rem 0.5rem", fontSize: "0.82rem" }}
@@ -93,16 +96,16 @@ export default function CbsFeedbackPage() {
       )}
 
       {data && data.queries.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="משובים שהתקבלו" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.88rem" }}>
             <thead>
               <tr>
-                <th style={{ ...cell, textAlign: "start" }}>שאילתה</th>
-                <th style={numCell}>👍</th>
-                <th style={numCell}>👎</th>
-                <th style={numCell}>סה"כ</th>
-                <th style={numCell}>ציון</th>
-                <th style={{ ...cell, textAlign: "start" }}>אחרון</th>
+                <th scope="col" style={{ ...cell, textAlign: "start" }}>שאילתה</th>
+                <th scope="col" style={numCell}>👍</th>
+                <th scope="col" style={numCell}>👎</th>
+                <th scope="col" style={numCell}>סה"כ</th>
+                <th scope="col" style={numCell}>ציון</th>
+                <th scope="col" style={{ ...cell, textAlign: "start" }}>אחרון</th>
               </tr>
             </thead>
             <tbody>
@@ -113,10 +116,10 @@ export default function CbsFeedbackPage() {
                       {r.query}
                     </Link>
                   </td>
-                  <td style={{ ...numCell, color: "#065f46" }}>{r.likes || ""}</td>
-                  <td style={{ ...numCell, color: "#991b1b" }}>{r.dislikes || ""}</td>
+                  <td style={{ ...numCell, color: "var(--success)" }}>{r.likes || ""}</td>
+                  <td style={{ ...numCell, color: "var(--tint-bad-fg)" }}>{r.dislikes || ""}</td>
                   <td style={numCell}>{r.total}</td>
-                  <td style={{ ...numCell, fontWeight: 600, color: r.score < 0 ? "#991b1b" : "#065f46" }}>
+                  <td style={{ ...numCell, fontWeight: 600, color: r.score < 0 ? "#941A1A" : "var(--success)" }}>
                     {r.score > 0 ? `+${r.score}` : r.score}
                   </td>
                   <td style={{ ...cell, textAlign: "start", color: "var(--text-muted)", fontSize: "0.8rem" }}>

@@ -45,7 +45,7 @@ function kindOf(type: string, profiled?: string): "text" | "number" | "date" {
 }
 
 const box: React.CSSProperties = {
-  padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)",
+  padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))",
   borderRadius: 4, fontSize: "0.82rem", maxWidth: 240,
 };
 
@@ -148,11 +148,11 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
   if (!cols.length) return null;
 
   return (
-    <div dir="rtl" style={{ border: "1px dashed var(--border, #d1d5db)", borderRadius: 6, margin: "0.6rem 0 0.4rem", overflow: "hidden" }}>
+    <div dir="rtl" style={{ border: "1px dashed var(--border, var(--border))", borderRadius: 6, margin: "0.6rem 0 0.4rem", overflow: "hidden" }}>
       <button onClick={() => setOpen((o) => !o)}
         style={{ width: "100%", textAlign: "start", padding: "0.5rem 0.8rem", background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: "0.85rem" }}>
         <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-        🔎 בונה סינון — סינון וקיבוץ בלי SQL, עם הערכים האמיתיים מהמאגר
+        <span aria-hidden="true">🔎</span> בונה סינון — סינון וקיבוץ בלי SQL, עם הערכים האמיתיים מהמאגר
       </button>
 
       {open && (
@@ -163,7 +163,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
             const showValue = !opDef?.noValue;
             return (
               <div key={i} className="flex" style={{ gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-                <select value={r.col} style={box}
+                <select value={r.col} style={box} aria-label={`תנאי ${i + 1} — עמודה`}
                   onChange={(e) => setRow(i, { col: e.target.value, value: "", op: "=" })}>
                   {cols.map((x) => (
                     <option key={x.name} value={x.name}>
@@ -171,7 +171,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
                     </option>
                   ))}
                 </select>
-                <select value={r.op} style={{ ...box, maxWidth: 130 }}
+                <select value={r.op} style={{ ...box, maxWidth: 130 }} aria-label={`תנאי ${i + 1} — אופרטור`}
                   onChange={(e) => setRow(i, { op: e.target.value })}>
                   {Object.entries(OPS)
                     .filter(([, d]) => d.kinds.includes(c?.kind || "text"))
@@ -180,7 +180,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
                 {showValue && (c?.values.length && r.op !== "contains" ? (
                   // The facet list: real values with their counts. Picking from
                   // here cannot produce an empty result.
-                  <select value={r.value} style={box}
+                  <select value={r.value} style={box} aria-label={`תנאי ${i + 1} — ערך`}
                     onChange={(e) => setRow(i, { value: e.target.value })}>
                     <option value="">— בחרו ערך —</option>
                     {c.values.map((v) => (
@@ -190,7 +190,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
                     ))}
                   </select>
                 ) : (
-                  <input value={r.value} style={box}
+                  <input aria-label={`תנאי ${i + 1} — ערך`} value={r.value} style={box}
                     placeholder={c?.min != null ? `${c.min} … ${c.max}` : "ערך"}
                     onChange={(e) => setRow(i, { value: e.target.value })} />
                 ))}
@@ -204,10 +204,10 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
             <button onClick={addRow} style={{ ...box, cursor: "pointer" }}>+ תנאי</button>
             <button onClick={preview} style={{ ...box, cursor: "pointer" }}>כמה שורות?</button>
             {count === "loading" && <span className="text-muted">בודק…</span>}
-            {count === "error" && <span style={{ color: "#b91c1c" }}>שגיאה</span>}
+            {count === "error" && <span style={{ color: "var(--danger)" }}>שגיאה</span>}
             {typeof count === "number" && (
               <span style={{ padding: "0.05rem 0.45rem", borderRadius: 4, fontSize: "0.75rem",
-                             background: count ? "#dcfce7" : "#fee2e2", color: count ? "#15803d" : "#b91c1c" }}>
+                             background: count ? "var(--tint-good-bg)" : "var(--tint-bad-bg)", color: count ? "var(--success)" : "var(--danger)" }}>
                 {count.toLocaleString("he-IL")} שורות
               </span>
             )}
@@ -240,7 +240,7 @@ export default function FilterBuilder({ table, profile, onUseSql }: {
               </select>
             </label>
             <button onClick={() => onUseSql(buildSql(), true)}
-              style={{ padding: "0.3rem 0.9rem", borderRadius: 4, border: "none", fontWeight: 600, background: "var(--primary, #0f766e)", color: "white", cursor: "pointer", fontSize: "0.82rem" }}>
+              style={{ padding: "0.3rem 0.9rem", borderRadius: 4, border: "none", fontWeight: 600, background: "var(--fill-brand)", color: "var(--on-fill-brand)", cursor: "pointer", fontSize: "0.82rem" }}>
               ▶ צור והרץ
             </button>
           </div>

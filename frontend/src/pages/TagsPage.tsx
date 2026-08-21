@@ -5,7 +5,9 @@ import { tagsApi, admin as adminApi, type TagWithCount } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 import { useAuth } from "../auth/AuthContext";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 export default function TagsPage() {
+  useDocumentTitle("תגיות");
   const { t } = useTranslation();
   const { user } = useAuth();
   const [tags, setTags] = useState<TagWithCount[]>([]);
@@ -62,7 +64,7 @@ export default function TagsPage() {
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
-        <input
+        <input aria-label={t("tags.search_placeholder", "חפש תגית...")}
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -149,7 +151,7 @@ export default function TagsPage() {
                     padding: "0.25rem 0.45rem",
                     fontSize: "0.85rem",
                     cursor: "pointer",
-                    color: "var(--danger, #dc2626)",
+                    color: "var(--danger, #992C2C)",
                   }}
                 >
                   🗑

@@ -7,10 +7,13 @@ import SourceChip from "../components/SourceChip";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 import { fmtDateHe } from "../utils/dates";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Breadcrumbs } from "../components/a11y";
 export default function OrganizationDetailPage() {
   const { t } = useTranslation();
   const { orgId } = useParams<{ orgId: string }>();
   const [org, setOrg] = useState<OrganizationDetail | null>(null);
+  useDocumentTitle(org?.title || "ארגון");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -71,7 +74,7 @@ export default function OrganizationDetailPage() {
               height: 80,
               borderRadius: 8,
               objectFit: "contain",
-              background: "#fff",
+              background: "var(--surface)",
               border: "1px solid var(--border)",
               flexShrink: 0,
             }}
@@ -79,6 +82,7 @@ export default function OrganizationDetailPage() {
           />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
+          <Breadcrumbs items={[{ label: t("nav.organizations", "ארגונים"), to: "/organizations" }, { label: org.title }]} />
           <h1 style={{ margin: "0 0 0.25rem 0", fontSize: "1.5rem" }}>{org.title}</h1>
           <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
             {org.dataset_count} {t("organizations.datasets_count", "מאגרים במעקב")}
@@ -95,7 +99,7 @@ export default function OrganizationDetailPage() {
                 style={{ color: "var(--primary)", textDecoration: "none" }}
               >
                 gov.il &#8599;
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             )}
             {org.data_gov_il_slug && (
               <a
@@ -105,7 +109,7 @@ export default function OrganizationDetailPage() {
                 style={{ color: "var(--primary)", textDecoration: "none" }}
               >
                 data.gov.il &#8599;
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             )}
             {org.external_website && (
               <a
@@ -115,7 +119,7 @@ export default function OrganizationDetailPage() {
                 style={{ color: "var(--text-muted)", textDecoration: "none" }}
               >
                 {t("organizations.external_website", "אתר רשמי")} &#8599;
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             )}
           </div>
         </div>
@@ -146,7 +150,7 @@ export default function OrganizationDetailPage() {
                     alt=""
                     style={{
                       width: 40, height: 40, borderRadius: 6, objectFit: "contain",
-                      background: "#fff", border: "1px solid var(--border)", flexShrink: 0,
+                      background: "var(--surface)", border: "1px solid var(--border)", flexShrink: 0,
                     }}
                     onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
                   />

@@ -153,7 +153,7 @@ export default function TagPicker({
 
       {open && (
         <div className="tag-picker-popover">
-          <input
+          <input aria-label={t("tags.picker_search_or_create", "חפש או הקלד שם חדש...")}
             ref={inputRef}
             type="text"
             value={query}

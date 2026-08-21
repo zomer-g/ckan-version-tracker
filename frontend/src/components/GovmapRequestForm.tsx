@@ -105,15 +105,15 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
       <div
         className="card"
         style={{
-          background: "#dcfce7",
-          border: "1px solid #86efac",
+          background: "var(--tint-good-bg)",
+          border: "1px solid var(--tint-good-bd)",
           padding: "1.25rem",
           marginTop: "0.75rem",
         }}
         role="status"
         aria-live="polite"
       >
-        <p style={{ color: "#166534", fontWeight: 500, margin: 0 }}>
+        <p style={{ color: "var(--success)", fontWeight: 500, margin: 0 }}>
           {t("home.govmap_request_done", { created, dup, bad })}
         </p>
         <ul
@@ -126,7 +126,7 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
         >
           {results.map((r, i) => (
             <li key={i} style={{ wordBreak: "break-all", padding: "0.15rem 0" }}>
-              <strong style={{ color: r.status === "pending" ? "#166534" : r.status === "duplicate" ? "#92400e" : "#dc2626" }}>
+              <strong style={{ color: r.status === "pending" ? "var(--success)" : r.status === "duplicate" ? "#833909" : "var(--danger)" }}>
                 [{r.status}]
               </strong>{" "}
               {r.layer_id ? `lay=${r.layer_id} — ` : ""}
@@ -141,7 +141,7 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
                   </Link>
                 </>
               )}
-              {r.error && <span style={{ color: "#dc2626" }}> ({r.error})</span>}
+              {r.error && <span style={{ color: "var(--danger)" }}> ({r.error})</span>}
             </li>
           ))}
         </ul>
@@ -191,7 +191,7 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
       </div>
 
       {error && (
-        <div role="alert" className="badge badge-danger mb-1" style={{ display: "block" }}>
+        <div id="govmap-error" role="alert" className="badge badge-danger mb-1" style={{ display: "block" }}>
           {error}
         </div>
       )}
@@ -205,16 +205,16 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
               padding: "0.45rem 0.7rem",
               border: "1px solid var(--primary-100)",
               borderRadius: "var(--radius)",
-              background: "white",
+              background: "var(--surface)",
               fontSize: "0.8rem",
               direction: "ltr",
               wordBreak: "break-all",
-              color: "#166534",
+              color: "var(--success)",
             }}
           >
             {validUrls.map((p, i) => (
               <div key={i} style={{ padding: "0.1rem 0" }}>
-                ✓ lay={p.layerId} — {p.url}
+                <span aria-hidden="true">✓</span> lay={p.layerId} — {p.url}
               </div>
             ))}
           </div>
@@ -226,6 +226,8 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
           </label>
           <input
             id="govmap-name"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "govmap-error" : undefined}
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}

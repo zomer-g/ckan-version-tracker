@@ -6,6 +6,8 @@ import { primeRegistryBadges } from "./utils/sourceBadge";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Navbar from "./components/Navbar";
+import { RouteAnnouncer } from "./components/a11y";
+import SessionWarning from "./components/a11y/SessionWarning";
 import Footer from "./components/Footer";
 import LoginPage from "./pages/LoginPage";
 import HomePage from "./pages/HomePage";
@@ -44,11 +46,22 @@ const KnessetGuidePage = lazy(() => import("./pages/KnessetGuidePage"));
 export default function App() {
   const { t, i18n } = useTranslation();
   const location = useLocation();
-  const mainRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
+  // Language of the page, honestly (WCAG 3.1.1) — and of its parts (3.1.2).
+  //
+  // The i18n layer covers 465 keys; roughly 2,900 Hebrew strings live directly
+  // in the components and do not translate. So switching to EN used to stamp
+  // lang="en" on a document that stayed overwhelmingly Hebrew, and a screen
+  // reader would try to pronounce Hebrew with an English voice — worse than no
+  // toggle at all.
+  //
+  // What is true in both modes: the document's language is Hebrew. The chrome
+  // (navbar, footer) is what actually translates, so it declares its own
+  // language and direction where they differ — see Navbar.tsx / Footer.tsx.
   useEffect(() => {
-    document.documentElement.dir = i18n.language === "he" ? "rtl" : "ltr";
-    document.documentElement.lang = i18n.language;
+    document.documentElement.lang = "he";
+    document.documentElement.dir = "rtl";
   }, [i18n.language]);
 
   // Chips for sources declared by the scraper worker instead of hardcoded in
@@ -97,7 +110,10 @@ export default function App() {
         {t("nav.skip_to_content", "Skip to content")}
       </a>
       <Navbar />
-      <div id="main-content" ref={mainRef} tabIndex={-1} role="main" style={{ outline: "none", flex: 1 }}>
+      {/* Focus moving to <main> says "something changed" but not what. This
+          reads the new page title once the route has set it (WCAG 4.1.3). */}
+      <RouteAnnouncer />
+      <main id="main-content" ref={mainRef} tabIndex={-1} style={{ outline: "none", flex: 1 }}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           {/* Shareable deep link → the dataset's versions page if tracked, the
@@ -170,8 +186,9 @@ export default function App() {
           />
           <Route path="/admin/login" element={<LoginPage />} />
         </Routes>
-      </div>
+      </main>
       <Footer />
+      <SessionWarning />
     </AuthProvider>
   );
 }

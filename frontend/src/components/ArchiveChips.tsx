@@ -83,10 +83,10 @@ const MISMATCH: Record<string, string> = {
 };
 
 const TONE_STYLE: Record<Tone, { background: string; color: string }> = {
-  good: { background: "#dcfce7", color: "#166534" },
+  good: { background: "var(--tint-good-bg)", color: "var(--success)" },
   info: { background: "var(--primary-50)", color: "var(--primary)" },
-  warn: { background: "#fef9c3", color: "#713f12" },
-  bad: { background: "#fee2e2", color: "#991b1b" },
+  warn: { background: "var(--tint-note-bg)", color: "var(--tint-note-fg)" },
+  bad: { background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)" },
 };
 
 function Chip(props: {
@@ -243,9 +243,9 @@ export default function ArchiveChips(props: {
             borderRadius: "4px",
             fontSize: "0.65rem",
             fontWeight: 600,
-            background: "#fef3c7",
-            color: "#92400e",
-            border: "1px solid #f59e0b",
+            background: "var(--tint-warn-bg)",
+            color: "var(--warning)",
+            border: "1px solid var(--tint-warn-bd)",
             cursor: "help",
           }}
         >

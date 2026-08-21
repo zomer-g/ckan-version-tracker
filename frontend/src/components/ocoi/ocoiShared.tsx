@@ -9,10 +9,10 @@
 import { OcoiEntityType, OCOI_TYPE_LABELS } from "../../api/client";
 
 export const TYPE_COLORS: Record<OcoiEntityType, string> = {
-  person: "#0f766e",      // teal — the officials
-  company: "#b45309",     // amber — commercial entities
-  association: "#6d28d9", // violet — עמותות
-  domain: "#0369a1",      // blue — subject areas
+  person: "var(--fill-teal)",       // teal — the officials
+  company: "var(--fill-warn)",      // amber — commercial entities
+  association: "var(--fill-violet)", // violet — עמותות
+  domain: "var(--fill-sky)",        // blue — subject areas
 };
 
 export const TYPE_ICONS: Record<OcoiEntityType, string> = {
@@ -31,7 +31,7 @@ export function TypeChip({ type, small }: { type: OcoiEntityType; small?: boolea
         borderRadius: 999,
         fontSize: small ? "0.7rem" : "0.75rem",
         fontWeight: 600,
-        color: "#fff",
+        color: "var(--on-fill)",
         background: TYPE_COLORS[type],
         whiteSpace: "nowrap",
       }}
@@ -69,8 +69,8 @@ export function ErrorNote({ error }: { error: string }) {
       style={{
         padding: "0.7rem 0.9rem",
         borderRadius: 8,
-        background: "var(--danger-bg, #fef2f2)",
-        color: "var(--danger, #b91c1c)",
+        background: "var(--tint-bad-bg)",
+        color: "var(--danger, #992C2C)",
         fontSize: "0.9rem",
         margin: "0.75rem 0",
       }}

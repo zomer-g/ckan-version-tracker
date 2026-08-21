@@ -157,7 +157,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
         rows={rows}
         style={{
           width: "100%", fontFamily: "monospace", fontSize: "0.85rem", padding: "0.6rem",
-          border: "1px solid var(--border, #d1d5db)", borderRadius: 4, resize: "vertical",
+          border: "1px solid var(--border, var(--border))", borderRadius: 4, resize: "vertical",
         }}
         aria-label={ariaLabel}
       />
@@ -169,7 +169,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
             position: "absolute", zIndex: 20, top: "calc(100% - 4px)", insetInlineStart: "0.6rem",
             margin: 0, padding: "0.2rem", listStyle: "none", minWidth: 260, maxWidth: 460,
             maxHeight: 240, overflowY: "auto", background: "var(--bg, #fff)",
-            border: "1px solid var(--border, #cbd5e1)", borderRadius: 6,
+            border: "1px solid var(--border, var(--border))", borderRadius: 6,
             boxShadow: "0 6px 20px rgba(0,0,0,0.14)", fontSize: "0.82rem",
           }}
         >
@@ -183,7 +183,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
               style={{
                 display: "flex", alignItems: "center", gap: "0.5rem",
                 padding: "0.3rem 0.5rem", borderRadius: 4, cursor: "pointer",
-                background: i === index ? "var(--bg-muted, #eef2f5)" : "transparent",
+                background: i === index ? "var(--surface-2)" : "transparent",
               }}
             >
               <span
@@ -191,7 +191,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
                 style={{
                   fontSize: "0.62rem", fontWeight: 700, padding: "0.05rem 0.35rem",
                   borderRadius: 3, flex: "0 0 auto",
-                  color: s.kind === "table" ? "#7c3aed" : "#0f766e",
+                  color: s.kind === "table" ? "#7c3aed" : "#0C5E58",
                   background: s.kind === "table" ? "rgba(124,58,237,0.12)" : "rgba(15,118,110,0.12)",
                 }}
               >
@@ -252,7 +252,7 @@ function ColumnChip({ name, alias, onInsert }: {
       title={alias ? `הכנס עמודה: ${name} (${alias})` : `הכנס עמודה: ${name}`}
       style={{
         fontFamily: "monospace", fontSize: "0.76rem", padding: "0.12rem 0.45rem",
-        border: "1px solid var(--border, #d1d5db)", borderRadius: 999,
+        border: "1px solid var(--border, var(--border))", borderRadius: 999,
         background: "var(--bg, #fff)", color: "var(--text, #111)", cursor: "pointer",
         display: "inline-flex", alignItems: "baseline", gap: "0.3rem",
       }}
@@ -306,7 +306,7 @@ export function SchemaReference({
         <div
           style={{
             marginTop: "0.4rem", padding: "0.5rem 0.6rem", maxHeight: 260, overflowY: "auto",
-            background: "var(--bg-muted, #f8fafc)", border: "1px solid var(--border, #e2e8f0)",
+            background: "var(--surface-2)", border: "1px solid var(--border, var(--border))",
             borderRadius: 6,
           }}
         >
@@ -344,7 +344,7 @@ export function SchemaReference({
                     title="הכנס שם טבלה"
                     style={{
                       fontSize: "0.72rem", padding: "0 0.35rem", borderRadius: 4, cursor: "pointer",
-                      border: "1px solid var(--border, #d1d5db)", background: "var(--bg, #fff)",
+                      border: "1px solid var(--border, var(--border))", background: "var(--bg, #fff)",
                       color: "var(--primary)",
                     }}
                   >
@@ -391,8 +391,8 @@ export function CopySchemaButton({ url, label = "העתק סכימה ל-AI" }: {
       title="העתקת מבנה הטבלאות (DDL) כדי להדביק ל-ChatGPT / Claude שיכתבו SQL מדויק"
       style={{
         fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4, cursor: "pointer",
-        border: "1px solid var(--primary, #0f766e)", background: "none",
-        color: state === "error" ? "var(--danger, #dc2626)" : "var(--primary, #0f766e)",
+        border: "1px solid var(--primary, var(--tint-teal-fg))", background: "none",
+        color: state === "error" ? "var(--danger, #992C2C)" : "var(--primary, #0C5E58)",
         whiteSpace: "nowrap",
       }}
     >
@@ -423,8 +423,8 @@ export function SqlHelpNote({ casing }: { casing: "lower" | "preserve" }) {
           className="text-sm"
           style={{
             marginTop: "0.4rem", padding: "0.6rem 0.8rem", lineHeight: 1.7,
-            background: "var(--bg-muted, #eef2f5)", borderRadius: 6,
-            border: "1px solid var(--border, #e2e8f0)",
+            background: "var(--surface-2)", borderRadius: 6,
+            border: "1px solid var(--border, var(--border))",
           }}
         >
           <div style={{ fontWeight: 700, marginBottom: "0.25rem" }}>אותיות גדולות/קטנות בשמות עמודות</div>

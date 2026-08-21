@@ -6,6 +6,7 @@ import OcalSearch from "../components/ocal/OcalSearch";
 import OcalCalendar from "../components/ocal/OcalCalendar";
 import OcalDiaries from "../components/ocal/OcalDiaries";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 type OcalTab = "search" | "calendar" | "diaries";
 const TAB_IDS: OcalTab[] = ["search", "calendar", "diaries"];
 const TAB_LABELS: [OcalTab, string][] = [
@@ -21,6 +22,7 @@ const TAB_LABELS: [OcalTab, string][] = [
  * (see app/api/ocal.py) over the migrated Neon database.
  */
 export default function OcalPage() {
+  useDocumentTitle("יומן לעם");
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlTab = searchParams.get("tab") as OcalTab | null;
@@ -60,7 +62,7 @@ export default function OcalPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, #e2e8f0)", marginBottom: "1rem", flexWrap: "wrap" }}>
+        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, var(--border))", marginBottom: "1rem", flexWrap: "wrap" }}>
           {TAB_LABELS.map(([id, label]) => (
             <button
               key={id}
@@ -69,8 +71,8 @@ export default function OcalPage() {
               style={{
                 padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
                 fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? "var(--primary, #0f766e)" : "var(--text-muted)",
-                borderBottom: tab === id ? "3px solid var(--primary, #0f766e)" : "3px solid transparent",
+                color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
+                borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
                 marginBottom: -2,
               }}
             >

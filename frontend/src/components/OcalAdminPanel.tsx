@@ -19,15 +19,15 @@ const SECTIONS: [Section, string][] = [
 
 const btn: React.CSSProperties = {
   padding: "0.25rem 0.6rem", fontSize: "0.78rem", borderRadius: 4,
-  border: "1px solid var(--border, #d1d5db)", background: "none", cursor: "pointer",
+  border: "1px solid var(--border, var(--border))", background: "none", cursor: "pointer",
 };
 const th: React.CSSProperties = {
-  textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border, #cbd5e1)",
-  fontSize: "0.78rem", position: "sticky", top: 0, background: "var(--bg-muted, #eef2f5)",
+  textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border, var(--border))",
+  fontSize: "0.78rem", position: "sticky", top: 0, background: "var(--surface-2)",
 };
 const td: React.CSSProperties = { padding: "0.35rem 0.55rem", fontSize: "0.82rem", verticalAlign: "top" };
 const inp: React.CSSProperties = {
-  padding: "0.35rem 0.5rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.85rem",
+  padding: "0.35rem 0.5rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.85rem",
 };
 
 // CKAN resource last-modified/upload timestamp → readable he-IL date (or —).
@@ -44,7 +44,7 @@ function useMsg() {
   const fail = (e: unknown) => { setErr((e as Error)?.message || "שגיאה"); setMsg(null); };
   const node = (
     <>
-      {err && <div style={{ color: "var(--danger, #dc2626)", margin: "0.4rem 0" }}>{err}</div>}
+      {err && <div style={{ color: "var(--danger, #992C2C)", margin: "0.4rem 0" }}>{err}</div>}
       {msg && <div style={{ color: "var(--primary)", margin: "0.4rem 0" }}>{msg}</div>}
     </>
   );
@@ -56,12 +56,27 @@ function DashboardSection({ onNav }: { onNav: (s: Section) => void }) {
   const { node, fail } = useMsg();
   const [d, setD] = useState<OcalDashboard | null>(null);
   useEffect(() => { ocalAdmin.dashboard().then(setD).catch(fail); }, []); // eslint-disable-line
-  const tile = (label: string, val: number, sec?: Section) => (
-    <div onClick={sec ? () => onNav(sec) : undefined} style={{ padding: "0.8rem 1.1rem", background: "var(--bg-muted,#f1f5f9)", borderRadius: 8, textAlign: "center", minWidth: 104, cursor: sec ? "pointer" : "default" }}>
-      <div style={{ fontSize: "1.55rem", fontWeight: 700 }}>{(val || 0).toLocaleString()}</div>
-      <div className="text-sm text-muted">{label}</div>
-    </div>
-  );
+  const tile = (label: string, val: number, sec?: Section) => {
+    // A div with onClick is not a control. Where the tile navigates it
+    // becomes a button; where it only reports a number it stays a div
+    // and takes no focus at all (WCAG 2.1.1, 4.1.2).
+    const Tag = sec ? "button" : "div";
+    return (
+      <Tag
+        type={sec ? "button" : undefined}
+        onClick={sec ? () => onNav(sec) : undefined}
+        aria-label={sec ? `${label}: ${(val || 0).toLocaleString()} — מעבר לפירוט` : undefined}
+        style={{
+          padding: "0.8rem 1.1rem", background: "var(--surface-2)", borderRadius: 8,
+          textAlign: "center", minWidth: 104, border: 0, font: "inherit",
+          color: "inherit", cursor: sec ? "pointer" : "default",
+        }}
+      >
+        <div style={{ fontSize: "1.55rem", fontWeight: 700 }}>{(val || 0).toLocaleString()}</div>
+        <div className="text-sm text-muted">{label}</div>
+      </Tag>
+    );
+  };
   const dt = (s: string) => { const x = new Date(s); return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("he-IL"); };
   return (
     <div>
@@ -82,12 +97,12 @@ function DashboardSection({ onNav }: { onNav: (s: Section) => void }) {
           <button style={btn} onClick={() => onNav("sources")}>נהל יומנים</button>
         </div>
         <h4 style={{ margin: "0.4rem 0" }}>יומנים שנוספו לאחרונה</h4>
-        <div style={{ overflowX: "auto", border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+        <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
-            <thead><tr><th style={th}>יומן</th><th style={th}>בעלים</th><th style={{ ...th, textAlign: "end" }}>אירועים</th><th style={th}>נוסף</th></tr></thead>
+            <thead><tr><th scope="col" style={th}>יומן</th><th scope="col" style={th}>בעלים</th><th scope="col" style={{ ...th, textAlign: "end" }}>אירועים</th><th scope="col" style={th}>נוסף</th></tr></thead>
             <tbody>
               {d.recent_sources.map((s) => (
-                <tr key={s.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", opacity: s.is_enabled ? 1 : 0.55 }}>
+                <tr key={s.id} style={{ borderBottom: "1px solid var(--border)", opacity: s.is_enabled ? 1 : 0.55 }}>
                   <td style={td}><span aria-hidden style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: s.color || "#3B82F6", marginInlineEnd: 6 }} />{s.name}</td>
                   <td style={{ ...td, color: "var(--text-muted)" }}>{s.person_name || "—"}</td>
                   <td style={{ ...td, textAlign: "end" }}>{(s.total_events || 0).toLocaleString()}</td>
@@ -137,9 +152,9 @@ function SourcesSection() {
   return (
     <div>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.6rem", alignItems: "center" }}>
-        <input style={{ ...inp, flex: "1 1 220px" }} placeholder="חיפוש יומן / בעלים…" value={q}
+        <input aria-label="חיפוש יומן / בעלים…" style={{ ...inp, flex: "1 1 220px" }} placeholder="חיפוש יומן / בעלים…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
-        <select style={inp} value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
+        <select style={inp} aria-label="סינון לפי מצב" value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
           <option value="all">הכל</option>
           <option value="enabled">פעילים</option>
           <option value="disabled">מושבתים</option>
@@ -149,15 +164,15 @@ function SourcesSection() {
         <span className="text-sm text-muted">{rows.length} מתוך {total.toLocaleString()}</span>
       </div>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
           <thead><tr>
-            <th style={th}>יומן</th><th style={th}>בעלים</th><th style={{ ...th, textAlign: "end" }}>אירועים</th>
-            <th style={th}>סטטוס</th><th style={th}>פעולות</th>
+            <th scope="col" style={th}>יומן</th><th scope="col" style={th}>בעלים</th><th scope="col" style={{ ...th, textAlign: "end" }}>אירועים</th>
+            <th scope="col" style={th}>סטטוס</th><th scope="col" style={th}>פעולות</th>
           </tr></thead>
           <tbody>
             {rows.map((s) => (
-              <tr key={s.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", opacity: s.is_enabled ? 1 : 0.55 }}>
+              <tr key={s.id} style={{ borderBottom: "1px solid var(--border)", opacity: s.is_enabled ? 1 : 0.55 }}>
                 <td style={td}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
                     <input type="color" value={s.color || "#3B82F6"} disabled={busy === s.id} title="צבע היומן"
@@ -207,7 +222,7 @@ function SourcesSection() {
                       catch (e) { fail(e); } finally { setBusy(null); }
                     }}>מצא התאמות</button>
                     {ner?.available && (
-                      <button style={{ ...btn, color: "#6d28d9", borderColor: "#c4b5fd" }} disabled={busy === s.id}
+                      <button style={{ ...btn, color: "var(--tint-violet-fg)", borderColor: "var(--tint-violet-bd)" }} disabled={busy === s.id}
                         title={`חילוץ ישויות עם LLM (${ner.provider}) — כרוך בעלות`}
                         onClick={async () => {
                           if (!confirm(`להריץ חילוץ ישויות AI על "${s.name}"? הפעולה כרוכה בעלות LLM.`)) return;
@@ -219,7 +234,7 @@ function SourcesSection() {
                           } catch (e) { fail(e); } finally { setBusy(null); }
                         }}>חילוץ AI</button>
                     )}
-                    <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5" }} disabled={busy === s.id}
+                    <button style={{ ...btn, color: "var(--danger)", borderColor: "var(--tint-bad-bd)" }} disabled={busy === s.id}
                       onClick={() => { if (confirm(`למחוק את "${s.name}" וכל האירועים שלו?`)) act(s.id, () => ocalAdmin.deleteSource(s.id), "נמחק"); }}>מחק</button>
                   </div>
                 </td>
@@ -257,12 +272,12 @@ function CandidatesSection() {
         <span className="text-sm text-muted">{rows.length} מועמדים חדשים (לא יובאו / נדחו)</span>
       </div>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
-          <thead><tr><th style={th}>יומן (dataset)</th><th style={th}>פורמט</th><th style={th}>הועלה / עודכן</th><th style={th}>גוף</th><th style={th}></th></tr></thead>
+          <thead><tr><th scope="col" style={th}>יומן (dataset)</th><th scope="col" style={th}>פורמט</th><th scope="col" style={th}>הועלה / עודכן</th><th scope="col" style={th}>גוף</th><th scope="col" style={th}></th></tr></thead>
           <tbody>
             {rows.map((c) => (
-              <tr key={c.resource_id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+              <tr key={c.resource_id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={td}>{c.dataset_title || c.resource_name || c.resource_id}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{c.format || "—"}</td>
                 <td style={{ ...td, color: "var(--text-muted)", whiteSpace: "nowrap" }} title={c.last_modified || ""}>{fmtDate(c.last_modified)}</td>
@@ -295,12 +310,12 @@ function ExceptionsSection() {
       <button style={btn} onClick={load}>רענן</button>
       <span className="text-sm text-muted" style={{ marginInlineStart: 8 }}>{rows.length} משאבים שנדחו אוטומטית</span>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6, marginTop: "0.5rem" }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 560, border: "1px solid var(--border)", borderRadius: 6, marginTop: "0.5rem" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
-          <thead><tr><th style={th}>dataset</th><th style={th}>פורמט</th><th style={th}>סיבה</th><th style={th}></th></tr></thead>
+          <thead><tr><th scope="col" style={th}>dataset</th><th scope="col" style={th}>פורמט</th><th scope="col" style={th}>סיבה</th><th scope="col" style={th}></th></tr></thead>
           <tbody>
             {rows.map((e) => (
-              <tr key={e.resource_id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+              <tr key={e.resource_id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={td}>{e.dataset_title || e.resource_name || e.resource_id}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{e.resource_format || "—"}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{e.exception_reason}</td>
@@ -368,7 +383,7 @@ function PeopleSection() {
   return (
     <div>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
-        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש שם…" value={q}
+        <input aria-label="חיפוש שם…" style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש שם…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
         <button style={btn} onClick={load}>חפש</button>
         <button style={btn} onClick={() => setShowCsv((v) => !v)}>יבוא CSV</button>
@@ -376,40 +391,40 @@ function PeopleSection() {
       </div>
 
       {/* add / edit form */}
-      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6 }}>
-        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="שם" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <select style={inp} value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })}>
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--surface-2)", borderRadius: 6 }}>
+        <input aria-label="שם" style={{ ...inp, flex: "1 1 160px" }} placeholder="שם" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <select style={inp} aria-label="ארגון" value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })}>
           <option value="">— ללא ארגון —</option>
           {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select>
-        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="קישור ויקיפדיה" value={form.wikipedia_link} onChange={(e) => setForm({ ...form, wikipedia_link: e.target.value })} />
-        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="הערות" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+        <input aria-label="קישור ויקיפדיה" style={{ ...inp, flex: "1 1 160px" }} placeholder="קישור ויקיפדיה" value={form.wikipedia_link} onChange={(e) => setForm({ ...form, wikipedia_link: e.target.value })} />
+        <input aria-label="הערות" style={{ ...inp, flex: "1 1 160px" }} placeholder="הערות" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
         <button className="btn-primary" disabled={!form.name.trim()} onClick={save}>{form.id ? "עדכן" : "הוסף"}</button>
         {form.id && <button style={btn} onClick={() => setForm({ ...EMPTY_PERSON })}>ביטול</button>}
       </div>
 
       {showCsv && (
         <div style={{ marginBottom: "0.6rem" }}>
-          <textarea style={{ ...inp, width: "100%", minHeight: 90, fontFamily: "monospace", fontSize: "0.8rem" }} dir="ltr"
+          <textarea aria-label="שורה לכל אדם: שם,ארגון,קישור ויקיפדיה,הערות" style={{ ...inp, width: "100%", minHeight: 90, fontFamily: "monospace", fontSize: "0.8rem" }} dir="ltr"
             placeholder="שורה לכל אדם: שם,ארגון,קישור ויקיפדיה,הערות" value={csv} onChange={(e) => setCsv(e.target.value)} />
           <button className="btn-primary" style={{ marginTop: 4 }} disabled={!csv.trim()} onClick={importCsv}>ייבא</button>
         </div>
       )}
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-          <thead><tr><th style={th}></th><th style={th}>שם</th><th style={th}>ארגון</th><th style={th}>ויקיפדיה</th><th style={{ ...th, textAlign: "end" }}>יומנים</th><th style={th}></th></tr></thead>
+          <thead><tr><th scope="col" style={th}></th><th scope="col" style={th}>שם</th><th scope="col" style={th}>ארגון</th><th scope="col" style={th}>ויקיפדיה</th><th scope="col" style={{ ...th, textAlign: "end" }}>יומנים</th><th scope="col" style={th}></th></tr></thead>
           <tbody>
             {rows.map((p) => (
-              <tr key={p.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", background: sel.has(p.id) ? "var(--bg-muted,#eef2ff)" : undefined }}>
+              <tr key={p.id} style={{ borderBottom: "1px solid var(--border)", background: sel.has(p.id) ? "var(--surface-2)" : undefined }}>
                 <td style={td}><input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} title="בחר למיזוג" /></td>
                 <td style={td}>{p.name}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{p.organization_name || "—"}</td>
-                <td style={td}>{p.wikipedia_link ? <a href={p.wikipedia_link} target="_blank" rel="noreferrer">↗</a> : "—"}</td>
+                <td style={td}>{p.wikipedia_link ? <a href={p.wikipedia_link} target="_blank" rel="noreferrer">↗<span className="sr-only"> (נפתח בחלון חדש)</span></a> : "—"}</td>
                 <td style={{ ...td, textAlign: "end" }}>{p.source_count}</td>
                 <td style={td}>
                   <button style={btn} onClick={() => setForm({ id: p.id, name: p.name, organization_id: p.organization_id || "", wikipedia_link: p.wikipedia_link || "", notes: p.notes || "" })}>ערוך</button>
-                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={async () => {
+                  <button style={{ ...btn, color: "var(--danger)", borderColor: "var(--tint-bad-bd)", marginInlineStart: 4 }} onClick={async () => {
                     if (!confirm(`למחוק את ${p.name}?`)) return;
                     try { await ocalAdmin.deletePerson(p.id); ok("נמחק"); load(); } catch (e) { fail(e); }
                   }}>מחק</button>
@@ -449,30 +464,30 @@ function OrgsSection() {
   return (
     <div>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
-        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ארגון…" value={q}
+        <input aria-label="חיפוש ארגון…" style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ארגון…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} />
         <button style={btn} onClick={load}>חפש</button>
       </div>
-      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6 }}>
-        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="שם ארגון" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input style={{ ...inp, flex: "1 1 160px" }} placeholder="אתר" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
-        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="תיאור" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.6rem", flexWrap: "wrap", alignItems: "center", padding: "0.5rem", background: "var(--surface-2)", borderRadius: 6 }}>
+        <input aria-label="שם ארגון" style={{ ...inp, flex: "1 1 160px" }} placeholder="שם ארגון" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <input aria-label="אתר" style={{ ...inp, flex: "1 1 160px" }} placeholder="אתר" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+        <input aria-label="תיאור" style={{ ...inp, flex: "1 1 200px" }} placeholder="תיאור" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
         <button className="btn-primary" disabled={!form.name.trim()} onClick={save}>{form.id ? "עדכן" : "הוסף"}</button>
         {form.id && <button style={btn} onClick={() => setForm({ ...EMPTY_ORG })}>ביטול</button>}
       </div>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 520, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-          <thead><tr><th style={th}>שם</th><th style={th}>אתר</th><th style={th}>תיאור</th><th style={th}></th></tr></thead>
+          <thead><tr><th scope="col" style={th}>שם</th><th scope="col" style={th}>אתר</th><th scope="col" style={th}>תיאור</th><th scope="col" style={th}></th></tr></thead>
           <tbody>
             {rows.map((o) => (
-              <tr key={o.id} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+              <tr key={o.id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={td}>{o.name}</td>
-                <td style={td}>{o.website ? <a href={o.website} target="_blank" rel="noreferrer" dir="ltr">{o.website}</a> : "—"}</td>
+                <td style={td}>{o.website ? <a href={o.website} target="_blank" rel="noreferrer" dir="ltr">{o.website}<span className="sr-only"> (נפתח בחלון חדש)</span></a> : "—"}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{o.description || "—"}</td>
                 <td style={td}>
                   <button style={btn} onClick={() => setForm({ id: o.id, name: o.name, website: o.website || "", description: o.description || "" })}>ערוך</button>
-                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={async () => {
+                  <button style={{ ...btn, color: "var(--danger)", borderColor: "var(--tint-bad-bd)", marginInlineStart: 4 }} onClick={async () => {
                     if (!confirm(`למחוק את ${o.name}?`)) return;
                     try { await ocalAdmin.deleteOrg(o.id); ok("נמחק"); load(); } catch (e) { fail(e); }
                   }}>מחק</button>
@@ -519,7 +534,7 @@ function AutomationSection() {
     <div>
       {node}
       {form && (
-        <div style={{ padding: "0.7rem", background: "var(--bg-muted,#f8fafc)", borderRadius: 6, marginBottom: "0.8rem" }}>
+        <div style={{ padding: "0.7rem", background: "var(--surface-2)", borderRadius: 6, marginBottom: "0.8rem" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, fontWeight: 600 }}>
             <input type="checkbox" checked={form.auto_scan_enabled} onChange={(e) => setForm({ ...form, auto_scan_enabled: e.target.checked })} />
             ייבוא אוטומטי פעיל (סריקה כל {st?.scheduler_interval_hours}ש׳, עד {st?.per_tick} בכל ריצה)
@@ -541,18 +556,18 @@ function AutomationSection() {
         </div>
       )}
       <h4 style={{ margin: "0.5rem 0" }}>לוג סריקות</h4>
-      <div style={{ overflowX: "auto", maxHeight: 420, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 420, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-          <thead><tr><th style={th}>התחיל</th><th style={th}>טריגר</th><th style={{ ...th, textAlign: "end" }}>מועמדים</th><th style={{ ...th, textAlign: "end" }}>יובאו</th><th style={{ ...th, textAlign: "end" }}>נדחו</th><th style={{ ...th, textAlign: "end" }}>שגיאות</th><th style={th}>משך</th></tr></thead>
+          <thead><tr><th scope="col" style={th}>התחיל</th><th scope="col" style={th}>טריגר</th><th scope="col" style={{ ...th, textAlign: "end" }}>מועמדים</th><th scope="col" style={{ ...th, textAlign: "end" }}>יובאו</th><th scope="col" style={{ ...th, textAlign: "end" }}>נדחו</th><th scope="col" style={{ ...th, textAlign: "end" }}>שגיאות</th><th scope="col" style={th}>משך</th></tr></thead>
           <tbody>
             {logs.map((l, i) => (
-              <tr key={l.id || i} style={{ borderBottom: "1px solid var(--border,#f1f5f9)" }}>
+              <tr key={l.id || i} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={td}>{dt(l.started_at)}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{l.trigger}</td>
                 <td style={{ ...td, textAlign: "end" }}>{l.candidates}</td>
                 <td style={{ ...td, textAlign: "end", color: l.imported ? "var(--primary)" : undefined }}>{l.imported}</td>
                 <td style={{ ...td, textAlign: "end" }}>{l.skipped}</td>
-                <td style={{ ...td, textAlign: "end", color: l.errors ? "#b91c1c" : undefined }}>{l.errors}</td>
+                <td style={{ ...td, textAlign: "end", color: l.errors ? "var(--danger)" : undefined }}>{l.errors}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{dur(l)}</td>
               </tr>
             ))}
@@ -590,7 +605,7 @@ function EntitiesSection() {
   useEffect(() => { load(); }, [load]);
 
   const tile = (label: string, val: number) => (
-    <div style={{ padding: "0.4rem 0.9rem", background: "var(--bg-muted,#f1f5f9)", borderRadius: 6, textAlign: "center", minWidth: 90 }}>
+    <div style={{ padding: "0.4rem 0.9rem", background: "var(--surface-2)", borderRadius: 6, textAlign: "center", minWidth: 90 }}>
       <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>{(val || 0).toLocaleString()}</div>
       <div className="text-sm text-muted">{label}</div>
     </div>
@@ -620,9 +635,9 @@ function EntitiesSection() {
         {tile("סה\"כ ייחודיות", stats.total_unique)}{tile("אנשים", stats.person_count)}{tile("ארגונים", stats.org_count)}{tile("מקומות", stats.place_count)}
       </div>}
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.6rem" }}>
-        <input style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ישות…" value={q}
+        <input aria-label="חיפוש ישות…" style={{ ...inp, flex: "1 1 200px" }} placeholder="חיפוש ישות…" value={q}
           onChange={(e) => { setOffset(0); setQ(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && load()} />
-        <select style={inp} value={type} onChange={(e) => { setOffset(0); setType(e.target.value); }}>
+        <select style={inp} aria-label="סוג הישות" value={type} onChange={(e) => { setOffset(0); setType(e.target.value); }}>
           {ETYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
         <button style={btn} onClick={load}>רענן</button>
@@ -630,20 +645,20 @@ function EntitiesSection() {
         <span className="text-sm text-muted">{total.toLocaleString()} ישויות</span>
       </div>
       {node}
-      <div style={{ overflowX: "auto", maxHeight: 500, border: "1px solid var(--border,#e2e8f0)", borderRadius: 6 }}>
+      <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto", maxHeight: 500, border: "1px solid var(--border)", borderRadius: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-          <thead><tr><th style={th}></th><th style={th}>ישות</th><th style={th}>סוג</th><th style={{ ...th, textAlign: "end" }}>אירועים</th><th style={th}>מקושר</th><th style={th}></th></tr></thead>
+          <thead><tr><th scope="col" style={th}></th><th scope="col" style={th}>ישות</th><th scope="col" style={th}>סוג</th><th scope="col" style={{ ...th, textAlign: "end" }}>אירועים</th><th scope="col" style={th}>מקושר</th><th scope="col" style={th}></th></tr></thead>
           <tbody>
             {rows.map((e) => (
-              <tr key={key(e)} style={{ borderBottom: "1px solid var(--border,#f1f5f9)", background: sel.has(key(e)) ? "var(--bg-muted,#eef2ff)" : undefined }}>
-                <td style={td}><input type="checkbox" checked={sel.has(key(e))} onChange={() => toggle(key(e))} /></td>
+              <tr key={key(e)} style={{ borderBottom: "1px solid var(--border)", background: sel.has(key(e)) ? "var(--surface-2)" : undefined }}>
+                <td style={td}><input type="checkbox" aria-label={`בחירת ${e.entity_name}`} checked={sel.has(key(e))} onChange={() => toggle(key(e))} /></td>
                 <td style={td}>{e.entity_name}</td>
                 <td style={{ ...td, color: "var(--text-muted)" }}>{ETYPE_HE[e.entity_type] || e.entity_type}</td>
                 <td style={{ ...td, textAlign: "end" }}>{e.event_count.toLocaleString()}</td>
                 <td style={td} title="מקושר לרשומת אדם/ארגון">{e.matched ? "✓" : "—"}</td>
                 <td style={td}>
                   <button style={btn} onClick={() => rename(e)}>שנה שם</button>
-                  <button style={{ ...btn, color: "#b91c1c", borderColor: "#fca5a5", marginInlineStart: 4 }} onClick={() => del(e)}>מחק</button>
+                  <button style={{ ...btn, color: "var(--danger)", borderColor: "var(--tint-bad-bd)", marginInlineStart: 4 }} onClick={() => del(e)}>מחק</button>
                 </td>
               </tr>
             ))}
@@ -678,8 +693,8 @@ function ContentSection() {
       {node}
       {rows.map((c) => (
         <div key={c.key} style={{ marginBottom: "0.9rem" }}>
-          <label style={{ fontWeight: 600, fontSize: "0.85rem" }}>{c.key}</label>
-          <textarea style={{ ...inp, width: "100%", minHeight: 70, marginTop: 4, fontFamily: "inherit" }}
+          <label style={{ fontWeight: 600, fontSize: "0.85rem" }} htmlFor={`ocal-content-${c.key}`}>{c.key}</label>
+          <textarea id={`ocal-content-${c.key}`} style={{ ...inp, width: "100%", minHeight: 70, marginTop: 4, fontFamily: "inherit" }}
             value={draft[c.key] ?? ""} onChange={(e) => setDraft({ ...draft, [c.key]: e.target.value })} />
           <button style={{ ...btn, marginTop: 4 }} onClick={async () => {
             try { await ocalAdmin.putContent(c.key, draft[c.key] ?? ""); ok(`"${c.key}" נשמר`); } catch (e) { fail(e); }
@@ -699,7 +714,7 @@ export default function OcalAdminPanel() {
         ניהול <strong>יומן לעם</strong> — יומני נבחרי הציבור שהוגרו ל-OVER. ניהול היומנים (מקורות),
         ייבוא אוטומטי של יומנים חדשים מ-odata.org.il, וקוריקציה של אנשים/ארגונים/טקסטים.
       </p>
-      <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border,#e2e8f0)", marginBottom: "1rem", flexWrap: "wrap" }}>
+      <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border)", marginBottom: "1rem", flexWrap: "wrap" }}>
         {SECTIONS.map(([id, label]) => (
           <button key={id} type="button" onClick={() => setSec(id)}
             style={{

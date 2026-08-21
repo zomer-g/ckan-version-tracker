@@ -2,6 +2,8 @@ import { Link } from "react-router-dom";
 import DataTabs from "../components/DataTabs";
 import SqlCell from "../components/SqlCell";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { PlainSummary } from "../components/a11y";
 // Guide for the "הצלבה מתוקנת" feature. Simple and example-first: every example
 // is a live SqlCell that runs in place (Jupyter-style), so nothing opens a
 // separate page. Styled with the site's own tokens; theme-aware; RTL.
@@ -50,6 +52,7 @@ const BA: [string, string, string][] = [
 ];
 
 export default function DataGuidePage() {
+  useDocumentTitle("מדריך — הצלבה מתוקנת");
   return (
     <div className="container mt-3 jg" dir="rtl">
       <DataTabs active="guide" />
@@ -62,6 +65,10 @@ export default function DataGuidePage() {
           <b> בלי לגעת בנתונים המקוריים.</b> כל דוגמה כאן רצה במקום — לחצו "הרץ".
         </p>
       </header>
+      <PlainSummary>
+        כשמחברים שני מאגרים לפי שם יישוב או שם רשות מקומית, כתיב שונה של אותו שם גורם לשורות ליפול בשקט — והתוצאה נראית תקינה אבל חסרה. המדריך הזה מראה איך לחבר לפי קוד קבוע במקום לפי טקסט חופשי, כדי שלא יאבד מידע.
+      </PlainSummary>
+
 
       {/* what it does — example */}
       <section className="jg-card">
@@ -89,7 +96,7 @@ export default function DataGuidePage() {
           בעמוד של כל טבלה עם שדה יישוב, מתחת לפרופיל, נפתח <b>"בונה הצלבה מתוקנת"</b>. כך הוא נראה:
         </p>
         <div className="jg-mock">
-          <div className="jg-mock-title">🔗 בונה הצלבה מתוקנת</div>
+          <div className="jg-mock-title"><span aria-hidden="true">🔗</span> בונה הצלבה מתוקנת</div>
           <div className="jg-mock-row">
             <b>צד שמאל:</b> <span className="jg-mchip gray">append_moj_amutot</span>
             שדה: <span className="jg-mchip blue">כתובת - ישוב</span>
@@ -150,7 +157,7 @@ export default function DataGuidePage() {
             התשאול. מי שרוצה את ההצלבה מקבל אותה; הטבלה המקורית לא זזה.</div>
         </div>
         <p style={{ textAlign: "center", marginTop: "1rem" }}>
-          <Link to="/data?table=append_moj_amutot_73f3cd78" style={{ color: "var(--primary,#0f766e)", fontWeight: 600 }}>
+          <Link to="/data?table=append_moj_amutot_73f3cd78" style={{ color: "var(--primary,#0C5E58)", fontWeight: 600 }}>
             ← פתחו מאגר עם שדה יישוב בקונסולה ותראו את "בונה ההצלבה" בעצמכם
           </Link>
         </p>
@@ -159,31 +166,31 @@ export default function DataGuidePage() {
       <style>{`
         .jg h1, .jg h2, .jg h3 { text-wrap: balance; }
         .jg .mono { font-family: ui-monospace, Consolas, monospace; direction: ltr; unicode-bidi: embed; font-size: 0.9em; }
-        .jg-eyebrow { font-size: 0.72rem; letter-spacing: 0.12em; font-weight: 700; text-transform: uppercase; color: #a21caf; }
-        .jg-lead { color: var(--text-muted, #64748b); line-height: 1.7; }
-        .jg-card { border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg, #fff); padding: 1.3rem 1.5rem; margin-bottom: 1.1rem; }
+        .jg-eyebrow { font-size: 0.72rem; letter-spacing: 0.12em; font-weight: 700; text-transform: uppercase; color: var(--tint-pink-fg); }
+        .jg-lead { color: var(--text-muted); line-height: 1.7; }
+        .jg-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 1.3rem 1.5rem; margin-bottom: 1.1rem; }
         .jg-card h2 { font-size: 1.3rem; margin: 0.2rem 0 0; }
         .jg-card h3 { font-size: 1.02rem; margin: 0 0 0.3rem; }
-        .jg-kicker { font-size: 0.78rem; font-weight: 700; color: var(--primary, #0f766e); margin-bottom: 0.2rem; }
+        .jg-kicker { font-size: 0.78rem; font-weight: 700; color: var(--primary); margin-bottom: 0.2rem; }
         .jg-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 1rem 0; }
-        .jg-ba-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; border: 1px solid var(--border,#e5e7eb); border-radius: 10px; padding: 8px 12px; background: var(--bg-muted,#f8fafc); }
+        .jg-ba-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-2); }
         .jg-val { font-family: ui-monospace, Consolas, monospace; font-size: 0.88rem; }
-        .jg-val.dirty { color: #b45309; }
-        .jg-val.healed { color: #15803d; font-weight: 600; }
-        .jg-tag { display: block; font-family: inherit; font-size: 0.66rem; color: var(--text-muted,#94a3b8); margin-top: 2px; font-weight: 600; }
-        .jg-arrow { color: var(--primary,#0f766e); font-size: 1.1rem; }
-        .jg-mock { border: 1.5px dashed color-mix(in srgb, var(--primary,#0f766e) 45%, var(--border,#cbd5e1)); border-radius: 10px; padding: 0.9rem 1.1rem; margin: 1rem 0; background: var(--bg-muted,#f8fafc); display: grid; gap: 0.6rem; }
+        .jg-val.dirty { color: var(--warning); }
+        .jg-val.healed { color: var(--success); font-weight: 600; }
+        .jg-tag { display: block; font-family: inherit; font-size: 0.66rem; color: var(--text-muted); margin-top: 2px; font-weight: 600; }
+        .jg-arrow { color: var(--primary); font-size: 1.1rem; }
+        .jg-mock { border: 1.5px dashed color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 10px; padding: 0.9rem 1.1rem; margin: 1rem 0; background: var(--surface-2); display: grid; gap: 0.6rem; }
         .jg-mock-title { font-weight: 700; font-size: 0.92rem; }
         .jg-mock-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.85rem; }
-        .jg-mchip { font-size: 0.75rem; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border,#e5e7eb); }
-        .jg-mchip.gray { color: var(--text-muted,#475569); background: var(--bg,#fff); }
-        .jg-mchip.blue { color: #0369a1; background: #e0f2fe; border-color: #bae6fd; }
-        .jg-mchip.green { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
-        .jg-mbtn { font-size: 0.8rem; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--border,#cbd5e1); background: var(--bg,#fff); color: var(--text-muted,#475569); }
-        .jg-mbtn.on { background: #dbeafe; color: #1d4ed8; font-weight: 700; border-color: #bfdbfe; }
-        .jg-mbtn.run { background: var(--primary,#0f766e); color: #fff; font-weight: 700; border-color: var(--primary,#0f766e); }
-        .jg-callout { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; background: #fbeafc; border: 1px solid #edc8f2; border-radius: 10px; }
-        .jg-mark { color: #a21caf; font-weight: 800; }
+        .jg-mchip { font-size: 0.75rem; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); }
+        .jg-mchip.gray { color: var(--tint-neutral-fg); background: var(--tint-neutral-bg); }
+        .jg-mchip.blue { color: var(--tint-sky-fg); background: var(--tint-sky-bg); border-color: var(--tint-sky-bd); }
+        .jg-mchip.green { color: var(--tint-good-fg); background: var(--tint-good-bg); border-color: var(--tint-good-bd); }
+        .jg-mbtn { font-size: 0.8rem; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); }
+        .jg-mbtn.on { background: var(--tint-sky-bg); color: var(--tint-sky-fg); font-weight: 700; border-color: var(--tint-sky-bd); }
+        .jg-mbtn.run { background: var(--fill-brand); color: var(--on-fill); font-weight: 700; border-color: var(--fill-brand); }
+        .jg-callout { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; background: var(--tint-pink-bg); border: 1px solid var(--tint-pink-bd); border-radius: 10px; }
+        .jg-mark { color: var(--tint-pink-fg); font-weight: 800; }
         @media (max-width: 620px) { .jg-ba { grid-template-columns: 1fr; } }
       `}</style>
     </div>

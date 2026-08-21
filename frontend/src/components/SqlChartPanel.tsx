@@ -102,6 +102,55 @@ function fmtCompact(n: number): string {
   return fmtNum(n);
 }
 
+/**
+ * The text a screen reader gets instead of the picture (WCAG 1.1.1).
+ *
+ * "תרשים עמודות" describes the shape, not the content — it tells a blind user
+ * nothing they could not have guessed. This names the series, the number of
+ * categories, and the range, which is the summary a sighted user takes from a
+ * glance. The full numbers live in the data table beside the chart.
+ */
+function chartAlt(kind: string, prep: Prepared | null): string {
+  if (!prep) return `תרשים ${kind}`;
+  const flat = prep.series.flat().filter((v): v is number => v != null);
+  const lo = flat.length ? Math.min(...flat) : 0;
+  const hi = flat.length ? Math.max(...flat) : 0;
+  const series = prep.names.join(", ");
+  return (
+    `תרשים ${kind}. ${prep.names.length > 1 ? `סדרות: ${series}` : series}. ` +
+    `${prep.labels.length} קטגוריות` +
+    (prep.truncated ? ` מתוך ${prep.totalCats}` : "") +
+    `. טווח הערכים ${fmtNum(lo)} עד ${fmtNum(hi)}. הנתונים המלאים בטבלה שמתחת לתרשים.`
+  );
+}
+
+/** Text alternative for the pie/donut: the slices, biggest first. */
+function pieAlt(entries: { label: string; value: number }[], donut?: boolean): string {
+  const total = entries.reduce((n, e) => n + e.value, 0) || 1;
+  const top = [...entries]
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5)
+    .map((e) => `${e.label} ${((e.value / total) * 100).toFixed(1)}%`)
+    .join(", ");
+  return (
+    `תרשים ${donut ? "טבעת" : "עוגה"} עם ${entries.length} פלחים. ` +
+    `הגדולים: ${top}${entries.length > 5 ? ", ועוד" : ""}. ` +
+    "הנתונים המלאים בטבלה שמתחת לתרשים."
+  );
+}
+
+/** Text alternative for the scatter: how many points, over which columns. */
+function scatterAlt(pts: { x: number | null }[], xCol: string, yCols: string[]): string {
+  const xs = pts.map((p) => p.x).filter((v): v is number => v != null);
+  const lo = xs.length ? Math.min(...xs) : 0;
+  const hi = xs.length ? Math.max(...xs) : 0;
+  return (
+    `תרשים פיזור. ציר X: ${xCol} (${fmtNum(lo)} עד ${fmtNum(hi)}). ` +
+    `ציר Y: ${yCols.join(", ")}. ${pts.length} נקודות. ` +
+    "הנתונים המלאים בטבלה שמתחת לתרשים."
+  );
+}
+
 // ── data preparation (aggregate → sort → top-N) ─────────────────────────────
 
 interface Prepared {
@@ -588,7 +637,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   return (
     <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
       <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
-        <strong style={{ fontSize: "0.95rem" }}>📊 תרשימים</strong>
+        <strong style={{ fontSize: "0.95rem" }}><span aria-hidden="true">📊</span> תרשימים</strong>
         <span className="text-sm text-muted">הציגו את תוצאת השאילתה כתרשים — או לחצו "אוטומטי" ונבחר בשבילכם</span>
       </div>
 
@@ -600,11 +649,11 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
           title="בחירה אוטומטית של סוג התרשים המתאים לתוצאה"
           style={{
             padding: "0.35rem 0.8rem", borderRadius: 999, fontSize: "0.84rem", fontWeight: 700,
-            border: "1px solid var(--primary, #0f766e)", background: "var(--primary, #0f766e)",
-            color: "white", cursor: "pointer",
+            border: "1px solid var(--primary, var(--tint-teal-fg))", background: "var(--fill-brand)",
+            color: "var(--on-fill-brand)", cursor: "pointer",
           }}
         >
-          ✨ אוטומטי
+          <span aria-hidden="true">✨</span> אוטומטי
         </button>
         {REQS.map((r) => {
           const ok = suggestions.includes(r.type);
@@ -622,8 +671,8 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
               style={{
                 padding: "0.35rem 0.7rem", borderRadius: 999, fontSize: "0.84rem",
                 fontWeight: active ? 700 : 500,
-                border: active ? "2px solid var(--primary, #0f766e)" : "1px solid var(--border, #d1d5db)",
-                background: active ? "var(--bg-muted, #eef2f5)" : "var(--bg, #fff)",
+                border: active ? "2px solid var(--primary, #0C5E58)" : "1px solid var(--border, #d1d5db)",
+                background: active ? "var(--surface-2)" : "var(--bg, #fff)",
                 color: ok ? "var(--text)" : "var(--text-muted)",
                 cursor: ok ? "pointer" : "not-allowed", opacity: ok ? 1 : 0.55,
               }}
@@ -639,10 +688,10 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
             title="סגירת התרשים"
             style={{
               marginInlineStart: "auto", fontSize: "0.78rem", padding: "0.25rem 0.6rem", borderRadius: 4,
-              border: "1px solid var(--border, #d1d5db)", background: "none", color: "var(--text-muted)", cursor: "pointer",
+              border: "1px solid var(--border, var(--border))", background: "none", color: "var(--text-muted)", cursor: "pointer",
             }}
           >
-            ✕ סגירה
+            <span aria-hidden="true">✕</span> סגירה
           </button>
         )}
       </div>
@@ -675,7 +724,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                   // Each mode's fill default (see applyDefaults). Still a knob.
                   setFillOpacity(isNum ? 0.6 : 0.2);
                 }}
-                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
               >
                 <option value="">צבע אחיד</option>
                 {mapCatOptions.length > 0 && (
@@ -697,7 +746,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                   value={scaleMode}
                   onChange={(e) => setScaleMode(e.target.value as ScaleMode)}
                   title="קווי מותח בין המינימום למקסימום. לפי התפלגות נותן לכל גוון אותו מספר שורות — קריא יותר כשערך אחד חריג ומשטח את כל השאר."
-                  style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                  style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                 >
                   <option value="linear">קווי (מינימום–מקסימום)</option>
                   <option value="quantile">לפי התפלגות</option>
@@ -709,7 +758,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
               <select
                 value={basemap}
                 onChange={(e) => setBasemap(e.target.value as Basemap)}
-                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
               >
                 <option value="streets">מפת רחובות</option>
                 <option value="satellite">תצלום לוויין</option>
@@ -725,16 +774,16 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
               onClick={() => setShowSettings((v) => !v)}
               style={{
                 fontSize: "0.78rem", padding: "0.25rem 0.6rem", borderRadius: 4, cursor: "pointer",
-                border: "1px solid var(--border, #d1d5db)",
-                background: showSettings ? "var(--bg-muted, #eef2f5)" : "none", color: "var(--text)",
+                border: "1px solid var(--border, var(--border))",
+                background: showSettings ? "var(--surface-2)" : "none", color: "var(--text)",
               }}
             >
-              ⚙ הגדרות {showSettings ? "▲" : "▼"}
+              <span aria-hidden="true">⚙</span> הגדרות {showSettings ? "▲" : "▼"}
             </button>
           </div>
 
           {showSettings && (
-            <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem", marginBottom: "0.7rem" }}>
+            <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem", marginBottom: "0.7rem" }}>
               <div className="flex" style={{ gap: "1.2rem", flexWrap: "wrap", alignItems: "center" }}>
                 <label className="text-sm text-muted">
                   אטימות מילוי: {Math.round(fillOpacity * 100)}%{" "}
@@ -766,7 +815,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                           type="color"
                           value={current}
                           onChange={(e) => setColorOverrides((p) => ({ ...p, [name]: e.target.value }))}
-                          style={{ width: 30, height: 24, padding: 0, border: "1px solid var(--border,#d1d5db)", borderRadius: 4, cursor: "pointer" }}
+                          style={{ width: 30, height: 24, padding: 0, border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer" }}
                           aria-label={`צבע ל-${name === "__map" ? "כל הצורות" : name}`}
                         />
                         {name === "__map" ? "כל הצורות" : name}
@@ -838,7 +887,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                     : prev);
                   setXCol(nx);
                 }}
-                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
               >
                 {(type === "scatter" ? numCols : type === "pie" ? (catCols.length ? catCols : columns) : columns).map((c) => (
                   <option key={c} value={c}>{c}</option>
@@ -854,7 +903,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                 <select
                   value={activeY[0] || ""}
                   onChange={(e) => setYCols([e.target.value])}
-                  style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                  style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                 >
                   {yOptions.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
@@ -885,17 +934,17 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
               onClick={() => setShowSettings((s) => !s)}
               style={{
                 marginInlineStart: "auto", fontSize: "0.8rem", padding: "0.25rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--border, #d1d5db)", background: showSettings ? "var(--bg-muted, #eef2f5)" : "none",
+                border: "1px solid var(--border, var(--border))", background: showSettings ? "var(--surface-2)" : "none",
                 color: "var(--text)", cursor: "pointer",
               }}
             >
-              ⚙ הגדרות {showSettings ? "▲" : "▼"}
+              <span aria-hidden="true">⚙</span> הגדרות {showSettings ? "▲" : "▼"}
             </button>
           </div>
 
           {/* Settings drawer */}
           {showSettings && hasSeries && (
-            <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.9rem", margin: "0 0 0.8rem", background: "var(--bg-muted, #f8fafc)" }}>
+            <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.9rem", margin: "0 0 0.8rem", background: "var(--surface-2)" }}>
               <div className="flex" style={{ gap: "0.9rem 1.4rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.6rem" }}>
                 <label className="text-sm text-muted">
                   כותרת:{" "}
@@ -904,7 +953,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="כותרת לתרשים (לא חובה)"
-                    style={{ padding: "0.25rem 0.45rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem", minWidth: 200 }}
+                    style={{ padding: "0.25rem 0.45rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem", minWidth: 200 }}
                   />
                 </label>
 
@@ -914,7 +963,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                     <select
                       value={agg}
                       onChange={(e) => setAgg(e.target.value as AggMode)}
-                      style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                      style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                     >
                       <option value="sum">סכום</option>
                       <option value="avg">ממוצע</option>
@@ -932,7 +981,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                     <select
                       value={sort}
                       onChange={(e) => setSort(e.target.value as SortMode)}
-                      style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                      style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                     >
                       <option value="result">כסדר התוצאה</option>
                       <option value="value_desc">ערך — מהגדול לקטן</option>
@@ -949,7 +998,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                       <select
                         value={topN}
                         onChange={(e) => setTopN(Number(e.target.value))}
-                        style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                        style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                       >
                         {[10, 20, 30, 50].map((n) => <option key={n} value={n}>{n} קטגוריות</option>)}
                         <option value={0}>הכל (עד 100)</option>
@@ -967,7 +1016,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                         <select
                           value={mode}
                           onChange={(e) => setMode(e.target.value as BarMode)}
-                          style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem" }}
+                          style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem" }}
                         >
                           <option value="group">מקובץ (זו לצד זו)</option>
                           <option value="stack">מוערם</option>
@@ -1017,7 +1066,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                         value={colorFor(name, i)}
                         onChange={(e) => setColor(name, e.target.value)}
                         aria-label={`צבע ${name}`}
-                        style={{ width: 34, height: 24, border: "1px solid var(--border, #d1d5db)", borderRadius: 4, padding: 0, cursor: "pointer" }}
+                        style={{ width: 34, height: 24, border: "1px solid var(--border, var(--border))", borderRadius: 4, padding: 0, cursor: "pointer" }}
                       />
                       <code style={{ fontSize: "0.82rem" }}>{name}</code>
                       {colorOverrides[name] && (
@@ -1032,7 +1081,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                           <select
                             value={axisOf[name] || "left"}
                             onChange={(e) => setAxisOf((p) => ({ ...p, [name]: e.target.value as Axis }))}
-                            style={{ padding: "0.15rem 0.35rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.8rem" }}
+                            style={{ padding: "0.15rem 0.35rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.8rem" }}
                           >
                             <option value="left">שמאל</option>
                             <option value="right">ימין</option>
@@ -1051,7 +1100,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                         value={colorFor(s.label, i)}
                         onChange={(e) => setColor(s.label, e.target.value)}
                         aria-label={`צבע ${s.label}`}
-                        style={{ width: 30, height: 22, border: "1px solid var(--border, #d1d5db)", borderRadius: 4, padding: 0, cursor: "pointer" }}
+                        style={{ width: 30, height: 22, border: "1px solid var(--border, var(--border))", borderRadius: 4, padding: 0, cursor: "pointer" }}
                       />
                       <span style={{ fontSize: "0.8rem", color: "var(--text)" }}>{s.label}</span>
                     </div>
@@ -1067,16 +1116,16 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                 {title.trim() && <strong style={{ fontSize: "0.95rem" }}>{title.trim()}</strong>}
                 <span style={{ marginInlineStart: "auto", display: "inline-flex", gap: "0.4rem" }}>
                   <button type="button" onClick={() => doExport("png")} title="הורדת התרשים כתמונת PNG"
-                    style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", background: "none", color: "var(--text-muted)", cursor: "pointer" }}>
+                    style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", color: "var(--text-muted)", cursor: "pointer" }}>
                     &#8595; PNG
                   </button>
                   <button type="button" onClick={() => doExport("svg")} title="הורדת התרשים כקובץ SVG (וקטורי)"
-                    style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", background: "none", color: "var(--text-muted)", cursor: "pointer" }}>
+                    style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", background: "none", color: "var(--text-muted)", cursor: "pointer" }}>
                     &#8595; SVG
                   </button>
                 </span>
               </div>
-              <div ref={chartWrapRef} style={{ direction: "ltr", overflowX: "auto" }}>
+              <div ref={chartWrapRef} tabIndex={0} role="region" aria-label="אזור התרשים" className="scroll-region" style={{ direction: "ltr", overflowX: "auto" }}>
                 {type === "bar" && prep && (
                   <BarChart prep={prep} colors={seriesColors} mode={mode} axes={seriesAxes} dualY={dualY && dualYAllowed} showVals={showVals} />
                 )}
@@ -1097,6 +1146,51 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                     labelCol={catCols[0] || null} trend={trend} />
                 )}
               </div>
+              {/* The picture's text alternative, and useful to everyone: the
+                  numbers behind it, in a real table. WCAG 1.1.1 is satisfied by
+                  the aria-label alone only for a simple image — a chart is
+                  complex content, and complex content needs the data. */}
+              {prep && prep.labels.length > 0 && (
+                <details style={{ marginTop: "0.5rem" }}>
+                  <summary style={{ cursor: "pointer", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                    הצגת נתוני התרשים כטבלה
+                  </summary>
+                  <div tabIndex={0} role="region" aria-label="נתוני התרשים" className="scroll-region"
+                    style={{ overflowX: "auto", maxHeight: 320, marginTop: "0.4rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                      <caption className="sr-only">
+                        {`נתוני התרשים — ${prep.labels.length} קטגוריות, ${prep.names.length} סדרות`}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.5rem", borderBottom: "1px solid var(--border)" }}>
+                            {xCol}
+                          </th>
+                          {prep.names.map((n) => (
+                            <th scope="col" key={n} style={{ textAlign: "start", padding: "0.3rem 0.5rem", borderBottom: "1px solid var(--border)" }}>
+                              {n}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prep.labels.map((lab, i) => (
+                          <tr key={lab + i}>
+                            <th scope="row" style={{ textAlign: "start", fontWeight: 400, padding: "0.25rem 0.5rem", borderBottom: "1px solid var(--border)" }}>
+                              {lab}
+                            </th>
+                            {prep.names.map((n, sIdx) => (
+                              <td key={n} style={{ padding: "0.25rem 0.5rem", borderBottom: "1px solid var(--border)", fontVariantNumeric: "tabular-nums" }}>
+                                {prep.series[sIdx]?.[i] == null ? "—" : fmtNum(prep.series[sIdx][i] as number)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
               {prep && prep.truncated && (
                 <div className="text-sm text-muted" style={{ textAlign: "center", marginTop: "0.3rem" }}>
                   מוצגות {prep.labels.length} קטגוריות מתוך {prep.totalCats.toLocaleString()} — אפשר לשנות ב"הגדרות".
@@ -1115,7 +1209,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
 const INK = "var(--text, #111827)";
 const MUTED = "var(--text-muted, #6b7280)";
 const GRID = "var(--border, #e5e7eb)";
-const AXISLINE = "var(--text-muted, #9ca3af)";
+const AXISLINE = "var(--text-muted, #6C7079)";
 const SURFACE = "var(--bg, #ffffff)";
 const W = 760, H = 400;
 
@@ -1217,7 +1311,7 @@ function BarChart({ prep, colors, mode, axes, dualY, showVals }: {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים עמודות">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={chartAlt("עמודות", prep)}>
         {left.ticks.map((t) => (
           <g key={t}>
             <line x1={m.left} x2={W - m.right} y1={yOfIn(left, t)} y2={yOfIn(left, t)} stroke={GRID} strokeWidth={1} />
@@ -1335,7 +1429,7 @@ function BarHChart({ prep, colors, mode, showVals }: {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${height}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים עמודות אופקיות">
+      <svg viewBox={`0 0 ${W} ${height}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={chartAlt("עמודות אופקיות", prep)}>
         {scale.ticks.map((t) => (
           <g key={t}>
             <line x1={xOf(t)} x2={xOf(t)} y1={m.top} y2={height - m.bottom} stroke={GRID} strokeWidth={1} />
@@ -1423,7 +1517,7 @@ function LineChart({ prep, colors, axes, dualY }: {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים קו">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={chartAlt("קו", prep)}>
         {left.ticks.map((t) => (
           <g key={t}>
             <line x1={m.left} x2={W - m.right} y1={yOfIn(left, t)} y2={yOfIn(left, t)} stroke={GRID} strokeWidth={1} />
@@ -1498,7 +1592,7 @@ function AreaChart({ prep, colors }: { prep: Prepared; colors: string[] }) {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים שטח נערם">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={chartAlt("שטח נערם", prep)}>
         {scale.ticks.map((t) => (
           <g key={t}>
             <line x1={m.left} x2={W - m.right} y1={yOf(t)} y2={yOf(t)} stroke={GRID} strokeWidth={1} />
@@ -1620,7 +1714,7 @@ function PieChart({ entries, colorFor, donut }: {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים עוגה">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={pieAlt(entries, donut)}>
         {arcs.map((a, i) => (
           <path key={i} d={a.path} fill={a.color} stroke={SURFACE} strokeWidth={2}>
             <title>{`${a.label}: ${fmtNum(a.value)} (${(a.frac * 100).toFixed(1)}%)`}</title>
@@ -1751,7 +1845,7 @@ function ScatterChart({ rows, xCol, yCols, colors, labelCol, trend }: {
 
   return (
     <>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label="תרשים פיזור">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, fontFamily: "system-ui, sans-serif" }} role="img" aria-label={scatterAlt(pts, xCol, yCols)}>
         {yScale.ticks.map((t) => (
           <g key={`y${t}`}>
             <line x1={m.left} x2={W - m.right} y1={yOf(t)} y2={yOf(t)} stroke={GRID} strokeWidth={1} />
@@ -1820,7 +1914,7 @@ function StatTiles({ row, numCols, title }: { row: Row; numCols: string[]; title
           const v = toNum(row[c]);
           return (
             <div key={c} style={{
-              border: "1px solid var(--border, #e5e7eb)", borderRadius: 8,
+              border: "1px solid var(--border, var(--border))", borderRadius: 8,
               padding: "0.8rem 1.4rem", minWidth: 150, textAlign: "center",
             }}>
               <div className="text-sm text-muted" style={{ marginBottom: "0.25rem" }}>{c}</div>

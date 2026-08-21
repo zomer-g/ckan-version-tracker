@@ -145,9 +145,9 @@ export default function OcoiSearch({
                   gap: "0.6rem",
                   alignItems: "center",
                   padding: "0.6rem 0.75rem",
-                  border: "1px solid var(--border, #e2e8f0)",
+                  border: "1px solid var(--border, var(--border))",
                   borderRadius: 8,
-                  background: "var(--card-bg, #fff)",
+                  background: "var(--surface)",
                   cursor: "pointer",
                   fontSize: "0.95rem",
                 }}

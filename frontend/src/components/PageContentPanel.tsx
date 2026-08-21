@@ -138,10 +138,10 @@ export default function PageContentPanel() {
   return (
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>📝 טקסטים של עמודים</h2>
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">📝</span> טקסטים של עמודים</h2>
         <a href={pageDef.path} target="_blank" rel="noopener noreferrer" className="text-sm" style={{ color: "var(--primary, #2563eb)" }}>
           פתח את עמוד {pageDef.label} ↗
-        </a>
+        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       </div>
 
       <div className="text-sm" style={{ marginTop: "0.5rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
@@ -183,8 +183,8 @@ export default function PageContentPanel() {
         </span>
       </div>
 
-      {err && <div className="text-sm" style={{ color: "#b91c1c", marginBottom: "0.5rem" }}>{err}</div>}
-      {toast && <div className="text-sm" style={{ color: "#065f46", marginBottom: "0.5rem" }}>{toast}</div>}
+      {err && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{err}</div>}
+      {toast && <div className="text-sm" style={{ color: "var(--success)", marginBottom: "0.5rem" }}>{toast}</div>}
 
       {loading ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>טוען…</div>
@@ -207,7 +207,7 @@ export default function PageContentPanel() {
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.35rem", flexWrap: "wrap" }}>
                   <code dir="ltr" style={{ fontSize: "0.78rem", fontWeight: 600 }}>{k}</code>
                   {overridden && (
-                    <span style={{ padding: "0.05rem 0.45rem", borderRadius: "999px", fontSize: "0.68rem", fontWeight: 600, background: "#eef2ff", color: "#3730a3" }}>
+                    <span style={{ padding: "0.05rem 0.45rem", borderRadius: "999px", fontSize: "0.68rem", fontWeight: 600, background: "var(--tint-indigo-bg)", color: "var(--tint-indigo-fg)" }}>
                       נערך
                     </span>
                   )}
@@ -215,6 +215,7 @@ export default function PageContentPanel() {
                 <textarea
                   value={effective(k)}
                   onChange={(e) => onChange(k, e.target.value)}
+                  aria-label={`טקסט המפתח ${k}`}
                   dir={isEn ? "ltr" : "rtl"}
                   spellCheck={false}
                   style={{

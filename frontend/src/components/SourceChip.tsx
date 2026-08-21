@@ -30,8 +30,14 @@ export default function SourceChip({
     <Link
       to={`/sources/${badge.id}`}
       title={`כל המאגרים מ־${badge.label}`}
+      // A standalone chip, not a link inside a sentence, so WCAG 2.5.5 gives it
+      // no exemption — .source-chip carries the 44px minimum. The pill still
+      // LOOKS small: the extra size is transparent padding around it.
+      className="source-chip"
       style={{
-        display: "inline-block",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
         padding: pad,
         borderRadius: "9999px",
         fontSize,

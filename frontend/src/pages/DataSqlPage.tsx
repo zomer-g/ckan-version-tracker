@@ -16,6 +16,9 @@ import FilterBuilder from "../components/FilterBuilder";
 import ProfilePanel from "../components/ProfilePanel";
 import JoinBuilder from "../components/JoinBuilder";
 import DataTabs from "../components/DataTabs";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { PlainSummary } from "../components/a11y";
+import Abbr from "../components/a11y/Abbr";
 import SqlEditor, {
   SqlEditorHandle,
   SqlHelpNote,
@@ -66,20 +69,20 @@ interface Badge { id: string; label: string; bg: string; fg: string; accent: str
 // (committee-protocol datasets), which is a different thing with the same name.
 const KNESSET_DB_BADGE: Badge = {
   id: "knesset-db", label: "מסד הנתונים של הכנסת",
-  bg: "#e0e7ff", fg: "#3730a3", accent: "#4f46e5",
+  bg: "var(--tint-indigo-bg)", fg: "var(--tint-indigo-fg)", accent: "var(--tint-indigo-bd)",
 };
 
 // Admin-imported מידע לעם tables (kind "odata"): PROCESSED data, not an original
 // public source — a distinct amber source group so it never reads as one.
 const ODATA_BADGE: Badge = {
   id: "odata", label: "מידע לעם (מידע מעובד)",
-  bg: "#ffedd5", fg: "#9a3412", accent: "#ea580c",
+  bg: "var(--tint-warn-bg)", fg: "var(--tint-warn-fg)", accent: "var(--tint-warn-bd)",
 };
 
 // יומן לעם (kind "ocal"): live foreign-table view of the ocal DB — also PROCESSED.
 const OCAL_BADGE: Badge = {
   id: "ocal", label: "יומן לעם (מידע מעובד)",
-  bg: "#fef3c7", fg: "#92400e", accent: "#d97706",
+  bg: "var(--tint-note-bg)", fg: "var(--tint-note-fg)", accent: "var(--tint-note-bd)",
 };
 
 // גרסאות לעם (kind "over"): OVER's OWN processed index tables (settlement /
@@ -87,7 +90,7 @@ const OCAL_BADGE: Badge = {
 // JOINed against the datasets. Also PROCESSED, not an original public source.
 const OVER_BADGE: Badge = {
   id: "over", label: "גרסאות לעם (אינדקסים מעובדים)",
-  bg: "#fae8ff", fg: "#86198f", accent: "#c026d3",
+  bg: "var(--tint-pink-bg)", fg: "var(--tint-pink-fg)", accent: "var(--tint-pink-bd)",
 };
 
 // The processed (non-official-source) badges, rendered below the divider.
@@ -117,7 +120,7 @@ function SpatialMark({ size = 15 }: { size?: number }) {
       style={{
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         width: size + 6, height: size + 6, borderRadius: 4, flex: "0 0 auto",
-        background: "#dcfce7", color: "#15803d", cursor: "help",
+        background: "var(--tint-good-bg)", color: "var(--success)", cursor: "help",
         verticalAlign: "middle",
       }}
     >
@@ -172,19 +175,19 @@ function FieldMark({ facet, size = 15 }: { facet: FieldFacet; size?: number }) {
 }
 
 const FIELD_FACETS: FieldFacet[] = [
-  { key: "has_locality", short: "יישוב", bg: "#fef3c7", fg: "#b45309",
+  { key: "has_locality", short: "יישוב", bg: "var(--tint-warn-bg)", fg: "var(--tint-warn-fg)",
     title: "כולל עמודת שם יישוב — ניתן ל-JOIN לפי יישוב (אוכלוסייה, שלטון מקומי, בחירות).",
     aria: "מאגר עם עמודת שם יישוב",
     icon: (<><path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z" /><circle cx="12" cy="11" r="2.2" /></>) },
-  { key: "has_authority", short: "רשות", bg: "#dbeafe", fg: "#1d4ed8",
+  { key: "has_authority", short: "רשות", bg: "var(--tint-sky-bg)", fg: "var(--tint-sky-fg)",
     title: "כולל עמודת רשות מקומית — ניתן ל-JOIN לפי רשות (תקציבים, ביקורת, מצב השלטון המקומי).",
     aria: "מאגר עם עמודת רשות מקומית",
     icon: (<><path d="M3 21h18M5 21V8l7-4 7 4v13" /><path d="M9 21v-5h6v5" /></>) },
-  { key: "has_ministry", short: "משרד", bg: "#ede9fe", fg: "#6d28d9",
+  { key: "has_ministry", short: "משרד", bg: "var(--tint-violet-bg)", fg: "var(--tint-violet-fg)",
     title: "כולל עמודת משרד ממשלתי — ניתן ל-JOIN לפי משרד.",
     aria: "מאגר עם עמודת משרד ממשלתי",
     icon: (<><path d="M4 21h16M4 10l8-6 8 6M6 10v11M10 10v11M14 10v11M18 10v11" /></>) },
-  { key: "has_date", short: "תאריך", bg: "#ccfbf1", fg: "#0f766e",
+  { key: "has_date", short: "תאריך", bg: "var(--tint-teal-bg)", fg: "var(--tint-teal-fg)",
     title: "כולל עמודת תאריך — ניתן לנתח לאורך זמן (מגמות, סדרות עתיות).",
     aria: "מאגר עם עמודת תאריך",
     icon: (<><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></>) },
@@ -204,7 +207,7 @@ interface FilterFacet {
 }
 
 const FILTER_FACETS: FilterFacet[] = [
-  { key: "__spatial", short: "מרחבי", title: SPATIAL_TITLE, bg: "#dcfce7", fg: "#15803d",
+  { key: "__spatial", short: "מרחבי", title: SPATIAL_TITLE, bg: "var(--tint-good-bg)", fg: "var(--tint-good-fg)",
     test: hasGeometry, mark: (s) => <SpatialMark size={s} /> },
   ...FIELD_FACETS.map((f): FilterFacet => ({
     key: f.key, short: f.short, title: f.title, bg: f.bg, fg: f.fg,
@@ -807,6 +810,7 @@ const EXAMPLE_GROUPS = ["צעדים ראשונים", "סינון, חיפוש ו�
                         "שאילתות מרחביות (מפה)", "הצלבה לפי יישוב", "מרחב על מאגרים שאינם מפות"];
 
 export default function DataSqlPage() {
+  useDocumentTitle("מאגר הנתונים — ממשק SQL");
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [tables, setTables] = useState<CatalogTable[]>([]);
@@ -1179,6 +1183,10 @@ export default function DataSqlPage() {
       </div>
 
       {/* SQL console */}
+      <PlainSummary>
+        העמוד הזה נותן לשאול שאלות על הנתונים של האתר. אפשר לבחור טבלה מהרשימה ולראות דוגמה מהתוכן שלה, ואפשר לכתוב שאילתה בשפת <Abbr>SQL</Abbr>. אי אפשר לשנות או למחוק כלום — הכול לקריאה בלבד. אם לא ברור מאיפה להתחיל, לחצו על אחת הדוגמאות המוכנות והיא תיכתב בשבילכם.
+      </PlainSummary>
+
       <div className="card" style={{ padding: "1rem", marginBottom: "1rem" }}>
         <div className="flex" style={{ gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
           <strong style={{ fontSize: "0.95rem" }}>{"</>"} קונסולת SQL</strong>
@@ -1195,7 +1203,7 @@ export default function DataSqlPage() {
               const ex = EXAMPLES.find((x) => x.label === e.target.value);
               if (ex) { setSqlText(ex.sql); setSqlResult(null); setSqlError(null); placeholderRef.current = false; }
             }}
-            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
+            style={{ marginInlineStart: "auto", padding: "0.3rem 0.5rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.82rem", maxWidth: 260 }}
           >
             <option value="">דוגמאות…</option>
             {EXAMPLE_GROUPS.map((g) => (
@@ -1213,12 +1221,13 @@ export default function DataSqlPage() {
             unrelated datasets. Its retrieval now powers the guided explorer,
             where a person picks from a shortlist instead. */}
         <div className="text-sm" style={{ marginBottom: "0.6rem", padding: "0.45rem 0.7rem",
-                                          background: "var(--bg-muted, #f8fafc)", borderRadius: 6 }}>
+                                          background: "var(--surface-2)", borderRadius: 6 }}>
           לא בטוחים באיזה מאגר להשתמש?{" "}
-          <Link to="/data/explore" style={{ color: "var(--primary, #0f766e)", fontWeight: 600 }}>
+          <Link to="/data/explore" style={{ color: "var(--primary, #0C5E58)", fontWeight: 600 }}>
             תארו מה אתם מחפשים ונציע מאגרים →
           </Link>
         </div>
+        <h2 className="sr-only">כתיבת שאילתה</h2>
         <SqlHelpNote casing="preserve" />
         <SchemaReference
           tables={sqlSchemaTables}
@@ -1238,7 +1247,7 @@ export default function DataSqlPage() {
             title={sqlCooldown ? "המתנה קצרה בין הרצות (מניעת חסימת קצב)" : undefined}
             style={{
               padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
-              background: "var(--primary, #0f766e)", color: "white",
+              background: "var(--fill-brand)", color: "var(--on-fill-brand)",
               cursor: (sqlRunning || sqlCooldown) ? "wait" : "pointer",
               opacity: (sqlRunning || sqlCooldown) ? 0.7 : 1,
             }}
@@ -1253,11 +1262,11 @@ export default function DataSqlPage() {
               title="ניקוי העורך, התוצאה והתרשים — והסרת השאילתה מכתובת העמוד"
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--border, #d1d5db)", background: "none",
+                border: "1px solid var(--border, var(--border))", background: "none",
                 color: "var(--text-muted)", cursor: "pointer",
               }}
             >
-              ✕ נקה
+              <span aria-hidden="true">✕</span> נקה
             </button>
           )}
           {sqlText.trim() && (
@@ -1267,8 +1276,8 @@ export default function DataSqlPage() {
               title="העתקת קישור שפותח את הקונסולה עם השאילתה הזו (וגם עם הגדרות המפה/התרשים)"
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--border, #d1d5db)", background: "none",
-                color: shared === "failed" ? "var(--danger, #b91c1c)" : "var(--text-muted)",
+                border: "1px solid var(--border, var(--border))", background: "none",
+                color: shared === "failed" ? "var(--danger, #992C2C)" : "var(--text-muted)",
                 cursor: "pointer",
               }}
             >
@@ -1284,8 +1293,8 @@ export default function DataSqlPage() {
               onClick={undoClear}
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", borderRadius: 4,
-                border: "1px solid var(--primary, #0f766e)", background: "none",
-                color: "var(--primary, #0f766e)", cursor: "pointer",
+                border: "1px solid var(--primary, var(--tint-teal-fg))", background: "none",
+                color: "var(--primary, #0C5E58)", cursor: "pointer",
               }}
             >
               ↩ החזר את השאילתה
@@ -1302,7 +1311,7 @@ export default function DataSqlPage() {
               onClick={() => downloadRowsCsv("over_query.csv", sqlResult.columns, sqlResult.rows)}
               style={{
                 fontSize: "0.82rem", padding: "0.3rem 0.7rem", background: "none",
-                color: "var(--primary, #0f766e)", border: "1px solid var(--primary, #0f766e)",
+                color: "var(--primary, #0C5E58)", border: "1px solid var(--primary, var(--tint-teal-fg))",
                 borderRadius: 4, cursor: "pointer",
               }}
               title="הורדת התוצאה המוצגת כ-CSV"
@@ -1311,7 +1320,7 @@ export default function DataSqlPage() {
             </button>
           )}
           {sqlText.trim() && (
-            <a
+            <a className="card-export-link"
               href={dataCatalog.exportUrl(sqlText)}
               style={{ fontSize: "0.82rem", color: "var(--text-muted)", textDecoration: "underline" }}
               title="הרצת השאילתה בשרת וייצוא מלא (עד 200,000 שורות)"
@@ -1350,23 +1359,30 @@ export default function DataSqlPage() {
           </div>
         )}
         {sqlError && (
-          <div style={{ marginTop: "0.6rem", color: "var(--danger, #dc2626)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+          <div style={{ marginTop: "0.6rem", color: "var(--danger, #992C2C)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
             {sqlError}
           </div>
         )}
         {sqlResult && !sqlError && (
-          <div style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 420 }}>
+          <>
+          <h2 className="sr-only">
+            {`תוצאות השאילתה — ${sqlResult.rows.length} שורות, ${sqlResult.columns.length} עמודות`}
+          </h2>
+          <div tabIndex={0} role="region" aria-label="תוצאות השאילתה" className="scroll-region" style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 420 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
+              <caption className="sr-only">
+                {`תוצאות השאילתה — ${sqlResult.rows.length} שורות, ${sqlResult.columns.length} עמודות`}
+              </caption>
               <thead>
                 <tr>
                   {sqlResult.columns.map((c) => (
-                    <th key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>{c}</th>
+                    <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>{c}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {sqlResult.rows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                     {sqlResult.columns.map((c) => (
                       <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
                     ))}
@@ -1375,16 +1391,21 @@ export default function DataSqlPage() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
 
       {/* Charts over the current result */}
       {sqlResult && !sqlError && sqlResult.rows.length > 0 && (
-        <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
+        <>
+          <h2 className="sr-only">תרשים מתוצאות השאילתה</h2>
+          <SqlChartPanel columns={sqlResult.columns} rows={sqlResult.rows} resultId={runId} />
+        </>
       )}
 
 
       {/* Table browser + detail cube */}
+      <h2 className="sr-only">דפדוף בטבלאות האתר</h2>
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div className="card" style={{ flex: "1 1 340px", minWidth: 300, padding: "0.75rem", maxHeight: 620, overflowY: "auto" }}>
           <input
@@ -1393,7 +1414,7 @@ export default function DataSqlPage() {
             onChange={(e) => setFilter(e.target.value)}
             placeholder="חיפוש טבלה, מאגר, מקור או תגית…"
             aria-label="חיפוש טבלאות"
-            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, marginBottom: "0.5rem" }}
+            style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, marginBottom: "0.5rem" }}
           />
           {/* Expand/collapse all + total count */}
           {!loading && groups.length > 0 && (
@@ -1451,7 +1472,7 @@ export default function DataSqlPage() {
           )}
 
           {loading && <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>טוען את רשימת הטבלאות…</div>}
-          {loadError && <div className="text-sm" style={{ padding: "0.5rem", color: "var(--danger, #dc2626)" }}>{loadError}</div>}
+          {loadError && <div className="text-sm" style={{ padding: "0.5rem", color: "var(--danger, #992C2C)" }}>{loadError}</div>}
           {!loading && shownTables.length === 0 && !loadError && (
             <div className="text-sm text-muted" style={{ padding: "0.5rem" }}>אין טבלאות תואמות.</div>
           )}
@@ -1473,7 +1494,7 @@ export default function DataSqlPage() {
                   <span>מאגרים מעובדים — אינם ממקור רשמי מקורי</span>
                 </div>
               )}
-              <div style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: isProcessed ? "#fffdf9" : "var(--bg-muted, #f8fafc)" }}>
+              <div style={{ marginBottom: "0.4rem", borderInlineStart: `3px solid ${badge.accent}`, borderRadius: 4, background: isProcessed ? "var(--tint-warn-bg)" : "var(--surface-2)" }}>
                 {/* Source header — click to expand/collapse; ↗ opens the source page */}
                 <div className="flex" style={{ gap: "0.4rem", alignItems: "center", padding: "0.35rem 0.5rem" }}>
                   <button
@@ -1499,7 +1520,7 @@ export default function DataSqlPage() {
                       {list.length === 1 ? "טבלה אחת" : `${list.length} טבלאות`}
                     </span>
                     {usedInGroup.length > 0 && (
-                      <span style={{ fontSize: "0.66rem", fontWeight: 700, color: "#854d0e", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 9999, padding: "0.05rem 0.4rem", flex: "0 0 auto" }}>
+                      <span style={{ fontSize: "0.66rem", fontWeight: 700, color: "var(--warning)", background: "var(--tint-warn-bg)", border: "1px solid var(--tint-warn-bd)", borderRadius: 9999, padding: "0.05rem 0.4rem", flex: "0 0 auto" }}>
                         בשאילתה
                       </span>
                     )}
@@ -1507,6 +1528,7 @@ export default function DataSqlPage() {
                   <Link
                     to={groupLink(badge)}
                     title={`לעמוד המקור: ${badge.label}`}
+                    className="chip-target"
                     style={{ fontSize: "0.72rem", color: "var(--text-muted)", textDecoration: "none", flex: "0 0 auto" }}
                   >
                     ↗
@@ -1528,7 +1550,7 @@ export default function DataSqlPage() {
                             display: "flex", width: "100%", gap: "0.5rem", alignItems: "center",
                             textAlign: "start", padding: "0.3rem 0.45rem", borderRadius: 4, cursor: "pointer",
                             border: "none", marginBottom: 1,
-                            background: active ? "var(--bg, #fff)" : used ? "#fef9c3" : "transparent",
+                            background: active ? "var(--bg, #fff)" : used ? "var(--tint-note-bg)" : "transparent",
                             boxShadow: active ? `inset 2px 0 0 ${badge.accent}` : "none",
                           }}
                         >
@@ -1542,8 +1564,8 @@ export default function DataSqlPage() {
                             }}>
                               {used && (
                                 <span title="הטבלה משמשת את השאילתה הנוכחית" style={{
-                                  fontSize: "0.62rem", fontWeight: 700, color: "#854d0e",
-                                  background: "#fef3c7", border: "1px solid #f59e0b",
+                                  fontSize: "0.62rem", fontWeight: 700, color: "var(--warning)",
+                                  background: "var(--tint-warn-bg)", border: "1px solid var(--tint-warn-bd)",
                                   borderRadius: 9999, padding: "0.02rem 0.35rem",
                                   marginInlineEnd: "0.35rem", verticalAlign: "middle",
                                 }}>
@@ -1600,10 +1622,10 @@ export default function DataSqlPage() {
               {/* Legend for the list marker. Without it the icon is a mystery:
                   a tooltip only helps someone who already suspects it means
                   something and bothers to hover. */}
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", padding: "0.6rem 0.7rem", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0", marginBottom: 0 }}>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--tint-good-bg)", border: "1px solid var(--tint-good-bd)", marginBottom: 0 }}>
                 <SpatialMark size={15} />
                 <div>
-                  <strong style={{ color: "#15803d" }}>שכבות מרחביות</strong> — טבלה שמסומנת בסמל הזה נתמכת ב-<strong>PostGIS</strong>,
+                  <strong style={{ color: "var(--success)" }}>שכבות מרחביות</strong> — טבלה שמסומנת בסמל הזה נתמכת ב-<strong>PostGIS</strong>,
                   כלומר אפשר לשאול עליה שאלות גיאוגרפיות ולא רק טקסטואליות: מה נמצא בתוך אזור מסוים, מה במרחק X מטרים מנקודה,
                   ואילו שתי שכבות חופפות. המידע שמור בעמודת <code dir="ltr" style={{ unicodeBidi: "isolate" }}>geom</code> ב-EPSG:4326.
                   <div style={{ marginTop: "0.35rem" }}>
@@ -1613,7 +1635,7 @@ export default function DataSqlPage() {
                 </div>
               </div>
               {FIELD_FACETS.some((f) => facetCounts[f.key] > 0) && (
-                <div style={{ padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--surface-2, #f8fafc)", border: "1px solid var(--border, #e2e8f0)", marginTop: "0.5rem" }}>
+                <div style={{ padding: "0.6rem 0.7rem", borderRadius: 6, background: "var(--surface-2, #f8fafc)", border: "1px solid var(--border, var(--border))", marginTop: "0.5rem" }}>
                   <strong style={{ display: "block", marginBottom: "0.4rem" }}>שדות תוכן — מפתחות ל-JOIN בין מאגרים</strong>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                     {FIELD_FACETS.filter((f) => facetCounts[f.key] > 0).map((f) => (
@@ -1663,7 +1685,7 @@ export default function DataSqlPage() {
                   )}
                   {hasGeometry(selectedTable) && (
                     <span title={SPATIAL_TITLE}
-                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "#dcfce7", color: "#166534", cursor: "help" }}>
+                          style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", padding: "0.25rem 0.6rem", borderRadius: 9999, fontSize: "0.78rem", fontWeight: 700, background: "var(--tint-good-bg)", color: "var(--success)", cursor: "help" }}>
                       <SpatialMark size={13} />
                       נתמך ב-PostGIS
                     </span>
@@ -1686,7 +1708,7 @@ export default function DataSqlPage() {
               {selectedTable.tags.length > 0 && (
                 <div className="flex" style={{ gap: "0.35rem", flexWrap: "wrap", margin: "0.4rem 0" }}>
                   {selectedTable.tags.map((tag) => (
-                    <span key={tag} style={{ fontSize: "0.72rem", padding: "0.1rem 0.5rem", borderRadius: 9999, background: "var(--bg-muted, #eef2f5)", color: "var(--text-muted)" }}>{tag}</span>
+                    <span key={tag} style={{ fontSize: "0.72rem", padding: "0.1rem 0.5rem", borderRadius: 9999, background: "var(--surface-2)", color: "var(--text-muted)" }}>{tag}</span>
                   ))}
                 </div>
               )}
@@ -1701,30 +1723,30 @@ export default function DataSqlPage() {
                   {"</>"} שאילתה מוכנה
                 </button>
                 <a href={selectedTable.source_url} target="_blank" rel="noreferrer"
-                   style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", color: "var(--text)", textDecoration: "none" }}>
+                   style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
                   ↗ מקור
-                </a>
+                <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 {selectedTable.kind === "dataset" && detail?.csv_url && (
                   <a href={detail.csv_url}
-                     style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--primary, #0f766e)", color: "white", textDecoration: "none", fontWeight: 500 }}>
+                     style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--fill-brand)", color: "var(--on-fill-brand)", textDecoration: "none", fontWeight: 500 }}>
                     &#8595; CSV — כל הנתונים
                   </a>
                 )}
                 {selectedTable.kind === "knesset" && (
                   <a href={dataCatalog.exportUrl(`SELECT * FROM ${selectedTable.table}`)}
-                     style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--primary, #0f766e)", color: "white", textDecoration: "none", fontWeight: 500 }}>
+                     style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--fill-brand)", color: "var(--on-fill-brand)", textDecoration: "none", fontWeight: 500 }}>
                     &#8595; CSV — כל הנתונים
                   </a>
                 )}
                 {selectedTable.archive_url && (
                   <Link to={selectedTable.archive_url}
-                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", color: "var(--text)", textDecoration: "none" }}>
+                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
                     ארכיון מלא →
                   </Link>
                 )}
                 {selectedTable.page_url && (
                   <Link to={selectedTable.page_url}
-                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, #d1d5db)", color: "var(--text)", textDecoration: "none" }}>
+                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border, var(--border))", color: "var(--text)", textDecoration: "none" }}>
                     עמוד הכנסת →
                   </Link>
                 )}
@@ -1774,12 +1796,12 @@ export default function DataSqlPage() {
                   <div className="text-sm text-muted">אין עדיין שורות בטבלה.</div>
                 )}
                 {detail && detail.sample.rows.length > 0 && (
-                  <div style={{ overflowX: "auto", maxHeight: 360, border: "1px solid var(--border, #e5e7eb)", borderRadius: 4 }}>
+                  <div tabIndex={0} role="region" aria-label="דוגמת שורות מהטבלה" className="scroll-region" style={{ overflowX: "auto", maxHeight: 360, border: "1px solid var(--border, var(--border))", borderRadius: 4 }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                       <thead>
                         <tr>
                           {detail.sample.columns.map((c) => (
-                            <th key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>
+                            <th scope="col" key={c} style={{ textAlign: "start", padding: "0.35rem 0.6rem", position: "sticky", top: 0, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>
                               {c}
                               {/* The caption under the name, where the source
                                   documents one: the header is the machine name
@@ -1796,7 +1818,7 @@ export default function DataSqlPage() {
                       </thead>
                       <tbody>
                         {detail.sample.rows.map((row, i) => (
-                          <tr key={i} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                          <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                             {detail.sample.columns.map((c) => (
                               <td key={c} style={{ padding: "0.3rem 0.6rem" }}>
                                 {c === "first_seen" ? fmtDate(row[c]) : String(row[c] ?? "")}

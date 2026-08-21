@@ -76,11 +76,11 @@ export default function OcoiGraphView({
               selector: "node",
               style: {
                 "background-color": (el: { data: (k: string) => string }) =>
-                  TYPE_COLORS[el.data("etype") as OcoiEntityType] || "#64748b",
+                  TYPE_COLORS[el.data("etype") as OcoiEntityType] || "#464F5E",
                 label: "data(label)",
                 "font-size": 10,
                 "font-family": "system-ui, sans-serif",
-                color: "#0f172a",
+                color: "var(--text)",
                 "text-valign": "bottom",
                 "text-margin-y": 4,
                 "text-wrap": "ellipsis",
@@ -156,9 +156,9 @@ export default function OcoiGraphView({
         style={{
           height,
           width: "100%",
-          border: "1px solid var(--border, #e2e8f0)",
+          border: "1px solid var(--border, var(--border))",
           borderRadius: 8,
-          background: "var(--card-bg, #fff)",
+          background: "var(--surface)",
         }}
       />
       <div
@@ -181,7 +181,7 @@ export default function OcoiGraphView({
         ))}
         <span>· {graph.nodes.length.toLocaleString()} צמתים, {graph.edges.length.toLocaleString()} קשרים</span>
         {graph.truncated && (
-          <span style={{ color: "var(--warning, #b45309)", fontWeight: 600 }}>
+          <span style={{ color: "var(--warning, #873E07)", fontWeight: 600 }}>
             · תצוגה חלקית — הגרף נחתך בתקרת השרת
           </span>
         )}

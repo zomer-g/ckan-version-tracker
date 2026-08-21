@@ -55,9 +55,9 @@ export default function CbsFeedbackButtons({ query, mode, answerType, topUrl }: 
   };
 
   const btn = (v: 1 | -1, emoji: string, label: string): React.CSSProperties => ({
-    border: "1px solid var(--border, #e2e8f0)",
+    border: "1px solid var(--border, var(--border))",
     background: vote === v ? (v > 0 ? "#ecfdf5" : "#fef2f2") : "transparent",
-    color: vote === v ? (v > 0 ? "#065f46" : "#991b1b") : "var(--text-muted, #64748b)",
+    color: vote === v ? (v > 0 ? "var(--success)" : "#941A1A") : "var(--text-muted, #464F5E)",
     borderColor: vote === v ? (v > 0 ? "#a7f3d0" : "#fecaca") : "var(--border, #e2e8f0)",
     borderRadius: "9999px",
     cursor: "pointer",

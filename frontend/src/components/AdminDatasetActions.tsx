@@ -68,8 +68,8 @@ export default function AdminDatasetActions({ datasetId, title, onDeleted }: Pro
             fontSize: "0.7rem",
             padding: "0.15rem 0.4rem",
             borderRadius: "4px",
-            background: toast.ok ? "#dcfce7" : "#fee2e2",
-            color: toast.ok ? "#166534" : "#991b1b",
+            background: toast.ok ? "var(--tint-good-bg)" : "var(--tint-bad-bg)",
+            color: toast.ok ? "var(--success)" : "#941A1A",
             whiteSpace: "nowrap",
           }}
         >

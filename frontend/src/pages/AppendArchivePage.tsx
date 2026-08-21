@@ -3,6 +3,8 @@ import { useParams, Link } from "react-router-dom";
 import { appendArchive, AppendSchema, AppendTableRef, AppendRows, AppendSqlResult } from "../api/client";
 import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference, SchemaTable, CopySchemaButton } from "../components/SqlEditor";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Breadcrumbs } from "../components/a11y";
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
   if (!value) return "";
@@ -41,6 +43,7 @@ function downloadRowsCsv(
 export default function AppendArchivePage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const [schema, setSchema] = useState<AppendSchema | null>(null);
+  useDocumentTitle(schema?.dataset_title ? `ארכיון — ${schema.dataset_title}` : "ארכיון");
   const [data, setData] = useState<AppendRows | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +187,7 @@ export default function AppendArchivePage() {
     <div className="container mt-3">
       <div className="page-header flex-between" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
         <div>
+          <Breadcrumbs items={[{ label: "מאגרים", to: "/" }, { label: schema?.dataset_title || "ארכיון מצטבר" }]} />
           <h1 style={{ margin: 0 }}>{schema?.dataset_title || "ארכיון מצטבר"}</h1>
           <div className="text-sm text-muted" style={{ marginTop: "0.25rem" }}>
             ארכיון מצטבר (APPEND) · {total.toLocaleString()} שורות
@@ -216,7 +220,7 @@ export default function AppendArchivePage() {
             href={downloadAllHref}
             style={{
               fontSize: "0.85rem", padding: "0.4rem 0.9rem",
-              background: "var(--primary, #0f766e)", color: "white",
+              background: "var(--fill-brand)", color: "var(--on-fill-brand)",
               borderRadius: 4, textDecoration: "none", fontWeight: 500,
             }}
             title="הורדת כל הנתונים הגולמיים כ-CSV"
@@ -228,8 +232,8 @@ export default function AppendArchivePage() {
               href={downloadHref}
               style={{
                 fontSize: "0.85rem", padding: "0.4rem 0.9rem",
-                background: "none", color: "var(--primary, #0f766e)",
-                border: "1px solid var(--primary, #0f766e)",
+                background: "none", color: "var(--primary, #0C5E58)",
+                border: "1px solid var(--primary, var(--tint-teal-fg))",
                 borderRadius: 4, textDecoration: "none", fontWeight: 500,
               }}
               title="הורדת התוצאה המסוננת הנוכחית כ-CSV"
@@ -285,7 +289,7 @@ export default function AppendArchivePage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="חיפוש חופשי בכל העמודות…"
-          style={{ flex: "1 1 280px", padding: "0.45rem 0.7rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+          style={{ flex: "1 1 280px", padding: "0.45rem 0.7rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
           aria-label="חיפוש חופשי"
         />
         <label className="text-sm text-muted">
@@ -299,9 +303,9 @@ export default function AppendArchivePage() {
           onClick={() => setSqlOpen((o) => !o)}
           style={{
             padding: "0.45rem 0.9rem", borderRadius: 4, cursor: "pointer", fontWeight: 600,
-            border: "1px solid var(--primary, #0f766e)",
-            background: sqlOpen ? "var(--primary, #0f766e)" : "none",
-            color: sqlOpen ? "white" : "var(--primary, #0f766e)",
+            border: "1px solid var(--primary, var(--tint-teal-fg))",
+            background: sqlOpen ? "var(--primary, #0C5E58)" : "none",
+            color: sqlOpen ? "white" : "var(--primary, #0C5E58)",
           }}
           title="כתיבת שאילתות SQL (קריאה בלבד)"
         >
@@ -341,7 +345,7 @@ export default function AppendArchivePage() {
               type="button" onClick={runSql} disabled={sqlRunning}
               style={{
                 padding: "0.4rem 1.1rem", borderRadius: 4, border: "none", fontWeight: 600,
-                background: "var(--primary, #0f766e)", color: "white",
+                background: "var(--fill-brand)", color: "var(--on-fill-brand)",
                 cursor: sqlRunning ? "wait" : "pointer", opacity: sqlRunning ? 0.7 : 1,
               }}
             >
@@ -359,8 +363,8 @@ export default function AppendArchivePage() {
                     onClick={() => downloadRowsCsv(`${schema?.table || "query"}_sql.csv`, sqlResult.columns, sqlResult.rows)}
                     style={{
                       fontSize: "0.82rem", padding: "0.3rem 0.7rem",
-                      background: "none", color: "var(--primary, #0f766e)",
-                      border: "1px solid var(--primary, #0f766e)", borderRadius: 4, cursor: "pointer",
+                      background: "none", color: "var(--primary, #0C5E58)",
+                      border: "1px solid var(--primary, var(--tint-teal-fg))", borderRadius: 4, cursor: "pointer",
                     }}
                     title="הורדת תוצאת ה-SQL כ-CSV"
                   >
@@ -371,23 +375,23 @@ export default function AppendArchivePage() {
             )}
           </div>
           {sqlError && (
-            <div style={{ marginTop: "0.6rem", color: "var(--danger, #dc2626)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+            <div style={{ marginTop: "0.6rem", color: "var(--danger, #992C2C)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
               {sqlError}
             </div>
           )}
           {sqlResult && !sqlError && (
-            <div style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 360 }}>
+            <div tabIndex={0} role="region" aria-label="תוצאות השאילתה" className="scroll-region" style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 360 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
                 <thead>
                   <tr>
                     {sqlResult.columns.map((c) => (
-                      <th key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)" }}>{c}</th>
+                      <th scope="col" key={c} style={{ textAlign: "start", padding: "0.4rem 0.6rem", position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)", borderBottom: "2px solid var(--border, var(--border))" }}>{c}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {sqlResult.rows.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                       {sqlResult.columns.map((c) => (
                         <td key={c} style={{ padding: "0.35rem 0.6rem" }}>{String(row[c] ?? "")}</td>
                       ))}
@@ -400,30 +404,48 @@ export default function AppendArchivePage() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+      <div className="card scroll-region" tabIndex={0} role="region" aria-label="שורות הארכיון" style={{ padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
           <thead>
             <tr>
               {cols.map((c) => (
                 <th
+                  scope="col"
                   key={c}
-                  onClick={() => toggleSort(c)}
-                  title="מיון"
-                  style={{ textAlign: "start", padding: "0.5rem 0.7rem", cursor: "pointer", position: "sticky", top: 0, zIndex: 1, background: "var(--bg-muted, #eef2f5)", borderBottom: "2px solid var(--border, #cbd5e1)", userSelect: "none" }}
+                  // aria-sort tells a screen reader which column is ordering the
+                  // table and in which direction — the arrow glyph said that to
+                  // sighted users only (WCAG 1.3.1).
+                  aria-sort={sort === c ? (order === "asc" ? "ascending" : "descending") : "none"}
+                  style={{ textAlign: "start", padding: 0, position: "sticky", top: 0, zIndex: 1, background: "var(--surface-2)" }}
                 >
-                  {c}{sort === c ? (order === "asc" ? " ▲" : " ▼") : ""}
+                  {/* The click target is a real button: a <th onClick> takes no
+                      focus and answers no key (WCAG 2.1.1). */}
+                  <button
+                    type="button"
+                    onClick={() => toggleSort(c)}
+                    aria-label={`מיון לפי ${c}`}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "0.25rem",
+                      width: "100%", padding: "0.5rem 0.7rem", textAlign: "start",
+                      background: "none", border: 0, font: "inherit", fontWeight: 600,
+                      color: "inherit", cursor: "pointer",
+                    }}
+                  >
+                    {c}
+                    <span aria-hidden="true">{sort === c ? (order === "asc" ? "▲" : "▼") : ""}</span>
+                  </button>
                 </th>
               ))}
             </tr>
-            <tr style={{ borderBottom: "1px solid var(--border, #e5e7eb)", background: "var(--bg, #fff)" }}>
+            <tr style={{ borderBottom: "1px solid var(--border, var(--border))", background: "var(--bg, #fff)" }}>
               {cols.map((c) => (
-                <th key={c} style={{ padding: "0.25rem 0.4rem" }}>
+                <th scope="col" key={c} style={{ padding: "0.25rem 0.4rem" }}>
                   <input
                     value={filters[c] || ""}
                     onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
                     placeholder="סנן…"
                     aria-label={`סנן ${c}`}
-                    style={{ width: "100%", minWidth: 80, padding: "0.2rem 0.35rem", border: "1px solid var(--border, #e5e7eb)", borderRadius: 3, fontSize: "0.78rem", fontWeight: 400 }}
+                    style={{ width: "100%", minWidth: 80, padding: "0.2rem 0.35rem", border: "1px solid var(--border, var(--border))", borderRadius: 3, fontSize: "0.78rem", fontWeight: 400 }}
                   />
                 </th>
               ))}
@@ -437,7 +459,7 @@ export default function AppendArchivePage() {
               <tr><td colSpan={cols.length || 1} style={{ padding: "1rem", textAlign: "center", color: "var(--text-muted)" }}>אין שורות תואמות</td></tr>
             )}
             {!loading && data?.rows.map((row, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+              <tr key={i} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                 {cols.map((c) => (
                   <td key={c} style={{ padding: "0.4rem 0.7rem" }}>
                     {c === "first_seen" ? fmtDate(row[c]) : (row[c] ?? "")}
@@ -455,11 +477,11 @@ export default function AppendArchivePage() {
         </span>
         <div className="flex" style={{ gap: "0.5rem" }}>
           <button type="button" className="btn" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - limit))}
-            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
+            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: offset === 0 ? "not-allowed" : "pointer" }}>
             &rarr; הקודם
           </button>
           <button type="button" className="btn" disabled={pageEnd >= total || loading} onClick={() => setOffset(offset + limit)}
-            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, background: "none", cursor: pageEnd >= total ? "not-allowed" : "pointer" }}>
+            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "none", cursor: pageEnd >= total ? "not-allowed" : "pointer" }}>
             הבא &larr;
           </button>
         </div>
@@ -508,9 +530,9 @@ function TablePicker({
                 cursor: active ? "default" : "pointer",
                 borderRadius: 4,
                 fontWeight: active ? 600 : 400,
-                border: "1px solid var(--primary, #0f766e)",
-                background: active ? "var(--primary, #0f766e)" : "none",
-                color: active ? "white" : "var(--primary, #0f766e)",
+                border: "1px solid var(--primary, var(--tint-teal-fg))",
+                background: active ? "var(--primary, #0C5E58)" : "none",
+                color: active ? "white" : "var(--primary, #0C5E58)",
               }}
             >
               {t.resource_name || t.table}
@@ -548,8 +570,8 @@ function StorageExplainBox({ schema }: { schema: AppendSchema }) {
       aria-label="אופן שמירת הנתונים"
       style={{
         marginBottom: "1rem", padding: "0.9rem 1.1rem",
-        background: "var(--bg-muted, #f8fafc)",
-        borderInlineStart: `3px solid ${diff ? "#b45309" : "var(--primary, #0f766e)"}`,
+        background: "var(--surface-2)",
+        borderInlineStart: `3px solid ${diff ? "#873E07" : "var(--primary, #0C5E58)"}`,
       }}
     >
       <h2 style={{ margin: "0 0 0.4rem", fontSize: "0.95rem", fontWeight: 600 }}>

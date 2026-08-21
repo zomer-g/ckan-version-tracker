@@ -69,7 +69,7 @@ export default function RegistrySourceCard({
               style={{ color: "var(--primary)" }}
             >
               {result.url}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           </p>
 
           <div style={{ marginTop: "0.75rem" }}>

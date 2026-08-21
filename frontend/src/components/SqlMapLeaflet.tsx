@@ -36,7 +36,7 @@ const TILES: Record<Exclude<Basemap, "none">, { url: string; attr: string }> = {
   },
 };
 
-const DEFAULT_COLOR = "#15803d";
+const DEFAULT_COLOR = "var(--success)";
 
 function colorOf(props: Record<string, unknown> | undefined): string {
   const c = props?.__color;
@@ -94,7 +94,7 @@ export default function SqlMapLeaflet({
       preferCanvas
       center={[31.7, 35.0]}
       zoom={7}
-      style={{ height, width: "100%", borderRadius: 6, background: "var(--bg-muted, #eef2f5)" }}
+      style={{ height, width: "100%", borderRadius: 6, background: "var(--surface-2)" }}
       scrollWheelZoom
     >
       {tiles && <TileLayer url={tiles.url} attribution={tiles.attr} maxZoom={19} />}

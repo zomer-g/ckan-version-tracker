@@ -38,6 +38,7 @@ import DecisionAnalysisPanel from "../components/DecisionAnalysisPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
 import OcalAdminPanel from "../components/OcalAdminPanel";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
   sourceBadgeFor as sourceBadgeForShared,
   sourceBadgeForKey,
@@ -149,10 +150,10 @@ const PRIORITY_PROMOTED = 300;
 
 function priorityChip(priority: number | undefined): { label: string; bg: string; fg: string } | null {
   if (priority === undefined || priority === PRIORITY_ROUTINE) return null;  // the norm needs no label
-  if (priority >= PRIORITY_PROMOTED) return { label: "⬆ הועלה לראש התור", bg: "#dbeafe", fg: "#1e40af" };
-  if (priority > PRIORITY_ROUTINE) return { label: "ידני — קופץ בראש התור", bg: "#dcfce7", fg: "#166534" };
-  if (priority <= 0) return { label: "השלמת GovMap — רק כשהתור פנוי", bg: "#f1f5f9", fg: "#475569" };
-  return { label: "כיסוי GovMap שוטף", bg: "#f1f5f9", fg: "#475569" };
+  if (priority >= PRIORITY_PROMOTED) return { label: "⬆ הועלה לראש התור", bg: "var(--tint-sky-bg)", fg: "var(--tint-sky-fg)" };
+  if (priority > PRIORITY_ROUTINE) return { label: "ידני — קופץ בראש התור", bg: "var(--tint-good-bg)", fg: "var(--success)" };
+  if (priority <= 0) return { label: "השלמת GovMap — רק כשהתור פנוי", bg: "var(--surface-2)", fg: "var(--text-muted)" };
+  return { label: "כיסוי GovMap שוטף", bg: "var(--surface-2)", fg: "var(--text-muted)" };
 }
 
 const INTERVAL_OPTIONS = [
@@ -226,6 +227,7 @@ function readTabFromHash(): AdminTab {
 }
 
 export default function AdminPage() {
+  useDocumentTitle("ניהול");
   const { t } = useTranslation();
   const [requests, setRequests] = useState<PendingRequest[]>([]);
   // Active datasets — ONE PAGE at a time (server-side search + slice, see
@@ -1047,8 +1049,8 @@ export default function AdminPage() {
           fontSize: "0.75rem",
           padding: "0.25rem 0.5rem",
           borderRadius: "4px",
-          background: syncToast.startsWith("שגיאה") ? "#fee2e2" : "#dcfce7",
-          color: syncToast.startsWith("שגיאה") ? "#991b1b" : "#166534",
+          background: syncToast.startsWith("שגיאה") ? "var(--tint-bad-bg)" : "var(--tint-good-bg)",
+          color: syncToast.startsWith("שגיאה") ? "#941A1A" : "var(--success)",
         }}>{syncToast}</span>
       )}
     </div>
@@ -1111,7 +1113,9 @@ export default function AdminPage() {
       </aside>
 
       {/* Main content — only the selected tab renders */}
-      <main style={{ flex: 1, minWidth: 0 }}>
+      {/* Not <main>: App.tsx already provides the page's main landmark,
+          and nesting a second one makes landmark navigation ambiguous. */}
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div className="page-header flex-between" style={{
           borderBottom: "1px solid var(--border)",
           paddingBottom: "0.5rem",
@@ -1153,16 +1157,24 @@ export default function AdminPage() {
             <div style={{
               marginBottom: "0.75rem",
               padding: "0.6rem 0.75rem",
-              background: "#f8fafc",
-              border: "1px solid #e2e8f0",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
               borderRadius: "6px",
               fontSize: "0.8rem",
             }}>
               <div style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
-                🗺️ השלמת GovMap למנוע החדש — {bf.crossed}/{govmapCoverage.total_layers} שכבות ({pct}%)
+                <span aria-hidden="true">🗺️</span> השלמת GovMap למנוע החדש — {bf.crossed}/{govmapCoverage.total_layers} שכבות ({pct}%)
               </div>
-              <div style={{ height: 6, background: "#e2e8f0", borderRadius: 9999, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: "#64748b" }} />
+              <div
+                style={{ height: 6, background: "var(--tint-neutral-bg)", borderRadius: 9999, overflow: "hidden" }}
+                role="progressbar"
+                aria-label="השלמת GovMap למנוע החדש"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(pct)}
+                aria-valuetext={`${bf.crossed} מתוך ${bf.crossed + bf.remaining}`}
+              >
+                <div style={{ height: "100%", width: `${pct}%`, background: "var(--fill-neutral)" }} />
               </div>
               <div className="text-muted" style={{ marginTop: "0.35rem" }}>
                 נותרו {bf.remaining} · בעבודה {bf.in_flight}
@@ -1182,8 +1194,8 @@ export default function AdminPage() {
             {/* Running */}
             {queue.running.length > 0 && (
               <div>
-                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#16a34a" }}>
-                  🔄 בעבודה כרגע ({queue.running.length})
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "var(--success)" }}>
+                  <span aria-hidden="true">🔄</span> בעבודה כרגע ({queue.running.length})
                 </div>
                 {queue.running.map((t) => {
                   // Liveness is the HEARTBEAT, not the age. This used to flag
@@ -1220,11 +1232,11 @@ export default function AdminPage() {
                               fontSize: "0.7rem",
                               padding: "0.1rem 0.4rem",
                               borderRadius: "9999px",
-                              background: "#fee2e2",
-                              color: "#991b1b",
+                              background: "var(--tint-bad-bg)",
+                              color: "var(--tint-bad-fg)",
                               fontWeight: 600,
                             }}>
-                              ⚠ אין דיווח {formatRelative(t.updated_at)}
+                              <span aria-hidden="true">⚠</span> אין דיווח {formatRelative(t.updated_at)}
                             </span>
                           )}
                         </div>
@@ -1233,8 +1245,8 @@ export default function AdminPage() {
                           title="אפס משימה"
                           style={{
                             background: "none",
-                            border: "1px solid #dc2626",
-                            color: "#dc2626",
+                            border: "1px solid var(--danger)",
+                            color: "var(--danger)",
                             cursor: "pointer",
                             fontSize: "0.7rem",
                             padding: "0.2rem 0.5rem",
@@ -1242,7 +1254,7 @@ export default function AdminPage() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          ✕ אפס
+                          <span aria-hidden="true">✕</span> אפס
                         </button>
                       </div>
                       <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
@@ -1253,7 +1265,7 @@ export default function AdminPage() {
                         {" · "}מכונה: <strong>{workerLabel(t) || "—"}</strong>
                       </div>
                       {t.message && (
-                        <div className="text-sm" style={{ marginTop: "0.2rem", color: "#166534" }}>
+                        <div className="text-sm" style={{ marginTop: "0.2rem", color: "var(--success)" }}>
                           {t.message}
                         </div>
                       )}
@@ -1261,10 +1273,17 @@ export default function AdminPage() {
                           fill level, so the bar goes indeterminate (a moving
                           stripe) instead of showing a 2% sliver that reads as
                           "barely started". */}
-                      <div style={{
+                      <div
+                        role="progressbar"
+                        aria-label="התקדמות המשימה"
+                        aria-valuemin={hasPercent ? 0 : undefined}
+                        aria-valuemax={hasPercent ? 100 : undefined}
+                        aria-valuenow={hasPercent ? Math.round(t.progress) : undefined}
+                        aria-valuetext={hasPercent ? `${Math.round(t.progress)}%` : "מתבצע — ההיקף הכולל אינו ידוע"}
+                        style={{
                         marginTop: "0.4rem",
                         height: "6px",
-                        background: isStuck ? "#fecaca" : "#dcfce7",
+                        background: isStuck ? "#fecaca" : "var(--tint-good-bg)",
                         borderRadius: "3px",
                         overflow: "hidden",
                       }}>
@@ -1272,13 +1291,13 @@ export default function AdminPage() {
                           <div style={{
                             width: `${Math.max(2, t.progress)}%`,
                             height: "100%",
-                            background: isStuck ? "#dc2626" : "#16a34a",
+                            background: isStuck ? "var(--danger)" : "var(--success)",
                             transition: "width 0.5s",
                           }} />
                         ) : (
                           <div className="queue-indeterminate" style={{
                             background: `repeating-linear-gradient(90deg, ${
-                              isStuck ? "#dc2626" : "#16a34a"
+                              isStuck ? "var(--danger)" : "var(--success)"
                             } 0 10px, transparent 10px 20px)`,
                           }} />
                         )}
@@ -1292,16 +1311,16 @@ export default function AdminPage() {
             {/* Pending */}
             {queue.pending.length > 0 && (
               <div>
-                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "#92400e" }}>
-                  🕐 ממתין בתור ({queue.pending.length})
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.4rem", color: "var(--warning)" }}>
+                  <span aria-hidden="true">🕐</span> ממתין בתור ({queue.pending.length})
                   {queue.running.length === 0 && (
                     <span style={{
                       marginInlineStart: "0.5rem",
                       fontSize: "0.7rem",
                       padding: "0.1rem 0.4rem",
                       borderRadius: "9999px",
-                      background: "#e0e7ff",
-                      color: "#3730a3",
+                      background: "var(--tint-indigo-bg)",
+                      color: "var(--tint-indigo-fg)",
                       fontWeight: 500,
                     }}>
                       אין worker פעיל — המשימות יחכו עד שיעלה אחד
@@ -1353,8 +1372,8 @@ export default function AdminPage() {
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
                             borderRadius: "4px",
-                            background: queueToast.ok ? "#dbeafe" : "#fee2e2",
-                            color: queueToast.ok ? "#1e40af" : "#991b1b",
+                            background: queueToast.ok ? "#dbeafe" : "var(--tint-bad-bg)",
+                            color: queueToast.ok ? "#1e40af" : "#941A1A",
                             whiteSpace: "nowrap",
                           }}>
                             {queueToast.msg}
@@ -1368,8 +1387,8 @@ export default function AdminPage() {
                             : "העלה לראש התור — יילקח על ידי ה-worker הפנוי הבא"}
                           style={{
                             background: isPromoted ? "#dbeafe" : "none",
-                            border: "1px solid #1e40af",
-                            color: "#1e40af",
+                            border: "1px solid var(--tint-sky-fg)",
+                            color: "var(--tint-sky-fg)",
                             cursor: queueBusy.has(t.task_id) ? "default" : "pointer",
                             opacity: queueBusy.has(t.task_id) ? 0.5 : 1,
                             fontSize: "0.7rem",
@@ -1385,8 +1404,8 @@ export default function AdminPage() {
                           title="הסר מהתור"
                           style={{
                             background: "none",
-                            border: "1px solid #92400e",
-                            color: "#92400e",
+                            border: "1px solid var(--warning)",
+                            color: "var(--warning)",
                             cursor: "pointer",
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
@@ -1394,7 +1413,7 @@ export default function AdminPage() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          ✕ הסר
+                          <span aria-hidden="true">✕</span> הסר
                         </button>
                       </li>
                     );
@@ -1409,7 +1428,7 @@ export default function AdminPage() {
                 only sensible action is to run it again. */}
             {(queue.interrupted?.length ?? 0) > 0 && (
               <div style={{ marginBottom: "0.8rem" }}>
-                <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#78350f", marginBottom: "0.4rem" }}>
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--warning)", marginBottom: "0.4rem" }}>
                   ⏸ ריצות שנקטעו — 24 שעות ({queue.interrupted!.length})
                   <span style={{ fontWeight: 400, color: "var(--text-muted)", marginInlineStart: "0.4rem" }}>
                     הוורקר הפסיק לדווח. אינן שגיאות גרידה.
@@ -1420,8 +1439,8 @@ export default function AdminPage() {
                     <li key={t.task_id} style={{
                       padding: "0.4rem 0.6rem",
                       marginBottom: "0.2rem",
-                      background: "#fffbeb",
-                      border: "1px solid #fde68a",
+                      background: "var(--tint-warn-bg)",
+                      border: "1px solid var(--tint-warn-bd)",
                       borderRadius: "4px",
                       fontSize: "0.85rem",
                     }}>
@@ -1434,7 +1453,7 @@ export default function AdminPage() {
                           onClick={() => handleRetryFailed(t.task_id, t.dataset_id, t.dataset_title)}
                           title="הרץ שוב"
                           style={{
-                            background: "none", border: "1px solid #166534", color: "#166534",
+                            background: "none", border: "1px solid var(--success)", color: "var(--success)",
                             cursor: "pointer", fontSize: "0.7rem", padding: "0.15rem 0.4rem",
                             borderRadius: "4px", whiteSpace: "nowrap",
                           }}
@@ -1460,8 +1479,8 @@ export default function AdminPage() {
             {queue.failed.length > 0 && (
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
-                  <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#991b1b", flex: 1 }}>
-                    ⚠ כשלים אחרונים — 24 שעות ({queue.failed.length})
+                  <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--tint-bad-fg)", flex: 1 }}>
+                    <span aria-hidden="true">⚠</span> כשלים אחרונים — 24 שעות ({queue.failed.length})
                   </span>
                   {/* Plain-text digest of every failure (title | phase | time +
                       the FULL error) — built for pasting into a debugging chat. */}
@@ -1486,8 +1505,8 @@ export default function AdminPage() {
                     <li key={t.task_id} style={{
                       padding: "0.4rem 0.6rem",
                       marginBottom: "0.2rem",
-                      background: "#fef2f2",
-                      border: "1px solid #fecaca",
+                      background: "var(--tint-bad-bg)",
+                      border: "1px solid var(--tint-bad-bd)",
                       borderRadius: "4px",
                       fontSize: "0.85rem",
                     }}>
@@ -1501,8 +1520,8 @@ export default function AdminPage() {
                           title="ניסיון חוזר"
                           style={{
                             background: "none",
-                            border: "1px solid #166534",
-                            color: "#166534",
+                            border: "1px solid var(--success)",
+                            color: "var(--success)",
                             cursor: "pointer",
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
@@ -1517,8 +1536,8 @@ export default function AdminPage() {
                           title="מחק מהיומן"
                           style={{
                             background: "none",
-                            border: "1px solid #991b1b",
-                            color: "#991b1b",
+                            border: "1px solid var(--tint-bad-fg)",
+                            color: "var(--tint-bad-fg)",
                             cursor: "pointer",
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
@@ -1526,7 +1545,7 @@ export default function AdminPage() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          ✕ מחק
+                          <span aria-hidden="true">✕</span> מחק
                         </button>
                       </div>
                       {workerLabel(t) && (
@@ -1538,15 +1557,15 @@ export default function AdminPage() {
                         <div style={{
                           marginTop: "0.2rem",
                           fontSize: "0.75rem",
-                          color: "#991b1b",
+                          color: "var(--tint-bad-fg)",
                           wordBreak: "break-word",
                           whiteSpace: "pre-wrap",
                           fontFamily: "monospace",
                           maxHeight: "10rem",
                           overflowY: "auto",
                           padding: "0.25rem 0.4rem",
-                          background: "#fff",
-                          border: "1px solid #fecaca",
+                          background: "var(--surface)",
+                          border: "1px solid var(--tint-bad-bd)",
                           borderRadius: "3px",
                         }}>
                           {t.error}
@@ -1589,15 +1608,15 @@ export default function AdminPage() {
         ) : schedule.jobs.length === 0 ? (
           <div className="empty-state" style={{ padding: "1rem" }}>אין מאגרים פעילים מתוזמנים.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
               <thead>
-                <tr style={{ background: "#f9fafb", textAlign: "right" }}>
-                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
-                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>תדירות</th>
-                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נדגם לאחרונה</th>
-                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>הפעלה הבאה</th>
-                  <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>בעוד</th>
+                <tr style={{ background: "var(--surface-2)", textAlign: "right" }}>
+                  <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
+                  <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>תדירות</th>
+                  <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נדגם לאחרונה</th>
+                  <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>הפעלה הבאה</th>
+                  <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>בעוד</th>
                 </tr>
               </thead>
               <tbody>
@@ -1605,13 +1624,13 @@ export default function AdminPage() {
                   const overdue = j.seconds_until_next_run !== null && j.seconds_until_next_run < 0;
                   return (
                     <tr key={j.dataset_id} style={{
-                      borderBottom: "1px solid #f0f0f0",
+                      borderBottom: "1px solid var(--border)",
                       background: !j.scheduled ? "#fef2f2" : overdue ? "#fef3c7" : undefined,
                     }}>
                       <td style={{ padding: "0.4rem 0.6rem" }}>
                         <Link to={`/versions/${j.dataset_id}`}>{j.title}</Link>
                         {!j.scheduled && (
-                          <span className="text-muted" style={{ fontSize: "0.7rem", marginInlineStart: "0.4rem", color: "#991b1b" }}>
+                          <span className="text-muted" style={{ fontSize: "0.7rem", marginInlineStart: "0.4rem", color: "var(--tint-bad-fg)" }}>
                             (לא מתוזמן)
                           </span>
                         )}
@@ -1633,7 +1652,7 @@ export default function AdminPage() {
                         {j.seconds_until_next_run === null ? (
                           <span className="text-muted">—</span>
                         ) : overdue ? (
-                          <span style={{ color: "#92400e", fontWeight: 600 }}>
+                          <span style={{ color: "var(--warning)", fontWeight: 600 }}>
                             פיגור: {formatDuration(-j.seconds_until_next_run)}
                           </span>
                         ) : (
@@ -1646,7 +1665,7 @@ export default function AdminPage() {
               </tbody>
             </table>
             {schedule.orphan_jobs.length > 0 && (
-              <div style={{ marginTop: "0.6rem", fontSize: "0.8rem", color: "#92400e" }}>
+              <div style={{ marginTop: "0.6rem", fontSize: "0.8rem", color: "var(--warning)" }}>
                 ⚠ {schedule.orphan_jobs.length} jobs יתומים בלי dataset תואם — Restart Render כדי לנקות.
               </div>
             )}
@@ -1719,7 +1738,7 @@ export default function AdminPage() {
                 <p className="text-sm text-muted" style={{ wordBreak: "break-all", direction: "ltr" }}>
                   <a href={req.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {req.source_url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
               )}
               {req.organization && isCkanLike(req.source_type) && <p className="text-sm text-muted">{req.organization}</p>}
@@ -1784,6 +1803,7 @@ export default function AdminPage() {
                     there was a fourth opinion on the plan — and the one the
                     admin actually read. */}
                 <select
+                  aria-label="יעד אחסון לבקשה"
                   value={storageOverrides[req.id] ?? req.storage_target}
                   onChange={(e) => setStorageOverrides((prev) => ({
                     ...prev, [req.id]: e.target.value as StorageTarget,
@@ -1932,7 +1952,7 @@ export default function AdminPage() {
         >
           <option value="">איכות ייבוא: הכל</option>
           <option value="only">
-            ⚠ רק חשודים לייבוא פגום{dsFacets ? ` (${dsFacets.import_warning.toLocaleString()})` : ""}
+            <span aria-hidden="true">⚠</span> רק חשודים לייבוא פגום{dsFacets ? ` (${dsFacets.import_warning.toLocaleString()})` : ""}
           </option>
           <option value="exclude">רק ללא חשש</option>
         </select>
@@ -1956,8 +1976,8 @@ export default function AdminPage() {
           {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} בעמוד</option>)}
         </select>
         {dsFacetsError && (
-          <div className="text-sm" style={{ flexBasis: "100%", color: "#b91c1c" }}>
-            ⚠ רשימות הסינון לא נטענו ({dsFacetsError}) — הסינון עצמו עדיין עובד,
+          <div className="text-sm" style={{ flexBasis: "100%", color: "var(--danger)" }}>
+            <span aria-hidden="true">⚠</span> רשימות הסינון לא נטענו ({dsFacetsError}) — הסינון עצמו עדיין עובד,
             אבל האפשרויות בתפריטים חסרות.
           </div>
         )}
@@ -1978,18 +1998,18 @@ export default function AdminPage() {
             </button>
           )}
         </div>
-        {coverageMsg && <div className="text-sm" style={{ marginTop: "0.4rem", color: "#0369a1" }}>{coverageMsg}</div>}
+        {coverageMsg && <div className="text-sm" style={{ marginTop: "0.4rem", color: "var(--tint-sky-fg)" }}>{coverageMsg}</div>}
         {coverage && (
           <div className="text-sm" style={{ marginTop: "0.5rem", lineHeight: 1.6 }}>
             <div>
-              ✅ מכוסים: <strong>{coverage.covered}</strong> / {coverage.total_active} מאגרים פעילים
+              <span aria-hidden="true">✅</span> מכוסים: <strong>{coverage.covered}</strong> / {coverage.total_active} מאגרים פעילים
               {coverage.local_only.length > 0 && <> · 🗂️ מקומיים (מחוץ ל-OVER מבחירה): <strong>{coverage.local_only.length}</strong></>}
             </div>
             {coverage.missing.length === 0 ? (
-              <div style={{ color: "#15803d" }}>כל המאגרים (שאינם מקומיים) כוללים לפחות גרסה מלאה אחת על OVER.</div>
+              <div style={{ color: "var(--success)" }}>כל המאגרים (שאינם מקומיים) כוללים לפחות גרסה מלאה אחת על OVER.</div>
             ) : (
               <div style={{ marginTop: "0.3rem" }}>
-                <div style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ חסרה גרסה מלאה ({coverage.missing.length}):</div>
+                <div style={{ color: "var(--danger)", fontWeight: 600 }}><span aria-hidden="true">⚠️</span> חסרה גרסה מלאה ({coverage.missing.length}):</div>
                 <ul style={{ margin: "0.25rem 0 0", paddingInlineStart: "1.2rem" }}>
                   {coverage.missing.slice(0, 30).map((m) => (
                     <li key={m.id}>
@@ -2069,9 +2089,9 @@ export default function AdminPage() {
                           const s = datasetStatusMap.get(ds.id);
                           if (!s) return null;
                           const config = {
-                            running: { icon: "🔄", color: "#16a34a", label: "בעבודה" },
-                            pending: { icon: "🕐", color: "#92400e", label: "בתור" },
-                            failed:  { icon: "⚠️", color: "#991b1b", label: "נכשל" },
+                            running: { icon: "🔄", color: "var(--success)", label: "בעבודה" },
+                            pending: { icon: "🕐", color: "var(--warning)", label: "בתור" },
+                            failed:  { icon: "⚠️", color: "var(--tint-bad-fg)", label: "נכשל" },
                           }[s.kind];
                           return (
                             <span
@@ -2120,7 +2140,7 @@ export default function AdminPage() {
                       <div style={{ fontSize: "0.75rem", marginTop: "0.2rem", direction: "ltr" }}>
                         <a href={ds.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                           {ds.source_url}
-                        </a>
+                        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                       </div>
                     )}
                     {ds.last_error && (
@@ -2130,8 +2150,8 @@ export default function AdminPage() {
                           fontSize: "0.7rem",
                           marginTop: "0.25rem",
                           padding: "0.2rem 0.4rem",
-                          background: "#fee2e2",
-                          color: "#991b1b",
+                          background: "var(--tint-bad-bg)",
+                          color: "var(--tint-bad-fg)",
                           borderRadius: "4px",
                           maxWidth: "28rem",
                           overflow: "hidden",
@@ -2191,9 +2211,9 @@ export default function AdminPage() {
                               onClick={() => setResourcePickerFor({ kind: "active", ds })}
                               title={ds.new_resources_at_source.map((r) => r.name || r.id).join(", ")}
                               style={{
-                                background: "#fef3c7",
-                                color: "#92400e",
-                                border: "1px solid #f59e0b",
+                                background: "var(--tint-warn-bg)",
+                                color: "var(--warning)",
+                                border: "1px solid var(--tint-warn-bd)",
                                 borderRadius: "9999px",
                                 padding: "0.05rem 0.5rem",
                                 fontSize: "0.7rem",
@@ -2214,7 +2234,7 @@ export default function AdminPage() {
                                 cursor: "pointer",
                               }}
                             >
-                              ✕ התעלם
+                              <span aria-hidden="true">✕</span> התעלם
                             </button>
                           </>
                         )}
@@ -2226,6 +2246,7 @@ export default function AdminPage() {
                     <div style={{ flex: "1 1 12rem", minWidth: "10rem" }}>
                       <div style={admFieldLabel}>{t("organizations.admin_column")}</div>
                     <select
+                      aria-label={`${t("organizations.admin_column")} — ${ds.title}`}
                       value={ds.organization_id ?? ""}
                       onChange={(e) => handleChangeOrg(ds.id, e.target.value)}
                       style={{
@@ -2257,6 +2278,7 @@ export default function AdminPage() {
                     <div style={{ flex: "0 1 9rem", minWidth: "8rem" }}>
                       <div style={admFieldLabel}>תדירות</div>
                     <select
+                      aria-label={`תדירות בדיקה — ${ds.title}`}
                       value={ds.poll_interval}
                       onChange={(e) => handleUpdateInterval(ds.id, Number(e.target.value))}
                       style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px" }}
@@ -2275,6 +2297,7 @@ export default function AdminPage() {
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                       <div style={admSubLabel}>{t("admin.storage_mode") || "אופן שמירה"}</div>
                       <select
+                        aria-label={`אופן שמירה — ${ds.title}`}
                         value={ds.storage_mode || "full_snapshot"}
                         onChange={(e) =>
                           handleUpdateStorageMode(
@@ -2289,7 +2312,7 @@ export default function AdminPage() {
                       </select>
                       {ds.storage_mode === "append_only" && (
                         <>
-                        <input
+                        <input aria-label={t("admin.append_key_placeholder") || "מפתח (אופציונלי)"}
                           type="text"
                           defaultValue={ds.append_key || ""}
                           placeholder={t("admin.append_key_placeholder") || "מפתח (אופציונלי)"}
@@ -2302,14 +2325,14 @@ export default function AdminPage() {
                         />
                         <label
                           title="מצב DIFF: לוכד גם שינויים בשורות קיימות (לא רק שורות חדשות), עם מיגרציה חד-פעמית כבדה. שמור למקרים קיצוניים בלבד (כמו מאגר הרכב)."
-                          style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", whiteSpace: "nowrap", color: ds.capture_changes ? "#b45309" : "var(--text-muted)", fontWeight: ds.capture_changes ? 600 : 400 }}
+                          style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", whiteSpace: "nowrap", color: ds.capture_changes ? "#873E07" : "var(--text-muted)", fontWeight: ds.capture_changes ? 600 : 400 }}
                         >
                           <input
                             type="checkbox"
                             checked={!!ds.capture_changes}
                             onChange={(e) => handleUpdateCaptureChanges(ds.id, e.target.checked)}
                           />
-                          ⚠ DIFF (לכידת שינויים)
+                          <span aria-hidden="true">⚠</span> DIFF (לכידת שינויים)
                         </label>
                         </>
                       )}
@@ -2322,7 +2345,7 @@ export default function AdminPage() {
                           handleUpdateStorageTarget(ds.id, e.target.value as StorageTarget)
                         }
                         title="תוכנית האחסון: היכן נשמרים הקבצים (מקומי / R2 / ODATA) והאם השורות הטבלאיות נשמרות גם ב-NEON (DB לתשאול). NEON זמין למאגרי data.gov.il טבלאיים בלבד."
-                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "#b91c1c" : (ds.storage_target?.includes("neon") ? "#0369a1" : undefined) }}
+                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "var(--danger)" : (ds.storage_target?.includes("neon") ? "#035887" : undefined) }}
                       >
                         {storageTargetOptions(ds.neon_eligible ?? (ds.source_type === "ckan")).map((o) => (
                           <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
@@ -2352,16 +2375,16 @@ export default function AdminPage() {
                         style={{
                           marginTop: "0.25rem",
                           fontSize: "0.7rem",
-                          color: "#92400e",
-                          background: "#fef3c7",
-                          border: "1px solid #fcd34d",
+                          color: "var(--warning)",
+                          background: "var(--tint-warn-bg)",
+                          border: "1px solid var(--tint-warn-bd)",
                           borderRadius: "4px",
                           padding: "0.2rem 0.4rem",
                           cursor: "help",
                           display: "inline-block",
                         }}
                       >
-                        💡 שקול ארכוב delta (append_only + מפתח)
+                        <span aria-hidden="true">💡</span> שקול ארכוב delta (append_only + מפתח)
                       </div>
                     )}
                     </div>
@@ -2383,8 +2406,8 @@ export default function AdminPage() {
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
                             borderRadius: "4px",
-                            background: pollToast.ok ? "#dcfce7" : "#fee2e2",
-                            color: pollToast.ok ? "#166534" : "#991b1b",
+                            background: pollToast.ok ? "var(--tint-good-bg)" : "var(--tint-bad-bg)",
+                            color: pollToast.ok ? "var(--success)" : "#941A1A",
                             whiteSpace: "nowrap",
                           }}>
                             {pollToast.msg}
@@ -2420,15 +2443,15 @@ export default function AdminPage() {
       {orgs.length === 0 ? (
         <div className="empty-state">אין ארגונים. סנכרן קודם מ-data.gov.il או gov.il.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
             <thead>
               <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
-                <th style={thStyle}>ארגון</th>
-                <th style={thStyle}>מקור</th>
-                <th style={thStyle}>הורה</th>
-                <th style={thStyle}>מאגרים</th>
-                <th style={thStyle}>תת-יחידות</th>
+                <th scope="col" style={thStyle}>ארגון</th>
+                <th scope="col" style={thStyle}>מקור</th>
+                <th scope="col" style={thStyle}>הורה</th>
+                <th scope="col" style={thStyle}>מאגרים</th>
+                <th scope="col" style={thStyle}>תת-יחידות</th>
               </tr>
             </thead>
             <tbody>
@@ -2450,8 +2473,8 @@ export default function AdminPage() {
                           borderRadius: "9999px",
                           fontSize: "0.65rem",
                           fontWeight: 600,
-                          background: "#ccfbf1",
-                          color: "#0f766e",
+                          background: "var(--tint-teal-bg)",
+                          color: "var(--tint-teal-fg)",
                         }}>DATA.GOV.IL</span>
                       )}
                       {o.gov_il_url_name && (
@@ -2461,14 +2484,15 @@ export default function AdminPage() {
                           borderRadius: "9999px",
                           fontSize: "0.65rem",
                           fontWeight: 600,
-                          background: "#fef3c7",
-                          color: "#92400e",
+                          background: "var(--tint-warn-bg)",
+                          color: "var(--warning)",
                         }}>GOV.IL</span>
                       )}
                     </div>
                   </td>
                   <td style={tdStyle}>
                     <select
+                      aria-label={`ארגון־אב עבור ${o.title || o.name}`}
                       value={o.parent_id ?? ""}
                       onChange={(e) => handleChangeParentOrg(o.id, e.target.value)}
                       style={{
@@ -2512,13 +2536,13 @@ export default function AdminPage() {
           עדיין אין תגיות. ניתן להוסיף תגיות לכל מאגר ברשימה למעלה.
         </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--surface)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
             <thead>
               <tr style={{ background: "var(--primary-50)", borderBottom: "2px solid var(--border)" }}>
-                <th style={thStyle}>תגית</th>
-                <th style={thStyle}>מאגרים</th>
-                <th style={thStyle}>פעולות</th>
+                <th scope="col" style={thStyle}>תגית</th>
+                <th scope="col" style={thStyle}>מאגרים</th>
+                <th scope="col" style={thStyle}>פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -2550,7 +2574,7 @@ export default function AdminPage() {
 
       </>)}
 
-      </main>
+      </div>
 
       {resourcePickerFor && resourcePickerFor.kind === "active" && (
         <ResourcePickerModal
@@ -2659,22 +2683,22 @@ function WorkerFleetPanel() {
 
   const statusChip = (w: WorkerNodeRow): { label: string; bg: string; fg: string; title: string } => {
     if (w.drained) return {
-      label: "✓ מנוקז — אפשר להפעיל מחדש", bg: "#dcfce7", fg: "#166534",
+      label: "✓ מנוקז — אפשר להפעיל מחדש", bg: "var(--tint-good-bg)", fg: "var(--success)",
       title: "מושהה ולא מחזיק משימה — הפעלה מחדש עכשיו לא תפיל גירוד",
     };
     if (w.paused) return {
-      label: "⏸ מתנקז — מסיים משימה", bg: "#fef3c7", fg: "#92400e",
+      label: "⏸ מתנקז — מסיים משימה", bg: "var(--tint-warn-bg)", fg: "var(--warning)",
       title: "מושהה, אבל עדיין מריץ משימה. לא ייקח משימות חדשות; המתן לסיום",
     };
     if (w.offline) return {
-      label: "○ לא מדווח", bg: "#f1f5f9", fg: "#475569",
+      label: "○ לא מדווח", bg: "var(--surface-2)", fg: "var(--text-muted)",
       title: "לא ביקש עבודה יותר מ-10 דקות — כבוי, קרס, או באמצע הפעלה מחדש",
     };
     if (w.current_tasks.length > 0) return {
       label: w.current_tasks.length > 1 ? `● בעבודה (${w.current_tasks.length})` : "● בעבודה",
-      bg: "#dbeafe", fg: "#1e40af", title: "מריץ משימה כרגע",
+      bg: "var(--tint-sky-bg)", fg: "var(--tint-sky-fg)", title: "מריץ משימה כרגע",
     };
-    return { label: "● פנוי", bg: "#dcfce7", fg: "#166534", title: "חי ומבקש עבודה" };
+    return { label: "● פנוי", bg: "var(--tint-good-bg)", fg: "var(--success)", title: "חי ומבקש עבודה" };
   };
 
   return (
@@ -2688,7 +2712,7 @@ function WorkerFleetPanel() {
     }} aria-labelledby="fleet-heading">
       <div className="flex-between" style={{ marginBottom: "0.4rem" }}>
         <h2 id="fleet-heading" style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
-          🖥 מכונות גירוד (workers)
+          <span aria-hidden="true">🖥</span> מכונות גירוד (workers)
         </h2>
         <button onClick={load} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
           רענן ↻
@@ -2703,7 +2727,7 @@ function WorkerFleetPanel() {
       {errorMsg && (
         <div style={{
           marginBottom: "0.6rem", padding: "0.4rem 0.6rem", fontSize: "0.8rem",
-          background: "#fee2e2", color: "#991b1b", borderRadius: 4,
+          background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)", borderRadius: 4,
         }}>
           {errorMsg}
         </div>
@@ -2757,7 +2781,7 @@ function WorkerFleetPanel() {
                   {w.worker_upstream === "behind" && (
                     <span title="ה-worker מדווח שהקוד שלו מאחור מול origin" style={{
                       fontSize: "0.7rem", padding: "0.1rem 0.45rem", borderRadius: 9999,
-                      background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap",
+                      background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)", whiteSpace: "nowrap",
                     }}>
                       קוד מיושן
                     </span>
@@ -2773,9 +2797,9 @@ function WorkerFleetPanel() {
                       ? "החזר את המכונה לקבל משימות"
                       : "אל תיתן למכונה משימות חדשות — המשימה הנוכחית תסתיים כרגיל"}
                     style={{
-                      background: w.paused ? "#dcfce7" : "none",
-                      border: `1px solid ${w.paused ? "#166534" : "#92400e"}`,
-                      color: w.paused ? "#166534" : "#92400e",
+                      background: w.paused ? "var(--tint-good-bg)" : "none",
+                      border: `1px solid ${w.paused ? "var(--success)" : "#833909"}`,
+                      color: w.paused ? "var(--success)" : "#833909",
                       cursor: isBusy ? "default" : "pointer",
                       opacity: isBusy ? 0.5 : 1,
                       fontSize: "0.72rem", padding: "0.2rem 0.5rem",
@@ -2801,7 +2825,7 @@ function WorkerFleetPanel() {
                         borderRadius: 4, whiteSpace: "nowrap",
                       }}
                     >
-                      ✕ הסר
+                      <span aria-hidden="true">✕</span> הסר
                     </button>
                   )}
                 </div>
@@ -2902,7 +2926,7 @@ function SourceLoadPanel() {
     }} aria-labelledby="source-load-heading">
       <div className="flex-between" style={{ marginBottom: "0.4rem" }}>
         <h2 id="source-load-heading" style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
-          🚦 עומס לפי מקור
+          <span aria-hidden="true">🚦</span> עומס לפי מקור
         </h2>
         <button onClick={load} className="btn-secondary" style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}>
           רענן ↻
@@ -2917,7 +2941,7 @@ function SourceLoadPanel() {
       {errorMsg && (
         <div style={{
           marginBottom: "0.6rem", padding: "0.4rem 0.6rem", fontSize: "0.8rem",
-          background: "#fee2e2", color: "#991b1b", borderRadius: 4,
+          background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)", borderRadius: 4,
         }}>
           {errorMsg}
         </div>
@@ -2930,11 +2954,11 @@ function SourceLoadPanel() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
             <thead>
               <tr style={{ textAlign: "start", color: "var(--text-muted)", fontSize: "0.75rem" }}>
-                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקור</th>
-                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מאגרים</th>
-                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בעבודה</th>
-                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בתור</th>
-                <th style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקסימום workers</th>
+                <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקור</th>
+                <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מאגרים</th>
+                <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בעבודה</th>
+                <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>בתור</th>
+                <th scope="col" style={{ textAlign: "start", padding: "0.3rem 0.4rem" }}>מקסימום workers</th>
               </tr>
             </thead>
             <tbody>
@@ -2993,7 +3017,7 @@ function SourceLoadPanel() {
                         {!dirty && r.max_workers === 0 && (
                           <span style={{
                             fontSize: "0.7rem", padding: "0.1rem 0.4rem", borderRadius: 9999,
-                            background: "#fee2e2", color: "#991b1b", whiteSpace: "nowrap",
+                            background: "var(--tint-bad-bg)", color: "var(--tint-bad-fg)", whiteSpace: "nowrap",
                           }}>
                             מושהה
                           </span>
@@ -3003,7 +3027,7 @@ function SourceLoadPanel() {
                             title="המגבלה הורדה בזמן שמשימות כבר רצו — הן ימשיכו עד סיומן, ולא יימסרו חדשות"
                             style={{
                               fontSize: "0.7rem", padding: "0.1rem 0.4rem", borderRadius: 9999,
-                              background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap",
+                              background: "var(--tint-warn-bg)", color: "var(--warning)", whiteSpace: "nowrap",
                             }}
                           >
                             מעל המגבלה — יתנקז
@@ -3148,12 +3172,12 @@ function DatastorePushJobsPanel() {
       >
         <span>⏳ ממתינות: <strong>{counts.pending}</strong></span>
         <span>▶ רצות עכשיו: <strong>{counts.running}</strong></span>
-        <span style={{ color: "#15803d" }}>✓ הצליחו: <strong>{counts.success}</strong></span>
-        <span style={{ color: "#991b1b" }}>✗ נכשלו: <strong>{counts.failed}</strong></span>
+        <span style={{ color: "var(--success)" }}><span aria-hidden="true">✓</span> הצליחו: <strong>{counts.success}</strong></span>
+        <span style={{ color: "var(--tint-bad-fg)" }}><span aria-hidden="true">✗</span> נכשלו: <strong>{counts.failed}</strong></span>
       </div>
 
       {errorMsg && (
-        <div role="alert" style={{ color: "#991b1b", padding: "0.5rem 0.6rem" }}>
+        <div role="alert" style={{ color: "var(--tint-bad-fg)", padding: "0.5rem 0.6rem" }}>
           {errorMsg}
         </div>
       )}
@@ -3167,19 +3191,19 @@ function DatastorePushJobsPanel() {
           אין משימות בתור.
         </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div tabIndex={0} role="region" aria-label="טבלת נתונים" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
             <thead>
-              <tr style={{ background: "#f9fafb", textAlign: "right" }}>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>סטטוס</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>resource_id</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שורות</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>ניסיונות</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נוצר</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>heartbeat</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שגיאה</th>
-                <th style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>פעולות</th>
+              <tr style={{ background: "var(--surface-2)", textAlign: "right" }}>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>סטטוס</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>מאגר</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>resource_id</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שורות</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>ניסיונות</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>נוצר</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>heartbeat</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>שגיאה</th>
+                <th scope="col" style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid var(--border)" }}>פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -3197,7 +3221,7 @@ function DatastorePushJobsPanel() {
                     ? `${j.rows_pushed.toLocaleString()} / ${j.total_rows.toLocaleString()}`
                     : j.rows_pushed.toLocaleString();
                 return (
-                  <tr key={j.id} style={{ borderBottom: "1px solid #f0f0f0", background: bg }}>
+                  <tr key={j.id} style={{ borderBottom: "1px solid var(--border)", background: bg }}>
                     <td style={tdStyle}>
                       <span
                         style={{
@@ -3210,9 +3234,9 @@ function DatastorePushJobsPanel() {
                             : j.status === "success" ? "#bbf7d0"
                             : "#e5e7eb",
                           color:
-                            j.status === "failed" ? "#991b1b"
-                            : j.status === "running" ? "#92400e"
-                            : j.status === "success" ? "#166534"
+                            j.status === "failed" ? "#941A1A"
+                            : j.status === "running" ? "#833909"
+                            : j.status === "success" ? "var(--success)"
                             : "#374151",
                           fontWeight: 600,
                         }}
@@ -3240,7 +3264,7 @@ function DatastorePushJobsPanel() {
                     <td style={{ ...tdStyle, whiteSpace: "nowrap" }} className="text-muted">
                       {formatRelative(j.updated_at)}
                     </td>
-                    <td style={{ ...tdStyle, fontSize: "0.75rem", color: "#991b1b", maxWidth: 360 }}>
+                    <td style={{ ...tdStyle, fontSize: "0.75rem", color: "var(--tint-bad-fg)", maxWidth: 360 }}>
                       {j.error || ""}
                     </td>
                     <td style={tdStyle}>

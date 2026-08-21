@@ -4,7 +4,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { auth } from "../api/client";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 export default function LoginPage() {
+  useDocumentTitle("התחברות");
   const { t } = useTranslation();
   const { user } = useAuth();
   const navigate = useNavigate();

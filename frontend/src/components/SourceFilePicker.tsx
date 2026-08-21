@@ -100,13 +100,13 @@ export default function SourceFilePicker({
     padding: "0.7rem 0.8rem",
     border: "1px solid var(--primary-100)",
     borderRadius: "var(--radius)",
-    background: "white",
+    background: "var(--surface)",
   };
 
   if (error) {
     return (
       <div style={boxStyle}>
-        <div role="alert" className="text-sm" style={{ color: "#dc2626" }}>
+        <div role="alert" className="text-sm" style={{ color: "var(--danger)" }}>
           {t("home.picker_failed")} {error}
         </div>
         <button
@@ -159,7 +159,7 @@ export default function SourceFilePicker({
       >
         <div className="text-sm" style={{ fontWeight: 600 }}>
           {t("home.request_pick_files_label")}
-          <span style={{ color: "#dc2626", marginInlineStart: "0.25rem" }}>*</span>
+          <span style={{ color: "var(--danger)", marginInlineStart: "0.25rem" }}>*</span>
         </div>
         <div style={{ display: "flex", gap: "0.25rem" }}>
           <button
@@ -191,7 +191,7 @@ export default function SourceFilePicker({
                 className="text-sm"
                 style={{
                   fontWeight: 600,
-                  color: group.onPage ? "var(--text-muted)" : "#b45309",
+                  color: group.onPage ? "var(--text-muted)" : "#873E07",
                   padding: "0.4rem 0 0.2rem 0",
                 }}
               >
@@ -227,8 +227,8 @@ export default function SourceFilePicker({
                         borderRadius: "9999px",
                         fontSize: "0.65rem",
                         fontWeight: 600,
-                        background: "#dcfce7",
-                        color: "#166534",
+                        background: "var(--tint-good-bg)",
+                        color: "var(--success)",
                         whiteSpace: "nowrap",
                       }}
                     >

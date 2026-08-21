@@ -122,9 +122,9 @@ export default function OcoiEntities({
                     alignItems: "center",
                     textAlign: "start",
                     padding: "0.5rem 0.7rem",
-                    border: "1px solid var(--border, #e2e8f0)",
+                    border: "1px solid var(--border, var(--border))",
                     borderRadius: 8,
-                    background: "var(--card-bg, #fff)",
+                    background: "var(--surface)",
                     cursor: "pointer",
                   }}
                 >
@@ -147,13 +147,13 @@ export default function OcoiEntities({
         ministries.length === 0 ? (
           <Empty>אין נתונים להצגה.</Empty>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div tabIndex={0} role="region" aria-label="ישויות" className="scroll-region" style={{ overflowX: "auto" }}>
             <table className="table" style={{ width: "100%", fontSize: "0.9rem" }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "start" }}>משרד / גוף</th>
-                  <th style={{ textAlign: "center" }}>בעלי תפקיד</th>
-                  <th style={{ textAlign: "center" }}>קשרים</th>
+                  <th scope="col" style={{ textAlign: "start" }}>משרד / גוף</th>
+                  <th scope="col" style={{ textAlign: "center" }}>בעלי תפקיד</th>
+                  <th scope="col" style={{ textAlign: "center" }}>קשרים</th>
                 </tr>
               </thead>
               <tbody>

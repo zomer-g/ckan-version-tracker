@@ -29,7 +29,7 @@ function EventCard({ ev }: { ev: OcalEvent }) {
           {ev.dataset_link ? (
             <a href={ev.dataset_link} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
               {ev.title}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           ) : (
             ev.title
           )}
@@ -59,7 +59,7 @@ function EventCard({ ev }: { ev: OcalEvent }) {
               key={`${e.name}-${i}`}
               style={{
                 fontSize: "0.72rem", padding: "0.1rem 0.45rem", borderRadius: 10,
-                background: "var(--bg-muted, #eef2f5)", color: "var(--text-muted)",
+                background: "var(--surface-2)", color: "var(--text-muted)",
               }}
             >
               {e.name}
@@ -131,7 +131,7 @@ export default function OcalSearch() {
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
   const inputStyle: React.CSSProperties = {
-    padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4, fontSize: "0.9rem",
+    padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4, fontSize: "0.9rem",
   };
 
   return (
@@ -182,7 +182,7 @@ export default function OcalSearch() {
         </select>
       </div>
 
-      {error && <div style={{ color: "var(--danger, #dc2626)", marginBottom: "0.6rem" }}>{error}</div>}
+      {error && <div style={{ color: "var(--danger, #992C2C)", marginBottom: "0.6rem" }}>{error}</div>}
 
       <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }} role="status">
         {loading ? "טוען…" : `${total.toLocaleString()} תוצאות`}

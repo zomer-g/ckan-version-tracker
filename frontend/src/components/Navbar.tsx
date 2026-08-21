@@ -3,7 +3,9 @@ import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { datasets as datasetsApi } from "../api/client";
 import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
+import { useTheme } from "../hooks/useTheme";
 
+import { autoRefreshPaused } from "../hooks/useAutoRefresh";
 /**
  * Brand icon — inline SVG (no extra dep) shaped as a stacked-archive /
  * "versions" mark so it carries the same family weight as Ocoi's shield
@@ -91,6 +93,7 @@ export default function Navbar() {
         .then((r) => { if (alive) setPendingCount(r.count || 0); })
         .catch(() => {});
     load();
+    if (autoRefreshPaused()) return () => { alive = false; };
     const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
   }, []);
@@ -161,6 +164,22 @@ export default function Navbar() {
   const closeMobile = () => setMobileOpen(false);
   const closeDesktop = () => setOpenGroup(null);
 
+  // Which trigger opened the dropdown, so Escape can put focus back on it
+  // instead of losing it to <body> (WCAG 2.4.3, Focus Order).
+  const groupBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const closeDesktopAndRestore = (key: string) => {
+    setOpenGroup(null);
+    groupBtnRefs.current[key]?.focus();
+  };
+
+  const { pref: themePref, resolved: themeNow, cycle: cycleTheme } = useTheme();
+  const themeLabel =
+    themePref === "system"
+      ? "ערכת נושא: לפי הגדרות המערכת — החלף לכהה"
+      : themePref === "dark"
+        ? "ערכת נושא: כהה — החלף לבהיר"
+        : "ערכת נושא: בהיר — החזר להגדרות המערכת";
+
   // Close an open desktop dropdown on outside click or Escape.
   useEffect(() => {
     if (!openGroup) return;
@@ -168,7 +187,7 @@ export default function Navbar() {
       if (!navDesktopRef.current?.contains(e.target as Node)) closeDesktop();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDesktop();
+      if (e.key === "Escape") closeDesktopAndRestore(openGroup);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -186,7 +205,15 @@ export default function Navbar() {
 
   return (
     <header>
-      <nav className="navbar" role="navigation" aria-label={t("app_name")}>
+      <nav
+        className="navbar"
+        aria-label={t("app_name")}
+        // The header is fully translated even where the page body is not, so
+        // it declares its own language rather than inheriting the document's
+        // (WCAG 3.1.2 Language of Parts).
+        lang={i18n.language}
+        dir={i18n.language === "he" ? "rtl" : "ltr"}
+      >
         <div className="container navbar-inner">
           <Link
             to="/"
@@ -197,12 +224,10 @@ export default function Navbar() {
             <BrandIcon />
             <span className="brand-text">{t("app_name")}</span>
             {pendingCount > 0 && (
-              <span
-                className="pending-dot"
-                role="status"
-                aria-label={t("nav.pending_waiting", "יש בקשות ממתינות")}
-                title={t("nav.pending_waiting", "יש בקשות ממתינות")}
-              />
+              <>
+                <span className="pending-dot" aria-hidden="true" title={t("nav.pending_waiting", "יש בקשות ממתינות")} />
+                <span className="sr-only">{t("nav.pending_waiting", "יש בקשות ממתינות")}</span>
+              </>
             )}
           </Link>
 
@@ -216,8 +241,11 @@ export default function Navbar() {
                     className={`nav-link nav-group-btn${
                       groupActive(entry) ? " is-active" : ""
                     }${openGroup === entry.key ? " is-open" : ""}`}
-                    aria-haspopup="true"
+                    ref={(el) => {
+                      groupBtnRefs.current[entry.key] = el;
+                    }}
                     aria-expanded={openGroup === entry.key}
+                    aria-controls={`nav-group-${entry.key}`}
                     onClick={() =>
                       setOpenGroup((cur) => (cur === entry.key ? null : entry.key))
                     }
@@ -226,12 +254,16 @@ export default function Navbar() {
                     <ChevronIcon />
                   </button>
                   {openGroup === entry.key && (
-                    <div className="nav-dropdown" role="menu">
+                    <div
+                      className="nav-dropdown"
+                      id={`nav-group-${entry.key}`}
+                      role="group"
+                      aria-label={entry.label}
+                    >
                       {entry.children.map((child) => (
                         <Link
                           key={child.to}
                           to={child.to}
-                          role="menuitem"
                           className={`nav-dropdown-link${
                             isActive(child.to) ? " is-active" : ""
                           }`}
@@ -261,6 +293,20 @@ export default function Navbar() {
               aria-label={langLabel}
             >
               {i18n.language === "he" ? "EN" : "HE"}
+            </button>
+            {/* WCAG 1.4.8 wants the reader to be able to choose the text and
+                background colours. Three stops, not two: "follow the system"
+                is a real preference and must stay reachable. */}
+            <button
+              type="button"
+              className="btn-theme"
+              onClick={cycleTheme}
+              aria-label={themeLabel}
+              title={themeLabel}
+            >
+              <span aria-hidden="true">
+                {themePref === "system" ? "◐" : themeNow === "dark" ? "☾" : "☀"}
+              </span>
             </button>
           </div>
 
@@ -327,6 +373,18 @@ export default function Navbar() {
                 aria-label={langLabel}
               >
                 {langLabel}
+              </button>
+              <button
+                type="button"
+                className="btn-lang navbar-mobile-lang"
+                onClick={cycleTheme}
+                aria-label={themeLabel}
+              >
+                {themePref === "system"
+                  ? "ערכת נושא: מערכת"
+                  : themePref === "dark"
+                    ? "ערכת נושא: כהה"
+                    : "ערכת נושא: בהיר"}
               </button>
             </div>
           </div>

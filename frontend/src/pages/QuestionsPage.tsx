@@ -21,6 +21,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { deepSearch } from "../api/client";
 import type { DeepSource } from "../api/client";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
   Attribution,
   ColState,
@@ -61,6 +62,7 @@ function readHidden(params: URLSearchParams): Set<string> {
 }
 
 export default function QuestionsPage() {
+  useDocumentTitle("שאלות לעם");
   const [searchParams, setSearchParams] = useSearchParams();
   // Seed from the URL exactly once — re-seeding fights the controlled inputs.
   const initial = useMemo(() => new URLSearchParams(searchParams), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -259,7 +261,7 @@ export default function QuestionsPage() {
           style={{
             flex: "1 1 260px",
             padding: "0.5rem 0.7rem",
-            border: "1px solid var(--border, #d1d5db)",
+            border: "1px solid var(--border, var(--border))",
             borderRadius: "var(--radius, 8px)",
             fontSize: "0.95rem",
           }}
@@ -287,7 +289,7 @@ export default function QuestionsPage() {
         </button>
 
         <div
-          role="tablist"
+          role="group"
           aria-label="תצוגת תוצאות"
           style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}
         >
@@ -300,8 +302,7 @@ export default function QuestionsPage() {
             <button
               key={m}
               type="button"
-              role="tab"
-              aria-selected={mode === m}
+              aria-pressed={mode === m}
               onClick={() => changeMode(m)}
               style={{
                 // A segmented control of BUTTONS, so --radius like every other
@@ -312,8 +313,8 @@ export default function QuestionsPage() {
                 fontSize: "0.82rem",
                 fontWeight: 600,
                 border: `1px solid ${mode === m ? "var(--primary-700, #06607C)" : "var(--border, #d1d5db)"}`,
-                background: mode === m ? "var(--primary-700, #06607C)" : "transparent",
-                color: mode === m ? "#fff" : "var(--primary-700, #06607C)",
+                background: mode === m ? "var(--fill-brand)" : "transparent",
+                color: mode === m ? "var(--on-fill)" : "var(--primary-700)",
               }}
             >
               {label}
@@ -396,6 +397,10 @@ export default function QuestionsPage() {
 
       {searched && visible.length > 0 && mode === "bysource" && (
         <div
+          tabIndex={0}
+          role="region"
+          aria-label="תוצאות לפי מקור — גלילה לצדדים"
+          className="scroll-region"
           style={{
             display: "flex",
             gap: "14px",
@@ -467,7 +472,7 @@ function MergedList({
       {errored.length > 0 && (
         <div
           className="text-sm"
-          style={{ marginTop: "0.75rem", color: "var(--danger, #dc2626)" }}
+          style={{ marginTop: "0.75rem", color: "var(--danger, #992C2C)" }}
         >
           מקורות שנכשלו:{" "}
           {errored
@@ -477,7 +482,7 @@ function MergedList({
       )}
 
       {/* Attribution is required per source, in both display modes. */}
-      <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: "0.6rem" }}>
+      <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border, var(--border))", paddingTop: "0.6rem" }}>
         {sources.map((s) => (
           <Attribution key={s.id} source={s} />
         ))}

@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, Organization } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 export default function OrganizationsPage() {
+  useDocumentTitle("ארגונים");
   const { t } = useTranslation();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,7 +110,7 @@ function OrgCard({ org, muted = false }: { org: Organization; muted?: boolean })
             height: 56,
             borderRadius: 8,
             objectFit: "contain",
-            background: "#fff",
+            background: "var(--surface)",
             border: "1px solid var(--border)",
             flexShrink: 0,
           }}

@@ -48,12 +48,12 @@ export default function ImportWarningNotice({
           fontWeight: 600,
           padding: "0.1rem 0.45rem",
           borderRadius: "999px",
-          background: "#fef3c7",
-          color: "#92400e",
+          background: "var(--tint-warn-bg)",
+          color: "var(--warning)",
           whiteSpace: "nowrap",
         }}
       >
-        ⚠ חשש לייבוא פגום
+        <span aria-hidden="true">⚠</span> חשש לייבוא פגום
       </span>
     );
   }
@@ -65,16 +65,16 @@ export default function ImportWarningNotice({
         marginTop: "0.6rem",
         padding: "0.6rem 0.85rem",
         borderRadius: 8,
-        background: "#fffbeb",
-        border: "1px solid #fcd34d",
-        color: "#78350f",
+        background: "var(--tint-warn-bg)",
+        border: "1px solid var(--tint-warn-bd)",
+        color: "var(--warning)",
         fontSize: "0.85rem",
         lineHeight: 1.6,
         maxWidth: "46rem",
       }}
     >
       <strong style={{ display: "block", marginBottom: "0.15rem" }}>
-        ⚠ יש חשש שהגרסה האחרונה לא יובאה כראוי{since ? ` — נבדק ב-${since}` : ""}
+        <span aria-hidden="true">⚠</span> יש חשש שהגרסה האחרונה לא יובאה כראוי{since ? ` — נבדק ב-${since}` : ""}
       </strong>
       {warning}
       <div style={{ marginTop: "0.35rem", opacity: 0.9 }}>

@@ -77,6 +77,54 @@ export function chipOutcome(st: ColState | undefined): {
 // Radius tokens follow the rule documented in index.css :root — buttons and
 // inputs get --radius (8px), chips and badges get --radius-full. Nothing here
 // hardcodes a radius, so the feature can never drift from the site.
+/**
+ * Make a server-supplied chip colour carry readable text (WCAG 1.4.6).
+ *
+ * Each deep-search source ships its own fill from the backend manifest, and the
+ * chip painted white on it unconditionally — 1.99:1 on the light end of the
+ * ramp, which fails even 1.4.3. Choosing the ink is not enough on its own: a
+ * mid-tone like #0A7A9A gives 4.93:1 against white and 4.2:1 against black, so
+ * NO ink clears 7:1 on it.
+ *
+ * So the fill itself is walked toward whichever end already suits it until the
+ * pair reaches 7:1. The hue survives — which is the whole point of the chip —
+ * and the result holds no matter what a future manifest declares.
+ */
+function readablePair(fill: string | null | undefined): { bg: string; fg: string } {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((fill || "").trim());
+  if (!m) return { bg: "var(--fill-brand)", fg: "var(--on-fill)" };
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+
+  const lum = (c: number[]) => {
+    const l = c.map((v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2];
+  };
+  const against = (c: number[], other: number) => {
+    const a = lum(c);
+    const [hi, lo] = a > other ? [a, other] : [other, a];
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const WHITE_L = 1, INK_L = lum([11, 21, 25]);
+
+  // Darken for white ink, lighten for dark ink — whichever the colour is
+  // already closer to, so the chip keeps looking like itself.
+  const goDark = lum(rgb) < 0.35;
+  const target = goDark ? [0, 0, 0] : [255, 255, 255];
+  let out = rgb;
+  for (let i = 0; i <= 100; i++) {
+    const t = i / 100;
+    out = rgb.map((v, k) => Math.round(v + (target[k] - v) * t));
+    if (against(out, goDark ? WHITE_L : INK_L) >= 7) break;
+  }
+  const hex = "#" + out.map((v) => v.toString(16).padStart(2, "0")).join("");
+  return { bg: hex, fg: goDark ? "#ffffff" : "#0B1519" };
+}
+
 const chip = (bg: string, fg: string): React.CSSProperties => ({
   display: "inline-block",
   padding: "0.125rem 0.5rem",
@@ -88,7 +136,7 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
   whiteSpace: "nowrap",
 });
 
-const MUTED_CHIP = chip("var(--bg-muted, #eef2f5)", "var(--text-muted)");
+const MUTED_CHIP = chip("var(--surface-2)", "var(--text-muted)");
 const EXTERNAL_CHIP = chip("var(--warning, #f59e0b)", "#fff");
 
 /**
@@ -161,7 +209,7 @@ export function Attribution({ source }: { source: DeepSource | DeepColumn }) {
         style={{ color: "var(--primary)", whiteSpace: "nowrap" }}
       >
         אימות מקור ↗
-      </a>
+      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
     </div>
   );
 }
@@ -205,7 +253,7 @@ export function ResultCard({
               style={{ color: "var(--primary)" }}
             >
               <Highlighted text={card.title} />
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           ) : (
             <Highlighted text={card.title} />
           )}
@@ -276,7 +324,7 @@ function ColumnBody({ source, state }: { source: DeepSource; state?: ColState })
     return (
       <div
         className="text-sm"
-        style={{ padding: "0.6rem 0", color: "var(--danger, #dc2626)" }}
+        style={{ padding: "0.6rem 0", color: "var(--danger, #992C2C)" }}
       >
         שגיאה בשליפה מהמקור — {err}
       </div>
@@ -474,9 +522,9 @@ export function SourceChips({
                 alignItems: "center",
                 gap: "0.35rem",
                 borderRadius: "var(--radius-full, 9999px)",
-                border: `1px solid ${on ? s.color : "var(--border, #d1d5db)"}`,
-                background: on ? s.color : "transparent",
-                color: on ? "#fff" : "var(--text-muted)",
+                border: `1px solid ${on ? readablePair(s.color).bg : "var(--border)"}`,
+                background: on ? readablePair(s.color).bg : "transparent",
+                color: on ? readablePair(s.color).fg : "var(--text-muted)",
                 padding: "0.25rem 0.7rem",
                 minHeight: "2rem",
                 fontSize: "0.8rem",
@@ -580,7 +628,7 @@ export function SourceChips({
 
 const inputStyle: React.CSSProperties = {
   padding: "0.3rem 0.5rem",
-  border: "1px solid var(--border, #d1d5db)",
+  border: "1px solid var(--border, var(--border))",
   borderRadius: "var(--radius, 8px)",
   fontSize: "0.85rem",
   width: "auto",
@@ -600,6 +648,7 @@ function FilterControl({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        aria-label={filter.label}
         style={{ ...inputStyle, minWidth: 140 }}
       >
         {(filter.options ?? []).map((o) => (
@@ -615,6 +664,7 @@ function FilterControl({
       type={filter.type === "date" ? "date" : filter.type === "number" ? "number" : "search"}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      aria-label={filter.label}
       style={{ ...inputStyle, minWidth: 130 }}
     />
   );

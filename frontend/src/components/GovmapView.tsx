@@ -135,7 +135,7 @@ const FILTER_BLOCKLIST: string[] = [];
 // as distinct. Defaults; the user can override them at runtime via
 // the "תצוגה" panel in the sidebar.
 const DEFAULT_LAYER_STYLE = {
-  color: "#0f766e",
+  color: "var(--tint-teal-fg)",
   weight: 1,
   fillColor: "#5d936c",
   fillOpacity: 0.25,
@@ -814,8 +814,8 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             top: "0.5rem",
             left: "0.5rem",
             zIndex: 500,
-            background: "white",
-            border: "1px solid var(--border, #cbd5e1)",
+            background: "var(--surface)",
+            border: "1px solid var(--border, var(--border))",
             borderRadius: 4,
             padding: "0.25rem 0.6rem",
             fontSize: "0.75rem",
@@ -832,7 +832,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             role="alert"
             style={{
               padding: "1rem",
-              color: "var(--danger, #b91c1c)",
+              color: "var(--danger, #992C2C)",
               fontSize: "0.9rem",
             }}
           >
@@ -845,7 +845,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               style={{ color: "var(--primary)" }}
             >
               {geojsonDownloadUrl}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           </div>
         ) : mobileChoice === null ? (
           <div
@@ -895,7 +895,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
                   padding: "0.45rem 1rem",
                   fontSize: "0.85rem",
                   background: "none",
-                  border: "1px solid var(--border, #cbd5e1)",
+                  border: "1px solid var(--border, var(--border))",
                   color: "var(--text-muted)",
                   borderRadius: 4,
                   cursor: "pointer",
@@ -970,7 +970,12 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
             </div>
             {downloadProgress !== null && !parsing && !pass2Loading && (
               <div
-                aria-hidden
+                role="progressbar"
+                aria-label="התקדמות טעינת השכבה"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(downloadProgress * 100)}
+                aria-valuetext={`${Math.round(downloadProgress * 100)}%`}
                 style={{
                   width: "70%",
                   maxWidth: 320,
@@ -984,7 +989,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
                   style={{
                     height: "100%",
                     width: `${downloadProgress * 100}%`,
-                    background: "var(--primary, #0f766e)",
+                    background: "var(--fill-brand)",
                     transition: "width 120ms linear",
                   }}
                 />
@@ -1079,7 +1084,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               fontSize: "0.75rem",
               padding: "0.2rem 0.55rem",
               background: "none",
-              border: "1px solid var(--border, #cbd5e1)",
+              border: "1px solid var(--border, var(--border))",
               color: "var(--text-muted)",
               borderRadius: 4,
               cursor: "pointer",
@@ -1141,7 +1146,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
               padding: "0.3rem 0.5rem",
               fontSize: "0.7rem",
               background: "none",
-              border: "1px dashed var(--border, #cbd5e1)",
+              border: "1px dashed var(--border, var(--border))",
               color: "var(--text-muted)",
               borderRadius: 4,
               cursor: "pointer",
@@ -1257,7 +1262,7 @@ function FieldFilter(props: {
   return (
     <fieldset
       style={{
-        border: "1px solid var(--border, #e2e8f0)",
+        border: "1px solid var(--border, var(--border))",
         borderRadius: 6,
         padding: "0.5rem 0.6rem",
         margin: "0 0 0.6rem 0",
@@ -1352,7 +1357,7 @@ function SortToggle(props: {
   const { mode, onChange, t } = props;
   const baseStyle: React.CSSProperties = {
     background: "none",
-    border: "1px solid var(--border, #cbd5e1)",
+    border: "1px solid var(--border, var(--border))",
     padding: "0.15rem 0.55rem",
     fontSize: "0.7rem",
     cursor: "pointer",
@@ -1360,9 +1365,9 @@ function SortToggle(props: {
     borderRadius: 4,
   };
   const activeStyle: React.CSSProperties = {
-    background: "var(--primary, #0f766e)",
-    borderColor: "var(--primary, #0f766e)",
-    color: "white",
+    background: "var(--fill-brand)",
+    borderColor: "var(--primary, var(--tint-teal-fg))",
+    color: "var(--on-fill-brand)",
   };
   return (
     <div style={{ display: "inline-flex", gap: "0.2rem" }}>
@@ -1402,7 +1407,7 @@ function StylePanel(props: {
   return (
     <fieldset
       style={{
-        border: "1px solid var(--border, #e2e8f0)",
+        border: "1px solid var(--border, var(--border))",
         borderRadius: 6,
         padding: open ? "0.5rem 0.6rem" : "0.25rem 0.6rem",
         margin: "0 0 0.6rem 0",
@@ -1434,6 +1439,7 @@ function StylePanel(props: {
           <StyleRow label={t("map.style_fill_color")}>
             <input
               type="color"
+              aria-label={t("map.style_fill_color")}
               value={style.fillColor}
               onChange={(e) => onChange({ ...style, fillColor: e.target.value })}
               style={{ width: 36, height: 24, border: "none", padding: 0 }}
@@ -1442,6 +1448,7 @@ function StylePanel(props: {
           <StyleRow label={t("map.style_fill_opacity")}>
             <input
               type="range"
+              aria-label={t("map.style_fill_opacity")}
               min={0}
               max={100}
               step={1}
@@ -1458,6 +1465,7 @@ function StylePanel(props: {
           <StyleRow label={t("map.style_stroke_color")}>
             <input
               type="color"
+              aria-label={t("map.style_stroke_color")}
               value={style.color}
               onChange={(e) => onChange({ ...style, color: e.target.value })}
               style={{ width: 36, height: 24, border: "none", padding: 0 }}
@@ -1466,6 +1474,7 @@ function StylePanel(props: {
           <StyleRow label={t("map.style_stroke_weight")}>
             <input
               type="range"
+              aria-label={t("map.style_stroke_weight")}
               min={0}
               max={5}
               step={0.5}
@@ -1483,7 +1492,7 @@ function StylePanel(props: {
             style={{
               alignSelf: "flex-start",
               background: "none",
-              border: "1px solid var(--border, #cbd5e1)",
+              border: "1px solid var(--border, var(--border))",
               color: "var(--text-muted)",
               fontSize: "0.7rem",
               padding: "0.15rem 0.5rem",

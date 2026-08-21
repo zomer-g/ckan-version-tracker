@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
 import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const DECISION_URL = "https://www.gov.il/he/pages/2016_dec1933";
 const REPORT_URL =
   "https://www.gov.il/BlobFolder/policy/report_inter_ministerial_improve_access_to_public_databases/he/DataBaseAccessibilityReport290716a.pdf";
@@ -15,11 +16,12 @@ function ExtLink({ href, children }: { href: string; children?: React.ReactNode 
   return (
     <a href={href} target="_blank" rel="noopener noreferrer">
       {children}
-    </a>
+    <span className="sr-only"> (נפתח בחלון חדש)</span></a>
   );
 }
 
 export default function RationalePage() {
+  useDocumentTitle("הרציונל");
   const { t } = useTranslation();
   usePageContentOverrides("rationale");
   // Empty until an analysis is published — the card below then appears on its

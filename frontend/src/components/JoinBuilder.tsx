@@ -30,7 +30,7 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 });
 const box: React.CSSProperties = {
   fontSize: "0.8rem", padding: "0.2rem 0.4rem", borderRadius: 4,
-  border: "1px solid var(--border,#cbd5e1)", background: "var(--bg,#fff)",
+  border: "1px solid var(--border)", background: "var(--bg,#fff)",
 };
 
 // over_settlements / over_authorities columns offered for enrichment.
@@ -105,8 +105,8 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
   const covChip = (c: typeof cov[string]) => {
     if (!c) return null;
     if (c === "loading") return <span className="text-muted" style={{ fontSize: "0.72rem" }}>בודק…</span>;
-    if (c === "error") return <span style={{ fontSize: "0.72rem", color: "#b91c1c" }}>שגיאה</span>;
-    return <span style={chip(c.healed === c.total ? "#dcfce7" : "#fef9c3", c.healed === c.total ? "#15803d" : "#a16207")}>
+    if (c === "error") return <span style={{ fontSize: "0.72rem", color: "var(--danger)" }}>שגיאה</span>;
+    return <span style={chip(c.healed === c.total ? "var(--tint-good-bg)" : "var(--tint-note-bg)", c.healed === c.total ? "var(--success)" : "var(--tint-note-fg)")}>
       {c.healed}/{c.total} ({c.total ? Math.round((c.healed / c.total) * 100) : 0}%)
     </span>;
   };
@@ -142,10 +142,10 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
   if (!leftCols.length) return null;  // table has no locality/authority field
 
   return (
-    <div dir="rtl" style={{ marginTop: "0.6rem", border: "1px solid var(--border,#e5e7eb)", borderRadius: 6, background: "var(--bg-muted,#f8fafc)", overflow: "hidden" }}>
+    <div dir="rtl" style={{ marginTop: "0.6rem", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface-2)", overflow: "hidden" }}>
       <button onClick={() => setOpen((o) => !o)} style={{ width: "100%", textAlign: "start", padding: "0.5rem 0.7rem", background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: "0.9rem" }}>
         <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-        🔗 בונה הצלבה מתוקנת — הצלבת מאגרים לפי יישוב/רשות, בלי SQL
+        <span aria-hidden="true">🔗</span> בונה הצלבה מתוקנת — הצלבת מאגרים לפי יישוב/רשות, בלי SQL
       </button>
       {open && (
         <div style={{ padding: "0 0.7rem 0.7rem", fontSize: "0.82rem" }}>
@@ -155,10 +155,10 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
             <span style={chip("#f1f5f9", "#475569")}>{profile.table_name}</span>
             <span>שדה יישוב:</span>
             {leftCols.length > 1 ? (
-              <select value={leftCol} onChange={(e) => setLeftCol(e.target.value)} style={box}>
+              <select value={leftCol} onChange={(e) => setLeftCol(e.target.value)} aria-label="שדה היישוב בצד שמאל" style={box}>
                 {leftCols.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            ) : <span style={chip("#e0f2fe", "#0369a1")}>{leftCol}</span>}
+            ) : <span style={chip("#e0f2fe", "#035887")}>{leftCol}</span>}
             <button style={box} onClick={() => checkCoverage("left", profile.schema_name, profile.table_name, leftCol)}>בדוק כיסוי</button>
             {covChip(cov.left)}
           </div>
@@ -172,7 +172,7 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
           {mode === "dataset" ? (
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: "0.5rem" }}>
               <b>צד ימין:</b>
-              <input list="jb-tables" value={rightTable} onChange={(e) => setRightTable(e.target.value)}
+              <input aria-label="חפש טבלה עם שדה יישוב/רשות…" list="jb-tables" value={rightTable} onChange={(e) => setRightTable(e.target.value)}
                 placeholder="חפש טבלה עם שדה יישוב/רשות…" style={{ ...box, minWidth: 260 }} />
               <datalist id="jb-tables">
                 {joinableTables.slice(0, 400).map((t) => <option key={t.table} value={t.table}>{t.title}</option>)}
@@ -181,14 +181,14 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
                 <>
                   <span>שדה יישוב:</span>
                   {rightLocCols.length > 1 ? (
-                    <select value={rightCol} onChange={(e) => setRightCol(e.target.value)} style={box}>
+                    <select value={rightCol} onChange={(e) => setRightCol(e.target.value)} aria-label="שדה היישוב בצד ימין" style={box}>
                       {rightLocCols.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                  ) : <span style={chip("#e0f2fe", "#0369a1")}>{rightCol}</span>}
+                  ) : <span style={chip("#e0f2fe", "#035887")}>{rightCol}</span>}
                   <button style={box} onClick={() => rightTableRec && checkCoverage("right", rightTableRec.schema, rightTableRec.table, rightCol)}>בדוק כיסוי</button>
                   {covChip(cov.right)}
                 </>
-              ) : <span style={{ color: "#b91c1c", fontSize: "0.75rem" }}>לא נמצא שדה יישוב בטבלה זו</span>)}
+              ) : <span style={{ color: "var(--danger)", fontSize: "0.75rem" }}>לא נמצא שדה יישוב בטבלה זו</span>)}
             </div>
           ) : (
             <div style={{ marginBottom: "0.5rem" }}>
@@ -210,7 +210,7 @@ export default function JoinBuilder({ profile, tables, onUseSql }: {
           <button
             disabled={!canRun}
             onClick={() => { const s = buildSql(); if (s) onUseSql(s, true); }}
-            style={{ padding: "0.35rem 1rem", borderRadius: 4, border: "none", fontWeight: 600, background: canRun ? "var(--primary,#0f766e)" : "#94a3b8", color: "white", cursor: canRun ? "pointer" : "not-allowed" }}
+            style={{ padding: "0.35rem 1rem", borderRadius: 4, border: "none", fontWeight: 600, background: canRun ? "var(--fill-brand)" : "var(--fill-neutral)", color: "var(--on-fill)", cursor: canRun ? "pointer" : "not-allowed" }}
           >
             ▶ צור והרץ
           </button>

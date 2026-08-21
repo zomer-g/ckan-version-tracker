@@ -103,14 +103,14 @@ export default function QuickChartBuilder({ table, onCreate }: {
   }
 
   const selStyle = {
-    padding: "0.25rem 0.4rem", border: "1px solid var(--border, #d1d5db)",
+    padding: "0.25rem 0.4rem", border: "1px solid var(--border, var(--border))",
     borderRadius: 4, fontSize: "0.82rem", maxWidth: 220,
   } as const;
 
   return (
-    <div style={{ border: "1px dashed var(--border, #d1d5db)", borderRadius: 6, padding: "0.6rem 0.8rem", margin: "0.6rem 0 0.4rem" }}>
+    <div style={{ border: "1px dashed var(--border, var(--border))", borderRadius: 6, padding: "0.6rem 0.8rem", margin: "0.6rem 0 0.4rem" }}>
       <div className="flex" style={{ gap: "0.5rem 0.9rem", alignItems: "center", flexWrap: "wrap" }}>
-        <strong style={{ fontSize: "0.85rem" }}>📊 גרף מהיר</strong>
+        <strong style={{ fontSize: "0.85rem" }}><span aria-hidden="true">📊</span> גרף מהיר</strong>
         <label className="text-sm text-muted">
           מה למדוד:{" "}
           <select value={measure} onChange={(e) => setMeasure(e.target.value)} style={selStyle}>
@@ -142,7 +142,7 @@ export default function QuickChartBuilder({ table, onCreate }: {
           onClick={create}
           style={{
             fontSize: "0.82rem", padding: "0.3rem 0.9rem", borderRadius: 4, border: "none",
-            background: "var(--primary, #0f766e)", color: "white", fontWeight: 600, cursor: "pointer",
+            background: "var(--fill-brand)", color: "var(--on-fill-brand)", fontWeight: 600, cursor: "pointer",
           }}
         >
           צור גרף ↑

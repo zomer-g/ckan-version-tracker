@@ -342,7 +342,7 @@ export default function OdataSearch() {
                       rel="noopener noreferrer"
                     >
                       {title}
-                    </a>
+                    <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                     <div className="odata-result-meta">
                       {org && <span className="odata-result-org">{org}</span>}
                       <span className="odata-result-resources">
@@ -380,7 +380,7 @@ export default function OdataSearch() {
                                       t("projects.odata_search.file_unnamed")
                                     )}
                                   </span>
-                                </a>
+                                <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                               ) : (
                                 <span className="odata-file odata-file-disabled">
                                   <span className="odata-file-format">
@@ -412,7 +412,7 @@ export default function OdataSearch() {
                 rel="noopener noreferrer"
               >
                 {t("projects.odata_search.view_all", { count })}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             )}
           </div>
         </div>

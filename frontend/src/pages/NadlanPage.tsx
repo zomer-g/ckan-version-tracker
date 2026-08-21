@@ -18,6 +18,7 @@ import type { GeoJsonObject } from "geojson";
 import { nadlan, NadlanEnvelope, NadlanProperty, NadlanStats } from "../api/client";
 import NadlanResultCard from "../components/nadlan/NadlanResultCard";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanMap = lazy(() => import("../components/nadlan/NadlanMap"));
 
 type Tab = "map" | "address" | "zip" | "gush";
@@ -36,6 +37,7 @@ function useParam(params: URLSearchParams, key: string): string {
 }
 
 export default function NadlanPage() {
+  useDocumentTitle("נדל\"ן לעם");
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
 
@@ -153,7 +155,7 @@ export default function NadlanPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, #e2e8f0)", marginBottom: "1rem", flexWrap: "wrap" }}>
+        <div className="flex" style={{ gap: "0.3rem", borderBottom: "2px solid var(--border, var(--border))", marginBottom: "1rem", flexWrap: "wrap" }}>
           {TAB_LABELS.map(([id, label]) => (
             <button
               key={id}
@@ -162,8 +164,8 @@ export default function NadlanPage() {
               style={{
                 padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
                 fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
-                color: tab === id ? "var(--primary, #0f766e)" : "var(--text-muted)",
-                borderBottom: tab === id ? "3px solid var(--primary, #0f766e)" : "3px solid transparent",
+                color: tab === id ? "var(--primary, #0C5E58)" : "var(--text-muted)",
+                borderBottom: tab === id ? "3px solid var(--primary, #0C5E58)" : "3px solid transparent",
                 marginBottom: -2,
               }}
             >
@@ -200,19 +202,19 @@ export default function NadlanPage() {
             style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}
             onSubmit={(e) => e.preventDefault()}
           >
-            <input
+            <input aria-label="יישוב (למשל פתח תקווה)"
               placeholder="יישוב (למשל פתח תקווה)"
               defaultValue={city}
               onBlur={(e) => patch({ city: e.target.value })}
               style={{ padding: "0.45rem 0.6rem", minWidth: 180 }}
             />
-            <input
+            <input aria-label="רחוב (למשל אבימלך)"
               placeholder="רחוב (למשל אבימלך)"
               defaultValue={street}
               onBlur={(e) => patch({ street: e.target.value })}
               style={{ padding: "0.45rem 0.6rem", minWidth: 180 }}
             />
-            <input
+            <input aria-label="מספר בית"
               placeholder="מספר בית"
               defaultValue={houseNo}
               onBlur={(e) => patch({ no: e.target.value })}
@@ -223,7 +225,7 @@ export default function NadlanPage() {
 
         {tab === "zip" && (
           <form className="flex" style={{ gap: "0.5rem", marginBottom: "1rem" }} onSubmit={(e) => e.preventDefault()}>
-            <input
+            <input aria-label="מיקוד (5 או 7 ספרות)"
               placeholder="מיקוד (5 או 7 ספרות)"
               defaultValue={zip}
               onBlur={(e) => patch({ zip: e.target.value.trim() })}
@@ -235,14 +237,14 @@ export default function NadlanPage() {
 
         {tab === "gush" && (
           <form className="flex" style={{ gap: "0.5rem", marginBottom: "1rem" }} onSubmit={(e) => e.preventDefault()}>
-            <input
+            <input aria-label="גוש"
               placeholder="גוש"
               defaultValue={gush}
               onBlur={(e) => patch({ g: e.target.value.trim() })}
               inputMode="numeric"
               style={{ padding: "0.45rem 0.6rem", width: 130 }}
             />
-            <input
+            <input aria-label="חלקה"
               placeholder="חלקה"
               defaultValue={helka}
               onBlur={(e) => patch({ h: e.target.value.trim() })}
@@ -279,7 +281,7 @@ export default function NadlanPage() {
 
         {/* ── results ── */}
         {loading && <div className="text-sm text-muted">מחפש…</div>}
-        {error && <div className="text-sm" style={{ color: "#b91c1c" }}>{error}</div>}
+        {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
         {!loading && !error && env && results.length === 0 && (
           <div className="text-sm text-muted">לא נמצאו חלקות להזנה הזו.</div>
         )}
@@ -296,7 +298,7 @@ export default function NadlanPage() {
         {/* ── coverage, stated up front rather than discovered ── */}
         <div style={{
           marginTop: "1.5rem", padding: "0.8rem 1rem", borderRadius: 8,
-          background: "var(--surface-muted,#f8fafc)", border: "1px solid var(--border,#e2e8f0)",
+          background: "var(--surface-2)", border: "1px solid var(--border)",
         }}>
           <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.35rem" }}>
             מה הקישור הזה כן ולא יודע

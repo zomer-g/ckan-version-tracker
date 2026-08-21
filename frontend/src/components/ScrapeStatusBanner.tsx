@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { datasets as datasetsApi, type ScrapeStatus } from "../api/client";
 
+import { autoRefreshPaused } from "../hooks/useAutoRefresh";
 /**
  * "This collection is running right now, and here is how it's doing."
  *
@@ -30,7 +31,9 @@ export default function ScrapeStatusBanner({ datasetId }: { datasetId: string })
         .catch(() => alive && setStatus(null));
     load();
     // While a run is in flight the page is worth refreshing; the endpoint is
-    // a single indexed row, and 30s matches the worker's own heartbeat.
+    // a single indexed row, and 30s matches the worker's own heartbeat. The
+    // user can switch that off globally (WCAG 2.2.4).
+    if (autoRefreshPaused()) return () => { alive = false; };
     const timer = window.setInterval(load, 30000);
     return () => {
       alive = false;
@@ -47,7 +50,7 @@ export default function ScrapeStatusBanner({ datasetId }: { datasetId: string })
       style={{
         padding: "0.75rem 0.9rem",
         marginTop: "1rem",
-        borderInlineStart: `3px solid ${stale ? "#dc2626" : "#0f766e"}`,
+        borderInlineStart: `3px solid ${stale ? "var(--danger)" : "#0C5E58"}`,
         display: "grid",
         gap: "0.35rem",
       }}
@@ -67,7 +70,7 @@ export default function ScrapeStatusBanner({ datasetId }: { datasetId: string })
           {status.message}
         </div>
       )}
-      <div style={{ fontSize: "0.72rem", color: stale ? "#b91c1c" : "var(--text-muted)" }}>
+      <div style={{ fontSize: "0.72rem", color: stale ? "var(--danger)" : "var(--text-muted)" }}>
         {stale
           ? `אין דיווח מהמכונה כבר ${human(status.seconds_since_heartbeat ?? 0)} — ייתכן שהריצה נפלה`
           : `דיווח אחרון לפני ${human(status.seconds_since_heartbeat ?? 0)}`}

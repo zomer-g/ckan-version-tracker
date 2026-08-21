@@ -104,7 +104,7 @@ export default function KnessetBatchTab() {
               setKnesset(e.target.value === "" ? "" : Number(e.target.value));
               setCommitteeId("");
             }}
-            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
           >
             <option value="">כל הכנסות</option>
             {facets?.knessets.map((k) => (
@@ -122,13 +122,13 @@ export default function KnessetBatchTab() {
             value={committeeQuery}
             onChange={(e) => { setCommitteeQuery(e.target.value); setCommitteeId(""); }}
             placeholder="חיפוש שם ועדה… (ריק = כל הוועדות)"
-            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }}
+            style={{ display: "block", width: "100%", marginTop: "0.3rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}
           />
         </label>
-        {facetsError && <div className="text-sm" style={{ color: "var(--danger, #dc2626)" }}>{facetsError}</div>}
+        {facetsError && <div className="text-sm" style={{ color: "var(--danger, #992C2C)" }}>{facetsError}</div>}
         {!facets && !facetsError && <div className="text-sm text-muted">טוען רשימת ועדות…</div>}
         {facets && committeeQuery.trim() && (
-          <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border, #eef2f5)", borderRadius: 4 }}>
+          <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--border, var(--border))", borderRadius: 4 }}>
             {committees.slice(0, 60).map((c) => (
               <button
                 key={c.id}
@@ -137,7 +137,7 @@ export default function KnessetBatchTab() {
                 style={{
                   display: "flex", width: "100%", gap: "0.5rem", alignItems: "baseline",
                   textAlign: "start", padding: "0.35rem 0.6rem", border: "none", cursor: "pointer",
-                  background: committeeId === c.id ? "var(--bg-muted, #eef2f5)" : "none",
+                  background: committeeId === c.id ? "var(--surface-2)" : "none",
                   fontSize: "0.84rem",
                 }}
               >
@@ -181,7 +181,7 @@ export default function KnessetBatchTab() {
                 : <><strong>{count.toLocaleString()}</strong> קובצי פרוטוקול בבחירה הנוכחית.</>}
             </p>
             {tooBig && (
-              <p className="text-sm" style={{ color: "#b45309", lineHeight: 1.6 }}>
+              <p className="text-sm" style={{ color: "var(--warning)", lineHeight: 1.6 }}>
                 האצווה גדולה ממגבלת ה-ZIP ({zipMax.toLocaleString()} קבצים). צמצמו לוועדה
                 או לכנסת ספציפית — או הורידו את רשימת הקישורים המלאה כ-CSV (עד 50,000
                 שורות) לשימוש במנהל הורדות.
@@ -193,26 +193,26 @@ export default function KnessetBatchTab() {
                 aria-disabled={tooBig || !count}
                 style={{
                   fontSize: "0.9rem", padding: "0.5rem 1.1rem", borderRadius: 4, fontWeight: 600,
-                  background: tooBig || !count ? "var(--bg-muted, #e5e7eb)" : "var(--primary, #0f766e)",
+                  background: tooBig || !count ? "var(--surface-2)" : "var(--primary, #0C5E58)",
                   color: tooBig || !count ? "var(--text-muted)" : "white",
                   textDecoration: "none", pointerEvents: tooBig || !count ? "none" : "auto",
                 }}
                 title="הורדת כל קובצי הפרוטוקולים כ-ZIP אחד"
               >
-                ⬇ הורדת ZIP{count && !tooBig ? ` (${count.toLocaleString()} קבצים)` : ""}
+                <span aria-hidden="true">⬇</span> הורדת ZIP{count && !tooBig ? ` (${count.toLocaleString()} קבצים)` : ""}
               </a>
               <a
                 href={count ? knessetDb.batchLinksUrl(filter) : undefined}
                 aria-disabled={!count}
                 style={{
                   fontSize: "0.85rem", padding: "0.45rem 0.9rem", borderRadius: 4,
-                  border: "1px solid var(--primary, #0f766e)", color: "var(--primary, #0f766e)",
+                  border: "1px solid var(--primary, var(--tint-teal-fg))", color: "var(--primary, #0C5E58)",
                   textDecoration: "none", pointerEvents: count ? "auto" : "none",
                   opacity: count ? 1 : 0.5,
                 }}
                 title="רשימת הקישורים בלבד — קובץ CSV קטן"
               >
-                ⬇ רשימת קישורים (CSV)
+                <span aria-hidden="true">⬇</span> רשימת קישורים (CSV)
               </a>
             </div>
             <ul className="text-sm text-muted" style={{ margin: "1rem 0 0", paddingInlineStart: "1.1rem", lineHeight: 1.7 }}>

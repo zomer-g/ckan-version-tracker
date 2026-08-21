@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { PlainSummary } from "../components/a11y";
+import Abbr from "../components/a11y/Abbr";
 /**
  * /api page — public API documentation + MCP cards.
  *
@@ -536,7 +539,7 @@ function LookerCard() {
               פתחו את{" "}
               <a href={connectorUrl} target="_blank" rel="noopener noreferrer">
                 קישור ההוספה של המחבר
-              </a>{" "}
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>{" "}
               והתחברו עם חשבון Google.
             </li>
             <li>
@@ -604,13 +607,14 @@ function EndpointCard({ ep }: { ep: ApiEndpoint }) {
           dir="ltr"
         >
           {ep.example}
-        </a>
+        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       </div>
     </div>
   );
 }
 
 export default function ApiPage() {
+  useDocumentTitle("API ציבורי");
   const { t } = useTranslation();
 
   return (
@@ -620,7 +624,7 @@ export default function ApiPage() {
           <h1 style={{ fontSize: "2rem", fontWeight: 700, marginBottom: "0.4rem" }}>
             {t("api.title", "API ציבורי")}
           </h1>
-          <p style={{ color: "var(--primary-100)", fontSize: "0.95rem" }}>
+          <p style={{ color: "#E4F1F5", fontSize: "0.95rem" }}>
             {t(
               "api.subtitle",
               "ממשק פתוח לארבעה מקורות — מאגרי ממשלה (OVER), אינדקס הלמ״ס, פרוטוקולי הכנסת, ויומני נבחרי ציבור (יומן לעם) — ב-REST וב-MCP",
@@ -630,6 +634,10 @@ export default function ApiPage() {
       </section>
 
       <div className="container" style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}>
+      <PlainSummary>
+        העמוד הזה מסביר איך לקבל את הנתונים של האתר ישירות לתוכנה שלכם (<Abbr>API</Abbr>), בלי לעבור דרך הדפדפן. אין צורך בהרשמה או במפתח. כל כתובת בעמוד מחזירה נתונים בפורמט שתוכנות קוראות; אפשר להעתיק אותה ולהדביק בדפדפן כדי לראות מה מגיע.
+      </PlainSummary>
+
         <div className="api-base-card">
           <p>
             {t(
@@ -648,9 +656,9 @@ export default function ApiPage() {
               "api.intro_versions",
               "תיעוד אינטראקטיבי מלא (OpenAPI) לכל נקודות הקצה של כל המקורות זמין ב-",
             )}
-            <a href="/docs" target="_blank" rel="noopener noreferrer" dir="ltr">/docs</a>
+            <a href="/docs" target="_blank" rel="noopener noreferrer" dir="ltr">/docs<span className="sr-only"> (נפתח בחלון חדש)</span></a>
             {" · "}
-            <a href="/redoc" target="_blank" rel="noopener noreferrer" dir="ltr">/redoc</a>
+            <a href="/redoc" target="_blank" rel="noopener noreferrer" dir="ltr">/redoc<span className="sr-only"> (נפתח בחלון חדש)</span></a>
             .
           </p>
         </div>

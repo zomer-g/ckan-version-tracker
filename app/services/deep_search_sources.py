@@ -843,7 +843,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_dataset,
     ),
     Source(
-        id="tables", name="טבלאות במסד הנתונים", color="#0A7A9A",
+        id="tables", name="טבלאות במסד הנתונים", color="#0C5468",
         attribution={"text": "קטלוג הטבלאות של קונסולת ה-SQL הציבורית של גרסאות לעם.",
                      "href": "https://www.over.org.il/data"},
         local="sql", tool="list_tables", results_path="tables",
@@ -857,7 +857,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_table,
     ),
     Source(
-        id="cbs", name="הלמ״ס", color="#1094B8",
+        id="cbs", name="הלמ״ס", color="#134E7A",
         attribution={"text": "אינדקס תוכן מעובד של אתר הלמ״ס (cbs.gov.il) — מטא-דאטה בלבד.",
                      "href": "https://www.over.org.il/cbs"},
         local="cbs", tool="search", results_path="items",
@@ -870,7 +870,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_cbs,
     ),
     Source(
-        id="protocols", name="פרוטוקולי ועדות הכנסת", color="#38AED0",
+        id="protocols", name="פרוטוקולי ועדות הכנסת", color="#1F4E79",
         attribution={"text": "מראה מעובדת של נתוני ODATA של הכנסת; תוכן הפרוטוקול נשאר בשרת הכנסת.",
                      "href": "https://www.over.org.il/knesset"},
         local="knesset", tool="search_protocols", results_path="items",
@@ -883,7 +883,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_protocol,
     ),
     Source(
-        id="mmm", name="מסמכי ממ״מ", color="#68C4DE",
+        id="mmm", name="מסמכי ממ״מ", color="#2A4A72",
         attribution={"text": "קטלוג מעובד של מרכז המחקר והמידע של הכנסת; המסמך המלא בשרת הכנסת.",
                      "href": "https://www.over.org.il/knesset?tab=mmm"},
         local="knesset", tool="search_mmm", results_path="items",
@@ -897,7 +897,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_mmm,
     ),
     Source(
-        id="ocal", name="יומני בעלי תפקידים", color="#06607C",
+        id="ocal", name="יומני בעלי תפקידים", color="#065B76",
         attribution={"text": "נתונים מעובדים (זיהוי ישויות והצלבות) של יומן לעם — יומני פגישות של בעלי תפקידים.",
                      "href": "https://www.over.org.il/projects/ocal"},
         local="ocal", tool="search_events", results_path="events",
@@ -911,7 +911,7 @@ SOURCES: tuple[Source, ...] = (
         normalize=_n_event,
     ),
     Source(
-        id="mevaker_reports", name="מבקר המדינה — קטלוג הדוחות", color="#0369a1",
+        id="mevaker_reports", name="מבקר המדינה — קטלוג הדוחות", color="#035887",
         attribution={"text": "סריקה של גרסאות לעם לספריית מבקר המדינה — מטא-דאטה "
                              "וקישור לדוח המלא באתר המבקר.",
                      "href": "https://www.mevaker.gov.il/subjects"},
@@ -934,7 +934,7 @@ SOURCES: tuple[Source, ...] = (
         # 2018-19). What is true is the CEILING — nothing after 24.06.2019,
         # because the import was taken from OVER's own corpus back when the
         # scraper's enumeration bug had frozen it there.
-        id="mevaker", name="מבקר המדינה — טקסט מלא", color="#075985",
+        id="mevaker", name="מבקר המדינה — טקסט מלא", color="#075884",
         attribution={"text": "מקור חיצוני: מסמכי מבקר המדינה כפי שנסרקו ונותחו ב-TAG-IT; "
                              "המסמך המלא באתר המבקר. טווח הכיסוי מוצג לצד שם העמודה "
                              "ונקרא מהשירות עצמו.",
@@ -948,7 +948,7 @@ SOURCES: tuple[Source, ...] = (
         run=_tagit_runner("tagit_mevaker_scope"),
     ),
     Source(
-        id="protocols_text", name="פרוטוקולי ועדות — טקסט מלא", color="#38AED0",
+        id="protocols_text", name="פרוטוקולי ועדות — טקסט מלא", color="#294D6B",
         attribution={"text": "מקור חיצוני: פרוטוקולי ועדות הכנסת כפי שנסרקו ונותחו ב-TAG-IT; "
                              "הפרוטוקול המלא בשרת הכנסת. הכיסוי חלקי ואינו כולל את כל הכנסות.",
                      "href": "https://tag-it.biz"},
@@ -966,7 +966,7 @@ SOURCES: tuple[Source, ...] = (
         run=_tagit_runner("tagit_protocols_scope"),
     ),
     Source(
-        id="mmm_text", name="מסמכי ממ״מ — טקסט מלא", color="#68C4DE",
+        id="mmm_text", name="מסמכי ממ״מ — טקסט מלא", color="#33496A",
         attribution={"text": "מקור חיצוני: מסמכי מרכז המחקר והמידע של הכנסת כפי שנסרקו "
                              "ונותחו ב-TAG-IT; המסמך המלא בשרת הכנסת.",
                      "href": "https://tag-it.biz"},
@@ -985,7 +985,7 @@ SOURCES: tuple[Source, ...] = (
         run=_tagit_runner("tagit_mmm_scope"),
     ),
     Source(
-        id="gov_decisions", name="החלטות הממשלה", color="#7c3aed",
+        id="gov_decisions", name="החלטות הממשלה", color="#5B21B6",
         attribution={"text": "מקור חיצוני: מאגר החלטות הממשלה כפי שנסרק ונותח ב-TAG-IT; "
                              "ההחלטה המלאה באתר gov.il.",
                      "href": "https://tag-it.biz"},
@@ -998,7 +998,7 @@ SOURCES: tuple[Source, ...] = (
         run=_tagit_runner("tagit_gov_decisions_scope"),
     ),
     Source(
-        id="obudget", name="מפתח התקציב", color="#b45309",
+        id="obudget", name="מפתח התקציב", color="#873E07",
         attribution={
             "text": "מקור חיצוני ומידע מעובד: הנתונים נאספים ומעובדים על-ידי מפתח "
                     "התקציב (obudget.org) — לא על-ידי גרסאות לעם. ישויות, סעיפי "
@@ -1013,7 +1013,7 @@ SOURCES: tuple[Source, ...] = (
         run=_run_obudget,
     ),
     Source(
-        id="odata", name="מידע לעם", color="#0f766e",
+        id="odata", name="מידע לעם", color="#0C5E58",
         attribution={
             "text": "מקור חיצוני ומידע מעובד: קטלוג מידע לעם (odata.org.il) — "
                     "ברובו תשובות לבקשות חופש מידע שפורסמו על-ידי המבקשים. "

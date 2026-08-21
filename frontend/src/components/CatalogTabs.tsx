@@ -13,12 +13,13 @@ export type CatalogTab = "search" | "organizations" | "tags" | "sources";
 export default function CatalogTabs({ active }: { active: CatalogTab }) {
   const { t } = useTranslation();
 
-  const tab = (to: string, label: string, key: CatalogTab) => {
+  const tab = (to: string, label: React.ReactNode, key: CatalogTab) => {
     const on = active === key;
     return (
       <Link
         key={key}
         to={to}
+        className="catalog-tab"
         style={{
           padding: "0.5rem 1rem",
           textDecoration: "none",
@@ -26,10 +27,10 @@ export default function CatalogTabs({ active }: { active: CatalogTab }) {
           fontSize: "0.9rem",
           borderRadius: "6px 6px 0 0",
           whiteSpace: "nowrap",
-          color: on ? "var(--primary, #0f766e)" : "var(--text-muted, #64748b)",
-          background: on ? "var(--bg-muted, #eef2f5)" : "transparent",
+          color: on ? "var(--primary, #0C5E58)" : "var(--text-muted, #464F5E)",
+          background: on ? "var(--surface-2)" : "transparent",
           borderBottom: on
-            ? "2px solid var(--primary, #0f766e)"
+            ? "2px solid var(--primary, #0C5E58)"
             : "2px solid transparent",
         }}
         aria-current={on ? "page" : undefined}
@@ -45,15 +46,17 @@ export default function CatalogTabs({ active }: { active: CatalogTab }) {
       style={{
         display: "flex",
         gap: 4,
-        borderBottom: "1px solid var(--border, #e5e7eb)",
+        borderBottom: "1px solid var(--border, var(--border))",
         marginBottom: "1rem",
         flexWrap: "wrap",
       }}
     >
-      {tab("/", `🔍 ${t("nav.search", "חיפוש")}`, "search")}
-      {tab("/organizations", `🏛 ${t("nav.organizations", "ארגונים")}`, "organizations")}
-      {tab("/tags", `🏷 ${t("nav.tags", "תגיות")}`, "tags")}
-      {tab("/sources", `🌐 ${t("nav.sources", "מקורות")}`, "sources")}
+      {/* The emoji is decoration; a screen reader announcing "magnifying
+          glass tilted left" before every tab name is noise (WCAG 1.1.1). */}
+      {tab("/", <><span aria-hidden="true">🔍</span> {t("nav.search", "חיפוש")}</>, "search")}
+      {tab("/organizations", <><span aria-hidden="true">🏛</span> {t("nav.organizations", "ארגונים")}</>, "organizations")}
+      {tab("/tags", <><span aria-hidden="true">🏷</span> {t("nav.tags", "תגיות")}</>, "tags")}
+      {tab("/sources", <><span aria-hidden="true">🌐</span> {t("nav.sources", "מקורות")}</>, "sources")}
     </nav>
   );
 }

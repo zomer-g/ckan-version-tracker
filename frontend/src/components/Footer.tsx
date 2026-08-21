@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
  * link columns (Projects / Catalog / About) and a copyright line.
  */
 export default function Footer() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const groups: {
     title: string;
@@ -49,7 +49,12 @@ export default function Footer() {
   ];
 
   return (
-    <footer className="footer" role="contentinfo">
+    <footer
+      className="footer"
+      // Translated in full, so it names its own language (WCAG 3.1.2).
+      lang={i18n.language}
+      dir={i18n.language === "he" ? "rtl" : "ltr"}
+    >
       <div className="container">
         <div className="footer-inner">
           <div className="footer-brand-col">
@@ -74,7 +79,7 @@ export default function Footer() {
                       rel="noopener noreferrer"
                     >
                       {link.label}
-                    </a>
+                    <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                   )
                 )}
               </nav>

@@ -131,12 +131,12 @@ function JoinHelper({ profile, columns, onUseSql }: {
   };
   const btn: React.CSSProperties = {
     fontSize: "0.72rem", padding: "0.15rem 0.5rem", borderRadius: 4, cursor: "pointer",
-    border: "1px solid var(--primary, #2563eb)", background: "var(--bg, #fff)", color: "var(--primary, #2563eb)",
+    border: "1px solid var(--primary, var(--tint-sky-fg))", background: "var(--bg, #fff)", color: "var(--primary, #2563eb)",
   };
   return (
-    <div style={{ marginTop: "0.6rem", padding: "0.5rem 0.7rem", border: "1px dashed var(--primary, #93c5fd)", borderRadius: 6 }}>
+    <div style={{ marginTop: "0.6rem", padding: "0.5rem 0.7rem", border: "1px dashed var(--primary, var(--tint-sky-bd))", borderRadius: 6 }}>
       <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.15rem" }}>
-        🔗 הצלבה מתוקנת — תיקון שדות יישוב/רשות תוך כדי JOIN
+        <span aria-hidden="true">🔗</span> הצלבה מתוקנת — תיקון שדות יישוב/רשות תוך כדי JOIN
       </div>
       <div className="text-muted" style={{ fontSize: "0.74rem", marginBottom: "0.5rem" }}>
         עוטף את השדה ב-<code>over_settlement()</code>/<code>over_authority()</code> כדי שערכים בכתיב שונה עדיין יצליבו.
@@ -144,16 +144,16 @@ function JoinHelper({ profile, columns, onUseSql }: {
       {columns.map((col) => {
         const c = cov[col];
         return (
-          <div key={col} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "0.3rem 0", borderTop: "1px solid var(--border,#eef2f5)" }}>
+          <div key={col} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "0.3rem 0", borderTop: "1px solid var(--border)" }}>
             <span style={{ fontWeight: 600, fontSize: "0.8rem", minWidth: 110 }}>{col}</span>
             <button style={btn} onClick={() => onUseSql(SQL.fixedCols(profile, col), true)}>עמודות תקניות</button>
             <button style={btn} onClick={() => onUseSql(SQL.enrich(profile, col), true)}>העשרה (מחוז/אוכלוסייה)</button>
             <button style={btn} onClick={() => onUseSql(SQL.joinTemplate(profile, col), false)}>תבנית JOIN</button>
-            <button style={{ ...btn, borderColor: "#94a3b8", color: "#475569" }} onClick={() => checkCoverage(col)}>בדוק כיסוי</button>
+            <button style={{ ...btn, borderColor: "var(--border)", color: "var(--text-muted)" }} onClick={() => checkCoverage(col)}>בדוק כיסוי</button>
             {c === "loading" && <span className="text-muted" style={{ fontSize: "0.74rem" }}>בודק…</span>}
-            {c === "error" && <span style={{ fontSize: "0.74rem", color: "#b91c1c" }}>שגיאה</span>}
+            {c === "error" && <span style={{ fontSize: "0.74rem", color: "var(--danger)" }}>שגיאה</span>}
             {c && c !== "loading" && c !== "error" && (
-              <span style={chip(c.healed === c.total ? "#dcfce7" : "#fef9c3", c.healed === c.total ? "#15803d" : "#a16207")}>
+              <span style={chip(c.healed === c.total ? "var(--tint-good-bg)" : "var(--tint-note-bg)", c.healed === c.total ? "var(--success)" : "var(--tint-note-fg)")}>
                 {c.healed}/{c.total} נפתרים ({c.total ? Math.round((c.healed / c.total) * 100) : 0}%)
               </span>
             )}
@@ -184,9 +184,9 @@ export default function ProfilePanel({ profile, onUseSql }: {
       dir="rtl"
       style={{
         marginTop: "0.6rem",
-        border: "1px solid var(--border, #e5e7eb)",
+        border: "1px solid var(--border, var(--border))",
         borderRadius: 6,
-        background: "var(--bg-muted, #f8fafc)",
+        background: "var(--surface-2)",
         overflow: "hidden",
       }}
     >
@@ -208,8 +208,8 @@ export default function ProfilePanel({ profile, onUseSql }: {
       >
         <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
         פרופיל אוטומטי של המאגר
-        <span style={chip("#e0f2fe", "#0369a1")}>{colNames.length} שדות</span>
-        {profile.status === "enriched" && <span style={chip("#dcfce7", "#15803d")}>מועשר AI</span>}
+        <span style={chip("#e0f2fe", "#035887")}>{colNames.length} שדות</span>
+        {profile.status === "enriched" && <span style={chip("var(--tint-good-bg)", "var(--success)")}>מועשר AI</span>}
       </button>
 
       {open && (
@@ -221,7 +221,7 @@ export default function ProfilePanel({ profile, onUseSql }: {
           {(tags.length > 0 || keywords.length > 0) && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: "0.6rem" }}>
               {tags.map((t) => (
-                <span key={`t-${t}`} style={chip("#ede9fe", "#6d28d9")}>{t}</span>
+                <span key={`t-${t}`} style={chip("#ede9fe", "#6826CE")}>{t}</span>
               ))}
               {keywords.map((k) => (
                 <span key={`k-${k.token}`} style={chip("#f1f5f9", "#475569")} title={`${k.count} מופעים`}>
@@ -231,12 +231,12 @@ export default function ProfilePanel({ profile, onUseSql }: {
             </div>
           )}
 
-          <div style={{ overflowX: "auto", border: "1px solid var(--border, #e5e7eb)", borderRadius: 4, background: "var(--bg, #fff)" }}>
+          <div tabIndex={0} role="region" aria-label="פרופיל הטבלה" className="scroll-region" style={{ overflowX: "auto", border: "1px solid var(--border, var(--border))", borderRadius: 4, background: "var(--bg, #fff)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem", whiteSpace: "nowrap" }}>
               <thead>
-                <tr style={{ background: "var(--bg-muted, #eef2f5)" }}>
+                <tr style={{ background: "var(--surface-2)" }}>
                   {["שדה", "סוג", "טווח / min–max", "ישות", "מילוי", "ערכים ייחודיים", "תיאור"].map((h) => (
-                    <th key={h} style={{ textAlign: "start", padding: "0.3rem 0.5rem", borderBottom: "2px solid var(--border, #cbd5e1)" }}>{h}</th>
+                    <th scope="col" key={h} style={{ textAlign: "start", padding: "0.3rem 0.5rem", borderBottom: "2px solid var(--border, var(--border))" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -247,14 +247,14 @@ export default function ProfilePanel({ profile, onUseSql }: {
                   const fill = c.fill_rate != null ? `${Math.round(c.fill_rate * 100)}%` : "—";
                   const df = c.date_format;
                   return (
-                    <tr key={name} style={{ borderBottom: "1px solid var(--border, #eef2f5)" }}>
+                    <tr key={name} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                       <td style={{ padding: "0.3rem 0.5rem", fontWeight: 600 }}>
                         {name}
-                        {candidateKey === name && <span style={{ ...chip("#fef9c3", "#a16207"), marginInlineStart: 4 }}>מפתח</span>}
+                        {candidateKey === name && <span style={{ ...chip("var(--tint-note-bg)", "var(--tint-note-fg)"), marginInlineStart: 4 }}>מפתח</span>}
                       </td>
                       <td style={{ padding: "0.3rem 0.5rem" }}>
                         {KIND_HE[c.detected_kind || ""] || c.detected_kind || "—"}
-                        {c.native && <span style={{ ...chip("#f1f5f9", "#64748b"), marginInlineStart: 4 }}>native</span>}
+                        {c.native && <span style={{ ...chip("#f1f5f9", "#464F5E"), marginInlineStart: 4 }}>native</span>}
                       </td>
                       <td style={{ padding: "0.3rem 0.5rem" }} dir="ltr">
                         {rangeText(c) || "—"}
@@ -266,14 +266,14 @@ export default function ProfilePanel({ profile, onUseSql }: {
                       </td>
                       <td style={{ padding: "0.3rem 0.5rem" }}>
                         {ent ? (
-                          <span style={chip(ent.llm ? "#dcfce7" : "#f1f5f9", ent.llm ? "#15803d" : "#475569")} title={ent.llm ? "סיווג AI" : "זיהוי היוריסטי"}>
+                          <span style={chip(ent.llm ? "var(--tint-good-bg)" : "#f1f5f9", ent.llm ? "var(--success)" : "#475569")} title={ent.llm ? "סיווג AI" : "זיהוי היוריסטי"}>
                             {ent.he}
                           </span>
                         ) : "—"}
                       </td>
                       <td style={{ padding: "0.3rem 0.5rem" }}>{fill}</td>
                       <td style={{ padding: "0.3rem 0.5rem" }}>{c.distinct_est != null ? c.distinct_est.toLocaleString("he-IL") : "—"}</td>
-                      <td style={{ padding: "0.3rem 0.5rem", whiteSpace: "normal", maxWidth: 260, color: "var(--text-muted, #64748b)" }}>
+                      <td style={{ padding: "0.3rem 0.5rem", whiteSpace: "normal", maxWidth: 260, color: "var(--text-muted, #464F5E)" }}>
                         {descOf(name) || ""}
                       </td>
                     </tr>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { marked } from "marked";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 // The guide's single source of truth is /knesset-sql-guide.md (a public static
 // asset, generated from the Knesset's official ODATA manual + live $metadata).
 // This page renders it; the download button serves the same file as-is.
@@ -9,6 +10,7 @@ import { marked } from "marked";
 const GUIDE_URL = "/knesset-sql-guide.md";
 
 export default function KnessetGuidePage() {
+  useDocumentTitle("מדריך — מסד הכנסת");
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +33,7 @@ export default function KnessetGuidePage() {
             download="knesset-sql-guide.md"
             style={{
               fontSize: "0.85rem", padding: "0.4rem 0.9rem",
-              background: "var(--primary, #0f766e)", color: "white",
+              background: "var(--fill-brand)", color: "var(--on-fill-brand)",
               borderRadius: 4, textDecoration: "none", fontWeight: 500,
             }}
             title="הורדת המדריך כקובץ Markdown"
@@ -60,16 +62,16 @@ export default function KnessetGuidePage() {
         .kns-guide h2 { font-size: 1.25rem; margin: 2rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border, #e5e7eb); }
         .kns-guide h3 { font-size: 1.02rem; margin: 1.4rem 0 0.5rem; }
         .kns-guide p, .kns-guide li { font-size: 0.93rem; }
-        .kns-guide a { color: var(--primary, #0f766e); }
+        .kns-guide a { color: var(--primary, #0C5E58); }
         .kns-guide hr { border: none; border-top: 1px solid var(--border, #e5e7eb); margin: 1.5rem 0; }
         .kns-guide code {
           direction: ltr; unicode-bidi: embed;
-          background: var(--bg-muted, #eef2f5); border-radius: 3px;
+          background: var(--surface-2); border-radius: 3px;
           padding: 0.08em 0.35em; font-size: 0.86em;
         }
         .kns-guide pre {
           direction: ltr; text-align: left;
-          background: var(--bg-muted, #f6f8fa); border: 1px solid var(--border, #e5e7eb);
+          background: var(--surface-2); border: 1px solid var(--border, #e5e7eb);
           border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto;
         }
         .kns-guide pre code { background: none; padding: 0; font-size: 0.84rem; }
@@ -81,11 +83,11 @@ export default function KnessetGuidePage() {
           border: 1px solid var(--border, #e5e7eb); padding: 0.35rem 0.6rem;
           text-align: start; vertical-align: top;
         }
-        .kns-guide th { background: var(--bg-muted, #eef2f5); }
+        .kns-guide th { background: var(--surface-2); }
         .kns-guide blockquote {
           margin: 0.8rem 0; padding: 0.4rem 1rem;
-          border-inline-start: 3px solid var(--primary, #0f766e);
-          background: var(--bg-muted, #f8fafc); color: var(--text-muted);
+          border-inline-start: 3px solid var(--primary, #0C5E58);
+          background: var(--surface-2); color: var(--text-muted);
         }
       `}</style>
     </div>

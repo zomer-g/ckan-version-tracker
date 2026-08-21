@@ -13,7 +13,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Heebo:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-    <title>גרסאות לעם — over.org.il</title>
+    <title>גרסאות לעם</title>
+    <!-- The colour-scheme choice has to land BEFORE first paint, or the page
+         flashes the wrong theme on every load. Kept inline and tiny for that
+         reason; useTheme.ts owns it from here on. "system" deliberately leaves
+         the attribute off — that is what lets prefers-color-scheme through. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("over.theme");
+          if (t === "light" || t === "dark") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) {}
+      })();
+    </script>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-VV98LR49GS"></script>
     <script>

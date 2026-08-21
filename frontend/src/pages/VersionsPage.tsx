@@ -29,6 +29,8 @@ import CollectionCoverage from "../components/CollectionCoverage";
 const GovmapView = lazy(() => import("../components/GovmapView"));
 import ErrorBoundary from "../components/ErrorBoundary";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Breadcrumbs } from "../components/a11y";
 const ODATA_BASE = "https://www.odata.org.il";
 
 // What a partial version READ. A version's change_summary carries the mode's
@@ -361,6 +363,7 @@ export default function VersionsPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const [versionsList, setVersionsList] = useState<Version[]>([]);
   const [dataset, setDataset] = useState<TrackedDataset | null>(null);
+  useDocumentTitle(dataset?.title ? `גרסאות — ${dataset.title}` : "גרסאות מאגר");
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
   // Admin-only: version_id -> total_bytes for the size annotation. Null
@@ -528,6 +531,15 @@ export default function VersionsPage() {
 
   return (
     <div>
+      <Breadcrumbs
+        items={[
+          { label: "מאגרים", to: "/" },
+          ...(dataset?.organization_title
+            ? [{ label: dataset.organization_title }]
+            : []),
+          { label: dataset?.title || t("versions.title") },
+        ]}
+      />
       <div className="page-header flex-between">
         <div>
           <h1 style={{ margin: 0 }}>
@@ -612,8 +624,8 @@ export default function VersionsPage() {
               style={{
                 fontSize: "0.85rem",
                 padding: "0.4rem 0.9rem",
-                background: "var(--primary, #0f766e)",
-                color: "white",
+                background: "var(--fill-brand)",
+                color: "var(--on-fill-brand)",
                 borderRadius: 4,
                 textDecoration: "none",
                 fontWeight: 600,
@@ -636,8 +648,8 @@ export default function VersionsPage() {
               style={{
                 fontSize: "0.85rem",
                 padding: "0.4rem 0.9rem",
-                background: "var(--primary, #0f766e)",
-                color: "white",
+                background: "var(--fill-brand)",
+                color: "var(--on-fill-brand)",
                 border: "none",
                 borderRadius: 4,
                 textDecoration: "none",
@@ -645,7 +657,7 @@ export default function VersionsPage() {
               }}
             >
               {t("tracked.open_archive")} &#8599;
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           )}
           {dataset && (() => {
             const sourceHref =
@@ -672,7 +684,7 @@ export default function VersionsPage() {
                 }}
               >
                 {linkLabel} &#8599;
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             );
           })()}
           {dataset && <CopyLookupLinkButton dataset={dataset} />}
@@ -685,8 +697,8 @@ export default function VersionsPage() {
                 fontSize: "0.8rem",
                 padding: "0.3rem 0.7rem",
                 background: "none",
-                border: "1px solid var(--danger, #dc2626)",
-                color: "var(--danger, #dc2626)",
+                border: "1px solid var(--danger, var(--danger))",
+                color: "var(--danger, #992C2C)",
                 borderRadius: 4,
                 cursor: "pointer",
               }}
@@ -850,8 +862,8 @@ export default function VersionsPage() {
                           fontSize: "0.75rem",
                           padding: "0.2rem 0.55rem",
                           background: "none",
-                          border: "1px solid var(--danger, #dc2626)",
-                          color: "var(--danger, #dc2626)",
+                          border: "1px solid var(--danger, var(--danger))",
+                          color: "var(--danger, #992C2C)",
                           borderRadius: 4,
                           cursor: deleting === v.id ? "not-allowed" : "pointer",
                           opacity: deleting === v.id ? 0.6 : 1,
@@ -1000,7 +1012,7 @@ export default function VersionsPage() {
                           style={{ color: "var(--primary)", textDecoration: "none" }}
                         >
                           &#8595; {f.label}
-                        </a>
+                        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                       ))}
                     </div>
                   );
@@ -1056,8 +1068,8 @@ function NeonArchiveExplanation({
       style={{
         marginBottom: "1.5rem",
         padding: "1rem 1.25rem",
-        background: "var(--bg-muted, #f8fafc)",
-        borderInlineStart: "3px solid var(--primary, #0f766e)",
+        background: "var(--surface-2)",
+        borderInlineStart: "3px solid var(--primary, var(--tint-teal-fg))",
       }}
     >
       <div className="flex-between" style={{ alignItems: "flex-start", gap: "1rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
@@ -1067,8 +1079,8 @@ function NeonArchiveExplanation({
           style={{
             fontSize: "0.9rem",
             padding: "0.5rem 1rem",
-            background: "var(--primary, #0f766e)",
-            color: "white",
+            background: "var(--fill-brand)",
+            color: "var(--on-fill-brand)",
             borderRadius: 4,
             textDecoration: "none",
             fontWeight: 600,
@@ -1132,8 +1144,8 @@ function ArchiveExplanation(props: {
       style={{
         marginBottom: "1.5rem",
         padding: "1rem 1.25rem",
-        background: "var(--bg-muted, #f8fafc)",
-        borderInlineStart: "3px solid var(--primary, #0f766e)",
+        background: "var(--surface-2)",
+        borderInlineStart: "3px solid var(--primary, var(--tint-teal-fg))",
       }}
     >
       <div
@@ -1157,8 +1169,8 @@ function ArchiveExplanation(props: {
           style={{
             fontSize: "0.9rem",
             padding: "0.5rem 1rem",
-            background: "var(--primary, #0f766e)",
-            color: "white",
+            background: "var(--fill-brand)",
+            color: "var(--on-fill-brand)",
             border: "none",
             borderRadius: 4,
             textDecoration: "none",
@@ -1167,7 +1179,7 @@ function ArchiveExplanation(props: {
           }}
         >
           {t("tracked.open_archive")} &#8599;
-        </a>
+        <span className="sr-only"> (נפתח בחלון חדש)</span></a>
       </div>
       <p
         style={{

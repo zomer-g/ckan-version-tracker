@@ -1,6 +1,7 @@
 import { Trans, useTranslation } from "react-i18next";
 import OdataSearch from "../components/OdataSearch";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 /**
  * Landing page for a sibling "לעם" project. Three of these live under
  * /projects/*:
@@ -22,6 +23,7 @@ const PROJECTS: Record<ProjectKey, { url: string }> = {
 };
 
 export default function ProjectImportPage({ project }: { project: ProjectKey }) {
+  useDocumentTitle("מידע לעם");
   const { t } = useTranslation();
   const { url } = PROJECTS[project];
 
@@ -60,7 +62,7 @@ export default function ProjectImportPage({ project }: { project: ProjectKey }) 
               rel="noopener noreferrer"
             >
               {t("projects.visit_site")}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           </div>
         ) : (
           <div className="about-card project-soon-card">
@@ -71,7 +73,7 @@ export default function ProjectImportPage({ project }: { project: ProjectKey }) 
               rel="noopener noreferrer"
             >
               {t("projects.visit_site")}
-            </a>
+            <span className="sr-only"> (נפתח בחלון חדש)</span></a>
           </div>
         )}
       </div>

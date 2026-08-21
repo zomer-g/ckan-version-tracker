@@ -15,12 +15,14 @@ import { publicApi, TrackedDataset } from "../api/client";
 import { sourceBadgeFor, type SourceBadge } from "../utils/sourceBadge";
 import CatalogTabs from "../components/CatalogTabs";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 interface SourceGroup {
   badge: SourceBadge;
   count: number;
 }
 
 export default function SourcesPage() {
+  useDocumentTitle("מקורות");
   const { t } = useTranslation();
   const [datasets, setDatasets] = useState<TrackedDataset[]>([]);
   const [loading, setLoading] = useState(true);

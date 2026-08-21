@@ -19,10 +19,10 @@ const STAGE_LABEL: Record<string, string> = {
 };
 // Free stages green, cheap amber, expensive red — the colour IS the cost.
 const STAGE_TONE: Record<string, [string, string]> = {
-  cache: ["#dcfce7", "#15803d"], template: ["#dcfce7", "#15803d"],
-  deepseek: ["#fef9c3", "#a16207"], anthropic: ["#fee2e2", "#b91c1c"],
+  cache: ["var(--tint-good-bg)", "var(--success)"], template: ["var(--tint-good-bg)", "var(--success)"],
+  deepseek: ["var(--tint-note-bg)", "var(--tint-note-fg)"], anthropic: ["var(--tint-bad-bg)", "var(--danger)"],
   refused: ["#f1f5f9", "#475569"], invalid: ["#ffedd5", "#c2410c"],
-  error: ["#fee2e2", "#b91c1c"],
+  error: ["var(--tint-bad-bg)", "var(--danger)"],
 };
 
 const chip = (stage: string) => {
@@ -32,7 +32,7 @@ const chip = (stage: string) => {
 };
 const box: React.CSSProperties = {
   fontSize: "0.82rem", padding: "0.25rem 0.45rem", borderRadius: 4,
-  border: "1px solid var(--border, #cbd5e1)", background: "var(--bg, #fff)",
+  border: "1px solid var(--border, var(--border))", background: "var(--bg, #fff)",
 };
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : Number(n).toLocaleString("he-IL");
@@ -84,10 +84,10 @@ export default function NlQueryAdminPanel() {
 
   return (
     <div dir="rtl">
-      {err && <div style={{ color: "#b91c1c", marginBottom: "0.6rem" }}>{err}</div>}
+      {err && <div style={{ color: "var(--danger)", marginBottom: "0.6rem" }}>{err}</div>}
 
       {/* ── switches ───────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
         <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>מתגי הפעלה</div>
         {cfg && (
           <>
@@ -146,7 +146,7 @@ export default function NlQueryAdminPanel() {
                 ? cfg.active_tiers.map((t, i) => (
                     <span key={t.provider}>{i > 0 && " ← "}<b>{t.model}</b></span>
                   ))
-                : <span style={{ color: "#b91c1c" }}>אין — רק תבניות ומטמון עובדים</span>}
+                : <span style={{ color: "var(--danger)" }}>אין — רק תבניות ומטמון עובדים</span>}
               {" · "}שינוי נכנס לתוקף מיידית.
             </div>
           </>
@@ -154,10 +154,10 @@ export default function NlQueryAdminPanel() {
       </div>
 
       {/* ── cost ───────────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
         <div className="flex" style={{ alignItems: "center", gap: 10, marginBottom: "0.5rem" }}>
           <span style={{ fontWeight: 600 }}>עלות ושימוש</span>
-          <select value={days} onChange={(e) => setDays(Number(e.target.value))} style={box}>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="טווח ימים לחישוב העלות" style={box}>
             {[1, 7, 30, 90].map((d) => <option key={d} value={d}>{d} ימים</option>)}
           </select>
           <button onClick={load} style={{ ...box, cursor: "pointer" }}>רענן</button>
@@ -171,7 +171,7 @@ export default function NlQueryAdminPanel() {
               </div>
               <div>
                 <div className="text-muted" style={{ fontSize: "0.75rem" }}>מהן ללא עלות</div>
-                <div style={{ fontSize: "1.3rem", fontWeight: 600, color: "#15803d" }}>
+                <div style={{ fontSize: "1.3rem", fontWeight: 600, color: "var(--success)" }}>
                   {stats.free_share == null ? "—" : `${Math.round(stats.free_share * 100)}%`}
                 </div>
               </div>
@@ -188,7 +188,7 @@ export default function NlQueryAdminPanel() {
               <div title="קריאות ששילמנו עליהן ולא יצאה מהן תשובה — סירוב או פלט לא תקין. זה המדד שאומר אם המודל הזול מספיק טוב.">
                 <div className="text-muted" style={{ fontSize: "0.75rem" }}>מהן בזבוז</div>
                 <div style={{ fontSize: "1.3rem", fontWeight: 600,
-                              color: (stats.wasted_share ?? 0) > 0.4 ? "#b91c1c" : "#a16207" }}>
+                              color: (stats.wasted_share ?? 0) > 0.4 ? "var(--danger)" : "var(--tint-note-fg)" }}>
                   {stats.wasted_share == null ? "—" : `${Math.round(stats.wasted_share * 100)}%`}
                 </div>
               </div>
@@ -207,19 +207,19 @@ export default function NlQueryAdminPanel() {
             </div>
             <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ textAlign: "start", color: "var(--text-muted, #64748b)" }}>
-                  <th style={{ textAlign: "start", padding: "0.2rem 0" }}>שלב</th>
-                  <th style={{ textAlign: "start" }}>שאלות</th>
-                  <th style={{ textAlign: "start" }}>נענו</th>
-                  <th style={{ textAlign: "start" }}>הוסלמו</th>
-                  <th style={{ textAlign: "start" }}>טוקני קלט</th>
-                  <th style={{ textAlign: "start" }}>טוקני פלט</th>
-                  <th style={{ textAlign: "start" }}>חציון זמן</th>
+                <tr style={{ textAlign: "start", color: "var(--text-muted, #464F5E)" }}>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>שלב</th>
+                  <th scope="col" style={{ textAlign: "start" }}>שאלות</th>
+                  <th scope="col" style={{ textAlign: "start" }}>נענו</th>
+                  <th scope="col" style={{ textAlign: "start" }}>הוסלמו</th>
+                  <th scope="col" style={{ textAlign: "start" }}>טוקני קלט</th>
+                  <th scope="col" style={{ textAlign: "start" }}>טוקני פלט</th>
+                  <th scope="col" style={{ textAlign: "start" }}>חציון זמן</th>
                 </tr>
               </thead>
               <tbody>
                 {stats.by_stage.map((s) => (
-                  <tr key={s.stage} style={{ borderTop: "1px solid var(--border, #f1f5f9)" }}>
+                  <tr key={s.stage} style={{ borderTop: "1px solid var(--border, var(--border))" }}>
                     <td style={{ padding: "0.25rem 0" }}><span style={chip(s.stage)}>{STAGE_LABEL[s.stage] || s.stage}</span></td>
                     <td>{fmt(s.n)}</td><td>{fmt(s.answered)}</td><td>{fmt(s.escalated)}</td>
                     <td>{fmt(s.input_tokens)}</td><td>{fmt(s.output_tokens)}</td>
@@ -234,7 +234,7 @@ export default function NlQueryAdminPanel() {
 
       {/* ── explorer: searches, picks, synonym candidates ──────────── */}
       {sug && (
-        <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
+        <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem", marginBottom: "0.9rem" }}>
           <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>
             מצא נתונים — חיפושים ובחירות
           </div>
@@ -245,7 +245,7 @@ export default function NlQueryAdminPanel() {
             </div>
             <div title="באיזה חלק מהחיפושים המשתמש בחר מאגר מהרשימה. זהו recall בשטח — המדד שהמסך תלוי בו, על שאלות אמיתיות ולא על סט שנכתב ביד.">
               <div className="text-muted" style={{ fontSize: "0.75rem" }}>נבחר מאגר</div>
-              <div style={{ fontSize: "1.3rem", fontWeight: 600, color: "#15803d" }}>
+              <div style={{ fontSize: "1.3rem", fontWeight: 600, color: "var(--success)" }}>
                 {sug.totals.searches
                   ? `${Math.round((sug.totals.picked / sug.totals.searches) * 100)}%` : "—"}
               </div>
@@ -260,7 +260,7 @@ export default function NlQueryAdminPanel() {
             <div title="חיפושים שלא החזירו כלום — הפער האמיתי בכיסוי הקטלוג.">
               <div className="text-muted" style={{ fontSize: "0.75rem" }}>ללא הצעות</div>
               <div style={{ fontSize: "1.3rem", fontWeight: 600,
-                            color: sug.totals.empty ? "#a16207" : undefined }}>
+                            color: sug.totals.empty ? "var(--tint-note-fg)" : undefined }}>
                 {fmt(sug.totals.empty)}
               </div>
             </div>
@@ -278,7 +278,7 @@ export default function NlQueryAdminPanel() {
               {sug.synonym_candidates.map((c) => (
                 <div key={`${c.query}|${c.picked_table}`} className="flex"
                      style={{ gap: 8, alignItems: "center", flexWrap: "wrap", padding: "0.25rem 0",
-                              borderTop: "1px solid var(--border, #f1f5f9)", fontSize: "0.82rem" }}>
+                              borderTop: "1px solid var(--border, var(--border))", fontSize: "0.82rem" }}>
                   <b>{c.query}</b>
                   <span className="text-muted">← {c.picked_table}</span>
                   <span style={chip("cache")}>{c.n}</span>
@@ -303,17 +303,17 @@ export default function NlQueryAdminPanel() {
             </summary>
             <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse", marginTop: 6 }}>
               <thead>
-                <tr style={{ color: "var(--text-muted, #64748b)" }}>
-                  <th style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
-                  <th style={{ textAlign: "start" }}>חיפוש</th>
-                  <th style={{ textAlign: "start" }}>הצעות</th>
-                  <th style={{ textAlign: "start" }}>נבחר</th>
-                  <th style={{ textAlign: "start" }}>מיקום</th>
+                <tr style={{ color: "var(--text-muted, #464F5E)" }}>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
+                  <th scope="col" style={{ textAlign: "start" }}>חיפוש</th>
+                  <th scope="col" style={{ textAlign: "start" }}>הצעות</th>
+                  <th scope="col" style={{ textAlign: "start" }}>נבחר</th>
+                  <th scope="col" style={{ textAlign: "start" }}>מיקום</th>
                 </tr>
               </thead>
               <tbody>
                 {sug.rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: "1px solid var(--border, #f1f5f9)" }}>
+                  <tr key={r.id} style={{ borderTop: "1px solid var(--border, var(--border))" }}>
                     <td className="text-muted" style={{ padding: "0.22rem 0", whiteSpace: "nowrap" }}>
                       {new Date(r.created_at).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })}
                     </td>
@@ -337,10 +337,10 @@ export default function NlQueryAdminPanel() {
       )}
 
       {/* ── log ────────────────────────────────────────────────────── */}
-      <div style={{ border: "1px solid var(--border, #e5e7eb)", borderRadius: 6, padding: "0.7rem 0.85rem" }}>
+      <div style={{ border: "1px solid var(--border, var(--border))", borderRadius: 6, padding: "0.7rem 0.85rem" }}>
         <div className="flex" style={{ alignItems: "center", gap: 10, marginBottom: "0.5rem", flexWrap: "wrap" }}>
           <span style={{ fontWeight: 600 }}>לוג שאלות</span>
-          <select value={stage} onChange={(e) => setStage(e.target.value)} style={box}>
+          <select value={stage} onChange={(e) => setStage(e.target.value)} aria-label="סינון הלוג לפי שלב" style={box}>
             <option value="">כל השלבים</option>
             {Object.entries(STAGE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
@@ -351,19 +351,19 @@ export default function NlQueryAdminPanel() {
         </div>
         <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
           <thead>
-            <tr style={{ color: "var(--text-muted, #64748b)" }}>
-              <th style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
-              <th style={{ textAlign: "start" }}>שאלה</th>
-              <th style={{ textAlign: "start" }}>שלב</th>
-              <th style={{ textAlign: "start" }}>ניסיונות</th>
-              <th style={{ textAlign: "start" }}>תוצאה</th>
-              <th style={{ textAlign: "start" }}>טוקנים</th>
-              <th style={{ textAlign: "start" }}>זמן</th>
+            <tr style={{ color: "var(--text-muted, #464F5E)" }}>
+              <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0" }}>מתי</th>
+              <th scope="col" style={{ textAlign: "start" }}>שאלה</th>
+              <th scope="col" style={{ textAlign: "start" }}>שלב</th>
+              <th scope="col" style={{ textAlign: "start" }}>ניסיונות</th>
+              <th scope="col" style={{ textAlign: "start" }}>תוצאה</th>
+              <th scope="col" style={{ textAlign: "start" }}>טוקנים</th>
+              <th scope="col" style={{ textAlign: "start" }}>זמן</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} style={{ borderTop: "1px solid var(--border, #f1f5f9)", verticalAlign: "top" }}>
+              <tr key={r.id} style={{ borderTop: "1px solid var(--border, var(--border))", verticalAlign: "top" }}>
                 <td style={{ padding: "0.3rem 0", whiteSpace: "nowrap" }} className="text-muted">
                   {new Date(r.created_at).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" })}
                 </td>
@@ -373,11 +373,11 @@ export default function NlQueryAdminPanel() {
                     <>
                       {" "}
                       <button onClick={() => setOpenSql(openSql === r.id ? null : r.id)}
-                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0f766e)", fontSize: "0.72rem", textDecoration: "underline" }}>
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary, #0C5E58)", fontSize: "0.72rem", textDecoration: "underline" }}>
                         SQL
                       </button>
                       {openSql === r.id && (
-                        <pre style={{ margin: "0.3rem 0 0", padding: "0.4rem", background: "var(--bg-muted, #f8fafc)", borderRadius: 4, fontSize: "0.7rem", whiteSpace: "pre-wrap", direction: "ltr", textAlign: "start" }}>{r.sql}</pre>
+                        <pre style={{ margin: "0.3rem 0 0", padding: "0.4rem", background: "var(--surface-2)", borderRadius: 4, fontSize: "0.7rem", whiteSpace: "pre-wrap", direction: "ltr", textAlign: "start" }}>{r.sql}</pre>
                       )}
                     </>
                   )}
@@ -389,7 +389,7 @@ export default function NlQueryAdminPanel() {
                 <td style={{ maxWidth: 220 }}>
                   {r.answered
                     ? <span className="text-muted" style={{ fontSize: "0.75rem" }}>{r.entity}</span>
-                    : <span style={{ fontSize: "0.75rem", color: "#a16207" }}>{r.reason}</span>}
+                    : <span style={{ fontSize: "0.75rem", color: "var(--warning)" }}>{r.reason}</span>}
                 </td>
                 <td className="text-muted" style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>
                   {r.input_tokens + r.output_tokens ? `${fmt(r.input_tokens)}/${fmt(r.output_tokens)}` : "—"}

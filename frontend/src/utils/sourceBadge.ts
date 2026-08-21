@@ -96,6 +96,45 @@ export function registrySource(id: string | undefined): RegistrySourceView | nul
   return (id && runtimeSources.get(id)) || null;
 }
 
+/**
+ * Snap a worker-supplied badge colour onto the site's tint palette.
+ *
+ * A scraper source ships its own chip colours in its manifest, and those were
+ * picked to look right on a white page — several land between 4.9:1 and 6.7:1,
+ * and none of them follow the theme, so in dark mode they stayed pale-on-pale.
+ * The manifest still chooses the HUE (that is how a reader tells sources
+ * apart); the exact values come from the palette, where each pair is verified
+ * at 7:1 or better in both themes (WCAG 1.4.6).
+ *
+ * An unrecognised colour falls back to the neutral tint rather than being
+ * passed through — an unknown value is exactly the case we cannot vouch for.
+ */
+const TINT_BY_HUE: Record<string, string> = {
+  // blues / skies
+  "#e0f2fe": "sky", "#dbeafe": "sky", "#eff6ff": "sky", "#f0f9ff": "sky",
+  // teals / cyans
+  "#cffafe": "teal", "#ccfbf1": "teal", "#f0fdfa": "teal",
+  // greens
+  "#d1fae5": "good", "var(--tint-good-bg)": "good", "#ecfdf5": "good", "#f0fdf4": "good",
+  // limes
+  "#ecfccb": "lime", "#f7fee7": "lime",
+  // violets / indigos
+  "#ede9fe": "violet", "#f5f3ff": "violet", "#e0e7ff": "indigo", "#eef2ff": "indigo",
+  // ambers / oranges
+  "#ffedd5": "warn", "#fef3c7": "warn", "#fffbeb": "warn", "#fff7ed": "warn",
+  "var(--tint-note-bg)": "note", "#fefce8": "note",
+  // reds
+  "var(--tint-bad-bg)": "bad", "#fef2f2": "bad", "#fff1f2": "bad",
+  // pinks
+  "#fce7f3": "pink", "#fdf2f8": "pink",
+  // neutrals
+  "#f1f5f9": "neutral", "#f8fafc": "neutral", "#e2e8f0": "neutral", "#f9fafb": "neutral",
+};
+
+function tintFor(bg: string): string {
+  return TINT_BY_HUE[(bg || "").trim().toLowerCase()] || "neutral";
+}
+
 export function primeRegistryBadges(
   sources: RegistrySourceView[],
   lang: string,
@@ -106,10 +145,10 @@ export function primeRegistryBadges(
     runtimeSources.set(source.id, source);
     runtimeBadges.set(source.ckan_id_prefix, {
       id: source.id,
-      bg: source.badge.bg,
-      fg: source.badge.fg,
+      bg: `var(--tint-${tintFor(source.badge.bg)}-bg)`,
+      fg: `var(--tint-${tintFor(source.badge.bg)}-fg)`,
       label: source.badge.label,
-      accent: source.badge.accent,
+      accent: `var(--tint-${tintFor(source.badge.bg)}-bd)`,
       // Unused for these sources — sourceLinkLabel wins — but the field is
       // required, and the generic key is the honest fallback.
       sourceLinkKey: "home.source_link",
@@ -358,11 +397,11 @@ export function sourceBadgeFor(
 ): SourceBadge {
   if (source_type === "govmap") {
     return {
-      bg: "#e0f2fe",
-      fg: "#075985",
+      bg: "var(--tint-sky-bg)",
+      fg: "var(--tint-sky-fg)",
       id: "govmap",
       label: "GOVMAP",
-      accent: "#0ea5e9",
+      accent: "var(--tint-sky-bd)",
       sourceLinkKey: "home.source_link_govmap",
     };
   }
@@ -370,11 +409,11 @@ export function sourceBadgeFor(
     // Cyan pill for the CBS (למ"ס) content index — distinct from the sky-blue
     // GOVMAP chip so the two aren't confused.
     return {
-      bg: "#cffafe",
-      fg: "#155e75",
+      bg: "var(--tint-teal-bg)",
+      fg: "var(--tint-teal-fg)",
       id: "cbs",
       label: 'למ"ס',
-      accent: "#06b6d4",
+      accent: "var(--tint-teal-bd)",
       sourceLinkKey: "home.source_link_cbs",
     };
   }
@@ -391,11 +430,11 @@ export function sourceBadgeFor(
         // AA contrast on this darker bg, so switch the chip text to
         // white — the chip is now distinctly readable as a filled
         // green pill instead of a tinted outline.
-        bg: "#5d936c",
-        fg: "#ffffff",
+        bg: "var(--fill-good)",
+        fg: "var(--on-fill)",
         id: "idf",
         label: "IDF.IL",
-        accent: "#0f766e",
+        accent: "var(--tint-teal-fg)",
         sourceLinkKey: "home.source_link_idf",
       };
     }
@@ -405,11 +444,11 @@ export function sourceBadgeFor(
       // readable on both light and dark page themes; accent matches
       // the left-rail colour used on the result card.
       return {
-        bg: "#ede9fe",
-        fg: "#5b21b6",
+        bg: "var(--tint-violet-bg)",
+        fg: "var(--tint-violet-fg)",
         id: "health",
         label: "PRACTITIONERS",
-        accent: "#7c3aed",
+        accent: "var(--tint-violet-bd)",
         sourceLinkKey: "home.source_link_health",
       };
     }
@@ -418,11 +457,11 @@ export function sourceBadgeFor(
       // practitioners.health.gov.il chip. bg/fg lands on WCAG AA on both
       // light and dark themes; accent matches the card left-rail.
       return {
-        bg: "#ccfbf1",
-        fg: "#115e59",
+        bg: "var(--tint-teal-bg)",
+        fg: "var(--tint-teal-fg)",
         id: "registries",
         label: "בריאות",
-        accent: "#14b8a6",
+        accent: "var(--tint-teal-bd)",
         sourceLinkKey: "home.source_link_registries",
       };
     }
@@ -431,11 +470,11 @@ export function sourceBadgeFor(
       // PRACTITIONERS purple and IDF green so the source family is
       // obvious at a glance.
       return {
-        bg: "#dbeafe",
-        fg: "#1e40af",
+        bg: "var(--tint-sky-bg)",
+        fg: "var(--tint-sky-fg)",
         id: "avodata",
         label: "AVODATA",
-        accent: "#2563eb",
+        accent: "var(--tint-sky-bd)",
         sourceLinkKey: "home.source_link_avodata",
       };
     }
@@ -444,11 +483,11 @@ export function sourceBadgeFor(
       // of Interior local-government dashboard), distinct from the emerald
       // mankal (#059669), teal registries (#14b8a6) and avodata sky-blue.
       return {
-        bg: "#ecfccb",
-        fg: "#3f6212",
+        bg: "var(--tint-lime-bg)",
+        fg: "var(--tint-lime-fg)",
         id: "munidata",
         label: "מצב השלטון המקומי",
-        accent: "#65a30d",
+        accent: "var(--tint-lime-bd)",
         sourceLinkKey: "home.source_link_munidata",
       };
     }
@@ -457,11 +496,11 @@ export function sourceBadgeFor(
       // government-decision follow-up), distinct from the munidata lime,
       // servicescompass amber, registries teal and avodata sky-blue.
       return {
-        bg: "#e0e7ff",
-        fg: "#3730a3",
+        bg: "var(--tint-indigo-bg)",
+        fg: "var(--tint-indigo-fg)",
         id: "emun",
         label: 'מערכת אמו"ן',
-        accent: "#4f46e5",
+        accent: "var(--tint-indigo-bd)",
         sourceLinkKey: "home.source_link_emun",
       };
     }
@@ -470,11 +509,11 @@ export function sourceBadgeFor(
       // הממשלתיים", National Digital Agency), distinct from avodata sky-blue,
       // munidata lime and mankal emerald.
       return {
-        bg: "#ffedd5",
-        fg: "#9a3412",
+        bg: "var(--tint-warn-bg)",
+        fg: "var(--tint-warn-fg)",
         id: "servicescompass",
         label: "מצפן השירותים",
-        accent: "#ea580c",
+        accent: "var(--tint-warn-bd)",
         sourceLinkKey: "home.source_link_servicescompass",
       };
     }
@@ -482,11 +521,11 @@ export function sourceBadgeFor(
       // Deep-red pill for mevaker.gov.il (State Comptroller), distinct
       // from the other source families.
       return {
-        bg: "#fee2e2",
-        fg: "#991b1b",
+        bg: "var(--tint-bad-bg)",
+        fg: "var(--tint-bad-fg)",
         id: "mevaker",
         label: "MEVAKER",
-        accent: "#dc2626",
+        accent: "var(--tint-bad-bd)",
         sourceLinkKey: "home.source_link_mevaker",
       };
     }
@@ -495,11 +534,11 @@ export function sourceBadgeFor(
       // viewer), distinct from the avodata sky-blue and the other
       // source families.
       return {
-        bg: "#e0e7ff",
-        fg: "#3730a3",
+        bg: "var(--tint-indigo-bg)",
+        fg: "var(--tint-indigo-fg)",
         id: "hatzav",
         label: "חצב",
-        accent: "#4f46e5",
+        accent: "var(--tint-indigo-bd)",
         sourceLinkKey: "home.source_link_hatzav",
       };
     }
@@ -508,11 +547,11 @@ export function sourceBadgeFor(
       // Education Director-General circulars), distinct from the other
       // source families.
       return {
-        bg: "#d1fae5",
-        fg: "#065f46",
+        bg: "var(--tint-good-bg)",
+        fg: "var(--tint-good-fg)",
         id: "mankal",
         label: "חוזרי מנכ\"ל",
-        accent: "#059669",
+        accent: "var(--tint-good-bd)",
         sourceLinkKey: "home.source_link_mankal",
       };
     }
@@ -521,11 +560,11 @@ export function sourceBadgeFor(
       // Development Authority tenders portal), distinct from the other
       // source families.
       return {
-        bg: "#fce7f3",
-        fg: "#9d174d",
+        bg: "var(--tint-pink-bg)",
+        fg: "var(--tint-pink-fg)",
         id: "jda",
         label: "JDA",
-        accent: "#db2777",
+        accent: "var(--tint-pink-bd)",
         sourceLinkKey: "home.source_link_jda",
       };
     }
@@ -534,11 +573,11 @@ export function sourceBadgeFor(
       // development company; tenders + committee decisions), distinct from
       // the jda rose (#db2777) and the govil amber (#f59e0b).
       return {
-        bg: "#ffedd5",
-        fg: "#9a3412",
+        bg: "var(--tint-warn-bg)",
+        fg: "var(--tint-warn-fg)",
         id: "eden",
         label: "EDEN",
-        accent: "#ea580c",
+        accent: "var(--tint-warn-bd)",
         sourceLinkKey: "home.source_link_eden",
       };
     }
@@ -546,27 +585,27 @@ export function sourceBadgeFor(
       // Indigo/blue pill for knesset.gov.il committee protocols, distinct
       // from the govmap sky (#0ea5e9), jda rose and govil amber.
       return {
-        bg: "#e0e7ff",
-        fg: "#3730a3",
+        bg: "var(--tint-indigo-bg)",
+        fg: "var(--tint-indigo-fg)",
         id: "knesset",
         label: "כנסת",
-        accent: "#4f46e5",
+        accent: "var(--tint-indigo-bd)",
         sourceLinkKey: "home.source_link_knesset",
       };
     }
     return {
-      bg: "#fef3c7",
-      fg: "#92400e",
+      bg: "var(--tint-warn-bg)",
+      fg: "var(--tint-warn-fg)",
       id: "govil",
       label: "GOV.IL",
-      accent: "#f59e0b",
+      accent: "var(--tint-warn-bd)",
       sourceLinkKey: "home.source_link_govil",
     };
   }
   // ckan (the default)
   return {
-    bg: "#ccfbf1",
-    fg: "#0f766e",
+    bg: "var(--tint-teal-bg)",
+    fg: "var(--tint-teal-fg)",
     id: "datagovil",
     label: "DATA.GOV.IL",
     accent: "var(--warning)",
@@ -597,10 +636,10 @@ export function sourceBadgeForKey(key: string): SourceBadge {
   if (badge.id !== key) {
     return {
       id: key,
-      bg: "#f1f5f9",
-      fg: "#334155",
+      bg: "var(--tint-neutral-bg)",
+      fg: "var(--tint-neutral-fg)",
       label: key,
-      accent: "#94a3b8",
+      accent: "var(--tint-neutral-bd)",
       sourceLinkKey: "home.source_link",
     };
   }

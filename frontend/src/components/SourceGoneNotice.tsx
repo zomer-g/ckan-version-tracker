@@ -52,8 +52,8 @@ export default function SourceGoneNotice({
           fontWeight: 600,
           padding: "0.1rem 0.45rem",
           borderRadius: "999px",
-          background: "#fee2e2",
-          color: "#991b1b",
+          background: "var(--tint-bad-bg)",
+          color: "var(--tint-bad-fg)",
           whiteSpace: "nowrap",
         }}
       >
@@ -69,9 +69,9 @@ export default function SourceGoneNotice({
         marginTop: "0.6rem",
         padding: "0.6rem 0.85rem",
         borderRadius: 8,
-        background: "#fef2f2",
-        border: "1px solid #fecaca",
-        color: "#7f1d1d",
+        background: "var(--tint-bad-bg)",
+        border: "1px solid var(--tint-bad-bd)",
+        color: "var(--tint-bad-fg)",
         fontSize: "0.85rem",
         lineHeight: 1.6,
         maxWidth: "46rem",

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { versions as versionsApi } from "../api/client";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 interface DiffEntry {
   type: string;
   field: string;
@@ -11,6 +12,7 @@ interface DiffEntry {
 }
 
 export default function DiffPage() {
+  useDocumentTitle("השוואת גרסאות");
   const { t } = useTranslation();
   const { datasetId } = useParams<{ datasetId: string }>();
   const [searchParams] = useSearchParams();
@@ -60,7 +62,7 @@ export default function DiffPage() {
       {diff.length === 0 ? (
         <div className="empty-state">{t("diff.no_changes")}</div>
       ) : (
-        <div className="card" style={{ overflow: "auto" }}>
+        <div className="card scroll-region" tabIndex={0} role="region" aria-label="השוואת הגרסאות" style={{ overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <caption className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>
               {t("diff.title")}: v{fromNumber} &rarr; v{toNumber}
@@ -91,13 +93,13 @@ export default function DiffPage() {
                       <code style={{ fontSize: "0.8rem" }}>{entry.field}</code>
                     </div>
                   </td>
-                  <td style={{ ...tdStyle, background: entry.type === "removed" ? "#fee2e2" : undefined }}>
-                    <pre style={preStyle}>
+                  <td style={{ ...tdStyle, background: entry.type === "removed" ? "var(--tint-bad-bg)" : undefined }}>
+                    <pre style={preStyle} tabIndex={0} className="scroll-region">
                       {entry.old_value !== null ? JSON.stringify(entry.old_value, null, 2) : "\u2014"}
                     </pre>
                   </td>
-                  <td style={{ ...tdStyle, background: entry.type === "added" ? "#dcfce7" : undefined }}>
-                    <pre style={preStyle}>
+                  <td style={{ ...tdStyle, background: entry.type === "added" ? "var(--tint-good-bg)" : undefined }}>
+                    <pre style={preStyle} tabIndex={0} className="scroll-region">
                       {entry.new_value !== null ? JSON.stringify(entry.new_value, null, 2) : "\u2014"}
                     </pre>
                   </td>

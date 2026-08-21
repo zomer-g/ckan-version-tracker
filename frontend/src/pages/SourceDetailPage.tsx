@@ -13,6 +13,8 @@ import SourceChip from "../components/SourceChip";
 import SourceMethodology from "../components/SourceMethodology";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { Breadcrumbs } from "../components/a11y";
 export default function SourceDetailPage() {
   const { t } = useTranslation();
   const { sourceId } = useParams<{ sourceId: string }>();
@@ -39,6 +41,8 @@ export default function SourceDetailPage() {
     };
   }, [datasets, sourceId]);
 
+  useDocumentTitle(badge?.label ?? sourceId ?? "מקור");
+
   if (loading) {
     return (
       <div className="container mt-3">
@@ -55,6 +59,7 @@ export default function SourceDetailPage() {
         </Link>
       </div>
 
+      <Breadcrumbs items={[{ label: t("nav.sources", "מקורות"), to: "/sources" }, { label: badge?.label ?? sourceId ?? "" }]} />
       <div className="page-header" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
         {badge && (
           <span
@@ -93,9 +98,9 @@ export default function SourceDetailPage() {
             return (
               <article key={d.id} className="card">
                 <div className="flex-between mb-1">
-                  <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                  <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
                     <Link to={`/versions/${d.id}`}>{d.title}</Link>
-                  </h3>
+                  </h2>
                   <SourceChip
                     sourceType={d.source_type}
                     organization={d.organization}

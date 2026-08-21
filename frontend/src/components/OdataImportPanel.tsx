@@ -249,7 +249,7 @@ export default function OdataImportPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-      <div style={{ fontSize: "0.88rem", lineHeight: 1.6, color: "#7c2d12", background: "#fffdf9", border: "1px solid #f59e0b", borderInlineStart: "4px solid #b45309", borderRadius: 6, padding: "0.75rem 0.9rem" }}>
+      <div style={{ fontSize: "0.88rem", lineHeight: 1.6, color: "var(--warning)", background: "var(--tint-warn-bg)", border: "1px solid var(--tint-warn-bd)", borderInlineStart: "4px solid var(--warning)", borderRadius: 6, padding: "0.75rem 0.9rem" }}>
         <strong>מידע מעובד.</strong> כאן בוחרים קבצים ספציפיים מ־מידע לעם (odata.org.il)
         ודוחפים אותם לטבלת SQL אמיתית. הטבלאות מופיעות בקונסולת ה-SQL תחת המקור
         <strong> "מידע לעם"</strong> וניתנות לתשאול ול-JOIN — אך הן מידע מעובד, לא מקור
@@ -258,13 +258,13 @@ export default function OdataImportPanel() {
       </div>
 
       {msg && (
-        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: msg.ok ? "#ecfdf5" : "#fef2f2", color: msg.ok ? "#065f46" : "#991b1b", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}` }}>
+        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: msg.ok ? "#ecfdf5" : "#fef2f2", color: msg.ok ? "var(--success)" : "#941A1A", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}` }}>
           {msg.text}
         </div>
       )}
 
       {progress && (
-        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: "#eff6ff", color: "#1e3a8a", border: "1px solid #bfdbfe" }}>
+        <div role="status" style={{ padding: "0.6rem 0.85rem", borderRadius: 6, fontSize: "0.88rem", background: "var(--tint-sky-bg)", color: "var(--tint-sky-fg)", border: "1px solid var(--tint-sky-bd)" }}>
           מייבא את "{progress.label}"… {progress.rows > 0
             ? `${progress.rows.toLocaleString()} שורות נטענו`
             : "מנתח את הקובץ"}. קובץ גדול יכול לקחת כמה דקות — אפשר להשאיר את הדף פתוח.
@@ -281,23 +281,23 @@ export default function OdataImportPanel() {
         ) : imports.length === 0 ? (
           <div className="text-sm text-muted">עדיין לא יובאו טבלאות. חפשו למטה ובחרו קובץ לייבוא.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div tabIndex={0} role="region" aria-label="תצוגה מקדימה של הייבוא" className="scroll-region" style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
               <thead>
-                <tr style={{ textAlign: "start", borderBottom: "2px solid var(--border, #e5e7eb)" }}>
-                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>כותרת</th>
-                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>טבלה</th>
-                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>שורות</th>
-                  <th style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>יובא</th>
-                  <th style={{ padding: "0.4rem 0.5rem" }}></th>
+                <tr style={{ textAlign: "start", borderBottom: "2px solid var(--border, var(--border))" }}>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>כותרת</th>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>טבלה</th>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>שורות</th>
+                  <th scope="col" style={{ textAlign: "start", padding: "0.4rem 0.5rem" }}>יובא</th>
+                  <th scope="col" style={{ padding: "0.4rem 0.5rem" }}></th>
                 </tr>
               </thead>
               <tbody>
                 {imports.map((imp) => (
-                  <tr key={imp.resource_id} style={{ borderBottom: "1px solid var(--border, #f1f5f9)" }}>
+                  <tr key={imp.resource_id} style={{ borderBottom: "1px solid var(--border, var(--border))" }}>
                     <td style={{ padding: "0.4rem 0.5rem" }}>
                       {imp.source_url ? (
-                        <a href={imp.source_url} target="_blank" rel="noopener noreferrer">{imp.title || imp.resource_id}</a>
+                        <a href={imp.source_url} target="_blank" rel="noopener noreferrer">{imp.title || imp.resource_id}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
                       ) : (imp.title || imp.resource_id)}
                       {imp.organization && <div className="text-muted" style={{ fontSize: "0.75rem" }}>{imp.organization}</div>}
                     </td>
@@ -308,7 +308,7 @@ export default function OdataImportPanel() {
                     <td style={{ padding: "0.4rem 0.5rem", whiteSpace: "nowrap" }}>{fmtDate(imp.imported_at)}</td>
                     <td style={{ padding: "0.4rem 0.5rem", whiteSpace: "nowrap" }}>
                       <button type="button" onClick={() => doDelete(imp)} disabled={busy === imp.resource_id}
-                        style={{ fontSize: "0.78rem", padding: "0.2rem 0.6rem", border: "1px solid #dc2626", background: "none", color: "#dc2626", borderRadius: 4, cursor: "pointer" }}>
+                        style={{ fontSize: "0.78rem", padding: "0.2rem 0.6rem", border: "1px solid var(--danger)", background: "none", color: "var(--danger)", borderRadius: 4, cursor: "pointer" }}>
                         מחק
                       </button>
                     </td>
@@ -327,14 +327,14 @@ export default function OdataImportPanel() {
           style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", maxWidth: 520 }}>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
             placeholder="חיפוש פריט במידע לעם…" aria-label="חיפוש פריט במידע לעם"
-            style={{ flex: 1, minWidth: 0, padding: "0.45rem 0.6rem", border: "1px solid var(--border, #d1d5db)", borderRadius: 4 }} />
+            style={{ flex: 1, minWidth: 0, padding: "0.45rem 0.6rem", border: "1px solid var(--border, var(--border))", borderRadius: 4 }} />
           <button type="submit" disabled={loading}
-            style={{ padding: "0.45rem 1rem", border: "none", borderRadius: 4, background: "#b45309", color: "#fff", fontWeight: 600, cursor: "pointer" }}>
+            style={{ padding: "0.45rem 1rem", border: "none", borderRadius: 4, background: "var(--fill-warn)", color: "var(--on-fill-warn)", fontWeight: 600, cursor: "pointer" }}>
             {loading ? "מחפש…" : "חפש"}
           </button>
         </form>
 
-        {error && <div className="text-sm" style={{ color: "#b91c1c" }}>החיפוש נכשל. נסו שוב.</div>}
+        {error && <div className="text-sm" style={{ color: "var(--danger)" }}>החיפוש נכשל. נסו שוב.</div>}
         {!error && (
           <>
             <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
@@ -364,7 +364,7 @@ export default function OdataImportPanel() {
                             <div key={r.id || i} className="odata-file-row">
                               <span className="odata-file-format">{resourceFormat(r) || "—"}</span>
                               {r.url ? (
-                                <a className="odata-file-link" href={r.url} target="_blank" rel="noopener noreferrer" title={r.name || ""}>{r.name?.trim() || "קובץ"}</a>
+                                <a className="odata-file-link" href={r.url} target="_blank" rel="noopener noreferrer" title={r.name || ""}>{r.name?.trim() || "קובץ"}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
                               ) : (
                                 <span className="odata-file-link">{r.name?.trim() || "קובץ"}</span>
                               )}
@@ -383,7 +383,7 @@ export default function OdataImportPanel() {
                                   before this it could not reach SQL at all. */}
                               <label className="odata-sql-query-btn" style={{ cursor: busy === r.id ? "default" : "pointer", opacity: busy === r.id ? 0.5 : 1, flex: "0 0 auto" }}
                                 title="בחר קובץ מהמחשב (CSV/XLS/XLSX/ICAL) וטען אותו לטבלת SQL תחת המשאב הזה">
-                                ⬆ העלה קובץ
+                                <span aria-hidden="true">⬆</span> העלה קובץ
                                 <input type="file" accept=".csv,.xls,.xlsx,.xlsm,.ics,.ical,.ica" disabled={busy === r.id}
                                   style={{ display: "none" }}
                                   onChange={(e) => {
@@ -398,7 +398,7 @@ export default function OdataImportPanel() {
                             </div>
                           );
                         })}
-                        <a className="odata-item-open" href={odataDatasetUrl(d.name, "he")} target="_blank" rel="noopener noreferrer">פתיחה במידע לעם ↗</a>
+                        <a className="odata-item-open" href={odataDatasetUrl(d.name, "he")} target="_blank" rel="noopener noreferrer">פתיחה במידע לעם ↗<span className="sr-only"> (נפתח בחלון חדש)</span></a>
                       </div>
                     )}
                   </div>

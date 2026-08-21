@@ -124,7 +124,7 @@ export default function CbsResultCard({
             style={{ color: "var(--text, inherit)" }}
           >
             {(he ? r.title : r.title_en) || r.title || r.title_en || r.url}
-          </a>
+          <span className="sr-only"> (נפתח בחלון חדש)</span></a>
         </h2>
         <div className="flex" style={{ gap: "0.35rem", flexShrink: 0 }}>
           {canPin && (
@@ -159,7 +159,7 @@ export default function CbsResultCard({
               fontSize: "0.65rem",
               fontWeight: 600,
               background: featured ? "#fef3c7" : "#e0f2fe",
-              color: featured ? "#92400e" : "#075985",
+              color: featured ? "#833909" : "#075884",
               whiteSpace: "nowrap",
             }}
           >
@@ -195,7 +195,7 @@ export default function CbsResultCard({
           <span>{r.geo_levels.map(geoLabel).join(", ")}</span>
         )}
         {r.series_key && r.is_latest_edition === false && (
-          <span style={{ color: "#b45309" }}>
+          <span style={{ color: "var(--warning)" }}>
             {t("cbs.old_edition", "מהדורה ישנה")}
           </span>
         )}
@@ -243,14 +243,14 @@ export default function CbsResultCard({
                           fontSize: "0.72rem",
                           textDecoration: "none",
                           background: current ? "#0ea5e9" : "#fffbeb",
-                          color: current ? "#fff" : "#92400e",
+                          color: current ? "#fff" : "#833909",
                           border: current ? "1px solid #0ea5e9" : "1px solid #fde68a",
                           fontWeight: current ? 700 : 400,
                         }}
                       >
                         {e.edition_year ?? "—"}
                         {e.is_latest_edition ? " ★" : ""}
-                      </a>
+                      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                     );
                   })}
                 </div>
@@ -262,7 +262,7 @@ export default function CbsResultCard({
 
       {history && history.length > 0 && (
         <div style={{ marginTop: "0.55rem" }}>
-          <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "#92400e", marginBottom: "0.3rem" }}>
+          <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--warning)", marginBottom: "0.3rem" }}>
             {t("cbs.history_label", "גרסאות קודמות")}:
           </div>
           <div className="flex" style={{ gap: "0.3rem", flexWrap: "wrap" }}>
@@ -276,14 +276,14 @@ export default function CbsResultCard({
                 className="badge"
                 style={{
                   fontSize: "0.7rem",
-                  background: "#fffbeb",
-                  color: "#92400e",
-                  border: "1px solid #fde68a",
+                  background: "var(--tint-warn-bg)",
+                  color: "var(--warning)",
+                  border: "1px solid var(--tint-warn-bd)",
                   textDecoration: "none",
                 }}
               >
                 {h.yearLabel}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             ))}
           </div>
         </div>
@@ -295,7 +295,7 @@ export default function CbsResultCard({
             <span
               key={s}
               className="badge"
-              style={{ fontSize: "0.7rem", background: "#f1f5f9", color: "#334155" }}
+              style={{ fontSize: "0.7rem", background: "var(--surface-2)", color: "var(--text-muted)" }}
             >
               {s}
             </span>
@@ -311,7 +311,7 @@ export default function CbsResultCard({
                 key={ext}
                 className="badge"
                 title={ext.toUpperCase()}
-                style={{ fontSize: "0.68rem", background: "#eef2ff", color: "#3730a3" }}
+                style={{ fontSize: "0.68rem", background: "var(--tint-indigo-bg)", color: "var(--tint-indigo-fg)" }}
               >
                 {fileIcon(ext)} {ext.toUpperCase()}
               </span>
@@ -339,9 +339,9 @@ export default function CbsResultCard({
                     gap: "0.5rem",
                     padding: "0.35rem 0.55rem",
                     marginBottom: "0.25rem",
-                    background: "var(--bg-secondary, #f8f9fa)",
+                    background: "var(--surface-2)",
                     borderRadius: "4px",
-                    border: "1px solid var(--border, #e2e8f0)",
+                    border: "1px solid var(--border, var(--border))",
                   }}
                 >
                   <a
@@ -357,7 +357,7 @@ export default function CbsResultCard({
                         {f.ext.toUpperCase()}
                       </span>
                     )}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                   {f.size != null && (
                     <span className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>
                       {formatBytes(f.size)}

@@ -45,6 +45,7 @@ import { EDEN_PATTERN } from "../utils/edenPattern";
 // backend /api/knesset/validate is authoritative on the committee scope.
 import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 interface CkanResource {
   id: string;
   name: string;
@@ -68,6 +69,7 @@ interface SearchResult {
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 
 export default function SearchPage() {
+  useDocumentTitle("חיפוש מאגרים");
   const { t } = useTranslation();
   const { user } = useAuth();
   const isAdmin = !!user?.is_admin;
@@ -78,6 +80,9 @@ export default function SearchPage() {
   const [tracking, setTracking] = useState<Set<string>>(new Set());
   const [tracked, setTracked] = useState<Map<string, "tracked" | "pending">>(new Map());
   const [showIntervalFor, setShowIntervalFor] = useState<string | null>(null);
+  // The frequency the user has picked but not yet confirmed. Choosing must
+  // not act on its own — see the note at the top of this file's a11y pass.
+  const [pendingInterval, setPendingInterval] = useState(604800);
   const [error, setError] = useState("");
   const [targetResourceId, setTargetResourceId] = useState<string | null>(null);
 
@@ -800,7 +805,7 @@ export default function SearchPage() {
     }
     if (status === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "\u05D4\u05D1\u05E7\u05E9\u05D4 \u05E0\u05E9\u05DC\u05D7\u05D4 \u2014 \u05DE\u05DE\u05EA\u05D9\u05DF \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8")}
         </span>
       );
@@ -810,11 +815,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showIntervalFor === key && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackDataset(datasetId, Number(e.target.value), resourceId)}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -824,7 +828,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => showIntervalFor === key ? setShowIntervalFor(null) : setShowIntervalFor(key)}
+          onClick={() => {
+            if (showIntervalFor === key) { trackDataset(datasetId, pendingInterval, resourceId); setShowIntervalFor(null); }
+            else { setPendingInterval(604800); setShowIntervalFor(key); }
+          }}
           disabled={tracking.has(key)}
           aria-label={tracking.has(key) ? t("common.loading") : `${t("search.track_btn")} ${label}`}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
@@ -842,7 +849,7 @@ export default function SearchPage() {
     }
     if (govIlTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "\u05D4\u05D1\u05E7\u05E9\u05D4 \u05E0\u05E9\u05DC\u05D7\u05D4 \u2014 \u05DE\u05DE\u05EA\u05D9\u05DF \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8")}
         </span>
       );
@@ -852,11 +859,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showGovIlInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackGovIlDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -866,7 +872,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowGovIlInterval(!showGovIlInterval)}
+          onClick={() => {
+            if (showGovIlInterval) { trackGovIlDataset(pendingInterval); setShowGovIlInterval(false); }
+            else { setPendingInterval(604800); setShowGovIlInterval(true); }
+          }}
           disabled={govIlTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -883,7 +892,7 @@ export default function SearchPage() {
     }
     if (avodataTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -892,11 +901,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showAvodataInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackAvodataDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -906,7 +914,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowAvodataInterval(!showAvodataInterval)}
+          onClick={() => {
+            if (showAvodataInterval) { trackAvodataDataset(pendingInterval); setShowAvodataInterval(false); }
+            else { setPendingInterval(604800); setShowAvodataInterval(true); }
+          }}
           disabled={avodataTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -923,7 +934,7 @@ export default function SearchPage() {
     }
     if (servicescompassTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -932,11 +943,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showServicescompassInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackServicescompassDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -946,7 +956,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowServicescompassInterval(!showServicescompassInterval)}
+          onClick={() => {
+            if (showServicescompassInterval) { trackServicescompassDataset(pendingInterval); setShowServicescompassInterval(false); }
+            else { setPendingInterval(604800); setShowServicescompassInterval(true); }
+          }}
           disabled={servicescompassTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -965,7 +978,7 @@ export default function SearchPage() {
     }
     if (munidataTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -974,11 +987,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showMunidataInterval && (
           <select
-            defaultValue={2592000}
-            onChange={(e) => trackMunidataDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -988,7 +1000,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowMunidataInterval(!showMunidataInterval)}
+          onClick={() => {
+            if (showMunidataInterval) { trackMunidataDataset(pendingInterval); setShowMunidataInterval(false); }
+            else { setPendingInterval(2592000); setShowMunidataInterval(true); }
+          }}
           disabled={munidataTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1008,7 +1023,7 @@ export default function SearchPage() {
     }
     if (emunTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1017,11 +1032,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showEmunInterval && (
           <select
-            defaultValue={2592000}
-            onChange={(e) => trackEmunDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1031,7 +1045,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowEmunInterval(!showEmunInterval)}
+          onClick={() => {
+            if (showEmunInterval) { trackEmunDataset(pendingInterval); setShowEmunInterval(false); }
+            else { setPendingInterval(2592000); setShowEmunInterval(true); }
+          }}
           disabled={emunTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1048,7 +1065,7 @@ export default function SearchPage() {
     }
     if (knessetTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1057,11 +1074,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showKnessetInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackKnessetDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1071,7 +1087,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowKnessetInterval(!showKnessetInterval)}
+          onClick={() => {
+            if (showKnessetInterval) { trackKnessetDataset(pendingInterval); setShowKnessetInterval(false); }
+            else { setPendingInterval(604800); setShowKnessetInterval(true); }
+          }}
           disabled={knessetTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1087,7 +1106,7 @@ export default function SearchPage() {
     }
     if (registryTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1096,13 +1115,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showRegistryInterval && (
           <select
-            // The source's own manifest knows its publishing rhythm; the
-            // person pasting the URL usually doesn't.
-            defaultValue={registryResult?.default_poll_interval || 604800}
-            onChange={(e) => trackRegistryDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1112,7 +1128,12 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowRegistryInterval(!showRegistryInterval)}
+          onClick={() => {
+            if (showRegistryInterval) { trackRegistryDataset(pendingInterval); setShowRegistryInterval(false); }
+            // The source's own manifest knows its publishing rhythm; the person
+            // pasting the URL usually doesn't — so that is the opening choice.
+            else { setPendingInterval(registryResult?.default_poll_interval || 604800); setShowRegistryInterval(true); }
+          }}
           disabled={registryTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1146,7 +1167,7 @@ export default function SearchPage() {
     }
     if (mevakerTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1155,11 +1176,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showMevakerInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackMevakerDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1169,7 +1189,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowMevakerInterval(!showMevakerInterval)}
+          onClick={() => {
+            if (showMevakerInterval) { trackMevakerDataset(pendingInterval); setShowMevakerInterval(false); }
+            else { setPendingInterval(604800); setShowMevakerInterval(true); }
+          }}
           disabled={mevakerTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1203,7 +1226,7 @@ export default function SearchPage() {
     }
     if (hatzavTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1212,11 +1235,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showHatzavInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackHatzavDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1226,7 +1248,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowHatzavInterval(!showHatzavInterval)}
+          onClick={() => {
+            if (showHatzavInterval) { trackHatzavDataset(pendingInterval); setShowHatzavInterval(false); }
+            else { setPendingInterval(604800); setShowHatzavInterval(true); }
+          }}
           disabled={hatzavTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1260,7 +1285,7 @@ export default function SearchPage() {
     }
     if (mankalTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1269,11 +1294,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showMankalInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackMankalDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1283,7 +1307,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowMankalInterval(!showMankalInterval)}
+          onClick={() => {
+            if (showMankalInterval) { trackMankalDataset(pendingInterval); setShowMankalInterval(false); }
+            else { setPendingInterval(604800); setShowMankalInterval(true); }
+          }}
           disabled={mankalTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1317,7 +1344,7 @@ export default function SearchPage() {
     }
     if (jdaTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1326,11 +1353,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showJdaInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackJdaDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1340,7 +1366,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowJdaInterval(!showJdaInterval)}
+          onClick={() => {
+            if (showJdaInterval) { trackJdaDataset(pendingInterval); setShowJdaInterval(false); }
+            else { setPendingInterval(604800); setShowJdaInterval(true); }
+          }}
           disabled={jdaTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1378,7 +1407,7 @@ export default function SearchPage() {
     }
     if (edenTracked[key] === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1387,11 +1416,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showEdenInterval[key] && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackEdenDataset(r, Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1418,7 +1446,7 @@ export default function SearchPage() {
     }
     if (healthTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1427,11 +1455,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showHealthInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackHealthDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1441,7 +1468,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowHealthInterval(!showHealthInterval)}
+          onClick={() => {
+            if (showHealthInterval) { trackHealthDataset(pendingInterval); setShowHealthInterval(false); }
+            else { setPendingInterval(604800); setShowHealthInterval(true); }
+          }}
           disabled={healthTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1458,7 +1488,7 @@ export default function SearchPage() {
     }
     if (registriesTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "הבקשה נשלחה — ממתין לאישור")}
         </span>
       );
@@ -1467,11 +1497,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showRegistriesInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackRegistriesDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1481,7 +1510,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowRegistriesInterval(!showRegistriesInterval)}
+          onClick={() => {
+            if (showRegistriesInterval) { trackRegistriesDataset(pendingInterval); setShowRegistriesInterval(false); }
+            else { setPendingInterval(604800); setShowRegistriesInterval(true); }
+          }}
           disabled={registriesTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1500,7 +1532,7 @@ export default function SearchPage() {
     }
     if (idfTracked === "pending") {
       return (
-        <span className="badge badge-success" role="status" style={{ background: "#22c55e", color: "#fff" }}>
+        <span className="badge badge-success" role="status" style={{ background: "var(--fill-good)", color: "var(--on-fill-good)" }}>
           {t("search.request_sent", "\u05D4\u05D1\u05E7\u05E9\u05D4 \u05E0\u05E9\u05DC\u05D7\u05D4 \u2014 \u05DE\u05DE\u05EA\u05D9\u05DF \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8")}
         </span>
       );
@@ -1509,11 +1541,10 @@ export default function SearchPage() {
       <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
         {showIdfInterval && (
           <select
-            defaultValue={604800}
-            onChange={(e) => trackIdfDataset(Number(e.target.value))}
+            value={pendingInterval}
+            onChange={(e) => setPendingInterval(Number(e.target.value))}
             style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem" }}
             aria-label={t("tracked.poll_interval")}
-            autoFocus
           >
             <option value="" disabled>{t("tracked.poll_interval")}</option>
             {INTERVAL_OPTIONS.map((opt) => (
@@ -1523,7 +1554,10 @@ export default function SearchPage() {
         )}
         <button
           className="btn-primary"
-          onClick={() => setShowIdfInterval(!showIdfInterval)}
+          onClick={() => {
+            if (showIdfInterval) { trackIdfDataset(pendingInterval); setShowIdfInterval(false); }
+            else { setPendingInterval(604800); setShowIdfInterval(true); }
+          }}
           disabled={idfTracking}
           style={{ fontSize: "0.8rem", padding: "0.25rem 0.6rem" }}
         >
@@ -1575,7 +1609,7 @@ export default function SearchPage() {
       {/* Gov.il scraper result */}
       {govIlResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #f59e0b" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-warn-bd)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{govIlResult.title}</h2>
@@ -1585,8 +1619,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#fef3c7",
-                  color: "#92400e",
+                  background: "var(--tint-warn-bg)",
+                  color: "var(--warning)",
                 }}>
                   GOV.IL
                 </span>
@@ -1602,7 +1636,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={govIlResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {govIlResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1611,7 +1645,7 @@ export default function SearchPage() {
       {/* IDF scraper result */}
       {idfResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #0f766e" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-teal-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{idfResult.title}</h2>
@@ -1621,8 +1655,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ccfbf1",
-                  color: "#115e59",
+                  background: "var(--tint-teal-bg)",
+                  color: "var(--tint-teal-fg)",
                 }}>
                   IDF.IL
                 </span>
@@ -1636,7 +1670,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={idfResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {idfResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1645,7 +1679,7 @@ export default function SearchPage() {
       {/* avodata.labor.gov.il scraper result */}
       {avodataResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #2563eb" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-sky-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{avodataResult.title}</h2>
@@ -1655,8 +1689,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#dbeafe",
-                  color: "#1e40af",
+                  background: "var(--tint-sky-bg)",
+                  color: "var(--tint-sky-fg)",
                 }}>
                   AVODATA
                 </span>
@@ -1670,7 +1704,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {avodataResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1679,7 +1713,7 @@ export default function SearchPage() {
       {/* gov.il/apps/servicescompass scraper result */}
       {servicescompassResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-warn-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{servicescompassResult.title}</h2>
@@ -1689,8 +1723,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ffedd5",
-                  color: "#9a3412",
+                  background: "var(--tint-warn-bg)",
+                  color: "var(--warning)",
                 }}>
                   מצפן השירותים
                 </span>
@@ -1704,7 +1738,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={servicescompassResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {servicescompassResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1713,7 +1747,7 @@ export default function SearchPage() {
       {/* municipal-data.org scraper result */}
       {munidataResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #65a30d" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-lime-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{munidataResult.title}</h2>
@@ -1723,8 +1757,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ecfccb",
-                  color: "#3f6212",
+                  background: "var(--tint-lime-bg)",
+                  color: "var(--tint-lime-fg)",
                 }}>
                   מצב השלטון המקומי
                 </span>
@@ -1738,7 +1772,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={munidataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {munidataResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1747,7 +1781,7 @@ export default function SearchPage() {
 {/* govextra.gov.il/pmo/emun scraper result */}
       {emunResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{emunResult.title}</h2>
@@ -1757,8 +1791,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#e0e7ff",
-                  color: "#3730a3",
+                  background: "var(--tint-indigo-bg)",
+                  color: "var(--tint-indigo-fg)",
                 }}>
                   מערכת אמו"ן
                 </span>
@@ -1772,7 +1806,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={emunResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {emunResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1781,7 +1815,7 @@ export default function SearchPage() {
             {/* mevaker.gov.il scraper result */}
       {mevakerResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #dc2626" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--danger)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mevakerResult.title}</h2>
@@ -1791,8 +1825,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#fee2e2",
-                  color: "#991b1b",
+                  background: "var(--tint-bad-bg)",
+                  color: "var(--tint-bad-fg)",
                 }}>
                   MEVAKER
                 </span>
@@ -1806,7 +1840,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={mevakerResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {mevakerResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1815,7 +1849,7 @@ export default function SearchPage() {
       {/* geo.mot.gov.il (חצב) scraper result */}
       {hatzavResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{hatzavResult.title}</h2>
@@ -1825,8 +1859,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#e0e7ff",
-                  color: "#3730a3",
+                  background: "var(--tint-indigo-bg)",
+                  color: "var(--tint-indigo-fg)",
                 }}>
                   חצב
                 </span>
@@ -1840,7 +1874,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={hatzavResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {hatzavResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1849,7 +1883,7 @@ export default function SearchPage() {
       {/* apps.education.gov.il/Mankal (חוזרי מנכ"ל) scraper result */}
       {mankalResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #059669" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-good-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mankalResult.title}</h2>
@@ -1859,8 +1893,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#d1fae5",
-                  color: "#065f46",
+                  background: "var(--tint-good-bg)",
+                  color: "var(--success)",
                 }}>
                   חוזרי מנכ"ל
                 </span>
@@ -1874,7 +1908,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={mankalResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {mankalResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1883,7 +1917,7 @@ export default function SearchPage() {
       {/* jda.gov.il (הרשות לפיתוח ירושלים) scraper result */}
       {jdaResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #db2777" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-pink-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{jdaResult.title}</h2>
@@ -1893,8 +1927,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#fce7f3",
-                  color: "#9d174d",
+                  background: "var(--tint-pink-bg)",
+                  color: "var(--tint-pink-fg)",
                 }}>
                   JDA
                 </span>
@@ -1908,7 +1942,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={jdaResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {jdaResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -1919,7 +1953,7 @@ export default function SearchPage() {
       {edenResults.length > 0 && (
         <div className="grid grid-2">
           {edenResults.map((r) => (
-            <article key={r.page_type || r.url} className="card" style={{ borderRight: "4px solid #ea580c" }}>
+            <article key={r.page_type || r.url} className="card" style={{ borderRight: "4px solid var(--tint-warn-fg)" }}>
               <div className="flex-between mb-1">
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                   <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{r.title}</h2>
@@ -1929,8 +1963,8 @@ export default function SearchPage() {
                     borderRadius: "9999px",
                     fontSize: "0.65rem",
                     fontWeight: 600,
-                    background: "#ffedd5",
-                    color: "#9a3412",
+                    background: "var(--tint-warn-bg)",
+                    color: "var(--warning)",
                   }}>
                     EDEN
                   </span>
@@ -1944,7 +1978,7 @@ export default function SearchPage() {
               <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                 <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                   {r.url}
-                </a>
+                <span className="sr-only"> (נפתח בחלון חדש)</span></a>
               </p>
             </article>
           ))}
@@ -1954,7 +1988,7 @@ export default function SearchPage() {
       {/* knesset.gov.il committee-protocols scraper result — indigo "כנסת" chip */}
       {knessetResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{knessetResult.title}</h2>
@@ -1964,8 +1998,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#e0e7ff",
-                  color: "#3730a3",
+                  background: "var(--tint-indigo-bg)",
+                  color: "var(--tint-indigo-fg)",
                 }}>
                   כנסת
                 </span>
@@ -1979,7 +2013,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={knessetResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {knessetResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -2018,7 +2052,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={registryResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {registryResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -2027,7 +2061,7 @@ export default function SearchPage() {
       {/* practitioners.health.gov.il scraper result */}
       {healthResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #7c3aed" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-violet-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{healthResult.title}</h2>
@@ -2037,8 +2071,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ede9fe",
-                  color: "#5b21b6",
+                  background: "var(--tint-violet-bg)",
+                  color: "var(--tint-violet-fg)",
                 }}>
                   PRACTITIONERS
                 </span>
@@ -2052,7 +2086,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={healthResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {healthResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -2061,7 +2095,7 @@ export default function SearchPage() {
       {/* registries.health.gov.il scraper result */}
       {registriesResult && (
         <div className="grid grid-2">
-          <article className="card" style={{ borderRight: "4px solid #14b8a6" }}>
+          <article className="card" style={{ borderRight: "4px solid var(--tint-teal-fg)" }}>
             <div className="flex-between mb-1">
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{registriesResult.title}</h2>
@@ -2071,8 +2105,8 @@ export default function SearchPage() {
                   borderRadius: "9999px",
                   fontSize: "0.65rem",
                   fontWeight: 600,
-                  background: "#ccfbf1",
-                  color: "#115e59",
+                  background: "var(--tint-teal-bg)",
+                  color: "var(--tint-teal-fg)",
                 }}>
                   בריאות
                 </span>
@@ -2086,7 +2120,7 @@ export default function SearchPage() {
             <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
               <a href={registriesResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                 {registriesResult.url}
-              </a>
+              <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             </p>
           </article>
         </div>
@@ -2159,9 +2193,9 @@ export default function SearchPage() {
                   style={{
                     marginTop: "0.75rem",
                     padding: "0.75rem",
-                    background: "var(--bg-secondary, #f8f9fa)",
+                    background: "var(--surface-2)",
                     borderRadius: "6px",
-                    border: "1px solid var(--border, #e2e8f0)",
+                    border: "1px solid var(--border, var(--border))",
                   }}
                 >
                   <div className="flex-between">
@@ -2191,9 +2225,9 @@ export default function SearchPage() {
                       style={{
                         padding: "0.5rem 0.75rem",
                         marginBottom: "0.3rem",
-                        background: "var(--bg-secondary, #f8f9fa)",
+                        background: "var(--surface-2)",
                         borderRadius: "4px",
-                        border: "1px solid var(--border, #e2e8f0)",
+                        border: "1px solid var(--border, var(--border))",
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Modal from "./a11y/Modal";
 import { ckan } from "../api/client";
 
 export interface ResourceLite {
@@ -83,57 +84,34 @@ export default function ResourcePickerModal({
     }
   };
 
-  const overlayStyle: React.CSSProperties = {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.4)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    padding: "1rem",
-  };
-
-  const dialogStyle: React.CSSProperties = {
-    background: "white",
-    borderRadius: "var(--radius)",
-    maxWidth: "32rem",
-    width: "100%",
-    maxHeight: "90vh",
-    display: "flex",
-    flexDirection: "column",
-    boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
-  };
-
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
-        <div
-          style={{
-            padding: "0.9rem 1.1rem",
-            borderBottom: "1px solid var(--border)",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "0.5rem",
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>בחירת קבצים למעקב</div>
-            <div className="text-sm text-muted" style={{ marginTop: "0.15rem" }}>
-              {datasetTitle}
-            </div>
+    <Modal
+      title="בחירת קבצים למעקב"
+      onClose={onClose}
+      width="32rem"
+      closeOnBackdrop={false}
+      footer={
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", gap: "0.5rem" }}>
+          <span className="text-sm text-muted">
+            {resources ? `${selected.size}/${resources.length} נבחרו` : ""}
+          </span>
+          <div style={{ display: "flex", gap: "0.4rem" }}>
+            <button className="btn-secondary" onClick={onClose} disabled={saving}>
+              ביטול
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={saving || !resources || selected.size === 0}
+            >
+              {saving ? "שומר…" : "שמור"}
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", fontSize: "1.4rem", cursor: "pointer", color: "var(--text-muted)" }}
-            aria-label="סגור"
-          >
-            &times;
-          </button>
         </div>
-
-        <div style={{ padding: "1rem 1.1rem", overflowY: "auto", flex: 1 }}>
+      }
+    >
+      <p className="text-sm text-muted" style={{ marginTop: 0 }}>{datasetTitle}</p>
+      <>
           {error && (
             <div role="alert" className="badge badge-danger mb-1" style={{ display: "block" }}>
               {error}
@@ -158,7 +136,7 @@ export default function ResourcePickerModal({
                       alignItems: "center",
                       gap: "0.5rem",
                       padding: "0.45rem 0.6rem",
-                      background: isNew ? "#fef3c7" : "var(--bg-secondary, #f8f9fa)",
+                      background: isNew ? "#fef3c7" : "var(--surface-2)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--radius)",
                       cursor: "pointer",
@@ -185,7 +163,7 @@ export default function ResourcePickerModal({
                     {isNew && (
                       <span
                         className="badge"
-                        style={{ background: "#f59e0b", color: "white", fontSize: "0.65rem" }}
+                        style={{ background: "var(--fill-warn)", color: "var(--on-fill-warn)", fontSize: "0.65rem" }}
                       >
                         חדש
                       </span>
@@ -200,35 +178,7 @@ export default function ResourcePickerModal({
               })}
             </div>
           )}
-        </div>
-
-        <div
-          style={{
-            padding: "0.75rem 1.1rem",
-            borderTop: "1px solid var(--border)",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "0.5rem",
-          }}
-        >
-          <span className="text-sm text-muted">
-            {resources ? `${selected.size}/${resources.length} נבחרו` : ""}
-          </span>
-          <div style={{ display: "flex", gap: "0.4rem" }}>
-            <button className="btn-secondary" onClick={onClose} disabled={saving}>
-              ביטול
-            </button>
-            <button
-              className="btn-primary"
-              onClick={handleSave}
-              disabled={saving || !resources || selected.size === 0}
-            >
-              {saving ? "שומר…" : "שמור"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+      </>
+    </Modal>
   );
 }

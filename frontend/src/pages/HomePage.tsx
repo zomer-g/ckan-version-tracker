@@ -55,6 +55,7 @@ import { EDEN_PATTERN } from "../utils/edenPattern";
 // /api/knesset/validate, which is authoritative.
 import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const ODATA_BASE = "https://www.odata.org.il";
 
 /** Detect gov.il collector URLs */
@@ -225,6 +226,7 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
 }
 
 export default function HomePage() {
+  useDocumentTitle("מאגרי מידע ממשלתיים במעקב");
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -886,7 +888,9 @@ export default function HomePage() {
         </div>
       </section>
 
-      <div className="container mt-3" role="main">
+      {/* No role="main" here — App.tsx already wraps every route in a
+          <main>, and two main landmarks on one page is not a thing. */}
+      <div className="container mt-3">
         {/* The catalog's other entry points, one click from the search box. */}
         <CatalogTabs active="search" />
 
@@ -907,7 +911,7 @@ export default function HomePage() {
         {!loading && govMapResult && (
           <section aria-label="govmap result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #0ea5e9" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-sky-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
@@ -919,8 +923,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#e0f2fe",
-                      color: "#075985",
+                      background: "var(--tint-sky-bg)",
+                      color: "var(--tint-sky-fg)",
                     }}>
                       GOVMAP
                     </span>
@@ -933,7 +937,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all", direction: "ltr" }}>
                   <a href={govMapResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {govMapResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -961,7 +965,7 @@ export default function HomePage() {
         {!loading && govIlResult && (
           <section aria-label="gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #f59e0b" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-warn-bd)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{govIlResult.title}</h2>
@@ -971,8 +975,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#fef3c7",
-                      color: "#92400e",
+                      background: "var(--tint-warn-bg)",
+                      color: "var(--warning)",
                     }}>
                       GOV.IL
                     </span>
@@ -987,7 +991,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={govIlResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {govIlResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 {/* Request form for scraper dataset */}
@@ -1019,7 +1023,7 @@ export default function HomePage() {
         {!loading && idfResult && (
           <section aria-label="idf.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #0f766e" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-teal-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{idfResult.title}</h2>
@@ -1029,8 +1033,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#ccfbf1",
-                      color: "#115e59",
+                      background: "var(--tint-teal-bg)",
+                      color: "var(--tint-teal-fg)",
                     }}>
                       IDF.IL
                     </span>
@@ -1043,7 +1047,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={idfResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {idfResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1075,7 +1079,7 @@ export default function HomePage() {
         {!loading && healthResult && (
           <section aria-label="practitioners.health.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #7c3aed" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-violet-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{healthResult.title}</h2>
@@ -1085,8 +1089,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#ede9fe",
-                      color: "#5b21b6",
+                      background: "var(--tint-violet-bg)",
+                      color: "var(--tint-violet-fg)",
                     }}>
                       PRACTITIONERS
                     </span>
@@ -1099,7 +1103,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={healthResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {healthResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1130,7 +1134,7 @@ export default function HomePage() {
         {!loading && registriesResult && (
           <section aria-label="registries.health.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #14b8a6" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-teal-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{registriesResult.title}</h2>
@@ -1140,8 +1144,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#ccfbf1",
-                      color: "#115e59",
+                      background: "var(--tint-teal-bg)",
+                      color: "var(--tint-teal-fg)",
                     }}>
                       בריאות
                     </span>
@@ -1154,7 +1158,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={registriesResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {registriesResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1186,7 +1190,7 @@ export default function HomePage() {
         {!loading && avodataResult && (
           <section aria-label="avodata.labor.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #2563eb" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-sky-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{avodataResult.title}</h2>
@@ -1196,8 +1200,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#dbeafe",
-                      color: "#1e40af",
+                      background: "var(--tint-sky-bg)",
+                      color: "var(--tint-sky-fg)",
                     }}>
                       AVODATA
                     </span>
@@ -1210,7 +1214,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={avodataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {avodataResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1242,7 +1246,7 @@ export default function HomePage() {
         {!loading && servicescompassResult && (
           <section aria-label="gov.il services compass result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #ea580c" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-warn-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{servicescompassResult.title}</h2>
@@ -1252,8 +1256,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#ffedd5",
-                      color: "#9a3412",
+                      background: "var(--tint-warn-bg)",
+                      color: "var(--warning)",
                     }}>
                       מצפן השירותים
                     </span>
@@ -1266,7 +1270,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={servicescompassResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {servicescompassResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1296,7 +1300,7 @@ export default function HomePage() {
         {!loading && munidataResult && (
           <section aria-label="municipal-data.org result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #65a30d" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-lime-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{munidataResult.title}</h2>
@@ -1306,8 +1310,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#ecfccb",
-                      color: "#3f6212",
+                      background: "var(--tint-lime-bg)",
+                      color: "var(--tint-lime-fg)",
                     }}>
                       מצב השלטון המקומי
                     </span>
@@ -1320,7 +1324,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={munidataResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {munidataResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1350,7 +1354,7 @@ export default function HomePage() {
         {!loading && emunResult && (
           <section aria-label="emun result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{emunResult.title}</h2>
@@ -1360,8 +1364,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#e0e7ff",
-                      color: "#3730a3",
+                      background: "var(--tint-indigo-bg)",
+                      color: "var(--tint-indigo-fg)",
                     }}>
                       מערכת אמו"ן
                     </span>
@@ -1374,7 +1378,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={emunResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {emunResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1404,7 +1408,7 @@ export default function HomePage() {
         {!loading && mevakerResult && (
           <section aria-label="mevaker.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #dc2626" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--danger)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mevakerResult.title}</h2>
@@ -1414,8 +1418,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#fee2e2",
-                      color: "#991b1b",
+                      background: "var(--tint-bad-bg)",
+                      color: "var(--tint-bad-fg)",
                     }}>
                       MEVAKER
                     </span>
@@ -1428,7 +1432,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={mevakerResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {mevakerResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1458,7 +1462,7 @@ export default function HomePage() {
         {!loading && hatzavResult && (
           <section aria-label="geo.mot.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{hatzavResult.title}</h2>
@@ -1468,8 +1472,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#e0e7ff",
-                      color: "#3730a3",
+                      background: "var(--tint-indigo-bg)",
+                      color: "var(--tint-indigo-fg)",
                     }}>
                       חצב
                     </span>
@@ -1482,7 +1486,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={hatzavResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {hatzavResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1513,7 +1517,7 @@ export default function HomePage() {
         {!loading && mankalResult && (
           <section aria-label="apps.education.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #059669" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-good-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{mankalResult.title}</h2>
@@ -1523,8 +1527,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#d1fae5",
-                      color: "#065f46",
+                      background: "var(--tint-good-bg)",
+                      color: "var(--success)",
                     }}>
                       חוזרי מנכ"ל
                     </span>
@@ -1537,7 +1541,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={mankalResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {mankalResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1568,7 +1572,7 @@ export default function HomePage() {
         {!loading && jdaResult && (
           <section aria-label="jda.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #db2777" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-pink-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{jdaResult.title}</h2>
@@ -1578,8 +1582,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#fce7f3",
-                      color: "#9d174d",
+                      background: "var(--tint-pink-bg)",
+                      color: "var(--tint-pink-fg)",
                     }}>
                       JDA
                     </span>
@@ -1592,7 +1596,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={jdaResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {jdaResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1627,7 +1631,7 @@ export default function HomePage() {
               {edenResults.map((r) => {
                 const formKey = `eden:${r.page_type}`;
                 return (
-                  <article key={formKey} className="card" style={{ borderRight: "4px solid #ea580c" }}>
+                  <article key={formKey} className="card" style={{ borderRight: "4px solid var(--tint-warn-fg)" }}>
                     <div className="flex-between mb-1">
                       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                         <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{r.title}</h2>
@@ -1637,8 +1641,8 @@ export default function HomePage() {
                           borderRadius: "9999px",
                           fontSize: "0.65rem",
                           fontWeight: 600,
-                          background: "#ffedd5",
-                          color: "#9a3412",
+                          background: "var(--tint-warn-bg)",
+                          color: "var(--warning)",
                         }}>
                           EDEN
                         </span>
@@ -1651,7 +1655,7 @@ export default function HomePage() {
                     <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                       <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                         {r.url}
-                      </a>
+                      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                     </p>
 
                     <div style={{ marginTop: "0.75rem" }}>
@@ -1684,7 +1688,7 @@ export default function HomePage() {
         {!loading && knessetResult && (
           <section aria-label="knesset.gov.il result" style={{ marginBottom: "2rem" }}>
             <div className="grid grid-2">
-              <article className="card" style={{ borderRight: "4px solid #4f46e5" }}>
+              <article className="card" style={{ borderRight: "4px solid var(--tint-indigo-fg)" }}>
                 <div className="flex-between mb-1">
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>{knessetResult.title}</h2>
@@ -1694,8 +1698,8 @@ export default function HomePage() {
                       borderRadius: "9999px",
                       fontSize: "0.65rem",
                       fontWeight: 600,
-                      background: "#e0e7ff",
-                      color: "#3730a3",
+                      background: "var(--tint-indigo-bg)",
+                      color: "var(--tint-indigo-fg)",
                     }}>
                       כנסת
                     </span>
@@ -1708,7 +1712,7 @@ export default function HomePage() {
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all" }}>
                   <a href={knessetResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {knessetResult.url}
-                  </a>
+                  <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
                 <div style={{ marginTop: "0.75rem" }}>
@@ -1778,7 +1782,7 @@ export default function HomePage() {
                       <div style={{
                         marginTop: "0.75rem",
                         padding: "0.75rem",
-                        background: "var(--bg-secondary, #f8f9fa)",
+                        background: "var(--surface-2)",
                         borderRadius: "6px",
                         border: "1px solid var(--border)",
                       }}>
@@ -1818,7 +1822,7 @@ export default function HomePage() {
                             style={{
                               padding: "0.5rem 0.75rem",
                               marginBottom: "0.3rem",
-                              background: "var(--bg-secondary, #f8f9fa)",
+                              background: "var(--surface-2)",
                               borderRadius: "4px",
                               border: "1px solid var(--border)",
                               display: "flex",
@@ -1902,13 +1906,13 @@ export default function HomePage() {
           ) : (
             <div className="grid grid-2">
               {!submittedQuery && committeeGroup && (
-                <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid #4f46e5" }}>
+                <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid var(--tint-indigo-fg)" }}>
                   <div className="flex-between mb-1">
                     <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
-                      <Link to="/knesset">🏛️ פרוטוקולי ועדות הכנסת</Link>
+                      <Link to="/knesset"><span aria-hidden="true">🏛️</span> פרוטוקולי ועדות הכנסת</Link>
                     </h3>
                     <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
-                      <span style={{ display: "inline-block", padding: "0.15rem 0.45rem", borderRadius: "9999px", fontSize: "0.65rem", fontWeight: 600, background: "#4f46e5", color: "white" }}>
+                      <span style={{ display: "inline-block", padding: "0.15rem 0.45rem", borderRadius: "9999px", fontSize: "0.65rem", fontWeight: 600, background: "var(--fill-brand)", color: "var(--on-fill-brand)" }}>
                         כנסת
                       </span>
                       <span className="badge badge-info">{committeeGroup.count.toLocaleString()} ועדות</span>
@@ -1970,6 +1974,10 @@ export default function HomePage() {
                     <Link
                       to={`/versions/${ds.id}`}
                       className="btn-primary"
+                      // The visible word is "גרסאות" on every card. Out of
+                      // context that names nothing, so the accessible name
+                      // carries the dataset (WCAG 2.4.9).
+                      aria-label={`${t("tracked.versions")} — ${ds.title}`}
                       style={{ textDecoration: "none", fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}
                     >
                       {t("tracked.versions")}
@@ -1980,6 +1988,7 @@ export default function HomePage() {
                         href={`${ODATA_BASE}/dataset/${ds.odata_dataset_id}`}
                         target="_blank"
                         rel="noopener noreferrer"
+                        className="card-source-link"
                         // Promoted from "small underlined ODATA text"
                         // to a visible outlined button so casual users
                         // notice the archived files exist. Outlined
@@ -1988,15 +1997,18 @@ export default function HomePage() {
                         style={{
                           fontSize: "0.85rem",
                           padding: "0.35rem 0.85rem",
-                          background: "white",
-                          color: "var(--primary, #0f766e)",
-                          border: "1px solid var(--primary, #0f766e)",
+                          background: "var(--surface)",
+                          color: "var(--primary, #0C5E58)",
+                          border: "1px solid var(--primary, var(--tint-teal-fg))",
                           borderRadius: 4,
                           textDecoration: "none",
                           fontWeight: 500,
                         }}
+                        aria-label={`${t("tracked.open_archive_short")} — ${ds.title}`}
                       >
-                        {t("tracked.open_archive_short")} &#8599;
+                        {t("tracked.open_archive_short")}
+                        <span aria-hidden="true"> &#8599;</span>
+                        <span className="sr-only"> (נפתח בחלון חדש)</span>
                       </a>
                     )}
 
@@ -2014,10 +2026,13 @@ export default function HomePage() {
                           href={sourceHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm"
+                          className="text-sm card-source-link"
+                          aria-label={`${linkLabel} — ${ds.title}`}
                           style={{ color: "var(--text-muted)", textDecoration: "none" }}
                         >
-                          {linkLabel} &#8599;
+                          {linkLabel}
+                          <span aria-hidden="true"> &#8599;</span>
+                          <span className="sr-only"> (נפתח בחלון חדש)</span>
                         </a>
                       );
                     })()}
