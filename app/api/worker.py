@@ -1223,6 +1223,54 @@ def _split_doc_bundles(
     return keep, docs
 
 
+async def _append_seed_from_snapshot(ds, latest) -> dict[str, list[dict]]:
+    """Rows a full_snapshot dataset already archived, keyed by resource name.
+
+    Flipping a tracked dataset to ``append_only`` starts its cumulative CSV
+    from nothing: the first append push would carry only what the source
+    still lists, so everything the source had already dropped would vanish
+    from the latest version — the exact loss the switch is meant to prevent
+    (jeden.co.il cleared 37 of its 39 tenders off the page). Reading the
+    previous version's object instead makes the conversion carry its own
+    history forward.
+
+    R2 only: an ODATA-backed dataset's snapshot resources are per-version
+    datastore tables, not one file to read back, so there is nothing safe to
+    seed from and the caller leaves the seen-set empty. Best-effort — a
+    resource that cannot be read back is skipped, and the push proceeds with
+    what the source gave it.
+
+    One rough edge, bounded to the conversion push itself: with no
+    ``append_key`` the row identity is a hash of the whole row, and a row read
+    back from CSV carries every column (blank where the scraper simply had no
+    such key). So a SPARSE row that the source still lists can hash
+    differently from its archived twin and land in the cumulative a second
+    time — at most once per still-listed row, never on later polls, since
+    from then on both sides are the scraper's own shape.
+    """
+    from app.services.csv_parser import parse_csv
+
+    out: dict[str, list[dict]] = {}
+    for name, value in (latest.resource_mappings or {}).items():
+        if name.startswith("_") or not storage.is_storage_value(value):
+            continue
+        if not str(storage.key_of(value) or "").lower().endswith(".csv"):
+            continue
+        try:
+            prev_bytes = await storage_client.get_object_bytes(value)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Append seed: cannot read %s for %s: %s", value, ds.id, e)
+            continue
+        if not prev_bytes:
+            continue
+        _fields, rows = parse_csv(prev_bytes)
+        if rows:
+            out[name] = rows
+            logger.info("Append seed: %d row(s) carried forward for %s/%s",
+                        len(rows), ds.id, name)
+    return out
+
+
 @router.post("/push-version")
 @limiter.limit("30/minute")
 async def push_version(
@@ -1350,6 +1398,14 @@ async def push_version(
     if (
         latest is not None
         and not sc.get("allow_shrink")
+        # An append_only dataset's archive is cumulative — the push carries
+        # what the source lists RIGHT NOW and the merge only ever adds to the
+        # stored rows, so a smaller batch is the normal shape, not a collapse.
+        # (The guard is already inert once a dataset has an append version:
+        # those record `rows_total`, not `total_rows`. Saying so explicitly is
+        # what lets a converted dataset publish its first append version at
+        # all, measured against its last snapshot.)
+        and ds.storage_mode != "append_only"
         # A deliberately partial run is not a measurement of the corpus, so
         # there is nothing for the guard to measure: one file sampled against a
         # 90k-file register is a 99.99% "shrink" and would be rejected every
@@ -1415,8 +1471,18 @@ async def push_version(
     seen_keys: list[str] = []
     rows_added_total = 0
 
+    # Rows carried over from a full_snapshot past, by resource name — empty
+    # unless this push is the first one after a switch to append_only.
+    append_seed: dict[str, list[dict]] = {}
+
     if is_append and latest is not None:
         seen_keys = list((latest.resource_mappings or {}).get("_appendonly_seen", []) or [])
+        if (not seen_keys
+                and _use_r2(ds)
+                and not storage.is_storage_value(ds.appendonly_resource_id)):
+            append_seed = await _append_seed_from_snapshot(ds, latest)
+            for _rows in append_seed.values():
+                _, seen_keys = compute_new_rows(seen_keys, _rows, append_key)
 
     # A NEON-only dataset (storage plan 'neon') has no file backend at all — no
     # ODATA mirror, not R2 — and its rows ARE the archive, so it has to enter
@@ -1745,6 +1811,11 @@ async def push_version(
                             prev_bytes = await storage_client.get_object_bytes(existing)
                             if prev_bytes:
                                 _f, cumulative = parse_csv(prev_bytes)
+                        else:
+                            # First push after a switch to append_only — the
+                            # snapshot history IS the cumulative's starting
+                            # point (see _append_seed_from_snapshot).
+                            cumulative = list(append_seed.get(res.name) or [])
                         cumulative = list(cumulative) + new_rows
                         csv_bytes = records_to_csv_bytes(res.fields, cumulative)
                         # Stable key: reuse the existing object's key, or mint a
