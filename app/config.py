@@ -237,10 +237,12 @@ class Settings(BaseSettings):
     #
     # The fix is a SIZE GATE rather than an off switch: the crash correlated
     # with size (a 395MB CSV took RSS to 427MB; everything ≤24.67MB loaded fine),
-    # and size is extremely skewed — a 25MB cap still covers 2,854 of the 2,910
-    # datasets (98.1%). The 56 oversized ones are deferred, not lost: they are
-    # recorded as such and wait for a run with real memory headroom (the
-    # over-worker service, a one-off job, or an out-of-Render backfill).
+    # and size is extremely skewed — the cap covers the overwhelming majority of
+    # datasets whatever tier it sits at (a 25MB cap covered 2,854 of 2,910, i.e.
+    # 98.1%). The oversized ones are deferred, not lost: they are recorded as
+    # such and wait for a run with real memory headroom (the over-worker
+    # service, a one-off job, or an out-of-Render backfill) — or for the cap to
+    # be raised a tier, which is what index_mirror_max_csv_mb below documents.
     index_mirror_enabled: bool = True
     # Insert only the rows a table does not already hold (identified by
     # `_row_hash`), instead of rebuilding the whole table on every sync. A
@@ -257,8 +259,25 @@ class Settings(BaseSettings):
     # holds a full snapshot per version, so a refresh still streams the whole CSV
     # even when it writes 45 rows. Raise it in TIERS with the admin endpoints
     # (retry-deferred?max_csv_mb=… then sync?max_csv_mb=…) rather than in one
-    # step: 54 datasets are deferred, 9GB of CSV, the largest 3.5GB.
-    index_mirror_max_csv_mb: int = 25
+    # step: at 25MB, 54 datasets were deferred — 11.4GB of CSV, the largest 3.5GB.
+    #
+    # Raised 25 → 100 on 2026-08-19. What the 25 was costing: the deferred 54
+    # are not a random tail, they are the LARGEST layers, and size here tracks
+    # national coverage — חלקות (1.09M), יעודי קרקע מבא"ת (788k), רצף מגרשי
+    # תב"ע רמ"י (1.09M), קווי גובה מפ"י (329k), מגרשים משרד הבינוי, סוג בעלות
+    # בחלקות, אזורים סטטיסטיים. So `idx` served 812 of 868 GovMap layers and
+    # missed nearly every layer a planning question actually needs, which reads
+    # from outside as "OVER has no spatial data worth querying".
+    #
+    # Why 100 is safe and not a guess: index_mirror_refresh_max_csv_mb already
+    # lets a LIVE table stream up to 120MB on this same dyno, and has been doing
+    # so since the refresh ceiling was added. A first load and a refresh run the
+    # identical streaming path (load_index_csv), so a 100MB first load cannot
+    # cost more than a 120MB refresh already costs. This raise moves 28 of the
+    # 54 into the console; the next tier (250 ⇒ 43 of 54) needs the same
+    # evidence for the refresh ceiling first, and the largest few belong on the
+    # worker service, not here.
+    index_mirror_max_csv_mb: int = 100
     # The ceiling for REFRESHING a table the console already serves. The cap
     # above decides what is worth starting to mirror; this one decides how big a
     # dataset may grow before we would rather freeze it than risk the dyno. In

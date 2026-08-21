@@ -5,6 +5,13 @@ dataset that OVER archives append-only. Read-only and public — the whole point
 is open access — but every column name is validated against the live schema and
 every filter value is parameterized (see app/services/append_store.py).
 
+NOT EVERY DATASET IS HERE. A dataset whose rows OVER holds as a mirrored index
+— every GovMap mapping layer, and the FOI/scraper collections — has no
+``public.append_*`` table and is served instead from the ``idx`` schema of the
+central console: ``POST /api/tables/sql`` for rows, ``GET
+/api/tables/{table}/features?bbox=`` for geometry. The 409 raised here names the
+exact table and both URLs rather than only saying no (see _not_here_detail).
+
 Endpoints (all under /api/append):
   GET /{dataset_id}/schema           → {dataset_title, table, tables, total, columns, key}
   GET /{dataset_id}/rows?…           → {columns, rows, total, limit, offset, sort, order}
@@ -144,6 +151,48 @@ def _pick(tables: list[dict], selector: str | None) -> dict:
     )
 
 
+async def _not_here_detail(ds) -> str | dict:
+    """The 409 body for a dataset this API cannot serve.
+
+    A plain "Dataset is not an append archive" is true and useless: the GovMap
+    layers have no ``public.append_*`` twin, so every one of the ~812 mirrored
+    ones answered that — while their rows sat in the ``idx`` schema behind a GiST
+    index, queryable by SQL and by bbox. Read from outside, the error says
+    "download-only", and it was read that way by people building on the API.
+
+    So when the rows ARE reachable somewhere else, the refusal carries the
+    address. The status stays 409 on purpose — the request genuinely cannot be
+    served at this path, and a 200 whose body has no ``rows`` key would break
+    the clients that do the right thing and check the status first."""
+    base = "Dataset is not an append archive"
+    try:
+        from app.services import index_mirror
+        mirror = await index_mirror.mirrored_table(ds.id)
+    except Exception:  # noqa: BLE001 — a pointer must never turn a 409 into a 500
+        logger.debug("append: idx pointer lookup failed", exc_info=True)
+        return base
+    if not mirror:
+        return base
+    qualified = f"{mirror['schema']}.{mirror['table']}"
+    detail = {
+        "message": (f"{base}, but its rows ARE queryable — they are mirrored "
+                    f"into the /data console as {qualified}."),
+        "queryable_via": "/api/tables/sql",
+        "table": qualified,
+        "rows": mirror["rows"],
+        "schema_url": f"/api/tables/schema.txt?table={mirror['table']}",
+        "detail_url": f"/api/tables/{mirror['table']}/detail",
+        "example_sql": f"SELECT * FROM {qualified} LIMIT 10",
+    }
+    if mirror["has_geom"]:
+        detail["features_url"] = f"/api/tables/{mirror['table']}/features"
+        detail["geometry"] = ("PostGIS `geom`, EPSG:4326 (WGS84 lon/lat) — "
+                              "filter by map viewport with "
+                              f"{detail['features_url']}?bbox=min_lon,min_lat,"
+                              "max_lon,max_lat")
+    return detail
+
+
 async def _resolve(dataset_id: str, db: AsyncSession,
                    selector: str | None = None) -> tuple[TrackedDataset, str, list[dict]]:
     """Return (dataset, chosen_table, all_tables) or raise 404/409.
@@ -178,7 +227,8 @@ async def _resolve(dataset_id: str, db: AsyncSession,
     # opted into the r2+neon plan (archive_neon) and seeded retroactively before
     # its first forward dual-write version exists.
     if not has_mapping and not append_tables.is_append_archive(ds):
-        raise HTTPException(status_code=409, detail="Dataset is not an append archive")
+        raise HTTPException(status_code=409,
+                            detail=await _not_here_detail(ds))
     tables = await append_tables.resolve_tables(ds, db)
     return ds, _pick(tables, selector)["table"], tables
 

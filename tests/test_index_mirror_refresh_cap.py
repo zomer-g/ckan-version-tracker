@@ -84,3 +84,17 @@ def test_a_small_dataset_is_unaffected_either_way():
         res, rec = _run(3, live=live)
         assert not res.get("deferred")
         assert rec.get("loaded") is True
+
+
+def test_the_load_cap_never_exceeds_the_refresh_ceiling():
+    """The two caps are a pair, and raising the load one past the refresh one
+    would break both of them at once: the "already served, refresh anyway"
+    branch becomes unreachable (its window is cap → ceiling), and a table would
+    be allowed to LOAD at a size it is never allowed to REFRESH at — so it would
+    land in the catalog and freeze at version one, which is the exact failure
+    the refresh ceiling was added to prevent.
+
+    Live values, not constants: this is a guard on the settings, checked
+    whenever the load cap is raised a tier (25 → 100 on 2026-08-19)."""
+    assert (settings.index_mirror_max_csv_mb
+            <= settings.index_mirror_refresh_max_csv_mb)

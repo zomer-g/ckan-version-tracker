@@ -1489,6 +1489,46 @@ async def list_tables() -> list[dict]:
              "synced_at": r["synced_at"]} for r in rows]
 
 
+async def mirrored_table(dataset_id) -> dict | None:
+    """Where one dataset's rows are queryable, or None.
+
+    ``{table, schema, rows, version_number, has_geom}`` for a dataset the mirror
+    actually serves — the live table is JOINed in, so a checkpoint left behind by
+    a dropped table does not claim rows nobody can read.
+
+    This exists for the OTHER APIs to answer "not here, but there". A GovMap
+    layer has no ``public.append_*`` twin, so /api/append answered every one of
+    them with a bare 409 "Dataset is not an append archive" while the rows sat
+    in ``idx`` behind a spatial index — a true statement that reads as "this
+    dataset is download-only" and was taken that way by people building on us.
+    """
+    if not append_store.is_configured():
+        return None
+    pool = await append_store.get_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                SELECT s.table_name, s.version_number, s.rows,
+                       EXISTS (SELECT 1 FROM information_schema.columns col
+                               WHERE col.table_schema = $2
+                                 AND col.table_name = s.table_name
+                                 AND col.column_name = $3) AS has_geom
+                FROM {_qt(STATE_TABLE)} s
+                JOIN pg_class c ON c.relname = s.table_name
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                                   AND n.nspname = $2
+                WHERE s.dataset_id = $1::uuid AND s.error IS NULL
+            """, str(dataset_id), SCHEMA, GEOM_COLUMN)
+    except Exception:  # noqa: BLE001 — schema not created yet / state table absent
+        logger.debug("idx: mirrored_table lookup failed", exc_info=True)
+        return None
+    if row is None:
+        return None
+    return {"table": row["table_name"], "schema": SCHEMA,
+            "rows": row["rows"], "version_number": row["version_number"],
+            "has_geom": bool(row["has_geom"])}
+
+
 async def geometry_coverage() -> dict:
     """How uniform the mirrored layers actually are, right now.
 
