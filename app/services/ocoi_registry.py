@@ -327,28 +327,108 @@ async def match_entity(entity_type: str, entity_id: str, name: str) -> dict | No
             "score": float(score), "registry_record_id": hit["id"]}
 
 
+async def _match_table(etype: str, table: str, limit: int | None,
+                       stats: dict) -> None:
+    """Match one entity table against the mirror, in bulk.
+
+    OCOI issued two queries per entity — an exact lookup and a prefix scan. At
+    ~9,700 unmatched entities that is ~19,000 round trips, and Neon bills
+    compute by the second, so the cost is in the latency rather than the work
+    (the queries themselves are index scans of 0.04ms and 0.2ms). Here the
+    exact pass is one query, and the fuzzy pass is one query per distinct
+    three-character prefix — the same blocking key, just shared.
+    """
+    sources = list(COMPANY_SOURCES if etype == "company" else ASSOCIATION_SOURCES)
+    q = (f"SELECT id, name_hebrew FROM {table} "
+         f"WHERE registration_number IS NULL AND hidden IS NOT TRUE "
+         f"AND name_hebrew IS NOT NULL")
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    rows = await ocoi_db.fetch(q)
+
+    todo = []  # (entity_id, original_name, normalised_name)
+    for r in rows:
+        norm = normalize_company_name(r["name_hebrew"])
+        if len(norm) >= 2:
+            todo.append((r["id"], r["name_hebrew"], norm))
+    stats["considered"] += len(todo)
+    if not todo:
+        return
+
+    hits: dict[str, tuple[str, str, float]] = {}  # entity_id -> (num, rec, score)
+
+    # ── pass 1: exact on the normalised name ─────────────────────────────────
+    # A name can hit several mirrored rows; prefer one that actually carries a
+    # number. OCOI took LIMIT 1 and gave up if that row happened to have none.
+    exact: dict[str, tuple[str, str]] = {}
+    for chunk in _chunks(sorted({t[2] for t in todo}), 5000):
+        for rec in await ocoi_db.fetch("""
+            SELECT id, name_normalized, registration_number
+              FROM registry_records
+             WHERE source_type = ANY($1::text[])
+               AND registration_number IS NOT NULL
+               AND name_normalized = ANY($2::text[])""", sources, chunk):
+            exact.setdefault(rec["name_normalized"],
+                             (rec["registration_number"], rec["id"]))
+    for eid, _name, norm in todo:
+        if norm in exact:
+            hits[eid] = (*exact[norm], 1.0)
+    await ocoi_match.set_progress(JOB_MATCH, entity_type=etype, phase="exact",
+                                  considered=len(todo), matched=len(hits))
+
+    # ── pass 2: fuzzy inside the prefix block, one query per prefix ──────────
+    rest = [t for t in todo if t[0] not in hits]
+    blocks: dict[str, list] = {}
+    for item in rest:
+        blocks.setdefault(item[2][:3], []).append(item)
+    for i, (prefix, group) in enumerate(blocks.items(), 1):
+        cands = await ocoi_db.fetch("""
+            SELECT id, name, registration_number FROM registry_records
+             WHERE source_type = ANY($1::text[])
+               AND registration_number IS NOT NULL
+               AND name_normalized LIKE $2
+             LIMIT 1000""", sources, prefix.replace("%", "").replace("_", "") + "%")
+        if not cands:
+            continue
+        for eid, name, _norm in group:
+            best, best_s = None, 0.0
+            for c in cands:
+                s = match_score(name, c["name"])
+                if s > best_s:
+                    best, best_s = c, s
+            if best is not None and best_s >= MATCH_THRESHOLD:
+                hits[eid] = (best["registration_number"], best["id"], best_s)
+        if i % 100 == 0:
+            await ocoi_match.set_progress(
+                JOB_MATCH, entity_type=etype, phase="fuzzy",
+                blocks_done=i, blocks=len(blocks), matched=len(hits))
+
+    # ── write ────────────────────────────────────────────────────────────────
+    for chunk in _chunks(list(hits.items()), 1000):
+        await ocoi_db.execute(f"""
+            UPDATE {table} t
+               SET registration_number = x.num, match_confidence = x.score,
+                   registry_record_id = x.rec
+              FROM unnest($1::text[], $2::text[], $3::text[], $4::float8[])
+                   AS x(id, num, rec, score)
+             WHERE t.id = x.id
+        """, [k for k, _ in chunk], [v[0] for _, v in chunk],
+            [v[1] for _, v in chunk], [float(v[2]) for _, v in chunk])
+    stats["matched"] += len(hits)
+
+
+def _chunks(seq, n):
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
 async def run_match_all(limit: int | None = None) -> dict:
     """Match every company/association still lacking a registration number."""
     stats = {"considered": 0, "matched": 0}
     try:
-        for etype, table in (("company", "companies"), ("association", "associations")):
-            q = (f"SELECT id, name_hebrew FROM {table} "
-                 f"WHERE registration_number IS NULL AND hidden IS NOT TRUE "
-                 f"AND name_hebrew IS NOT NULL")
-            if limit:
-                q += f" LIMIT {int(limit)}"
-            rows = await ocoi_db.fetch(q)
-            for i, r in enumerate(rows, 1):
-                stats["considered"] += 1
-                try:
-                    if await match_entity(etype, r["id"], r["name_hebrew"]):
-                        stats["matched"] += 1
-                except Exception:  # noqa: BLE001 — one bad name never stops the run
-                    logger.debug("ocoi registry match failed for %s", r["id"],
-                                 exc_info=True)
-                if i % 200 == 0:
-                    await ocoi_match.set_progress(
-                        JOB_MATCH, entity_type=etype, **stats)
+        for etype, table in (("company", "companies"),
+                             ("association", "associations")):
+            await _match_table(etype, table, limit, stats)
         await ocoi_match.set_progress(JOB_MATCH, **stats)
         await ocoi_match.finish_job(JOB_MATCH)
     except Exception as e:  # noqa: BLE001

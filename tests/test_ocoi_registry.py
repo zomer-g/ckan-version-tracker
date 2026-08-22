@@ -123,3 +123,35 @@ def test_naive_timestamp_writes_never_use_a_bare_sql_now():
                 stmt = text[max(0, idx - 400):idx + 200]
                 assert any(t in stmt for t in tz_tables), (
                     f"{name}: bare now() outside a timestamptz table:\n{line}")
+
+
+# ── job progress (the jsonb codec double-encodes a pre-serialised string) ─────
+
+def test_set_progress_binds_text_not_jsonb():
+    """ocoi_db registers a jsonb codec whose encoder IS json.dumps, so binding
+    an already-serialised string to a jsonb parameter encodes it twice.
+    Postgres then merges an object with a JSON *string*, which yields an ARRAY:
+    progress grew into a list of escaped blobs instead of merging. Observed on
+    the live registry_match job before this cast was added."""
+    src = inspect.getsource(ocoi_match.set_progress)
+    assert "$2::text::jsonb" in src
+    assert "$2::jsonb" not in src.replace("$2::text::jsonb", "")
+
+
+# ── matching runs in bulk, not one entity at a time ──────────────────────────
+
+def test_match_all_does_not_query_per_entity():
+    """~9,700 unmatched entities x 2 queries is ~19,000 round trips, and Neon
+    bills compute by the second. The exact pass is one query; the fuzzy pass is
+    one per distinct blocking prefix."""
+    src = inspect.getsource(ocoi_registry._match_table)
+    assert "= ANY($2::text[])" in src          # bulk exact
+    assert "blocks.setdefault" in src           # shared prefix blocks
+    assert "unnest(" in src                     # bulk write
+
+
+def test_match_prefers_a_registry_row_that_has_a_number():
+    """OCOI took LIMIT 1 on the exact match and gave up if that row happened to
+    carry no registration number, even when a sibling row had one."""
+    src = inspect.getsource(ocoi_registry._match_table)
+    assert src.count("registration_number IS NOT NULL") >= 2

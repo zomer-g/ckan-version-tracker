@@ -239,8 +239,17 @@ async def claim_job(kind: str) -> bool:
 
 
 async def set_progress(kind: str, **fields) -> None:
+    """Merge fields into the job's progress object.
+
+    Bound as ``text`` and cast in SQL, NOT as jsonb: ocoi_db registers a jsonb
+    codec whose encoder is json.dumps, so binding an already-serialised string
+    to a jsonb parameter encodes it a second time. Postgres then sees a JSON
+    *string* rather than an object, and ``object || string`` yields an ARRAY —
+    so progress silently grew into a list of escaped blobs instead of merging.
+    """
     await ocoi_db.execute(
-        "UPDATE ocoi_jobs SET progress = progress || $2::jsonb WHERE kind = $1",
+        "UPDATE ocoi_jobs SET progress = progress || $2::text::jsonb "
+        "WHERE kind = $1",
         kind, json.dumps(fields, ensure_ascii=False, default=str))
 
 
