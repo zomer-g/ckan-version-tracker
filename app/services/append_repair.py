@@ -155,3 +155,97 @@ async def ensure_index(table: str, columns: list[str], *,
             f"CREATE INDEX IF NOT EXISTS {_qi(name)} ON {_qi(table)} ({cols_sql})")
     logger.info("append_repair index: %s on %s(%s)", name, table, columns)
     return {"table": table, "index": name, "created": True, "columns": columns}
+
+
+# The columns an append table adds; never part of what makes a row's CONTENT.
+# `first_seen` and the source's own sampling stamp are both dates ABOUT the row
+# rather than facts IN it, and row_hash is derived.
+def _content_columns(all_cols: list[str], stamp_col: str | None) -> list[str]:
+    skip = {"first_seen", "row_hash", "geom"} | ({stamp_col} if stamp_col else set())
+    return [c for c in all_cols if c not in skip]
+
+
+def _content_hash_sql(cols: list[str]) -> str:
+    """md5 over the content columns, with the two spellings of "absent" and the
+    two spellings of a whole number folded together.
+
+    NULL and '' both mean the source published nothing, and a scraper that
+    switched between them would otherwise mark every row as changed. Likewise
+    "180" and "180.0" are one number written twice — the plan register carries
+    39,748 rows reading "0.0" against 183,841 reading "0", alternating by run.
+    Neither is a content difference and neither should keep a duplicate alive."""
+    parts = []
+    for c in cols:
+        q = _qi(c)
+        parts.append(
+            f"coalesce(CASE WHEN {q} LIKE '%.0' THEN left({q}, length({q}) - 2) "
+            f"ELSE nullif({q}, '') END, '')")
+    return "md5(concat_ws(chr(31)," + ",".join(parts) + "))"
+
+
+async def collapse_duplicates(table: str, *, stamp_col: str | None = None,
+                              apply: bool = False) -> dict:
+    """Keep one row per distinct CONTENT, dropping the re-readings of it.
+
+    The repair for tables filled before a sampling stamp was excluded from the
+    dedup identity: every pass filed a fresh row for an unchanged item, so the
+    archive holds one row per LOOK where it should hold one row per CHANGE. The
+    plan register measured 225,277 rows over 88,854 distinct states.
+
+    The survivor is the EARLIEST sighting of each state, and it inherits the
+    LATEST stamp seen for it — the same split the fixed insert path maintains
+    going forward, so a cleaned table and a table that was never broken end up
+    identical: first_seen says when this state first appeared, the stamp says
+    when it was last confirmed.
+
+    ``apply=False`` reports what it would remove."""
+    if not append_store.is_configured():
+        return {"error": "append DB not configured"}
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        all_cols = [r["column_name"] for r in await conn.fetch(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema='public' AND table_name=$1
+               ORDER BY ordinal_position""", table)]
+        if not all_cols:
+            return {"table": table, "error": "no such table"}
+        if stamp_col and stamp_col not in all_cols:
+            stamp_col = None
+        cols = _content_columns(all_cols, stamp_col)
+        h = _content_hash_sql(cols)
+        total = await conn.fetchval(f"SELECT count(*) FROM {_qi(table)}")
+        states = await conn.fetchval(f"SELECT count(DISTINCT {h}) FROM {_qi(table)}")
+        plan = {"table": table, "rows": total, "distinct_states": states,
+                "would_delete": total - states, "stamp_col": stamp_col,
+                "content_columns": len(cols)}
+        if not apply or total == states:
+            return {**plan, "applied": False}
+
+        async with conn.transaction():
+            # ctid is the physical row address — the only handle a table with no
+            # primary key has on ONE specific duplicate.
+            await conn.execute(f"""
+                CREATE TEMP TABLE _keep ON COMMIT DROP AS
+                SELECT DISTINCT ON ({h}) ctid AS keep_ctid, {h} AS h
+                FROM {_qi(table)} ORDER BY {h}, first_seen ASC, ctid""")
+            if stamp_col:
+                # Carry the freshest confirmation onto the row that survives,
+                # BEFORE its siblings are deleted and that date is gone with
+                # them. Grouped by the same content hash the survivor was chosen
+                # by, so the max is taken over exactly the rows about to be
+                # collapsed into it.
+                await conn.execute(f"""
+                    UPDATE {_qi(table)} t
+                    SET {_qi(stamp_col)} = m.newest
+                    FROM _keep k
+                    JOIN (SELECT {h} AS h, max({_qi(stamp_col)}) AS newest
+                          FROM {_qi(table)} GROUP BY 1) m ON m.h = k.h
+                    WHERE t.ctid = k.keep_ctid
+                      AND t.{_qi(stamp_col)} IS DISTINCT FROM m.newest""")
+            deleted = await conn.execute(
+                f"DELETE FROM {_qi(table)} t WHERE t.ctid NOT IN "
+                f"(SELECT keep_ctid FROM _keep)")
+            remaining = await conn.fetchval(f"SELECT count(*) FROM {_qi(table)}")
+    logger.info("append_repair collapse: %s %s -> %s", table, total, remaining)
+    return {**plan, "applied": True, "deleted": total - remaining,
+            "remaining": remaining}

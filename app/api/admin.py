@@ -2653,6 +2653,33 @@ async def append_create_index(
     return s
 
 
+@router.post("/append-tables/{table}/collapse-duplicates")
+@limiter.limit("2/minute")
+async def append_collapse_duplicates(
+    request: Request,
+    table: str,
+    stamp_col: str = "",
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Keep one row per distinct CONTENT, dropping re-readings of it.
+
+    The repair for tables filled before a sampling stamp was excluded from the
+    dedup identity, when every pass filed a fresh row for an unchanged item. The
+    survivor is the earliest sighting and inherits the latest stamp, so a cleaned
+    table matches one that was never broken.
+
+    ``apply=false`` (default) reports what it would remove."""
+    from app.services import append_repair
+    s = await append_repair.collapse_duplicates(
+        table, stamp_col=stamp_col or None, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=409, detail=s["error"])
+    logger.info("Collapse duplicates by %s: table=%s would_delete=%s applied=%s",
+                user.email, table, s.get("would_delete"), s.get("applied"))
+    return s
+
+
 # ── מידע לעם (odata) import — admin-curated processed-data tables ────────────
 
 class OdataImportRequest(BaseModel):

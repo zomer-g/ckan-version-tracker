@@ -159,3 +159,33 @@ def test_unconfigured_append_db_is_reported_not_raised(monkeypatch):
     monkeypatch.setattr(append_store, "is_configured", lambda: False)
     assert "error" in asyncio.run(AR.scan("t"))
     assert "error" in asyncio.run(AR.ensure_index("t", ["a"]))
+
+
+# ── collapsing the rows a broken dedup already stored ────────────────────────
+
+def test_the_content_hash_ignores_the_dates_about_a_row():
+    from app.services.append_repair import _content_columns
+    cols = ["מספר תכנית", "סטטוס", "תאריך דגימה", "first_seen", "row_hash", "geom"]
+    assert _content_columns(cols, "תאריך דגימה") == ["מספר תכנית", "סטטוס"]
+
+
+def test_without_a_stamp_column_only_bookkeeping_is_dropped():
+    from app.services.append_repair import _content_columns
+    cols = ["a", "first_seen", "row_hash", "geom"]
+    assert _content_columns(cols, None) == ["a"]
+
+
+def test_null_and_empty_fold_together_in_the_content_hash():
+    # A scraper that switched between '' and NULL for "the source published
+    # nothing" must not thereby mark every row as changed.
+    from app.services.append_repair import _content_hash_sql
+    sql = _content_hash_sql(["a"])
+    assert "nullif" in sql and "coalesce" in sql
+
+
+def test_a_whole_number_written_twice_folds_together():
+    # 39,748 rows read "0.0" against 183,841 reading "0" — one number, two
+    # spellings, alternating by run.
+    from app.services.append_repair import _content_hash_sql
+    sql = _content_hash_sql(["a"])
+    assert "LIKE '%.0'" in sql and "length" in sql
