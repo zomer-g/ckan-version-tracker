@@ -3173,3 +3173,216 @@ export const ocoi = {
   /** Public GET — safe as a plain href / iframe src (no auth needed). */
   fileUrl: (id: string) => `${BASE}/ocoi/documents/${id}/file`,
 };
+
+// ── ניגוד עניינים לעם — admin ────────────────────────────────────────────────
+// The admin envelope differs from the public one: `total` and friends sit at
+// the top level rather than under `meta`, because these routes were written
+// against OCOI's own admin API rather than its public API.
+
+export interface OcoiAdminEnvelope<T> {
+  status: string;
+  data: T;
+  total?: number;
+  shown?: number;
+  limit?: number;
+  offset?: number;
+  total_capped?: boolean;
+}
+
+export interface OcoiStats {
+  documents: number; verified: number; extraction_pending: number;
+  extraction_failed: number; no_text: number; with_file: number;
+  persons: number; companies: number; associations: number; domains: number;
+  relationships: number; sources: number; registry_records: number;
+  suggestions_pending: number; proposals_pending: number;
+  ignored_resources: number;
+}
+
+export interface OcoiAdminDoc {
+  id: string; title: string | null; file_url: string; file_format: string | null;
+  file_size: number | null; conversion_status: string; extraction_status: string;
+  verified: boolean; verified_at: string | null; verified_by_email: string | null;
+  created_at: string; converted_at: string | null; extracted_at: string | null;
+  has_file: boolean; has_text: boolean; text_length: number;
+  source_title: string | null; source_type: string | null;
+}
+
+export interface OcoiAdminDocDetail extends OcoiAdminDoc {
+  content_hash: string | null; markdown_length: number; source_id: string | null;
+  source_url: string | null;
+  extraction_runs: Array<{
+    id: string; extractor_type: string | null; model_version: string | null;
+    entities_found: number | null; relationships_found: number | null;
+    created_at: string;
+  }>;
+  /** The detail route returns the document's edges inline. */
+  relationships: OcoiAdminRel[];
+}
+
+export interface OcoiAdminEntity {
+  id: string; name_hebrew: string | null; name_english: string | null;
+  aliases: string[]; hidden: boolean; created_at: string; connections: number;
+  entity_type: string;
+  title?: string | null; position?: string | null; ministry?: string | null;
+  registration_number?: string | null; company_type?: string | null;
+  status?: string | null; match_confidence?: number | null;
+}
+
+export interface OcoiAdminRel {
+  id: string; source_entity_type: string; source_entity_id: string;
+  target_entity_type: string; target_entity_id: string;
+  relationship_type: string; details: string | null;
+  restriction_type: string | null; confidence: number | null;
+  origin_kind: string | null; verified: boolean; document_id: string | null;
+  created_at: string; document_title: string | null;
+  source_name: string | null; target_name: string | null;
+}
+
+export interface OcoiProposal {
+  id: string; entity_type: string; entity_id: string; target_type: string;
+  target_id: string; score: number; reasons: string[]; status: string;
+  reviewed_by_email: string | null; reviewed_at: string | null;
+  created_at: string;
+  left: { id: string; type: string; name: string; aliases: string[] };
+  right: { id: string; type: string; name: string; aliases: string[] };
+}
+
+export interface OcoiCluster {
+  entity_type: string; size: number; canonical_id: string;
+  members: Array<{ id: string; type: string; name: string; aliases: string[]; connections: number }>;
+}
+
+export interface OcoiJob {
+  kind: string; status: string; progress: Record<string, unknown>;
+  started_at: string | null; finished_at: string | null; error: string | null;
+}
+
+export interface OcoiRegistrySource {
+  key: string; label: string; entity_type: string; rows_held: number;
+  last_synced_at: string | null; sync_status: string;
+  error_message: string | null; enabled: boolean; note: string | null;
+}
+
+export interface OcoiRegistryRecord {
+  id: string; source_type: string; name: string;
+  registration_number: string | null; status: string | null; updated_at: string | null;
+}
+
+export interface OcoiIgnored {
+  id: string; file_url: string; title: string | null;
+  source_type: string; created_at: string;
+}
+
+export interface OcoiSuggestion {
+  id: string; target_kind: string; target_id: string; field_name: string;
+  document_id: string | null; current_value: string | null;
+  proposed_value: string | null; comment: string | null;
+  submitter_email: string | null; status: string; admin_notes: string | null;
+  resolved_at: string | null; created_at: string;
+}
+
+export interface OcoiAudit {
+  placeholder_entities: Record<string, { count: number; items: Array<{ id: string; name: string }> }>;
+  orphan_relationships: Record<string, { relationships: number; ids: Array<{ id: string; cnt: number }> }>;
+}
+
+const OB = "/admin/ocoi";
+const jbody = (b: unknown) => ({ body: JSON.stringify(b) });
+
+export const ocoiAdmin = {
+  stats: () => request<OcoiAdminEnvelope<OcoiStats>>(`${OB}/stats`),
+  audit: (limit = 20) => request<OcoiAdminEnvelope<OcoiAudit>>(`${OB}/audit${aqs({ limit })}`),
+  auditCleanup: (body: { kinds?: string[]; dry_run?: boolean }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/audit/cleanup`, { method: "POST", ...jbody(body) }),
+
+  // documents
+  documents: (p: {
+    q?: string; extraction?: string; conversion?: string; source_type?: string;
+    verified?: boolean; has_file?: boolean; date_from?: string; date_to?: string;
+    limit?: number; offset?: number;
+  } = {}) => request<OcoiAdminEnvelope<OcoiAdminDoc[]>>(`${OB}/documents${aqs(p)}`),
+  document: (id: string, include_markdown = false) =>
+    request<OcoiAdminEnvelope<OcoiAdminDocDetail>>(`${OB}/documents/${id}${aqs({ include_markdown })}`),
+  verifyDocument: (id: string, verified: boolean) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/${id}/verify`, { method: "PATCH", ...jbody({ verified }) }),
+  reextractDocument: (id: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/${id}/reextract`, { method: "POST" }),
+  deleteDocument: (id: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/${id}`, { method: "DELETE" }),
+  resetDocumentStatus: (body: { ids: string[]; field: string; value: string }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/batch/reset-status`, { method: "POST", ...jbody(body) }),
+  purgeDocuments: (body: { kind: string; dry_run?: boolean }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/purge`, { method: "POST", ...jbody(body) }),
+
+  // entities
+  entities: (etype: string, p: { q?: string; hidden?: boolean; unmatched?: boolean; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiAdminEntity[]>>(`${OB}/entities/${etype}${aqs(p)}`),
+  createEntity: (etype: string, body: Record<string, unknown>) =>
+    request<OcoiAdminEnvelope<{ id: string }>>(`${OB}/entities/${etype}`, { method: "POST", ...jbody(body) }),
+  patchEntity: (etype: string, id: string, body: Record<string, unknown>, keep_alias = true) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/${etype}/${id}${aqs({ keep_alias })}`, { method: "PATCH", ...jbody(body) }),
+  deleteEntity: (etype: string, id: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/${etype}/${id}`, { method: "DELETE" }),
+  mergeEntities: (body: { entity_type: string; keep_id: string; drop_ids: string[] }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/merge`, { method: "POST", ...jbody(body) }),
+
+  // relationships
+  relationships: (p: { q?: string; origin_kind?: string; verified?: boolean; document_id?: string; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiAdminRel[]>>(`${OB}/relationships${aqs(p)}`),
+  createRelationship: (body: Record<string, unknown>) =>
+    request<OcoiAdminEnvelope<{ id: string }>>(`${OB}/relationships`, { method: "POST", ...jbody(body) }),
+  deleteRelationship: (id: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/relationships/${id}`, { method: "DELETE" }),
+  bulkDeleteRelationships: (ids: string[]) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/relationships/bulk-delete`, { method: "POST", ...jbody({ ids }) }),
+
+  // duplicates
+  proposals: (p: { status?: string; entity_type?: string; min_score?: number; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiProposal[]>>(`${OB}/matches${aqs(p)}`),
+  reviewProposal: (id: string, action: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/${id}/review`, { method: "POST", ...jbody({ action }) }),
+  clusters: (p: { entity_type?: string; min_score?: number; limit?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiCluster[]>>(`${OB}/matches/clusters${aqs(p)}`),
+  mergeCluster: (body: { entity_type: string; keep_id: string; drop_ids: string[] }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/clusters/merge`, { method: "POST", ...jbody(body) }),
+  scanDuplicates: (kinds?: string[]) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/scan`, { method: "POST", ...jbody({ kinds }) }),
+  cleanupProposals: (body: { entity_type?: string; dry_run?: boolean }) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/cleanup`, { method: "POST", ...jbody(body) }),
+
+  // jobs
+  jobs: () => request<OcoiAdminEnvelope<OcoiJob[]>>(`${OB}/jobs`),
+  resetJob: (kind: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/jobs/${kind}/reset`, { method: "POST" }),
+
+  // registry
+  registrySources: () => request<OcoiAdminEnvelope<OcoiRegistrySource[]>>(`${OB}/registry/sources`),
+  syncRegistry: (sources?: string[]) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/registry/sync`, { method: "POST", ...jbody({ sources }) }),
+  matchRegistry: (limit?: number) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/registry/match`, { method: "POST", ...jbody({ limit }) }),
+  registryRecords: (p: { q?: string; source?: string; registration_number?: string; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiRegistryRecord[]>>(`${OB}/registry/records${aqs(p)}`),
+
+  // ignore list
+  ignored: (p: { q?: string; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiIgnored[]>>(`${OB}/ignored${aqs(p)}`),
+  addIgnored: (urls: string[], title?: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/ignored`, { method: "POST", ...jbody({ urls, title }) }),
+  removeIgnored: (urls: string[]) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/ignored`, { method: "DELETE", ...jbody({ urls }) }),
+
+  // public suggestions
+  suggestions: (p: { status?: string; target_kind?: string; limit?: number; offset?: number } = {}) =>
+    request<OcoiAdminEnvelope<OcoiSuggestion[]>>(`${OB}/suggestions${aqs(p)}`),
+  reviewSuggestion: (id: string, status: string, admin_notes?: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/suggestions/${id}`, { method: "PATCH", ...jbody({ status, admin_notes }) }),
+  deleteSuggestion: (id: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/suggestions/${id}`, { method: "DELETE" }),
+
+  // site content (incl. the worker's extraction prompt)
+  content: (key: string) =>
+    request<OcoiAdminEnvelope<{ key: string; value: string; updated_at: string | null }>>(`${OB}/content/${key}`),
+  saveContent: (key: string, value: string) =>
+    request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/content/${key}`, { method: "PUT", ...jbody({ value }) }),
+};

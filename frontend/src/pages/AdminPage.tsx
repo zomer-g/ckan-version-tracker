@@ -38,6 +38,7 @@ import DecisionAnalysisPanel from "../components/DecisionAnalysisPanel";
 import DriveConnectionPanel from "../components/DriveConnectionPanel";
 import OdataImportPanel from "../components/OdataImportPanel";
 import OcalAdminPanel from "../components/OcalAdminPanel";
+import OcoiAdminPanel from "../components/OcoiAdminPanel";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
   sourceBadgeFor as sourceBadgeForShared,
@@ -198,7 +199,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal" | "ocoi";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -216,6 +217,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "drive",     label: "חיבור Drive",       emoji: "📁" },
   { id: "odata",     label: "מידע לעם → SQL",    emoji: "📊" },
   { id: "ocal",      label: "יומן לעם",           emoji: "📔" },
+  { id: "ocoi",      label: "ניגוד עניינים",      emoji: "⚖" },
 ];
 
 function readTabFromHash(): AdminTab {
@@ -1712,6 +1714,7 @@ export default function AdminPage() {
       {tab === "odata" && <OdataImportPanel />}
 
       {tab === "ocal" && <OcalAdminPanel />}
+      {tab === "ocoi" && <OcoiAdminPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}
