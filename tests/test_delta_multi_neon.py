@@ -70,7 +70,8 @@ def store(monkeypatch):
     async def ensure_table(table, cols, *, key_col, keyless):
         calls["ensure"].append((table, tuple(cols), key_col, keyless))
 
-    async def append_rows(table, cols, rows, *, key_col, keyless, first_seen=None):
+    async def append_rows(table, cols, rows, *, key_col, keyless, first_seen=None,
+                          stamp_col=None):
         calls["append"].append((table, len(rows)))
         return len(rows)
 

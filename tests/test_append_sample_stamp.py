@@ -98,3 +98,33 @@ def test_keyed_tables_are_untouched_by_the_stamp_option():
     sql, _ = build_insert("t", COLS, [_row()], key_col="מספר תכנית", keyless=False,
                           stamp_col=STAMP)
     assert 'ON CONFLICT ("מספר תכנית")' in sql
+
+
+# ── every writer must pass it, or the fix reverts for that path alone ────────
+
+def test_no_append_rows_call_site_forgets_the_stamp():
+    """The first attempt fixed two of seven call sites and looked correct: the
+    tests passed, the streaming loaders deduped, and the very next production
+    run still added a full 37,039-row copy — because the scraper reaches NEON
+    through push_version, not through those loaders. A missing stamp_col is
+    invisible at every level except the row count days later, so it is checked
+    here instead of trusted."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "app"
+    missing = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not (isinstance(f, ast.Attribute) and f.attr == "append_rows"):
+                continue
+            if not any(k.arg == "stamp_col" for k in node.keywords):
+                missing.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+    assert not missing, (
+        "append_rows called without stamp_col — a sampled source writing "
+        "through these paths will duplicate every row on every pass:\n  "
+        + "\n  ".join(missing))

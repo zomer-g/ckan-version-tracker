@@ -154,6 +154,19 @@ def _fields_for_odata(ds_info_fields: list[dict]) -> list[dict]:
     return out
 
 
+
+def _stamp_col(ds) -> str | None:
+    """The source's own sampling-time column, or None.
+
+    Every path that writes rows has to pass this, or the dedup silently reverts
+    to "every pass is a new row" for that path alone — which is exactly what
+    happened when only the streaming loaders were fixed and the scraper's
+    push-version path was not: the next run added a full 37,039-row copy. Kept
+    as a one-liner so adding it to a new call site is cheaper than forgetting
+    it."""
+    from app.services import sampling_runs
+    return (sampling_runs.sampling_spec(ds) or {}).get("sample_column")
+
 async def _archive_streaming_to_db(
     *,
     ds: TrackedDataset,
@@ -251,6 +264,7 @@ async def _archive_streaming_to_db(
         else:
             n = await append_store.append_rows(
                 table, source_cols, pending, key_col=append_key, keyless=keyless,
+                stamp_col=_stamp_col(ds),
             )
         rows_inserted_total += n
         pending = []
@@ -464,13 +478,15 @@ async def archive_multi_via_datastore_streaming(
                 pending.extend(batch)
                 if len(pending) >= PENDING_FLUSH_THRESHOLD:
                     added_total += await append_store.append_rows(
-                        table, source_cols, pending, key_col=None, keyless=True)
+                        table, source_cols, pending, key_col=None, keyless=True,
+                        stamp_col=_stamp_col(ds))
                     pending = []
                     # Checkpoint ONLY after the rows are durably in NEON.
                     await _save_cp(done, rid, last_offset)
             if pending:
                 added_total += await append_store.append_rows(
-                    table, source_cols, pending, key_col=None, keyless=True)
+                    table, source_cols, pending, key_col=None, keyless=True,
+                    stamp_col=_stamp_col(ds))
                 pending = []
         except Exception as e:
             # scraper_config already holds the last durable checkpoint for this

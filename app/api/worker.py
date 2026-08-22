@@ -1696,6 +1696,11 @@ async def push_version(
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
                 n = await append_store.append_rows(
                     table, cols, n_records, key_col=None, keyless=True,
+                    # The scraper path. Every sampled source reaches NEON
+                    # through here, not through the streaming loaders — which
+                    # is why fixing only those left the duplication in place.
+                    stamp_col=(sampling_runs.sampling_spec(ds) or {}).get(
+                        "sample_column"),
                 )
                 # Stamped only once the rows are actually in: a table key on a
                 # version whose load threw would point every reader at a table

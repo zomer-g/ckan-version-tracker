@@ -836,6 +836,7 @@ async def consolidate_dataset_versions(
 
 async def _stream_r2_csv_to_neon(
     table: str, r2val: str, *, first_seen, batch: int = 5000,
+    stamp_col: str | None = None,
 ) -> tuple[int, int, str | None]:
     """Stream one R2 CSV into ``table`` in memory-bounded batches.
 
@@ -887,6 +888,7 @@ async def _stream_r2_csv_to_neon(
                         ensured = True
                     inserted += await append_store.append_rows(
                         table, cols, buf, key_col=None, keyless=True, first_seen=first_seen,
+                        stamp_col=stamp_col,
                     )
                     buf = []
         if buf:
@@ -894,6 +896,7 @@ async def _stream_r2_csv_to_neon(
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
             inserted += await append_store.append_rows(
                 table, cols, buf, key_col=None, keyless=True, first_seen=first_seen,
+                stamp_col=stamp_col,
             )
         return seen_rows, inserted, None
     finally:
@@ -939,7 +942,7 @@ async def seed_neon_from_versions(
     every version at the SAME cumulative object; it's streamed once (oldest
     version first, so the earliest ``first_seen`` wins) and later versions that
     reuse it are recorded as no-ops."""
-    from app.services import append_store
+    from app.services import append_store, sampling_runs
 
     if not append_store.is_configured():
         return {"error": "NEON append DB is not configured (APPEND_DATABASE_URL missing)"}
@@ -1023,6 +1026,14 @@ async def seed_neon_from_versions(
             try:
                 seen_rows, n, err = await _stream_r2_csv_to_neon(
                     entry["table"], r2val, first_seen=fs,
+                    # Snapshots replay oldest-first, so DO UPDATE leaves the
+                    # NEWEST stamp on a row that appeared in several of them —
+                    # the same direction first_seen already depends on, where
+                    # DO NOTHING keeps the EARLIEST. A seed of a sampled source
+                    # without this replays one row per snapshot per item, which
+                    # is the duplication this whole change removes.
+                    stamp_col=(sampling_runs.sampling_spec(ds) or {}).get(
+                        "sample_column"),
                 )
             except Exception as e:
                 logger.exception("seed_neon: version %d (%s) stream failed",
