@@ -163,7 +163,7 @@ def test_the_held_csv_streams_into_the_append_table(monkeypatch):
     async def _ensure_table(table, cols, *, key_col, keyless):
         ensured.append((table, cols))
 
-    async def _append_rows(table, cols, rows, *, key_col, keyless):
+    async def _append_rows(table, cols, rows, *, key_col, keyless, stamp_col=None):
         appended.extend(rows)
         return len(rows)
 
@@ -353,7 +353,7 @@ def test_push_version_loads_a_neon_only_dataset_rows_and_records_the_table(monke
     async def _ensure_table(table, cols, *, key_col, keyless):
         pass
 
-    async def _append_rows(table, cols, rows, *, key_col, keyless):
+    async def _append_rows(table, cols, rows, *, key_col, keyless, stamp_col=None):
         loaded.append((table, len(rows)))
         return len(rows)
 

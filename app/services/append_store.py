@@ -382,12 +382,26 @@ def tables_from_mappings(ds, mappings: dict | None) -> list[dict]:
     return [{"table": table_name(ds), "resource_id": rid, "resource_name": None}]
 
 
-def row_hash(row: dict, cols: list[str]) -> str:
+def row_hash(row: dict, cols: list[str], *, exclude: tuple[str, ...] = ()) -> str:
     """SHA-256 over the row's column values (str-coerced, None→''), used as the
     dedup identity for keyless datasets. Matches version_detector._row_identity
-    semantics so behavior is consistent."""
+    semantics so behavior is consistent.
+
+    ``exclude`` drops columns from the identity WITHOUT dropping them from the
+    row. It exists for one specific shape: a sampled source stamps each row with
+    the moment it was read, and that stamp is a source column like any other. Hash
+    it and the identity changes on every single pass, so the dedup can never fire
+    and an unchanged item is filed again in full — the plan register reached
+    178,241 rows for 38,111 plans (4.68 copies each) that way, and three identical
+    scrapes on one day added exactly 3 × 36,784. What the archive is supposed to
+    record is a row per CHANGE, not a row per LOOK.
+
+    Excluding is only half of it; see build_insert, which then refreshes the stamp
+    on the surviving row so "when did we last confirm this" is not lost with the
+    duplicate."""
+    hashed = [c for c in cols if c not in exclude] if exclude else cols
     canonical = json.dumps(
-        {c: ("" if row.get(c) is None else str(row.get(c))) for c in cols},
+        {c: ("" if row.get(c) is None else str(row.get(c))) for c in hashed},
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -402,8 +416,9 @@ def build_insert(
     key_col: str | None,
     keyless: bool,
     first_seen=None,  # datetime | None — explicit backfill timestamp, else now()
+    stamp_col: str | None = None,
 ) -> tuple[str, list]:
-    """Build one multi-row ``INSERT … ON CONFLICT DO NOTHING`` for a chunk.
+    """Build one multi-row ``INSERT … ON CONFLICT`` for a chunk.
 
     Pure (no DB) so it's unit-testable. Dedups within the chunk by the conflict
     identity (so a single statement can't carry the same key twice). ``first_seen``
@@ -412,16 +427,33 @@ def build_insert(
     from per-version snapshots — each row stamped with the version's date, oldest
     first, so ON CONFLICT keeps the earliest). Keyless rows also carry the
     computed ``row_hash``. Returns (sql, params); sql is "" when the chunk has
-    nothing to insert."""
+    nothing to insert.
+
+    ``stamp_col`` names the source's own "when was this sampled" column, and
+    turns the conflict clause from DO NOTHING into DO UPDATE of that one column.
+    Without it, excluding the stamp from the identity (see row_hash) would fix
+    the duplication by throwing the freshness away: the row would keep the stamp
+    of the FIRST pass that saw it and there would be no way to tell a fact
+    re-confirmed this morning from one last seen in June. With it the two dates
+    say different things and both are true — ``first_seen`` is when OVER first
+    stored the row, the stamp is when the source last showed it unchanged.
+
+    Only the stamp is updated, never a content column: a row that differs in any
+    hashed field is a different identity and inserts on its own, so an UPDATE
+    reaching content would be rewriting history rather than dating it."""
     insert_cols = list(cols) + ["first_seen"] + (["row_hash"] if keyless else [])
     conflict_target = "row_hash" if keyless else key_col
+    # A stamp that isn't in this table's columns is a manifest declaring a column
+    # the CSV didn't carry; ignore it rather than build SQL naming nothing.
+    stamp = stamp_col if (stamp_col and stamp_col in cols) else None
+    hash_exclude = (stamp,) if stamp else ()
     values_sql: list[str] = []
     params: list = []
     seen_local: set[str] = set()
     p = 1
     for r in chunk:
         if keyless:
-            ident = row_hash(r, cols)
+            ident = row_hash(r, cols, exclude=hash_exclude)
         else:
             kv = r.get(key_col)
             ident = "" if kv is None else str(kv)
@@ -451,9 +483,18 @@ def build_insert(
     if not values_sql:
         return "", []
     cols_sql = ",".join(_qi(c) for c in insert_cols)
+    # DO UPDATE cannot touch the same row twice in one statement — Postgres
+    # raises rather than picking a winner. The seen_local dedup above already
+    # guarantees it can't: it collapses the chunk by this same identity, and the
+    # identity now ignores the stamp, so two readings of one unchanged item
+    # inside a chunk become one VALUES row before the SQL is built.
+    on_conflict = (
+        f"DO UPDATE SET {_qi(stamp)} = EXCLUDED.{_qi(stamp)}" if stamp
+        else "DO NOTHING"
+    )
     sql = (
         f"INSERT INTO {_qi(table)} ({cols_sql}) VALUES {','.join(values_sql)} "
-        f"ON CONFLICT ({_qi(conflict_target)}) DO NOTHING"
+        f"ON CONFLICT ({_qi(conflict_target)}) {on_conflict}"
     )
     return sql, params
 
@@ -515,11 +556,19 @@ async def append_rows(
     key_col: str | None,
     keyless: bool,
     first_seen: str | None = None,
+    stamp_col: str | None = None,
 ) -> int:
     """Insert ``rows`` into ``table``, skipping ones already present (by key or
     row_hash). Returns the number actually inserted (parsed from the INSERT
     command tags). Assumes ensure_table has run for this (table, cols, mode).
-    ``first_seen`` (ISO timestamp) backfills historical dates; default ``now()``."""
+    ``first_seen`` (ISO timestamp) backfills historical dates; default ``now()``.
+    ``stamp_col`` is the source's sampling-time column — see build_insert.
+
+    NOTE the return value's meaning shifts with ``stamp_col``: the command tag
+    counts rows AFFECTED, and a DO UPDATE affects the row it refreshed. So this
+    returns inserts+refreshes, not inserts. Callers that report "new rows" to a
+    user should read the table, not this number — which is what the short-load
+    check already does."""
     if not rows:
         return 0
     pool = await get_pool()
@@ -529,7 +578,7 @@ async def append_rows(
         for i in range(0, len(rows), size):
             sql, params = build_insert(
                 table, source_cols, rows[i:i + size], key_col=key_col, keyless=keyless,
-                first_seen=first_seen,
+                first_seen=first_seen, stamp_col=stamp_col,
             )
             if not sql:
                 continue

@@ -872,6 +872,31 @@ async def _record_short_load(table: str, ds_id, expected: int,
         logger.warning("could not record the short-load warning: %s", e)
 
 
+async def _sample_column_for(ds_id) -> str | None:
+    """The source's own "when was this sampled" column, or None.
+
+    Read here rather than threaded from the caller because both NEON loaders
+    already carry ``ds_id`` and nothing else about the dataset — and the answer
+    lives in the manifest, which ``sampling_spec`` resolves even for a dataset
+    created before it declared one. Never raises: a source that cannot be looked
+    up simply keeps the old DO NOTHING behaviour."""
+    if ds_id is None:
+        return None
+    try:
+        from app.database import async_session
+        from app.models.tracked_dataset import TrackedDataset as _TD
+        from app.services import sampling_runs
+        async with async_session() as _db:
+            ds = (await _db.execute(
+                select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
+        if ds is None:
+            return None
+        return (sampling_runs.sampling_spec(ds) or {}).get("sample_column")
+    except Exception as e:  # noqa: BLE001 — an optimisation must not break a load
+        logger.debug("sample-column lookup failed for %s: %s", ds_id, e)
+        return None
+
+
 def _open_maybe_gzip(path: str):
     """Open a CSV that may or may not be gzipped, as text, without reading it.
 
@@ -898,6 +923,7 @@ def _open_maybe_gzip(path: str):
 
 async def _neon_stream_load_file(
     table: str, path: str, *, delete_after: bool = False,
+    stamp_col: str | None = None,
 ) -> int:
     """Stream a CSV file on local disk into ``table``, batch by batch. Returns
     the number of rows appended.
@@ -963,6 +989,7 @@ async def _neon_stream_load_file(
                         ensured = True
                     total += await append_store.append_rows(
                         table, cols, batch, key_col=None, keyless=True,
+                        stamp_col=stamp_col,
                     )
                     batch = []
         if batch:
@@ -970,6 +997,7 @@ async def _neon_stream_load_file(
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
             total += await append_store.append_rows(
                 table, cols, batch, key_col=None, keyless=True,
+                stamp_col=stamp_col,
             )
         # Once the whole file is down, not once per batch — see
         # append_store.fill_geometry. `cols` is set as soon as the header is
@@ -1018,7 +1046,8 @@ async def _neon_stream_load_r2(table: str, r2_key: str,
         # dyno.
         if not await storage_client.download_to_file(r2_key, tmp):
             return
-        total = await _neon_stream_load_file(table, tmp)
+        total = await _neon_stream_load_file(
+            table, tmp, stamp_col=await _sample_column_for(ds_id))
         logger.info("NEON stream-load: +%d rows into %s from %s", total, table, r2_key)
     except Exception as e:
         logger.warning("NEON stream-load failed for %s (non-fatal): %s", table, e)
@@ -1076,7 +1105,9 @@ async def _neon_only_load_csv(table: str, path: str, res_name: str,
     total = 0
     failed = None
     try:
-        total = await _neon_stream_load_file(table, path, delete_after=True)
+        total = await _neon_stream_load_file(
+            table, path, delete_after=True,
+            stamp_col=await _sample_column_for(ds_id))
         logger.info("NEON-only archive: +%d rows into %s for %s",
                     total, table, res_name)
     except Exception as e:  # noqa: BLE001 — recorded below, never re-raised

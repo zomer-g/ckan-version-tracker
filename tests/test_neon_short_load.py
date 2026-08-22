@@ -32,7 +32,7 @@ class _Rec:
 
 
 def _patch(monkeypatch, *, held, loaded=None, rec=None, raises=None):
-    async def _stream(table, path, delete_after=False):
+    async def _stream(table, path, delete_after=False, stamp_col=None):
         if raises:
             raise raises
         return held if loaded is None else loaded
