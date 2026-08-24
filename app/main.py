@@ -5,7 +5,13 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -44,6 +50,8 @@ from app.api.admin_nl_query import router as admin_nl_query_router
 from app.api.nl_query import router as nl_query_router
 from app.api.tables import router as tables_router
 from app.api.settlements import router as settlements_router
+from app.api.seo import router as seo_router
+from app.services import seo
 from app.api.site_stats import router as site_stats_router
 from app.api.connector import router as connector_router
 from app.api.cbs import router as cbs_router
@@ -235,6 +243,7 @@ app.include_router(tables_router)
 app.include_router(nl_query_router)
 app.include_router(admin_nl_query_router)
 app.include_router(settlements_router)
+app.include_router(seo_router)
 app.include_router(site_stats_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)
@@ -324,10 +333,53 @@ index_html = frontend_dist / "index.html"
 if frontend_dist.exists() and index_html.exists():
     logger.info("Frontend dist found at %s", frontend_dist)
 
-    # Mount Vite's hashed static assets
+    # Mount Vite's hashed static assets.
+    #
+    # Vite puts a content hash in every filename here, so a given URL's bytes
+    # can never change — a new build produces a new name. That makes these the
+    # one thing on the site safe to cache forever, and they were being served
+    # with no Cache-Control at all: Cloudflare reported cf-cache-status DYNAMIC
+    # and every repeat visitor re-fetched ~334 KB of JavaScript from the origin.
+    class _ImmutableAssets(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            resp = super().file_response(*args, **kwargs)
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return resp
+
     assets_dir = frontend_dist / "assets"
     if assets_dir.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        app.mount("/assets", _ImmutableAssets(directory=str(assets_dir)), name="assets")
+
+    # The SPA shell, read once. Every route serves the same bytes apart from the
+    # <head> block composed per request, so re-reading the file per view would
+    # buy nothing but disk I/O.
+    _shell = index_html.read_text(encoding="utf-8")
+
+    async def _spa_response(path: str) -> Response:
+        """index.html with a real <head> for this route.
+
+        The body is still client-rendered; what changes is that a crawler — and
+        anything unfurling a pasted link — now gets a title, a description, a
+        canonical URL and, on a dataset page, schema.org/Dataset markup instead
+        of one sitewide title and an empty <div id="root">.
+
+        Wrapped end to end: if anything in the SEO path misbehaves the shell
+        goes out untouched, exactly as it did before.
+        """
+        try:
+            meta = await seo.meta_for(path)
+            body = seo.render(_shell, meta)
+        except Exception:  # noqa: BLE001
+            logger.warning("SEO head injection failed for %s", path, exc_info=True)
+            body = _shell
+        return HTMLResponse(
+            content=body,
+            headers={
+                # Short, revalidated: the HTML names hashed assets, so a stale
+                # copy would pin an old bundle. Long enough to absorb a burst.
+                "Cache-Control": "public, max-age=60, stale-while-revalidate=600",
+            },
+        )
 
     # SPA fallback: intercept 404s on non-API routes and serve index.html
     @app.exception_handler(StarletteHTTPException)
@@ -343,11 +395,11 @@ if frontend_dist.exists() and index_html.exists():
         if static_path.is_file() and str(static_path).startswith(str(frontend_dist)):
             return FileResponse(static_path)
         # For all other 404s, serve the SPA
-        return FileResponse(index_html)
+        return await _spa_response(request.url.path)
 
     # Explicit root route (some load balancers hit / for health checks)
     @app.get("/")
     async def serve_root():
-        return FileResponse(index_html)
+        return await _spa_response("/")
 else:
     logger.warning("Frontend dist not found at %s — SPA disabled", frontend_dist)

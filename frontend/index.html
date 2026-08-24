@@ -13,7 +13,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Heebo:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Everything between the two markers is replaced per route by
+         app/services/seo.py: title, description, canonical, Open Graph and
+         JSON-LD. The markers ENCLOSE the fallback rather than sitting beside
+         it, so the generated <title> replaces this one instead of joining it.
+         What is written here is what a build served without the API shows —
+         the dev server, or dist/ opened straight from disk. -->
+    <!--SEO:START-->
     <title>גרסאות לעם</title>
+    <!--SEO:END-->
     <!-- The colour-scheme choice has to land BEFORE first paint, or the page
          flashes the wrong theme on every load. Kept inline and tiny for that
          reason; useTheme.ts owns it from here on. "system" deliberately leaves
