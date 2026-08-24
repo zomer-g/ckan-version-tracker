@@ -222,7 +222,21 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
             ).scalar_one_or_none()
             if ds is None or ds.status not in ("active", "pending"):
                 return None
+            # TrackedDataset.organization holds the SOURCE's slug — CKAN gives
+            # us "interior_affairs", which is what a search result would have
+            # shown. The Organization row carries the name a person recognises,
+            # so prefer it and keep the slug only as a fallback.
             org = ds.organization or ""
+            if ds.organization_id:
+                row = (
+                    await db.execute(
+                        select(Organization.title, Organization.name).where(
+                            Organization.id == ds.organization_id
+                        )
+                    )
+                ).first()
+                if row and (row[0] or row[1]):
+                    org = row[0] or row[1]
             what = "ארכיון מצטבר" if parts[0] == "archive" else "היסטוריית גרסאות"
             desc = (
                 f"{what} של המאגר «{_clean(ds.title, 120)}»"
@@ -233,7 +247,7 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
                 title=_clean(ds.title, 110),
                 description=_clean(desc),
                 canonical_path=f"/{parts[0]}/{ds.id}",
-                jsonld=[_dataset_jsonld(ds)],
+                jsonld=[_dataset_jsonld(ds, org)],
             )
 
         # /organizations/<id>
@@ -284,7 +298,25 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
     return None
 
 
-def _dataset_jsonld(ds) -> dict:
+def _source_url(ds) -> str | None:
+    """Where this dataset lives at its publisher.
+
+    ``sameAs`` is how Dataset markup says "this is the same thing as that", and
+    leaving it out on a mirror invites the mirror being read as the origin.
+    Scraped sources carry an explicit URL; a CKAN dataset does not store one
+    because it is derivable from the slugs — the same construction the dataset
+    card uses (HomePage.tsx).
+    """
+    if ds.source_url:
+        return ds.source_url
+    if ds.source_type in ("scraper", "govmap"):
+        return None
+    if ds.organization and ds.ckan_name:
+        return f"https://data.gov.il/he/datasets/{ds.organization}/{ds.ckan_name}"
+    return None
+
+
+def _dataset_jsonld(ds, creator_name: str = "") -> dict:
     """schema.org/Dataset — the reason this whole module earns its keep.
 
     Google Dataset Search is a separate index that reads exactly this markup,
@@ -309,10 +341,12 @@ def _dataset_jsonld(ds) -> dict:
             "url": SITE_URL,
         },
     }
-    if ds.organization:
-        node["creator"] = {"@type": "Organization", "name": _clean(ds.organization, 150)}
-    if ds.source_url:
-        node["sameAs"] = ds.source_url
+    creator = creator_name or ds.organization or ""
+    if creator:
+        node["creator"] = {"@type": "Organization", "name": _clean(creator, 150)}
+    source = _source_url(ds)
+    if source:
+        node["sameAs"] = source
     if getattr(ds, "last_polled_at", None):
         node["dateModified"] = ds.last_polled_at.date().isoformat()
     return node

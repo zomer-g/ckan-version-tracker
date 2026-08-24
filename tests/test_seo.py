@@ -16,6 +16,7 @@ import uuid
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.models.organization import Organization  # noqa: E402
@@ -407,3 +408,61 @@ def test_robots_and_sitemap_answer_at_their_real_paths():
     assert "xml" in sitemap.headers["content-type"]
     assert sitemap.text.startswith("<?xml")
     assert "<loc>" in sitemap.text
+
+
+# ── what the search result actually says ────────────────────────────────────
+
+def test_creator_uses_the_organization_name_not_the_source_slug():
+    """A result reading "interior_affairs" is a result nobody clicks."""
+    factory, ds_id, org_id, _ = _run(_seeded_session_factory())
+
+    async def link():
+        async with factory() as db:
+            ds = (await db.execute(
+                select(TrackedDataset).where(TrackedDataset.id == ds_id)
+            )).scalar_one()
+            ds.organization = "interior_affairs"
+            ds.organization_id = org_id
+            await db.commit()
+    _run(link())
+
+    seo._cache.clear()
+    import app.database as database
+    original = database.async_session
+    database.async_session = factory
+    try:
+        meta = _run(seo.meta_for(f"/versions/{ds_id}"))
+    finally:
+        database.async_session = original
+
+    html = seo.head_html(meta)
+    assert "משרד המשפטים" in html
+    assert "interior_affairs" not in meta.description
+
+
+def test_a_ckan_dataset_points_back_at_its_publisher():
+    """sameAs is how the markup says this is a mirror, not the origin."""
+    class Fake:
+        id = uuid.uuid4()
+        title = "מאגר"
+        organization = "interior_affairs"
+        ckan_name = "beaches"
+        source_url = None
+        source_type = "ckan"
+        last_polled_at = None
+
+    node = seo._dataset_jsonld(Fake())
+    assert node["sameAs"] == "https://data.gov.il/he/datasets/interior_affairs/beaches"
+
+
+def test_a_scraped_source_without_a_url_claims_no_origin():
+    class Fake:
+        id = uuid.uuid4()
+        title = "מאגר"
+        organization = "somewhere"
+        ckan_name = "x"
+        source_url = None
+        source_type = "scraper"
+        last_polled_at = None
+
+    assert "sameAs" not in seo._dataset_jsonld(Fake())
