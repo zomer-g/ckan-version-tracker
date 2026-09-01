@@ -151,7 +151,15 @@ export default function OcoiGraphTab({
         <div className="flex text-sm" style={{ gap: "0.5rem", alignItems: "center", marginBottom: "0.6rem" }}>
           <span className="text-muted">במרכז:</span>
           <TypeChip type={target.type} small />
-          <strong>{target.name}</strong>
+          {/* A link from inside the app carries the name; one arriving from a
+              legacy ocoi.org.il citation carries only type+id, so fall back to
+              the name the loaded graph already knows rather than showing the
+              bare type label to every visitor who followed a citation. */}
+          <strong>
+            {target.name ||
+              graph?.nodes?.find((n) => n.id === target.id)?.name ||
+              ""}
+          </strong>
           <button type="button" className="btn btn-sm" onClick={() => onTarget(null)}>
             חזרה לתצוגת הפתיחה
           </button>
