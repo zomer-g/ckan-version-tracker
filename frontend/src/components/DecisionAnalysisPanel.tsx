@@ -32,10 +32,8 @@ const STATUS_OPTIONS: { id: DecisionTaskStatus; label: string }[] = [
 
 // Captions the page renders, in the order they appear there.
 const LABEL_FIELDS: { id: string; label: string }[] = [
-  { id: "reveal_tasks", label: "כפתור 1 — חילוץ המשימות" },
-  { id: "hide_tasks", label: "כפתור 1 — הסתרה" },
-  { id: "reveal_analysis", label: "כפתור 2 — הצגת הניתוח" },
-  { id: "hide_analysis", label: "כפתור 2 — הסתרה" },
+  { id: "toggle_tasks", label: "מתג 1 — שכבת המשימות" },
+  { id: "toggle_analysis", label: "מתג 2 — שכבת הניתוח" },
   { id: "tasks_heading", label: "כותרת בלוק המשימות" },
   { id: "potential", label: 'כותרת עמודה — "הפוטנציאל"' },
   { id: "actual", label: 'כותרת עמודה — "בפועל"' },

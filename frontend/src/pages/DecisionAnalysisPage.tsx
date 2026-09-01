@@ -11,16 +11,27 @@ import {
 import { useAuth } from "../auth/AuthContext";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-// The government-decision analysis page. Three layers, revealed in order:
+// The government-decision analysis page. Three layers, all open by default:
 //
 //   1. the decision's full text, clause by clause — always visible;
 //   2. the operative tasks extracted out of the clauses that carry an
-//      obligation — behind the first button;
+//      obligation;
 //   3. for each task: what it was worth, what actually happened, what the gap
-//      cost — behind the second, which only unlocks once (2) is showing.
+//      cost.
 //
-// The staging is the argument: you read what was promised before you see what
-// was owed, and you see what was owed before you're told what it cost.
+// A reader who lands here sees the whole argument without having to discover a
+// button first; the two switches only FOLD a layer away, for someone who wants
+// to read the decision's own wording undisturbed. They are switches and not
+// action buttons on purpose: the caption names the layer and never changes, and
+// the on/off state is carried by the track, the "מוצג/מוסתר" word and
+// aria-checked — so it is always readable whether a layer is currently showing,
+// rather than having to infer it from what a button offers to do next.
+//
+// Layers 2 and 3 nest (the analysis renders inside the task cards), so the two
+// switches move together where they must: folding the tasks folds the analysis,
+// and switching the analysis on brings the tasks back. Each switch stays
+// enabled and every click therefore changes something visible — no disabled
+// control that does nothing when clicked.
 //
 // Content comes from GET /api/decision-analysis/{key}, which 404s while the
 // analysis is unpublished. An admin then falls back to the draft endpoint and
@@ -51,17 +62,18 @@ export default function DecisionAnalysisPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const [showTasks, setShowTasks] = useState(false);
-  const [showAnalysis, setShowAnalysis] = useState(false);
+  // Everything open on arrival — see the header note.
+  const [showTasks, setShowTasks] = useState(true);
+  const [showAnalysis, setShowAnalysis] = useState(true);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setErr(null);
     setView(null);
-    // Reset the reveal steps: a different decision starts from the text again.
-    setShowTasks(false);
-    setShowAnalysis(false);
+    // A different decision starts fully open again, like a first visit.
+    setShowTasks(true);
+    setShowAnalysis(true);
 
     decisionAnalysis
       .get(key)
@@ -110,9 +122,18 @@ export default function DecisionAnalysisPage() {
   const toggleTasks = () => {
     const next = !showTasks;
     setShowTasks(next);
-    // Hiding the tasks hides the analysis with them — the third layer has
-    // nothing to hang on once the second is gone.
+    // Folding the tasks folds the analysis with them — it renders inside the
+    // task cards, so its switch has to follow rather than sit on "מוצג" over an
+    // empty page.
     if (!next) setShowAnalysis(false);
+  };
+
+  const toggleAnalysis = () => {
+    const next = !showAnalysis;
+    setShowAnalysis(next);
+    // ...and the reverse: switching the analysis on has to bring its host cards
+    // back, so the click is never a no-op.
+    if (next) setShowTasks(true);
   };
 
   if (loading) {
@@ -177,34 +198,28 @@ export default function DecisionAnalysisPage() {
           </p>
           <p>{doc.intro}</p>
 
-          <div className="decision-controls">
-            <button
-              type="button"
-              className={showTasks ? "btn-secondary" : "btn-primary"}
-              onClick={toggleTasks}
-              aria-pressed={showTasks}
-            >
-              {showTasks
-                ? label("hide_tasks", "הסתירו את המשימות")
-                : label("reveal_tasks", "חלצו את המשימות האופרטיביות")}
-            </button>
-            <button
-              type="button"
-              className={showAnalysis ? "btn-secondary" : "btn-primary"}
-              onClick={() => setShowAnalysis((v) => !v)}
-              disabled={!showTasks}
-              aria-pressed={showAnalysis}
-              title={
-                showTasks
-                  ? undefined
-                  : t("decision.analysis_locked", "חלצו קודם את המשימות האופרטיביות")
-              }
-            >
-              {showAnalysis
-                ? label("hide_analysis", "הסתירו את הניתוח")
-                : label("reveal_analysis", "מה זה היה שווה — ומה יצא מזה")}
-            </button>
+          <div
+            className="decision-controls"
+            role="group"
+            aria-label={t("decision.controls_label", "מה מוצג בעמוד")}
+          >
+            <DecisionToggle
+              checked={showTasks}
+              onChange={toggleTasks}
+              text={label("toggle_tasks", "המשימות האופרטיביות")}
+            />
+            <DecisionToggle
+              checked={showAnalysis}
+              onChange={toggleAnalysis}
+              text={label("toggle_analysis", "הניתוח — מה זה היה שווה ומה יצא מזה")}
+            />
           </div>
+          <p className="decision-controls-hint">
+            {t(
+              "decision.controls_hint",
+              "הכול פתוח כברירת מחדל. כיבוי מתג מקפל את השכבה ומשאיר את נוסח ההחלטה עצמו.",
+            )}
+          </p>
         </div>
 
         {parts.map((group) => (
@@ -247,6 +262,42 @@ export default function DecisionAnalysisPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// A switch, not a button: the caption names the layer and stays put, while the
+// track, the state word and aria-checked all say whether that layer is showing
+// right now. An action-labelled button ("hide the tasks") has to be decoded —
+// is that what it does, or what it is? — which is exactly what confused readers
+// of the first version.
+function DecisionToggle({
+  checked,
+  onChange,
+  text,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  text: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className={`decision-toggle${checked ? " is-on" : ""}`}
+    >
+      <span className="decision-toggle-track" aria-hidden="true">
+        <span className="decision-toggle-thumb" />
+      </span>
+      <span className="decision-toggle-text">{text}</span>
+      <span className="decision-toggle-state">
+        {checked
+          ? t("decision.state_shown", "מוצג")
+          : t("decision.state_hidden", "מוסתר")}
+      </span>
+    </button>
   );
 }
 

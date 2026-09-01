@@ -49,13 +49,16 @@ COMPTROLLER_URL = (
 # the story, so it must be sayable without pretending to know.
 TASK_STATUSES = ("done", "partial", "not_done", "unknown")
 
-# Captions for the two reveal steps and the three analysis columns. Editable so
-# the framing can be reworded without a deploy.
+# Captions for the two layer switches and the three analysis columns. Editable
+# so the framing can be reworded without a deploy.
+#
+# One caption per switch, not two: the switches show their state themselves, so
+# a caption naming the layer ("the operative tasks") holds in both positions.
+# The earlier reveal_*/hide_* pairs are gone — a stored doc that still carries
+# them simply falls back to these, since the page reads labels by key.
 DEFAULT_LABELS = {
-    "reveal_tasks": "חלצו את המשימות האופרטיביות",
-    "hide_tasks": "הסתירו את המשימות",
-    "reveal_analysis": "מה זה היה שווה — ומה יצא מזה",
-    "hide_analysis": "הסתירו את הניתוח",
+    "toggle_tasks": "המשימות האופרטיביות",
+    "toggle_analysis": "הניתוח — מה זה היה שווה ומה יצא מזה",
     "tasks_heading": "המשימות האופרטיביות שנגזרות מהסעיף",
     "potential": "הפוטנציאל שהיה",
     "actual": "מה קרה בפועל",
@@ -93,9 +96,9 @@ DEFAULT_DOC: dict = {
     "intro": (
         "זהו הנוסח המלא של החלטת ממשלה 1933, סעיף אחר סעיף. ההחלטה איננה הצהרת כוונות: "
         "היא מטילה משימות קונקרטיות, על גורמים מזוהים, עם מועדי יעד. "
-        "בלחיצה אחת אפשר לחלץ מתוך כל סעיף את המשימות האופרטיביות שהוא יצר; "
-        "בלחיצה נוספת אפשר לראות, לכל משימה, מה היא הייתה שווה אילו בוצעה, מה קרה איתה בפועל, "
-        "ומה המחיר שהציבור משלם על הפער."
+        "תחת כל סעיף מוצגות המשימות האופרטיביות שהוא יצר, ולכל משימה — מה היא הייתה שווה "
+        "אילו בוצעה, מה קרה איתה בפועל, ומה המחיר שהציבור משלם על הפער. "
+        "מי שמעדיף לקרוא את נוסח ההחלטה לבדו יכול לכבות כל אחת מהשכבות במתגים שלמטה."
     ),
     "labels": dict(DEFAULT_LABELS),
     "sections": [
