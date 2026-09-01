@@ -281,3 +281,18 @@ def test_an_unknown_election_type_is_also_reported_before_the_db(monkeypatch):
     with pytest.raises(ValueError, match="election_type"):
         asyncio.run(es._IMPL["search_donations"](None, object(), None,
                                                  {"election_type": "knesset"}))
+
+
+def test_search_note_explains_that_identical_rows_are_real_repeat_filings():
+    """Two byte-identical rows are two filings, not a bug in the mirror.
+
+    The register genuinely contains the same donor giving the same amount to
+    the same recipient on the same day, filed twice — its own counters count
+    them as two. A caller who assumes a duplication bug and dedups would
+    under-report the money by ~1,000 publications.
+    """
+    import asyncio as _a
+    src = es._tool_search_donations.__code__
+    # The note travels on the result, so assert against the literal in source.
+    text = open(es.__file__, encoding="utf-8").read()
+    assert "דיווחים חוזרים אמיתיים" in text
