@@ -39,3 +39,9 @@ scripts/verify_r2_batch.py
 # Local dev-only API proxy target for the vite dev server (see vite.config.ts).
 .env.local
 frontend/.env.local
+
+# Database dumps. The OCOI auth/billing export holds hashed OAuth codes
+# and refresh tokens: it exists precisely because those were never allowed
+# into the append DB behind the public SQL console, and committing them to
+# a public repo would undo that in one keystroke.
+backups/

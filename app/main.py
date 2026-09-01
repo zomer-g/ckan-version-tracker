@@ -327,13 +327,17 @@ async def short_share_link(slug: str):
 
 
 # ── legacy ocoi.org.il paths ────────────────────────────────────────────────
-# ניגוד עניינים לעם moved here, and ocoi.org.il now points at over.org.il. Its
-# top-level paths must keep resolving, because OCOI's whole credibility model
-# was "every claim links back to its source document": its MCP server instructs
-# models to cite https://www.ocoi.org.il/document?id=… and /entity?type=&id=,
-# so those URLs are already in the wild in text we cannot edit. Without these,
-# shutting the old service down turns every citation it ever produced into a
-# 404 — the one failure this project could least afford.
+# ניגוד עניינים לעם moved here. OCOI's credibility model was "every claim links
+# back to its source document" — its MCP server instructs models to cite
+# https://www.ocoi.org.il/document?id=… and /entity?type=&id= — so those URLs
+# are in the wild in text we cannot edit, and they have to keep resolving after
+# the old service is shut down.
+#
+# ocoi.org.il is NOT being pointed at over.org.il: the domain keeps its own
+# static site (Ocoi/static-site), and THAT is what actually carries those links
+# across. These routes are the backstop for the same paths typed or rewritten
+# against over.org.il directly, and the landing they redirect to — including
+# ?doc= on the documents tab — is the contract the static site targets.
 #
 # 301, not 302: the destination is permanent and search engines should move the
 # authority across. Registered before the SPA fallback so React never sees them.
