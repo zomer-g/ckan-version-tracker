@@ -308,7 +308,11 @@ async def push_document(item: dict, pdf_bytes: bytes | None = None) -> dict:
         try:
             extracted = await _store_extraction(doc_id, extraction)
             await ocoi_db.execute(
-                "UPDATE documents SET extraction_status='completed', extracted_at=$2 "
+                # 'extracted', not 'completed': that is the value the whole
+                # migrated corpus carries and the value OCOI itself wrote. A
+                # second name for the same state makes every status filter and
+                # count silently wrong for exactly the newest rows.
+                "UPDATE documents SET extraction_status='extracted', extracted_at=$2 "
                 "WHERE id=$1", doc_id, _now_tz())
         except Exception as e:  # noqa: BLE001 — the document is still worth keeping
             logger.exception("ocoi push: extraction failed for %s", file_url)

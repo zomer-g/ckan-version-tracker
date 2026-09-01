@@ -3292,7 +3292,9 @@ const jbody = (b: unknown) => ({ body: JSON.stringify(b) });
 export const ocoiAdmin = {
   stats: () => request<OcoiAdminEnvelope<OcoiStats>>(`${OB}/stats`),
   audit: (limit = 20) => request<OcoiAdminEnvelope<OcoiAudit>>(`${OB}/audit${aqs({ limit })}`),
-  auditCleanup: (body: { kinds?: string[]; dry_run?: boolean }) =>
+  // The server selects by category, not by a `kinds` list — a `kinds` argument
+  // would be dropped in silence and both categories would run anyway.
+  auditCleanup: (body: { placeholder_entities?: boolean; orphan_relationships?: boolean; dry_run?: boolean }) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/audit/cleanup`, { method: "POST", ...jbody(body) }),
 
   // documents
@@ -3309,7 +3311,9 @@ export const ocoiAdmin = {
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/${id}/reextract`, { method: "POST" }),
   deleteDocument: (id: string) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/${id}`, { method: "DELETE" }),
-  resetDocumentStatus: (body: { ids: string[]; field: string; value: string }) =>
+  // `document_ids` (not `ids`) and `filter` are the server's field names — a
+  // mismatch here is a 400 at the button, not a type error at build time.
+  resetDocumentStatus: (body: { document_ids?: string[]; filter?: string; field: string; value: string }) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/batch/reset-status`, { method: "POST", ...jbody(body) }),
   purgeDocuments: (body: { kind: string; dry_run?: boolean }) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/documents/purge`, { method: "POST", ...jbody(body) }),
@@ -3323,7 +3327,7 @@ export const ocoiAdmin = {
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/${etype}/${id}${aqs({ keep_alias })}`, { method: "PATCH", ...jbody(body) }),
   deleteEntity: (etype: string, id: string) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/${etype}/${id}`, { method: "DELETE" }),
-  mergeEntities: (body: { entity_type: string; keep_id: string; drop_ids: string[] }) =>
+  mergeEntities: (body: { keep_type: string; keep_id: string; merge_type?: string; merge_ids: string[] }) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/entities/merge`, { method: "POST", ...jbody(body) }),
 
   // relationships
@@ -3343,7 +3347,7 @@ export const ocoiAdmin = {
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/${id}/review`, { method: "POST", ...jbody({ action }) }),
   clusters: (p: { entity_type?: string; min_score?: number; limit?: number } = {}) =>
     request<OcoiAdminEnvelope<OcoiCluster[]>>(`${OB}/matches/clusters${aqs(p)}`),
-  mergeCluster: (body: { entity_type: string; keep_id: string; drop_ids: string[] }) =>
+  mergeCluster: (body: { entity_type: string; canonical_id: string; member_ids: string[] }) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/clusters/merge`, { method: "POST", ...jbody(body) }),
   scanDuplicates: (kinds?: string[]) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/matches/scan`, { method: "POST", ...jbody({ kinds }) }),

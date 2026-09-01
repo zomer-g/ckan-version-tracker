@@ -3670,6 +3670,91 @@ async def ocoi_worker_check_duplicates(request: Request,
     return {"existing_urls": [r["file_url"] for r in rows]}
 
 
+@router.get("/ocoi-reconvert")
+async def ocoi_worker_reconvert_queue(request: Request, limit: int = 25,
+                                      _: None = Depends(_verify_worker_key)):
+    """Documents an admin marked for re-conversion (conversion_status='pending').
+
+    OVER has neither poppler nor tesseract, so the admin can only record the
+    intent — this is the other half of that contract. Oldest first, so a marked
+    document cannot be starved by newer ones.
+    """
+    from app.services import ocoi_db
+    if not ocoi_db.is_configured():
+        return {"documents": [], "reason": "ocoi_not_configured"}
+    rows = await ocoi_db.fetch("""
+        SELECT id, file_url, file_format, pdf_r2_key
+          FROM documents
+         WHERE conversion_status = 'pending'
+         ORDER BY created_at
+         LIMIT $1
+    """, max(1, min(limit, 50)))
+    return {"documents": [dict(r) for r in rows]}
+
+
+@router.post("/ocoi-reconvert-push")
+async def ocoi_worker_reconvert_push(request: Request,
+                                     body: dict,
+                                     _: None = Depends(_verify_worker_key)):
+    """Store the text the worker produced for an already-stored document.
+
+    Deliberately an UPDATE and not /ocoi-push: the row exists, and pushing would
+    either insert a twin or be rejected as a duplicate content_hash. Only the
+    conversion result changes hands here.
+
+    New text invalidates the old edges, so they go and the document returns to
+    the extraction queue. If the worker did the extraction in the same pass it
+    can send `extraction_json` and skip that round trip.
+    """
+    from app.services import ocoi_db, ocoi_ingest
+    if not ocoi_db.is_configured():
+        raise HTTPException(status_code=503, detail="ocoi is not configured")
+    doc_id = (body or {}).get("document_id")
+    if not isinstance(doc_id, str) or not doc_id.strip():
+        raise HTTPException(status_code=400, detail="document_id is required")
+    doc_id = doc_id.strip()
+    row = await ocoi_db.fetchrow("SELECT id FROM documents WHERE id = $1", doc_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    markdown = (body or {}).get("markdown_content") or None
+    await ocoi_db.execute(
+        "DELETE FROM entity_relationships WHERE document_id = $1", doc_id)
+    await ocoi_db.execute(
+        "DELETE FROM extraction_runs WHERE document_id = $1", doc_id)
+    await ocoi_db.execute("""
+        UPDATE documents
+           SET markdown_content = $2,
+               conversion_status = $3,
+               converted_at = $4,
+               extraction_status = 'pending', extracted_at = NULL,
+               verified = false, verified_at = NULL, verified_by_email = NULL
+         WHERE id = $1
+    """, doc_id, markdown, "converted" if markdown else "no_text",
+        ocoi_db.now_utc() if markdown else None)
+
+    extracted = 0
+    extraction = (body or {}).get("extraction_json")
+    if markdown and extraction:
+        try:
+            extracted = await ocoi_ingest._store_extraction(doc_id, extraction)
+            await ocoi_db.execute(
+                "UPDATE documents SET extraction_status='extracted', extracted_at=$2 "
+                "WHERE id=$1", doc_id, ocoi_db.now_utc())
+        except Exception as e:  # noqa: BLE001 — the new text is still worth keeping
+            logger.exception("worker ocoi-reconvert-push: extraction failed for %s", doc_id)
+            await ocoi_db.execute(
+                "UPDATE documents SET extraction_status='failed' WHERE id=$1", doc_id)
+            raise HTTPException(
+                status_code=500,
+                detail=f"stored the conversion but extraction failed: {e}")
+    logger.info("worker ocoi-reconvert-push: %s reconverted (%s chars, %s relationships)",
+                doc_id, len(markdown or ""), extracted)
+    return {"ok": True, "document_id": doc_id,
+            "conversion_status": "converted" if markdown else "no_text",
+            "relationships": extracted}
+
+
 @router.get("/ocoi-config")
 async def ocoi_worker_config(request: Request,
                              _: None = Depends(_verify_worker_key)):

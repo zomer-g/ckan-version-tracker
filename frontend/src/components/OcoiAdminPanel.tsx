@@ -177,7 +177,7 @@ function DocumentsSection() {
     if (!sel.size) return;
     try {
       const r = await ocoiAdmin.resetDocumentStatus({
-        ids: [...sel], field: "extraction_status", value: "pending" });
+        document_ids: [...sel], field: "extraction_status", value: "pending" });
       ok(`הוחזרו לתור: ${JSON.stringify(r.data)}`);
       load();
     } catch (e) { fail(e); }
@@ -193,7 +193,7 @@ function DocumentsSection() {
         <select style={inp} value={extraction} onChange={(e) => setExtraction(e.target.value)}>
           <option value="">חילוץ: הכל</option>
           <option value="pending">ממתין</option>
-          <option value="completed">הושלם</option>
+          <option value="extracted">הושלם</option>
           <option value="failed">נכשל</option>
         </select>
         <select style={inp} value={conversion} onChange={(e) => setConversion(e.target.value)}>
@@ -341,7 +341,7 @@ function EntitiesSection() {
       `השאר יימחקו והשמות שלהן יישמרו ככינויים.`)) return;
     try {
       const r = await ocoiAdmin.mergeEntities({
-        entity_type: etype, keep_id: keep.id, drop_ids: chosen.slice(1).map((c) => c.id) });
+        keep_type: etype, keep_id: keep.id, merge_ids: chosen.slice(1).map((c) => c.id) });
       ok(`מוזגו: ${JSON.stringify(r.data)}`);
       load();
     } catch (e) { fail(e); }
@@ -599,8 +599,8 @@ function DuplicatesSection() {
       `למזג ${c.size} ישויות אל «${keep.name}» (${keep.connections} קשרים)?`)) return;
     try {
       await ocoiAdmin.mergeCluster({
-        entity_type: c.entity_type, keep_id: keep.id,
-        drop_ids: c.members.filter((m) => m.id !== keep.id).map((m) => m.id) });
+        entity_type: c.entity_type, canonical_id: keep.id,
+        member_ids: c.members.filter((m) => m.id !== keep.id).map((m) => m.id) });
       ok(`מוזגו ${c.size} ישויות`);
       load();
     } catch (e) { fail(e); }

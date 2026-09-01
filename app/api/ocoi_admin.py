@@ -254,6 +254,38 @@ async def verify_document(request: Request, doc_id: str, body: VerifyBody,
 
 # ── documents: re-queue extraction ────────────────────────────────────────────
 
+@router.post("/documents/{doc_id}/reconvert")
+@limiter.limit("30/minute")
+async def requeue_conversion(request: Request, doc_id: str,
+                             user: User = Depends(get_admin_user)):
+    """Mark this document to be converted again by the worker.
+
+    OVER cannot run poppler/tesseract, so conversion is not something this
+    process can perform — it can only record the intent. The worker collects
+    what is marked via GET /api/worker/ocoi-reconvert and returns the text to
+    POST /api/worker/ocoi-reconvert-push.
+
+    A document with no stored bytes cannot be re-converted from here: the worker
+    re-fetches from `file_url`, so a row without one is refused rather than left
+    marked forever in a queue nothing can drain.
+    """
+    _require_configured()
+    doc_id = _id(doc_id, "doc_id")
+    row = await ocoi_db.fetchrow(
+        "SELECT file_url, pdf_r2_key FROM documents WHERE id = $1", doc_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not row["file_url"] and not row["pdf_r2_key"]:
+        raise HTTPException(
+            status_code=409,
+            detail="למסמך אין קובץ מאוחסן ואין כתובת מקור — אין ממה להמיר מחדש.")
+    await ocoi_db.execute(
+        "UPDATE documents SET conversion_status = 'pending' WHERE id = $1", doc_id)
+    logger.info("ocoi admin: %s marked %s for reconversion",
+                getattr(user, "email", "?"), doc_id)
+    return _ok({"id": doc_id, "conversion_status": "pending"})
+
+
 @router.post("/documents/{doc_id}/reextract")
 @limiter.limit("30/minute")
 async def requeue_extraction(request: Request, doc_id: str,
@@ -654,27 +686,66 @@ class MergeBody(BaseModel):
     keep_type: str
     keep_id: str
     merge_type: str | None = None      # defaults to keep_type
-    merge_id: str
+    merge_id: str | None = None        # single merge
+    merge_ids: list[str] | None = None # many-into-one; alternative to merge_id
 
 
 @router.post("/entities/merge")
 @limiter.limit("20/minute")
 async def merge_entities(request: Request, body: MergeBody,
                          user: User = Depends(get_admin_user)):
-    """Merge one entity into another. Cross-type is allowed (keep_type may
-    differ from merge_type), which is how a person mis-extracted as a company
-    gets folded back."""
+    """Merge one or more entities into another.
+
+    Cross-type is allowed (keep_type may differ from merge_type), which is how a
+    person mis-extracted as a company gets folded back.
+
+    ``merge_ids`` folds a whole selection in one request. The admin list is
+    multi-select, and looping client-side would mean N round trips against a
+    20/minute limit with no account of which ones landed — so losers are merged
+    server-side and reported individually, the same way a cluster merge is.
+    A member that fails does not abort the rest.
+    """
     _require_configured()
     kt = _etype(body.keep_type)
     mt = _etype(body.merge_type or body.keep_type)
     kid = _id(body.keep_id, "keep_id")
-    mid = _id(body.merge_id, "merge_id")
-    if kt == mt and kid == mid:
-        raise HTTPException(status_code=400, detail="cannot merge an entity into itself")
-    res = await _merge_entities(kt, kid, mt, mid)
-    logger.info("ocoi admin: %s merged %s %s into %s %s -> %s",
-                getattr(user, "email", "?"), mt, mid, kt, kid, res)
-    return _ok(res)
+
+    if body.merge_ids is None and body.merge_id is None:
+        raise HTTPException(status_code=400,
+                            detail="merge_id or merge_ids is required")
+
+    # Single merge keeps its original response shape.
+    if body.merge_ids is None:
+        mid = _id(body.merge_id, "merge_id")
+        if kt == mt and kid == mid:
+            raise HTTPException(status_code=400,
+                                detail="cannot merge an entity into itself")
+        res = await _merge_entities(kt, kid, mt, mid)
+        logger.info("ocoi admin: %s merged %s %s into %s %s -> %s",
+                    getattr(user, "email", "?"), mt, mid, kt, kid, res)
+        return _ok(res)
+
+    losers = [_id(m, "merge_ids[]") for m in body.merge_ids]
+    # Dropping the keeper from its own loser list is what makes the UI's
+    # "select N, keep the first" gesture safe to send verbatim.
+    losers = [m for m in losers if not (kt == mt and m == kid)]
+    if not losers:
+        raise HTTPException(status_code=400, detail="merge_ids is required")
+
+    merged, failed = [], []
+    for mid in losers:
+        try:
+            await _merge_entities(kt, kid, mt, mid)
+            merged.append(mid)
+        except HTTPException as e:
+            failed.append({"id": mid, "error": e.detail})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("ocoi admin merge: %s failed", mid)
+            failed.append({"id": mid, "error": str(e)[:200]})
+    logger.info("ocoi admin: %s merged %s %s into %s %s (%s failed)",
+                getattr(user, "email", "?"), len(merged), mt, kt, kid, len(failed))
+    return _ok({"kept_id": kid, "kept_type": kt,
+                "merged": merged, "failed": failed})
 
 
 # ── entities: list / create / update / delete ─────────────────────────────────
