@@ -477,8 +477,13 @@ TOOLS: list[dict] = [
 
 
 async def _tool_search_donations(request, db, user, a) -> tuple[dict, int]:
-    corpus, entries = await _corpus_sql(db, _norm_types(a.get("election_type")))
+    # Validate the ARGUMENTS before resolving tables. Otherwise a typo in
+    # publication_type is reported as "nothing collected yet" whenever the
+    # register happens to be uncollected — the caller is told the wrong thing
+    # about their own query.
+    types = _norm_types(a.get("election_type"))
     where, params = _filters(a)
+    corpus, entries = await _corpus_sql(db, types)
     limit = min(int(a.get("limit") or 50), MAX_ROWS)
     offset = max(int(a.get("offset") or 0), 0)
 
@@ -513,15 +518,16 @@ async def _tool_search_donations(request, db, user, a) -> tuple[dict, int]:
 
 
 async def _tool_donor_profile(request, db, user, a) -> tuple[dict, int]:
-    corpus, entries = await _corpus_sql(db, _norm_types(a.get("election_type")))
+    types = _norm_types(a.get("election_type"))
     name = (a.get("donor") or "").strip()
     if not name:
         raise ValueError("donor is required")
+    pub = _norm_pub_type(a.get("publication_type"))   # validates before the DB
+    corpus, entries = await _corpus_sql(db, types)
 
     params: list = [name if a.get("exact") else f"%{name}%"]
     match = "donor_name = $1" if a.get("exact") else "donor_name ILIKE $1"
     where = [match]
-    pub = _norm_pub_type(a.get("publication_type"))
     if pub is not None:
         params.append(str(pub))
         where.append(f"publication_type_id = ${len(params)}")
@@ -571,16 +577,17 @@ async def _tool_donor_profile(request, db, user, a) -> tuple[dict, int]:
 
 
 async def _tool_recipient_profile(request, db, user, a) -> tuple[dict, int]:
-    corpus, entries = await _corpus_sql(db, _norm_types(a.get("election_type")))
+    types = _norm_types(a.get("election_type"))
     name = (a.get("recipient") or "").strip()
     if not name:
         raise ValueError("recipient is required")
+    pub = _norm_pub_type(a.get("publication_type"))   # validates before the DB
+    corpus, entries = await _corpus_sql(db, types)
 
     params: list = [name if a.get("exact") else f"%{name}%"]
     match = ("recipient_name = $1" if a.get("exact")
              else "(recipient_name ILIKE $1 OR recipient_party ILIKE $1)")
     where = [match]
-    pub = _norm_pub_type(a.get("publication_type"))
     if pub is not None:
         params.append(str(pub))
         where.append(f"publication_type_id = ${len(params)}")
@@ -625,8 +632,9 @@ async def _tool_recipient_profile(request, db, user, a) -> tuple[dict, int]:
 
 
 async def _tool_top_donors(request, db, user, a) -> tuple[dict, int]:
-    corpus, entries = await _corpus_sql(db, _norm_types(a.get("election_type")))
-    where, params = _filters(a)
+    types = _norm_types(a.get("election_type"))
+    where, params = _filters(a)          # validates before touching the DB
+    corpus, entries = await _corpus_sql(db, types)
     limit = min(int(a.get("limit") or 25), MAX_ROWS)
     rows = await _fetch(
         f"SELECT donor_name, donor_city, count(*) AS n, "

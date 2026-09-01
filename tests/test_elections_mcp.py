@@ -251,3 +251,33 @@ def test_filtering_to_an_uncollected_type_also_raises(monkeypatch):
     monkeypatch.setattr(es, "_tables", _one)
     with pytest.raises(es._NotCollectedYet):
         asyncio.run(es._corpus_sql(object(), ["parties"]))
+
+
+def test_a_bad_argument_is_reported_as_such_even_when_nothing_is_collected(monkeypatch):
+    """Argument validation must precede table resolution.
+
+    Otherwise a typo in publication_type comes back as "nothing collected yet"
+    whenever the register happens to be uncollected — telling the caller the
+    wrong thing about their own query, and one they cannot fix by waiting.
+    """
+    async def _none(db):
+        return []
+    monkeypatch.setattr(es, "_tables", _none)
+
+    for tool, args in [
+        ("search_donations", {"publication_type": "מענק"}),
+        ("top_donors", {"publication_type": "מענק"}),
+        ("donor_profile", {"donor": "כהן", "publication_type": "מענק"}),
+        ("recipient_profile", {"recipient": "הליכוד", "publication_type": "מענק"}),
+    ]:
+        with pytest.raises(ValueError, match="publication_type"):
+            asyncio.run(es._IMPL[tool](None, object(), None, args))
+
+
+def test_an_unknown_election_type_is_also_reported_before_the_db(monkeypatch):
+    async def _none(db):
+        return []
+    monkeypatch.setattr(es, "_tables", _none)
+    with pytest.raises(ValueError, match="election_type"):
+        asyncio.run(es._IMPL["search_donations"](None, object(), None,
+                                                 {"election_type": "knesset"}))
