@@ -22,7 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.database import get_db
-from app.mcp import oauth
+from app.mcp import config, oauth
 from app.mcp.auth import McpUser, authenticate
 from app.mcp.server import handle_message
 
@@ -163,11 +163,26 @@ async def mcp_options(request: Request, rest: str = ""):
     return _preflight()
 
 
-# Every MCP resource on this app. Each dedicated server (cbs/knesset/ocal/data)
-# is a separate protected resource under the SAME authorization server, and they
-# all need the permissive cross-origin treatment — listing them by prefix keeps
-# a new resource from silently getting the restrictive global CORS policy.
-_MCP_PREFIXES = ("/mcp", "/cbs/mcp", "/knesset/mcp", "/ocal/mcp", "/data/mcp")
+# Every MCP resource on this app. Each dedicated server is a separate protected
+# resource under the SAME authorization server, and they all need the permissive
+# cross-origin treatment — a resource missing from this tuple silently falls
+# back to the app's restrictive global CORS, which fails a browser client's
+# preflight before any of our routes run.
+#
+# Derived from the prefix constants rather than retyped, because retyping is how
+# it drifted: /ocoi/mcp and /odata/mcp were both shipped as resources and both
+# left out of the hand-written list. Importing the constants means declaring a
+# new prefix in config.py is enough.
+_MCP_PREFIXES = (
+    config.MCP_PREFIX,
+    config.CBS_MCP_PREFIX,
+    config.KNESSET_MCP_PREFIX,
+    config.OCAL_MCP_PREFIX,
+    config.OCOI_MCP_PREFIX,
+    config.ODATA_MCP_PREFIX,
+    config.SQL_MCP_PREFIX,
+    config.ELECTIONS_MCP_PREFIX,
+)
 
 
 def _is_mcp_path(path: str) -> bool:

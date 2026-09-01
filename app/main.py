@@ -309,6 +309,17 @@ app.include_router(odata_mcp_router)
 # the MCP twin of the public /data console — table catalog, DDL and free
 # read-only SELECT across every schema). Registered before the SPA fallback so
 # /data/mcp isn't swallowed by the React /data route.
+# Dedicated election-finance MCP at /elections/mcp (same OAuth server + api_users
+# gate). The State Comptroller's register of who funded Israeli campaigns, asked
+# by PERSON — a question that spans six tables with different recipient columns,
+# so it gets a resource rather than living in the generic SQL console.
+# Registered before the SPA fallback so /elections/mcp isn't swallowed by it.
+from app.mcp.elections_routes import (
+    elections_mcp_router, elections_mcp_wellknown_router,
+)
+app.include_router(elections_mcp_wellknown_router)
+app.include_router(elections_mcp_router)
+
 from app.mcp.sql_routes import sql_mcp_router, sql_mcp_wellknown_router
 app.include_router(sql_mcp_wellknown_router)
 app.include_router(sql_mcp_router)

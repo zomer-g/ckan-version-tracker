@@ -32,6 +32,14 @@ OCOI_MCP_PREFIX = "/ocoi/mcp"
 # catalog, its DDL, and free read-only SELECT across every schema).
 ODATA_MCP_PREFIX = "/odata/mcp"
 SQL_MCP_PREFIX = "/data/mcp"
+# Dedicated election-finance MCP — the State Comptroller's register of who
+# funded Israeli election campaigns (statements-p.mevaker.gov.il, collected by
+# the mevaker_statements source). A resource of its own rather than a corner of
+# the generic SQL MCP because the questions it answers are about PEOPLE — "what
+# has this person given", "who funded this candidate" — and answering those
+# means resolving a name across six tables whose recipient columns deliberately
+# differ. That join is the product; a caller should not have to rediscover it.
+ELECTIONS_MCP_PREFIX = "/elections/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -116,6 +124,17 @@ def sql_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the SQL resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/data/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{SQL_MCP_PREFIX}"
+
+
+def elections_mcp_url(request: Request, path: str = "") -> str:
+    """The election-finance MCP resource URL, e.g. https://www.over.org.il/elections/mcp."""
+    return f"{base_url(request)}{ELECTIONS_MCP_PREFIX}{path}"
+
+
+def elections_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the elections resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/elections/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{ELECTIONS_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:

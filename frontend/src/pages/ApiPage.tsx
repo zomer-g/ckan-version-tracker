@@ -457,6 +457,14 @@ const MCP_SERVERS: {
     tools: ["search", "entity_get", "graph_neighbors", "graph_path", "document_get", "document_entities", "top_connected", "by_ministry", "registry_lookup", "stats"],
   },
   {
+    key: "elections",
+    label: "מימון בחירות לעם — תרומות ומימון מערכות בחירות",
+    path: "/elections/mcp",
+    purpose:
+      "מרשם מימון הבחירות של מבקר המדינה: כל תרומה, ערבות והלוואה שדווחו בבחירות לרשויות המקומיות, למועצות אזוריות, למפלגות, בבחירות מקדימות ובבחירות מיוחדות. תשאול לפי שם אדם — מה נתן תורם מסוים ולמי, ומי מימן מועמד או מפלגה — עם סינון לפי סוג הפרסום (תרומה/ערבות/הלוואה), סוג הבחירות, יישוב, טווח תאריכים וטווח סכומים. שם אינו מזהה ייחודי, ולכן כל תשובה מפרטת אילו כתיבים נכללו בסכום.",
+    tools: ["search_donations", "donor_profile", "recipient_profile", "top_donors", "stats", "list_election_types"],
+  },
+  {
     key: "odata",
     label: "מידע לעם — בקשות חופש מידע",
     path: "/odata/mcp",
