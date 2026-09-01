@@ -107,9 +107,10 @@ export default function AboutPage() {
             </li>
             <li>
               <strong>
-                <ExtLink href="https://www.ocoi.org.il">
-                  {t("about.family_ocoi_name")}
-                </ExtLink>
+                {/* Hosted here now, unlike its siblings — ocoi.org.il is being
+                    retired, so this must not point out at a service that is
+                    about to stop answering. */}
+                <Link to="/projects/ocoi">{t("about.family_ocoi_name")}</Link>
               </strong>
               {": "}
               {t("about.family_ocoi_desc")}

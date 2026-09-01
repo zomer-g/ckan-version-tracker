@@ -326,6 +326,54 @@ async def short_share_link(slug: str):
     return RedirectResponse(url=f"/data?share={quote(slug, safe='')}", status_code=302)
 
 
+# ── legacy ocoi.org.il paths ────────────────────────────────────────────────
+# ניגוד עניינים לעם moved here, and ocoi.org.il now points at over.org.il. Its
+# top-level paths must keep resolving, because OCOI's whole credibility model
+# was "every claim links back to its source document": its MCP server instructs
+# models to cite https://www.ocoi.org.il/document?id=… and /entity?type=&id=,
+# so those URLs are already in the wild in text we cannot edit. Without these,
+# shutting the old service down turns every citation it ever produced into a
+# 404 — the one failure this project could least afford.
+#
+# 301, not 302: the destination is permanent and search engines should move the
+# authority across. Registered before the SPA fallback so React never sees them.
+
+@app.get("/entity")
+async def legacy_ocoi_entity(type: str = "", id: str = ""):
+    if not type or not id:
+        return RedirectResponse(url="/projects/ocoi", status_code=301)
+    return RedirectResponse(
+        url=f"/projects/ocoi?tab=graph&type={quote(type, safe='')}&id={quote(id, safe='')}",
+        status_code=301)
+
+
+@app.get("/document")
+async def legacy_ocoi_document(id: str = ""):
+    if not id:
+        return RedirectResponse(url="/projects/ocoi?tab=documents", status_code=301)
+    return RedirectResponse(
+        url=f"/projects/ocoi?tab=documents&doc={quote(id, safe='')}", status_code=301)
+
+
+# /search is gated on the legacy host, unlike the two above: "entity" and
+# "document" are names nothing else here wants, but /search is one OVER may
+# well want for itself one day, and claiming it site-wide to serve a redirect
+# would be borrowing against that.
+_LEGACY_OCOI_HOSTS = {"ocoi.org.il", "www.ocoi.org.il"}
+
+
+@app.get("/search")
+async def legacy_ocoi_search(request: Request, q: str = ""):
+    # An exact set, not endswith(): "ocoi.org.il" is a suffix of
+    # "myocoi.org.il", so a suffix test hands the redirect to any lookalike
+    # domain that points itself at us.
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host not in _LEGACY_OCOI_HOSTS:
+        raise HTTPException(status_code=404, detail="Not Found")
+    suffix = f"?q={quote(q, safe='')}" if q else ""
+    return RedirectResponse(url=f"/projects/ocoi{suffix}", status_code=301)
+
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"

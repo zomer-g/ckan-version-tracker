@@ -153,6 +153,12 @@ export default function OcoiPage() {
         {tab === "documents" && (
           <OcoiDocuments
             onOpenEntity={(type, id, name) => focusGraph({ type, id, name })}
+            docId={searchParams.get("doc")}
+            onClearDoc={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete("doc");
+              setSearchParams(next, { replace: true });
+            }}
           />
         )}
 

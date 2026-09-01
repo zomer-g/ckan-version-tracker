@@ -7,19 +7,20 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
  * /projects/*:
  *   odata → מידע לעם   (odata.org.il)
  *   ocal  → יומן לעם   (ocal.org.il)
- *   ocoi  → ניגוד עניינים לעם (ocoi.org.il)
  *
  * Every one surfaces PROCESSED / derived data, not original government
  * sources, hence the loud banner up top. odata now hosts a live CKAN-API
- * search over מידע לעם; ocal/ocoi are still just a link out to the live
- * site until their interfaces are imported.
+ * search over מידע לעם.
+ *
+ * ocoi is gone from here: ניגוד עניינים לעם is served by OcoiPage, and
+ * ocoi.org.il is being retired, so a link out to it would be a link to
+ * nothing. ocal keeps its entry only as long as ocal.org.il answers.
  */
-type ProjectKey = "odata" | "ocal" | "ocoi";
+type ProjectKey = "odata" | "ocal";
 
 const PROJECTS: Record<ProjectKey, { url: string }> = {
   odata: { url: "https://www.odata.org.il/" },
   ocal: { url: "https://ocal.org.il/" },
-  ocoi: { url: "https://www.ocoi.org.il/" },
 };
 
 export default function ProjectImportPage({ project }: { project: ProjectKey }) {

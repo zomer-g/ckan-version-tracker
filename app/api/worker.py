@@ -3597,14 +3597,22 @@ async def ocal_worker_import(request: Request,
 # already shipped this contract as /api/v1/push/documents + tools/local_processor;
 # this is that contract on OVER's worker auth and storage.
 
+# Kept below ocoi_pipeline.CHECK_INTERVAL_S (4h) — see the docstring below.
+OCOI_CANDIDATE_GATE_S = 3 * 3600
+
+
 @router.get("/ocoi-candidates")
 async def ocoi_worker_candidates(request: Request, limit: int = 25,
                                  _: None = Depends(_verify_worker_key)):
     """Conflict-of-interest PDFs on CKAN that we have not imported yet.
 
     Throttled across the fleet the same way the diary endpoint is: returns []
-    unless the newest document is >5h old, so one worker per window does the
-    batch. Cheap when throttled — one fast query, no CKAN round trip.
+    unless the newest document is older than the gate, so one worker per window
+    does the batch. Cheap when throttled — one fast query, no CKAN round trip.
+
+    The gate sits BELOW the worker's poll interval (4h) on purpose. Above it,
+    every other poll is refused and the real cadence silently halves; the two
+    numbers only mean anything as a pair, so change them together.
     """
     from app.services import ocoi_db, ocoi_ingest
     if not ocoi_db.is_configured():
@@ -3612,9 +3620,9 @@ async def ocoi_worker_candidates(request: Request, limit: int = 25,
     last = await ocoi_db.fetchval("SELECT max(created_at) FROM documents")
     if last is not None:
         gap = await ocoi_db.fetchval("SELECT EXTRACT(epoch FROM now() - $1)", last)
-        if gap is not None and gap < 5 * 3600:
+        if gap is not None and gap < OCOI_CANDIDATE_GATE_S:
             return {"candidates": [], "reason": "throttled",
-                    "next_in_s": int(5 * 3600 - gap)}
+                    "next_in_s": int(OCOI_CANDIDATE_GATE_S - gap)}
     cands = await ocoi_ingest.discover_candidates(limit=max(1, min(limit, 50)))
     return {"candidates": cands}
 

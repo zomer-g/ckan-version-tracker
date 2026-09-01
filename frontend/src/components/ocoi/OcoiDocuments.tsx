@@ -16,8 +16,16 @@ const PER_PAGE = 20;
 
 export default function OcoiDocuments({
   onOpenEntity,
+  docId,
+  onClearDoc,
 }: {
   onOpenEntity: (type: OcoiEntityType, id: string, name: string) => void;
+  // A single document to show on its own, from ?doc=<id>. This is what
+  // ocoi.org.il/document?id=<id> redirects to — those links are in the wild
+  // (OCOI's own attribution rules tell models to cite them), so landing on an
+  // unfiltered list would turn every past citation into a dead end.
+  docId?: string | null;
+  onClearDoc?: () => void;
 }) {
   // The relationships extracted from ONE document, shown inline. A document is
   // where a claim comes from, so seeing its own web next to it is the natural
@@ -58,6 +66,16 @@ export default function OcoiDocuments({
     setLoading(true);
     setError("");
     try {
+      if (docId) {
+        // One document by id — a legacy citation link. A vanished id says so
+        // plainly rather than silently falling back to the full list, which
+        // would look like the citation resolved.
+        const res = await ocoi.document(docId);
+        setRows(res.data ? [res.data] : []);
+        setMeta(null);
+        if (!res.data) setError("המסמך המבוקש לא נמצא.");
+        return;
+      }
       const res = await ocoi.documents({
         page,
         limit: PER_PAGE,
@@ -72,7 +90,7 @@ export default function OcoiDocuments({
     } finally {
       setLoading(false);
     }
-  }, [page, applied, verifiedOnly]);
+  }, [page, applied, verifiedOnly, docId]);
 
   useEffect(() => {
     load();
@@ -80,6 +98,21 @@ export default function OcoiDocuments({
 
   return (
     <div>
+      {docId && (
+        <div
+          className="text-sm"
+          style={{
+            display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap",
+            marginBottom: "0.9rem", padding: "0.55rem 0.8rem",
+            border: "1px solid var(--border)", borderRadius: 8,
+          }}
+        >
+          <span>מוצג מסמך יחיד לפי קישור ישיר.</span>
+          <button type="button" className="btn-secondary" onClick={onClearDoc}>
+            הצג את כל המסמכים
+          </button>
+        </div>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
