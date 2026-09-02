@@ -12,6 +12,14 @@
 import { useEffect, useRef, useState } from "react";
 import { OcoiEntityType, OcoiGraph } from "../../api/client";
 import { TYPE_COLORS } from "./ocoiShared";
+import OcoiConnectionTable from "./OcoiConnectionTable";
+import {
+  dominantRelType,
+  edgeLabel,
+  EDGE_COLORS,
+  EDGE_FALLBACK_COLOR,
+  EDGE_PRIORITY,
+} from "./ocoiGraphLabels";
 
 /**
  * Resolve the palette to concrete colours.
@@ -34,6 +42,10 @@ function resolvePalette() {
     const m = c.match(/^var\(\s*(--[\w-]+)\s*\)$/);
     return m ? v(m[1], fallback) : c;
   };
+  const edge: Record<string, string> = {};
+  for (const [k, token] of Object.entries(EDGE_COLORS)) {
+    edge[k] = raw(token, "#464F5E");
+  }
   return {
     node: {
       person: raw(TYPE_COLORS.person, "#12564F"),
@@ -41,6 +53,8 @@ function resolvePalette() {
       association: raw(TYPE_COLORS.association, "#5B21B6"),
       domain: raw(TYPE_COLORS.domain, "#14458F"),
     } as Record<OcoiEntityType, string>,
+    rel: edge,
+    relFallback: raw(EDGE_FALLBACK_COLOR, "#464F5E"),
     text: v("--text", "#16161a"),
     // The label halo: labels sit over edges and other nodes, and without a
     // ring of the page colour behind them they are read against whatever
@@ -104,17 +118,73 @@ export default function OcoiGraphView({
           /* already registered */
         }
 
-        // Degree drives node size and which labels survive. Counting it here
-        // is cheaper than asking cytoscape per node inside a style callback,
-        // which runs on every repaint.
-        const degree = new Map<string, number>();
+        // Merge every relationship between the same two entities into ONE
+        // line. A person is routinely both "קשור ל־" a company and "מוגבל מ־"
+        // it, and drawing those as separate curves produced the thing that
+        // says nothing: five identical grey arcs between two dots. One line,
+        // coloured by the most consequential relationship, labelled with all
+        // of them.
+        const pairs = new Map<string, {
+          source: string; target: string; types: string[];
+          // Verified only when EVERY contributing row was signed off — one
+          // unreviewed edge is enough to drop the tick, so the mark never
+          // over-claims.
+          allVerified: boolean;
+          count: number;
+        }>();
         for (const e of graph.edges) {
           const s = `${e.source_type}:${e.source_id}`;
           const t = `${e.target_type}:${e.target_id}`;
-          degree.set(s, (degree.get(s) || 0) + 1);
-          degree.set(t, (degree.get(t) || 0) + 1);
+          const key = [s, t].sort().join("||");
+          const found = pairs.get(key);
+          if (found) {
+            if (!found.types.includes(e.relationship_type)) {
+              found.types.push(e.relationship_type);
+            }
+            if (!e.verified) found.allVerified = false;
+            found.count += 1;
+          } else {
+            pairs.set(key, {
+              source: s, target: t, types: [e.relationship_type],
+              allVerified: !!e.verified, count: 1,
+            });
+          }
+        }
+        const mergedEdges = Array.from(pairs.entries()).map(([key, p]) => {
+          const rel = dominantRelType(p.types);
+          const names = p.types.map(edgeLabel).join(" + ");
+          return {
+            data: {
+              id: `e_${key}`,
+              source: p.source,
+              target: p.target,
+              label: (p.allVerified ? "✓ " : "") + names,
+              rel,
+              restricted: rel === "restricted_from" ? 1 : 0,
+              // Named at rest for the same reason the nodes are: nothing is
+              // competing for the space.
+              always: graph.nodes.length <= 12 ? 1 : 0,
+            },
+          };
+        });
+
+        // Degree drives node size and which labels survive, and it counts
+        // MERGED pairs — distinct neighbours, not rows. Counting rows would
+        // size a node by how verbosely one relationship was recorded rather
+        // than by how connected it is, and would disagree with the lines the
+        // reader can actually count. Computed here rather than in a style
+        // callback, which runs on every repaint.
+        const degree = new Map<string, number>();
+        for (const p of pairs.values()) {
+          degree.set(p.source, (degree.get(p.source) || 0) + 1);
+          degree.set(p.target, (degree.get(p.target) || 0) + 1);
         }
         const maxDegree = Math.max(1, ...degree.values());
+        // Hiding labels is a crowding remedy, and a small neighbourhood is not
+        // crowded. Below this size everything is named at rest — otherwise a
+        // two-node graph, where there is room for both names twice over,
+        // renders as two anonymous dots and a line.
+        const sparse = graph.nodes.length <= 12;
 
         const elements = [
           ...graph.nodes.map((n) => {
@@ -129,21 +199,11 @@ export default function OcoiGraphView({
                 deg,
                 // The hub is the entity the user asked about; it should read as
                 // the subject rather than as one dot among fifty.
-                hub: deg >= Math.max(4, maxDegree * 0.5) ? 1 : 0,
+                hub: sparse || deg >= Math.max(4, maxDegree * 0.5) ? 1 : 0,
               },
             };
           }),
-          ...graph.edges.map((e, i) => ({
-            data: {
-              id: `e${i}`,
-              source: `${e.source_type}:${e.source_id}`,
-              target: `${e.target_type}:${e.target_id}`,
-              label: e.relationship_type || "",
-              // Expense edges are visually de-emphasised: they are bulk data,
-              // not a declared conflict of interest.
-              expense: e.origin_kind === "mk_expense" ? 1 : 0,
-            },
-          })),
+          ...mergedEdges,
         ];
 
         const pal = resolvePalette();
@@ -196,11 +256,36 @@ export default function OcoiGraphView({
             {
               selector: "edge",
               style: {
-                width: (el: { data: (k: string) => number }) => (el.data("expense") ? 0.8 : 1.3),
-                "line-color": pal.edge,
+                // Colour BY RELATIONSHIP TYPE. One undifferentiated grey made
+                // "בן משפחה" and "מוגבל מ־" look like the same fact, which is
+                // the difference the whole project exists to show.
+                "line-color": (el: { data: (k: string) => string }) =>
+                  pal.rel[el.data("rel")] || pal.relFallback,
+                "target-arrow-color": (el: { data: (k: string) => string }) =>
+                  pal.rel[el.data("rel")] || pal.relFallback,
+                "target-arrow-shape": (el: { data: (k: string) => number }) =>
+                  (el.data("restricted") ? "triangle" : "none"),
+                "arrow-scale": 0.9,
+                width: (el: { data: (k: string) => number }) => (el.data("restricted") ? 2.6 : 1.5),
                 "curve-style": "bezier",
-                opacity: (el: { data: (k: string) => number }) => (el.data("expense") ? 0.3 : 0.6),
+                opacity: 0.85,
+                label: "data(label)",
+                "font-size": 9,
+                "font-family": "system-ui, sans-serif",
+                color: pal.text,
+                "text-outline-width": 2.5,
+                "text-outline-color": pal.halo,
+                "text-rotation": "autorotate",
+                "text-opacity": 0,
+                "min-zoomed-font-size": 8,
               },
+            },
+            {
+              // A restriction is the finding, so its line is named even at
+              // rest; the rest of the vocabulary is carried by colour until
+              // the reader hovers or zooms.
+              selector: "edge[restricted = 1], edge[always = 1]",
+              style: { "text-opacity": 1, "z-index": 5 },
             },
             {
               selector: "node:selected",
@@ -236,6 +321,7 @@ export default function OcoiGraphView({
           const show = cy.zoom() >= baseZoom * 1.7;
           cy.batch(() => {
             cy.nodes("[hub = 0]").style("text-opacity", show ? 1 : 0);
+            cy.edges("[restricted = 0][always = 0]").style("text-opacity", show ? 1 : 0);
           });
         };
         cy.one("layoutstop", () => {
@@ -260,6 +346,20 @@ export default function OcoiGraphView({
           evt.target.style("text-opacity", keep ? 1 : 0);
           evt.target.style("z-index", evt.target.data("hub") === 1 ? 10 : 1);
           if (box.current) box.current.style.cursor = "";
+        });
+
+        // Hovering a line names the relationship, which is the question a
+        // coloured line raises and the legend only half answers.
+        cy.on("mouseover", "edge", (evt: { target: { style: (k: string, v: unknown) => void } }) => {
+          evt.target.style("text-opacity", 1);
+          evt.target.style("z-index", 30);
+        });
+        cy.on("mouseout", "edge", (evt: {
+          target: { data: (k: string) => number; style: (k: string, v: unknown) => void };
+        }) => {
+          const keep = evt.target.data("restricted") === 1 || cy.zoom() >= baseZoom * 1.7;
+          evt.target.style("text-opacity", keep ? 1 : 0);
+          evt.target.style("z-index", evt.target.data("restricted") === 1 ? 5 : 1);
         });
 
         cy.on("tap", "node", (evt: { target: { data: (k: string) => string } }) => {
@@ -291,6 +391,20 @@ export default function OcoiGraphView({
       </div>
     );
   }
+
+  // Ordered by the same priority the lines use, so the legend reads in the
+  // order of consequence rather than in whatever order the rows arrived.
+  const relTypesPresent = EDGE_PRIORITY.filter((t) =>
+    graph.edges.some((e) => e.relationship_type === t),
+  ).concat(
+    Array.from(
+      new Set(
+        graph.edges
+          .map((e) => e.relationship_type)
+          .filter((t) => !EDGE_PRIORITY.includes(t)),
+      ),
+    ),
+  );
 
   return (
     <div>
@@ -329,6 +443,37 @@ export default function OcoiGraphView({
           </span>
         )}
       </div>
+
+      {/* The edge legend. Colouring lines by relationship is only informative
+          if the reader is told what the colours mean, and only the types
+          actually present are listed — a fixed legend of nine entries for a
+          graph containing two is noise. */}
+      {relTypesPresent.length > 0 && (
+        <div
+          className="flex text-sm text-muted"
+          style={{ gap: "0.9rem", flexWrap: "wrap", marginTop: "0.35rem", alignItems: "center" }}
+        >
+          <span>סוגי קשר:</span>
+          {relTypesPresent.map((t) => (
+            <span key={t} className="flex" style={{ gap: "0.3rem", alignItems: "center" }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 16,
+                  height: 0,
+                  borderTop: `${t === "restricted_from" ? 3 : 2}px solid ${
+                    EDGE_COLORS[t] || EDGE_FALLBACK_COLOR
+                  }`,
+                  display: "inline-block",
+                }}
+              />
+              {edgeLabel(t)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <OcoiConnectionTable edges={graph.edges} nodes={graph.nodes} />
     </div>
   );
 }
