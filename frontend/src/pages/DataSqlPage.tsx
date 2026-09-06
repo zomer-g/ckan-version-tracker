@@ -803,6 +803,188 @@ SELECT a.name AS יישוב, c.companies AS חברות_חדשות_2025, a.geomet
 FROM areas a JOIN new_co c USING (code)
 ORDER BY חברות_חדשות_2025 DESC`,
   },
+  // Crime per capita: the police file is a case list with a CBS settlement code
+  // and no geometry, so both the shape and the denominator are borrowed from the
+  // CBS statistical-areas layer — the same layer answers "where is it" and "how
+  // many people live there", which keeps the two sides of the rate consistent.
+  // Two numbers belong in the reader's head: ~11% of 2025 cases carry no
+  // settlement code at all, and the rate is cases-per-RESIDENT, so a city with a
+  // large daytime or tourist population (אילת, ת"א) is measured against a
+  // denominator that is not really who is there.
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "מפה: גניבות רכב ל-1,000 תושבים, 2025",
+    sql: `-- קובץ תיקי הפשיעה של המשטרה (data.gov.il, 2025 — ארבעת הרבעונים,
+-- 395 אלף תיקים) אינו מפה: יש בו סמל יישוב ולא גיאומטריה. שכבת האזורים
+-- הסטטיסטיים של הלמ"ס נותנת גם את הצורה וגם את האוכלוסייה, ולכן המונה
+-- והמכנה של השיעור מגיעים מאותו מקור.
+--
+-- "גניבת רכב" היא סוג עבירה אחד ומדויק — 'גניבה שמוש רכב ללא רשות'.
+-- לא לבלבל עם 'גניבה מתוך רכב' או 'גניבת חלקי רכב': אלה עבירות אחרות.
+--
+-- ה-ST_Union מצומצם בכוונה לרשימת היישובים שכבר סוננו (CTE keep) ולא רץ
+-- על כל היישובים בארץ — זה ההבדל בין 3.5 שניות ל-6.5.
+--
+-- כיסוי: 15,553 מתוך 17,536 תיקי גניבת רכב ב-2025 נושאים סמל יישוב,
+-- ו-14,829 מהם ביישובים שמוצגים כאן (20 אלף תושבים ומעלה).
+WITH theft AS (
+  SELECT "YeshuvKod"::int AS code, count(*) AS cases
+  FROM public.append_crime_records_data_69a37f7d
+  WHERE "YeshuvKod" ~ '^[0-9]+$'
+    AND "StatisticType" = 'גניבה שמוש רכב ללא רשות'
+  GROUP BY 1
+),
+pop AS (
+  SELECT "SEMEL_YISHUV"::int AS code, max("SHEM_YISHUV") AS name,
+         sum(NULLIF("Pop_Total",'')::numeric) AS pop
+  FROM public.append_cbs_pub_file_a74ad779_a13c151c
+  WHERE "SEMEL_YISHUV" ~ '^[0-9]+$'
+  GROUP BY 1
+),
+keep AS (
+  SELECT p.code, p.name, p.pop, t.cases
+  FROM pop p JOIN theft t USING (code)
+  WHERE p.pop >= 20000
+),
+geo AS (
+  SELECT "SEMEL_YISHUV"::int AS code, ST_Union(geom) AS geom
+  FROM public.append_cbs_pub_file_a74ad779_a13c151c
+  WHERE "SEMEL_YISHUV"::int IN (SELECT code FROM keep)
+  GROUP BY 1
+)
+SELECT round(1000.0 * k.cases / k.pop, 2) AS "גניבות רכב ל-1000 תושבים",
+       k.name AS "יישוב", k.cases AS "תיקי גניבת רכב", round(k.pop) AS "אוכלוסייה",
+       ST_AsText(g.geom) AS geometry_wkt
+FROM keep k JOIN geo g USING (code)
+ORDER BY 1 DESC`,
+  },
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "מפה: עבירות אלימות ל-1,000 תושבים, 2025",
+    sql: `-- אותו שלד כמו מפת גניבות הרכב, אבל כאן ההגדרה היא ההחלטה: בקובץ
+-- המשטרה אין קבוצה בשם "אלימות". מה שנספר כאן הוא עבירות נגד גוף
+-- ונגד חיי אדם, בלי עבירות הרשלנות שנכללות באותן קבוצות, ובתוספת שוד
+-- שמסווג אצל המשטרה כעבירת רכוש. רוצים הגדרה אחרת — משנים את ה-WHERE
+-- ב-CTE הראשון, שם ורק שם.
+--
+-- עמודת "מתוכם עבירות נגד חיי אדם" (רצח, נסיון לרצח, הריגה) נשארת בנפרד
+-- כי היא כמה סדרי גודל קטנה יותר ונבלעת בשיעור הכולל.
+--
+-- כיסוי: 53,195 מתוך 59,052 תיקי אלימות ב-2025 נושאים סמל יישוב,
+-- ו-48,194 מהם ביישובים שמוצגים כאן.
+WITH violent AS (
+  SELECT "YeshuvKod"::int AS code, count(*) AS cases,
+         count(*) FILTER (WHERE "StatisticGroup" = 'עבירות נגד אדם') AS life
+  FROM public.append_crime_records_data_69a37f7d
+  WHERE "YeshuvKod" ~ '^[0-9]+$'
+    AND (
+      ("StatisticGroup" IN ('עבירות נגד גוף', 'עבירות נגד אדם')
+        AND "StatisticType" NOT IN ('רשלנות ופחזות פלילית',
+                                    'גרימת מות ברשלנות', 'גרימת מות ברשלנות - ת.ד.'))
+      OR "StatisticType" IN ('שוד', 'שוד בנסיבות חמורות')
+    )
+  GROUP BY 1
+),
+pop AS (
+  SELECT "SEMEL_YISHUV"::int AS code, max("SHEM_YISHUV") AS name,
+         sum(NULLIF("Pop_Total",'')::numeric) AS pop
+  FROM public.append_cbs_pub_file_a74ad779_a13c151c
+  WHERE "SEMEL_YISHUV" ~ '^[0-9]+$'
+  GROUP BY 1
+),
+keep AS (
+  SELECT p.code, p.name, p.pop, v.cases, v.life
+  FROM pop p JOIN violent v USING (code)
+  WHERE p.pop >= 20000
+),
+geo AS (
+  SELECT "SEMEL_YISHUV"::int AS code, ST_Union(geom) AS geom
+  FROM public.append_cbs_pub_file_a74ad779_a13c151c
+  WHERE "SEMEL_YISHUV"::int IN (SELECT code FROM keep)
+  GROUP BY 1
+)
+SELECT round(1000.0 * k.cases / k.pop, 2) AS "עבירות אלימות ל-1000 תושבים",
+       k.name AS "יישוב", k.cases AS "תיקי אלימות",
+       k.life AS "מתוכם עבירות נגד חיי אדם", round(k.pop) AS "אוכלוסייה",
+       ST_AsText(g.geom) AS geometry_wkt
+FROM keep k JOIN geo g USING (code)
+ORDER BY 1 DESC`,
+  },
+  // The hardest version of the same idea: the register that has the place is
+  // ALSO non-spatial. The ballot register (רשות האוכלוסין) holds street+house
+  // per polling station but no coordinates, so the address itself has to be
+  // matched — after normalising it — against two layers that do carry geometry.
+  // Coverage is the finding, not a footnote: 87 of Haifa's 134 polling sites
+  // match on the exact house number, 15 more fall back to the street centre,
+  // and 32 have no donor address at all and are dropped by the final WHERE.
+  {
+    group: "מרחב על מאגרים שאינם מפות",
+    label: "מפה: אחוז ההצבעה לרשימה ג׳ בחיפה, לפי מקום ההצבעה",
+    sql: `-- שלושה מאגרים שאף אחד מהם אינו מפה של קלפיות: תוצאות האמת של הכנסת
+-- ה-21, מרשם הקלפיות (רחוב+מספר בית, בלי קואורדינטות), ושתי שכבות ממ"ג
+-- שמהן "שואלים" את הגיאומטריה לפי הכתובת.
+--
+-- מפתח החיבור בין התוצאות למרשם אינו שוויון: המרשם ממספר תחנה (1010)
+-- והתוצאות מפצלות אותה לתת-קלפיות (101.1 … 101.4), ולכן
+-- floor(מספר קלפי) מול סמל קלפי/10.
+--
+-- הכתובות מנורמלות לפני ההשוואה — הסרת "רח׳ / שד׳ / דרך / סמ׳", גרשיים
+-- ורווחים כפולים — אחרת רוב הכתובות אינן נפגשות. קודם מנסים התאמה
+-- לכתובת המדויקת, ורק אם אין נופלים למרכז הרחוב; עמודת "דיוק המיקום"
+-- אומרת לכל נקודה מה קרה. 102 מתוך 134 מקומות ההצבעה בחיפה נמצאו כך.
+WITH norm AS (SELECT '^(שד|רח|דרך|סמ)[[:space:]]+' AS pre),
+v AS (
+  SELECT floor(("מספר קלפי")::numeric) AS station,
+         "מספר קלפי" AS kalpi, ("כשרים")::int AS kosher, ("ג")::int AS g
+  FROM public.append_votes_knesset_1c9517e7
+  WHERE "סמל ישוב" = '4000'
+),
+p AS (
+  SELECT DISTINCT ON (("סמל קלפי")::numeric / 10)
+         ("סמל קלפי")::numeric / 10 AS station,
+         btrim("שם רחוב") AS street, btrim("מספר בית") AS hnum,
+         btrim("תיאור מקום הקלפי") AS place
+  FROM public.append_voting_polls_89252354
+  WHERE "סמל ישוב" = '4000'
+  ORDER BY 1
+),
+donor AS (
+  SELECT btrim(regexp_replace(regexp_replace(translate(street_name,'"''״׳',''),
+           (SELECT pre FROM norm),''),'[[:space:]]+',' ','g')) AS nstreet,
+         btrim(house_num) AS hnum, geom
+  FROM idx.govmap_401_19bf0a23_083d0295 WHERE citycode = '4000'
+  UNION ALL
+  SELECT btrim(regexp_replace(regexp_replace(translate(
+           regexp_replace(address,'[[:space:]]+[0-9]+[א-ת]?$',''),'"''״׳',''),
+           (SELECT pre FROM norm),''),'[[:space:]]+',' ','g')),
+         substring(address from '([0-9]+)[א-ת]?$'), geom
+  FROM idx.govmap_217784_6ad50db7_58154fe8
+  WHERE address ~ '[0-9]+[א-ת]?$'
+),
+exact  AS (SELECT nstreet, hnum, ST_Centroid(ST_Collect(geom)) AS geom FROM donor GROUP BY 1,2),
+street AS (SELECT nstreet,       ST_Centroid(ST_Collect(geom)) AS geom FROM donor GROUP BY 1),
+site AS (
+  SELECT p.place, p.street || ' ' || p.hnum AS addr,
+         btrim(regexp_replace(regexp_replace(translate(p.street,'"''״׳',''),
+           (SELECT pre FROM norm),''),'[[:space:]]+',' ','g')) AS nstreet,
+         p.hnum,
+         sum(v.kosher) AS kosher, sum(v.g) AS g, count(*) AS n_kalpi,
+         string_agg(v.kalpi || ' (' || round(100.0*v.g/NULLIF(v.kosher,0),1) || '%)',
+                    ', ' ORDER BY v.kalpi::numeric) AS kalpiot
+  FROM v JOIN p USING (station)
+  GROUP BY 1,2,3,4
+)
+SELECT round(100.0 * s.g / NULLIF(s.kosher,0), 2) AS "אחוז ג",
+       s.g AS "קולות ג", s.kosher AS "קולות כשרים", s.n_kalpi AS "מספר קלפיות",
+       s.place AS "מקום ההצבעה", s.addr AS "כתובת", s.kalpiot AS "פירוט לפי קלפי",
+       CASE WHEN e.geom IS NOT NULL THEN 'כתובת מדויקת' ELSE 'מרכז הרחוב' END AS "דיוק המיקום",
+       ST_AsText(COALESCE(e.geom, st.geom)) AS geometry_wkt
+FROM site s
+LEFT JOIN exact  e  ON e.nstreet  = s.nstreet AND e.hnum = s.hnum
+LEFT JOIN street st ON st.nstreet = s.nstreet
+WHERE COALESCE(e.geom, st.geom) IS NOT NULL
+ORDER BY 1 DESC`,
+  },
 ];
 
 // Dropdown groups, in the learning order above.
