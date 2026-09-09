@@ -3,8 +3,12 @@
  *
  * Four ways into the same answer: a point on the map (with a radius), a postal
  * code, an address, or a gush/helka. Whichever you use, the result is the same
- * envelope from /api/nadlan — the property's identity in every other codespace
+ * envelope from /api/nadlan, the property's identity in every other codespace
  * plus a link to each source's full row on /data.
+ *
+ * A fifth tab is not a lookup at all: "פערים מול מיסוי מקרקעין" is a written
+ * comparison of nadlan.gov.il against the tax authority's register, which is
+ * where the parcel identities in the other four tabs ultimately come from.
  *
  * Everything lives in the query string (?tab=&lat=&lon=&r=&g=&h=&zip=&city=…)
  * so every result is a shareable link, the convention the /data console and
@@ -20,14 +24,16 @@ import NadlanResultCard from "../components/nadlan/NadlanResultCard";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanMap = lazy(() => import("../components/nadlan/NadlanMap"));
+const NadlanGaps = lazy(() => import("../components/nadlan/NadlanGaps"));
 
-type Tab = "map" | "address" | "zip" | "gush";
-const TAB_IDS: Tab[] = ["map", "address", "zip", "gush"];
+type Tab = "map" | "address" | "zip" | "gush" | "gaps";
+const TAB_IDS: Tab[] = ["map", "address", "zip", "gush", "gaps"];
 const TAB_LABELS: [Tab, string][] = [
   ["map", "🗺 לפי מפה"],
   ["address", "🏠 לפי כתובת"],
   ["zip", "✉️ לפי מיקוד"],
   ["gush", "📐 לפי גוש־חלקה"],
+  ["gaps", "🔍 פערים מול מיסוי מקרקעין"],
 ];
 
 const RADII = [0, 100, 250, 500, 1000, 2000];
@@ -141,8 +147,8 @@ export default function NadlanPage() {
           <h1 style={{ margin: 0 }}>נדל"ן לעם</h1>
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             טיוב וקישור של מידע מרחבי ברמת הנכס: שכבת החלקות, גזטיר הנכסים, קובץ המיקוד ורשימת
-            הכתובות — מוצלבים זה לזה. הזינו כל אחת מצורות הזיהוי — נקודה על המפה, מיקוד, כתובת או
-            גוש־חלקה — וקבלו את כל השאר.
+            הכתובות, מוצלבים זה לזה. הזינו כל אחת מצורות הזיהוי, נקודה על המפה, מיקוד, כתובת או
+            גוש־חלקה, וקבלו את כל השאר.
             {stats && (
               <div style={{ marginTop: "0.4rem" }}>
                 {stats.parcels.toLocaleString("he-IL")} חלקות ·{" "}
@@ -254,77 +260,89 @@ export default function NadlanPage() {
           </form>
         )}
 
-        {/* The map is NOT exclusive to the map tab: a property found by address,
-            zip or gush/helka has to be locatable on the map too, so the same
-            polygon layer is shown for every mode and fits itself to the result. */}
-        <div style={{ marginBottom: "1rem" }}>
-          <Suspense fallback={<div className="text-sm text-muted">טוען מפה…</div>}>
-            <NadlanMap
-              lat={lat}
-              lon={lon}
-              radiusM={radiusM}
-              results={results}
-              selected={expanded}
-              polygon={polygon}
-              onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
-              onSelect={(k) => setExpanded(k)}
-            />
-          </Suspense>
-          {results.length > 0 && (
-            <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
-              {results.filter((r) => r.geometry).length.toLocaleString("he-IL")} מתוך{" "}
-              {results.length.toLocaleString("he-IL")} חלקות מוצגות עם גבולות החלקה.
-              לחיצה על חלקה במפה תפתח את ההצלבה שלה.
+        {/* Everything below is the lookup half of the page. The gaps report is a
+            written comparison, not a query, so none of it applies there. */}
+        {tab !== "gaps" && (
+          <>
+            {/* The map is NOT exclusive to the map tab: a property found by address,
+                zip or gush/helka has to be locatable on the map too, so the same
+                polygon layer is shown for every mode and fits itself to the result. */}
+            <div style={{ marginBottom: "1rem" }}>
+              <Suspense fallback={<div className="text-sm text-muted">טוען מפה…</div>}>
+                <NadlanMap
+                  lat={lat}
+                  lon={lon}
+                  radiusM={radiusM}
+                  results={results}
+                  selected={expanded}
+                  polygon={polygon}
+                  onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
+                  onSelect={(k) => setExpanded(k)}
+                />
+              </Suspense>
+              {results.length > 0 && (
+                <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+                  {results.filter((r) => r.geometry).length.toLocaleString("he-IL")} מתוך{" "}
+                  {results.length.toLocaleString("he-IL")} חלקות מוצגות עם גבולות החלקה.
+                  לחיצה על חלקה במפה תפתח את ההצלבה שלה.
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* ── results ── */}
-        {loading && <div className="text-sm text-muted">מחפש…</div>}
-        {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
-        {!loading && !error && env && results.length === 0 && (
-          <div className="text-sm text-muted">לא נמצאו חלקות להזנה הזו.</div>
+            {/* ── results ── */}
+            {loading && <div className="text-sm text-muted">מחפש…</div>}
+            {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
+            {!loading && !error && env && results.length === 0 && (
+              <div className="text-sm text-muted">לא נמצאו חלקות להזנה הזו.</div>
+            )}
+
+            {results.map((p) => (
+              <NadlanResultCard
+                key={p.parcel_key}
+                property={p}
+                expanded={expanded === p.parcel_key}
+                onToggle={() => setExpanded(expanded === p.parcel_key ? null : p.parcel_key)}
+              />
+            ))}
+
+            {/* ── coverage, stated up front rather than discovered ── */}
+            <div style={{
+              marginTop: "1.5rem", padding: "0.8rem 1rem", borderRadius: 8,
+              background: "var(--surface-2)", border: "1px solid var(--border)",
+            }}>
+              <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.35rem" }}>
+                מה הקישור הזה כן ולא יודע
+              </div>
+              <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.8 }}>
+                {(env?.caveats ?? [
+                  "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא מיקוד כלל-יישובי אחד.",
+                  "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד, לא למספר בית.",
+                  "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
+                ]).map((c, i) => <li key={i}>{c}</li>)}
+                {stats?.coverage && (
+                  <li>
+                    כיסוי בפועל: {stats.coverage.addresses_with_point_pct}% מהכתובות עם נקודה ·{" "}
+                    {stats.coverage.addresses_linked_pct}% משויכות לחלקה ·{" "}
+                    {stats.coverage.addresses_with_zip_pct}% עם מיקוד (מתוכם{" "}
+                    {stats.coverage.addresses_with_address_zip_pct}% ברמת הכתובת) ·{" "}
+                    {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר.
+                  </li>
+                )}
+              </ul>
+            </div>
+
+            <div className="text-sm text-muted" style={{ margin: "1rem 0 0.5rem" }}>
+              המידע מעובד, הצלבה שנגזרה מארבעה מקורות, לא מקור ממשלתי ראשוני. כל שדה מקושר לשורת
+              המקור שלו בקונסולת <a href="/data">/data</a>.
+            </div>
+          </>
         )}
 
-        {results.map((p) => (
-          <NadlanResultCard
-            key={p.parcel_key}
-            property={p}
-            expanded={expanded === p.parcel_key}
-            onToggle={() => setExpanded(expanded === p.parcel_key ? null : p.parcel_key)}
-          />
-        ))}
-
-        {/* ── coverage, stated up front rather than discovered ── */}
-        <div style={{
-          marginTop: "1.5rem", padding: "0.8rem 1rem", borderRadius: 8,
-          background: "var(--surface-2)", border: "1px solid var(--border)",
-        }}>
-          <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.35rem" }}>
-            מה הקישור הזה כן ולא יודע
-          </div>
-          <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.8 }}>
-            {(env?.caveats ?? [
-              "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא מיקוד כלל-יישובי אחד.",
-              "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד — לא למספר בית.",
-              "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
-            ]).map((c, i) => <li key={i}>{c}</li>)}
-            {stats?.coverage && (
-              <li>
-                כיסוי בפועל: {stats.coverage.addresses_with_point_pct}% מהכתובות עם נקודה ·{" "}
-                {stats.coverage.addresses_linked_pct}% משויכות לחלקה ·{" "}
-                {stats.coverage.addresses_with_zip_pct}% עם מיקוד (מתוכם{" "}
-                {stats.coverage.addresses_with_address_zip_pct}% ברמת הכתובת) ·{" "}
-                {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר.
-              </li>
-            )}
-          </ul>
-        </div>
-
-        <div className="text-sm text-muted" style={{ margin: "1rem 0 0.5rem" }}>
-          המידע מעובד — הצלבה שנגזרה מארבעה מקורות, לא מקור ממשלתי ראשוני. כל שדה מקושר לשורת
-          המקור שלו בקונסולת <a href="/data">/data</a>.
-        </div>
+        {tab === "gaps" && (
+          <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
+            <NadlanGaps />
+          </Suspense>
+        )}
       </div>
     </div>
   );

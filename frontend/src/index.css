@@ -3199,3 +3199,325 @@ li > a:only-child,
   color: var(--text-muted);
   opacity: 1;               /* Firefox dims placeholders by default */
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   נדל"ן לעם, לשונית "פערים מול מיסוי מקרקעין"
+   A long-form comparison report living inside a tab of /projects/nadlan. It
+   arrived as a standalone page with a palette of its own; everything below
+   re-homes it onto the site tokens so it inherits both themes and the AAA
+   contrast floor. The two sources get a colour each and keep it throughout:
+   sky for nadlan.gov.il, amber for the tax authority.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.ngap {
+  --ngap-nadlan: var(--tint-sky-fg);
+  --ngap-nadlan-wash: var(--tint-sky-bg);
+  --ngap-tax: var(--tint-warn-fg);
+  --ngap-tax-wash: var(--tint-warn-bg);
+  line-height: 1.65;
+}
+
+.ngap-kicker {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ngap-tax);
+  margin-bottom: 0.5rem;
+}
+.ngap-lede {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  max-width: 68ch;
+}
+.ngap-lede + .ngap-lede { margin-top: 0.7rem; }
+.ngap-lede strong { color: var(--text); font-weight: 600; }
+
+/* The two-source legend, repeated as a colour key under each reference row. */
+.ngap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin-top: 0.9rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.ngap-legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+.ngap-legend i {
+  width: 10px; height: 10px; border-radius: 3px;
+  display: inline-block; flex: 0 0 auto;
+}
+.ngap-legend .is-nadlan i { background: var(--ngap-nadlan); }
+.ngap-legend .is-tax i { background: var(--ngap-tax); }
+
+/* Headline numbers. */
+.ngap-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.7rem;
+  margin: 1.4rem 0 0.5rem;
+}
+.ngap-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+.ngap-stat b {
+  font-size: 1.7rem; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  display: block; margin-bottom: 0.3rem;
+}
+.ngap-stat span { font-size: 0.8rem; color: var(--text-muted); line-height: 1.45; display: block; }
+.ngap-stat.is-nadlan b { color: var(--ngap-nadlan); }
+.ngap-stat.is-tax b { color: var(--ngap-tax); }
+.ngap-stat.is-good b { color: var(--tint-good-fg); }
+.ngap-stat.is-bad b { color: var(--danger); }
+
+.ngap-section {
+  font-size: 0.85rem; font-weight: 700; color: var(--text-muted);
+  letter-spacing: 0.04em; margin: 2.2rem 0 0.85rem;
+  display: flex; align-items: center; gap: 0.75rem;
+}
+.ngap-section::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+/* ── findings ── */
+.ngap-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 0.9rem;
+}
+.ngap-card h3 {
+  font-size: 1.02rem; font-weight: 700; margin: 0 0 0.4rem;
+  line-height: 1.45; display: flex; align-items: flex-start; gap: 0.6rem;
+}
+.ngap-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: 0 0 auto; border-radius: var(--radius-sm);
+  background: var(--ngap-nadlan-wash); color: var(--ngap-nadlan);
+  font-size: 0.78rem; font-weight: 700; margin-top: 0.2rem;
+  font-variant-numeric: tabular-nums;
+}
+.ngap-card.is-severe .ngap-num { background: var(--tint-bad-bg); color: var(--tint-bad-fg); }
+.ngap-p { font-size: 0.9rem; color: var(--text-muted); max-width: 68ch; margin: 0 0 1rem; }
+.ngap-p:last-child { margin-bottom: 0; }
+.ngap-p strong { color: var(--text); font-weight: 600; }
+.ngap-p code {
+  background: var(--surface-2); border-radius: 4px;
+  padding: 0.05rem 0.3rem; font-size: 0.85em;
+}
+
+/* A verbatim extract from one of the two sites, kept monospaced so the columns
+   line up the way they do on screen. */
+.ngap-evidence {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.8rem 0.9rem; margin: 0 0 1rem;
+  font-size: 0.82rem; line-height: 1.95;
+  font-variant-numeric: tabular-nums;
+  overflow-x: auto; white-space: pre;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.ngap-evidence .ngap-cap {
+  display: block;
+  font-size: 0.78rem; color: var(--text-muted);
+  margin-bottom: 0.5rem; white-space: normal;
+  font-weight: 600;
+}
+.ngap-evidence em {
+  color: var(--ngap-nadlan); font-weight: 600; font-style: normal;
+}
+
+/* ── tables ── */
+.ngap-tablewrap {
+  overflow-x: auto; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); margin-bottom: 1rem;
+}
+.ngap-tablewrap table {
+  border-collapse: collapse; width: 100%;
+  font-size: 0.83rem; min-width: 480px;
+}
+.ngap-tablewrap caption {
+  caption-side: top; text-align: start; padding: 0.65rem 0.8rem;
+  font-size: 0.78rem; color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.ngap-tablewrap th,
+.ngap-tablewrap td {
+  padding: 0.5rem 0.8rem; text-align: start;
+  border-bottom: 1px solid var(--border);
+}
+.ngap-tablewrap thead th {
+  font-size: 0.76rem; font-weight: 700; color: var(--text-muted);
+  white-space: nowrap; background: var(--surface-2);
+}
+.ngap-tablewrap tbody tr:last-child td { border-bottom: none; }
+.ngap-tablewrap tbody tr.ngap-sum td {
+  background: var(--surface-2); font-weight: 700;
+  border-top: 1px solid var(--border);
+}
+.ngap-tablewrap td.num,
+.ngap-tablewrap th.num {
+  text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ngap-id { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* An LTR island for runs of digits and signs. Left in the RTL paragraph they
+   reorder: "+132,712 · 18%" comes out as "18% · 132,712+", and a leading minus
+   ends up trailing the number. See the Ltr helper in NadlanGaps.tsx. */
+.ngap-ltr { direction: ltr; unicode-bidi: isolate; }
+.ngap-vn { color: var(--ngap-nadlan); font-weight: 600; }
+.ngap-vt { color: var(--ngap-tax); font-weight: 600; }
+.ngap-vc { color: var(--danger); font-weight: 600; }
+
+.ngap-tag {
+  display: inline-block; padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-full); font-size: 0.72rem;
+  font-weight: 600; white-space: nowrap;
+  background: var(--tint-neutral-bg); color: var(--tint-neutral-fg);
+  border: 1px solid var(--tint-neutral-bd);
+}
+.ngap-tag.is-nadlan {
+  background: var(--tint-sky-bg); color: var(--tint-sky-fg);
+  border-color: var(--tint-sky-bd);
+}
+
+/* The "so what" line that closes a finding. */
+.ngap-takeaway {
+  border-inline-start: 3px solid var(--tint-neutral-bd);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.9rem; font-size: 0.87rem;
+  color: var(--text-muted); margin-top: 1rem;
+}
+.ngap-takeaway b { color: var(--text); }
+.ngap-takeaway.is-bad {
+  border-inline-start-color: var(--tint-bad-bd);
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
+}
+.ngap-takeaway.is-bad b { color: var(--tint-bad-fg); }
+.ngap-takeaway.is-good {
+  border-inline-start-color: var(--tint-good-bd);
+  background: var(--tint-good-bg);
+  color: var(--tint-good-fg);
+}
+.ngap-takeaway.is-good b { color: var(--tint-good-fg); }
+
+.ngap-actions { margin: 0; padding-inline-start: 1.2rem; font-size: 0.9rem; }
+.ngap-actions li { margin-bottom: 0.55rem; color: var(--text-muted); }
+.ngap-actions li strong { color: var(--text); font-weight: 600; }
+
+/* ── the reference row that points a finding at its screenshots ── */
+.ngap-refs {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 0.3rem; font-size: 0.8rem;
+  color: var(--text-muted); margin: 0 0 1rem;
+}
+.ngap-refs > b { font-weight: 700; margin-inline-end: 0.15rem; }
+.ngap-ref {
+  min-width: 26px; min-height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 0.3rem; border-radius: var(--radius-sm);
+  font-size: 0.76rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  border: 1px solid var(--tint-sky-bd);
+  background: var(--tint-sky-bg); color: var(--tint-sky-fg);
+}
+.ngap-ref.is-tax {
+  border-color: var(--tint-warn-bd);
+  background: var(--tint-warn-bg); color: var(--tint-warn-fg);
+}
+.ngap-ref:hover { filter: brightness(1.08); }
+.ngap-refs .ngap-key { opacity: 0.85; margin-inline-start: 0.4rem; }
+.ngap-refs .ngap-key i {
+  display: inline-block; width: 9px; height: 9px;
+  border-radius: 2px; margin-inline-end: 0.2rem;
+}
+
+/* ── the image appendix ── */
+.ngap-figgroup {
+  font-size: 0.9rem; font-weight: 700; margin: 1.6rem 0 0.5rem;
+  padding-bottom: 0.35rem; border-bottom: 1px solid var(--border);
+}
+.ngap-figsub {
+  font-size: 0.8rem; font-weight: 600; margin: 0.9rem 0 0.5rem;
+  display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+}
+.ngap-figsub span { font-weight: 400; font-size: 0.75rem; opacity: 0.85; }
+.ngap-figsub.is-tax { color: var(--ngap-tax); }
+.ngap-figsub.is-nadlan { color: var(--ngap-nadlan); }
+
+.ngap-figrow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.7rem;
+}
+.ngap-thumb {
+  padding: 0; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--surface); cursor: zoom-in; display: block;
+  min-width: 0;
+}
+.ngap-thumb:hover { border-color: var(--primary); }
+.ngap-thumb img {
+  display: block; width: 100%; height: 118px;
+  object-fit: cover; object-position: top center;
+}
+.ngap-thumb figcaption {
+  font-size: 0.72rem; color: var(--text-muted);
+  padding: 0.35rem 0.45rem; text-align: start; line-height: 1.4;
+}
+.ngap-thumb figcaption b {
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+
+/* ── lightbox ── */
+.ngap-lb {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex; flex-direction: column;
+}
+.ngap-lb-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.5rem 0.8rem; color: #f2f2f2; font-size: 0.82rem;
+  background: rgba(0, 0, 0, 0.55);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+}
+.ngap-lb-bar .ngap-lb-n { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ngap-lb-bar .ngap-lb-place { opacity: 0.92; }
+.ngap-lb-bar .ngap-lb-host {
+  font-size: 0.72rem; padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-full);
+  border: 1px solid currentColor;
+}
+.ngap-lb-bar .ngap-lb-spacer { flex: 1; }
+.ngap-lb-bar button,
+.ngap-lb-bar a {
+  background: rgba(255, 255, 255, 0.14); color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.7rem; font-size: 0.8rem;
+  cursor: pointer; text-decoration: none;
+  min-height: var(--target-min); display: inline-flex; align-items: center;
+}
+.ngap-lb-bar button:hover,
+.ngap-lb-bar a:hover { background: rgba(255, 255, 255, 0.26); }
+.ngap-lb-bar button[disabled] { opacity: 0.4; cursor: default; }
+.ngap-lb-stage {
+  flex: 1; overflow: auto; padding: 0.8rem;
+  display: flex; align-items: flex-start; justify-content: center;
+}
+.ngap-lb-stage img {
+  max-width: 100%; border-radius: var(--radius-sm); background: #ffffff;
+}
+.ngap-lb-cap {
+  padding: 0.6rem 0.9rem; color: #e8e8e8; font-size: 0.82rem;
+  background: rgba(0, 0, 0, 0.55); line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .ngap-figrow { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .ngap-stat b { font-size: 1.45rem; }
+}

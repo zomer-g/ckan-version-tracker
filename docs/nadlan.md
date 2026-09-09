@@ -402,3 +402,57 @@ re-confirming known misses while 165k never-asked addresses waited behind them.
 So a miss is now only re-offered after `RETRY_AFTER_DAYS = 30`, which is the
 timescale on which GovMap's index could actually change, and never-asked
 addresses sort ahead of previously-asked ones.
+
+
+## The fifth tab: nadlan.gov.il against מיסוי מקרקעין
+
+`/projects/nadlan?tab=gaps` is not a lookup. It is a written comparison of the
+two government sites that publish the same property transactions, added
+2026-09-09 from a hand check of ten random parcels read page by page on both
+sites on that date.
+
+The headline is that the two disagree **by definition, not by coverage**:
+nadlan.gov.il publishes one transaction per sub-parcel, the last one, while the
+tax authority publishes every declaration. 93 transactions against 159, and
+almost all of the difference is that one rule. What survives the explanation is
+eight transactions whose amount differs between the sites, a whole parcel with
+no page at all on nadlan.gov.il, an area that differs by a factor of ten, and
+the fact that every transaction carries two official amounts (תמורה מוצהרת and
+שווי מכירה) of which nadlan.gov.il publishes only one, unmarked.
+
+It matters here because the crosswalk's own consumers hit the same traps:
+
+* Counting rows on nadlan.gov.il counts **properties**, not sales.
+* An amount there is the **assessed** value, never the declared one.
+* Joining the two registers **by locality name** silently drops rows. Two of the
+  ten parcels carry a different locality name on each site, which is the same
+  failure mode `over_settlement_code()` exists to prevent.
+* A parcel that returns "0 עסקאות", or no page at all, is not evidence that
+  nothing was sold there. About a quarter of page loads returned an empty table
+  for a parcel that has transactions.
+
+### Where it lives
+
+| piece | path |
+|---|---|
+| the report | `frontend/src/components/nadlan/NadlanGaps.tsx` (lazy chunk, ~10 kB gz) |
+| figure metadata | `frontend/src/components/nadlan/nadlanGapsFigures.ts` |
+| screenshots | `frontend/public/nadlan-gaps/fig-NN.jpg` + `thumb-NN.jpg` |
+| styles | `.ngap-*` block at the end of `frontend/src/index.css` |
+
+Two things about it are deliberate and easy to undo by accident:
+
+1. **The screenshots are static files, not data URIs.** The report arrived as a
+   single 4 MB HTML page with all 36 images inlined in base64. Inlined, they
+   would sit in the JS bundle and be paid for by every visitor to every page.
+2. **The grid shows separate 520px crops.** `loading="lazy"` on the full images
+   did not hold them back, the browser fetched all 36 on tab open, so the grid
+   has its own copies: the same 36 pictures for 0.56 MB instead of 2.9 MB. The
+   full image is fetched only when the lightbox opens.
+
+A third is the `Ltr` helper. A cell like `+132,712 · 18%` is entirely
+bidi-neutral, so an RTL paragraph reorders it into `18% · 132,712+` and a
+leading minus lands after the digits. Numeric cells that carry a sign, a
+separator or two values are wrapped in an LTR isolate; cells that mix Hebrew
+with a number isolate only the numeric tail, and units such as מ״ר were moved
+into the column header rather than repeated per cell.
