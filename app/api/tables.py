@@ -21,7 +21,9 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import require_signed_in_user
 from app.database import get_db
+from app.models.user import User
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, sql_shares
 
@@ -219,9 +221,20 @@ async def table_features(
 
 @router.post("/sql")
 @limiter.limit("20/minute")
-async def run_sql(request: Request, body: SqlBody):
+async def run_sql(
+    request: Request,
+    body: SqlBody,
+    user: User = Depends(require_signed_in_user),
+):
     """Read-only SELECT over the append DB, spanning the public (dataset) and
-    knesset schemas (search_path = public, knesset)."""
+    knesset schemas (search_path = public, knesset).
+
+    Requires a signed-in account. Any Google account passes, so this is
+    attribution and a per-account budget rather than an access decision — every
+    table these consoles reach is public by design. The machine surfaces that
+    read the same data (``/api/append/{id}/sql``, the Looker connector, the MCP
+    servers) keep their own credentials and are NOT affected.
+    """
     _require_enabled()
     try:
         sql = _decode_sql(body.sql, body.sql_b64)
@@ -303,7 +316,12 @@ async def schema_txt(request: Request, table: str | None = None,
 
 @router.get("/export.csv")
 @limiter.limit("6/minute")
-async def export_csv(request: Request, sql: str | None = None, sql_b64: str | None = None):
+async def export_csv(
+    request: Request,
+    sql: str | None = None,
+    sql_b64: str | None = None,
+    user: User = Depends(require_signed_in_user),
+):
     """Run the SQL on the server and stream the full result (≤200k rows) as CSV
     over both schemas. First chunk is pulled eagerly so validation/SQL errors
     become a clean 400 instead of a broken download. ``sql_b64`` (base64) is

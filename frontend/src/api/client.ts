@@ -14,6 +14,11 @@ export function clearToken() {
   localStorage.removeItem("token");
 }
 
+/** Thrown when a console SQL call is refused for want of a signed-in account.
+ *  Exported so a page can render a sign-in panel instead of an error string. */
+export const SIGN_IN_REQUIRED =
+  "כדי להריץ שאילתה צריך להתחבר. ההתחברות היא לזיהוי בלבד — הנתונים עצמם ציבוריים, וה-API, מחבר Looker ושרתי ה-MCP ממשיכים לעבוד ללא שינוי.";
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
@@ -41,6 +46,15 @@ async function request<T>(
       detail = j?.detail || j?.message || "";
     } catch {
       /* not JSON — fall through to the heuristics below */
+    }
+    // The SQL consoles now require a signed-in account (attribution and a
+    // per-account budget — every table they reach is public). FastAPI's own
+    // 401/403 for a missing bearer says "Not authenticated", which reads as a
+    // fault rather than an instruction, so name the action instead.
+    if (resp.status === 401 || (resp.status === 403 && /not authenticated/i.test(detail))) {
+      if (/\/sql|\/export\.csv/.test(path)) {
+        throw new Error(SIGN_IN_REQUIRED);
+      }
     }
     if (!detail) {
       const blocked = resp.status === 403 && /cloudflare|blocked|attention required|<html/i.test(raw);

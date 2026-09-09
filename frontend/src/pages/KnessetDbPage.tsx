@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { SqlSignInNotice, isSignInRequired } from "../components/SqlSignInNotice";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   knessetDb,
@@ -383,9 +384,11 @@ export default function KnessetDbPage() {
           )}
         </div>
         {sqlError && (
-          <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
-            {sqlError}
-          </div>
+          isSignInRequired(sqlError)
+            ? <SqlSignInNotice />
+            : <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+                {sqlError}
+              </div>
         )}
         {sqlResult && !sqlError && (
           <div tabIndex={0} role="region" aria-label="תוצאות השאילתה" className="scroll-region" style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 420 }}>

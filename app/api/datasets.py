@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid, sanitize_ckan_name, scraper_url_slug
-from app.auth.dependencies import get_admin_user, get_current_user
+from app.auth.dependencies import get_admin_user, get_current_user, is_admin
 from app.database import get_db
 from app.models.organization import Organization
 from app.models.tracked_dataset import TrackedDataset
@@ -661,7 +661,7 @@ async def track_dataset(
     storage_mode = _validate_storage_mode(body.storage_mode)
 
     # Determine status based on admin privilege
-    dataset_status = "active" if user.is_admin else "pending"
+    dataset_status = "active" if is_admin(user) else "pending"
 
     # ---- Scraper-type dataset ----
     if body.source_type == "scraper":
@@ -1467,8 +1467,11 @@ async def update_tracked(
         ds.last_modified = None
         ds.last_error = None
 
+    interval_changed = False
     if body.poll_interval is not None:
-        ds.poll_interval = max(body.poll_interval, settings.min_poll_interval)
+        new_interval = max(body.poll_interval, settings.min_poll_interval)
+        interval_changed = new_interval != ds.poll_interval
+        ds.poll_interval = new_interval
     if body.is_active is not None:
         ds.is_active = body.is_active
     if body.storage_mode is not None:
@@ -1587,6 +1590,24 @@ async def update_tracked(
 
     await db.commit()
     await db.refresh(ds)
+
+    # Re-register the poll job so a new cadence takes effect NOW. The
+    # scheduler holds an APScheduler job per dataset, created at startup and
+    # on approve; nothing here used to touch it, so a cadence change only
+    # became real at the next deploy (init_scheduler re-reads every dataset).
+    # That is invisible and points the wrong way: slowing a heavy dataset down
+    # is exactly the case where you need it to stop hammering immediately.
+    # add_poll_job replaces an existing job and re-anchors to last_polled_at,
+    # so the next fire is "last poll + new interval", not "now + interval".
+    if interval_changed and ds.status == "active":
+        try:
+            from app.worker.scheduler import add_poll_job
+            add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at)
+        except Exception as e:
+            # A scheduler that refused the job is not a reason to fail the
+            # edit — the interval is already committed, and the next restart
+            # picks it up the way it always did.
+            logger.warning("add_poll_job(%s) after interval change failed: %s", ds.id, e)
 
     # Propagate title change to odata mirror (best-effort, don't fail the request)
     if title_changed and ds.odata_dataset_id:

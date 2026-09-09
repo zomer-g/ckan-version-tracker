@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment, type ReactElement } from "react";
+import { SqlSignInNotice, isSignInRequired } from "../components/SqlSignInNotice";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   dataCatalog,
@@ -1607,9 +1608,11 @@ export default function DataSqlPage() {
           </div>
         )}
         {sqlError && (
-          <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
-            {sqlError}
-          </div>
+          isSignInRequired(sqlError)
+            ? <SqlSignInNotice />
+            : <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
+                {sqlError}
+              </div>
         )}
         {sqlResult && !sqlError && (
           <>

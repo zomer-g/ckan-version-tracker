@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.auth.dependencies import require_signed_in_user
+from app.models.user import User
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.rate_limit import limiter
@@ -75,7 +77,11 @@ async def schema_txt(request: Request, group: str | None = None):
 
 @router.post("/sql")
 @limiter.limit("20/minute")
-async def sql(request: Request, body: SqlBody):
+async def sql(
+    request: Request,
+    body: SqlBody,
+    user: User = Depends(require_signed_in_user),
+):
     _require_enabled()
     try:
         return await knesset_db.run_sql(body.sql)
@@ -87,7 +93,11 @@ async def sql(request: Request, body: SqlBody):
 
 @router.get("/export.csv")
 @limiter.limit("6/minute")
-async def export_csv(request: Request, sql: str):
+async def export_csv(
+    request: Request,
+    sql: str,
+    user: User = Depends(require_signed_in_user),
+):
     _require_enabled()
     try:
         stream = knesset_db.iter_sql_csv(sql)

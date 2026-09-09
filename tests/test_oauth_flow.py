@@ -184,12 +184,15 @@ def test_drive_connect_returns_authorize_url_with_opaque_state_no_jwt():
         oauth.httpx = types.SimpleNamespace(AsyncClient=_FakeGoogle)
 
         SessionLocal = await _setup()
-        # Seed an admin.
+        # Seed an admin. Admin comes from the ADMIN_EMAILS secret, not from the
+        # users row — is_admin is left False on purpose, to prove the column no
+        # longer grants anything.
+        settings.admin_emails = "admin@example.com"
         uid = uuid.uuid4()
         async with SessionLocal() as db:
             db.add(User(
                 id=uid, email="admin@example.com", hashed_password="x",
-                display_name="Admin", is_active=True, is_admin=True,
+                display_name="Admin", is_active=True, is_admin=False,
             ))
             await db.commit()
         from app.auth.security import create_access_token

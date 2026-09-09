@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/ckan_tracker"
 
     jwt_secret_key: str = ""
+
+    # Who is an admin. Comma-separated emails, and the ONLY source of truth for
+    # it. Deliberately NOT a database column and NOT settable through any UI:
+    # admin is re-derived from this value on every request, so granting it means
+    # editing the platform secret and nothing else. `users.is_admin` still exists
+    # in the schema but no longer authorizes anything — see get_admin_user().
+    #
+    # Empty means NOBODY is an admin. That is the correct failure: an unset
+    # secret must not silently promote whoever signs in first.
+    admin_emails: str = ""
     jwt_algorithm: str = "HS256"
     # Admin session lifetime. Kept SHORT (2h) so a token that somehow leaks is
     # useless within hours, not a full day. The SPA slides the session forward
@@ -673,6 +683,17 @@ class Settings(BaseSettings):
                 "JWT_SECRET_KEY is not set. Set it in .env or as an environment variable."
             )
         return self.jwt_secret_key
+
+    def get_admin_emails(self) -> set[str]:
+        """The admin allow-list, lower-cased. Empty set when unset."""
+        return {
+            e.strip().lower()
+            for e in (self.admin_emails or "").split(",")
+            if e.strip()
+        }
+
+    def is_admin_email(self, email: str | None) -> bool:
+        return bool(email) and email.strip().lower() in self.get_admin_emails()
 
     def get_cors_origins(self) -> list[str]:
         if not self.cors_origins:

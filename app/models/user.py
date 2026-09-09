@@ -15,6 +15,10 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # DEPRECATED and not authoritative. Admin is derived per request from the
+    # ADMIN_EMAILS platform secret (app/auth/dependencies.is_admin); nothing
+    # reads this column to decide anything, and nothing writes it. Kept only so
+    # the migration does not have to rewrite the table.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     oauth_provider: Mapped[str | None] = mapped_column(String(50))
     # Google OAuth refresh token, stored when an admin connects Drive

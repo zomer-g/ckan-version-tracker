@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_admin_user
+from app.auth.dependencies import get_admin_user, is_admin
 from app.auth.security import create_access_token
 from app.config import settings
 from app.database import get_db
@@ -230,7 +230,7 @@ async def google_drive_callback(
     except ValueError:
         return RedirectResponse(url="/admin/login?error=drive_unauthorized")
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
-    if not user or not user.is_admin:
+    if not user or not is_admin(user):
         return RedirectResponse(url="/admin/login?error=drive_unauthorized")
 
     try:
@@ -279,10 +279,10 @@ async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider
         if not user.oauth_provider:
             user.oauth_provider = provider
             changed = True
-        # Ensure the designated admin has is_admin set
-        if email.lower() == "zomerg@gmail.com" and not user.is_admin:
-            user.is_admin = True
-            changed = True
+        # Admin is NOT granted here, and is not granted anywhere. It is derived
+        # per request from the ADMIN_EMAILS platform secret
+        # (app/auth/dependencies.is_admin), so signing in can never promote an
+        # account — not even the owner's.
         if changed:
             await db.commit()
     else:
@@ -292,7 +292,6 @@ async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider
             hashed_password="!sso-only-no-password-auth",
             display_name=name,
             oauth_provider=provider,
-            is_admin=(email.lower() == "zomerg@gmail.com"),
         )
         db.add(user)
         await db.commit()
