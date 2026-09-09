@@ -3521,3 +3521,267 @@ li > a:only-child,
   .ngap-figrow { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .ngap-stat b { font-size: 1.45rem; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   נדל"ן לעם, לשונית "שניים אוחזין בעסקה"
+   The trivia round over the gap report. Same tokens as the report next door, so
+   the two tabs read as one project; the game just gets a warmer surface and
+   bigger tap targets, because it is the one thing on this page people click
+   through rather than read.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.nquiz {
+  max-width: 720px;
+  margin: 0 auto;
+  line-height: 1.65;
+}
+
+.nquiz-hero {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.6rem 1.4rem;
+  text-align: center;
+}
+.nquiz-hero h2 {
+  font-size: 1.55rem;
+  margin: 0 0 0.7rem;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+.nquiz-kicker {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--tint-warn-fg);
+  margin-bottom: 0.5rem;
+}
+.nquiz-lede {
+  font-size: 0.93rem;
+  color: var(--text-muted);
+  margin: 0 auto 0.8rem;
+  max-width: 56ch;
+}
+.nquiz-fine {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 1rem 0 0;
+}
+
+.nquiz-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+}
+.nquiz-cta .btn-primary,
+.nquiz-cta .btn-secondary { padding: 0.6rem 1.4rem; font-size: 0.95rem; }
+
+/* A text button that has to look like a link but stay a button for a11y. */
+.nquiz-link {
+  background: none;
+  border: none;
+  padding: 0.4rem 0.5rem;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.87rem;
+  cursor: pointer;
+  text-decoration: underline;
+  min-height: var(--target-min);
+}
+.nquiz-link:hover { color: var(--primary-dark); }
+
+/* ── progress ── */
+.nquiz-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.nquiz-progress-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.nquiz-track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.nquiz-fill {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--radius-full);
+  transition: width var(--motion-base) ease;
+}
+.nquiz-tally {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--tint-good-fg);
+}
+
+/* ── the question ── */
+.nquiz-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+}
+.nquiz-q {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.5;
+  margin: 0 0 1.1rem;
+  text-wrap: pretty;
+}
+
+.nquiz-options { display: grid; gap: 0.5rem; }
+.nquiz-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: start;
+  padding: 0.75rem 0.9rem;
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: var(--target-min);
+  transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+.nquiz-option:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--primary-50);
+}
+.nquiz-option:disabled { cursor: default; }
+
+/* The marker keeps its width whether or not it holds a glyph, so revealing the
+   answer does not shift every line of text sideways. */
+.nquiz-marker {
+  flex: 0 0 auto;
+  width: 1.1em;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.nquiz-option.is-right {
+  background: var(--tint-good-bg);
+  border-color: var(--tint-good-bd);
+  color: var(--tint-good-fg);
+  font-weight: 600;
+}
+.nquiz-option.is-wrong {
+  background: var(--tint-bad-bg);
+  border-color: var(--tint-bad-bd);
+  color: var(--tint-bad-fg);
+}
+.nquiz-option.is-dim { opacity: 0.55; }
+
+.nquiz-feedback {
+  margin-top: 1rem;
+  padding: 0.8rem 0.95rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  border-inline-start: 3px solid var(--tint-good-bd);
+  background: var(--tint-good-bg);
+  color: var(--tint-good-fg);
+}
+.nquiz-feedback.is-wrong {
+  border-inline-start-color: var(--tint-bad-bd);
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
+}
+.nquiz-cite { opacity: 0.8; font-size: 0.95em; }
+
+.nquiz-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+}
+.nquiz-foot .btn-primary { padding: 0.55rem 1.5rem; }
+
+/* ── result ── */
+.nquiz-result .nquiz-score {
+  margin: 0.4rem 0 0.8rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.nquiz-result .nquiz-score b {
+  font-size: 3.4rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+.nquiz-result .nquiz-score span { font-size: 1rem; color: var(--text-muted); }
+
+.nquiz-grid {
+  font-family: inherit;
+  font-size: 1.25rem;
+  line-height: 1.35;
+  letter-spacing: 0.08em;
+  margin: 1.1rem 0 0;
+  white-space: pre;
+  direction: rtl;
+}
+
+.nquiz-sharenote {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0.7rem 0 0;
+}
+
+/* ── the answer key, folded away ── */
+.nquiz-review { margin-top: 1.6rem; text-align: start; }
+.nquiz-review summary {
+  cursor: pointer;
+  font-size: 0.87rem;
+  font-weight: 600;
+  color: var(--primary);
+  padding: 0.5rem 0;
+  min-height: var(--target-min);
+  display: flex;
+  align-items: center;
+}
+.nquiz-reviewlist {
+  margin: 0.6rem 0 0;
+  padding-inline-start: 1.3rem;
+  font-size: 0.85rem;
+}
+.nquiz-reviewlist li {
+  margin-bottom: 0.9rem;
+  padding-inline-start: 0.3rem;
+  border-inline-start: 3px solid var(--tint-good-bd);
+  padding-block: 0.1rem;
+}
+.nquiz-reviewlist li.is-wrong { border-inline-start-color: var(--tint-bad-bd); }
+.nquiz-reviewlist b { display: block; color: var(--text); font-weight: 600; }
+.nquiz-answer { display: block; margin-top: 0.2rem; font-weight: 600; }
+.nquiz-reviewlist li.is-right .nquiz-answer { color: var(--tint-good-fg); }
+.nquiz-reviewlist li.is-wrong .nquiz-answer { color: var(--tint-bad-fg); }
+.nquiz-why { display: block; margin-top: 0.2rem; color: var(--text-muted); }
+
+@media (max-width: 640px) {
+  .nquiz-hero { padding: 1.2rem 1rem; }
+  .nquiz-hero h2 { font-size: 1.3rem; }
+  .nquiz-result .nquiz-score b { font-size: 2.8rem; }
+  .nquiz-foot { justify-content: stretch; }
+  .nquiz-foot .btn-primary { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nquiz-fill { transition: none; }
+}

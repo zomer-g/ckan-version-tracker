@@ -25,15 +25,17 @@ import NadlanResultCard from "../components/nadlan/NadlanResultCard";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanMap = lazy(() => import("../components/nadlan/NadlanMap"));
 const NadlanGaps = lazy(() => import("../components/nadlan/NadlanGaps"));
+const NadlanQuiz = lazy(() => import("../components/nadlan/NadlanQuiz"));
 
-type Tab = "map" | "address" | "zip" | "gush" | "gaps";
-const TAB_IDS: Tab[] = ["map", "address", "zip", "gush", "gaps"];
+type Tab = "map" | "address" | "zip" | "gush" | "gaps" | "quiz";
+const TAB_IDS: Tab[] = ["map", "address", "zip", "gush", "gaps", "quiz"];
 const TAB_LABELS: [Tab, string][] = [
   ["map", "🗺 לפי מפה"],
   ["address", "🏠 לפי כתובת"],
   ["zip", "✉️ לפי מיקוד"],
   ["gush", "📐 לפי גוש־חלקה"],
   ["gaps", "🔍 פערים מול מיסוי מקרקעין"],
+  ["quiz", "🏛 שניים אוחזין בעסקה"],
 ];
 
 const RADII = [0, 100, 250, 500, 1000, 2000];
@@ -148,7 +150,8 @@ export default function NadlanPage() {
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             טיוב וקישור של מידע מרחבי ברמת הנכס: שכבת החלקות, גזטיר הנכסים, קובץ המיקוד ורשימת
             הכתובות, מוצלבים זה לזה. הזינו כל אחת מצורות הזיהוי, נקודה על המפה, מיקוד, כתובת או
-            גוש־חלקה, וקבלו את כל השאר.
+            גוש־חלקה, וקבלו את כל השאר. שתי הלשוניות האחרונות אינן חיפוש: האחת משווה את
+            אתר הנדל״ן הממשלתי למאגר מיסוי מקרקעין, והשנייה הופכת את הפערים האלה למשחק.
             {stats && (
               <div style={{ marginTop: "0.4rem" }}>
                 {stats.parcels.toLocaleString("he-IL")} חלקות ·{" "}
@@ -262,7 +265,7 @@ export default function NadlanPage() {
 
         {/* Everything below is the lookup half of the page. The gaps report is a
             written comparison, not a query, so none of it applies there. */}
-        {tab !== "gaps" && (
+        {tab !== "gaps" && tab !== "quiz" && (
           <>
             {/* The map is NOT exclusive to the map tab: a property found by address,
                 zip or gush/helka has to be locatable on the map too, so the same
@@ -341,6 +344,12 @@ export default function NadlanPage() {
         {tab === "gaps" && (
           <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
             <NadlanGaps />
+          </Suspense>
+        )}
+
+        {tab === "quiz" && (
+          <Suspense fallback={<div className="text-sm text-muted">מסדר את השאלות…</div>}>
+            <NadlanQuiz onReadReport={() => patch({ tab: "gaps" })} />
           </Suspense>
         )}
       </div>

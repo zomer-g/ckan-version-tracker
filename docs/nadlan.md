@@ -456,3 +456,40 @@ leading minus lands after the digits. Numeric cells that carry a sign, a
 separator or two values are wrapped in an LTR isolate; cells that mix Hebrew
 with a number isolate only the numeric tail, and units such as מ״ר were moved
 into the column header rather than repeated per cell.
+
+## The sixth tab: "שניים אוחזין בעסקה"
+
+`/projects/nadlan?tab=quiz` is the gap report as a trivia round. Every question,
+every number and every distractor comes from the report next door; nothing in
+the bank is invented.
+
+It exists because prose does not stick. A reader who is told that "מחיר העסקה"
+on nadlan.gov.il is the assessed value rather than the declared one nods and
+forgets; a player who guesses wrong and is told why remembers. So the round is
+built to be cheated on: the explanation follows every answer, right or wrong,
+and a link to the report sits on screen the whole time.
+
+| piece | path |
+|---|---|
+| the game | `frontend/src/components/nadlan/NadlanQuiz.tsx` (lazy chunk, ~7 kB gz) |
+| the bank | `frontend/src/components/nadlan/nadlanQuizQuestions.ts` |
+| styles | `.nquiz-*` block at the end of `frontend/src/index.css` |
+
+Rules of the thing, in case it gets extended:
+
+* **The bank is 30, a round is 25** (`ROUND_SIZE`). The surplus is what makes a
+  second round a different round; drop it and replays become identical.
+* **Both the questions and the answers are shuffled.** Without the second
+  shuffle, "the longest option" becomes a winning strategy, because the correct
+  answer is usually the one that needs a qualifier.
+* **Every question carries a `finding`**, the numbered section of the report at
+  `?tab=gaps` it is drawn from, and the number is shown with the explanation. A
+  player who wants to argue with an answer is told exactly where to go and check.
+  `finding: 0` means the appendix or the method section.
+* **No timer, no streak, no prompt to come back.** The tab is opt-in and it stays
+  that way.
+
+The result is a score out of 25, a rank, and a Wordle-style 5×5 grid of 🟩/🟥
+that shares as plain text through `navigator.share` where it exists and through
+the clipboard elsewhere. Both can be refused by the browser, so the failure is
+reported in the UI rather than swallowed.
