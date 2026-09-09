@@ -421,7 +421,13 @@ class StorageClient:
             return None
         disposition = None
         if filename:
-            ascii_name = _SAFE_KEY_PART.sub("_", filename).strip("._-") or "download"
+            # `_safe_filename`, not a bare substitute-and-strip: sanitising the
+            # whole string collapses an all-Hebrew name to "_" and then the
+            # strip eats the underscore AND the dot before the extension, so
+            # the ASCII fallback for "רשות העתיקות.geojson.gz" came out
+            # "geojson.gz" — reintroducing, for any client that ignores
+            # `filename*`, the exact unopenable name this method exists to fix.
+            ascii_name = _safe_filename(filename)
             disposition = (
                 f'attachment; filename="{ascii_name}"; '
                 f"filename*=UTF-8''{quote(filename)}"

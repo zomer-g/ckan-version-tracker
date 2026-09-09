@@ -291,3 +291,42 @@ def test_download_filename_without_a_title_still_yields_an_openable_name():
     # is unopenable, "file.geojson.gz" is not.
     assert sc.download_filename(
         "r2:datasets/x/v1/cee35a8b_geojson.gz") == "file.geojson.gz"
+
+
+def test_presigned_disposition_ascii_fallback_keeps_the_extension():
+    """The `filename*` spelling carries the Hebrew name; the plain `filename`
+    is what a client that ignores it uses. Sanitising the whole string
+    collapses Hebrew to "_" and the strip then eats the dot too — which handed
+    back "geojson.gz", the very name that will not open. `_safe_filename`
+    splits the extension off first."""
+    import asyncio
+
+    class _Fake(sc.StorageClient):
+        def is_configured(self):  # noqa: D102
+            return True
+
+        def _get_client(self):
+            captured = self.captured = {}
+
+            class _C:
+                def generate_presigned_url(_s, _op, Params, ExpiresIn):
+                    captured.update(Params)
+                    return "https://signed.test/x"
+
+            return _C()
+
+    fake = _Fake()
+    url = asyncio.run(fake.presign_download(
+        "r2:datasets/x/v1/cee35a8b_geojson.gz",
+        filename="רשות העתיקות.geojson.gz"))
+    assert url == "https://signed.test/x"
+    disp = fake.captured["ResponseContentDisposition"]
+    assert 'filename="file.geojson.gz"' in disp
+    assert "filename*=UTF-8''" in disp
+    assert "%D7" in disp          # the Hebrew name, percent-encoded
+
+
+def test_presign_download_is_a_noop_without_credentials(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(sc.StorageClient, "is_configured", lambda _s: False)
+    assert asyncio.run(sc.StorageClient().presign_download("r2:k")) is None
