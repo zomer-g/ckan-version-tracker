@@ -27,7 +27,15 @@ export default function OcalPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlTab = searchParams.get("tab") as OcalTab | null;
   const tab: OcalTab = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "search";
-  const setTab = (id: OcalTab) => setSearchParams(id === "search" ? {} : { tab: id });
+  // Keep the search tab's own params (?q=&from=&to=&source=&sort=&page=, see
+  // OcalSearch) across a trip to another tab — losing a search because you
+  // glanced at the calendar is its own small betrayal.
+  const setTab = (id: OcalTab) => {
+    const sp = new URLSearchParams(searchParams);
+    if (id === "search") sp.delete("tab");
+    else sp.set("tab", id);
+    setSearchParams(sp);
+  };
 
   const [stats, setStats] = useState<OcalStats | null>(null);
   useEffect(() => {
