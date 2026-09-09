@@ -431,6 +431,12 @@ async def download_resource(
         description="For list-valued resources (e.g. multi-part ZIP "
         "`_zip_parts`, multi-layer `_geojson`): which element to download.",
     ),
+    inline: bool = Query(
+        False,
+        description="Set by the in-page map, not by a human clicking a link: "
+        "skip the download-filename signature and redirect to the object's "
+        "stable public URL, which the browser can cache across page loads.",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     vid = parse_uuid(version_id, "version_id")
@@ -464,20 +470,41 @@ async def download_resource(
         if not mapped:
             raise HTTPException(status_code=404, detail="Resource not found in this version")
 
-    # R2 backend: redirect straight to the object store's public domain so the
-    # file bytes are served by R2, never proxied through this backend.
-    if storage.is_storage_value(mapped):
-        return RedirectResponse(url=storage_client.public_url(mapped))
-
-    # ODATA-stored resource: redirect to the file on the CKAN mirror. The URL
-    # must use the ODATA *package* id (ds.odata_dataset_id), NOT the OVER
-    # dataset UUID — CKAN validates the /dataset/<id>/ segment and 404s a
-    # mismatch (this silently broke every ODATA download via this endpoint).
     ds = (
         await db.execute(
             select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
         )
     ).scalar_one_or_none()
+
+    # R2 backend: redirect straight to the object store so the file bytes are
+    # served by R2, never proxied through this backend.
+    #
+    # The redirect target decides the filename the browser saves, and an object
+    # key is a random-prefixed ASCII segment — the "GeoJSON" link handed over
+    # `cee35a8b_geojson.gz`, a name with no `.geojson` in it, which GDAL / QGIS
+    # / ArcGIS cannot identify a driver for. So sign a short-lived URL carrying
+    # `response-content-disposition` with a real filename (R2 honours the S3
+    # override) and fall back to the plain public URL if signing is unavailable
+    # — a download must never fail over its own filename.
+    if storage.is_storage_value(mapped):
+        if inline:
+            # A signed URL is unique per request, so the browser can never
+            # reuse a cached copy — which for a 50 MB layer means re-fetching
+            # the whole thing on every visit to the page. The map is not saving
+            # a file, so it wants the stable URL, not the filename.
+            return RedirectResponse(url=storage_client.public_url(mapped))
+        filename = storage.download_filename(
+            mapped,
+            dataset_title=(ds.title if ds and ds.title else ""),
+            fallback=resource_id.lstrip("_") or "download",
+        )
+        signed = await storage_client.presign_download(mapped, filename=filename)
+        return RedirectResponse(url=signed or storage_client.public_url(mapped))
+
+    # ODATA-stored resource: redirect to the file on the CKAN mirror. The URL
+    # must use the ODATA *package* id (ds.odata_dataset_id), NOT the OVER
+    # dataset UUID — CKAN validates the /dataset/<id>/ segment and 404s a
+    # mismatch (this silently broke every ODATA download via this endpoint).
     odata_pkg = (
         ds.odata_dataset_id if ds and ds.odata_dataset_id
         else version.tracked_dataset_id

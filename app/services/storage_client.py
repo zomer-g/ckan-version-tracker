@@ -38,6 +38,7 @@ import logging
 import re
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 from app.config import settings
 from app.services.archive_state import ROW_ARCHIVE_KEYS
@@ -164,6 +165,49 @@ def _filename_from_value(value: str, fallback: str) -> str:
             name = f"data.{bare}"
         return name
     return fallback
+
+
+# Stems that carry no information about the file — either a placeholder the key
+# builder fell back to, or (for keys written before the extension fix) the
+# extension standing in as the whole name. When the stem is one of these, the
+# dataset's own title is a far better filename.
+_ANONYMOUS_STEMS = {"file", "data", "download", "resource", ""}
+
+
+def download_filename(value: str, *, dataset_title: str = "",
+                      fallback: str = "file") -> str:
+    """The name a BROWSER should save this object under.
+
+    An object key is an ASCII URL path segment, so it long ago stopped carrying
+    a usable filename: a layer titled entirely in Hebrew collapses to
+    ``<8 hex>_file.geojson.gz`` today, and keys written before the extension fix
+    (2026-08-05) to ``<8 hex>_geojson.gz``. Redirecting straight at the object
+    store hands that string to the user as the filename, and the second form is
+    the one that actually breaks things: strip the ``.gz`` and nothing named
+    ``.geojson`` remains, so GDAL/QGIS/ArcGIS cannot identify the driver and the
+    file the site calls "GeoJSON" will not open in any GIS tool. Downloading it
+    and finding it unreadable is indistinguishable from us having archived it
+    badly.
+
+    So: keep the EXTENSION the key records (it is the one true thing in there)
+    and put the dataset's title in front of it whenever the stem says nothing.
+    """
+    name = _filename_from_value(value, fallback)
+    stem, suffix = _split_suffix(name)
+    # A key whose whole name IS the extension: "geojson.gz" splits to stem
+    # "geojson" + ".gz", and that stem is not a name at all — it is the rest of
+    # the extension. Promote it only when doing so yields a suffix we actually
+    # know, so a genuinely-named "zip.geojson" is left alone.
+    if stem and f".{stem.lower()}{suffix}" in _KNOWN_SUFFIXES:
+        stem, suffix = "", f".{stem}{suffix}"
+    if not suffix:
+        # No extension we recognise — inventing one would be a lie about the
+        # format, so hand back whatever the key had.
+        return name
+    title = (dataset_title or "").strip().replace("/", "-").replace("\\", "-")
+    if title and stem.strip().lower() in _ANONYMOUS_STEMS:
+        stem = title
+    return (stem or fallback) + suffix
 
 
 def enumerate_files(mappings: dict | None) -> list[tuple[str, str]]:
@@ -354,6 +398,48 @@ class StorageClient:
             )
 
         return await asyncio.to_thread(_do)
+
+    async def presign_download(self, key_or_value: str, *,
+                               filename: str | None = None,
+                               expires_s: int = 3600) -> str | None:
+        """A time-limited GET URL that tells the browser what to call the file.
+
+        The public object URL cannot: the filename a browser saves comes from
+        the URL path, and an object key is a sanitised ASCII segment with a
+        random prefix (see `download_filename`). R2 honours the S3
+        ``response-content-disposition`` override on a presigned GET — verified
+        live against the bucket — so this is the one way to serve the archived
+        bytes straight from the store AND hand over a usable filename.
+
+        `filename` may be non-ASCII (dataset titles are Hebrew): both spellings
+        of the header are sent, RFC 6266 style, so a browser that understands
+        ``filename*`` gets the real name and any other falls back to the ASCII
+        one. Returns None when it cannot be produced, so the caller keeps the
+        plain public URL rather than failing a download.
+        """
+        if not self.is_configured():
+            return None
+        disposition = None
+        if filename:
+            ascii_name = _SAFE_KEY_PART.sub("_", filename).strip("._-") or "download"
+            disposition = (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        key = key_of(key_or_value)
+
+        def _do() -> str:
+            params: dict[str, Any] = {"Bucket": settings.s3_bucket, "Key": key}
+            if disposition:
+                params["ResponseContentDisposition"] = disposition
+            return self._get_client().generate_presigned_url(
+                "get_object", Params=params, ExpiresIn=expires_s)
+
+        try:
+            return await asyncio.to_thread(_do)
+        except Exception as e:  # noqa: BLE001 — a download must not 500 on this
+            logger.warning("presign_download failed for %s: %s", key, e)
+            return None
 
     async def complete_multipart(self, key: str, upload_id: str,
                                  parts: list[dict]) -> None:

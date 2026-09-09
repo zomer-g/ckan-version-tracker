@@ -464,8 +464,14 @@ export default function VersionsPage() {
     // magic bytes, so the stripped filename on the redirect target is fine.
     // (The object store must allow this app's origin via CORS for the
     // GovmapView fetch to read the body.)
+    //
+    // `inline=1` asks for the object's STABLE public URL. The download links
+    // get a signed URL instead, so the file arrives named `<layer>.geojson.gz`
+    // rather than `<hash>_geojson.gz` — but a signature is unique per request,
+    // and a map that cannot reuse the browser cache re-downloads the whole
+    // layer on every visit.
     if (rid.startsWith("r2:")) {
-      return `/api/versions/${latest.id}/download/_geojson`;
+      return `/api/versions/${latest.id}/download/_geojson?inline=1`;
     }
     if (!dataset.odata_dataset_id) return null;
     return `${ODATA_BASE}/dataset/${dataset.odata_dataset_id}/resource/${rid}/download`;

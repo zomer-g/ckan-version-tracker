@@ -231,3 +231,63 @@ def test_csv_roundtrip_for_append_cumulative():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── download filename (what a browser saves the object as) ──────────────
+#
+# The download route redirects at the object store, so the object KEY is the
+# filename the user gets. A key is a random-prefixed ASCII segment: the
+# "GeoJSON" link on a Hebrew-titled layer handed over "cee35a8b_geojson.gz",
+# which has no ".geojson" in it and so cannot be identified by GDAL / QGIS /
+# ArcGIS. download_filename is what puts a real name back on it.
+
+def test_download_filename_recovers_geojson_from_a_legacy_key():
+    # Keys written before the 2026-08-05 extension fix: the extension IS the
+    # whole name, and stripping ".gz" leaves nothing a GIS tool can open.
+    assert sc.download_filename(
+        "r2:datasets/x/v1/cee35a8b_geojson.gz",
+        dataset_title="רשות העתיקות") == "רשות העתיקות.geojson.gz"
+
+
+def test_download_filename_replaces_the_placeholder_stem():
+    # Today's keys for an all-Hebrew title: stem collapsed to "file".
+    assert sc.download_filename(
+        "r2:datasets/x/v1/abc12345_file.geojson.gz",
+        dataset_title="רשות העתיקות") == "רשות העתיקות.geojson.gz"
+
+
+def test_download_filename_keeps_a_real_stem():
+    # A key that already carries a name keeps it — the title is a fallback,
+    # not an override (two layers of one dataset must stay distinguishable).
+    assert sc.download_filename(
+        "r2:datasets/x/v1/abc12345_symbology.zip",
+        dataset_title="רשות העתיקות") == "symbology.zip"
+
+
+def test_download_filename_promotes_only_a_known_suffix():
+    # "zip.geojson" is a real stem + a real extension; ".zip.geojson" is not a
+    # known suffix, so nothing is promoted and the name is left alone.
+    assert sc.download_filename(
+        "r2:datasets/x/v1/abc12345_zip.geojson",
+        dataset_title="ת") == "zip.geojson"
+
+
+def test_download_filename_leaves_an_unknown_format_alone():
+    # No extension we recognise: inventing one would lie about the format.
+    assert sc.download_filename(
+        "r2:datasets/x/v1/abc12345_weird", dataset_title="ת") == "weird"
+
+
+def test_download_filename_uses_the_fallback_for_an_odata_value():
+    # A bare ODATA resource_id carries no name at all.
+    assert sc.download_filename(
+        "3f1c0e22-7a0b-4d9e-9c1a-2b6f5e8d4a10",
+        dataset_title="רשות העתיקות",
+        fallback="נתוני הסורק") == "נתוני הסורק"
+
+
+def test_download_filename_without_a_title_still_yields_an_openable_name():
+    # No title to borrow, but the extension must still be there: "geojson.gz"
+    # is unopenable, "file.geojson.gz" is not.
+    assert sc.download_filename(
+        "r2:datasets/x/v1/cee35a8b_geojson.gz") == "file.geojson.gz"

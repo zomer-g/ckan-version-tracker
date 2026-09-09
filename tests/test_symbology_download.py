@@ -135,7 +135,12 @@ def client(monkeypatch):
 def test_a_version_that_carries_the_bundle_serves_its_own(client):
     r = client.get(f"/api/versions/{V3}/download/_symbology")
     assert r.status_code == 307
-    assert r.headers["location"].endswith("309eb7f7_symbology.zip")
+    # The object key is in the redirect path. It is no longer the END of the
+    # URL: when R2 credentials are present the route signs a GET carrying
+    # `response-content-disposition`, so a query string follows (see
+    # storage_client.presign_download) — the point of which is that the browser
+    # saves a file whose name has a usable extension.
+    assert "309eb7f7_symbology.zip" in r.headers["location"]
 
 
 def test_a_version_without_a_bundle_inherits_the_newest_one(client):
@@ -143,7 +148,12 @@ def test_a_version_without_a_bundle_inherits_the_newest_one(client):
     # hand it over next to the data it belongs with.
     r = client.get(f"/api/versions/{V1}/download/_symbology")
     assert r.status_code == 307
-    assert r.headers["location"].endswith("309eb7f7_symbology.zip")
+    # The object key is in the redirect path. It is no longer the END of the
+    # URL: when R2 credentials are present the route signs a GET carrying
+    # `response-content-disposition`, so a query string follows (see
+    # storage_client.presign_download) — the point of which is that the browser
+    # saves a file whose name has a usable extension.
+    assert "309eb7f7_symbology.zip" in r.headers["location"]
 
 
 def test_an_unrelated_missing_resource_still_404s(client):
