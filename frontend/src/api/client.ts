@@ -17,7 +17,7 @@ export function clearToken() {
 /** Thrown when a console SQL call is refused for want of a signed-in account.
  *  Exported so a page can render a sign-in panel instead of an error string. */
 export const SIGN_IN_REQUIRED =
-  "כדי להריץ שאילתה צריך להתחבר. ההתחברות היא לזיהוי בלבד — הנתונים עצמם ציבוריים, וה-API, מחבר Looker ושרתי ה-MCP ממשיכים לעבוד ללא שינוי.";
+  "כדי להריץ שאילתה צריך להתחבר. ההתחברות היא לזיהוי בלבד, הנתונים עצמם ציבוריים, וה-API, מחבר Looker ושרתי ה-MCP ממשיכים לעבוד ללא שינוי.";
 
 async function request<T>(
   path: string,
