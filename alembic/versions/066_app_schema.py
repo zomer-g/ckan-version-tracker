@@ -38,20 +38,31 @@ The list is written out rather than read from the models: seven of these tables
 migration must not change meaning when the models do. tests/test_app_schema.py
 pins it against app/database.py:APP_TABLES.
 
-LOCKING: ONE TABLE PER TRANSACTION
-----------------------------------
+LOCKING: ONE TABLE PER TRANSACTION, PATIENT, AND SAYS WHO BLOCKED IT
+--------------------------------------------------------------------
 The first version moved all 26 tables in one transaction and deadlocked against
 the live site on its first production run: it held ACCESS EXCLUSIVE on every
 table it had moved while waiting for `organizations`, and a request holding
-`organizations` asked for one of those. Postgres rolled the migration back whole,
-so nothing was lost, but it will happen again on any busy moment.
+`organizations` asked for one of those. Postgres rolled it back whole.
 
-So each move is its own transaction (autocommit), and holds exactly one table's
+So each move is its own transaction (autocommit) holding exactly one table's
 lock, which cannot form a cycle. It waits at most 2 seconds for that lock, then
-releases, sleeps a second and retries, up to 60 times, so a long reader delays
-the move rather than queueing every other reader behind it. A half-finished run
-is safe: `app, public` resolves both halves, and re-running skips what moved.
+releases, sleeps a second and retries, so a long reader delays the move rather
+than queueing every other reader behind it for longer than 2 seconds.
+
+The second production run moved five tables and then spent all of 60 attempts
+(three minutes) on dataset_tags, held by a transaction that had ended by the
+time anyone looked. So the budget is now 300 attempts (about 15 minutes; waiting
+costs the site nothing), and when it still runs out the error names every
+session holding the table, with its state, transaction age and query, so the
+build log says what to fix. OVER_066_LOCK_ATTEMPTS overrides the budget, for
+tests.
+
+A half-finished run is safe: `app, public` resolves both halves, and re-running
+skips what already moved.
 """
+import os
+
 from alembic import op
 
 revision = "066"
@@ -89,14 +100,19 @@ TABLES = (
 )
 
 LOCK_TIMEOUT = "2s"
-ATTEMPTS = 60
+
+
+def _attempts() -> int:
+    return max(1, int(os.environ.get("OVER_066_LOCK_ATTEMPTS", "300")))
 
 
 def _move(table: str, src: str, dst: str) -> str:
-    return f"""
+    attempts = _attempts()
+    return rf"""
     DO $$
     DECLARE
       attempt int := 0;
+      holders text;
     BEGIN
       IF to_regclass('{src}.{table}') IS NULL OR to_regclass('{dst}.{table}') IS NOT NULL THEN
         RETURN;
@@ -108,8 +124,18 @@ def _move(table: str, src: str, dst: str) -> str:
           RETURN;
         EXCEPTION WHEN lock_not_available OR deadlock_detected THEN
           attempt := attempt + 1;
-          IF attempt >= {ATTEMPTS} THEN
-            RAISE;
+          IF attempt >= {attempts} THEN
+            SELECT string_agg(format('pid=%s app=%s state=%s xact_age=%s query=%s',
+                                     a.pid, coalesce(nullif(a.application_name, ''), '-'), a.state,
+                                     date_trunc('second', now() - a.xact_start),
+                                     left(regexp_replace(a.query, '\s+', ' ', 'g'), 200)), ' | ')
+              INTO holders
+              FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+             WHERE l.relation = to_regclass('{src}.{table}') AND l.granted
+               AND a.pid <> pg_backend_pid();
+            RAISE EXCEPTION 'could not lock {src}.{table} after % attempts; held by: %',
+              attempt, coalesce(holders, 'no session visible now')
+              USING ERRCODE = 'lock_not_available';
           END IF;
           PERFORM pg_sleep(1);
         END;
