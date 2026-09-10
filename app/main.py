@@ -83,38 +83,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _guard_db_separation() -> None:
-    """Refuse to let the public SQL consoles run against the DB that holds the
-    secrets.
+def _guard_db_separation() -> bool:
+    """Report whether the public SQL consoles share a database with the secrets.
 
-    The consoles at /api/append/{id}/sql and /api/knesset-db/sql execute
-    arbitrary read-only SELECTs against APPEND_DATABASE_URL. The api_users
-    (bearer tokens) and users tables live in DATABASE_URL. render.yaml only
-    defines DATABASE_URL — APPEND_DATABASE_URL is set by hand in the Render
-    dashboard, so a copy-paste mistake could point both at one Neon database and
-    silently expose every token through a public console.
+    The consoles (/api/append/{id}/sql, /api/tables/sql, /api/knesset-db/sql and
+    their CSV exports) execute arbitrary read-only SELECTs over APPEND_DATABASE_URL.
+    The credential tables live in DATABASE_URL.
 
-    Fail CLOSED: on collision we log CRITICAL and, because a public SQL console
-    is live whenever the append DB is configured, raise to abort startup rather
-    than boot into a token-leaking state. (knesset_db_enabled only gates the
-    /knesset console; the /api/append console leaks just the same, so the abort
-    is not conditioned on it.)
+    This used to abort startup whenever the two addresses matched, because the
+    only thing then keeping a console away from the credentials was the address.
+    That stopped being true with migration 065 and the fail-closed read-only pool:
+    every free-SQL path now runs as APPEND_READONLY_DATABASE_URL's role, the
+    credentials sit in the `auth` schema that role is never granted, and
+    ``_prove_console_role_cannot_read_secrets`` asks Postgres directly what that
+    role can read. On xhostd there is one database per app by design, so an
+    address match is the normal topology there, not a mistake.
+
+    A match therefore no longer aborts here. It is logged, and it makes the
+    capability proof mandatory: see ``lifespan``. Returns True on a match.
     """
     collides, details = settings.append_db_shares_main_db()
-    if not collides:
-        return
-    logger.critical(
-        "SECURITY: APPEND_DATABASE_URL and DATABASE_URL resolve to the SAME "
-        "Postgres database (%s) — the PUBLIC SQL consoles (/api/append/*/sql, "
-        "/api/knesset-db/sql) would expose api_users tokens and the users table. "
-        "Point APPEND_DATABASE_URL at a SEPARATE Neon database. Refusing to start.",
-        details["append"],
-    )
-    raise RuntimeError(
-        "APPEND_DATABASE_URL must be a different physical database from "
-        "DATABASE_URL (public SQL consoles run against the append DB, which must "
-        f"not contain the auth tables). Parsed targets: {details}"
-    )
+    if collides:
+        logger.warning(
+            "APPEND_DATABASE_URL and DATABASE_URL address the same database (%s). "
+            "The schema boundary is the guard: the console capability proof must "
+            "pass before startup continues.",
+            details["append"],
+        )
+    return collides
 
 
 SENSITIVE_SCHEMA = "auth"
@@ -134,7 +130,7 @@ SENSITIVE_TABLES = frozenset({
 })
 
 
-async def _prove_console_role_cannot_read_secrets() -> None:
+async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) -> None:
     """Ask Postgres what the public console's role can actually read.
 
     ``_guard_db_separation`` compares two connection strings. That is a proxy:
@@ -150,6 +146,11 @@ async def _prove_console_role_cannot_read_secrets() -> None:
     sits in, and an address tells you nothing about it.
 
     Fails closed: anything readable that should not be aborts startup.
+
+    ``shared_db`` is True when the consoles and the credentials are in one
+    database. It does not change what is checked, only what is logged when no
+    read-only role is configured: the consoles are then disabled either way,
+    because get_readonly_pool refuses to hand out the read/write pool.
     """
     from app.services import append_store
 
@@ -160,7 +161,9 @@ async def _prove_console_role_cannot_read_secrets() -> None:
         # out the read/write pool, so no console can run — nothing to prove.
         logger.warning(
             "console capability proof skipped: no read-only role is configured, "
-            "so the public SQL consoles are disabled."
+            "so the public SQL consoles are disabled%s.",
+            " (and must stay so: they share a database with the credentials)"
+            if shared_db else "",
         )
         return
 
@@ -205,16 +208,17 @@ async def _prove_console_role_cannot_read_secrets() -> None:
 # separation — only the data tables are migrated into `ocal`; ocal's auth tables
 # (api_users/admin_users/mcp_oauth_*) are NOT copied into the append DB and the
 # console's read-only role (over_readonly) is granted SELECT on schema `ocal`
-# only. The append-vs-main guard below still stands. See app/services/ocal_db.py.
+# only. The console capability proof above still stands. See app/services/ocal_db.py.
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
-    _guard_db_separation()
+    shared_db = _guard_db_separation()
     # Before the scheduler and before any request: prove, from the database's own
-    # answer, that the public console's role cannot read a credential table.
-    await _prove_console_role_cannot_read_secrets()
+    # answer, that the public console's role cannot read a credential table. This
+    # is the guard on every topology; with one database it is the only one.
+    await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See
