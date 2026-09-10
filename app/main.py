@@ -129,6 +129,10 @@ SENSITIVE_TABLES = frozenset({
     "mcp_usage_events",
 })
 
+# Schemas the console role must hold nothing in: `auth` has the credentials,
+# `app` has everything else the application owns (alembic 066).
+PRIVATE_SCHEMAS = frozenset({"auth", "app"})
+
 
 async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) -> None:
     """Ask Postgres what the public console's role can actually read.
@@ -152,6 +156,7 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
     read-only role is configured: the consoles are then disabled either way,
     because get_readonly_pool refuses to hand out the read/write pool.
     """
+    from app.database import APP_TABLES
     from app.services import append_store
 
     try:
@@ -181,7 +186,11 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
     exposed = [
         f"{r['schema']}.{r['name']}"
         for r in rows
-        if r["schema"] == SENSITIVE_SCHEMA or r["name"] in SENSITIVE_TABLES
+        if r["schema"] in PRIVATE_SCHEMAS
+        or r["name"] in SENSITIVE_TABLES
+        # An application table that a migration put in `public` by mistake. Only
+        # `public`: data schemas legitimately reuse names (ocal.organizations).
+        or (r["schema"] == "public" and r["name"] in APP_TABLES)
     ]
     if exposed:
         logger.critical(
@@ -199,6 +208,56 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
         "console capability proof: role may read %d tables, none sensitive.",
         len(rows),
     )
+
+
+async def _prove_app_tables_are_private(*, shared_db: bool = False) -> None:
+    """Check the other half: that the application keeps its own tables out of `public`.
+
+    ``_prove_console_role_cannot_read_secrets`` asks what the console role can
+    read. This asks whether the application's connection really resolves names
+    to `app`. If the engine's search_path were not applied, a future migration that
+    creates a table without naming a schema would put it in `public`, which the
+    xhostd read-only role reads automatically and forever.
+
+    With one shared database that is an exposure, so startup stops. With separate
+    databases (Neon today) nothing is reachable either way, so it is logged loudly
+    and startup continues.
+    """
+    from sqlalchemy import text
+
+    from app.database import APP_SCHEMA, APP_TABLES, engine
+
+    if engine.dialect.name != "postgresql":
+        return
+    async with engine.connect() as conn:
+        current = (await conn.execute(text("SELECT current_schema()"))).scalar()
+        in_public = (await conn.execute(
+            text(
+                "SELECT coalesce(array_agg(c.relname::text ORDER BY c.relname), '{}') "
+                "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') "
+                "AND c.relname = ANY(:names)"
+            ),
+            {"names": sorted(APP_TABLES)},
+        )).scalar()
+
+    problems = []
+    if current != APP_SCHEMA:
+        problems.append(f"the app engine resolves names to {current!r}, not {APP_SCHEMA!r}")
+    if in_public:
+        problems.append("application tables still in public: " + ", ".join(in_public))
+    if not problems:
+        logger.info("app tables are private: current schema %r, none in public.", current)
+        return
+
+    detail = "; ".join(problems)
+    if shared_db:
+        logger.critical(
+            "SECURITY: %s. The public console shares this database. Refusing to start.",
+            detail,
+        )
+        raise RuntimeError(detail)
+    logger.critical("app schema check failed (separate databases, nothing exposed): %s", detail)
 
 
 # NOTE: an earlier guard forbade OCAL_DATABASE_URL from sharing the append DB.
@@ -219,6 +278,7 @@ async def lifespan(app: FastAPI):
     # answer, that the public console's role cannot read a credential table. This
     # is the guard on every topology; with one database it is the only one.
     await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
+    await _prove_app_tables_are_private(shared_db=shared_db)
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See

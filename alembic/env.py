@@ -1,5 +1,4 @@
 import asyncio
-import ssl as _ssl
 from logging.config import fileConfig
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -8,7 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
-from app.database import Base
+from app.database import Base, app_db_connect_args, install_app_search_path
 from app.models import User, TrackedDataset, VersionIndex  # noqa: F401
 
 config = context.config
@@ -29,13 +28,10 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Neon SSL support via connect_args
-connect_args: dict = {}
-if "neon.tech" in raw_url or "neon" in settings.database_url:
-    ssl_context = _ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = _ssl.CERT_NONE
-    connect_args = {"ssl": ssl_context, "statement_cache_size": 0}
+# Same connection setup as the app engine: SSL for Neon here, and below the same
+# search_path = app, public, so a table a migration creates without naming a
+# schema lands in `app`.
+connect_args: dict = app_db_connect_args(raw_url)
 
 
 def run_migrations_offline() -> None:
@@ -46,7 +42,10 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    # alembic_version stays in public wherever search_path points. It is harmless
+    # there, and moving it would strand every existing deployment.
+    context.configure(connection=connection, target_metadata=target_metadata,
+                      version_table_schema="public")
     with context.begin_transaction():
         context.run_migrations()
 
@@ -58,6 +57,7 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
         connect_args=connect_args,
     )
+    install_app_search_path(connectable.sync_engine, raw_url)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
