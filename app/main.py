@@ -117,6 +117,87 @@ def _guard_db_separation() -> None:
     )
 
 
+SENSITIVE_SCHEMA = "auth"
+
+# Names that must never be readable by the console role, in ANY schema. The
+# schema check below is the real boundary; this list is the tripwire for the way
+# that boundary actually gets lost — a future migration that creates a table
+# without naming a schema, so it lands in `public`, which the platform's
+# read-only role can read automatically and forever.
+SENSITIVE_TABLES = frozenset({
+    "users",
+    "auth_codes",
+    "api_users",
+    "mcp_oauth_clients",
+    "mcp_oauth_codes",
+    "mcp_usage_events",
+})
+
+
+async def _prove_console_role_cannot_read_secrets() -> None:
+    """Ask Postgres what the public console's role can actually read.
+
+    ``_guard_db_separation`` compares two connection strings. That is a proxy:
+    it infers the property from an address. This asks the database the question
+    directly — connect as the role the public consoles use, and enumerate the
+    tables it holds SELECT on.
+
+    Why it matters now: on Neon the two databases are physically separate and a
+    cross-database read is impossible, so the address comparison is sufficient.
+    On xhostd there is one database per app and the platform injects a read-only
+    role that automatically holds SELECT on everything in ``public`` — including
+    tables created after the grant. There, the boundary is which schema a table
+    sits in, and an address tells you nothing about it.
+
+    Fails closed: anything readable that should not be aborts startup.
+    """
+    from app.services import append_store
+
+    try:
+        pool = await append_store.get_readonly_pool()
+    except RuntimeError:
+        # No console role configured. get_readonly_pool already refuses to hand
+        # out the read/write pool, so no console can run — nothing to prove.
+        logger.warning(
+            "console capability proof skipped: no read-only role is configured, "
+            "so the public SQL consoles are disabled."
+        )
+        return
+
+    rows = await pool.fetch(
+        """
+        SELECT n.nspname AS schema, c.relname AS name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND has_table_privilege(c.oid, 'SELECT')
+        """
+    )
+
+    exposed = [
+        f"{r['schema']}.{r['name']}"
+        for r in rows
+        if r["schema"] == SENSITIVE_SCHEMA or r["name"] in SENSITIVE_TABLES
+    ]
+    if exposed:
+        logger.critical(
+            "SECURITY: the public SQL console's role can read %d table(s) it must "
+            "not: %s. Revoke them, or move them into the %r schema and never grant "
+            "on it. Refusing to start.",
+            len(exposed), ", ".join(sorted(exposed)[:10]), SENSITIVE_SCHEMA,
+        )
+        raise RuntimeError(
+            "public SQL console role can read credential tables: "
+            + ", ".join(sorted(exposed))
+        )
+
+    logger.info(
+        "console capability proof: role may read %d tables, none sensitive.",
+        len(rows),
+    )
+
+
 # NOTE: an earlier guard forbade OCAL_DATABASE_URL from sharing the append DB.
 # That is now the DESIRED topology: the ocal DATA tables are co-located in the
 # append DB under schema `ocal` so the public /data console can live-query and
@@ -131,6 +212,9 @@ def _guard_db_separation() -> None:
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
     _guard_db_separation()
+    # Before the scheduler and before any request: prove, from the database's own
+    # answer, that the public console's role cannot read a credential table.
+    await _prove_console_role_cannot_read_secrets()
     await init_scheduler()
     # One-time seed of the CBS content index into the NEON append archive
     # (no-op once populated). Non-blocking so it never delays boot. See

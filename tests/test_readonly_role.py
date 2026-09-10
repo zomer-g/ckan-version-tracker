@@ -139,27 +139,35 @@ def test_readonly_dsn_strips_libpq_params_and_dialect_suffix():
     assert "ro:pw@" in dsn
 
 
-def test_get_readonly_pool_falls_back_to_rw_pool_with_warning(monkeypatch, caplog):
-    """When APPEND_READONLY_DATABASE_URL is unset, the consoles fall back to the
-    read/write pool (so dev/prod keep working) and warn exactly once."""
-    sentinel = object()
+def test_get_readonly_pool_fails_closed_when_role_is_unset(monkeypatch):
+    """No least-privilege role, no console.
+
+    This used to fall back to the read/write pool with a one-time warning so an
+    unprovisioned environment kept working. That made the strongest guard the
+    easiest one to lose: one missing environment variable silently handed the
+    public SQL console a full-privilege role, and the only trace was a log line.
+    It was survivable while the secrets lived in a physically separate database;
+    it stops being survivable when the application's own tables share a database
+    with the console, which is where the xhostd migration goes.
+
+    So the contract is now: raise. If this test is ever "fixed" by restoring a
+    fallback, read the paragraph above first.
+    """
+    called = False
 
     async def fake_get_pool():
-        return sentinel
+        nonlocal called
+        called = True
+        return object()
 
     monkeypatch.setattr(A, "get_pool", fake_get_pool)
     monkeypatch.setattr(settings, "append_readonly_database_url", "")
-    monkeypatch.setattr(A, "_ro_fallback_warned", False)
+    monkeypatch.setattr(A, "_ro_pool", None)
 
-    with caplog.at_level("WARNING"):
-        got = asyncio.run(A.get_readonly_pool())
-        assert got is sentinel
-        # Second call still falls back but does NOT warn again (one-time).
-        got2 = asyncio.run(A.get_readonly_pool())
-        assert got2 is sentinel
+    with pytest.raises(RuntimeError, match="APPEND_READONLY_DATABASE_URL"):
+        asyncio.run(A.get_readonly_pool())
 
-    warnings = [r for r in caplog.records if "APPEND_READONLY_DATABASE_URL not set" in r.message]
-    assert len(warnings) == 1
+    assert not called, "must not silently reach for the read/write pool"
 
 
 # ── Integration tests (need the provisioned read-only role) ──────────────────

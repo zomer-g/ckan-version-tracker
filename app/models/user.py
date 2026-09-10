@@ -9,6 +9,7 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {"schema": "auth"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)

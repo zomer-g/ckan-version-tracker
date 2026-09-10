@@ -51,7 +51,7 @@ class DriveExportJob(Base):
     )
     # Admin who triggered it — whose google_refresh_token the runner uses.
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("auth.users.id", ondelete="SET NULL"), nullable=True
     )
     # Google Drive destination folder id (extracted from the pasted URL).
     folder_id: Mapped[str] = mapped_column(String(128), nullable=False)

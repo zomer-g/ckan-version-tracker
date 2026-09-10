@@ -21,13 +21,14 @@ def _now() -> datetime:
 class ApiUser(Base):
     """Closed-beta invite list — the real MCP access gate."""
     __tablename__ = "api_users"
+    __table_args__ = {"schema": "auth"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     name: Mapped[str | None] = mapped_column(Text)
     google_id: Mapped[str | None] = mapped_column(Text, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.users.id", ondelete="SET NULL"))
     tier: Mapped[str] = mapped_column(String(20), nullable=False, default="beta")  # beta|free|pro
     monthly_quota: Mapped[int | None] = mapped_column(Integer)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -38,6 +39,7 @@ class ApiUser(Base):
 class McpOauthClient(Base):
     """Dynamically-registered OAuth client (RFC 7591). Public (PKCE) by default."""
     __tablename__ = "mcp_oauth_clients"
+    __table_args__ = {"schema": "auth"}
 
     client_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     client_secret_hash: Mapped[str | None] = mapped_column(Text)
@@ -53,10 +55,11 @@ class McpOauthClient(Base):
 class McpOauthCode(Base):
     """Short-lived single-use PKCE authorization code (10-min TTL)."""
     __tablename__ = "mcp_oauth_codes"
+    __table_args__ = {"schema": "auth"}
 
     code: Mapped[str] = mapped_column(Text, primary_key=True)
-    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("mcp_oauth_clients.client_id", ondelete="CASCADE"), nullable=False)
-    api_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("api_users.id", ondelete="CASCADE"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("auth.mcp_oauth_clients.client_id", ondelete="CASCADE"), nullable=False)
+    api_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("auth.api_users.id", ondelete="CASCADE"), nullable=False)
     redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
     code_challenge: Mapped[str] = mapped_column(Text, nullable=False)
     code_challenge_method: Mapped[str] = mapped_column(Text, nullable=False, default="S256")
@@ -68,10 +71,11 @@ class McpOauthCode(Base):
 class McpUsageEvent(Base):
     """Append-only log of every MCP tool call (for analytics / future billing)."""
     __tablename__ = "mcp_usage_events"
+    __table_args__ = {"schema": "auth"}
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    api_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("api_users.id", ondelete="CASCADE"), nullable=False)
-    client_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("mcp_oauth_clients.client_id", ondelete="SET NULL"))
+    api_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("auth.api_users.id", ondelete="CASCADE"), nullable=False)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.mcp_oauth_clients.client_id", ondelete="SET NULL"))
     mcp_session_id: Mapped[str | None] = mapped_column(Text)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
     request_params: Mapped[dict | None] = mapped_column(JSONB)

@@ -46,12 +46,11 @@ logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
 _pool_lock = asyncio.Lock()
 
-# Second, least-privilege pool for the PUBLIC SQL consoles only (see
-# get_readonly_pool). None until first use; falls back to _pool when the
-# read-only role isn't configured.
+# Second, least-privilege pool for the public SQL consoles and for every
+# internal reader that has no business writing (see get_readonly_pool). None
+# until first use. There is no fallback: an unset role raises.
 _ro_pool: asyncpg.Pool | None = None
 _ro_pool_lock = asyncio.Lock()
-_ro_fallback_warned = False
 
 # Postgres bind-parameter ceiling is 32767; stay well under it.
 _MAX_PARAMS = 30000
@@ -149,11 +148,19 @@ async def get_readonly_pool() -> asyncpg.Pool:
     point of failure where the app-layer guard was the only thing between an
     arbitrary user SELECT and a full-privilege role.
 
-    Falls back to the read/write pool (with a ONE-TIME warning) when the env var
-    isn't set, so dev/prod keep working until the role is provisioned. The
-    app-layer guards (single statement, SELECT/WITH only, READ ONLY tx,
-    statement_timeout, row caps) still apply in both cases — this is
-    defense-in-depth, not a replacement for them.
+    **Fails closed.** There is no fallback to the read/write pool. There used to
+    be one, with a one-time warning, so an unprovisioned environment kept
+    working — but that made the strongest guard the easiest one to lose: a
+    missing environment variable silently handed the public console a
+    full-privilege role, and the only trace was a single log line nobody reads.
+    That was survivable while the secrets lived in a physically separate
+    database. It is not survivable once the application's own tables share a
+    database with the console, which is where the xhostd migration takes us.
+    So: no role, no console.
+
+    The app-layer guards (single statement, SELECT/WITH only, READ ONLY tx,
+    statement_timeout, row caps) still apply — this is defense-in-depth, not a
+    replacement for them.
 
     The pool also carries a CONNECTION-LEVEL statement_timeout backstop. Every
     console path today sets its own ``SET LOCAL statement_timeout`` (10s for
@@ -164,21 +171,16 @@ async def get_readonly_pool() -> asyncpg.Pool:
     was measured at 46 SECONDS of compute, and an unbounded one pins the Neon
     endpoint for as long as it runs. The backstop applies to the console role
     only — never to get_pool(), whose COPY/backfill work legitimately runs long.
-
-    Caveat: the fallback above returns the read/write pool, which has NO such
-    backstop. That path is already a warned, degraded mode."""
-    global _ro_pool, _ro_fallback_warned
+"""
+    global _ro_pool
     raw = (settings.append_readonly_database_url or "").strip()
     if not raw:
-        if not _ro_fallback_warned:
-            logger.warning(
-                "append_store: APPEND_READONLY_DATABASE_URL not set — the public "
-                "SQL consoles fall back to the read/write append pool, so the READ "
-                "ONLY transaction is the only write guard. Provision the read-only "
-                "role (scripts/create_append_readonly_role.sql) and set the env var."
-            )
-            _ro_fallback_warned = True
-        return await get_pool()
+        raise RuntimeError(
+            "APPEND_READONLY_DATABASE_URL is not set. The public SQL consoles "
+            "refuse to run without the least-privilege role rather than falling "
+            "back to the read/write pool. Provision the role "
+            "(scripts/create_append_readonly_role.sql) and set the variable."
+        )
     if _ro_pool is None:
         async with _ro_pool_lock:
             if _ro_pool is None:
@@ -1571,21 +1573,58 @@ def latest_source(
     )
 
 
+_SEARCH_TOKEN_RE = re.compile(r'"[^"]*"|\S+')
+
+# Each term costs one ILIKE per column, and a wide table times a long query is
+# how a search box walks into the statement timeout. Six is far past any real
+# search and keeps the worst case bounded; beyond it the tail is dropped, which
+# widens the result rather than emptying it.
+_MAX_SEARCH_TERMS = 6
+
+
+def search_terms(q: str | None) -> list[str]:
+    """A free-text box entry, split into the things that must ALL appear.
+
+    A quoted run stays whole; everything else is one term per word. Without the
+    split a two-word entry is a single contiguous-substring test, so
+    `בנימין נתניהו` matched only rows carrying those words adjacent and in that
+    order — and the חיפוש רוחבי gateway, which has no operator to send here,
+    had to fall back to one word and let the other go, filling its column with
+    every מטה בנימין in the corpus.
+
+    A one-token entry is the old behaviour exactly, so nothing that worked
+    before now returns less.
+    """
+    raw = (q or "").strip()
+    if not raw:
+        return []
+    out: list[str] = []
+    for tok in _SEARCH_TOKEN_RE.findall(raw):
+        if len(tok) >= 2 and tok.startswith('"') and tok.endswith('"'):
+            tok = tok[1:-1]
+        tok = tok.strip()
+        if tok:
+            out.append(tok)
+    # An entry that is nothing but punctuation still meant something to whoever
+    # typed it; search for it literally rather than silently matching everything.
+    return out[:_MAX_SEARCH_TERMS] or [raw]
+
+
 def _build_where(
     cols: list[str], q: str | None, filters: dict[str, str], start_param: int,
 ) -> tuple[str, list]:
-    """Build a WHERE clause: optional free-text ``q`` (ILIKE across every
-    column) AND per-column ILIKE ``filters``. Only known columns are honored.
-    Returns (clause_without_WHERE_or_empty, params)."""
+    """Build a WHERE clause: optional free-text ``q`` (every term ILIKE'd across
+    every column, terms ANDed) AND per-column ILIKE ``filters``. Only known
+    columns are honored. Returns (clause_without_WHERE_or_empty, params)."""
     conds: list[str] = []
     params: list = []
     p = start_param
     colset = set(cols)
-    if q:
+    for term in search_terms(q):
         ph = f"${p}"  # one param, referenced by every column's ILIKE
         clause = " OR ".join(f"{_qi(c)}::text ILIKE {ph}" for c in cols)
         conds.append("(" + clause + ")")
-        params.append(f"%{q}%")
+        params.append(f"%{term}%")
         p += 1
     for col, val in filters.items():
         if col not in colset or val is None or val == "":
@@ -1730,7 +1769,8 @@ async def datastore_search(
 ) -> dict | None:
     """CKAN ``datastore_search``-style query over an append table. ``filters``
     are exact-match per column (scalar or list → IN); ``q`` is a substring match
-    across all columns; ``fields`` projects the output columns. Returns
+    across all columns, one term at a time and ANDed (see search_terms);
+    ``fields`` projects the output columns. Returns
     {fields:[{id,type}], records, total, limit, offset} or None if the table is
     gone. All column names are validated against the live schema; values are
     parameterized."""
@@ -1745,10 +1785,13 @@ async def datastore_search(
     conds: list[str] = []
     params: list = []
     p = 1
-    if q:
+    # Same term split as _build_where, deliberately: CKAN's own ``q`` is a
+    # full-text AND of words, so treating two words as one contiguous run was
+    # both the less useful reading and the less compatible one.
+    for term in search_terms(q):
         ph = f"${p}"
         conds.append("(" + " OR ".join(f"{_qi(c)}::text ILIKE {ph}" for c in all_cols) + ")")
-        params.append(f"%{q}%")
+        params.append(f"%{term}%")
         p += 1
     for col, val in (filters or {}).items():
         if col not in colset:

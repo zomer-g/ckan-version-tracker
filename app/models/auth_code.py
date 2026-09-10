@@ -23,6 +23,7 @@ class AuthCode(Base):
     """
 
     __tablename__ = "auth_codes"
+    __table_args__ = {"schema": "auth"}
 
     # SHA-256 hex of the raw code (never the raw code itself).
     code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

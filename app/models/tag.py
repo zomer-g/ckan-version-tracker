@@ -39,7 +39,7 @@ class Tag(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("auth.users.id", ondelete="SET NULL"), nullable=True
     )
 
     datasets = relationship(

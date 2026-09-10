@@ -76,7 +76,7 @@ class TrackedDataset(Base):
     field_flags: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'"), default=dict
     )
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
