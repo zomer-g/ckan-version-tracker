@@ -188,7 +188,7 @@ export default function App() {
           <Route
             path="/admin"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute requireAdmin>
                 <div className="container mt-3"><AdminPage /></div>
               </ProtectedRoute>
             }
