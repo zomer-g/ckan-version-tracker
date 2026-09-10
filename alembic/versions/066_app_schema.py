@@ -37,6 +37,20 @@ The list is written out rather than read from the models: seven of these tables
 (activity_log, govmap_coverage and five nl_* tables) have no ORM model, and a
 migration must not change meaning when the models do. tests/test_app_schema.py
 pins it against app/database.py:APP_TABLES.
+
+LOCKING: ONE TABLE PER TRANSACTION
+----------------------------------
+The first version moved all 26 tables in one transaction and deadlocked against
+the live site on its first production run: it held ACCESS EXCLUSIVE on every
+table it had moved while waiting for `organizations`, and a request holding
+`organizations` asked for one of those. Postgres rolled the migration back whole,
+so nothing was lost, but it will happen again on any busy moment.
+
+So each move is its own transaction (autocommit), and holds exactly one table's
+lock, which cannot form a cycle. It waits at most 2 seconds for that lock, then
+releases, sleeps a second and retries, up to 60 times, so a long reader delays
+the move rather than queueing every other reader behind it. A half-finished run
+is safe: `app, public` resolves both halves, and re-running skips what moved.
 """
 from alembic import op
 
@@ -74,36 +88,48 @@ TABLES = (
     "workers",
 )
 
+LOCK_TIMEOUT = "2s"
+ATTEMPTS = 60
+
+
+def _move(table: str, src: str, dst: str) -> str:
+    return f"""
+    DO $$
+    DECLARE
+      attempt int := 0;
+    BEGIN
+      IF to_regclass('{src}.{table}') IS NULL OR to_regclass('{dst}.{table}') IS NOT NULL THEN
+        RETURN;
+      END IF;
+      LOOP
+        BEGIN
+          SET LOCAL lock_timeout = '{LOCK_TIMEOUT}';
+          EXECUTE 'ALTER TABLE {src}.{table} SET SCHEMA {dst}';
+          RETURN;
+        EXCEPTION WHEN lock_not_available OR deadlock_detected THEN
+          attempt := attempt + 1;
+          IF attempt >= {ATTEMPTS} THEN
+            RAISE;
+          END IF;
+          PERFORM pg_sleep(1);
+        END;
+      END LOOP;
+    END $$;
+    """
+
 
 def upgrade() -> None:
-    op.execute("CREATE SCHEMA IF NOT EXISTS app")
-    for table in TABLES:
-        op.execute(
-            f"""
-            DO $$
-            BEGIN
-              IF to_regclass('public.{table}') IS NOT NULL
-                 AND to_regclass('app.{table}') IS NULL THEN
-                EXECUTE 'ALTER TABLE public.{table} SET SCHEMA app';
-              END IF;
-            END $$;
-            """
-        )
-    op.execute("REVOKE ALL ON SCHEMA app FROM PUBLIC")
+    with op.get_context().autocommit_block():
+        op.execute("CREATE SCHEMA IF NOT EXISTS app")
+        op.execute("REVOKE ALL ON SCHEMA app FROM PUBLIC")
+        for table in TABLES:
+            op.execute(_move(table, "public", "app"))
 
 
 def downgrade() -> None:
-    for table in TABLES:
-        op.execute(
-            f"""
-            DO $$
-            BEGIN
-              IF to_regclass('app.{table}') IS NOT NULL THEN
-                EXECUTE 'ALTER TABLE app.{table} SET SCHEMA public';
-              END IF;
-            END $$;
-            """
-        )
-    # Plain DROP, not CASCADE: if anything else was created in `app` meanwhile,
-    # the downgrade stops here instead of destroying it.
-    op.execute("DROP SCHEMA IF EXISTS app")
+    with op.get_context().autocommit_block():
+        for table in TABLES:
+            op.execute(_move(table, "app", "public"))
+        # Plain DROP, not CASCADE: if anything else was created in `app` meanwhile,
+        # the downgrade stops here instead of destroying it.
+        op.execute("DROP SCHEMA IF EXISTS app")
