@@ -3,7 +3,11 @@
   POST /api/nl/query     question → {sql, explanation, result}
   GET  /api/nl/examples  question suggestions derived from the live model
 
-Public and read-only. The SQL this returns was compiled by the server from a
+Read-only. Compiling a question is public; RUNNING the result (``run``, the
+default) needs a signed-in account, the same attribution gate as the SQL
+consoles, or this endpoint would be an anonymous way around them. The /data page
+only ever compiles (run=false) and then runs the SQL through the gated console.
+The SQL this returns was compiled by the server from a
 validated query object (app/services/semantic_model.py), never written by a
 language model, and it is executed through the SAME read-only path as the
 console (append_store.run_readonly_sql: least-privilege role, READ ONLY tx,
@@ -26,7 +30,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_optional_user
 from app.database import get_db
+from app.models.user import User
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, nl_query, semantic_model
 from app.services.llm_budget import record_llm_tokens, reserve_llm_call
@@ -97,8 +103,13 @@ def _candidates(cands: list) -> list[dict]:
 
 @router.post("/query")
 @limiter.limit("20/minute")
-async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends(get_db)):
+async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends(get_db),
+                user: User | None = Depends(get_optional_user)):
     """Hebrew question → compiled SQL (+ results unless ``run`` is false)."""
+    # Before anything that costs: no language-model call, no log row, for a
+    # request that was never going to be allowed to run.
+    if body.run and user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     _require_enabled()
     q = (body.q or "").strip()
     if not q:
