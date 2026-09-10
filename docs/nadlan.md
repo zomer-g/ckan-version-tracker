@@ -409,20 +409,25 @@ addresses sort ahead of previously-asked ones.
 `/projects/nadlan?tab=gaps` is not a lookup. It is a written comparison of the
 two government sites that publish the same property transactions, added
 2026-09-09 from a hand check of ten random parcels read page by page on both
-sites on that date.
+sites, and revised 2026-09-10 after a re-check that also opened the previous-sales
+window behind every nadlan.gov.il row.
 
-The headline is that the two disagree **by definition, not by coverage**:
-nadlan.gov.il publishes one transaction per sub-parcel, the last one, while the
-tax authority publishes every declaration. 93 transactions against 159, and
-almost all of the difference is that one rule. What survives the explanation is
-eight transactions whose amount differs between the sites, a whole parcel with
-no page at all on nadlan.gov.il, an area that differs by a factor of ten, and
-the fact that every transaction carries two official amounts (תמורה מוצהרת and
-שווי מכירה) of which nadlan.gov.il publishes only one, unmarked.
+The headline is that nadlan.gov.il's deals table shows **one row per property**,
+the latest sale, and keeps every earlier sale of that property in a
+"עסקאות קודמות לנכס" window that opens only on a click. Read as a table it shows
+93 sales against the tax authority's 161; opened row by row it shows 145, and 140
+of those match the tax authority on date and amount (120 to the shekel, 20 rounded
+to the thousand). The first version of the report, written before those windows
+were opened, read the same numbers as "one sale per sub-parcel, the last one"
+and was wrong. What survives is seven tax-authority sales that appear nowhere on
+nadlan.gov.il, amounts that differ, a whole parcel with no page, an area off by a
+factor of ten, and the fact that every transaction carries two official amounts
+(תמורה מוצהרת and שווי מכירה) of which nadlan.gov.il publishes only one, unmarked.
 
 It matters here because the crosswalk's own consumers hit the same traps:
 
-* Counting rows on nadlan.gov.il counts **properties**, not sales.
+* Counting rows on nadlan.gov.il, or trusting its "נמצאו N עסקאות", counts
+  **properties**, not sales: 52 of the 145 sales sit behind the rows.
 * An amount there is the **assessed** value, never the declared one.
 * Joining the two registers **by locality name** silently drops rows. Two of the
   ten parcels carry a different locality name on each site, which is the same
@@ -443,11 +448,12 @@ It matters here because the crosswalk's own consumers hit the same traps:
 Two things about it are deliberate and easy to undo by accident:
 
 1. **The screenshots are static files, not data URIs.** The report arrived as a
-   single 4 MB HTML page with all 36 images inlined in base64. Inlined, they
+   single HTML page with every image inlined in base64 (4 MB and 36 images
+   at first, 5.5 MB and 68 after the re-check). Inlined, they
    would sit in the JS bundle and be paid for by every visitor to every page.
 2. **The grid shows separate 520px crops.** `loading="lazy"` on the full images
-   did not hold them back, the browser fetched all 36 on tab open, so the grid
-   has its own copies: the same 36 pictures for 0.56 MB instead of 2.9 MB. The
+   did not hold them back, the browser fetched every one on tab open, so the grid
+   has its own copies: all 68 pictures for 0.75 MB instead of 3.9 MB. The
    full image is fetched only when the lightbox opens.
 
 A third is the `Ltr` helper. A cell like `+132,712 · 18%` is entirely
@@ -477,7 +483,8 @@ and a link to the report sits on screen the whole time.
 
 Rules of the thing, in case it gets extended:
 
-* **The bank is 30, a round is 25** (`ROUND_SIZE`). The surplus is what makes a
+* **The bank is larger than a round**: 38 questions, 25 per round
+  (`ROUND_SIZE`). The surplus is what makes a
   second round a different round; drop it and replays become identical.
 * **Both the questions and the answers are shuffled.** Without the second
   shuffle, "the longest option" becomes a winning strategy, because the correct
@@ -488,6 +495,10 @@ Rules of the thing, in case it gets extended:
   `finding: 0` means the appendix or the method section.
 * **No timer, no streak, no prompt to come back.** The tab is opt-in and it stays
   that way.
+* **The bank follows the report.** A question whose answer the report no longer
+  supports is worse than no question. The 2026-09-10 re-check rewrote five whose
+  premise was "one sale per sub-parcel", corrected the numbers in four more, and
+  added eight about the history window.
 
 The result is a score out of 25, a rank, and a Wordle-style 5×5 grid of 🟩/🟥
 that shares as plain text through `navigator.share` where it exists and through

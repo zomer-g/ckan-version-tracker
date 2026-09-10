@@ -1,8 +1,9 @@
 /**
  * "שניים אוחזין בעסקה" — a trivia round over the gap report next door.
  *
- * Two government sites publish the same property transactions and disagree
- * about almost every one of them. The report at ?tab=gaps says why in prose;
+ * Two government sites publish the same property transactions, and read the
+ * way they present themselves they seem to disagree about almost everything,
+ * until every row on nadlan.gov.il is opened. The report at ?tab=gaps says why in prose;
  * this tab asks you to guess first, which turns out to be the only way anyone
  * remembers that "מחיר העסקה" on nadlan.gov.il is the assessed value and not
  * the declared one.
@@ -13,7 +14,7 @@
  * the intended failure mode, because a player who goes and reads the thing has
  * done exactly what the tab is for.
  *
- * A round is 25 questions drawn from a bank of 30 and shuffled, so a second
+ * A round is 25 questions drawn from a larger bank and shuffled, so a second
  * round is not the same round.
  */
 import { useCallback, useMemo, useState } from "react";
@@ -80,7 +81,7 @@ function rankFor(score: number, total: number): Rank {
   if (pct >= 0.4) {
     return {
       title: "סמכתם על אתר הנדל״ן",
-      note: "טעות מובנת. הוא באמת נראה כאילו הוא מציג את כל העסקאות.",
+      note: "טעות מובנת. הטבלה שלו באמת נראית כאילו היא מציגה את כל העסקאות.",
     };
   }
   if (pct >= 0.2) {
@@ -174,9 +175,10 @@ export default function NadlanQuiz({ onReadReport }: { onReadReport: () => void 
           <div className="nquiz-kicker">משחק ניחושים · על סמך הבדיקה בלשונית שלצד</div>
           <h2>{GAME_NAME}</h2>
           <p className="nquiz-lede">
-            שני אתרים ממשלתיים מפרסמים את אותן עסקאות נדל״ן, ולא מסכימים כמעט על אף אחת
-            מהן: לא על מספר העסקאות, לא על הסכום, לפעמים אפילו לא על שם היישוב. עשר חלקות
-            אקראיות נבדקו בשניהם עמוד אחר עמוד, וכל שאלה כאן היא ממצא אמיתי מהבדיקה הזו.
+            שני אתרים ממשלתיים מפרסמים את אותן עסקאות נדל״ן, ומי שקורא אותם כפי שהם מוצגים
+            יקבל שתי תמונות שונות: מספר עסקאות אחר, סכומים אחרים, לפעמים אפילו שם יישוב אחר.
+            עשר חלקות אקראיות נבדקו בשניהם עמוד אחר עמוד, כולל כל חלון היסטוריה, וכל שאלה
+            כאן היא ממצא אמיתי מהבדיקה הזו.
           </p>
           <p className="nquiz-lede">
             {ROUND_SIZE} שאלות, בלי טיימר ובלי לחץ. אחרי כל תשובה מופיע ההסבר, גם אם

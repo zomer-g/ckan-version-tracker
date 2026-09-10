@@ -2,15 +2,18 @@
  * "פערים מול מיסוי מקרקעין" — the fifth tab of נדל"ן לעם.
  *
  * Ten random parcels were read page by page on both nadlan.gov.il and
- * nadlan.taxes.gov.il on 9 September 2026 and compared row against row. The
- * headline is that the two sites disagree by definition rather than by
- * coverage, and this component is the write-up: the findings, the numbers
- * behind each one, and the 36 screenshots they were read off.
+ * nadlan.taxes.gov.il on 9 and 10 September 2026 and compared row against row,
+ * including every "עסקאות קודמות לנכס" window behind a nadlan.gov.il row. The
+ * headline is that the nadlan.gov.il table shows one row per property and hides
+ * the earlier sales behind a click: 93 rows, 145 sales once every row is opened,
+ * 140 of which match the tax authority. This component is the write-up: the
+ * findings, the numbers behind each one, and the 68 screenshots they were read
+ * off.
  *
  * It lives behind a lazy import because none of it, least of all the appendix,
  * is needed by the four lookup tabs. The screenshots are static files under
  * public/nadlan-gaps/, and the grid shows small crops rather than the originals
- * so opening the tab costs 0.56 MB of pictures instead of 2.9 MB.
+ * so opening the tab does not pull every full-size screenshot.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GAP_FIGURES, GapFigure, figureUrl, thumbUrl } from "./nadlanGapsFigures";
@@ -134,17 +137,26 @@ function Lightbox({
 
 /* ── the appendix, grouped parcel by parcel ─────────────────────────────── */
 
-type Group = { place: string; tax: GapFigure[]; nadlan: GapFigure[] };
+type Group = {
+  place: string;
+  tax: GapFigure[];
+  /** Pages of the nadlan.gov.il deals table. */
+  nadlanPages: GapFigure[];
+  /** One shot per row with its "עסקאות קודמות לנכס" window open. */
+  nadlanHistory: GapFigure[];
+};
 
 function groupFigures(): Group[] {
   const out: Group[] = [];
   for (const f of GAP_FIGURES) {
     let g = out[out.length - 1];
     if (!g || g.place !== f.place) {
-      g = { place: f.place, tax: [], nadlan: [] };
+      g = { place: f.place, tax: [], nadlanPages: [], nadlanHistory: [] };
       out.push(g);
     }
-    (f.src === "tax" ? g.tax : g.nadlan).push(f);
+    if (f.src === "tax") g.tax.push(f);
+    else if (f.kind === "history") g.nadlanHistory.push(f);
+    else g.nadlanPages.push(f);
   }
   return out;
 }
@@ -213,12 +225,13 @@ export default function NadlanGaps() {
           נבדקו בשניהם, עמוד אחר עמוד, והושוו זו מול זו.
         </p>
         <p className="ngap-lede">
-          הממצא המרכזי הוא ש<strong>הפער אינו פער כיסוי אלא פער הגדרה</strong>: אתר הנדל״ן
-          מפרסם עסקה אחת לכל תת־חלקה, האחרונה שבוצעה בה, בעוד רשות המיסים מפרסמת כל הצהרה.
-          93 עסקאות מול 159, וכמעט כולן מוסברות בכך. מה שנותר אחרי ההסבר הוא שמונה עסקאות
-          שסכומן שונה בין האתרים, חלקה שלמה שאין לה דף כלל באתר הנדל״ן, שטח שנבדל בין
-          המקורות עד כדי פי עשרה, ועובדה שאינה מסומנת בשום מקום: לכל עסקה יש שני סכומים
-          רשמיים, ואתר הנדל״ן מפרסם רק אחד מהם.
+          הממצא המרכזי הוא ש<strong>טבלת העסקאות של אתר הנדל״ן מציגה שורה אחת לכל נכס</strong>,
+          המכירה האחרונה בו, ואת המכירות הקודמות של אותו נכס היא מציגה רק בחלון שנפתח בלחיצה
+          על השורה. מי שקורא את הטבלה רואה 93 עסקאות מול 161 אצל רשות המיסים; מי שפותח כל שורה
+          מגיע ל־145, ו־140 מהן מתלכדות עם רשות המיסים על התאריך ועל הסכום. מה שנותר אחרי ההסבר
+          הוא שבע מכירות שאינן מופיעות באתר הנדל״ן בשום מקום, סכומים שונים בין האתרים, חלקה
+          שלמה שאין לה דף, שטח שנבדל בין המקורות עד כדי פי עשרה, ועובדה שאינה מסומנת בשום
+          מקום: לכל עסקה יש שני סכומים רשמיים, ואתר הנדל״ן מפרסם רק אחד מהם.
         </p>
         <div className="ngap-legend">
           <span className="is-nadlan">
@@ -234,16 +247,16 @@ export default function NadlanGaps() {
 
       <div className="ngap-stats">
         <div className="ngap-stat is-nadlan">
-          <b>93</b><span>עסקאות באתר הנדל״ן, בעשר החלקות</span>
+          <b>145</b><span>מכירות באתר הנדל״ן, 93 בטבלה ו־52 בחלונות ההיסטוריה</span>
         </div>
         <div className="ngap-stat is-tax">
-          <b>159</b><span>עסקאות אצל רשות המיסים (188 שורות)</span>
+          <b>161</b><span>עסקאות אצל רשות המיסים (188 שורות)</span>
         </div>
         <div className="ngap-stat is-good">
-          <b>77</b><span>מתלכדות במדויק בין המקורות</span>
+          <b>140</b><span>מתלכדות בין המקורות על תאריך וסכום</span>
         </div>
         <div className="ngap-stat is-bad">
-          <b>8</b><span>עסקאות שסכומן שונה בין האתרים</span>
+          <b>7</b><span>מכירות שאינן מופיעות באתר הנדל״ן כלל</span>
         </div>
       </div>
 
@@ -253,31 +266,44 @@ export default function NadlanGaps() {
       <div className="ngap-card">
         <h3>
           <span className="ngap-num">1</span>
-          אתר הנדל״ן מציג עסקה אחת לכל תת־חלקה, האחרונה בלבד
+          טבלת אתר הנדל״ן מציגה שורה לכל נכס, וההיסטוריה מאחורי חץ
         </h3>
         <p className="ngap-p">
-          זה ההסבר לרוב הפער. אתר הנדל״ן אינו היסטוריית עסקאות אלא תמונת מצב: לכל תת־חלקה
-          רשומה מוצגת רק המכירה האחרונה שבוצעה בה. רשות המיסים, לעומת זאת, מציגה כל הצהרה
-          שנרשמה אי־פעם.
+          זה ההסבר לרוב הפער. טבלת העסקאות של אתר הנדל״ן מציגה שורה אחת לכל נכס, ובה המכירה
+          האחרונה שבוצעה בו. המכירות הקודמות של אותו נכס קיימות באתר, אך מוצגות רק כשפותחים את
+          השורה בלחיצה על החץ שבקצה, בחלון שכותרתו <strong>״עסקאות קודמות לנכס״</strong>. רשות
+          המיסים, לעומת זאת, מציגה כל הצהרה בשורה משלה.
         </p>
         <div className="ngap-evidence">
           <span className="ngap-cap">
-            גוש 17457 חלקה 63 · תת־חלקה 027, חמש מכירות אצל רשות המיסים
+            גוש 17457 חלקה 63 · תת־חלקה 027, חמש מכירות אצל רשות המיסים, וכולן באתר הנדל״ן
           </span>
-          {`07/10/2008    160,000 ₪
-07/10/2010    200,000 ₪
-12/12/2011    315,000 ₪
-15/01/2014    356,000 ₪
-04/04/2021    510,000 ₪   `}
-          <em>← רק זו מוצגת באתר הנדל״ן</em>
+          {`07/10/2008    160,000 ₪   `}<em>← בחלון ההיסטוריה</em>{`
+07/10/2010    200,000 ₪   `}<em>← בחלון ההיסטוריה</em>{`
+12/12/2011    315,000 ₪   `}<em>← בחלון ההיסטוריה</em>{`
+15/01/2014    356,000 ₪   `}<em>← בחלון ההיסטוריה</em>{`
+04/04/2021    510,000 ₪   `}<em>← בשורת הטבלה</em>
         </div>
         <p className="ngap-p">
-          הכלל נבדק על כל עשר החלקות: 93 העסקאות שמציג אתר הנדל״ן מול{" "}
-          <strong>99 תתי־חלקה</strong> שיש להן עסקאות אצל רשות המיסים, ו־
-          <strong>77 מהן מתלכדות בדיוק</strong> על התאריך ועל הסכום של העסקה האחרונה באותה
-          תת־חלקה. השאר מוסברות בסעיפים 2–9.
+          הכלל נבדק על כל עשר החלקות: בטבלאות מוצגות 93 שורות, ובחלונות ההיסטוריה שמאחוריהן
+          עוד 52 מכירות, <strong>145 בסך הכול</strong>, מול 161 עסקאות אצל רשות המיסים.{" "}
+          <strong>140 מהן מתלכדות</strong> על התאריך ועל הסכום, 120 עד השקל ו־20 בעיגול לאלף.
+          מבין 21 העסקאות של רשות המיסים שאין להן התאמה, תשע בחלקה שאין לה דף באתר הנדל״ן
+          (סעיף 7), שבע אינן מופיעות בו כלל (סעיף 3), שלוש מופיעות בסכום אחר (סעיף 4), ושתיים,
+          מכירה אחת בתל אביב מ־11/09/2017, רשומות אצל רשות המיסים כשתי שורות של 2,136,400
+          ו־113,600 ש״ח, ובאתר הנדל״ן כשורה אחת של 2,250,000.
         </p>
-        <Refs ns={[1, 2, 3, 4, 5, 6, 7, 29, 30]} onOpen={openByNumber} />
+        <Refs
+          ns={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 59, 60, 61, 62, 63, 64]}
+          onOpen={openByNumber}
+        />
+        <p className="ngap-p">
+          שום דבר בשורה עצמה אינו אומר שיש מאחוריה היסטוריה, מלבד סימן עקיף אחד: חיווי השינוי
+          במחיר (למשל ״137.2% ב־4.4 שנים״) מופיע רק בשורות שיש להן מכירה קודמת. גם הספירה
+          ״נמצאו 9 עסקאות״ שבתחתית הטבלה סופרת נכסים ולא מכירות: בגוש 7136 חלקה 208 בבת ים
+          מסתתרות בחלונות עוד חמש מכירות מעבר לתשע.
+        </p>
+        <Refs ns={[55, 56, 57, 58]} onOpen={openByNumber} />
         <p className="ngap-p">
           דיוק אחד: היחידה של אתר הנדל״ן היא <strong>נכס במספור שלו</strong>. בבניין מחולק
           היא מתלכדת עם תת־החלקה של רשות המיסים; בחלקה שאינה מחולקת, כמו גוש 7787 חלקה 464
@@ -285,9 +311,10 @@ export default function NadlanGaps() {
           את הנכסים בעצמו ומציג שש שורות נפרדות.
         </p>
         <div className="ngap-takeaway">
-          <b>המשמעות.</b> כל השוואה שסופרת עסקאות מול עסקאות תדווח על כ־40% ״חוסר״ באתר
-          הנדל״ן שאינו חוסר. מי שזקוק להיסטוריית המכירות של דירה מסוימת חייב את מאגר רשות
-          המיסים; מי שמסתפק במחיר העדכני של חלקה יכול להישאר באתר הנדל״ן.
+          <b>המשמעות.</b> מי שסופר שורות בטבלת אתר הנדל״ן, או מסתמך על ״נמצאו N עסקאות״,
+          יחסיר יותר משליש מהמכירות, 52 מתוך 145 בעשר החלקות, וזה אינו חוסר בנתונים אלא אופן
+          ההצגה. היסטוריית המכירות של דירה מסוימת זמינה בשני האתרים; באתר הנדל״ן, רק בפתיחת
+          השורה, אחת אחת.
         </div>
       </div>
 
@@ -301,7 +328,7 @@ export default function NadlanGaps() {
           אתר הנדל״ן מציג שורה אחת בלבד ואין בו עמודה כזו. השאלה היא איזה סכום מוצג,
           ובמדגם הזה אין לכך תשובה אחת.
         </p>
-        <Refs ns={[1, 4, 9, 20, 26, 27, 31]} onOpen={openByNumber} />
+        <Refs ns={[1, 4, 18, 33, 53, 54, 62]} onOpen={openByNumber} />
         <div className="ngap-tablewrap">
           <table>
             <caption>תשעת המקרים במדגם שבהם החלק הנמכר קטן מ־1.000</caption>
@@ -355,13 +382,16 @@ export default function NadlanGaps() {
       <div className="ngap-card">
         <h3>
           <span className="ngap-num">3</span>
-          סוגי עסקאות שאתר הנדל״ן אינו מציג כלל
+          שבע מכירות שאינן מופיעות באתר הנדל״ן בשום מקום
         </h3>
         <p className="ngap-p">
-          מעבר לכלל ״אחת לתת־חלקה״, יש תתי־חלקה שלמות שאינן מופיעות באתר הנדל״ן. במדגם הזה
-          כולן חולקות מכנה משותף: סכום חריג בקטנותו או שטח רשום 0.
+          גם אחרי שפותחים את כל חלונות ההיסטוריה, שבע מכירות של רשות המיסים, בחלקות שיש להן
+          דף, אינן מופיעות באתר הנדל״ן: לא בשורת הטבלה ולא בהיסטוריה של הנכס.
         </p>
-        <Refs ns={[1, 3, 17]} onOpen={openByNumber} />
+        <Refs
+          ns={[1, 3, 6, 7, 16, 17, 18, 19, 20, 29, 30, 31, 32, 33, 34, 35, 36, 37, 49]}
+          onOpen={openByNumber}
+        />
         <div className="ngap-tablewrap">
           <table>
             <thead>
@@ -370,30 +400,35 @@ export default function NadlanGaps() {
                 <th className="num">תאריך</th>
                 <th className="num">סכום</th>
                 <th className="num">שטח רשום</th>
+                <th>באתר הנדל״ן</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td className="ngap-id">17457-63</td><td className="ngap-id">018</td>
-                <td className="num">01/07/2001</td>
-                <td className="num ngap-vt">45,880</td><td className="num">70</td>
-              </tr>
-              <tr>
-                <td className="ngap-id">17457-63</td><td className="ngap-id">024</td>
-                <td className="num">15/09/2019</td>
-                <td className="num ngap-vt">48,100</td><td className="num">70</td>
-              </tr>
-              <tr>
-                <td className="ngap-id">10236-99</td><td className="ngap-id">012</td>
-                <td className="num">30/10/2002</td>
-                <td className="num ngap-vt">900,000</td><td className="num ngap-vc">0</td>
-              </tr>
+              {([
+                ["17457-63", "018", "01/07/2001", "45,880", "70", "אין שורה לנכס"],
+                ["17457-63", "024", "15/09/2019", "48,100", "70", "אין שורה לנכס"],
+                ["17457-63", "030", "02/02/2017", "460,000", "0", "חסרה בהיסטוריה: 2011 ו־2020 מוצגות"],
+                ["7151-316", "004", "14/12/2006", "557,763", "0", "הנכס מוצג רק עם מכירת 2024"],
+                ["10236-99", "012", "30/10/2002", "900,000", "0", "אין שורה לנכס"],
+                ["10236-99", "035", "07/08/2002", "915,000", "0", "חסרה בהיסטוריה: 2007 מוצגת"],
+                ["10236-99", "038", "19/02/2003", "805,000", "0", "הנכס מוצג רק עם מכירת 2008"],
+              ] as const).map(([parcel, sub, date, amount, area, onNadlan], i) => (
+                <tr key={i}>
+                  <td className="ngap-id">{parcel}</td>
+                  <td className="ngap-id">{sub}</td>
+                  <td className="num">{date}</td>
+                  <td className="num ngap-vt">{amount}</td>
+                  <td className={area === "0" ? "num ngap-vc" : "num"}>{area}</td>
+                  <td>{onNadlan}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
         <p className="ngap-p">
-          זו כנראה מדיניות סינון ולא תקלה, אך היא אומרת שספירת עסקאות מאתר הנדל״ן תיתן
-          מספר נמוך מהאמת גם אחרי שמנטרלים את כלל תת־החלקה.
+          המכנה המשותף בולט: חמש מהשבע רשומות אצל רשות המיסים בשטח 0, ושתיים בסכום של פחות
+          מ־50,000 ש״ח. אבל זה אינו כלל: שש שורות אחרות בשטח 0 כן מוצגות באתר הנדל״ן. כך או
+          כך, האתר אינו מסמן שהושמטה מכירה, ובהיסטוריה של הנכס נוצר חור שאינו נראה.
         </p>
       </div>
 
@@ -409,7 +444,7 @@ export default function NadlanGaps() {
           אותה חלקה, אותה תת־חלקה, אותו יום מכירה, ושני מספרים שונים. ארבעה מהם פער עיגול
           לאלף, ושלושה לא.
         </p>
-        <Refs ns={[8, 10, 14, 15, 16, 19, 22, 24, 26, 28]} onOpen={openByNumber} />
+        <Refs ns={[17, 19, 27, 28, 29, 32, 35, 37, 53, 55]} onOpen={openByNumber} />
         <div className="ngap-tablewrap">
           <table>
             <thead>
@@ -473,6 +508,13 @@ export default function NadlanGaps() {
           בקריית ביאליק, ‎870,000‎ ש״ח מול ‎737,288‎ ש״ח. שני האתרים מציגים היום מספרים
           סותרים על אותה מכירה, ואין באף אחד מהם סימן לכך שהערך שנוי במחלוקת.
         </p>
+        <p className="ngap-p">
+          העיגול אינו מוגבל לשורת הטבלה: גם הסכומים בחלון ההיסטוריה מעוגלים לאלף, ולא תמיד
+          לאלף הקרוב. בגוש 17457 חלקה 63 מופיעה מכירה מ־19/08/2010 כ־234,000 מול 235,000 אצל
+          רשות המיסים, ומכירה מ־04/04/2014 כ־369,000 מול 370,000: סכומים עגולים שהאתר מציג
+          נמוכים באלף.
+        </p>
+        <Refs ns={[1, 2, 3, 4, 5, 8, 12]} onOpen={openByNumber} />
       </div>
 
       <div className="ngap-card is-severe">
@@ -486,7 +528,7 @@ export default function NadlanGaps() {
           זהות, אבל לא תמיד, ואז הפער אינו זניח. אתר הנדל״ן מפרסם תמיד את שווי המכירה, בלי
           לציין שקיים מספר שני.
         </p>
-        <Refs ns={[8, 14, 16, 19]} onOpen={openByNumber} />
+        <Refs ns={[17, 27, 29, 32]} onOpen={openByNumber} />
         <div className="ngap-tablewrap">
           <table>
             <caption>השורות במדגם שבהן שתי העמודות נבדלות</caption>
@@ -540,7 +582,7 @@ export default function NadlanGaps() {
           השטח הרשום לאותו נכס נבדל בין שני האתרים בארבעה מקרים במדגם, ובאחד מהם ההפרש הוא
           סדר גודל שלם.
         </p>
-        <Refs ns={[8, 10, 16, 19, 22, 29, 30]} onOpen={openByNumber} />
+        <Refs ns={[17, 19, 29, 32, 35, 59, 60]} onOpen={openByNumber} />
         <div className="ngap-tablewrap">
           <table>
             <thead>
@@ -595,7 +637,7 @@ export default function NadlanGaps() {
           <strong>״המיקום לא נמצא״</strong>, אותה תשובה בדיוק שהיה מקבל מי שיחפש גוש שאינו
           קיים.
         </p>
-        <Refs ns={[33, 34]} onOpen={openByNumber} />
+        <Refs ns={[65, 66]} onOpen={openByNumber} />
         <p className="ngap-p">
           אצל רשות המיסים יש לאותה חלקה <strong>תשע עסקאות בשמונה תתי־חלקה</strong>, בין
           2006 ל־2013, כולל מכירת קוטג׳ ב־3.6 מיליון ש״ח בינואר 2013. כלומר היעדר דף באתר
@@ -613,15 +655,15 @@ export default function NadlanGaps() {
           עוקבים, 18 ו־19 בינואר 2017, בשטחים שונים, 207 ו־250 מ״ר. אצל רשות המיסים קיימת
           רק זו של ה־19.
         </p>
-        <Refs ns={[14, 15]} onOpen={openByNumber} />
+        <Refs ns={[27, 28]} onOpen={openByNumber} />
         <p className="ngap-p">
-          זהו המקרה היחיד בכל המדגם שבו לאתר הנדל״ן יש תאריך עסקה שאין לו מקבילה אצל רשות
-          המיסים. בכל 92 העסקאות האחרות, כל מה שמופיע באתר הנדל״ן קיים גם במאגר מיסוי
-          מקרקעין.
+          זהו המקרה היחיד בכל המדגם שבו לאתר הנדל״ן יש מכירה בתאריך שאין לו מקבילה אצל רשות
+          המיסים. לכל 144 המכירות האחרות שהאתר מציג, בטבלה ובחלונות ההיסטוריה, יש רשומה באותו
+          תאריך במאגר מיסוי מקרקעין.
         </p>
         <div className="ngap-takeaway">
           <b>הכיוון ברור.</b> מאגר מיסוי מקרקעין הוא כמעט תמיד קבוצה מכילה של אתר הנדל״ן.
-          חריגה אחת מתוך 93 מספיקה כדי לומר שלא תמיד, אך לא כדי להצדיק התייחסות לאתר
+          חריגה אחת מתוך 145 מספיקה כדי לומר שלא תמיד, אך לא כדי להצדיק התייחסות לאתר
           הנדל״ן כמקור עצמאי.
         </div>
       </div>
@@ -635,7 +677,7 @@ export default function NadlanGaps() {
           שתיים מעשר החלקות נושאות שם יישוב שונה בשני האתרים. כל הצלבה בין המאגרים לפי שם
           בטקסט חופשי תיכשל עליהן בשקט: תחזיר תוצאה, ופשוט תפיל את השורות האלה.
         </p>
-        <Refs ns={[33, 34, 35, 36]} onOpen={openByNumber} />
+        <Refs ns={[65, 66, 67, 68]} onOpen={openByNumber} />
         <div className="ngap-tablewrap">
           <table>
             <thead>
@@ -676,7 +718,7 @@ export default function NadlanGaps() {
           הסתיים בהודעה ״נמצאו 0 עסקאות״ עבור חלקה שיש בה עסקאות: טבלה ריקה, בלי שגיאה,
           בלי סימן שמשהו נכשל.
         </p>
-        <Refs ns={[15]} onOpen={openByNumber} />
+        <Refs ns={[28]} onOpen={openByNumber} />
         <div className="ngap-evidence">
           <span className="ngap-cap">
             גוש 7787 חלקה 464, שבע טעינות רצופות של אותה כתובת
@@ -708,38 +750,41 @@ export default function NadlanGaps() {
           <thead>
             <tr>
               <th>חלקה</th><th>יישוב</th>
-              <th className="num">נדל״ן<br />עסקאות מוצגות</th>
-              <th className="num">מיסים<br />תתי־חלקה</th>
+              <th className="num">נדל״ן<br />בטבלה</th>
+              <th className="num">נדל״ן<br />בהיסטוריה</th>
               <th className="num">מיסים<br />עסקאות</th>
               <th className="num">מיסים<br />שורות</th>
+              <th className="num">מתלכדות</th>
             </tr>
           </thead>
           <tbody>
             {([
-              ["17457-63", "מגדל העמק", "20", "22", "46", "49"],
-              ["7151-316", "בת ים", "12", "12", "18", "24"],
-              ["12593-23", "נופית", "1", "1", "1", "1"],
-              ["7787-464", "תל מונד", "6", "1", "4", "5"],
-              ["10236-99", "קריית ביאליק", "39", "40", "56", "58"],
-              ["7136-208", "בת ים", "9", "9", "14", "26"],
-              ["17032-221", "כפר תבור", "2", "2", "3", "3"],
-              ["6982-34", "תל אביב‑יפו", "3", "3", "7", "12"],
-              ["5134-28", "שדמה / כפר מרדכי", "אין דף", "8", "9", "9"],
-              ["7369-15", "כוכב יאיר / צור יגאל", "1", "1", "1", "1"],
-            ] as const).map(([parcel, town, shown, subs, deals, rows], i) => (
+              ["17457-63", "מגדל העמק", "20", "23", "46", "49", "43"],
+              ["7151-316", "בת ים", "12", "5", "18", "24", "16"],
+              ["12593-23", "נופית", "1", "0", "1", "1", "1"],
+              ["7787-464", "תל מונד", "6", "0", "5", "5", "5"],
+              ["10236-99", "קריית ביאליק", "39", "14", "56", "58", "52"],
+              ["7136-208", "בת ים", "9", "5", "14", "26", "13"],
+              ["17032-221", "כפר תבור", "2", "1", "3", "3", "3"],
+              ["6982-34", "תל אביב‑יפו", "3", "4", "8", "12", "6"],
+              ["5134-28", "שדמה / כפר מרדכי", "אין דף", "—", "9", "9", "0"],
+              ["7369-15", "כוכב יאיר / צור יגאל", "1", "0", "1", "1", "1"],
+            ] as const).map(([parcel, town, table, history, deals, rows, match], i) => (
               <tr key={i}>
                 <td className="ngap-id">{parcel}</td>
                 <td>{town}</td>
-                <td className={shown === "אין דף" ? "num ngap-vc" : "num"}>{shown}</td>
-                <td className="num">{subs}</td>
+                <td className={table === "אין דף" ? "num ngap-vc" : "num"}>{table}</td>
+                <td className="num">{history}</td>
                 <td className="num">{deals}</td>
                 <td className="num">{rows}</td>
+                <td className="num">{match}</td>
               </tr>
             ))}
             <tr className="ngap-sum">
               <td className="ngap-id">סה״כ</td><td>—</td>
-              <td className="num">93</td><td className="num">99</td>
-              <td className="num">159</td><td className="num">188</td>
+              <td className="num">93</td><td className="num">52</td>
+              <td className="num">161</td><td className="num">188</td>
+              <td className="num">140</td>
             </tr>
           </tbody>
         </table>
@@ -748,11 +793,13 @@ export default function NadlanGaps() {
       <div className="ngap-card">
         <h3>איך לקרוא את הנספח</h3>
         <p className="ngap-p">
-          <strong>מיסים · עסקאות</strong> סופר צירופים של תת־חלקה ויום מכירה.{" "}
-          <strong>מיסים · שורות</strong> סופר את השורות שהאתר מציג בפועל, וההפרש בין
-          השניים, 29 שורות, הוא בדיוק מכירות החלקים: כמה רוכשים שרכשו כל אחד חלק מאותו
-          נכס באותו יום. <strong>נדל״ן · עסקאות מוצגות</strong> קרוב לעמודת תתי־החלקה ולא
-          לעמודת העסקאות, וזו התמצית המספרית של הממצא הראשון.
+          <strong>מיסים · עסקאות</strong> סופר מכירות: שורות של אותה תת־חלקה ואותו יום מכירה
+          נספרות כמכירה אחת כשהחלקים שבהן מסתכמים לנכס שלם לכל היותר.{" "}
+          <strong>מיסים · שורות</strong> סופר את השורות שהאתר מציג בפועל, וההפרש בין השניים,
+          27 שורות, הוא מכירות החלקים. <strong>נדל״ן · בטבלה</strong>{" "}
+          ו<strong>נדל״ן · בהיסטוריה</strong> מופרדים כי זה עיקר הממצא הראשון: רק סכומם
+          מתקרב לעמודת העסקאות של רשות המיסים. <strong>מתלכדות</strong>: אותו תאריך ואותו
+          סכום, בסטייה של עיגול לאלף לכל היותר.
         </p>
       </div>
 
@@ -762,8 +809,13 @@ export default function NadlanGaps() {
       <div className="ngap-card">
         <ol className="ngap-actions">
           <li>
-            <strong>ספירת עסקאות באתר הנדל״ן היא ספירת נכסים, לא ספירת מכירות.</strong>{" "}
-            מי שמחשב נפח פעילות באזור יקבל מספר נמוך משמעותית מהאמת.
+            <strong>שורות בטבלת אתר הנדל״ן הן נכסים, לא מכירות.</strong> המכירות הקודמות של
+            כל נכס מוצגות רק בחלון שנפתח בלחיצה; מי שסופר שורות, או קורא את ״נמצאו N
+            עסקאות״, יחסיר יותר משליש מהמכירות.
+          </li>
+          <li>
+            <strong>גם פתיחת כל השורות אינה מבטיחה תמונה מלאה.</strong> שבע מכירות במדגם
+            אינן מופיעות באתר הנדל״ן בשום מקום, וחמש מהן רשומות בשטח 0.
           </li>
           <li>
             <strong>אין להסיק מחיר נכס מלא ממספר שמוצג באתר הנדל״ן.</strong> ברוב מכירות
@@ -774,7 +826,7 @@ export default function NadlanGaps() {
             שני שמות שונים; הצלבה כזו נכשלת בלי להודיע.
           </li>
           <li>
-            <strong>שנת בנייה ושטח אינם שדות שאפשר להסתמך עליהם</strong>, הם נבדלים בין
+            <strong>שנת בנייה ושטח אינם שדות שאפשר להסתמך עליהם</strong>: הם נבדלים בין
             המאגרים, ולעיתים בתוך אותו מאגר.
           </li>
           <li>
@@ -791,9 +843,10 @@ export default function NadlanGaps() {
           </li>
         </ol>
         <div className="ngap-takeaway is-good">
-          <b>ולבסוף, הצד החיובי.</b> אחרי שמנטרלים את הבדל היחידות, שני המקורות מסכימים:
-          77 מתוך 93 העסקאות שאתר הנדל״ן מציג מתלכדות בדיוק עם רשות המיסים, ורק אחת מהן,
-          עסקה מפברואר 2004, נושאת פער שאי אפשר לייחס לעיגול או למכירת חלקים.
+          <b>ולבסוף, הצד החיובי.</b> כשקוראים את אתר הנדל״ן במלואו, כולל חלונות ההיסטוריה,
+          שני המקורות מסכימים: 140 מתוך 145 המכירות שהאתר מציג מתלכדות עם רשות המיסים על
+          התאריך ועל הסכום, 120 מהן עד השקל. רק שלוש נושאות פער סכום שאינו עיגול לאלף,
+          והגדול שבהם, 18%, בעסקה מפברואר 2004.
         </div>
       </div>
 
@@ -808,9 +861,10 @@ export default function NadlanGaps() {
         </p>
         <p className="ngap-p">
           כל חלקה נפתחה בשני האתרים ונקראה במלואה: באתר הנדל״ן דרך דף הגוש והחלקה, עם מעבר
-          על כל עמודי טבלת העסקאות; ובאתר רשות המיסים דרך חיפוש גוש/חלקה מלא, כולל מעבר על
-          כל עמודי התוצאות. כל מספר בדוח הוא מה שהאתרים הציגו בפועל ב־9 בספטמבר 2026, וניתן
-          לשחזור בחיפוש חוזר של אותו גוש וחלקה.
+          על כל עמודי טבלת העסקאות ופתיחת חלון ״עסקאות קודמות לנכס״ בכל שורה שיש לה היסטוריה;
+          ובאתר רשות המיסים דרך חיפוש גוש/חלקה מלא, כולל מעבר על כל עמודי התוצאות. כל מספר
+          בדוח הוא מה שהאתרים הציגו בפועל ב־9 וב־10 בספטמבר 2026, וניתן לשחזור בחיפוש חוזר של
+          אותו גוש וחלקה.
         </p>
         <p className="ngap-p">
           בשל התופעה שמתוארת בסעיף 10, כל תוצאה של ״0 עסקאות״ נבדקה בטעינה חוזרת ולא נרשמה
@@ -822,7 +876,7 @@ export default function NadlanGaps() {
           <strong>סוגי</strong> פערים ולכמת אותם בתוך המדגם, וזה מה שהדוח עושה.
         </p>
         <p className="ngap-p" style={{ marginBottom: 0 }}>
-          הבדיקה בוצעה ב־9 בספטמבר 2026 מול הגרסאות החיות של{" "}
+          הבדיקה בוצעה ב־9 וב־10 בספטמבר 2026 מול הגרסאות החיות של{" "}
           <span dir="ltr">nadlan.gov.il</span> ושל{" "}
           <span dir="ltr">nadlan.taxes.gov.il</span>.
         </p>
@@ -834,8 +888,9 @@ export default function NadlanGaps() {
       <p className="ngap-p">
         האיורים מסודרים חלקה אחר חלקה. לכל חלקה מוצגות תחילה הרשומות של{" "}
         <strong>מאגר מיסוי מקרקעין</strong> ואחריהן העסקאות שמציג{" "}
-        <strong>אתר הנדל״ן</strong>, כך שאפשר לעבור על התמונות לבדן ולראות את הפער. לחיצה
-        על איור פותחת תצוגה מקדימה, וממנה אפשר לפתוח אותו בכרטיסייה נפרדת.
+        <strong>אתר הנדל״ן</strong>: דפי הטבלה, ואחריהם כל שורה שיש לה היסטוריה כשחלון
+        ״עסקאות קודמות לנכס״ פתוח. כך אפשר לעבור על התמונות לבדן ולראות את הפער. לחיצה על
+        איור פותחת תצוגה מקדימה, וממנה אפשר לפתוח אותו בכרטיסייה נפרדת.
       </p>
 
       {groups.map((g) => (
@@ -849,12 +904,20 @@ export default function NadlanGaps() {
               <Thumbs figs={g.tax} onOpen={openByNumber} />
             </>
           )}
-          {g.nadlan.length > 0 && (
+          {(g.nadlanPages.length > 0 || g.nadlanHistory.length > 0) && (
             <>
               <div className="ngap-figsub is-nadlan">
                 אתר הנדל״ן הממשלתי <span dir="ltr">nadlan.gov.il</span>
               </div>
-              <Thumbs figs={g.nadlan} onOpen={openByNumber} />
+              <Thumbs figs={g.nadlanPages} onOpen={openByNumber} />
+              {g.nadlanHistory.length > 0 && (
+                <>
+                  <div className="ngap-figkind">
+                    חלונות ״עסקאות קודמות לנכס״ ({g.nadlanHistory.length})
+                  </div>
+                  <Thumbs figs={g.nadlanHistory} onOpen={openByNumber} />
+                </>
+              )}
             </>
           )}
         </section>

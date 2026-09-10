@@ -3473,6 +3473,21 @@ li > a:only-child,
   font-variant-numeric: tabular-nums; color: var(--text);
 }
 
+/* The history-window captions run to a paragraph; the grid shows the start and
+   the lightbox the rest. */
+.ngap-thumb figcaption {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ngap-figkind {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0.85rem 0 0.45rem;
+}
+
 /* ── lightbox ── */
 .ngap-lb {
   position: fixed; inset: 0; z-index: 1000;
