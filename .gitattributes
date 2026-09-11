@@ -1,0 +1,2 @@
+# xhostd runs these with /bin/sh on Linux; a CRLF shebang line fails to exec.
+*.sh text eol=lf

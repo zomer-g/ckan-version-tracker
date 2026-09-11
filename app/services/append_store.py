@@ -35,6 +35,8 @@ import json
 import logging
 import re
 import ssl
+
+from app.pg_ssl import asyncpg_ssl_for
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import asyncpg
@@ -123,7 +125,7 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         async with _pool_lock:
             if _pool is None:
-                ctx = ssl.create_default_context()
+                ctx = asyncpg_ssl_for(_dsn())
                 _pool = await asyncpg.create_pool(
                     dsn=_dsn(),
                     ssl=ctx,
@@ -184,7 +186,7 @@ async def get_readonly_pool() -> asyncpg.Pool:
     if _ro_pool is None:
         async with _ro_pool_lock:
             if _ro_pool is None:
-                ctx = ssl.create_default_context()
+                ctx = asyncpg_ssl_for(_dsn_from(raw))
                 _ro_pool = await asyncpg.create_pool(
                     dsn=_dsn_from(raw),
                     ssl=ctx,

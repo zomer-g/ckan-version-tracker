@@ -1,5 +1,8 @@
 from urllib.parse import urlsplit
 
+import os
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -79,6 +82,17 @@ class Settings(BaseSettings):
     # (e.g. https://files.over.org.il). Downloads 302-redirect here, so the
     # file bytes never pass through the OVER backend.
     s3_public_base_url: str = ""
+    # xhostd RESERVES S3_ENDPOINT, S3_BUCKET and S3_REGION and injects its own
+    # object store into them, so there those names cannot carry R2 and would
+    # quietly point the archive at the platform's bucket. R2_* carry the same six
+    # values and, when set, win over S3_* (_r2_names_win_over_platform_s3).
+    # Render keeps using S3_*.
+    r2_endpoint: str = ""
+    r2_bucket: str = ""
+    r2_access_key: str = ""
+    r2_secret_key: str = ""
+    r2_region: str = ""
+    r2_public_base_url: str = ""
 
     # Max ZIP part size the worker splits attachments into, per destination.
     # ODATA stays small (CKAN/Cloudflare ~100MB upload edge limit); R2 has no
@@ -675,7 +689,33 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # ── Running a second instance, and moving a database ──
+    # SCHEDULER_ENABLED=false boots the web app without the poll scheduler and
+    # its one-time boot writers: an instance that serves but does not write
+    # (wave 2, xhostd serving while Render still polls production).
+    # MAINTENANCE_MODE=true does the same and also refuses API writes and pauses
+    # the worker fleet with 503 + Retry-After, for the minutes a database is being
+    # copied. /healthz reports both.
+    scheduler_enabled: bool = True
+    maintenance_mode: bool = False
+
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @property
+    def on_xhostd(self) -> bool:
+        return bool(os.environ.get("XHOST_SHA") or os.environ.get("XHOST_HTTP_PORT"))
+
+    @property
+    def writers_enabled(self) -> bool:
+        return self.scheduler_enabled and not self.maintenance_mode
+
+    @model_validator(mode="after")
+    def _r2_names_win_over_platform_s3(self):
+        for name in ("endpoint", "bucket", "access_key", "secret_key", "region", "public_base_url"):
+            value = getattr(self, f"r2_{name}")
+            if value:
+                setattr(self, f"s3_{name}", value)
+        return self
 
     def get_jwt_secret(self) -> str:
         if not self.jwt_secret_key:

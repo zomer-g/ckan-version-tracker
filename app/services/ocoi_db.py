@@ -40,6 +40,8 @@ import asyncio
 import json
 import logging
 import ssl
+
+from app.pg_ssl import asyncpg_ssl_for
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -139,7 +141,7 @@ async def get_pool() -> asyncpg.Pool:
                         "OCOI_DATABASE_URL is not configured — the /projects/ocoi "
                         "feature is off. Set it in the Render dashboard."
                     )
-                ctx = ssl.create_default_context()
+                ctx = asyncpg_ssl_for(_dsn_from(settings.ocoi_database_url))
                 _pool = await asyncpg.create_pool(
                     dsn=_dsn_from(settings.ocoi_database_url),
                     ssl=ctx,

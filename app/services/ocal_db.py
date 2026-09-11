@@ -27,6 +27,8 @@ import asyncio
 import json
 import logging
 import ssl
+
+from app.pg_ssl import asyncpg_ssl_for
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import asyncpg
@@ -92,7 +94,7 @@ async def get_pool() -> asyncpg.Pool:
                         "OCAL_DATABASE_URL is not configured — the /projects/ocal "
                         "feature is off. Set it in the Render dashboard."
                     )
-                ctx = ssl.create_default_context()
+                ctx = asyncpg_ssl_for(_dsn_from(settings.ocal_database_url))
                 _pool = await asyncpg.create_pool(
                     dsn=_dsn_from(settings.ocal_database_url),
                     ssl=ctx,

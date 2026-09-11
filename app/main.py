@@ -270,27 +270,54 @@ async def _prove_app_tables_are_private(*, shared_db: bool = False) -> None:
 # only. The console capability proof above still stands. See app/services/ocal_db.py.
 
 
+def _refuse_platform_bucket_as_archive() -> None:
+    """On xhostd, refuse to start if file archiving would land in the platform's bucket.
+
+    xhostd injects its own object store into S3_ENDPOINT, S3_BUCKET and S3_REGION,
+    the names OVER has always read for R2. Without R2_* set, uploads would go to
+    the platform bucket with no error, and every download link (served from
+    S3_PUBLIC_BASE_URL, files.over.org.il) would point at files that are not
+    there. Not booting is the better failure.
+    """
+    if settings.on_xhostd and not settings.r2_endpoint:
+        raise RuntimeError(
+            "Running on xhostd without R2_ENDPOINT: S3_* here are the platform's "
+            "bucket, not R2. Set R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY, "
+            "R2_SECRET_KEY, R2_REGION and R2_PUBLIC_BASE_URL."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
+    _refuse_platform_bucket_as_archive()
     shared_db = _guard_db_separation()
     # Before the scheduler and before any request: prove, from the database's own
     # answer, that the public console's role cannot read a credential table. This
     # is the guard on every topology; with one database it is the only one.
     await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
     await _prove_app_tables_are_private(shared_db=shared_db)
-    await init_scheduler()
-    # One-time seed of the CBS content index into the NEON append archive
-    # (no-op once populated). Non-blocking so it never delays boot. See
-    # app/services/cbs_neon.py.
     import asyncio
-    from app.services import cbs_neon
-    asyncio.create_task(cbs_neon.backfill_if_empty())
-    # One-time auto-activation of the MMM dataset's daily incremental archive
-    # mode (guarded + idempotent — no-op once active or if the catalog isn't
-    # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
-    from app.services import mmm_activate
-    asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
+    # The scheduler and the one-time boot writers below only run on an instance
+    # allowed to write. A second instance (SCHEDULER_ENABLED=false) and a
+    # database move (MAINTENANCE_MODE=true) serve without them.
+    if settings.writers_enabled:
+        await init_scheduler()
+        # One-time seed of the CBS content index into the NEON append archive
+        # (no-op once populated). Non-blocking so it never delays boot. See
+        # app/services/cbs_neon.py.
+        from app.services import cbs_neon
+        asyncio.create_task(cbs_neon.backfill_if_empty())
+        # One-time auto-activation of the MMM dataset's daily incremental archive
+        # mode (guarded + idempotent — no-op once active or if the catalog isn't
+        # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
+        from app.services import mmm_activate
+        asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
+    else:
+        logger.warning(
+            "scheduler and boot writers NOT started (SCHEDULER_ENABLED=%s, MAINTENANCE_MODE=%s)",
+            settings.scheduler_enabled, settings.maintenance_mode,
+        )
     # Warm the declarative source-registry cache so the first pasted URL and
     # the first neon-eligibility check don't race an empty cache. Manifests
     # are pushed by the worker; see app/services/source_registry.py.
@@ -354,6 +381,53 @@ async def _referrer_policy(request, call_next):
     response = await call_next(request)
     response.headers.setdefault("Referrer-Policy", "strict-origin")
     return response
+
+# Maintenance mode (MAINTENANCE_MODE), for the minutes a database is being copied.
+# Whatever would write is refused with 503 and Retry-After, so the copy stays the
+# truth: every /api/worker call (the fleet stops claiming tasks too) and every
+# other write under /api/. Reads keep working, and so do the POSTs that only read,
+# which is why they are named here.
+import re as _re
+
+_MAINTENANCE_READ_ONLY_POSTS = tuple(_re.compile(p) for p in (
+    r"^/api/tables/sql$",
+    r"^/api/knesset-db/sql$",
+    r"^/api/append/[^/]+/sql$",
+    r"^/api/connector/sql$",
+    r"^/api/auth/refresh$",
+))
+
+
+def _refused_in_maintenance(method: str, path: str) -> bool:
+    if path.startswith("/api/worker/"):
+        return True
+    if not path.startswith("/api/") or method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    return not any(p.match(path) for p in _MAINTENANCE_READ_ONLY_POSTS)
+
+
+@app.middleware("http")
+async def _maintenance_mode(request, call_next):
+    if settings.maintenance_mode and _refused_in_maintenance(request.method, request.url.path):
+        return JSONResponse(
+            {"detail": "maintenance: writes are paused while the database moves; retry later"},
+            status_code=503,
+            headers={"Retry-After": "300"},
+        )
+    return await call_next(request)
+
+
+@app.get("/healthz")
+async def healthz():
+    from app.worker.scheduler import scheduler
+    return {
+        "ok": True,
+        "host": "xhostd" if settings.on_xhostd else "other",
+        "scheduler_enabled": settings.scheduler_enabled,
+        "scheduler_running": bool(scheduler.running),
+        "maintenance_mode": settings.maintenance_mode,
+    }
+
 
 # API routes
 app.include_router(auth_router)
