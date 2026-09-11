@@ -18,6 +18,12 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
   python3 -m alembic upgrade head
 fi
 
+# On the shared channel database, re-assert the console role's function grants
+# and hidden-table revokes before serving. See scripts/xhostd_db_grants.py.
+if [ -n "${DATABASE_URL:-}" ] && [ "${APPEND_DATABASE_URL:-}" = "${DATABASE_URL:-}" ]; then
+  python3 scripts/xhostd_db_grants.py || true
+fi
+
 # The archive copy from Neon (ARCHIVE_LOADER=run) runs beside the web server and
 # resumes where it stopped after any restart. See scripts/xhostd_archive_loader.py.
 if [ "${ARCHIVE_LOADER:-}" = "run" ]; then
