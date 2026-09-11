@@ -423,7 +423,10 @@ async def _maintenance_mode(request, call_next):
         return JSONResponse(
             {"detail": "maintenance: writes are paused while the database moves; retry later"},
             status_code=503,
-            headers={"Retry-After": "300"},
+            # X-Over-Mode tells a worker which pause this is without parsing
+            # the text: a maintenance window lasts minutes to hours, so a held
+            # result is worth keeping; a freeze (below) can last days.
+            headers={"Retry-After": "300", "X-Over-Mode": "maintenance"},
         )
     return await call_next(request)
 
@@ -474,7 +477,8 @@ def _refused_in_version_freeze(method: str, path: str) -> bool:
 @app.middleware("http")
 async def _version_freeze(request, call_next):
     if settings.version_freeze and _refused_in_version_freeze(request.method, request.url.path):
-        return JSONResponse({"detail": _FREEZE_DETAIL}, status_code=503, headers={"Retry-After": "3600"})
+        return JSONResponse({"detail": _FREEZE_DETAIL}, status_code=503,
+                            headers={"Retry-After": "3600", "X-Over-Mode": "freeze"})
     return await call_next(request)
 
 

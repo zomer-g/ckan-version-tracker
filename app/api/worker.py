@@ -222,6 +222,12 @@ class PushVersionRequest(BaseModel):
     # reader whether its 4,690 rows are the publication clocks or the year's
     # movers. See app/services/sampling_runs.py.
     run_group: str | None = None
+    # The task this push belongs to (the X-Worker-Task-Id header carries the
+    # same). With it, the guard checks THAT task instead of "some task is
+    # running for this dataset", so a result held through a maintenance window
+    # can neither close another worker's newer task nor be lost to the sweep.
+    # Absent (older workers): the guard behaves exactly as before.
+    task_id: str | None = None
 
 class ProgressUpdate(BaseModel):
     phase: str
@@ -1309,6 +1315,77 @@ async def _append_seed_from_snapshot(ds, latest) -> dict[str, list[dict]]:
     return out
 
 
+def _missing_neon_csv(body: "PushVersionRequest") -> list[str]:
+    """Resource names whose neon-csv reference points at a file no longer on disk."""
+    return [
+        name for name, ref in (body.csv_resource_ids or {}).items()
+        if _is_neon_csv_ref(ref) and not _os.path.isfile(_neon_csv_path(ref))
+    ]
+
+
+async def _push_task_outcome(db: AsyncSession, ds, task_id: str, request: Request):
+    """Decide a push that names its task. Returns None to go ahead (the task is
+    running when it returns), a dict to answer with, or raises.
+
+    - running: go ahead, as before.
+    - failed by the sweep (phase interrupted) and last held by THIS worker, with
+      no other active task on the dataset: the result outlived a maintenance
+      window or a network outage. Put the task back to running and go ahead.
+    - completed: the push already landed (a retry after an ambiguous timeout).
+      200 with already_committed, so the worker's outbox can let go of it.
+    - another task is active on the dataset: 409 superseded, and that task is
+      left untouched.
+    - anything else (cancelled, failed by the worker, another worker's task,
+      a task of another dataset): 409.
+    """
+    from app.models.scrape_task import PHASE_INTERRUPTED
+
+    try:
+        tid = uuid.UUID(str(task_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task ID")
+    task = (await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))).scalar_one_or_none()
+    if task is None or task.tracked_dataset_id != ds.id:
+        raise HTTPException(status_code=409, detail={"error": "unknown_task"})
+
+    if task.status == "running":
+        return None
+
+    if task.status == "completed":
+        latest = (await db.execute(
+            select(VersionIndex)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
+            .order_by(VersionIndex.version_number.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        return {"already_committed": True,
+                "version_number": latest.version_number if latest else None}
+
+    other = (await db.execute(
+        select(ScrapeTask).where(
+            ScrapeTask.tracked_dataset_id == ds.id,
+            ScrapeTask.status.in_(("pending", "running")),
+            ScrapeTask.id != task.id,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if other is not None:
+        raise HTTPException(status_code=409, detail={"error": "superseded"})
+
+    worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
+    if (task.status == "failed" and task.phase == PHASE_INTERRUPTED
+            and worker_id and task.worker_id == worker_id):
+        task.status = "running"
+        task.phase = "reclaimed"
+        task.error = None
+        task.completed_at = None
+        task.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.info("push-version: worker %s reclaimed interrupted task %s", worker_id, task.id)
+        return None
+
+    raise HTTPException(status_code=409, detail={"error": "not_reclaimable", "status": task.status})
+
+
 @router.post("/push-version")
 @limiter.limit("30/minute")
 async def push_version(
@@ -1331,6 +1408,25 @@ async def push_version(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # A push that names its task is checked against that task (see
+    # _push_task_outcome); every later step then finds it running, as before.
+    task_id = body.task_id or request.headers.get("x-worker-task-id")
+    if task_id:
+        outcome = await _push_task_outcome(db, ds, task_id, request)
+        if outcome is not None:
+            return outcome
+
+    # A neon-csv reference whose staged file is gone (a restart or a deploy
+    # emptied /tmp, or the 6-hour cleanup ran): refuse BEFORE anything is
+    # written. Accepting it created a version promising rows nobody would load.
+    missing = _missing_neon_csv(body)
+    if missing:
+        raise HTTPException(status_code=409, detail={
+            "error": "staged_csv_missing", "resources": missing,
+            "message": "The CSV staged by /upload-csv is no longer on the "
+                       "server; upload it again, then push again.",
+        })
 
     # Refuse a push for a dataset with no running task. push_version otherwise
     # creates the version off whatever the worker sends, no matter the state of
@@ -3353,6 +3449,14 @@ async def report_failure(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # A completed task stays completed. A failure report can arrive after the
+    # push that finished the task (a worker's outbox resending /fail from
+    # before a retried push succeeded); overwriting it would list a run that
+    # produced a version as failed. 200, so the outbox can drop it.
+    if task.status == "completed":
+        logger.info("Ignoring failure report for completed task %s: %s", task_id, body.error)
+        return {"status": "completed", "ignored": True}
 
     task.status = "failed"
     task.phase = body.phase

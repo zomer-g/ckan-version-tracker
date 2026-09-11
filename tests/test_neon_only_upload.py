@@ -375,7 +375,7 @@ def test_push_version_loads_a_neon_only_dataset_rows_and_records_the_table(monke
     assert version.change_summary["total_rows"] == 2
 
 
-def test_push_version_queues_the_out_of_band_csv_of_a_neon_only_dataset(monkeypatch):
+def test_push_version_queues_the_out_of_band_csv_of_a_neon_only_dataset(monkeypatch, tmp_path):
     """The >30MB path end to end: /upload-csv's reference reaches push-version,
     which streams it into the append table off the request path and records the
     table — with no file mapping, because there is no file."""
@@ -395,12 +395,14 @@ def test_push_version_queues_the_out_of_band_csv_of_a_neon_only_dataset(monkeypa
 
     monkeypatch.setattr(worker_api.asyncio, "create_task", _fake_create_task)
 
+    staged = tmp_path / "x.csv"  # push-version refuses a reference whose file is gone
+    staged.write_text("שם\nתוכנית א\n", encoding="utf-8")
     db = _PushDB(_ds({"storage_backend": "neon"}))
     resp = _push(
         _client(db),
         [{"name": "נתוני הסורק", "format": "CSV", "row_count": 36784,
           "fields": [], "records": []}],
-        csv_resource_ids={"נתוני הסורק": worker_api._neon_csv_ref("/tmp/x.csv")},
+        csv_resource_ids={"נתוני הסורק": worker_api._neon_csv_ref(str(staged))},
     )
     assert resp.status_code == 200, resp.text
     assert len(scheduled) == 1, "the row load must be scheduled off-request"
