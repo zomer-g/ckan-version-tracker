@@ -111,62 +111,44 @@ CREATE TABLE ocal.diary_events (id integer);
     assert "CREATE TABLE ocal.diary_events (id integer);" in out
 
 
-class _Tx:
-    def __init__(self, log):
-        self.log = log
-
-    async def __aenter__(self):
-        self.log.append("begin")
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self.log.append("rollback" if exc_type else "commit")
-        return False
+def test_the_copy_pipe_is_one_target_transaction_that_fails_with_its_source():
+    s = L.copy_script()
+    assert s.startswith("set -o pipefail;")
+    assert '-c "COPY $LOADER_TABLE TO STDOUT (FORMAT binary)"' in s
+    assert "--single-transaction" in s and "ON_ERROR_STOP=1" in s
+    assert s.index('-c "TRUNCATE $LOADER_TABLE"') < s.index('-c "COPY $LOADER_TABLE FROM STDIN (FORMAT binary)"')
+    # the name reaches psql only through the variable, inside double quotes
+    assert "public" not in s and '"$LOADER_TABLE' not in s
 
 
-class _Dst:
-    def __init__(self):
-        self.log, self.received = [], []
-
-    def transaction(self):
-        return _Tx(self.log)
-
-    async def execute(self, sql):
-        self.log.append(sql.split()[0])
-
-    async def copy_to_table(self, name, schema_name, source, format):
-        async for chunk in source:
-            self.received.append(chunk)
+def _fake_bin(tmp_path, src_exit: int, dst_exit: int):
+    """A stand-in psql: the source prints bytes and exits src_exit, the target
+    drains stdin and exits dst_exit."""
+    psql = tmp_path / "psql"
+    psql.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$*" == *"TO STDOUT"* ]]; then printf PGCOPY; exit ' + str(src_exit) + "; fi\n"
+        "cat >/dev/null; exit " + str(dst_exit) + "\n", encoding="utf-8", newline="\n")
+    psql.chmod(0o755)
+    return str(tmp_path).replace("\\", "/")
 
 
-class _Src:
-    def __init__(self, chunks, fail_after=None):
-        self.chunks, self.fail_after = chunks, fail_after
+import shutil  # noqa: E402
 
-    async def copy_from_table(self, name, schema_name, output, format):
-        for i, c in enumerate(self.chunks):
-            if self.fail_after is not None and i == self.fail_after:
-                raise ConnectionError("neon went away")
-            await output(c)
+import pytest  # noqa: E402
 
 
-def test_a_table_streams_into_one_committed_transaction():
+@pytest.mark.skipif(shutil.which("bash") is None, reason="no bash")
+@pytest.mark.parametrize("src_exit,dst_exit,ok", [(0, 0, True), (1, 0, False), (0, 3, False)])
+def test_a_failure_on_either_side_fails_the_table(tmp_path, monkeypatch, src_exit, dst_exit, ok):
     import asyncio
-    dst = _Dst()
-    asyncio.run(L.copy_table(_Src([b"PGCOPY", b"row1", b"row2"]), dst, "public", "t"))
-    assert dst.received == [b"PGCOPY", b"row1", b"row2"]
-    assert dst.log == ["begin", "TRUNCATE", "commit"]
-
-
-def test_a_source_failure_rolls_the_table_back_instead_of_committing_part_of_it():
-    import asyncio
-    dst = _Dst()
-    try:
-        asyncio.run(L.copy_table(_Src([b"PGCOPY", b"row1", b"row2"], fail_after=2), dst, "public", "t"))
-        raise AssertionError("a source failure must propagate")
-    except RuntimeError as e:
-        assert "source side failed" in str(e)
-    assert dst.log[-1] == "rollback"
-    assert "commit" not in dst.log
+    monkeypatch.setattr(L, "BIN", _fake_bin(tmp_path, src_exit, dst_exit))
+    coro = L.copy_table("postgresql://src/db", "postgresql://dst/db", "public", "t")
+    if ok:
+        asyncio.run(coro)
+    else:
+        with pytest.raises(RuntimeError):
+            asyncio.run(coro)
 
 
 def test_post_data_is_split_into_typed_statements_in_order():

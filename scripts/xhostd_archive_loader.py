@@ -12,12 +12,11 @@ Phases, each recorded once done:
   1. pre-data   schema, types, functions, tables (no indexes yet), from pg_dump
                 --section=pre-data. postgres_fdw is dropped: xhostd refuses it
                 and nothing uses it (no foreign tables on Neon).
-  2. data       each table streamed in binary COPY over connections that stay
-                open (copy_table), smallest first, PARALLEL at a time. Each is its
-                own short read on Neon, so no transaction sits open for hours in
-                front of the live site. TRUNCATE and COPY share one transaction
-                on the target, so an interrupted table leaves nothing. Row counts
-                must match.
+  2. data       each table as a psql | psql binary COPY pipe (copy_script),
+                smallest first, PARALLEL at a time. Each is its own short read on
+                Neon, so no transaction sits open for hours in front of the live
+                site. TRUNCATE and COPY share one transaction on the target, so an
+                interrupted table leaves nothing. Row counts must match.
      sequences  positions carried over, since COPY does not set them.
   3. post-data  indexes and constraints, then foreign keys, triggers and
                 materialized view data. An object that already exists is taken
@@ -36,7 +35,6 @@ Env: APPEND_DATABASE_URL (Neon archive, owner role), XHOST_LOCAL_DATABASE_URL
 remaps it), DATABASE_URL_READONLY (the channel's read-only role).
 """
 import asyncio
-import contextlib
 import os
 import re
 import sys
@@ -148,55 +146,38 @@ async def run(args: list[str], *, stdin_text: str | None = None, env: dict | Non
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
-_END = object()
+def copy_script() -> str:
+    """One table, Neon to the channel database, as a psql | psql pipe in binary COPY.
 
+    History, measured on the real run. pg_dump | psql per table spent ~10 s a
+    table re-reading Neon's whole catalog on every start. Streaming through
+    asyncpg on two open connections removed that but stalled on sub-megabyte
+    tables for minutes while Neon sat idle in ClientRead, with the bytes stuck in
+    the Python handoff. Plain psql on both ends skips the catalog and streams in C.
 
-async def copy_table(src, dst, schema: str, name: str) -> None:
-    """Stream one table from Neon into the channel database in binary COPY.
-
-    Both connections stay open for the whole run. The first version spawned
-    pg_dump | psql per table, and pg_dump reads the entire catalog on every start
-    (~2,300 tables, 3,155 indexes on Neon), which made the thousands of small
-    tables cost seconds each. Binary COPY between two PostgreSQL 18 servers with
-    the same type definitions is byte-for-byte, geometry included.
-
-    The target side runs in one transaction with the TRUNCATE, so a table that
-    fails halfway leaves nothing behind. A failure on the source side reaches the
-    target as an exception, never as an early end of stream that would commit a
-    partial table.
+    The table name travels in an environment variable and is only ever expanded
+    inside double quotes, so no name is re-parsed by the shell. TRUNCATE and COPY
+    share one target transaction (--single-transaction, ON_ERROR_STOP). If the
+    source dies midway, pipefail fails the table. A stream cut inside a row makes
+    the target COPY error and roll back; one cut exactly between rows can commit,
+    which is why the guarantee is not this pipe but the caller: a failed table is
+    recorded failed and copied again from TRUNCATE on the next run, and a table
+    is marked done only when its row counts match Neon's.
     """
-    chunks: asyncio.Queue = asyncio.Queue(maxsize=32)
+    return (
+        'set -o pipefail; '
+        f'"{BIN}/psql" "$LOADER_SRC" -X -q -v ON_ERROR_STOP=1 '
+        '-c "COPY $LOADER_TABLE TO STDOUT (FORMAT binary)" '
+        f'| "{BIN}/psql" "$LOADER_DST" -X -q -v ON_ERROR_STOP=1 --single-transaction '
+        '-c "TRUNCATE $LOADER_TABLE" -c "COPY $LOADER_TABLE FROM STDIN (FORMAT binary)"'
+    )
 
-    async def produce() -> None:
-        async def sink(data) -> None:
-            await chunks.put(bytes(data))
-        try:
-            await src.copy_from_table(name, schema_name=schema, output=sink, format="binary")
-        except BaseException as e:  # noqa: BLE001
-            await chunks.put(e)
-            raise
-        await chunks.put(_END)
 
-    async def consume():
-        while True:
-            item = await chunks.get()
-            if item is _END:
-                return
-            if isinstance(item, BaseException):
-                raise RuntimeError(f"source side failed: {item}") from item
-            yield item
-
-    producer = asyncio.create_task(produce())
-    try:
-        async with dst.transaction():
-            await dst.execute(f"TRUNCATE {qualified(schema, name)}")
-            await dst.copy_to_table(name, schema_name=schema, source=consume(), format="binary")
-    except BaseException:
-        producer.cancel()
-        with contextlib.suppress(BaseException):
-            await producer
-        raise
-    await producer
+async def copy_table(src_url: str, dst_url: str, schema: str, name: str) -> None:
+    env = {**os.environ, "LOADER_TABLE": qualified(schema, name), "LOADER_SRC": src_url, "LOADER_DST": dst_url}
+    rc, _, err = await run(["bash", "-c", copy_script()], env=env)
+    if rc != 0:
+        raise RuntimeError(err.strip()[-600:] or f"copy pipe exited {rc}")
 
 
 async def sequences(src, dst) -> None:
@@ -287,7 +268,7 @@ async def data(src_url: str, dst_url: str, src, dst) -> None:
                 try:
                     await d.execute("UPDATE _loader.tables SET status = 'running', updated_at = now() "
                                     "WHERE schema = $1 AND name = $2", t["schema"], t["name"])
-                    await copy_table(s, d, t["schema"], t["name"])
+                    await copy_table(src_url, dst_url, t["schema"], t["name"])
                     src_rows = await s.fetchval(f"SELECT count(*) FROM {table}")
                     dst_rows = await d.fetchval(f"SELECT count(*) FROM {table}")
                     status = "done" if src_rows == dst_rows else "mismatch"
