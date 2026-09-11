@@ -6,6 +6,7 @@ import {
   ReactNode,
 } from "react";
 import { auth as authApi, setToken, clearToken } from "../api/client";
+import { safeNext } from "./safeNext";
 
 interface User {
   id: string;
@@ -48,7 +49,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const bootstrap = async () => {
       if (code) {
-        window.history.replaceState({}, "", window.location.pathname);
+        // Drop the code, keep ?next= (a same-site path, not a secret) so the login
+        // page can send the reader back to what they were doing.
+        const next = safeNext(params.get("next"));
+        window.history.replaceState(
+          {},
+          "",
+          window.location.pathname + (next ? `?next=${encodeURIComponent(next)}` : ""),
+        );
         try {
           const { token } = await authApi.exchange(code);
           setToken(token);

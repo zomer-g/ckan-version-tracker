@@ -1,12 +1,13 @@
 """OAuth2 SSO endpoints for Google."""
 
 import logging
+import base64
 import secrets
 import uuid
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -32,14 +33,67 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 
+# -- Where to send the reader after sign-in ------------------------------------
+# A page that asks for sign-in (the SQL consoles, via SqlSignInNotice) passes
+# ?next=<the page, with its query>. It rides through Google inside `state`,
+# which Google hands back untouched, and returns with the one-time code, so the
+# reader lands back on their query instead of the admin panel.
+#
+# Nothing here is trusted. An attacker can put anything in ?next= or in state,
+# so the value is validated on the way out and again on the way back: a path on
+# this site and nothing else. Not another origin, not a scheme-relative "//host",
+# not a backslash some browsers read as a slash, no control characters (header
+# splitting), and not the login page itself (a loop). The SPA applies the same
+# rule before it navigates (frontend/src/auth/safeNext.ts).
+_NEXT_MAX_CHARS = 1500
+
+
+def _safe_next(raw: str | None) -> str | None:
+    n = (raw or "").strip()
+    if not n.startswith("/") or n.startswith("//") or "\\" in n:
+        return None
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in n):
+        return None
+    if n.startswith("/admin/login") or n.startswith("/api/"):
+        return None
+    if len(n) > _NEXT_MAX_CHARS:
+        # A console URL can carry a long query. Better the right page without
+        # the query than a state parameter Google may refuse.
+        n = n.split("?", 1)[0].split("#", 1)[0]
+        if len(n) > _NEXT_MAX_CHARS:
+            return None
+    return n
+
+
+def _state_with_next(next_path: str | None) -> str:
+    # token_urlsafe never emits ".", so it separates the random part from the
+    # packed destination unambiguously.
+    state = secrets.token_urlsafe(32)
+    if next_path:
+        packed = base64.urlsafe_b64encode(next_path.encode("utf-8")).decode("ascii").rstrip("=")
+        state = f"{state}.{packed}"
+    return state
+
+
+def _next_from_state(state: str | None) -> str | None:
+    _, _, packed = (state or "").partition(".")
+    if not packed:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(packed + "=" * (-len(packed) % 4)).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    return _safe_next(raw)
+
+
 @router.get("/google")
 @limiter.limit("20/minute")
-async def google_login(request: Request):
+async def google_login(request: Request, next_path: str = Query("", alias="next")):
     """Redirect user to Google's OAuth2 consent screen."""
     if not settings.google_client_id:
         raise HTTPException(status_code=501, detail="Google SSO not configured")
 
-    state = secrets.token_urlsafe(32)
+    state = _state_with_next(_safe_next(next_path))
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": f"{settings.app_base_url}/api/auth/sso/google/callback",
@@ -58,6 +112,7 @@ async def google_callback(
     request: Request,
     code: str = "",
     error: str = "",
+    state: str = "",
     db: AsyncSession = Depends(get_db),
 ):
     """Handle Google OAuth2 callback."""
@@ -101,7 +156,11 @@ async def google_callback(
         login_code = await auth_codes.issue_code(
             db, user.id, auth_codes.PURPOSE_LOGIN, ttl_seconds=auth_codes.LOGIN_TTL_SECONDS
         )
-        return RedirectResponse(url=f"/admin/login?code={login_code}")
+        destination = f"/admin/login?code={login_code}"
+        next_path = _next_from_state(state)
+        if next_path:
+            destination += f"&next={quote(next_path, safe='')}"
+        return RedirectResponse(url=destination)
 
     except Exception:
         logger.exception("Google OAuth callback failed")

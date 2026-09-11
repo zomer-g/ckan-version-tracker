@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { safeNext } from "../auth/safeNext";
 import { auth } from "../api/client";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
@@ -17,10 +18,11 @@ export default function LoginPage() {
   });
   const errorRef = useRef<HTMLDivElement>(null);
 
-  // If already logged in (e.g. SSO callback set token), redirect
+  // Once signed in (e.g. the SSO callback set a token), go back to the page that
+  // asked for sign-in, if it said so and it is a path on this site, else to admin.
   useEffect(() => {
-    if (user) navigate("/admin");
-  }, [user, navigate]);
+    if (user) navigate(safeNext(searchParams.get("next")) ?? "/admin", { replace: true });
+  }, [user, navigate, searchParams]);
 
   // Check for SSO error in URL
   useEffect(() => {
