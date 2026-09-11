@@ -251,6 +251,16 @@ async def _prove_app_tables_are_private(*, shared_db: bool = False) -> None:
         return
 
     detail = "; ".join(problems)
+    if shared_db and settings.maintenance_mode:
+        # The app database is being rebuilt underneath us (the resync drops and
+        # recreates `app` and `auth` in the background) while writes are
+        # refused. Refusing to start here restarted the container, which killed
+        # the resync, which dropped the schemas again: a loop. The console proof
+        # above still ran and passed; the next boot, with maintenance off, runs
+        # this check in full.
+        logger.critical(
+            "app schema check deferred during MAINTENANCE_MODE (resync in progress?): %s", detail)
+        return
     if shared_db:
         logger.critical(
             "SECURITY: %s. The public console shares this database. Refusing to start.",

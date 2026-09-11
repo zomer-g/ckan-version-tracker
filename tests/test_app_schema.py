@@ -175,3 +175,18 @@ def test_private_check_skips_sqlite(monkeypatch):
     fake = _engine(monkeypatch, "sqlite", [])
     asyncio.run(M._prove_app_tables_are_private(shared_db=True))
     assert fake.connected is False
+
+
+def test_private_check_does_not_block_boot_during_maintenance(monkeypatch):
+    """A resync drops and rebuilds `app` while MAINTENANCE_MODE refuses writes;
+    blocking boot then restarted the container and killed the resync."""
+    monkeypatch.setattr(M.settings, "maintenance_mode", True)
+    _engine(monkeypatch, "postgresql", ["public", []])
+    asyncio.run(M._prove_app_tables_are_private(shared_db=True))
+
+
+def test_private_check_still_blocks_a_shared_db_outside_maintenance(monkeypatch):
+    monkeypatch.setattr(M.settings, "maintenance_mode", False)
+    _engine(monkeypatch, "postgresql", ["public", []])
+    with pytest.raises(RuntimeError):
+        asyncio.run(M._prove_app_tables_are_private(shared_db=True))
