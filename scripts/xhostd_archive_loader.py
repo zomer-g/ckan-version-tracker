@@ -417,6 +417,15 @@ async def summary(dst) -> None:
         + f"; database {size}; {idx} indexes")
 
 
+async def _reconnect(src, dst, src_url: str, dst_url: str):
+    for conn in (src, dst):
+        try:
+            await conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return await connect(src_url), await connect(dst_url)
+
+
 async def main() -> None:
     src_raw = os.environ.get("APPEND_DATABASE_URL", "")
     dst_raw = os.environ.get("XHOST_LOCAL_DATABASE_URL", "")
@@ -443,9 +452,16 @@ async def main() -> None:
             "updated_at timestamptz DEFAULT now(), PRIMARY KEY (schema, name))")
         await pre_data(src_url, dst_url, dst)
         await data(src_url, dst_url, src, dst)
+        # Fresh connections for every later phase. The first complete run lost its
+        # Neon connection while it sat idle through 40 minutes of index building,
+        # and the grants phase, which asks Neon which tables are hidden, died on
+        # "connection is closed" after everything else had finished.
+        src, dst = await _reconnect(src, dst, src_url, dst_url)
         await sequences(src, dst)
         await post_data(src_url, dst_url, dst)
+        src, dst = await _reconnect(src, dst, src_url, dst_url)
         await analyze(dst)
+        src, dst = await _reconnect(src, dst, src_url, dst_url)
         await grants(src, dst, ro_role)
         await summary(dst)
         log("COMPLETE")
