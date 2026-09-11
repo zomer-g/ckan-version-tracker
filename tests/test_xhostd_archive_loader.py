@@ -111,6 +111,64 @@ CREATE TABLE ocal.diary_events (id integer);
     assert "CREATE TABLE ocal.diary_events (id integer);" in out
 
 
+class _Tx:
+    def __init__(self, log):
+        self.log = log
+
+    async def __aenter__(self):
+        self.log.append("begin")
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.log.append("rollback" if exc_type else "commit")
+        return False
+
+
+class _Dst:
+    def __init__(self):
+        self.log, self.received = [], []
+
+    def transaction(self):
+        return _Tx(self.log)
+
+    async def execute(self, sql):
+        self.log.append(sql.split()[0])
+
+    async def copy_to_table(self, name, schema_name, source, format):
+        async for chunk in source:
+            self.received.append(chunk)
+
+
+class _Src:
+    def __init__(self, chunks, fail_after=None):
+        self.chunks, self.fail_after = chunks, fail_after
+
+    async def copy_from_table(self, name, schema_name, output, format):
+        for i, c in enumerate(self.chunks):
+            if self.fail_after is not None and i == self.fail_after:
+                raise ConnectionError("neon went away")
+            await output(c)
+
+
+def test_a_table_streams_into_one_committed_transaction():
+    import asyncio
+    dst = _Dst()
+    asyncio.run(L.copy_table(_Src([b"PGCOPY", b"row1", b"row2"]), dst, "public", "t"))
+    assert dst.received == [b"PGCOPY", b"row1", b"row2"]
+    assert dst.log == ["begin", "TRUNCATE", "commit"]
+
+
+def test_a_source_failure_rolls_the_table_back_instead_of_committing_part_of_it():
+    import asyncio
+    dst = _Dst()
+    try:
+        asyncio.run(L.copy_table(_Src([b"PGCOPY", b"row1", b"row2"], fail_after=2), dst, "public", "t"))
+        raise AssertionError("a source failure must propagate")
+    except RuntimeError as e:
+        assert "source side failed" in str(e)
+    assert dst.log[-1] == "rollback"
+    assert "commit" not in dst.log
+
+
 def test_post_data_is_split_into_typed_statements_in_order():
     dump = """
 \\restrict abc123

@@ -12,10 +12,13 @@ Phases, each recorded once done:
   1. pre-data   schema, types, functions, tables (no indexes yet), from pg_dump
                 --section=pre-data. postgres_fdw is dropped: xhostd refuses it
                 and nothing uses it (no foreign tables on Neon).
-  2. data       one table per pg_dump|psql pipe, smallest first, PARALLEL at a
-                time. Each is its own short snapshot on Neon, so no transaction
-                sits open for hours in front of the live site. A table that was
-                interrupted is truncated and loaded again. Row counts must match.
+  2. data       each table streamed in binary COPY over connections that stay
+                open (copy_table), smallest first, PARALLEL at a time. Each is its
+                own short read on Neon, so no transaction sits open for hours in
+                front of the live site. TRUNCATE and COPY share one transaction
+                on the target, so an interrupted table leaves nothing. Row counts
+                must match.
+     sequences  positions carried over, since COPY does not set them.
   3. post-data  indexes and constraints, then foreign keys, triggers and
                 materialized view data. An object that already exists is taken
                 as done, so an interrupted run resumes.
@@ -33,6 +36,7 @@ Env: APPEND_DATABASE_URL (Neon archive, owner role), XHOST_LOCAL_DATABASE_URL
 remaps it), DATABASE_URL_READONLY (the channel's read-only role).
 """
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -144,6 +148,74 @@ async def run(args: list[str], *, stdin_text: str | None = None, env: dict | Non
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
+_END = object()
+
+
+async def copy_table(src, dst, schema: str, name: str) -> None:
+    """Stream one table from Neon into the channel database in binary COPY.
+
+    Both connections stay open for the whole run. The first version spawned
+    pg_dump | psql per table, and pg_dump reads the entire catalog on every start
+    (~2,300 tables, 3,155 indexes on Neon), which made the thousands of small
+    tables cost seconds each. Binary COPY between two PostgreSQL 18 servers with
+    the same type definitions is byte-for-byte, geometry included.
+
+    The target side runs in one transaction with the TRUNCATE, so a table that
+    fails halfway leaves nothing behind. A failure on the source side reaches the
+    target as an exception, never as an early end of stream that would commit a
+    partial table.
+    """
+    chunks: asyncio.Queue = asyncio.Queue(maxsize=32)
+
+    async def produce() -> None:
+        async def sink(data) -> None:
+            await chunks.put(bytes(data))
+        try:
+            await src.copy_from_table(name, schema_name=schema, output=sink, format="binary")
+        except BaseException as e:  # noqa: BLE001
+            await chunks.put(e)
+            raise
+        await chunks.put(_END)
+
+    async def consume():
+        while True:
+            item = await chunks.get()
+            if item is _END:
+                return
+            if isinstance(item, BaseException):
+                raise RuntimeError(f"source side failed: {item}") from item
+            yield item
+
+    producer = asyncio.create_task(produce())
+    try:
+        async with dst.transaction():
+            await dst.execute(f"TRUNCATE {qualified(schema, name)}")
+            await dst.copy_to_table(name, schema_name=schema, source=consume(), format="binary")
+    except BaseException:
+        producer.cancel()
+        with contextlib.suppress(BaseException):
+            await producer
+        raise
+    await producer
+
+
+async def sequences(src, dst) -> None:
+    """Carry sequence positions over. pg_dump did this per table; binary COPY does not."""
+    if await phase_done(dst, "sequences"):
+        return
+    seqs = await src.fetch(
+        "SELECT schemaname AS schema, sequencename AS name, last_value FROM pg_sequences "
+        "WHERE schemaname <> ALL($1::text[]) AND last_value IS NOT NULL", list(EXCLUDE_SCHEMAS))
+    moved = 0
+    for r in seqs:
+        q = qualified(r["schema"], r["name"])
+        if await dst.fetchval("SELECT to_regclass($1) IS NOT NULL", q):
+            await dst.execute("SELECT setval($1::regclass, $2, true)", q, r["last_value"])
+            moved += 1
+    log(f"sequences: {moved} set")
+    await mark_phase(dst, "sequences")
+
+
 async def phase_done(dst, name: str) -> bool:
     return bool(await dst.fetchval("SELECT 1 FROM _loader.phase WHERE name = $1", name))
 
@@ -213,17 +285,9 @@ async def data(src_url: str, dst_url: str, src, dst) -> None:
                 table = qualified(t["schema"], t["name"])
                 t0 = time.monotonic()
                 try:
-                    if t["status"] != "pending":
-                        await d.execute(f"TRUNCATE {table}")
                     await d.execute("UPDATE _loader.tables SET status = 'running', updated_at = now() "
                                     "WHERE schema = $1 AND name = $2", t["schema"], t["name"])
-                    env = {**os.environ, "LOADER_TABLE": table, "LOADER_SRC": src_url, "LOADER_DST": dst_url}
-                    rc, _, err = await run(["bash", "-c",
-                        'set -o pipefail; "' + BIN + '/pg_dump" --data-only --no-owner --no-privileges '
-                        '--table="$LOADER_TABLE" "$LOADER_SRC" | "' + BIN + '/psql" "$LOADER_DST" '
-                        '-v ON_ERROR_STOP=1 -q --single-transaction'], env=env)
-                    if rc != 0:
-                        raise RuntimeError(err.strip()[-600:])
+                    await copy_table(s, d, t["schema"], t["name"])
                     src_rows = await s.fetchval(f"SELECT count(*) FROM {table}")
                     dst_rows = await d.fetchval(f"SELECT count(*) FROM {table}")
                     status = "done" if src_rows == dst_rows else "mismatch"
@@ -398,6 +462,7 @@ async def main() -> None:
             "updated_at timestamptz DEFAULT now(), PRIMARY KEY (schema, name))")
         await pre_data(src_url, dst_url, dst)
         await data(src_url, dst_url, src, dst)
+        await sequences(src, dst)
         await post_data(src_url, dst_url, dst)
         await analyze(dst)
         await grants(src, dst, ro_role)
