@@ -315,8 +315,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
     else:
         logger.warning(
-            "scheduler and boot writers NOT started (SCHEDULER_ENABLED=%s, MAINTENANCE_MODE=%s)",
-            settings.scheduler_enabled, settings.maintenance_mode,
+            "scheduler and boot writers NOT started "
+            "(SCHEDULER_ENABLED=%s, MAINTENANCE_MODE=%s, VERSION_FREEZE=%s)",
+            settings.scheduler_enabled, settings.maintenance_mode, settings.version_freeze,
         )
     # Warm the declarative source-registry cache so the first pasted URL and
     # the first neon-eligibility check don't race an empty cache. Manifests
@@ -417,6 +418,56 @@ async def _maintenance_mode(request, call_next):
     return await call_next(request)
 
 
+
+# Version freeze (VERSION_FREEZE), for the days the archive is copied to xhostd.
+# Refused with 503: every /api/worker call, creating, editing, deleting or polling
+# a dataset, and every admin action that writes. The admin set is read from the
+# routes themselves (any non-GET route whose dependencies include
+# get_admin_user), so an admin action added later is frozen without anyone
+# remembering to list it. Sign-in, the consoles and every read keep working.
+_FREEZE_DATASET_WRITES = _re.compile(r"^/api/datasets(/[^/]+(/poll)?)?/?$")
+_FREEZE_DETAIL = "עדכוני גרסאות מוקפאים בזמן העברת המאגר ל-xhostd. אפשר לנסות שוב אחרי השלמת המעבר."
+_admin_write_routes: list | None = None
+
+
+def _admin_write_patterns() -> list:
+    global _admin_write_routes
+    if _admin_write_routes is None:
+        from fastapi.routing import APIRoute
+
+        from app.auth.dependencies import get_admin_user
+
+        def needs_admin(dependant) -> bool:
+            return any(d.call is get_admin_user or needs_admin(d) for d in dependant.dependencies)
+
+        found = []
+        for route in app.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            writes = set(route.methods) - {"GET", "HEAD", "OPTIONS"}
+            if writes and needs_admin(route.dependant):
+                found.append((route.path_regex, writes))
+        _admin_write_routes = found
+    return _admin_write_routes
+
+
+def _refused_in_version_freeze(method: str, path: str) -> bool:
+    if path.startswith("/api/worker/"):
+        return True
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    if _FREEZE_DATASET_WRITES.match(path):
+        return True
+    return any(method in methods and rx.match(path) for rx, methods in _admin_write_patterns())
+
+
+@app.middleware("http")
+async def _version_freeze(request, call_next):
+    if settings.version_freeze and _refused_in_version_freeze(request.method, request.url.path):
+        return JSONResponse({"detail": _FREEZE_DETAIL}, status_code=503, headers={"Retry-After": "3600"})
+    return await call_next(request)
+
+
 @app.get("/healthz")
 async def healthz():
     from app.worker.scheduler import scheduler
@@ -426,6 +477,7 @@ async def healthz():
         "scheduler_enabled": settings.scheduler_enabled,
         "scheduler_running": bool(scheduler.running),
         "maintenance_mode": settings.maintenance_mode,
+        "version_freeze": settings.version_freeze,
     }
 
 

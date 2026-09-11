@@ -698,6 +698,13 @@ class Settings(BaseSettings):
     # copied. /healthz reports both.
     scheduler_enabled: bool = True
     maintenance_mode: bool = False
+    # VERSION_FREEZE=true, for the days the archive is copied to xhostd: nothing
+    # may create or change a version, so the copy is an exact snapshot. Stops the
+    # scheduler and the boot writers like SCHEDULER_ENABLED=false, and answers 503
+    # to the worker fleet, to dataset create/edit/delete/poll and to every admin
+    # action that writes. Unlike MAINTENANCE_MODE it leaves sign-in, the SQL
+    # consoles and the rest of the public site alone, because it may last days.
+    version_freeze: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -707,7 +714,7 @@ class Settings(BaseSettings):
 
     @property
     def writers_enabled(self) -> bool:
-        return self.scheduler_enabled and not self.maintenance_mode
+        return self.scheduler_enabled and not self.maintenance_mode and not self.version_freeze
 
     @model_validator(mode="after")
     def _r2_names_win_over_platform_s3(self):
