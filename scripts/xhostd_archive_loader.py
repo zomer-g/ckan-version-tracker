@@ -76,10 +76,29 @@ def qualified(schema: str, name: str) -> str:
     return '"' + schema.replace('"', '""') + '"."' + name.replace('"', '""') + '"'
 
 
+_TOC = re.compile(r"^-- Name: .*?; Type: (?P<type>[A-Z ]+?); Schema: .*$", re.M)
+_TOC_BLOCK = re.compile(r"^--\n-- Name: (?P<name>.*?); Type: (?P<type>[A-Z ]+?); Schema: .*\n--\n", re.M)
+# Foreign-data objects are dropped whole: xhostd refuses postgres_fdw, and on Neon
+# the only ones are a leftover server `ocal_srv` and its user mapping, with no
+# foreign table using them.
+_DROP_TYPES = ("SERVER", "USER MAPPING", "FOREIGN TABLE", "FOREIGN DATA WRAPPER")
+
+
 def clean_pre_data(sql: str) -> str:
     """Make pg_dump's pre-data section apply to a platform database we do not superuse."""
+    kept = []
+    blocks = list(_TOC_BLOCK.finditer(sql))
+    kept.append(sql[:blocks[0].start()] if blocks else sql)
+    for i, m in enumerate(blocks):
+        end = blocks[i + 1].start() if i + 1 < len(blocks) else len(sql)
+        kind, name = m.group("type").strip(), m.group("name")
+        if kind in _DROP_TYPES:
+            continue
+        if kind in ("EXTENSION", "COMMENT") and any(ext in name for ext in BLOCKED_EXTENSIONS):
+            continue
+        kept.append(sql[m.start():end])
     out = []
-    for line in sql.splitlines():
+    for line in "".join(kept).splitlines():
         if any(ext in line for ext in BLOCKED_EXTENSIONS) and re.match(
                 r"^(CREATE EXTENSION|COMMENT ON EXTENSION)", line):
             continue
@@ -90,9 +109,6 @@ def clean_pre_data(sql: str) -> str:
             line = f"CREATE SCHEMA IF NOT EXISTS {m.group(1)};"
         out.append(line)
     return "\n".join(out) + "\n"
-
-
-_TOC = re.compile(r"^-- Name: .*?; Type: (?P<type>[A-Z ]+?); Schema: .*$", re.M)
 
 
 def split_post_data(sql: str) -> list[tuple[str, str]]:

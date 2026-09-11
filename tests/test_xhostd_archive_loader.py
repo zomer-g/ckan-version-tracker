@@ -49,6 +49,68 @@ def test_pre_data_drops_the_blocked_extension_and_tolerates_existing_schemas():
     assert "CREATE TABLE public.append_x (id integer);" in out
 
 
+def test_pre_data_drops_the_leftover_foreign_server_and_its_user_mapping():
+    """The first real run stopped here: a server and a user mapping built on
+    postgres_fdw survived a line filter that only knew the extension."""
+    dump = """SET statement_timeout = 0;
+
+--
+-- Name: postgres_fdw; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS postgres_fdw WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION postgres_fdw; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION postgres_fdw IS 'foreign-data wrapper for remote PostgreSQL servers';
+
+
+--
+-- Name: ocal_srv; Type: SERVER; Schema: -; Owner: -
+--
+
+CREATE SERVER ocal_srv FOREIGN DATA WRAPPER postgres_fdw OPTIONS (
+    dbname 'neondb',
+    host 'example.neon.tech'
+);
+
+
+--
+-- Name: USER MAPPING public SERVER ocal_srv; Type: USER MAPPING; Schema: -; Owner: -
+--
+
+CREATE USER MAPPING FOR public SERVER ocal_srv OPTIONS (
+    password 'secret',
+    "user" 'x'
+);
+
+
+--
+-- Name: ocal; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA ocal;
+
+
+--
+-- Name: diary_events; Type: TABLE; Schema: ocal; Owner: -
+--
+
+CREATE TABLE ocal.diary_events (id integer);
+"""
+    out = L.clean_pre_data(dump)
+    assert "postgres_fdw" not in out
+    assert "ocal_srv" not in out
+    assert "USER MAPPING" not in out
+    assert "password" not in out
+    assert out.startswith("SET statement_timeout = 0;")
+    assert "CREATE SCHEMA IF NOT EXISTS ocal;" in out
+    assert "CREATE TABLE ocal.diary_events (id integer);" in out
+
+
 def test_post_data_is_split_into_typed_statements_in_order():
     dump = """
 \\restrict abc123
