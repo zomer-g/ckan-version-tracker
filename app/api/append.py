@@ -59,6 +59,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.sql_access import SqlCaller, admit, sql_caller
+
 from app.api.utils import MAX_API_OFFSET, parse_uuid
 from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
@@ -484,6 +486,7 @@ async def archive_sql(
     body: SqlBody,
     table: str | None = None,
     db: AsyncSession = Depends(get_db),
+    caller: SqlCaller = Depends(sql_caller),
 ):
     """Run a user-supplied read-only SELECT against the append DB. Guarded by a
     READ ONLY transaction + statement_timeout + row cap (see
@@ -491,6 +494,7 @@ async def archive_sql(
     the client can reference them — the SQL may name any table it likes, and
     ``table`` only picks whose column casing gets auto-corrected. Errors
     (validation, SQL syntax, timeout) come back as 400 with the message."""
+    admit(caller, dataset_id=dataset_id, sql=body.sql)
     # 404/409 if not an append dataset
     _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
@@ -581,10 +585,12 @@ async def datastore_search_sql(
     sql: str,
     table: str | None = None,
     db: AsyncSession = Depends(get_db),
+    caller: SqlCaller = Depends(sql_caller),
 ):
     """CKAN ``datastore_search_sql``-style read-only SQL (single SELECT/WITH).
     Reference the dataset's table(s) by the name(s) in /schema. Returns the CKAN
     envelope ``{success, result:{records, fields:[{id,type}]}}``."""
+    admit(caller, dataset_id=dataset_id, sql=sql)
     _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
         r = await append_store.run_readonly_sql(sql, table=tbl)

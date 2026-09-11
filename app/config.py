@@ -706,6 +706,17 @@ class Settings(BaseSettings):
     # consoles and the rest of the public site alone, because it may last days.
     version_freeze: bool = False
 
+    # ── Free SQL per dataset (POST /api/append/{id}/sql, GET …/datastore_search_sql) ──
+    # SQL_SERVICE_TOKEN: a secret a trusted service presents as
+    # `Authorization: Bearer …` (TAG-IT / SMART DMS imports through these). Kept
+    # separate from MCP_SERVICE_TOKEN, which opens every MCP resource. Empty
+    # means no service token is accepted.
+    # APPEND_SQL_REQUIRE_AUTH: when true, anonymous callers get 401; the service
+    # token and signed-in users get through. Turn on only after every service
+    # client sends the token. See app/auth/sql_access.py.
+    sql_service_token: str = ""
+    append_sql_require_auth: bool = False
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @property

@@ -5,6 +5,7 @@ import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { Breadcrumbs } from "../components/a11y";
+import { SqlSignInNotice, isSignInRequired } from "../components/SqlSignInNotice";
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
   if (!value) return "";
@@ -374,7 +375,8 @@ export default function AppendArchivePage() {
               </>
             )}
           </div>
-          {sqlError && (
+          {sqlError && isSignInRequired(sqlError) && <SqlSignInNotice />}
+          {sqlError && !isSignInRequired(sqlError) && (
             <div style={{ marginTop: "0.6rem", color: "var(--danger)", fontSize: "0.85rem", whiteSpace: "pre-wrap" }}>
               {sqlError}
             </div>
