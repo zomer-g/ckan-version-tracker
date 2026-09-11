@@ -23,6 +23,11 @@ fi
 if [ "${ARCHIVE_LOADER:-}" = "run" ]; then
   python3 scripts/xhostd_archive_loader.py &
 fi
+# The app database (schemas app, auth) from Neon, once per APP_DB_LOADER token.
+# See scripts/xhostd_app_db_loader.py.
+if [ -n "${APP_DB_LOADER:-}" ]; then
+  python3 scripts/xhostd_app_db_loader.py &
+fi
 
 # Trusted forwarders: loopback and the private ranges, as on Render, never "*".
 # Narrow to the ingress range measured on xhostd once it is known (plan, wave 2).
