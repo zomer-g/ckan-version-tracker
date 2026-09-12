@@ -40,6 +40,8 @@ export default function Footer() {
         { label: t("nav.about"), to: "/about" },
         { label: t("nav.rationale", "הרציונל"), to: "/rationale" },
         { label: t("nav.api", "API"), to: "/api" },
+        { label: t("about.privacy_title"), to: "/about#privacy" },
+        { label: t("about.accessibility_title"), to: "/about#accessibility" },
         {
           label: t("footer.source_code"),
           href: "https://github.com/zomer-g/ckan-version-tracker",

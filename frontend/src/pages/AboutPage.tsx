@@ -1,5 +1,6 @@
+import { useEffect } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
@@ -17,6 +18,15 @@ export default function AboutPage() {
   useDocumentTitle("אודות");
   const { t } = useTranslation();
   usePageContentOverrides("about");
+
+  // Footer links to /about#privacy and /about#accessibility arrive as a
+  // client-side navigation, which never scrolls to the fragment on its own
+  // (App only skips its scroll-to-top when a hash is present).
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!hash) return;
+    document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView();
+  }, [hash]);
 
   return (
     <div>
@@ -148,6 +158,31 @@ export default function AboutPage() {
               </div>
             ))}
           </dl>
+        </div>
+
+        <div className="about-card" id="privacy">
+          <h2>{t("about.privacy_title")}</h2>
+          <p>
+            <Trans
+              i18nKey="about.privacy_text"
+              components={{
+                strong: <strong />,
+                1: <a href="mailto:guy@z-g.co.il" />,
+              }}
+            />
+          </p>
+        </div>
+
+        <div className="about-card" id="accessibility">
+          <h2>{t("about.accessibility_title")}</h2>
+          <p>
+            <Trans
+              i18nKey="about.accessibility_text"
+              components={{
+                1: <a href="mailto:guy@z-g.co.il" />,
+              }}
+            />
+          </p>
         </div>
 
         <div className="about-card">
