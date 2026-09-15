@@ -62,7 +62,8 @@ const ODATA_BASE = "https://www.odata.org.il";
 /** Detect gov.il collector URLs */
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 /** Detect govmap.gov.il layer URLs (requires lay=<id>) */
-const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&]lay(?:er|ers)?=\d+/i;
+// A layer (lay=) or a layer GROUP (g=), which validation expands to its layers.
+const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&](?:lay(?:er|ers)?|g)=\d+/i;
 
 interface CkanResource {
   id: string;
