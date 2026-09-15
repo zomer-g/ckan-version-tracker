@@ -999,7 +999,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
-                  <span>lay={govMapResult.layer_id}</span>
+                  <span>{govMapResult.group_id ? `g=${govMapResult.group_id}` : `lay=${govMapResult.layer_id}`}</span>
                   <span>govmap.gov.il</span>
                 </div>
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all", direction: "ltr" }}>
@@ -1008,10 +1008,30 @@ export default function HomePage() {
                   <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>
 
+                {/* A layer group is not a dataset: list its layers and request those. */}
+                {govMapResult.layers && govMapResult.layers.length > 0 && (
+                  <div className="text-sm mt-1">
+                    <p className="text-muted" style={{ margin: "0 0 0.25rem" }}>
+                      {t("home.govmap_group_hint", { count: govMapResult.layers.length })}
+                    </p>
+                    <ul style={{ margin: 0, paddingInlineStart: "1.25rem" }}>
+                      {govMapResult.layers.map((l) => (
+                        <li key={l.layer_id}>
+                          {l.caption} <span className="text-muted">(lay={l.layer_id})</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 <div style={{ marginTop: "0.75rem" }}>
                   {requestFormFor === "govmap" ? (
                     <GovmapRequestForm
-                      initialUrl={govMapResult.url || ""}
+                      initialUrl={
+                        govMapResult.layers && govMapResult.layers.length > 0
+                          ? govMapResult.layers.map((l) => l.url).join("\n")
+                          : govMapResult.url || ""
+                      }
                       onClose={() => setRequestFormFor(null)}
                     />
                   ) : (
@@ -1020,7 +1040,7 @@ export default function HomePage() {
                       onClick={() => setRequestFormFor("govmap")}
                       style={{ fontSize: "0.85rem" }}
                     >
-                      {t("home.govmap_request_btn")}
+                      {govMapResult.group_id ? t("home.govmap_group_request_btn") : t("home.govmap_request_btn")}
                     </button>
                   )}
                 </div>

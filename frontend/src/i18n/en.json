@@ -125,6 +125,8 @@
     "govmap_request_submit": "Submit Request ({{count}} layers)",
     "govmap_request_done": "Request submitted: {{created}} new, {{dup}} duplicates, {{bad}} invalid.",
     "govmap_no_layer": "No valid GovMap layer found in the link.",
+    "govmap_group_hint": "This links to a layer group, not a single layer. The group holds {{count}} layers, and each can be requested:",
+    "govmap_group_request_btn": "Request tracking for the group's layers",
     "no_tracked": "No tracked datasets yet",
     "stats_datasets": "Tracked datasets",
     "stats_versions": "Saved versions",

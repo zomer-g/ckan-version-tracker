@@ -246,6 +246,28 @@ def test_an_untracked_layer_resolves_to_nothing():
     _run(go())
 
 
+def test_a_govmap_link_without_a_layer_matches_no_tracked_layer():
+    """Every GovMap layer lives at the site root, so a path match on a link
+    with no ``lay=`` (a layer group, ``?g=397``) listed every tracked layer as
+    "already tracked" while pointing at none of them."""
+    async def go():
+        Session = await _seed([
+            {"ckan_name": "govmap-11", "source_type": "govmap",
+             "source_url": GOVMAP_COPIED,
+             "scraper_config": {"kind": "govmap", "layer_id": "11"}},
+            {"ckan_name": "govmap-12", "source_type": "govmap",
+             "source_url": "https://www.govmap.gov.il/?c=219143.61,618345.06&lay=12",
+             "scraper_config": {"kind": "govmap", "layer_id": "12"}},
+        ])
+        async with Session() as db:
+            hits = await find_datasets_for_url(
+                db, "https://www.govmap.gov.il/?c=198360.87,677529.5&z=4&g=397"
+            )
+        assert hits == []
+
+    _run(go())
+
+
 def test_demoted_duplicates_are_never_returned():
     async def go():
         Session = await _seed([

@@ -161,7 +161,11 @@ async def find_datasets_for_url(
         )
     ).all()
 
-    target_path = path_key(url)
+    # No path match on GovMap. Every layer is served from the site root, so a
+    # GovMap link without ``lay=`` (a layer GROUP, ``?g=397``, or a bare
+    # viewport) path-matched EVERY tracked layer and was shown as "already
+    # tracked" while pointing at none of them.
+    target_path = None if host.endswith("govmap.gov.il") else path_key(url)
     exact: list = []
     loose: list = []
     for row in rows:

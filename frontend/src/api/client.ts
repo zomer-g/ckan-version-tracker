@@ -580,6 +580,9 @@ export interface GovMapValidation {
   url?: string;
   title?: string;
   error?: string;
+  // A layer-group link (?g=397): the group expands to these layers.
+  group_id?: string | null;
+  layers?: { layer_id: string; caption: string; url: string }[];
 }
 
 export const govmap = {

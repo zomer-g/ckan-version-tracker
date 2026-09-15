@@ -125,6 +125,8 @@
     "govmap_request_submit": "שלח בקשה ({{count}} שכבות)",
     "govmap_request_done": "הבקשה נשלחה: {{created}} חדשות, {{dup}} כפולות, {{bad}} לא תקינות.",
     "govmap_no_layer": "לא זוהתה שכבת GovMap תקינה בקישור.",
+    "govmap_group_hint": "זה קישור לקבוצת שכבות, לא לשכבה אחת. הקבוצה מכילה {{count}} שכבות, ואפשר לבקש מעקב על כל אחת מהן:",
+    "govmap_group_request_btn": "בקש מעקב על שכבות הקבוצה",
     "no_tracked": "עדיין אין מאגרים במעקב",
     "stats_datasets": "מאגרים במעקב",
     "stats_versions": "גרסאות שנשמרו",
