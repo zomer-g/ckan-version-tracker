@@ -163,10 +163,21 @@ async def track_dataset(
             raise HTTPException(status_code=400, detail="title is required for scraper datasets")
 
         # Parse collector name from URL for ckan_id/ckan_name
-        from app.api.govil import _parse_govil_url
+        from app.api.govil import _parse_govil_url, derive_source_name
         page_type, collector_name = _parse_govil_url(body.source_url)
         if not collector_name:
-            raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+            # Not a gov.il collector page. Admins may register a scraper whose
+            # source lives elsewhere (e.g. nadlan.taxes.gov.il) — derive the
+            # name from the host and path instead of rejecting. Everyone else
+            # keeps the gov.il-only rule.
+            if not user.is_admin:
+                raise HTTPException(status_code=400, detail="Invalid gov.il collector URL")
+            collector_name = derive_source_name(body.source_url)
+            if not collector_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="source_url must be a gov.il collector URL or an http(s) URL",
+                )
 
         # Build a unique slug that includes a hash of the full source URL,
         # so two URLs with the same collector path (e.g. /collectors/policies

@@ -2,11 +2,13 @@
 
 import logging
 import re
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from app.api.utils import sanitize_ckan_name
 from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,48 @@ def _parse_govil_url(url: str) -> tuple[str | None, str | None]:
     if m:
         return "content_page", m.group(2)
     return None, None
+
+
+def derive_source_name(url: str) -> str | None:
+    """Derive a collector-like stem from a source URL that is not a gov.il collector.
+
+    Scraper datasets are normally registered from one of the gov.il collector
+    pages matched above, and the collector slug becomes the dataset's
+    ``ckan_name``. A scraper whose source lives elsewhere (a different gov.il
+    subdomain such as ``nadlan.taxes.gov.il``, or another site entirely) has no
+    such slug, so build one from the host and the first path segments:
+
+        https://nadlan.taxes.gov.il/svinfonadlan2010/startpage.aspx
+        -> nadlan-taxes-gov-il-svinfonadlan2010
+
+    Callers pass the result through :func:`app.api.utils.scraper_url_slug`,
+    which appends a hash of the full URL — so two URLs that reduce to the same
+    stem still get distinct slugs. Returns None if ``url`` is not http(s),
+    which keeps ``javascript:`` and other schemes out of a field that is
+    rendered as a link on over.org.il and on the ODATA mirror.
+    """
+    url = url.strip()
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        # urlsplit rejects some malformed URLs outright (e.g. an unclosed IPv6
+        # bracket). Treat those as unusable rather than letting them 500.
+        return None
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    if not host:
+        return None
+    if host.startswith("www."):
+        host = host[4:]
+    # Segments that look like a file (startpage.aspx, index.html) carry no
+    # identity of their own — drop them and keep at most two real segments.
+    segments = [seg for seg in parts.path.split("/") if seg and "." not in seg][:2]
+    # Cap the stem so that the ODATA mirror name built from it
+    # ("gov-versions-scraper-" + stem + "-" + 8-char hash) stays within CKAN's
+    # 100-character limit on dataset names.
+    stem = sanitize_ckan_name("-".join([host, *segments]))[:60].strip("-")
+    return stem or None
 
 
 def _format_collector_name(name: str) -> str:

@@ -32,6 +32,21 @@ This document describes the API that the **govil-scraper worker** must implement
 5. Your worker **pushes** the results back to the version tracker
 6. The version tracker creates a version and pushes data to odata.org.il
 
+**Sources that are not gov.il collector pages.** A scraper dataset is usually
+registered from a gov.il collector URL (`/he/departments/dynamiccollectors/…`,
+`/he/collectors/…`, `/he/pages/…`), and the collector slug becomes the
+dataset's `ckan_name`. An **admin** may also register a scraper whose source
+lives elsewhere — another gov.il subdomain such as `nadlan.taxes.gov.il`, or a
+different site entirely — by posting any `http(s)` URL as `source_url` to
+`POST /api/datasets` with `source_type: "scraper"`. The name is then derived
+from the host and the first path segments
+(`https://nadlan.taxes.gov.il/svinfonadlan2010/startpage.aspx` →
+`nadlan-taxes-gov-il-svinfonadlan2010`), plus a hash of the full URL for
+uniqueness. Everything downstream is unchanged: the ODATA mirror still carries
+`source_type=scraper`, `source_url=<your URL>`, `auto_managed=true`, and the
+worker endpoints below behave identically. Non-admin requests
+(`POST /api/datasets/requests`) still accept gov.il collector URLs only.
+
 ---
 
 ## Authentication
@@ -208,6 +223,18 @@ Content-Type: application/json
 - `records` must be flat dictionaries — no nested objects.
 - `fields` type values: `"text"` (default), `"integer"`, `"numeric"`, `"date"`, `"boolean"`.
 - Maximum payload size: ~50MB (for very large datasets, paginate or summarize).
+- **Each version is a complete snapshot, not a delta.** A version's
+  `resource_mappings` is built only from the `resources` (and
+  `csv_resource_ids` / `zip_resource_id(s)`) present in that one push;
+  resources omitted from the push are **not** inherited from the previous
+  version, and the version will show only what you sent. So a multi-resource
+  dataset must send every resource on every push — to update 3 of 51 files,
+  re-reference the other 48 (their already-uploaded `resource_id`s can be
+  reused via `csv_resource_ids`, so nothing has to be re-uploaded). Caveat
+  when reusing an id across versions: `DELETE /api/versions/{id}` removes the
+  ODATA resources that version points at, so deleting an older version would
+  also remove a resource a newer version still shares. Nothing deletes
+  versions automatically — this only bites on a manual admin delete.
 
 ---
 
