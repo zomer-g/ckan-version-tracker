@@ -851,6 +851,22 @@ async def _record_short_load(table: str, ds_id, expected: int,
     One-directional and so free of false alarms — an append table accumulates
     across versions and samples, so it may hold far MORE than any single
     version's count and can never legitimately hold less.
+
+    One-directional is not the same as accurate, though. The screen is
+    ``table_count_estimate``, i.e. ``pg_class.reltuples``, which only ANALYZE
+    and autovacuum refresh — and nothing here runs an ANALYZE. Read straight
+    after a bulk load, it still reflects some earlier moment, so a table that
+    just received every one of its rows reads far short: the real-estate
+    dataset was flagged at "52,000 of 250,852" and then again at "26,000 of
+    79,451" on resources an exact count found complete, both of them the
+    largest in their push. The estimate is still the right screen — an exact
+    count of a million-row table is a real cost — but it is not evidence, so a
+    shortfall it suggests is CONFIRMED with a count before anything is
+    published. That runs only in the rare suspicious case, which is exactly
+    where the accuracy is worth paying for, and only here: both callers are
+    scheduled with asyncio.create_task, so no request is waiting on it.
+    push_version's own check keeps the estimate alone, deliberately — see the
+    note there.
     """
     if ds_id is None or expected <= 0:
         return
@@ -861,6 +877,21 @@ async def _record_short_load(table: str, ds_id, expected: int,
         return
     if not force and (held < 0 or held >= expected * 0.95):
         return
+    if not force:
+        # The estimate says short. Before saying so on a public page, count.
+        try:
+            held = await append_store.table_count(table)
+        except Exception as e:  # noqa: BLE001 — same rule: never become the failure
+            logger.warning(
+                "NEON landed-check could not confirm %s (estimate suggested a "
+                "shortfall): %s — not flagging on the estimate alone", table, e)
+            return
+        if held >= expected * 0.95:
+            logger.info(
+                "NEON landed-check: %s estimate looked short but holds %d of %d "
+                "— stale reltuples, nothing missing", table, held, expected)
+            await _clear_short_load_warning(ds_id, res_name or table)
+            return
     note = (f"⚠ {res_name or table}: {held:,} שורות בטבלה מתוך {expected:,} "
             f"שנקלטו בגרסה — הטעינה ל-NEON חלקית")
     try:
@@ -876,6 +907,58 @@ async def _record_short_load(table: str, ds_id, expected: int,
         logger.error("NEON short load: %s holds ~%d of %d rows", table, held, expected)
     except Exception as e:  # noqa: BLE001
         logger.warning("could not record the short-load warning: %s", e)
+
+
+# The tail of every short-load note, and the only reliable way to tell one
+# apart from the other things that share the import_warning field.
+_SHORT_LOAD_MARK = "הטעינה ל-NEON חלקית"
+
+
+async def _clear_short_load_warning(ds_id, res_name: str) -> None:
+    """Drop THIS resource's short-load note from the dataset's warning.
+
+    import_warning is written in exactly two places: push_version, which
+    recomputes it from scratch on every push and so can clear it, and
+    _record_short_load, which until now only ever set it. A warning written by
+    a background loader therefore outlived the condition it described — the
+    gap closed, and the dataset page kept saying rows were missing until the
+    next version happened to be pushed, which on a weekly corpus is a week of
+    a false alarm on a public page.
+
+    Only this resource's note goes. push_version composes a warning by joining
+    several notes with " · " — a short load can sit beside an engine-change or
+    quality note that is still true — so the string is taken apart and only the
+    segments naming this resource AND carrying the short-load marker are
+    dropped. Everything else is left exactly as it was found, including a
+    warning this function does not recognise at all.
+    """
+    if ds_id is None:
+        return
+    try:
+        from app.database import async_session
+        from app.models.tracked_dataset import TrackedDataset as _TD
+        async with async_session() as _db:
+            row = (await _db.execute(
+                select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
+            current = getattr(row, "import_warning", None) if row is not None else None
+            if not current or _SHORT_LOAD_MARK not in current:
+                return
+            kept = [
+                seg.strip()
+                for seg in current.removeprefix("⚠ ").split(" · ")
+                if seg.strip()
+                and not (_SHORT_LOAD_MARK in seg and res_name and res_name in seg)
+            ]
+            updated = ("⚠ " + " · ".join(kept)) if kept else None
+            if updated == current:
+                return
+            row.import_warning = updated
+            row.import_warning_at = datetime.now(timezone.utc) if updated else None
+            await _db.commit()
+            logger.info(
+                "Cleared a stale short-load warning for %s on %s", res_name, ds_id)
+    except Exception as e:  # noqa: BLE001 — clearing a warning must not fail a load
+        logger.warning("could not clear the short-load warning: %s", e)
 
 
 async def _sample_column_for(ds_id) -> str | None:
