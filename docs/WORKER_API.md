@@ -65,6 +65,71 @@ GET /api/worker/poll
 Authorization: Bearer {API_KEY}
 ```
 
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `only_sources` | comma-separated string | No | Source keys this worker can actually run. Omit to accept a task from any source. |
+
+#### Restricting a poll to the sources you can run (`only_sources`)
+
+By default the server hands you the highest-priority pending task from **any**
+source. It does not know which engines your build has, and a task cannot be
+handed back — `POST /api/worker/fail/{task_id}` (§4) marks it `failed` for good.
+So a worker that receives work for a source it cannot run has only bad options:
+report a failure on a dataset that was never broken, or scrape it with the wrong
+engine.
+
+`only_sources` is how you avoid that. Name the sources you have engines for and
+the claim is restricted to them:
+
+```
+GET /api/worker/poll?only_sources=govmap,munidata,jda
+Authorization: Bearer {API_KEY}
+```
+
+**The keys.** A source key is the name OVER already uses for an upstream site:
+
+* for a source registered from a manifest, it is the manifest `id` — which is
+  also the `scraper_config["kind"]` you dispatch your engine on, and the
+  `<key>-scraper-` prefix of that source's dataset ids. If your engine table is
+  keyed by `kind`, its keys are exactly the keys to send.
+* for a built-in source, it is the `source_type`: `govmap`, `ckan`, `cbs`, …
+
+There is no separate capability vocabulary to maintain — one name per source.
+
+**Unknown keys are rejected.** A key the server does not recognise gets a `400`
+naming it, together with the keys that *are* known:
+
+```json
+{
+  "detail": "unknown source key(s) in only_sources: govmpa. Known keys: avodata, cbs, ckan, ..."
+}
+```
+
+This is deliberate. A misspelled key matches no dataset, so ignoring it would
+leave you polling a queue that merely *looks* permanently empty — indefinitely,
+and indistinguishable from "no work for me right now". An empty value
+(`?only_sources=`) is a `400` for the same reason: it can only mean a worker
+that meant to name its engines and sent none, and both readings of it
+("everything" / "nothing") are wrong without saying so. At most 64 keys.
+
+Keys are matched **exactly** — not case-folded, since a key is also an engine
+name. Whitespace around a key is trimmed and duplicates are ignored, so
+`"govmap, munidata"` is fine.
+
+**Notes:**
+
+* **Omitting the parameter keeps the old behaviour exactly**: an unrestricted
+  claim from any source. Nothing needs to change in an existing worker.
+* This says nothing about *priority*. Within the sources you declare, the queue
+  order is unchanged: highest priority band first, oldest first inside a band.
+* It does not override a per-source worker cap. If a source you declared is
+  already at its cap, you get nothing from it — the cap is the server's decision
+  about how hard to push one upstream.
+* Declaring a source with nothing pending answers `204`, which is normal. `204`
+  now means "nothing for *you*" rather than "nothing at all".
+
 **Response 200** — Task available:
 ```json
 {
@@ -512,7 +577,7 @@ When defining `fields`, use these CKAN DataStore types:
 |--------|---------|
 | 200 | Success |
 | 204 | No tasks available (for poll) |
-| 400 | Bad request (invalid JSON, missing fields) |
+| 400 | Bad request (invalid JSON, missing fields, unknown `only_sources` key) |
 | 401 | Missing Authorization header |
 | 403 | Invalid API key |
 | 404 | Task or dataset not found |
