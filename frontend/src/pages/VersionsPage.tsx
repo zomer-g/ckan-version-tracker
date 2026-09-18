@@ -683,6 +683,12 @@ export default function VersionsPage() {
                 href={sourceHref}
                 target="_blank"
                 rel="noopener noreferrer"
+                // This header is one non-wrapping row, so a source label with
+                // no break opportunity in it — a bare URL from a manifest —
+                // pushed the whole page 522px wide on a 375px phone. Breaking
+                // only; deliberately NOT .card-source-link, whose 44px hit area
+                // wants more room than this row's 12px gap gives it.
+                className="source-link-breakable"
                 style={{
                   textDecoration: "none",
                   fontSize: "0.85rem",

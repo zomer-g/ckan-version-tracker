@@ -494,6 +494,19 @@ label {
   margin-bottom: 1.5rem;
 }
 
+/* A page header is a title on one side and a row of actions on the other, and
+   .flex-between alone never wraps: on a phone the two sides simply did not fit,
+   so the header — and with it the whole page — grew wider than the viewport and
+   sat shifted sideways with its edge cut off. A dataset's versions page was
+   509px of header inside 343px.
+   Wrapping costs nothing where there is room (flex only wraps when it must), so
+   this is not behind a media query; the gap is the row-gap the second line
+   needs once it does wrap. */
+.page-header.flex-between {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .page-header h1 {
   font-size: 1.5rem;
   font-weight: 700;
@@ -3055,6 +3068,29 @@ abbr[title] {
 .card-source-row {
   gap: 0.75rem 0.6rem;
   row-gap: 0.85rem;
+}
+
+/* The source link's text is not ours. A worker-declared source supplies its own
+   label from its manifest (source_link_he), and a manifest that puts the bare
+   source URL there — as the Tax Authority real-estate source does — hands this
+   anchor a 58-character string with no break opportunity anywhere in it. A
+   flex item cannot shrink below its min-content width, so that one word became
+   a 394px box inside a 301px card: the document grew 56px wider than a 375px
+   phone on the home page, and 522px wider on a dataset's versions page, where
+   the header is a single non-wrapping row. The page then sat shifted sideways
+   with its right edge cut off.
+   Breaking anywhere is what makes the min-content width small again, so the
+   layout survives a label of any length instead of depending on every source
+   author to keep theirs short. Only the link needs it — the rest of a card is
+   ordinary prose that already wraps at spaces.
+   Kept separate from the hit-area rule above, and applied by its own class, so
+   the versions header can opt into the breaking WITHOUT the 44px pseudo-element:
+   its row is a plain .flex at a 12px gap, which is not the spacing the enlarged
+   targets need to stay clear of one another. */
+.card-source-link,
+.source-link-breakable {
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* The dataset title is the primary target on every card and was 19px tall —
