@@ -24,10 +24,15 @@ everything else is its ``source_type``. Live catalog, for scale:
     ykpubdata/workagreements/emun/servicescompass/hatzav/cbs 1
 
 ``source_key`` (Python, for counting and display) and ``source_filter`` (SQL,
-for excluding a saturated source from the claim query) are two directions of
-one rule, so they are defined together here and pinned against each other in
+for narrowing the claim query to — or away from — one source) are two directions
+of one rule, so they are defined together here and pinned against each other in
 tests/test_source_load.py. Deriving the key in SQL instead would need
 ``split_part``, which the SQLite test suite doesn't have.
+
+The same key is now also the vocabulary a worker uses to declare which sources
+it can actually run (``only_sources`` on /api/worker/poll), which is why
+``known_source_keys`` lives here too: one name for a source, checked in one
+place, rather than a second naming scheme for capabilities.
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.scrape_task import ScrapeTask
 from app.models.source_limit import SourceLimit
 from app.models.tracked_dataset import TrackedDataset
+from app.services import source_registry
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +89,33 @@ def source_filter(key: str):
             TrackedDataset.source_type == key,
         ),
     )
+
+
+async def known_source_keys(db: AsyncSession) -> set[str]:
+    """Every source key that means something here — the vocabulary of `key`.
+
+    Needed because the positive filter (a worker declaring which sources it can
+    run, see ``next_pending_task_q``) has a failure mode the negative one does
+    not: a key nobody recognises silently matches no dataset, so a single typo
+    turns into a worker that polls forever against what looks like an empty
+    queue. Rejecting the key instead makes the typo say so on the first poll.
+
+    Two sources of truth, and both are needed:
+
+      * the live catalog, run through :func:`source_key` — by construction,
+        exactly the keys ``source_filter`` can ever match a row for;
+      * every registered manifest id, because a source onboarded a minute ago
+        (POST /api/worker/sources/sync) is legitimate before its first dataset
+        exists, and a worker shipping the engine for it should be able to say so
+        while the queue is still empty.
+
+    Derived rather than hardcoded: a second list of source names would be one
+    more thing to forget when a source is added.
+    """
+    rows = await db.execute(select(TrackedDataset.ckan_id, TrackedDataset.source_type))
+    keys = {source_key(ckan_id, source_type) for ckan_id, source_type in rows.all()}
+    keys.update(m.id for m in source_registry.cached_manifests())
+    return keys
 
 
 async def running_by_source(db: AsyncSession) -> dict[str, int]:

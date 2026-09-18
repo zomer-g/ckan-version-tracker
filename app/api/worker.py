@@ -14,9 +14,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
+                     Response, UploadFile)
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import false, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -29,7 +30,7 @@ from app.rate_limit import limiter
 from app.services import (append_store, blocked_resources, sampling_runs,
                           source_registry)
 from app.services.archive_state import ROW_ARCHIVE_KEYS
-from app.services.source_load import saturated_sources, source_filter
+from app.services.source_load import known_source_keys, saturated_sources, source_filter
 from app.services.worker_fleet import touch_worker
 from app.services.odata_client import odata_client
 from app.services import storage_client as storage
@@ -342,7 +343,10 @@ async def _acquire_claim_lock(db: AsyncSession) -> bool:
     ))
 
 
-def next_pending_task_q(exclude_sources: Iterable[str] = ()):
+def next_pending_task_q(
+    exclude_sources: Iterable[str] = (),
+    only_sources: Iterable[str] | None = None,
+):
     """The claim order: highest priority band first, oldest-first within a band.
 
     Factored out of ``poll_for_task`` so the ordering can be tested directly
@@ -355,21 +359,101 @@ def next_pending_task_q(exclude_sources: Iterable[str] = ()):
     queue without pushing back a single routine poll, because a band-0 task is
     only ever claimed when nothing above it is pending.
 
-    ``exclude_sources`` drops every task belonging to a source that is already
-    at its worker cap (app/services/source_load.py). Skipping it here — rather
-    than claiming and refusing — is what keeps a cap from ever interrupting a
-    scrape: a capped source's tasks simply stay pending, and the next-best task
-    from another source goes out instead. A source with no cap is never in this
-    set, so an unconfigured system builds the same query it always did.
+    Two source filters narrow the candidates. They are not mirror images — they
+    answer different questions — and they compose by AND:
+
+    ``exclude_sources`` is the server's question, "who is already busy enough?".
+    It drops every task belonging to a source at its worker cap
+    (app/services/source_load.py). Skipping it here — rather than claiming and
+    refusing — is what keeps a cap from ever interrupting a scrape: a capped
+    source's tasks simply stay pending, and the next-best task from another
+    source goes out instead. A source with no cap is never in this set, so an
+    unconfigured system builds the same query it always did.
+
+    ``only_sources`` is the worker's question, "what can I actually run?". It
+    keeps ONLY tasks belonging to the listed sources. Without it the queue is
+    blind to engines: the highest-priority pending task goes to whoever polls
+    first, so a worker without that source's engine is handed work it can only
+    fail — and ``report_failure`` is terminal, so failing is the only thing it
+    CAN do; there is no handing a task back. ``None`` means "no preference" and
+    must build exactly the query above, because every deployed worker predates
+    the parameter. An empty-but-present list means a worker that declared it can
+    run nothing, and claims nothing rather than everything — ``false()`` says so
+    explicitly instead of leaning on what ``or_()`` does with no clauses.
+
+    A source both requested and capped stays excluded: the cap is the server's
+    call about an upstream, and a worker's capability list does not get a vote.
     """
     q = (
         select(ScrapeTask, TrackedDataset)
         .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
         .where(ScrapeTask.status == "pending")
     )
+    if only_sources is not None:
+        q = q.where(or_(false(), *(source_filter(key) for key in only_sources)))
     for key in exclude_sources:
         q = q.where(~source_filter(key))
     return q.order_by(ScrapeTask.priority.desc(), ScrapeTask.created_at.asc()).limit(1)
+
+
+# A worker names its engines in one comma-separated query parameter, so the cap
+# on how many it may list is really a cap on URL length. 64 is far past the ~25
+# sources that exist, and still bounds the OR-chain the claim query builds.
+MAX_ONLY_SOURCES = 64
+
+
+async def _requested_sources(db: AsyncSession, raw: str | None) -> list[str] | None:
+    """Parse ``?only_sources=`` into the source keys to restrict the claim to.
+
+    ``None`` (parameter absent) means no restriction — the behaviour every
+    deployed worker relies on, and the reason this is a query parameter rather
+    than something required.
+
+    An unknown key is a 400, not a shrug. A key nobody recognises matches no
+    dataset, so ignoring it would turn one typo into a worker that polls forever
+    against a queue that merely LOOKS permanently empty — silent, and
+    indistinguishable from "nothing for me right now". Refusing on the first
+    poll, naming the bad key and listing what is known, costs one confused
+    deploy instead of a worker that quietly does nothing for a week.
+
+    The same reasoning makes an EMPTY value an error rather than a default: it
+    can only come from a worker that meant to name its engines and produced
+    nothing, and both readings of it ("everything" / "nothing") are wrong in a
+    way nobody would notice.
+
+    Keys are matched exactly, never case-folded. A source key is the manifest
+    ``id``, which is also the ``scraper_config["kind"]`` the worker looks its
+    engine up by (see the ``id`` validator in app/services/source_registry.py) —
+    normalising here would invent a second spelling of a name that has one.
+    """
+    if raw is None:
+        return None
+    keys: list[str] = []
+    for part in raw.split(","):
+        key = part.strip()
+        if key and key not in keys:
+            keys.append(key)
+    if not keys:
+        raise HTTPException(
+            status_code=400,
+            detail=("only_sources was given but names no source; omit the "
+                    "parameter entirely to accept work from any source"),
+        )
+    if len(keys) > MAX_ONLY_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"only_sources names {len(keys)} sources; "
+                    f"at most {MAX_ONLY_SOURCES} are accepted"),
+        )
+    known = await known_source_keys(db)
+    unknown = [k for k in keys if k not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"unknown source key(s) in only_sources: {', '.join(unknown)}. "
+                    f"Known keys: {', '.join(sorted(known))}"),
+        )
+    return keys
 
 
 @router.get("/poll")
@@ -377,6 +461,15 @@ def next_pending_task_q(exclude_sources: Iterable[str] = ()):
 async def poll_for_task(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    only_sources: str | None = Query(
+        None,
+        description=(
+            "Comma-separated source keys this worker can actually run, e.g. "
+            "'govmap,munidata'. Omit to accept a task from any source (the "
+            "default, and what every worker did before this existed). Unknown "
+            "keys are rejected with 400."
+        ),
+    ),
 ):
     """Worker polls for the next available scrape task.
 
@@ -395,8 +488,20 @@ async def poll_for_task(
 
     Setting worker_required_version re-enables the older pinned-SHA gate as an
     emergency override (see config.py).
+
+    ``?only_sources=`` lets a worker say which sources it has engines for, in
+    the same source-key vocabulary the per-source caps already use. It matters
+    because a task cannot be handed back: dispatch is blind to engines, so a
+    worker without the engine for the highest-priority pending task receives it
+    anyway and ``report_failure`` is its only exit — a terminal 'failed' on a
+    dataset that was never wrong. Absent, the claim is unrestricted, exactly as
+    before; the fleet's older workers send nothing and keep working unchanged.
     """
     _verify_worker_key(request)
+    # Parsed (and its keys checked) before any bookkeeping, so a worker
+    # misconfigured with a bad key gets told on its first poll rather than
+    # silently refreshing last_seen_at against an apparently empty queue.
+    wanted_sources = await _requested_sources(db, only_sources)
 
     # Worker-version gate. We do this before the auto-reset/dispatch logic
     # so an outdated worker doesn't even trigger the bookkeeping side
@@ -589,7 +694,9 @@ async def poll_for_task(
         # than claimed-then-refused, so a cap never interrupts work in flight.
         blocked = await saturated_sources(db)
         result = await db.execute(
-            next_pending_task_q(blocked.keys())
+            # blocked wins over wanted: a worker asking for a capped source
+            # still gets nothing from it (see next_pending_task_q).
+            next_pending_task_q(blocked.keys(), wanted_sources)
             # CRITICAL with multiple workers: the claim must be atomic.
             # Without a row lock, two workers polling in the same instant
             # both SELECT the same pending task, both flip it to 'running',
