@@ -39,6 +39,19 @@ class _EmptyDB:
     stub just has to answer the same calls a real session would.
     """
 
+    # poll_for_task takes the fleet-wide claim lock before it looks for a task,
+    # and _acquire_claim_lock reads db.bind.dialect.name to decide whether the
+    # backend even has advisory locks. Without a bind the whole endpoint raised
+    # AttributeError → 500, which _refused() read as "not refused" — so every
+    # dispatch assertion in this file passed on a crash. Naming a non-Postgres
+    # dialect takes the same branch the SQLite test DB does: lock granted, no
+    # SQL issued.
+    class _Bind:
+        class dialect:
+            name = "sqlite"
+
+    bind = _Bind()
+
     async def get(self, model, key):
         return None
 
@@ -58,6 +71,15 @@ class _EmptyDB:
 
             def scalar_one_or_none(self):
                 return None
+
+            def first(self):
+                return None
+
+            # source_load.limits() reads the per-source caps straight off the
+            # result (no .scalars()); with none configured every source is
+            # uncapped, which is the state this file wants.
+            def all(self):
+                return []
         return _Result()
 
     async def commit(self):
@@ -90,6 +112,18 @@ def _poll(client, **headers):
 
 
 def _refused(response) -> bool:
+    """Did the gate turn this worker away?
+
+    A refusal is a 200 carrying ``outdated``; a worker that gets past the gate
+    sees 204 here, because the stub queue is empty. Anything else — a 500 most
+    of all — is neither, and must be loud: read as a plain boolean it would
+    come back False and every ``assert not _refused(...)`` below would pass on
+    a crash, which is exactly what used to happen.
+    """
+    assert response.status_code in (200, 204), (
+        f"poll returned {response.status_code}, which is neither a refusal nor "
+        f"a dispatch: {response.text[:200]}"
+    )
     return response.status_code == 200 and (response.json() or {}).get("outdated")
 
 
