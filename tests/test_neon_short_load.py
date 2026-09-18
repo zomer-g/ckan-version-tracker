@@ -149,6 +149,10 @@ def test_the_shared_check_flags_a_background_load_that_died(monkeypatch):
         return 150000
 
     monkeypatch.setattr(append_store, "table_count_estimate", _count)
+    # The estimate only screens now; the shortfall it suggests is confirmed by
+    # an exact count before anything is published. A genuinely short table has
+    # both agreeing, which is what this case is.
+    monkeypatch.setattr(append_store, "table_count", _count)
     _install_session(monkeypatch, rec)
     run(worker._record_short_load("append_shape_x", "ds-1", 1097775,
                                   res_name="חלקות shape"))
@@ -165,4 +169,160 @@ def test_the_shared_check_stays_quiet_when_the_table_is_fuller(monkeypatch):
     monkeypatch.setattr(append_store, "table_count_estimate", _count)
     _install_session(monkeypatch, rec)
     run(worker._record_short_load("append_shape_x", "ds-1", 1097775))
+    assert rec.import_warning is None
+
+
+# ── The estimate is a screen, not evidence ────────────────────────────────
+#
+# pg_class.reltuples is refreshed by ANALYZE and autovacuum, and nothing in
+# this codebase runs an ANALYZE. Read straight after a bulk load it still
+# reflects an earlier moment, so the table that just received every one of its
+# rows reads far short. The real-estate dataset was flagged at "52,000 of
+# 250,852" and, a version later, "26,000 of 79,451" — both on resources an
+# exact count found complete, both the largest resource in their push. Two
+# false alarms on a public page is what a warning nobody can trust looks like.
+
+def test_a_stale_estimate_alone_does_not_flag_a_complete_table(monkeypatch):
+    """The screen says short, the count says complete. Nothing is published."""
+    rec = _Rec()
+
+    async def _estimate(table, **kw):
+        return 26_000          # reltuples, not yet analysed after the load
+
+    async def _exact(table, **kw):
+        return 79_451          # every row is actually there
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 79_451,
+                                  res_name="r2:.../v3/475e6d86_6600.csv"))
+    assert rec.import_warning is None
+
+
+def test_the_exact_count_is_only_paid_for_when_the_screen_says_short(monkeypatch):
+    """count(*) over a million-row table is a real cost. It must not run on the
+    healthy path, which is almost every call."""
+    calls = []
+
+    async def _estimate(table, **kw):
+        return 2_000_000       # comfortably above — healthy
+
+    async def _exact(table, **kw):
+        calls.append(table)
+        return 2_000_000
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, _Rec())
+    run(worker._record_short_load("append_x", "ds-1", 1_097_775))
+    assert calls == [], "the healthy path must not scan the table"
+
+
+def test_a_confirmed_complete_table_clears_a_stale_warning(monkeypatch):
+    """Nothing used to remove a short-load note once the gap closed: the loader
+    only ever set it, and only a later push recomputed it. On a weekly corpus
+    that is a week of a false alarm on a public page."""
+    rec = _Rec()
+    rec.import_warning = ("⚠ r2:.../v3/475e6d86_6600.csv: 26,000 שורות בטבלה "
+                          "מתוך 79,451 שנקלטו בגרסה — הטעינה ל-NEON חלקית")
+
+    async def _estimate(table, **kw):
+        return 26_000
+
+    async def _exact(table, **kw):
+        return 79_451
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 79_451,
+                                  res_name="r2:.../v3/475e6d86_6600.csv"))
+    assert rec.import_warning is None
+    assert rec.import_warning_at is None
+
+
+def test_clearing_keeps_a_warning_that_is_about_something_else(monkeypatch):
+    """push_version joins several notes with ' · ': a short load can sit beside
+    an engine-change note that is still true. Only this resource's note goes."""
+    rec = _Rec()
+    rec.import_warning = (
+        "⚠ r2:.../6600.csv: 26,000 שורות בטבלה מתוך 79,451 שנקלטו בגרסה — "
+        "הטעינה ל-NEON חלקית · המנוע שאסף את הגרסה הזו שונה מקודמתה")
+
+    async def _estimate(table, **kw):
+        return 26_000
+
+    async def _exact(table, **kw):
+        return 79_451
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 79_451,
+                                  res_name="r2:.../6600.csv"))
+    assert rec.import_warning == "⚠ המנוע שאסף את הגרסה הזו שונה מקודמתה"
+    assert rec.import_warning_at is not None
+
+
+def test_another_resources_short_load_is_left_alone(monkeypatch):
+    """Two resources of one dataset can each be short. Confirming one complete
+    must not silence the other."""
+    rec = _Rec()
+    rec.import_warning = (
+        "⚠ a.csv: 1 שורות בטבלה מתוך 9 שנקלטו בגרסה — הטעינה ל-NEON חלקית · "
+        "b.csv: 2 שורות בטבלה מתוך 8 שנקלטו בגרסה — הטעינה ל-NEON חלקית")
+
+    async def _estimate(table, **kw):
+        return 2
+
+    async def _exact(table, **kw):
+        return 8
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 8, res_name="b.csv"))
+    assert rec.import_warning == (
+        "⚠ a.csv: 1 שורות בטבלה מתוך 9 שנקלטו בגרסה — הטעינה ל-NEON חלקית")
+
+
+def test_a_load_that_threw_is_still_flagged_without_a_count(monkeypatch):
+    """force means the load itself failed, so the table's row count cannot
+    clear it — a table already holding an earlier version's rows would pass.
+    That path must not pay for a count(*) either."""
+    calls = []
+
+    async def _estimate(table, **kw):
+        return 90_000
+
+    async def _exact(table, **kw):
+        calls.append(table)
+        return 90_000
+
+    rec = _Rec()
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 18_689, res_name="r",
+                                  force=True))
+    assert rec.import_warning
+    assert calls == []
+
+
+def test_an_unconfirmable_estimate_publishes_nothing(monkeypatch):
+    """If the count cannot be taken, the estimate alone is not enough to say on
+    a public page that rows are missing."""
+    rec = _Rec()
+
+    async def _estimate(table, **kw):
+        return 10
+
+    async def _exact(table, **kw):
+        raise RuntimeError("pool exhausted")
+
+    monkeypatch.setattr(append_store, "table_count_estimate", _estimate)
+    monkeypatch.setattr(append_store, "table_count", _exact)
+    _install_session(monkeypatch, rec)
+    run(worker._record_short_load("append_x", "ds-1", 1000, res_name="r"))
     assert rec.import_warning is None
