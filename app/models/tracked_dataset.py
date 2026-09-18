@@ -86,6 +86,28 @@ class TrackedDataset(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    @property
+    def is_externally_pushed(self) -> bool:
+        """True when versions arrive from a publisher outside the worker fleet.
+
+        The normal life of a scraper dataset is a loop: the scheduler queues a
+        ScrapeTask, a fleet worker claims it at /poll, scrapes, and pushes. Some
+        sources have no worker in that loop at all — the data is produced
+        elsewhere and handed to OVER directly with the worker key, one push per
+        run. For those, the loop is not merely unused but actively harmful: a
+        task is queued on every poll for work nobody in the fleet can do, gets
+        claimed by whichever worker asks first, and fails with "no engine for
+        kind=…". Meanwhile push_version's running-task precondition can never be
+        satisfied, because nothing ever moves a task to `running`.
+
+        A dataset says so once, at registration, via
+        ``scraper_config["push_mode"] == "external"``; the two places that make
+        up that loop (poll_job._create_scrape_task and the guard in
+        push_version) then both step aside. Anything else — a missing key, a
+        different value — behaves exactly as it always has.
+        """
+        return (self.scraper_config or {}).get("push_mode") == "external"
+
     versions = relationship("VersionIndex", back_populates="tracked_dataset", cascade="all, delete-orphan")
     tags = relationship(
         "Tag",

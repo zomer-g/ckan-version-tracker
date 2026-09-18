@@ -1437,23 +1437,38 @@ async def push_version(
     # is at most one active task per dataset (migration 023), so "a running
     # task exists" is the clean precondition that a legitimate in-flight push
     # always satisfies.
-    running_task = (await db.execute(
-        select(ScrapeTask).where(
-            ScrapeTask.tracked_dataset_id == ds.id,
-            ScrapeTask.status == "running",
-        )
-    )).scalar_one_or_none()
-    if running_task is None:
-        logger.warning(
-            "Rejecting push-version for %s: no running task (cancelled or "
-            "reassigned). Worker %s.",
+    #
+    # ...unless the dataset has no task loop to be stale against. An
+    # externally-pushed dataset (see TrackedDataset.is_externally_pushed) is
+    # published by something outside the fleet that never claims a task, so the
+    # precondition is unsatisfiable by construction and the guard would reject
+    # every push rather than the stale ones. Nothing is given up: "stale" here
+    # means "the task this push belongs to was taken away", and a publisher with
+    # no task has none to lose.
+    if ds.is_externally_pushed:
+        logger.info(
+            "push-version for %s: externally-pushed dataset, skipping the "
+            "running-task precondition. Publisher %s.",
             ds.id, request.headers.get("x-worker-id", "?"),
         )
-        raise HTTPException(
-            status_code=409,
-            detail="No running task for this dataset — the task was cancelled "
-                   "or reassigned; this push is stale and was rejected.",
-        )
+    else:
+        running_task = (await db.execute(
+            select(ScrapeTask).where(
+                ScrapeTask.tracked_dataset_id == ds.id,
+                ScrapeTask.status == "running",
+            )
+        )).scalar_one_or_none()
+        if running_task is None:
+            logger.warning(
+                "Rejecting push-version for %s: no running task (cancelled or "
+                "reassigned). Worker %s.",
+                ds.id, request.headers.get("x-worker-id", "?"),
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="No running task for this dataset — the task was cancelled "
+                       "or reassigned; this push is stale and was rejected.",
+            )
 
     # GovMap layers carry a placeholder title ("GovMap layer 200541") at
     # creation time because we don't fetch the catalog from the request path.

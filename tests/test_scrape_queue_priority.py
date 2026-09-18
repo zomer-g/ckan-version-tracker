@@ -283,3 +283,67 @@ def test_default_band_is_routine():
             )).all()
             assert tasks[0].priority == PRIORITY_ROUTINE
     _run(go())
+
+
+# ── 4. externally-pushed datasets never enter the queue ───────────────────
+
+def test_an_externally_pushed_dataset_queues_nothing():
+    """Nobody in the fleet can scrape it, so a task for it is work that can
+    only be claimed and failed — once per poll_interval, forever. The poll is
+    still recorded, so cadence bookkeeping is unaffected."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            ds = _dataset("56")
+            ds.scraper_config = {"kind": "taxes_nadlan_full", "push_mode": "external"}
+            db.add(ds)
+            await db.commit()
+
+            await _create_scrape_task(ds, db)
+
+            tasks = (await db.execute(
+                ScrapeTask.__table__.select().where(ScrapeTask.tracked_dataset_id == ds.id)
+            )).all()
+            assert tasks == []
+            assert ds.last_polled_at is not None
+    _run(go())
+
+
+def test_a_manual_trigger_cannot_force_one_either():
+    """"דגום" on an externally-pushed dataset has nobody to hand the work to;
+    queueing a band-3 task would only jump it to the front of a queue in which
+    it is guaranteed to fail."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            ds = _dataset("57")
+            ds.scraper_config = {"kind": "taxes_nadlan_full", "push_mode": "external"}
+            db.add(ds)
+            await db.commit()
+
+            await _create_scrape_task(ds, db, priority=PRIORITY_MANUAL)
+
+            tasks = (await db.execute(
+                ScrapeTask.__table__.select().where(ScrapeTask.tracked_dataset_id == ds.id)
+            )).all()
+            assert tasks == []
+    _run(go())
+
+
+def test_a_normal_scraper_dataset_still_queues():
+    """The exemption is opt-in: a dataset that says nothing about push_mode
+    behaves exactly as it did before this existed."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            ds = _dataset("58")
+            db.add(ds)
+            await db.commit()
+
+            await _create_scrape_task(ds, db)
+
+            tasks = (await db.execute(
+                ScrapeTask.__table__.select().where(ScrapeTask.tracked_dataset_id == ds.id)
+            )).all()
+            assert len(tasks) == 1
+    _run(go())
