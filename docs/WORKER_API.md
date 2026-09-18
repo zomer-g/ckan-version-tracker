@@ -516,8 +516,49 @@ When defining `fields`, use these CKAN DataStore types:
 | 401 | Missing Authorization header |
 | 403 | Invalid API key |
 | 404 | Task or dataset not found |
+| 409 | Push rejected — see below |
 | 429 | Rate limit exceeded |
 | 500 | Server error |
+
+A `409` from `push-version` means the push was refused before anything was
+written. Two cases:
+
+- `staged_csv_missing` — a `neon-csv` reference whose staged file is gone
+  (a restart or a deploy emptied `/tmp`). Upload it again, then push again.
+- *"No running task for this dataset"* — the dataset has no task in `running`
+  state. This is the stale-push guard: a version is built from whatever the
+  worker sends, so a worker whose task was cancelled or reassigned could
+  otherwise land a junk version (and, for an archive source, a poisoned
+  checkpoint with it). There is at most one active task per dataset, so a
+  legitimate in-flight push always satisfies it.
+
+---
+
+## Datasets published from outside the fleet
+
+Not every source has a worker in the poll → scrape → push loop. Some are
+produced elsewhere and handed to OVER directly with the worker key, one push
+per run. For those the loop is not just unused but harmful: a task is queued on
+every `poll_interval` for work nobody in the fleet can do, gets claimed by
+whichever worker asks first, and comes back *"no engine for kind=…"*. And the
+stale-push guard above can never be satisfied, because nothing ever moves a
+task to `running` — so every push is rejected with `409`.
+
+Such a dataset declares itself once, at registration, in its `scraper_config`:
+
+```json
+{"kind": "your_source_id", "push_mode": "external"}
+```
+
+With that set, OVER queues no scrape tasks for the dataset (a manual "דגום"
+does nothing either — there is nobody to hand the work to), and `push-version`
+skips the running-task precondition. Nothing else changes: uploads, versioning,
+`csv_resource_ids`, append mode and NEON archiving all behave exactly as they
+do for a fleet-scraped dataset.
+
+The value is matched exactly — only the literal string `"external"` exempts a
+dataset, so a typo leaves the normal guard in place rather than silently
+disabling it.
 
 ---
 

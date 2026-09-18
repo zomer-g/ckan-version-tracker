@@ -35,14 +35,17 @@ DS_ID = uuid.uuid4()
 class _DB:
     """Minimal async session: serves the dataset and the running-task query."""
 
-    def __init__(self, *, has_running_task: bool):
+    def __init__(self, *, has_running_task: bool, push_mode: str | None = None):
         self.has_running_task = has_running_task
         self.committed = False
+        config = {"kind": "workagreements", "archive": True,
+                  "checkpoint": {"known_file_urls": [], "rows_hash": "h"}}
+        if push_mode is not None:
+            config["push_mode"] = push_mode
         self.ds = TrackedDataset(
             id=DS_ID, ckan_id="workagreements-scraper-x", ckan_name="x",
             title="t", source_type="scraper",
-            scraper_config={"kind": "workagreements", "archive": True,
-                            "checkpoint": {"known_file_urls": [], "rows_hash": "h"}},
+            scraper_config=config,
         )
         self.task = ScrapeTask(
             id=uuid.uuid4(), tracked_dataset_id=DS_ID, status="running",
@@ -123,6 +126,25 @@ def test_push_passes_the_guard_when_a_task_is_running():
     db = _DB(has_running_task=True)
     resp = _push(_client(db))
     assert resp.status_code != 409
+
+
+def test_external_push_mode_is_exempt_from_the_guard():
+    """A dataset published from outside the fleet never has a running task —
+    nothing on its behalf ever claims one — so the precondition is
+    unsatisfiable and would reject every push, not just the stale ones."""
+    db = _DB(has_running_task=False, push_mode="external")
+    resp = _push(_client(db))
+    assert resp.status_code != 409
+
+
+def test_the_exemption_is_opt_in_per_dataset():
+    """Only the exact value "external" exempts. A neighbouring value must not
+    quietly disable the guard for a dataset that does live in the fleet loop."""
+    for mode in ("externally", "External", "true", ""):
+        db = _DB(has_running_task=False, push_mode=mode)
+        resp = _push(_client(db))
+        assert resp.status_code == 409, f"push_mode={mode!r} must not exempt"
+        assert db.committed is False
 
 
 def test_more_batches_defaults_off():

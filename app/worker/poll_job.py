@@ -1037,6 +1037,19 @@ async def _create_scrape_task(
     """
     from app.models.scrape_task import PRIORITY_ROUTINE, ScrapeTask
 
+    # An externally-pushed dataset has no worker in the fleet that can scrape
+    # it (see TrackedDataset.is_externally_pushed), so a task for it is work
+    # nobody can do: it is claimed by whichever worker asks first and comes
+    # back "no engine for kind=…", once per poll_interval, forever. Record the
+    # poll and queue nothing.
+    if ds.is_externally_pushed:
+        logger.info(
+            "Dataset %s is externally pushed — no scrape task queued", ds.ckan_name
+        )
+        ds.last_polled_at = datetime.now(timezone.utc)
+        await db.commit()
+        return
+
     # Check if there's already a pending/running task
     existing = await db.execute(
         select(ScrapeTask).where(
