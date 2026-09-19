@@ -133,6 +133,35 @@ def test_the_declaration_is_per_dataset_and_does_not_leak():
                                     [REGISTER, DOCUMENTS]) is True
 
 
+def test_one_table_is_marked_as_one_table_however_many_resources_feed_it():
+    """The layout marker is written off the DISTINCT tables, not the number of
+    resources. _neon_layout carries one entry per resource, and a partitioned
+    source has 47 of them naming the same table — counted as entries, that is a
+    multi-table marker, and tables_from_mappings would hand /data the same table
+    47 times over. Which is the whole thing the merge was asked for.
+
+    Pinned by reading the source: the real write sits deep inside push_version,
+    past R2 and the append store."""
+    import inspect
+    src = inspect.getsource(worker.push_version)
+    assert 'len({e["table"] for e in _neon_layout}) > 1' in src, (
+        "the marker is being chosen by entry count again")
+
+
+def test_the_reseed_retargets_versions_it_moved():
+    """Every reader resolves a version's tables from its own mappings, so a
+    reseed that moved the rows and left the markers behind leaves /data, the
+    append endpoints and MCP all reading tables it just emptied."""
+    import inspect
+    from app.services import r2_backfill
+    src = inspect.getsource(r2_backfill.seed_neon_from_versions)
+    assert "_retarget_versions_to_one_table" in src
+    fn = inspect.getsource(r2_backfill._retarget_versions_to_one_table)
+    # Only the two layout keys move; a resource's R2 object is still its own.
+    assert '_append_tables' in fn and 'append_table' in fn
+    assert "_names" not in fn and "_hashes" not in fn
+
+
 def test_the_reseed_agrees_with_the_forward_path():
     """r2_backfill.seed_neon_from_versions computes the same layout separately,
     and a reseed that disagreed would rebuild a shape the next push writes past.

@@ -2474,7 +2474,12 @@ async def push_version(
     # for the multi shape because jsonb does not preserve object key order, and
     # the order here IS the order of the resources as scraped.
     if _neon_layout:
-        if len(_neon_layout) > 1:
+        # On the DISTINCT tables, not on the number of entries. _neon_layout has
+        # one entry per RESOURCE, and a partitioned source (neon_single_table)
+        # has many resources pointing at the same table — so counting entries
+        # would write a multi-table marker naming one table 47 times, and
+        # tables_from_mappings would hand /data the same table 47 times over.
+        if len({e["table"] for e in _neon_layout}) > 1:
             resource_mappings["_append_tables"] = _neon_layout
         else:
             resource_mappings["append_table"] = _neon_layout[0]["table"]

@@ -1098,4 +1098,43 @@ async def seed_neon_from_versions(
                 summary["archive_neon_enabled"] = True
                 summary["committed"] = True
 
+            # Point the versions at the tables their rows are now in. Every
+            # reader resolves a version's NEON tables from its own mappings
+            # (append_store.tables_from_mappings) — /data, the public append
+            # endpoints, MCP — so a reseed that moved the rows and left the
+            # markers behind would leave all of them reading tables this run
+            # just emptied. Only the two layout keys are touched; the R2 object
+            # each resource maps to is untouched and still its own file.
+            if not per_resource:
+                merged = await _retarget_versions_to_one_table(ds_uuid, table)
+                summary["versions_retargeted"] = merged
+
     return summary
+
+
+async def _retarget_versions_to_one_table(ds_uuid, table: str) -> int:
+    """Rewrite every version's NEON layout markers to the single ``table``.
+
+    Returns how many versions changed. Its own short-lived session, for the
+    reason the caller's is: the seed runs for minutes and the request's
+    connection is long gone by now.
+    """
+    from app.database import async_session
+    changed = 0
+    async with async_session() as s:
+        rows = list((await s.execute(
+            select(VersionIndex).where(VersionIndex.tracked_dataset_id == ds_uuid)
+        )).scalars().all())
+        for v in rows:
+            m = dict(v.resource_mappings or {})
+            if m.get("append_table") == table and "_append_tables" not in m:
+                continue
+            m.pop("_append_tables", None)
+            m["append_table"] = table
+            v.resource_mappings = m
+            changed += 1
+        if changed:
+            await s.commit()
+    logger.info("seed_neon: retargeted %d version(s) of %s to %s",
+                changed, ds_uuid, table)
+    return changed
