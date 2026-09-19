@@ -18,6 +18,7 @@ const SOURCE_LABELS: Record<string, string> = {
   gazetteer: "גזטיר הנכסים",
   postal: "קובץ המיקוד (דואר ישראל)",
   address_list: "רשימת כתובות בישראל",
+  deals: "עסקאות נדל\"ן (רשות המסים)",
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -36,6 +37,10 @@ const FIELD_LABELS: Record<string, string> = {
   zip7: "מיקוד 7",
   zip5: "מיקוד 5",
   n_addresses: "כתובות מקושרות",
+  n_deals: "עסקאות",
+  deal_years: "טווח שנים",
+  last_deal_date: "עסקה אחרונה",
+  last_deal_amount: "סכום אחרון (₪)",
 };
 
 function fmt(v: unknown): string {
@@ -67,6 +72,24 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
         </dl>
       ) : (
         <div className="text-sm text-muted">אין נתונים במקור הזה לחלקה זו.</div>
+      )}
+      {/* Only the deals block carries rows inline: it is the one source that
+          records what HAPPENED to a property rather than what it is, and a
+          count plus a link answers less than the last few deals do. */}
+      {block.recent && block.recent.length > 0 && (
+        <ul style={{ margin: "0.5rem 0 0", padding: 0, listStyle: "none", fontSize: "0.8rem" }}>
+          {block.recent.map((d, i) => (
+            <li key={i} style={{ borderTop: i ? "1px solid var(--border)" : "none", padding: "0.25rem 0" }}>
+              <span style={{ fontWeight: 600 }}>{d.date ?? "—"}</span>
+              {d.amount ? <> · {d.amount} ₪</> : null}
+              {d.rooms ? <> · {d.rooms} חד׳</> : null}
+              {d.area ? <> · {d.area} מ״ר</> : null}
+              {d.sub_chelka ? (
+                <span className="text-muted"> · תת-חלקה {d.sub_chelka}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       )}
       <a
         href={block.row_url}

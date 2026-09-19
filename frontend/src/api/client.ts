@@ -2850,11 +2850,25 @@ export const ocalAdmin = {
 // in every other codespace plus a per-source block linking to that source's
 // untouched full row on /data.
 
+export interface NadlanDeal {
+  date: string | null;
+  amount: string | null;
+  nature: string | null;
+  rooms: string | null;
+  area: string | null;
+  year_built: string | null;
+  sub_chelka: string | null;
+}
+
 export interface NadlanSourceBlock {
   table: string;
   fields: Record<string, unknown>;
   console_sql: string;
   row_url: string;
+  // Only the deals block carries rows inline. It is the one source that records
+  // what HAPPENED to a property rather than what it is, so a count and a link
+  // answer less than the last few deals do.
+  recent?: NadlanDeal[];
 }
 
 export interface NadlanAddress {
@@ -2890,6 +2904,8 @@ export interface NadlanProperty {
     gazetteer: NadlanSourceBlock;
     postal: NadlanSourceBlock;
     address_list: NadlanSourceBlock;
+    // Absent on a deployment that does not track the deals corpus.
+    deals?: NadlanSourceBlock;
   };
   match: { method: string | null; confidence: string; notes: string[] };
   // The parcel polygon as a GeoJSON *string*, present when the request asked

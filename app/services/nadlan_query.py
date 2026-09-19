@@ -27,6 +27,7 @@ from urllib.parse import quote
 from app.services import append_store, nadlan_text
 from app.services.append_store import _qi
 from app.services.index_mirror import GEOM_SRID, PG_EXT_SCHEMA
+from app.services import nadlan_index
 from app.services.nadlan_index import (
     ADDRESSES_TABLE, GAZ_TABLE, PARCELS_SRC, PARCELS_TABLE, STREETS_TABLE,
     ZIP5_TABLE, GAZTIR_SRC, POSTAL_SRC, ADDR_SRC, _t,
@@ -202,6 +203,19 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
         f"""SELECT * FROM public.{_qi(GAZ_TABLE)}
             WHERE parcel_key = ANY($1::text[])""", keys)}
 
+    # Best-effort, and deliberately not fatal: the deals corpus is a tracked
+    # dataset like any other, so a deployment that does not track it — or one
+    # mid-reseed — must still answer the other four sources rather than 500.
+    deals_src = None
+    deals_by_parcel: dict[str, list[dict]] = {}
+    try:
+        deals_src = await nadlan_index.find_deals_table()
+        if deals_src:
+            deals_by_parcel = await _deals_for_parcels(parcels)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("nadlan: deals lookup unavailable: %s", e)
+        deals_src = None
+
     addr_by_parcel: dict[str, list[dict]] = {}
     if include_addresses:
         rows = addresses if addresses is not None else await _fetch(
@@ -282,6 +296,8 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
                         f"AND street = {_lit(a.get('street_name') or '')})"
                         for a in addrs[:20]) or "false"),
                     fields={"n_addresses": len(addrs)}),
+                **({"deals": _deals_block(deals_src, deals_by_parcel.get(pk))}
+                   if deals_src else {}),
             },
             "match": {"method": "gp_key" if g else None,
                       "confidence": confidence, "notes": notes},
@@ -293,6 +309,97 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
 def _lit(v) -> str:
     """A single-quoted SQL literal for the deep-link text (never executed here)."""
     return "'" + str(v).replace("'", "''") + "'"
+
+
+# ── עסקאות נדל"ן ──────────────────────────────────────────────────────────────
+# The deals corpus is the one source here that is not a register of what a
+# property IS but of what happened to it, so the block carries a small summary
+# rather than a field list: how many deals, over what span, and the most recent
+# one. Everything else stays one click away at /data, exactly like the other
+# four blocks.
+_DEALS_RECENT = 5
+
+
+async def _deals_for_parcels(parcels: list[dict]) -> dict[str, list[dict]]:
+    """Recent deals + a count per parcel, keyed by parcel_key.
+
+    Matched on gush+chelka as TEXT: both sides are canonical plain integers
+    (verified against production — no leading zeros, no ".0" form), so the
+    comparison rides the (gush, chelka) btree that nadlan_index builds. Casting
+    the column to int instead would type-check and then scan every row.
+
+    תת-חלקה is deliberately NOT part of the match. A deal is reported on the
+    apartment (sub_chelka), the crosswalk's spine is the חלקה, and a parcel's
+    deals are all of its sub-parcels' deals — filtering by the parcel's own
+    suffix would hide most of them.
+    """
+    pairs = {(str(p["gush"]), str(p["parcel"])): p["parcel_key"] for p in parcels}
+    if not pairs:
+        return {}
+    src = await nadlan_index.find_deals_table()
+    if not src:
+        return {}
+    schema, table = src
+    gushim = [g for g, _ in pairs]
+    helkot = [h for _, h in pairs]
+    rows = await _fetch(
+        f"""
+        SELECT gush, chelka, sub_chelka, deal_date, deal_amount, deal_nature,
+               room_num, asset_area, year_built
+        FROM {_qi(schema)}.{_qi(table)}
+        WHERE (gush, chelka) IN (
+            SELECT * FROM unnest($1::text[], $2::text[])
+        )
+        """, gushim, helkot)
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        pk = pairs.get((r["gush"], r["chelka"]))
+        if pk:
+            out.setdefault(pk, []).append(r)
+    return out
+
+
+def _deal_sort_key(d: dict):
+    """Newest first, by the DD/MM/YYYY the source publishes.
+
+    Sorted in Python rather than SQL: to_date over the whole corpus would have
+    to run before the LIMIT, and a row whose date is malformed would abort the
+    query instead of just sorting last. An unparseable date sorts oldest.
+    """
+    raw = (d.get("deal_date") or "").strip()
+    parts = raw.split("/")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        return (parts[2], parts[1], parts[0])
+    return ("", "", "")
+
+
+def _deals_block(src: tuple[str, str], deals: list[dict] | None) -> dict:
+    schema, table = src
+    deals = sorted(deals or [], key=_deal_sort_key, reverse=True)
+    years = sorted({_deal_sort_key(d)[0] for d in deals if _deal_sort_key(d)[0]})
+    fields: dict = {"n_deals": len(deals)}
+    if years:
+        fields["deal_years"] = (years[0] if years[0] == years[-1]
+                                else f"{years[0]}–{years[-1]}")
+    if deals:
+        fields["last_deal_date"] = deals[0].get("deal_date")
+        fields["last_deal_amount"] = deals[0].get("deal_amount")
+    block = _src_block(
+        schema, table,
+        where=(f"gush = {_lit(deals[0]['gush'])} AND chelka = {_lit(deals[0]['chelka'])}"
+               if deals else "false"),
+        fields=fields)
+    # The rows themselves, so the card can list the recent ones without a second
+    # round trip. Capped: a חלקה in a tower block has hundreds of deals and this
+    # rides on an envelope that already carries up to 100 addresses.
+    block["recent"] = [
+        {"date": d.get("deal_date"), "amount": d.get("deal_amount"),
+         "nature": d.get("deal_nature"), "rooms": d.get("room_num"),
+         "area": d.get("asset_area"), "year_built": d.get("year_built"),
+         "sub_chelka": d.get("sub_chelka")}
+        for d in deals[:_DEALS_RECENT]
+    ]
+    return block
 
 
 # ── detail + support ──────────────────────────────────────────────────────────
