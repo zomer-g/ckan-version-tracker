@@ -69,6 +69,14 @@ class UpdateRequest(BaseModel):
     # archives them as a ZIP, vs catalog-only (index CSV only). Stored in
     # scraper_config; honored by mevaker/idf/health engines.
     download_files: bool | None = None
+    # Treat this dataset's tabular resources as PARTITIONS of one NEON table
+    # rather than separate grains, overriding the per-resource split (see
+    # worker.neon_per_resource). Stored in scraper_config. Setting it changes
+    # only where the NEXT push writes; the rows already loaded stay in the
+    # per-resource tables until a reseed
+    # (POST /api/admin/datasets/{id}/seed-neon?apply=true&reset=true) replays
+    # them into the merged one.
+    neon_single_table: bool | None = None
     # New: replace the tracked-resources set. Empty list ([]) is rejected
     # so an admin can't accidentally orphan a CKAN dataset; pass null to
     # leave unchanged.
@@ -1568,6 +1576,17 @@ async def update_tracked(
         sc = dict(ds.scraper_config or {})
         sc["download_files"] = body.download_files
         ds.scraper_config = sc or None
+
+    if body.neon_single_table is not None:
+        sc = dict(ds.scraper_config or {})
+        sc["neon_single_table"] = body.neon_single_table
+        ds.scraper_config = sc or None
+        # The catalog lists a dataset's tables from its latest version's
+        # mappings, and those do not move until the next push — but the cache
+        # in front of it would otherwise keep serving the old shape for the
+        # full TTL after a reseed rewrites them.
+        from app.services.data_catalog import invalidate_catalog_cache
+        invalidate_catalog_cache()
 
     if body.organization_id is not None:
         if body.organization_id == "":

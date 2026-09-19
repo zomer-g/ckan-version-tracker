@@ -106,6 +106,43 @@ def test_the_layout_ratchets_and_never_merges_back():
     assert worker.neon_per_resource(already_split, []) is True
 
 
+def test_a_partitioned_source_can_declare_one_table():
+    """The split infers "several resources" to mean "several grains", which is
+    usually right and sometimes not: a source whose resources are PARTITIONS of
+    one table — identical columns, split only by settlement — has one grain and
+    47 files. Left to the inference, querying it is a 47-way UNION and a
+    per-parcel lookup is 47 sequential scans."""
+    partitioned = {"archive_neon": True, "neon_single_table": True}
+    assert worker.neon_per_resource(partitioned, [REGISTER, DOCUMENTS]) is False
+    assert worker.neon_per_resource(partitioned, [REGISTER]) is False
+
+
+def test_the_declaration_wins_over_a_ratchet_already_set():
+    """A dataset that has been split can be moved back, which is the whole
+    point: the 47 tables exist before anyone can say they should not."""
+    both = {"archive_neon": True, "neon_tables_per_resource": True,
+            "neon_single_table": True}
+    assert worker.neon_per_resource(both, [REGISTER, DOCUMENTS]) is False
+
+
+def test_the_declaration_is_per_dataset_and_does_not_leak():
+    """Nothing about one dataset's shape may change another's. A config without
+    the flag behaves exactly as it did before the flag existed."""
+    assert worker.neon_per_resource({"archive_neon": True}, [REGISTER, DOCUMENTS]) is True
+    assert worker.neon_per_resource({"neon_single_table": False},
+                                    [REGISTER, DOCUMENTS]) is True
+
+
+def test_the_reseed_agrees_with_the_forward_path():
+    """r2_backfill.seed_neon_from_versions computes the same layout separately,
+    and a reseed that disagreed would rebuild a shape the next push writes past.
+    Pinned by reading the source, since the real function needs R2 and NEON."""
+    import inspect
+    from app.services import r2_backfill
+    src = inspect.getsource(r2_backfill.seed_neon_from_versions)
+    assert "neon_single_table" in src, "the reseed would re-split a merged dataset"
+
+
 # ── resolving and selecting the tables ───────────────────────────────────
 
 def _multi_mappings(ds):

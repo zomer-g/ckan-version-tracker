@@ -965,8 +965,20 @@ async def seed_neon_from_versions(
     # all into one table is what produced the merged table this rebuild exists
     # to repair. The layout only ratchets to multi, never back, so a reseed can
     # never re-merge what the forward path has already split.
-    per_resource = bool((ds.scraper_config or {}).get("neon_tables_per_resource")) or any(
-        len(_named_r2_files(v.resource_mappings)) > 1 for v in versions
+    #
+    # Except on the one dataset that says its resources are PARTITIONS of a
+    # single table rather than separate grains (neon_single_table — see
+    # worker.neon_per_resource, which this has to agree with or the reseed would
+    # rebuild a layout the forward path then writes past). That is also what
+    # makes this the migration path INTO the merged layout: with the flag set,
+    # ``?apply=true&reset=true`` replays every resource of every version into the
+    # one table, which is the only way the rows already on R2 get there — the
+    # forward path only fills it from the next push onward.
+    sc = ds.scraper_config or {}
+    per_resource = not sc.get("neon_single_table") and (
+        bool(sc.get("neon_tables_per_resource")) or any(
+            len(_named_r2_files(v.resource_mappings)) > 1 for v in versions
+        )
     )
 
     def _table_for(resource_name: str) -> str:

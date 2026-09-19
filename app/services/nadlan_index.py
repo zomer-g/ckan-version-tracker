@@ -357,6 +357,27 @@ async def ensure_source_indexes() -> dict:
             except Exception as e:  # noqa: BLE001
                 failed.append(f"{name}: {e}")
                 logger.warning("nadlan: source index %s failed: %s", name, e)
+        # The deals corpus is found rather than named (see find_deals_table), so
+        # its index cannot live in the static list above. Without it a per-parcel
+        # lookup is a sequential scan of every deal ever recorded, which is the
+        # difference between the deals block being servable from the property
+        # card and not.
+        deals = await find_deals_table()
+        if deals:
+            d_schema, d_table = deals
+            idx = f"{d_table[:50]}_gush_chelka_idx"
+            try:
+                await conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {_qi(idx)} "
+                    f"ON {_qi(d_schema)}.{_qi(d_table)} (gush, chelka)",
+                    timeout=_LONG_TIMEOUT)
+                made.append(idx)
+                await conn.execute(
+                    f"ANALYZE {_qi(d_schema)}.{_qi(d_table)}", timeout=_LONG_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"{idx}: {e}")
+                logger.warning("nadlan: deals index %s failed: %s", idx, e)
+
         for schema, table in (GAZTIR_SRC, POSTAL_SRC, ADDR_SRC):
             try:
                 await conn.execute(f"ANALYZE {_qi(schema)}.{_qi(table)}", timeout=_LONG_TIMEOUT)
@@ -758,6 +779,62 @@ async def build_postal_localities() -> dict:
 # Absent → build_streets() just falls back to the heuristic ladder.
 _OFFICIAL_STREET_COLS = {"city_code", "street_code", "street_name",
                          "street_name_status", "official_code"}
+
+
+# עסקאות נדל"ן (רשות המסים) — the deals corpus, discovered the same way and for
+# a sharper version of the same reason. Its physical name carries the tracked
+# dataset's id, so it changes if the dataset is ever re-registered, and the
+# corpus is published as one file per settlement: every partition has this exact
+# signature too. So the name cannot be hardcoded and the signature alone does not
+# single one out — see find_deals_table.
+_DEALS_COLS = {"gush", "chelka", "deal_date", "deal_amount", "settlement_code"}
+
+# The columns a deal is READ through. Every column in this table is text (an
+# append table has no types), and the values were checked against production
+# before anything here relied on them: deal_date is DD/MM/YYYY for 100% of rows,
+# gush and chelka are plain integers with no leading zeros and no ".0" form, and
+# deal_amount is never blank. That is why the lookup below compares gush/chelka
+# as TEXT — canonical on both sides, so a plain btree serves it, where a ::int
+# cast on the column would not.
+DEALS_DATE_FMT = "DD/MM/YYYY"
+
+
+async def find_deals_table() -> tuple[str, str] | None:
+    """The one table holding ALL real-estate deals, or None.
+
+    Every per-settlement partition shares the signature, so matching it is not
+    enough: the merged table and its 47 leftovers are indistinguishable by
+    columns. The largest wins, which is the fact that actually distinguishes
+    them — the merged table holds every row and each partition holds one
+    settlement's. That also makes this self-correcting during the migration into
+    the merged layout: while the partitions are still the fuller ones, it keeps
+    resolving to a partition and the deals block simply reports what that table
+    holds; once the reseed lands, it moves to the merged table on its own.
+
+    Returns None when the corpus is not loaded at all, which is the normal state
+    of a deployment that does not track it — the deals block is then absent
+    rather than broken.
+    """
+    best: tuple[str, str] | None = None
+    best_rows = -1
+    for schema in ("public", "odata", "idx"):
+        try:
+            cols_by_table = await append_store.schema_table_columns(schema)
+        except Exception:  # noqa: BLE001
+            continue
+        for table, cols in cols_by_table.items():
+            names = {c["name"] if isinstance(c, dict) else c for c in cols}
+            if not _DEALS_COLS <= names:
+                continue
+            try:
+                rows = await append_store.table_count_estimate(table, schema=schema)
+            except Exception:  # noqa: BLE001
+                rows = 0
+            if rows > best_rows:
+                best, best_rows = (schema, table), rows
+    if best:
+        logger.info("nadlan: deals corpus at %s.%s (~%d rows)", *best, best_rows)
+    return best
 
 
 async def find_official_streets_table() -> tuple[str, str] | None:

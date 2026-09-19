@@ -938,11 +938,24 @@ def neon_per_resource(scraper_config: dict | None, tabular_names: list[str]) -> 
     recorded as ``scraper_config.neon_tables_per_resource``. Deciding per
     version instead would send a partial scrape that happened to return one
     resource back into the single merged table, quietly re-creating the mixed
-    grains the split exists to prevent."""
-    return bool(
-        (scraper_config or {}).get("neon_tables_per_resource")
-        or len(tabular_names) > 1
-    )
+    grains the split exists to prevent.
+
+    ``scraper_config.neon_single_table`` opts out, and wins over the ratchet.
+    The split guards against mixing different GRAINS in one table — a catalog
+    index beside the rows it indexes, a per-plan table beside a per-entity one —
+    and it infers "several resources" to mean "several grains" because that is
+    what it usually means. It is not what it always means: a source whose
+    resources are PARTITIONS of one table, identical columns split only by which
+    settlement the rows belong to, has one grain and 47 files. Left to the
+    inference, querying it means a 47-way UNION and a per-parcel lookup means 47
+    sequential scans, because a partition's table carries no index the others
+    do not. Only the source author knows which of the two shapes a source is, so
+    this is stated rather than guessed — and stated per dataset, so it cannot
+    leak into one where the inference was right."""
+    sc = scraper_config or {}
+    if sc.get("neon_single_table"):
+        return False
+    return bool(sc.get("neon_tables_per_resource") or len(tabular_names) > 1)
 
 
 async def _record_short_load(table: str, ds_id, expected: int,
