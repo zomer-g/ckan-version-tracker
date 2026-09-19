@@ -2576,6 +2576,36 @@ async def site_index_refresh(
     return s
 
 
+@router.post("/datasets/{dataset_id}/purge-orphan-tables")
+@limiter.limit("3/minute")
+async def purge_orphan_append_tables_endpoint(
+    request: Request,
+    dataset_id: str,
+    apply: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Drop this dataset's per-resource append tables that no version names.
+
+    The companion to merging a partitioned source into one table: the reseed
+    moves the rows and retargets the versions, and this clears the tables it
+    emptied, which are otherwise invisible in /data and still paid for.
+
+    ``apply=false`` (default) reports the plan without dropping anything. It
+    drops nothing until a reseed has actually retargeted the versions, so
+    running it on a half-finished migration is a no-op rather than a loss.
+    """
+    uid = parse_uuid(dataset_id, "dataset_id")
+    from app.services.r2_backfill import purge_orphan_append_tables
+    s = await purge_orphan_append_tables(db, uid, apply=apply)
+    if s.get("error"):
+        raise HTTPException(status_code=409, detail=s["error"])
+    logger.info("Orphan append-table purge by %s: dataset=%s orphans=%d dropped=%d apply=%s",
+                user.email, dataset_id, len(s.get("orphans") or []),
+                len(s.get("dropped") or []), apply)
+    return s
+
+
 @router.post("/index-mirror/purge-ineligible")
 @limiter.limit("3/minute")
 async def index_mirror_purge(
