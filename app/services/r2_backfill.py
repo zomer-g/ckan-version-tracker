@@ -1138,3 +1138,87 @@ async def _retarget_versions_to_one_table(ds_uuid, table: str) -> int:
     logger.info("seed_neon: retargeted %d version(s) of %s to %s",
                 changed, ds_uuid, table)
     return changed
+
+
+async def purge_orphan_append_tables(db, ds_uuid, *, apply: bool) -> dict:
+    """Drop this dataset's per-resource append tables that nothing references.
+
+    The companion to a merge. Flipping a partitioned source to one table
+    (worker.neon_per_resource) and reseeding moves every row into the merged
+    table and retargets the versions, but the per-resource tables it emptied
+    stay on disk — invisible in /data, still paid for. For the real-estate
+    corpus that was 47 tables and 881 MB.
+
+    Safe by construction rather than by care:
+
+    * a candidate must be one of THIS dataset's own per-resource tables, by the
+      exact name shape append_store mints — the dataset's base, its dataset-id
+      octet, and an 8-hex resource digest. A table belonging to any other
+      dataset cannot match, because the octet is this dataset's;
+    * a candidate is dropped only if NO version of this dataset still names it.
+      So this is inert until a reseed has actually retargeted them, and a
+      half-finished migration drops nothing;
+    * the merged table is never a candidate at all.
+
+    ``apply=False`` (the default at the endpoint) returns the same plan without
+    dropping anything, so the list can be read before it is acted on.
+    """
+    from app.services import append_store
+
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == ds_uuid)
+    )).scalar_one_or_none()
+    if ds is None:
+        return {"error": "dataset not found"}
+    if not append_store.is_configured():
+        return {"error": "NEON append DB is not configured"}
+
+    merged = append_store.table_name(ds)
+    # The per-resource shape: same base and dataset octet, plus a resource
+    # digest. Built from append_store's own rule rather than guessed, and
+    # anchored, so a longer name that merely starts the same cannot match.
+    base = re.sub(r"[^a-z0-9_]+", "_", (ds.ckan_name or "").lower()).strip("_") or "ds"
+    dsid = str(ds.id).replace("-", "")[:8]
+    stem = f"append_{base}"[:63 - 18].rstrip("_") + f"_{dsid}"
+    shape = re.compile(rf"^{re.escape(stem)}_[0-9a-f]{{8}}$")
+
+    versions = list((await db.execute(
+        select(VersionIndex).where(VersionIndex.tracked_dataset_id == ds_uuid)
+    )).scalars().all())
+    referenced: set[str] = {merged}
+    for v in versions:
+        for entry in append_store.tables_from_mappings(ds, v.resource_mappings):
+            if entry.get("table"):
+                referenced.add(entry["table"])
+
+    try:
+        present = set(await append_store.schema_table_columns("public"))
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"could not list tables: {type(e).__name__}: {e}"}
+
+    candidates = sorted(t for t in present if shape.match(t))
+    orphans = [t for t in candidates if t not in referenced]
+
+    out = {
+        "dataset_id": str(ds_uuid),
+        "merged_table": merged,
+        "candidates": len(candidates),
+        "still_referenced": sorted(t for t in candidates if t in referenced),
+        "orphans": orphans,
+        "apply": apply,
+        "dropped": [],
+    }
+    if not apply:
+        return out
+    for table in orphans:
+        try:
+            await append_store.drop_table(table)
+            out["dropped"].append(table)
+        except Exception as e:  # noqa: BLE001 — one failure must not strand the rest
+            out.setdefault("failed", []).append(f"{table}: {type(e).__name__}: {e}")
+            logger.warning("purge_orphan_append_tables: %s failed: %s", table, e)
+    logger.info("purge_orphan_append_tables: dropped %d of %d orphan table(s) for %s",
+                len(out["dropped"]), len(orphans), ds_uuid)
+    from app.services.data_catalog import invalidate_catalog_cache
+    invalidate_catalog_cache()
+    return out
