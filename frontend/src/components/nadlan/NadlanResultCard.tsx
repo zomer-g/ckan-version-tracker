@@ -77,7 +77,15 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
       >
         צפייה בשורות המקור ב-/data ↗
       <span className="sr-only"> (נפתח בחלון חדש)</span></a>
-      <div className="text-sm text-muted" style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
+      {/* A physical table name, and several are a schema plus a 32-hex resource
+          id joined by underscores — `odata.ac1ae1fa_6d43_4685_8434_9953e950ca9b_19c5be7f`
+          is 58 characters. An underscore is not a break opportunity in CSS, so
+          the name is one unbreakable word: it ran straight out of the card and
+          past the edge of the grid on the postal-code and address-list blocks,
+          whose ids are the longest. Breaking anywhere keeps it inside whatever
+          width the card happens to have. */}
+      <div className="text-sm text-muted"
+           style={{ fontSize: "0.75rem", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
         {block.table}
       </div>
     </div>
