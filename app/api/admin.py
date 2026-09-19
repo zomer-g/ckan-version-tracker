@@ -2606,6 +2606,79 @@ async def purge_orphan_append_tables_endpoint(
     return s
 
 
+@router.get("/parquet/tables")
+@limiter.limit("10/minute")
+async def parquet_tables(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Which tables are big enough to deserve a Parquet mirror, and the state
+    of each one's file. Read-only: nothing is built by asking."""
+    from app.services import parquet_export
+    ok, why = parquet_export.is_available()
+    rows = await parquet_export.eligible_tables(db)
+    for r in rows:
+        key = parquet_export.parquet_key(r["table"])
+        try:
+            size = await storage_client.object_size("r2:" + key)
+        except Exception:  # noqa: BLE001
+            size = None
+        r["parquet_key"] = key
+        r["parquet_bytes"] = size
+        r["built"] = size is not None
+    return {"available": ok, "unavailable_reason": why or None,
+            "min_rows": parquet_export.PARQUET_MIN_ROWS,
+            "tables": rows,
+            "built": sum(1 for r in rows if r["built"]), "total": len(rows)}
+
+
+async def _run_parquet_build_bg(tables: list[str], who: str) -> None:
+    from app.services import parquet_export
+    done, failed = 0, 0
+    for t in tables:
+        res = await parquet_export.build_table_parquet(t)
+        if res.get("error"):
+            failed += 1
+        elif res.get("key"):
+            done += 1
+    logger.info("Parquet build by %s finished: %d built, %d failed, %d requested",
+                who, done, failed, len(tables))
+
+
+@router.post("/parquet/build")
+@limiter.limit("3/minute")
+async def parquet_build(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    table: str | None = None,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Build the Parquet mirror of one table, or of every eligible table.
+
+    Always background: a 5.6M-row table takes minutes, far past any HTTP
+    timeout. Poll GET /api/admin/parquet/tables to watch the files appear.
+    """
+    from app.services import parquet_export
+    ok, why = parquet_export.is_available()
+    if not ok:
+        raise HTTPException(status_code=409, detail=why)
+
+    if table:
+        wanted = [table]
+    else:
+        wanted = [r["table"] for r in await parquet_export.eligible_tables(db)]
+    if not wanted:
+        raise HTTPException(status_code=404, detail=(
+            f"no table has more than {parquet_export.PARQUET_MIN_ROWS:,} rows"))
+
+    background_tasks.add_task(_run_parquet_build_bg, wanted, user.email)
+    logger.info("Parquet build started by %s: %d table(s)", user.email, len(wanted))
+    return {"status": "started", "tables": len(wanted),
+            "message": "Building in the background; poll GET /api/admin/parquet/tables."}
+
+
 @router.post("/index-mirror/purge-ineligible")
 @limiter.limit("3/minute")
 async def index_mirror_purge(
