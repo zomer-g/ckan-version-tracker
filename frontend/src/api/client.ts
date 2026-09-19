@@ -345,6 +345,10 @@ export interface Version {
   change_summary: {
     type?: string;
     resources_added?: string[];
+    // Present in the version but carried from an earlier one rather than
+    // uploaded again (the worker re-referenced them via csv_resource_ids).
+    // Absent on versions created before the two were told apart.
+    resources_carried?: string[];
     resources_removed?: string[];
     resources_modified?: { resource_id: string; name: string; format: string }[];
     total_resources?: number;
