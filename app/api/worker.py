@@ -1816,6 +1816,13 @@ async def push_version(
     # order. Empty unless this dataset archives to NEON (see _record_neon_table).
     _neon_layout: list[dict] = []
     odata_resource_ids = []
+    # Of those, the ones this push did NOT upload: a resource the worker mapped
+    # to an object an earlier version already holds (csv_resource_ids). That is
+    # the documented way to publish a partial update of a multi-resource dataset
+    # — re-reference what has not changed instead of re-uploading it — so these
+    # are genuinely part of the version and genuinely not new, and a version
+    # that called all 51 of them "added" said something false on the page.
+    carried_resource_ids: list[str] = []
     push_errors: list[str] = []
 
     is_append = (ds.storage_mode == "append_only")
@@ -2108,6 +2115,7 @@ async def push_version(
             if pre_uploaded:
                 resource_mappings[res.name] = pre_uploaded
                 odata_resource_ids.append(pre_uploaded)
+                carried_resource_ids.append(pre_uploaded)
                 logger.info("Using pre-uploaded CSV for %s → resource %s (%d rows)",
                             res.name, pre_uploaded, res.row_count)
                 # >50MB path: the worker uploaded the CSV out-of-band and sent
@@ -2552,7 +2560,12 @@ async def push_version(
             "total_attachments": len(body.attachments),
             "resources": [{"name": r.name, "format": r.format, "rows": r.row_count} for r in body.resources],
             "scrape_metadata": body.scrape_metadata,
-            "resources_added": odata_resource_ids,
+            "resources_added": [r for r in odata_resource_ids
+                                if r not in set(carried_resource_ids)],
+            # Present in the version, carried from an earlier one rather than
+            # uploaded again. Kept apart from resources_added so the page can
+            # say how much of the version is new without hiding the rest.
+            "resources_carried": carried_resource_ids,
             "resources_removed": [],
             "resources_modified": [],
         }

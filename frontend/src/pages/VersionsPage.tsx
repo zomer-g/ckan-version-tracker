@@ -937,6 +937,11 @@ export default function VersionsPage() {
                         {summary.resources_added!.length} {t("versions.resources_added")}
                       </span>
                     )}
+                    {(summary.resources_carried?.length ?? 0) > 0 && (
+                      <span className="badge" title="משאבים שהגרסה מכילה אך לא הועלו בה מחדש — הם נותרו ללא שינוי מגרסה קודמת">
+                        {summary.resources_carried!.length} ללא שינוי
+                      </span>
+                    )}
                     {(summary.resources_removed?.length ?? 0) > 0 && (
                       <span className="badge badge-danger">
                         {summary.resources_removed!.length} {t("versions.resources_removed")}
@@ -980,6 +985,18 @@ export default function VersionsPage() {
                   ];
                   if (files.length === 0) return null;
                   const batch = files.filter((f) => !f.alternate);
+                  // Everything the version CONTAINS, not just what changed in
+                  // it. The list above is the changelog — right for a source
+                  // that carries most of its resources forward untouched, and
+                  // the reason a version of a 51-resource dataset shows the 10
+                  // that moved. But the version does hold all 51, every one is
+                  // downloadable, and a page that showed 10 with no sign of the
+                  // rest — under a button labelled "download all" — was lying
+                  // about both. So the full set gets its own count and its own
+                  // button, and the default view stays readable.
+                  const allFiles = versionFiles(v.resource_mappings, null)
+                    .filter((f) => !f.alternate);
+                  const carried = allFiles.length - batch.length;
                   return (
                     <div
                       className="mt-1 flex"
@@ -991,9 +1008,11 @@ export default function VersionsPage() {
                           onClick={() => downloadAllFiles(v.id, batch)}
                           className="text-sm"
                           title={
-                            symbologyCarry
-                              ? "הורדת כל הקבצים בגרסה זו — כולל קובץ הסימבולוגיה של השכבה"
-                              : "הורדת כל הקבצים בגרסה זו"
+                            carried > 0
+                              ? `הורדת ${batch.length} הקבצים שהשתנו בגרסה זו`
+                              : symbologyCarry
+                                ? "הורדת כל הקבצים בגרסה זו — כולל קובץ הסימבולוגיה של השכבה"
+                                : "הורדת כל הקבצים בגרסה זו"
                           }
                           style={{
                             color: "var(--primary)",
@@ -1005,8 +1024,31 @@ export default function VersionsPage() {
                             fontWeight: 600,
                           }}
                         >
-                          &#8595; הורד הכל ({batch.length})
+                          &#8595; {carried > 0 ? "הורד שהשתנו" : "הורד הכל"} ({batch.length})
                         </button>
+                      )}
+                      {carried > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => downloadAllFiles(v.id, allFiles)}
+                          className="text-sm"
+                          title={`הורדת כל ${allFiles.length} הקבצים שהגרסה מכילה, כולל ${carried} שנותרו ללא שינוי מגרסה קודמת`}
+                          style={{
+                            color: "var(--text-muted)",
+                            background: "none",
+                            border: "1px solid var(--border)",
+                            borderRadius: "4px",
+                            padding: "0.15rem 0.6rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          &#8595; הורד את כל {allFiles.length} המשאבים בגרסה
+                        </button>
+                      )}
+                      {carried > 0 && (
+                        <span className="text-sm text-muted">
+                          {carried} משאבים נוספים בגרסה זו לא השתנו ואינם מוצגים כאן
+                        </span>
                       )}
                       {isAdmin && (
                         <DriveExportButton
