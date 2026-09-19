@@ -2698,6 +2698,21 @@ async def push_version(
         ),
     )
 
+    # Rebuild the table's Parquet mirror, if it is big enough to have one.
+    # AFTER the version is committed and off the request path: the file is a
+    # convenience form of rows that are already safely stored, so it must never
+    # delay a push or fail one. A table under the threshold costs one row-count
+    # estimate and returns.
+    if _archive_neon:
+        try:
+            from app.services import parquet_export
+            _pq = asyncio.create_task(
+                parquet_export.build_for_dataset(db, ds, resource_mappings))
+            _NEON_BG_TASKS.add(_pq)
+            _pq.add_done_callback(_NEON_BG_TASKS.discard)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("parquet: could not schedule rebuild for %s: %s", ds.id, e)
+
     # Persist checkpoint patch back to scraper_config (archive mode).
     # Done after task commit so a failure here doesn't block version creation.
     if body.scraper_config_patch:
