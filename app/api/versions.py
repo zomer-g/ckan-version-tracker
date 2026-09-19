@@ -1,7 +1,8 @@
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -511,6 +512,257 @@ async def download_resource(
     )
     download_url = f"{settings.odata_url}/dataset/{odata_pkg}/resource/{mapped}/download"
     return RedirectResponse(url=download_url)
+
+
+# -- "download all", as ONE file ---------------------------------------------
+# The per-file links stay: they redirect to storage and cost this server
+# nothing. But a version of a 51-resource dataset offered 51 of them fired
+# 500ms apart, which is 25 seconds of clicking, 51 entries in the download
+# shelf and a browser permission prompt. A ZIP is what a person asking for
+# "everything" means.
+#
+# The bytes do pass through this process, which the per-file path deliberately
+# avoids -- so the same three bounds the Knesset batch ZIP uses apply here
+# (app/api/knesset_db.py, where this sink and these guards come from): a
+# process-wide slot so concurrent builds cannot stack, a file-count cap, and a
+# cumulative byte ceiling enforced mid-stream. One member is held in memory at
+# a time; the archive itself is never buffered.
+ZIP_MAX_FILES = 200
+ZIP_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB of source bytes
+_ZIP_SLOTS = 2
+_zip_in_flight = 0
+
+
+def _reserve_version_zip_slot() -> bool:
+    global _zip_in_flight
+    if _zip_in_flight >= _ZIP_SLOTS:
+        return False
+    _zip_in_flight += 1
+    return True
+
+
+def _release_version_zip_slot() -> None:
+    global _zip_in_flight
+    _zip_in_flight = max(0, _zip_in_flight - 1)
+
+
+class _ZipBuf:
+    """Unseekable sink for zipfile: no seek(), so zipfile emits data
+    descriptors and the archive stays valid for a consumer reading it as a
+    stream. The generator drains it after each member."""
+
+    def __init__(self):
+        self._chunks: list[bytes] = []
+        self._pos = 0
+
+    def write(self, b) -> int:
+        b = bytes(b)
+        self._chunks.append(b)
+        self._pos += len(b)
+        return len(b)
+
+    def tell(self) -> int:
+        return self._pos
+
+    def flush(self) -> None:
+        pass
+
+    def drain(self) -> bytes:
+        out = b"".join(self._chunks)
+        self._chunks = []
+        return out
+
+
+_ZIP_BAD_CHARS = set('\\/:*?"<>|')
+
+
+def _zip_safe(name: str, fallback: str) -> str:
+    """A member name safe on every OS. Hebrew is kept -- ZIP carries UTF-8
+    names and every modern extractor reads them -- but the path separators and
+    the Windows-reserved characters are not."""
+    out = "".join("_" if ch in _ZIP_BAD_CHARS else ch for ch in (name or "").strip())
+    out = out.strip(". ")
+    return (out or fallback)[:120]
+
+
+async def _version_zip_stream(entries: list[dict], odata_pkg, slot_held: bool):
+    """Stream a ZIP of a version's files, one member at a time.
+
+    A file that cannot be fetched becomes a line in _errors.txt rather than
+    aborting a download that is already half-sent: once the first byte is out,
+    failing means handing over a truncated archive with no explanation."""
+    import io as _io
+    import zipfile
+
+    import httpx
+
+    buf = _ZipBuf()
+    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED)
+    manifest = _io.StringIO()
+    manifest.write("filename,resource,bytes,source\r\n")
+    errors: list[str] = []
+    seen: set[str] = set()
+    total = 0
+    truncated = False
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0, connect=20.0), follow_redirects=True,
+            headers={"User-Agent": "over.org.il version download (+https://over.org.il)"},
+        ) as client:
+            for e in entries:
+                name = _zip_safe(e["filename"], e["key"])
+                if name in seen:
+                    stem, _, ext = name.rpartition(".")
+                    name = (stem or name) + "_" + str(len(seen)) + (("." + ext) if stem else "")
+                seen.add(name)
+                try:
+                    if e["stored"]:
+                        # Straight from the object store: no HTTP hop, and no
+                        # presigned URL that could expire mid-archive.
+                        data = await storage_client.get_object_bytes(e["value"])
+                        if data is None:
+                            raise FileNotFoundError("object missing from storage")
+                    else:
+                        url = (settings.odata_url + "/dataset/" + str(odata_pkg)
+                               + "/resource/" + str(e["value"]) + "/download")
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        data = resp.content
+                    zf.writestr(name, data)
+                    total += len(data)
+                    src = "storage" if e["stored"] else "odata"
+                    manifest.write('"%s","%s",%d,%s\r\n' % (name, e["key"], len(data), src))
+                except Exception as ex:  # noqa: BLE001 -- keep the archive going
+                    errors.append("%s\t%s: %s" % (e["key"], type(ex).__name__, ex))
+                    logger.warning("version zip: %s failed: %s", e["key"], ex)
+                chunk = buf.drain()
+                if chunk:
+                    yield chunk
+                if total >= ZIP_MAX_TOTAL_BYTES:
+                    truncated = True
+                    errors.append(
+                        "[TRUNCATED]\tההורדה נקטעה לאחר %d בתים. הורידו את הקבצים "
+                        "הנותרים אחד-אחד מעמוד הגרסה." % total)
+                    break
+
+        if truncated:
+            manifest.write("# הרשימה נקטעה עקב חריגה מתקרת הנפח; ראו _errors.txt\r\n")
+        zf.writestr("_index.csv", "\ufeff" + manifest.getvalue())
+        if errors:
+            zf.writestr("_errors.txt", "\n".join(errors))
+        zf.close()
+        tail = buf.drain()
+        if tail:
+            yield tail
+    finally:
+        if slot_held:
+            _release_version_zip_slot()
+
+
+# Which mapping keys name a FILE. resource_mappings mixes real resources with
+# the version's own bookkeeping, and the two are told apart by convention: a
+# leading underscore means bookkeeping — except for the handful that genuinely
+# carry files.
+#
+# An allowlist for the underscore keys rather than the page's denylist
+# (VersionsPage.tsx `skip`), because the two fail in opposite directions: a
+# bookkeeping key added later leaks into a denylist as a bogus member that
+# 404s mid-archive, while a file-bearing key added later is simply missing
+# from an allowlist until someone adds it — visible, and not a broken
+# download. `append_table` is the one bookkeeping key with no underscore.
+_ZIP_FILE_KEYS = ("_zip", "_zip_parts", "_geojson", "_gpkg", "_parquet", "_symbology")
+_ZIP_SKIP_KEYS = ("append_table",)
+
+
+def _zip_is_file_key(key: str) -> bool:
+    if key in _ZIP_SKIP_KEYS:
+        return False
+    return key in _ZIP_FILE_KEYS if key.startswith("_") else True
+
+
+def version_zip_entries(version, ds) -> list[dict]:
+    """Every downloadable file of a version, as {key, value, stored, filename}.
+
+    Pure and separate from the endpoint so the selection can be tested without
+    a request, a database or an object store. Mirrors what the per-file
+    download endpoint resolves, but for the whole version at once -- including
+    the resources it carried forward rather than uploading again, which the
+    page's file list leaves out as unchanged."""
+    mappings = (getattr(version, "resource_mappings", None) or {})
+    out: list[dict] = []
+    for key, value in mappings.items():
+        if not _zip_is_file_key(key):
+            continue
+        values = [v for v in (value if isinstance(value, list) else [value])
+                  if isinstance(v, str) and len(v) > 10]
+        for i, v in enumerate(values):
+            stored = storage.is_storage_value(v)
+            if stored:
+                fname = storage.download_filename(
+                    v, dataset_title=(ds.title if ds and getattr(ds, "title", "") else ""),
+                    fallback=key.lstrip("_") or "download")
+            else:
+                fname = (key.lstrip("_") or "download") + ".csv"
+            if len(values) > 1:
+                stem, _, ext = fname.rpartition(".")
+                fname = (stem or fname) + "_" + str(i + 1) + (("." + ext) if stem else "")
+            out.append({"key": key, "value": v, "stored": stored, "filename": fname})
+    return out
+
+
+@router.get("/versions/{version_id}/download.zip")
+@limiter.limit("6/minute")
+async def download_version_zip(
+    version_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Every file of one version, as a single ZIP.
+
+    The archive holds what the version CONTAINS, including the resources it
+    carried forward from an earlier version rather than uploading again -- the
+    page's file list leaves those out as unchanged, which is right for a
+    changelog and wrong for "give me everything". An _index.csv names every
+    member, and anything that could not be fetched is listed in _errors.txt
+    rather than being silently absent."""
+    vid = parse_uuid(version_id, "version_id")
+    version = (await db.execute(
+        select(VersionIndex).where(VersionIndex.id == vid)
+    )).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    await require_visible_version(db, version)
+
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == version.tracked_dataset_id)
+    )).scalar_one_or_none()
+
+    entries = version_zip_entries(version, ds)
+    if not entries:
+        raise HTTPException(status_code=404, detail="לגרסה הזו אין קבצים להורדה")
+    if len(entries) > ZIP_MAX_FILES:
+        raise HTTPException(status_code=400, detail=(
+            "הגרסה מכילה %d קבצים; המקסימום להורדת ZIP הוא %d. "
+            "הורידו אותם אחד-אחד מעמוד הגרסה." % (len(entries), ZIP_MAX_FILES)))
+
+    if not _reserve_version_zip_slot():
+        raise HTTPException(status_code=429, detail=(
+            "יותר מדי הורדות ZIP מתבצעות במקביל כרגע. נסו שוב בעוד רגע, "
+            "או הורידו קבצים בודדים מעמוד הגרסה."))
+
+    odata_pkg = (ds.odata_dataset_id if ds and ds.odata_dataset_id
+                 else version.tracked_dataset_id)
+    nice = _zip_safe((ds.title if ds and ds.title else "version"), "version")
+    nice = nice + " - v" + str(version.version_number) + ".zip"
+    ascii_name = "version-" + str(version.version_number) + ".zip"
+    disposition = ('attachment; filename="' + ascii_name + '"; '
+                   "filename*=UTF-8''" + quote(nice))
+    return StreamingResponse(
+        _version_zip_stream(entries, odata_pkg, True),
+        media_type="application/zip",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.get("/diff")

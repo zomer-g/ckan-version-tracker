@@ -328,6 +328,21 @@ function symbologyFiles(
 // rapid back-to-back navigations. Each file streams straight from its
 // storage via the redirect, so this scales to large GeoJSON/ZIP parts
 // without pulling bytes through the page.
+// The whole version as ONE file. The server streams a ZIP (one member in
+// memory at a time, never the whole archive), so this is a single navigation
+// rather than N staggered clicks: 51 files was 25 seconds of clicking, 51
+// entries in the download shelf and a browser permission prompt.
+//
+// It is also the only way to get the resources a version CARRIED FORWARD.
+// downloadAllFiles below can only fetch what the page listed, and the list is
+// the changelog — it leaves unchanged resources out on purpose.
+function downloadVersionZip(versionId: string): void {
+  // A plain navigation, not fetch(): the response is an attachment and can run
+  // to hundreds of megabytes, so the browser should stream it to disk rather
+  // than the page holding it in memory.
+  window.location.href = `/api/versions/${versionId}/download.zip`;
+}
+
 function downloadAllFiles(versionId: string, files: VersionFile[]): void {
   files.forEach((f, i) => {
     window.setTimeout(() => {
@@ -1005,7 +1020,9 @@ export default function VersionsPage() {
                       {batch.length > 1 && (
                         <button
                           type="button"
-                          onClick={() => downloadAllFiles(v.id, batch)}
+                          onClick={() => (carried > 0
+                            ? downloadAllFiles(v.id, batch)
+                            : downloadVersionZip(v.id))}
                           className="text-sm"
                           title={
                             carried > 0
@@ -1024,15 +1041,15 @@ export default function VersionsPage() {
                             fontWeight: 600,
                           }}
                         >
-                          &#8595; {carried > 0 ? "הורד שהשתנו" : "הורד הכל"} ({batch.length})
+                          &#8595; {carried > 0 ? "הורד שהשתנו" : "הורד הכל כ-ZIP"} ({batch.length})
                         </button>
                       )}
                       {carried > 0 && (
                         <button
                           type="button"
-                          onClick={() => downloadAllFiles(v.id, allFiles)}
+                          onClick={() => downloadVersionZip(v.id)}
                           className="text-sm"
-                          title={`הורדת כל ${allFiles.length} הקבצים שהגרסה מכילה, כולל ${carried} שנותרו ללא שינוי מגרסה קודמת`}
+                          title={`הורדת כל ${allFiles.length} הקבצים שהגרסה מכילה כקובץ ZIP אחד, כולל ${carried} שנותרו ללא שינוי מגרסה קודמת`}
                           style={{
                             color: "var(--text-muted)",
                             background: "none",
@@ -1042,7 +1059,7 @@ export default function VersionsPage() {
                             cursor: "pointer",
                           }}
                         >
-                          &#8595; הורד את כל {allFiles.length} המשאבים בגרסה
+                          &#8595; הורד הכל כ-ZIP ({allFiles.length})
                         </button>
                       )}
                       {carried > 0 && (
