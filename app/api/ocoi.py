@@ -41,7 +41,13 @@ Deliberately NOT ported: ``/api/db-health`` (it returns 3000 chars of traceback
 in a 500) and the SPA catch-all ``GET /{path:path}`` (OVER owns its own routing).
 Admin lives in a later phase.
 """
-from __future__ import annotations
+# NO `from __future__ import annotations` here, deliberately: every route in
+# this module is wrapped by @limiter.limit, and FastAPI resolves a STRING
+# annotation against the endpoint's ``__globals__`` — which functools.wraps
+# leaves pointing at slowapi.extension, where this module's names do not
+# exist. Postponed annotations therefore made 63 parameters unresolvable,
+# broke /openapi.json outright, and turned `body: SuggestionIn` into a QUERY
+# parameter. Real annotation objects need no resolution and cannot drift.
 
 import re
 import time

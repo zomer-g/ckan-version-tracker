@@ -24,7 +24,13 @@ Conversion (`reconvert`) is absent on purpose: it needs poppler + tesseract,
 which OVER cannot install (see docs/ocoi-port-plan.md §1). Re-running it is a
 worker job, so the admin marks the document and the worker picks it up.
 """
-from __future__ import annotations
+# NO `from __future__ import annotations` here, deliberately: every route in
+# this module is wrapped by @limiter.limit, and FastAPI resolves a STRING
+# annotation against the endpoint's ``__globals__`` — which functools.wraps
+# leaves pointing at slowapi.extension, where this module's names do not
+# exist. Postponed annotations therefore made 63 parameters unresolvable,
+# broke /openapi.json outright, and turned `body: SuggestionIn` into a QUERY
+# parameter. Real annotation objects need no resolution and cannot drift.
 
 import logging
 import uuid
