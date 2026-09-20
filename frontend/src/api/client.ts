@@ -2236,6 +2236,12 @@ export const admin = {
   // because two of them are opt-in and were otherwise reachable only by hand-
   // writing a request with an admin token.
   nadlanState: () => request<NadlanBuildState>("/admin/nadlan/state"),
+  /** Fold geocoded points back into over_re_addresses. Needed after an address
+   *  rebuild: the TRUNCATE drops the merged points along with everything else,
+   *  and only this puts them back. Never overwrites an existing point. */
+  nadlanGeocodeMerge: () =>
+    request<{ merged: number; rejected_outside_locality: number }>(
+      "/admin/nadlan/geocode/merge", { method: "POST" }),
   nadlanBuild: (stages?: string) =>
     request<{ status: string; stages: string | string[]; message: string }>(
       `/admin/nadlan/build${stages ? `?stages=${encodeURIComponent(stages)}` : ""}`,

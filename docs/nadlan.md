@@ -443,6 +443,33 @@ to roughly 67,000. Most of the new rows are streets that cannot answer a
 lookup — `suggest_streets` returns `located` so a caller can tell, and ranks the
 ones that can answer first.
 
+## `pip` is not optional, and the day it looked optional
+
+2026-09-20. The default six stages ran green, and the address spine came out
+with **617,876 rows and `parcel_key` NULL on every one of them.** A real lookup
+(אבימלך 8, פתח תקווה) went from answering to returning nothing, site-wide, with
+nothing in the build state to suggest why.
+
+`addresses` TRUNCATE+INSERTs the spine. Only `pip` writes `parcel_key`. So the
+documented, blessed way to rebuild the crosswalk deleted the entire
+address→parcel link set and reported success.
+
+`pip` was an opt-in because it was believed to be the one stage with material
+Neon compute cost, on an estimate of 15-60 minutes. That estimate was already
+known to be wrong by more than an order of magnitude — the first production run
+took ~2 minutes, and the restore measured **62.9 s for 340,190 links** — but the
+opt-in outlived the estimate that justified it. It is in the default set now,
+and `DEFAULT_SKIP` is a named constant so the reason lives next to the decision.
+
+The restore also showed the pair is stable: 340,190 of 357,679 points linked,
+**95.1%**, the same rate as the original build.
+
+⚠ One more thing an address rebuild throws away: the **geocoded** points. The
+~94k GovMap points live in `over_re_geocode` and reach the spine only through
+`merge_into_addresses()`, so after an `addresses` run they have to be merged
+again. That is now a button in the admin panel rather than an API call nobody
+would think to make.
+
 ## The two layers that describe a property
 
 Added 2026-09-20. Everything above identifies a property; these two say

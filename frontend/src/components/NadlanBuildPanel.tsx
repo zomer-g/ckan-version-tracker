@@ -35,8 +35,8 @@ const STAGES: { id: string; label: string; note: string; optIn?: boolean }[] = [
   { id: "streets", label: "אינדקס הרחובות", note: "רחובות והטיות שלהם." },
   { id: "addresses", label: "שדרת הכתובות", note: "622 אלף כתובות, כולל המיקוד." },
   { id: "zip5", label: "גלגול מיקוד", note: "מיקוד 5 ליישוב." },
-  { id: "pip", label: "שיוך כתובת לחלקה (PIP)", note: "נקודה בתוך פוליגון. השלב היחיד עם עלות מחשוב משמעותית ב-NEON.",
-    optIn: true },
+  { id: "pip", label: "שיוך כתובת לחלקה (PIP)",
+    note: "נקודה בתוך פוליגון. חייב לרוץ אחרי שדרת הכתובות: ה-TRUNCATE שם מוחק כל parcel_key, ורק השלב הזה כותב אותם בחזרה." },
 ];
 
 const DEFAULT_SELECTION = STAGES.filter((s) => !s.optIn).map((s) => s.id);
@@ -65,6 +65,8 @@ export default function NadlanBuildPanel() {
   const [state, setState] = useState<NadlanBuildState | null>(null);
   const [selected, setSelected] = useState<string[]>(DEFAULT_SELECTION);
   const [busy, setBusy] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [mergeResult, setMergeResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -105,6 +107,23 @@ export default function NadlanBuildPanel() {
     }
   };
 
+  const merge = async () => {
+    setMerging(true); setError(null); setMergeResult(null);
+    try {
+      const r = await admin.nadlanGeocodeMerge();
+      setMergeResult(
+        `מוזגו ${r.merged.toLocaleString("he-IL")} נקודות` +
+        (r.rejected_outside_locality
+          ? `, ${r.rejected_outside_locality.toLocaleString("he-IL")} נדחו כמחוץ ליישוב`
+          : ""));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "המיזוג נכשל");
+    } finally {
+      setMerging(false);
+    }
+  };
+
   const byStage = new Map<string, NadlanStageRow>(
     (state?.stages ?? []).map((s) => [s.stage, s]));
 
@@ -112,11 +131,12 @@ export default function NadlanBuildPanel() {
     <div>
       <h2 style={{ marginTop: 0 }}>נדל"ן לעם — בניית ההצלבה</h2>
       <p className="text-sm text-muted" style={{ lineHeight: 1.8, maxWidth: "60rem" }}>
-        כל שלב אידמפוטנטי (TRUNCATE + INSERT), ואפשר להריץ אותם בנפרד. שני השלבים
-        המסומנים כאופציונליים אינם נכללים בהרצת ברירת המחדל:{" "}
-        <b>אינדקסים על טבלאות המקור</b> הוא חד-פעמי לכל טבלה, ו-<b>PIP</b> הוא
-        היחיד עם עלות מחשוב משמעותית. הבנייה רצה ברקע; הטבלה כאן מתרעננת מעצמה
-        כל עוד יש שלב פעיל.
+        כל שלב אידמפוטנטי (TRUNCATE + INSERT), ואפשר להריץ אותם בנפרד.
+        <b>אינדקסים על טבלאות המקור</b> הוא היחיד שאינו בברירת המחדל: הוא חד-פעמי
+        לכל טבלה ואינו צריך לחזור. <b>PIP</b> כן בברירת המחדל, כי שדרת הכתובות
+        מוחקת כל <code>parcel_key</code> ורק הוא כותב אותם בחזרה, והרצה בלעדיו
+        משאירה את חיפוש הכתובות בלי אף חלקה. הבנייה רצה ברקע; הטבלה כאן מתרעננת
+        מעצמה כל עוד יש שלב פעיל.
       </p>
 
       {state?.stats && Object.keys(state.stats).length > 0 && (
@@ -224,6 +244,37 @@ export default function NadlanBuildPanel() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div style={{
+        marginTop: "1.2rem", padding: "0.8rem 1rem", borderRadius: 8,
+        background: "var(--surface-2)", border: "1px solid var(--border)",
+      }}>
+        <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.35rem" }}>
+          נקודות מ-GovMap
+        </div>
+        <p className="text-sm text-muted" style={{ margin: "0 0 0.6rem", lineHeight: 1.8 }}>
+          הכתובות שקיבלו קואורדינטה מהג׳אוקודר נשמרות בתור נפרד, והן מתמזגות לשדרת
+          הכתובות רק בפעולה הזו. אחרי בניית שדרת הכתובות צריך להריץ אותה שוב:
+          ה-TRUNCATE מוחק גם את הנקודות שכבר מוזגו. נקודה קיימת לעולם לא נדרסת,
+          ונקודה שנפלה מחוץ ליישוב של הכתובת נדחית.
+        </p>
+        <button
+          type="button"
+          disabled={merging}
+          onClick={() => void merge()}
+          style={{
+            padding: "0.35rem 0.9rem", fontSize: "0.85rem", cursor: "pointer",
+            border: "1px solid var(--border)", borderRadius: 6, background: "none",
+          }}
+        >
+          {merging ? "ממזג…" : "מיזוג נקודות לשדרת הכתובות"}
+        </button>
+        {mergeResult && (
+          <span className="text-sm" style={{ marginInlineStart: "0.6rem", color: "var(--success)" }}>
+            {mergeResult}
+          </span>
+        )}
       </div>
 
       <p className="text-sm text-muted" style={{ marginTop: "0.8rem", lineHeight: 1.7 }}>

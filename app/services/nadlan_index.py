@@ -120,6 +120,10 @@ ALL_TABLES = [PARCELS_TABLE, GAZ_TABLE, STREETS_TABLE, STREET_ALIASES_TABLE,
 
 STAGES = ["source_indexes", "parcels", "gazetteer", "postal_localities",
           "streets", "addresses", "zip5", "pip"]
+# What a bare build() leaves out. `pip` is NOT in here: see build()'s docstring —
+# it rebuilds the links that `addresses` has just thrown away, and a rebuild that
+# skips it leaves the address spine with no parcel at all.
+DEFAULT_SKIP = ("source_indexes",)
 
 # The parcels scan and the index builds far exceed the pool's command_timeout=180.
 _LONG_TIMEOUT = 3600
@@ -1618,6 +1622,9 @@ async def build_addresses() -> dict:
                 f"""SELECT string_agg(lvl || '=' || c, ' ') FROM (
                       SELECT coalesce(zip_level,'none') AS lvl, count(*) AS c
                       FROM public.{_qi(ADDRESSES_TABLE)} GROUP BY 1 ORDER BY 1) x""")
+            # Said where it will be read: this TRUNCATE dropped every
+            # parcel_key, and only `pip` puts them back. A run that stops here
+            # leaves the address tab unable to reach a parcel at all.
             await _stage_done(conn, "addresses", t0, rows_out=n,
                               note=f"with_point={with_pt} with_zip={with_zip} [{by_lvl}]")
         await conn.execute(f"ANALYZE public.{_qi(ADDRESSES_TABLE)}", timeout=_LONG_TIMEOUT)
@@ -1728,10 +1735,19 @@ _BUILDERS = {
 async def build(stages: list[str] | None = None) -> dict:
     """Run the requested stages in dependency order.
 
-    Default skips ``source_indexes`` and ``pip``: the first is a one-off that
-    takes minutes and never needs repeating, the second is the only stage whose
-    cost is material on a compute-billed Neon plan. Both stay explicit opt-ins."""
-    todo = stages or [s for s in STAGES if s not in ("source_indexes", "pip")]
+    The default set skips ``source_indexes`` only: it is a one-off over tables
+    this module does not own, and it never needs repeating.
+
+    ``pip`` USED to be skipped too, on the belief that it was the one stage with
+    material Neon compute cost. That belief came from a 15-60 minute estimate
+    which measurement contradicted by more than an order of magnitude (62.9 s
+    for 388,320 links), and leaving it out had a cost of its own that nobody had
+    priced: ``addresses`` TRUNCATE+INSERTs the spine and only ``pip`` writes
+    ``parcel_key``, so every default rebuild silently deleted the entire
+    address→parcel link set and reported success. Observed in production on
+    2026-09-20: 617,876 addresses, 0 with a parcel. The two stages are
+    inseparable, so they run together."""
+    todo = stages or [s for s in STAGES if s not in DEFAULT_SKIP]
     unknown = [s for s in todo if s not in _BUILDERS]
     if unknown:
         raise ValueError(f"unknown stage(s): {', '.join(unknown)}")
