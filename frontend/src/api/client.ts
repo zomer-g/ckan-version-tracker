@@ -2211,7 +2211,36 @@ export interface OdataImportJob {
   elapsed?: number | null;
 }
 
+/** One row of over_re_build_state: where a stage got to, and how long it took. */
+export interface NadlanStageRow {
+  stage: string;
+  watermark: string | null;
+  rows_in: number | null;
+  rows_out: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  status: string | null;
+  note: string | null;
+}
+
+export interface NadlanBuildState {
+  stages: NadlanStageRow[];
+  ready: boolean;
+  stats?: Record<string, number>;
+  note?: string;
+}
+
 export const admin = {
+  // נדל"ן לעם: the crosswalk build. Eight idempotent stages; the panel exists
+  // because two of them are opt-in and were otherwise reachable only by hand-
+  // writing a request with an admin token.
+  nadlanState: () => request<NadlanBuildState>("/admin/nadlan/state"),
+  nadlanBuild: (stages?: string) =>
+    request<{ status: string; stages: string | string[]; message: string }>(
+      `/admin/nadlan/build${stages ? `?stages=${encodeURIComponent(stages)}` : ""}`,
+      { method: "POST" },
+    ),
   // Parquet mirrors. Both are admin-only and go through request(), which
   // carries the logged-in token — the reason this exists as a button at all.
   parquetTables: () => request<ParquetTablesResponse>("/admin/parquet/tables"),
