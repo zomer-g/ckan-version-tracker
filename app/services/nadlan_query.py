@@ -144,6 +144,31 @@ async def by_point(lat: float, lon: float, radius_m: float = 0.0,
     return await _fetch(sql, lat, lon)
 
 
+# What a tap on the map falls back to when it lands on nothing. Parcels do not
+# tile the country: roads, open ground and unregistered land sit between them,
+# and how much is between them varies enormously. Measured 2026-09-20 on random
+# points inside a settlement's own envelope: 149/150 inside a parcel in Tel
+# Aviv, 94/150 in Dimona. So an exact-containment answer of "nothing" is the
+# normal case in a lot of the country, and returning it bare reads as a broken
+# map rather than as a gap in the cadastre.
+POINT_FALLBACK_RADIUS_M = 150.0
+
+
+async def by_point_or_near(lat: float, lon: float, radius_m: float = 0.0,
+                           limit: int = 50) -> tuple[list[dict], float]:
+    """The parcel under the point, or the nearest ones, with which it was.
+
+    Only an EXPLICIT radius of 0 widens: a caller that asked for 500 m and got
+    nothing has been answered, and quietly re-asking a different question is how
+    a result set stops meaning what the query said. The returned radius is what
+    the answer actually used, so the caller can say which of the two it got."""
+    parcels = await by_point(lat, lon, radius_m, limit)
+    if parcels or radius_m:
+        return parcels, radius_m
+    parcels = await by_point(lat, lon, POINT_FALLBACK_RADIUS_M, limit)
+    return parcels, POINT_FALLBACK_RADIUS_M if parcels else 0.0
+
+
 async def by_zip(zip_code: str) -> tuple[list[dict], list[dict]]:
     """Return (addresses, parcels) for a ZIP5 or ZIP7.
 
@@ -179,6 +204,65 @@ async def by_address(city: str, street: str, number: str | None = None
         f"""SELECT * FROM public.{_qi(PARCELS_TABLE)}
             WHERE parcel_key = ANY($1::text[]) LIMIT 200""", keys) if keys else []
     return addrs, parcels
+
+
+async def explain_address_miss(city: str, street: str) -> dict:
+    """Why an address lookup came back empty, and what to try instead.
+
+    An empty list is the one answer a person cannot act on: it does not say
+    whether the town is unknown, the street is spelled differently, or the
+    street is real and simply has nothing behind it. Each of those is a
+    different next move, and the index can tell them apart.
+
+    The third case is not rare. The street index is built from the address list
+    and the postal file, so a street that only רשות האוכלוסין's register knows
+    is absent by construction — 29,454 of 63,567 official streets as measured on
+    2026-09-20. הר הצופים in Dimona is one of them: it is in the register, and
+    in neither the gazetteer, the postal file nor the address list, so nothing
+    we hold can place it."""
+    rows = await _fetch(
+        """
+        WITH sc AS (SELECT public.over_settlement_code($1) AS code)
+        SELECT sc.code AS settlement_code,
+               public.over_settlement($1) AS settlement_name,
+               s.street_key, s.name AS street_name,
+               s.in_address_list, s.in_postal, s.in_gazetteer, s.official_code
+        FROM sc
+        LEFT JOIN public.over_re_streets s
+               ON s.settlement_code = sc.code
+              AND s.street_key = public.over_street_key(sc.code, $2)
+        """, city, street)
+    r = rows[0] if rows else {}
+    if not r.get("settlement_code"):
+        return {"reason": "settlement_unknown",
+                "message": f"לא זוהה יישוב בשם \"{city}\"."}
+
+    sc = r["settlement_code"]
+    if not r.get("street_key"):
+        near = await suggest_streets(street, sc, 8)
+        return {"reason": "street_unknown", "settlement_code": sc,
+                "settlement_name": r.get("settlement_name"),
+                "message": (f"לא נמצא רחוב בשם \"{street}\" ב{r.get('settlement_name') or city}."
+                            + (" האם התכוונתם לאחד מאלה?" if near else "")),
+                "suggestions": [n["name"] for n in near]}
+
+    located = any(r.get(k) for k in ("in_address_list", "in_postal", "in_gazetteer"))
+    if not located:
+        return {"reason": "street_not_located", "settlement_code": sc,
+                "settlement_name": r.get("settlement_name"),
+                "street_name": r.get("street_name"),
+                "official_code": r.get("official_code"),
+                "message": (f"הרחוב \"{r.get('street_name')}\" קיים במרשם הרחובות הרשמי "
+                            f"(קוד {r.get('official_code')}), אבל אף אחד משלושת המקורות "
+                            f"שנושאים מיקום — רשימת הכתובות, קובץ המיקוד וגזטיר הנכסים — "
+                            f"אינו מזכיר אותו, ולכן אין באפשרותנו למקם אותו על המפה. "
+                            f"אפשר לאתר את החלקה בלשונית המפה.")}
+
+    return {"reason": "no_house_match", "settlement_code": sc,
+            "settlement_name": r.get("settlement_name"),
+            "street_name": r.get("street_name"),
+            "message": (f"הרחוב \"{r.get('street_name')}\" מוכר, אך לא נמצאה כתובת "
+                        f"תואמת. נסו בלי מספר בית.")}
 
 
 # ── the two layers that hang off a parcel ─────────────────────────────────────
@@ -654,12 +738,16 @@ async def suggest_streets(q: str, settlement_code: int | None = None,
     limit = max(1, min(int(limit), 50))
     return await _fetch(
         f"""
-        SELECT s.street_key, s.name, s.settlement_code, st.name AS settlement_name
+        SELECT s.street_key, s.name, s.settlement_code, st.name AS settlement_name,
+               (s.in_address_list OR s.in_postal OR s.in_gazetteer) AS located
         FROM public.{_qi(STREETS_TABLE)} s
         LEFT JOIN public.over_settlements st ON st.code = s.settlement_code
         WHERE ($2::int IS NULL OR s.settlement_code = $2)
           AND s.name_norm LIKE public.over_settlement_norm($1) || '%'
-        ORDER BY length(s.name_norm), s.name
+        -- A street we can place ranks above one the register alone knows: both
+        -- are real, only one of them can answer a lookup.
+        ORDER BY (s.in_address_list OR s.in_postal OR s.in_gazetteer) DESC,
+                 length(s.name_norm), s.name
         LIMIT {limit}
         """, q, settlement_code)
 

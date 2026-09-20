@@ -404,6 +404,45 @@ timescale on which GovMap's index could actually change, and never-asked
 addresses sort ahead of previously-asked ones.
 
 
+## What a field report found (2026-09-20)
+
+Three complaints from one user, each a real property of the data rather than a
+bug in the request path, and each now answered rather than swallowed.
+
+**A tap between parcels.** Parcels do not tile the country: roads, open ground
+and unregistered land sit between them, and how much sits between them varies
+enormously. Measured on random points inside a settlement's own envelope,
+**149/150 fall inside a parcel in Tel Aviv and 94/150 in Dimona.** So "nothing
+here" is the normal answer over a third of a desert town, and returning it bare
+reads as a broken map. An explicit radius of 0 that finds nothing now widens
+ONCE, to 150 m, and the envelope reports `radius_used` and `widened` so the page
+can say which of the two questions it answered. An explicit radius is never
+widened: a caller that asked for 500 m has been answered.
+
+**No lookup was submittable from a phone.** All three forms committed on `blur`
+alone, inside a form with no button — so on a phone you type, press Go, and
+nothing happens, because the keyboard closes without a blur the page can act on.
+Each form now keeps a draft and commits on submit as well as on blur, with
+`enterKeyHint="search"` and 16px fields (anything smaller and iOS Safari zooms
+the page in on focus and never back out).
+
+**A street the register knows and nothing else does.** הר הצופים 1, דימונה
+returned an empty list. It is in רשות האוכלוסין's official street register
+(code 391) and in NONE of the gazetteer, the postal file or the address list —
+so nothing we hold can place it. The index made that invisible, because the
+canonical street universe was the address list ∪ the postal file only:
+**29,454 of 63,567 official streets (46.3%), across 1,314 localities, were
+missing from `over_re_streets` entirely.** They are now seeded from the register
+with `in_postal`/`in_address_list`/`in_gazetteer` all false, which is precisely
+what distinguishes them, and `explain_address_miss()` reads that combination to
+tell the four cases apart: unknown settlement, unknown street (with near
+matches), a street nothing can place, and a house number with no match.
+
+⚠ The street count therefore changes at the next `streets` build, from 37,814
+to roughly 67,000. Most of the new rows are streets that cannot answer a
+lookup — `suggest_streets` returns `located` so a caller can tell, and ranks the
+ones that can answer first.
+
 ## The two layers that describe a property
 
 Added 2026-09-20. Everything above identifies a property; these two say

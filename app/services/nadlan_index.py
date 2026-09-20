@@ -1233,6 +1233,34 @@ def _resolve_streets(canon_rows, gaz_rows, official_rows=(),
             cur["in_addr"] = cur["in_addr"] or bool(r["in_addr"])
             cur["postal_id"] = cur["postal_id"] or r["street_id"]
 
+    # 1b. Streets that ONLY the official register knows.
+    #
+    # The canonical universe above is the address list ∪ the postal file, so a
+    # street that neither of them carries does not exist in the index at all and
+    # cannot be typed into the address lookup. That is not an edge: measured
+    # 2026-09-20, 29,454 of 63,567 official streets (46.3%) across 1,314
+    # localities were missing, which is how "הר הצופים 1, דימונה" came back
+    # empty rather than saying anything.
+    #
+    # They are added with in_post / in_addr / in_gaz all false, which is what
+    # tells a reader the difference: the street is real, and no source we hold
+    # places it. `explain_address_miss` reads exactly that flag combination.
+    for r in official_rows:
+        if not str(r.get("status") or "").strip().lower().startswith("official"):
+            continue
+        sc, name = r.get("sc"), (r.get("name") or "").strip()
+        nm = nadlan_text.norm(name)
+        code = r.get("official_code")
+        if sc is None or not nm:
+            continue
+        k = (sc, f"c{code}" if code is not None else nm)
+        if k in streets or (sc, nm) in streets:
+            continue
+        streets[k] = {"sc": sc, "name": name, "norm": nm, "n": 0,
+                      "postal_id": None, "gaz_code": None, "name_en": None,
+                      "official_code": code,
+                      "in_post": False, "in_addr": False, "in_gaz": False}
+
     # street_key stays `{sc}-{norm of the representative spelling}` so its shape
     # does not depend on whether the official file happened to cover the street.
     # Two groups CAN land on the same representative norm; the second one keeps

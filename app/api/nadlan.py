@@ -164,12 +164,18 @@ async def nadlan_point(
     deals: bool = _DEALS,
 ):
     """radius_m=0 answers "which parcel is this point inside"; anything larger
-    returns the parcels whose centre lies within that many metres."""
+    returns the parcels whose centre lies within that many metres.
+
+    A radius of 0 that finds nothing widens ONCE, to 150 m, and says so in
+    ``radius_used``/``widened``: parcels do not tile the country, and in a lot of
+    it a tap lands between them — 94 of 150 random points inside Dimona's own
+    envelope are inside a parcel, against 149 of 150 in Tel Aviv."""
     await _require_ready()
-    parcels = await nadlan_query.by_point(lat, lon, radius_m, limit)
+    parcels, used = await nadlan_query.by_point_or_near(lat, lon, radius_m, limit)
     data = await nadlan_query.property_envelope(
         parcels, with_geometry=geometry, with_stat_area=stat_area, with_deals=deals)
-    return _envelope("point", {"lat": lat, "lon": lon, "radius_m": radius_m}, data)
+    return _envelope("point", {"lat": lat, "lon": lon, "radius_m": radius_m,
+                               "radius_used": used, "widened": used > radius_m}, data)
 
 
 @router.get("/zip/{zip_code}")
@@ -207,8 +213,12 @@ async def nadlan_address(
     data = await nadlan_query.property_envelope(
         parcels, addresses=addrs, with_geometry=geometry,
         with_stat_area=stat_area, with_deals=deals)
+    # An empty list is the one answer a person cannot act on: it does not say
+    # whether the town, the spelling or the street itself is the problem, and
+    # each of those is a different next move.
+    extra = {} if data else {"miss": await nadlan_query.explain_address_miss(city, street)}
     return _envelope("address", {"city": city, "street": street, "number": number},
-                     data, addresses=addrs)
+                     data, addresses=addrs, **extra)
 
 
 @router.get("/streets")

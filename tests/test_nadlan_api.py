@@ -129,7 +129,8 @@ def test_point_mode_shares_the_same_shape(client, monkeypatch):
     r = client.get("/api/nadlan/point?lat=32.0789&lon=34.9171&radius_m=250")
     assert r.status_code == 200
     body = r.json()
-    assert body["query"] == {"mode": "point", "lat": 32.0789, "lon": 34.9171, "radius_m": 250.0}
+    assert body["query"] == {"mode": "point", "lat": 32.0789, "lon": 34.9171,
+                             "radius_m": 250.0, "radius_used": 250.0, "widened": False}
     assert body["data"][0]["parcel_key"] == "6319-0-225"
 
 
@@ -427,3 +428,60 @@ def test_lookup_all_includes_the_polygon(client, monkeypatch):
     prop = client.get("/api/nadlan/lookup?gush=6319&helka=225&fields=all").json()["data"][0]
     assert prop["geometry"] == _POLY
     assert set(prop) >= {"stat_area", "deals", "sources", "match"}
+
+
+# ── a tap that lands between parcels ─────────────────────────────────────────
+def test_an_exact_tap_that_finds_nothing_widens_once_and_says_so(client, monkeypatch):
+    """Parcels do not tile the country. Measured on random points inside a
+    settlement's own envelope: 149/150 inside a parcel in Tel Aviv, 94/150 in
+    Dimona — so a bare "nothing here" is the normal answer in a lot of the
+    country, and it reads as a broken map rather than as a gap in the cadastre."""
+    asked: list[float] = []
+
+    async def _point(lat, lon, r=0.0, limit=50):
+        asked.append(r)
+        return [] if r == 0 else [_PARCEL]
+
+    _stub_lookup(monkeypatch)                       # …then override the reader
+    monkeypatch.setattr(nadlan_query, "by_point", _point)
+    body = client.get("/api/nadlan/point?lat=32.0789&lon=34.9171").json()
+    assert asked == [0.0, nadlan_query.POINT_FALLBACK_RADIUS_M]
+    assert body["query"]["widened"] is True
+    assert body["query"]["radius_used"] == nadlan_query.POINT_FALLBACK_RADIUS_M
+    assert body["count"] == 1
+
+
+def test_an_explicit_radius_is_never_quietly_widened(client, monkeypatch):
+    """A caller that asked for 500 m and got nothing has been answered; re-asking
+    a different question is how a result set stops meaning what the query said."""
+    asked: list[float] = []
+
+    async def _point(lat, lon, r=0.0, limit=50):
+        asked.append(r)
+        return []
+
+    _stub_lookup(monkeypatch)
+    monkeypatch.setattr(nadlan_query, "by_point", _point)
+    body = client.get("/api/nadlan/point?lat=32.0789&lon=34.9171&radius_m=500").json()
+    assert asked == [500.0]
+    assert body["query"]["widened"] is False and body["count"] == 0
+
+
+# ── an empty address answer explains itself ──────────────────────────────────
+def test_an_empty_address_answer_says_why(client, monkeypatch):
+    """Empty is the one answer a person cannot act on: unknown town, different
+    spelling and a street nothing can place are three different next moves."""
+    async def _miss(city, street):
+        return {"reason": "street_not_located", "message": "…", "official_code": 391}
+
+    monkeypatch.setattr(nadlan_query, "explain_address_miss", _miss)
+    _stub_lookup(monkeypatch, parcels=())
+    body = client.get("/api/nadlan/address?city=דימונה&street=הר הצופים&number=1").json()
+    assert body["count"] == 0
+    assert body["miss"]["reason"] == "street_not_located"
+
+
+def test_a_found_address_carries_no_miss_block(client, monkeypatch):
+    _stub_lookup(monkeypatch)
+    body = client.get("/api/nadlan/address?city=פתח תקווה&street=אבימלך").json()
+    assert body["count"] == 1 and "miss" not in body

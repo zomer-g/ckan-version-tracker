@@ -38,6 +38,36 @@ const TAB_LABELS: [Tab, string][] = [
 
 const RADII = [0, 100, 250, 500, 1000, 2000];
 
+// 16px or larger, or iOS Safari zooms the whole page in when the field takes
+// focus and never zooms back out — which on a phone reads as the page breaking
+// the moment you try to type in it.
+const FIELD: React.CSSProperties = { padding: "0.5rem 0.6rem", fontSize: 16 };
+
+/** A lookup form that can actually be submitted.
+ *
+ *  The three forms below used to commit on blur alone, which a phone never
+ *  reliably delivers: you type, press the keyboard's Go, and nothing happens
+ *  because there is no submit target and no blur. This keeps the draft locally
+ *  and commits it on submit — from the button or from Enter — while still
+ *  committing on blur so the desktop habit is unchanged. */
+function LookupForm({ children, onSubmit }: {
+  children: React.ReactNode;
+  onSubmit: () => void;
+}) {
+  return (
+    <form
+      className="flex"
+      style={{ gap: "0.5rem", flexWrap: "wrap", alignItems: "flex-end", marginBottom: "1rem" }}
+      onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
+    >
+      {children}
+      <button type="submit" className="btn" style={{ padding: "0.5rem 1.2rem", fontSize: 16 }}>
+        חיפוש
+      </button>
+    </form>
+  );
+}
+
 function useParam(params: URLSearchParams, key: string): string {
   return params.get(key) ?? "";
 }
@@ -81,6 +111,23 @@ export default function NadlanPage() {
   const city = useParam(params, "city");
   const street = useParam(params, "street");
   const houseNo = useParam(params, "no");
+
+  // Each form keeps its own draft so it can be SUBMITTED; the URL stays the
+  // single source of truth for what was actually looked up, and a link opened
+  // with parameters fills the fields.
+  const [draftCity, setDraftCity] = useState(city);
+  const [draftStreet, setDraftStreet] = useState(street);
+  const [draftNo, setDraftNo] = useState(houseNo);
+  const [draftZip, setDraftZip] = useState(zip);
+  const [draftGush, setDraftGush] = useState(gush);
+  const [draftHelka, setDraftHelka] = useState(helka);
+
+  useEffect(() => { setDraftCity(city); }, [city]);
+  useEffect(() => { setDraftStreet(street); }, [street]);
+  useEffect(() => { setDraftNo(houseNo); }, [houseNo]);
+  useEffect(() => { setDraftZip(zip); }, [zip]);
+  useEffect(() => { setDraftGush(gush); }, [gush]);
+  useEffect(() => { setDraftHelka(helka); }, [helka]);
 
   const patch = useCallback((next: Record<string, string | null>) => {
     setParams((prev) => {
@@ -215,61 +262,71 @@ export default function NadlanPage() {
         )}
 
         {tab === "address" && (
-          <form
-            className="flex"
-            style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}
-            onSubmit={(e) => e.preventDefault()}
-          >
+          <LookupForm onSubmit={() => patch({
+            city: draftCity.trim(), street: draftStreet.trim(), no: draftNo.trim(),
+          })}>
             <input aria-label="יישוב (למשל פתח תקווה)"
               placeholder="יישוב (למשל פתח תקווה)"
-              defaultValue={city}
-              onBlur={(e) => patch({ city: e.target.value })}
-              style={{ padding: "0.45rem 0.6rem", minWidth: 180 }}
+              value={draftCity}
+              enterKeyHint="search"
+              onChange={(e) => setDraftCity(e.target.value)}
+              onBlur={(e) => patch({ city: e.target.value.trim() })}
+              style={{ ...FIELD, minWidth: 180, flex: "1 1 180px" }}
             />
             <input aria-label="רחוב (למשל אבימלך)"
               placeholder="רחוב (למשל אבימלך)"
-              defaultValue={street}
-              onBlur={(e) => patch({ street: e.target.value })}
-              style={{ padding: "0.45rem 0.6rem", minWidth: 180 }}
+              value={draftStreet}
+              enterKeyHint="search"
+              onChange={(e) => setDraftStreet(e.target.value)}
+              onBlur={(e) => patch({ street: e.target.value.trim() })}
+              style={{ ...FIELD, minWidth: 180, flex: "1 1 180px" }}
             />
             <input aria-label="מספר בית"
               placeholder="מספר בית"
-              defaultValue={houseNo}
-              onBlur={(e) => patch({ no: e.target.value })}
-              style={{ padding: "0.45rem 0.6rem", width: 110 }}
+              value={draftNo}
+              enterKeyHint="search"
+              onChange={(e) => setDraftNo(e.target.value)}
+              onBlur={(e) => patch({ no: e.target.value.trim() })}
+              style={{ ...FIELD, width: 110 }}
             />
-          </form>
+          </LookupForm>
         )}
 
         {tab === "zip" && (
-          <form className="flex" style={{ gap: "0.5rem", marginBottom: "1rem" }} onSubmit={(e) => e.preventDefault()}>
+          <LookupForm onSubmit={() => patch({ zip: draftZip.trim() })}>
             <input aria-label="מיקוד (5 או 7 ספרות)"
               placeholder="מיקוד (5 או 7 ספרות)"
-              defaultValue={zip}
+              value={draftZip}
+              onChange={(e) => setDraftZip(e.target.value)}
               onBlur={(e) => patch({ zip: e.target.value.trim() })}
               inputMode="numeric"
-              style={{ padding: "0.45rem 0.6rem", minWidth: 200 }}
+              enterKeyHint="search"
+              style={{ ...FIELD, minWidth: 200, flex: "1 1 200px" }}
             />
-          </form>
+          </LookupForm>
         )}
 
         {tab === "gush" && (
-          <form className="flex" style={{ gap: "0.5rem", marginBottom: "1rem" }} onSubmit={(e) => e.preventDefault()}>
+          <LookupForm onSubmit={() => patch({ g: draftGush.trim(), h: draftHelka.trim() })}>
             <input aria-label="גוש"
               placeholder="גוש"
-              defaultValue={gush}
+              value={draftGush}
+              onChange={(e) => setDraftGush(e.target.value)}
               onBlur={(e) => patch({ g: e.target.value.trim() })}
               inputMode="numeric"
-              style={{ padding: "0.45rem 0.6rem", width: 130 }}
+              enterKeyHint="search"
+              style={{ ...FIELD, width: 130 }}
             />
             <input aria-label="חלקה"
               placeholder="חלקה"
-              defaultValue={helka}
+              value={draftHelka}
+              onChange={(e) => setDraftHelka(e.target.value)}
               onBlur={(e) => patch({ h: e.target.value.trim() })}
               inputMode="numeric"
-              style={{ padding: "0.45rem 0.6rem", width: 130 }}
+              enterKeyHint="search"
+              style={{ ...FIELD, width: 130 }}
             />
-          </form>
+          </LookupForm>
         )}
 
         {/* Everything below is the lookup half of the page, and now the whole of
@@ -291,6 +348,16 @@ export default function NadlanPage() {
                   onSelect={(k) => setExpanded(k)}
                 />
               </Suspense>
+              {env?.query?.widened === true && (
+                <div className="text-sm" style={{
+                  marginTop: "0.4rem", padding: "0.5rem 0.75rem", borderRadius: 8,
+                  background: "var(--tint-warn-bg, #fef3c7)", color: "#833909",
+                }}>
+                  אין חלקה רשומה מתחת לנקודה שנבחרה — חלקות אינן מרצפות את השטח, ובין
+                  כביש, שטח פתוח וקרקע לא מוסדרת יש רווחים. מוצגות החלקות הקרובות
+                  ביותר ברדיוס {String(env.query.radius_used)} מ׳.
+                </div>
+              )}
               {results.length > 0 && (
                 <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
                   {results.filter((r) => r.geometry).length.toLocaleString("he-IL")} מתוך{" "}
@@ -304,7 +371,46 @@ export default function NadlanPage() {
             {loading && <div className="text-sm text-muted">מחפש…</div>}
             {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
             {!loading && !error && env && results.length === 0 && (
-              <div className="text-sm text-muted">לא נמצאו חלקות להזנה הזו.</div>
+              env.miss ? (
+                <div style={{
+                  padding: "0.7rem 0.9rem", borderRadius: 8,
+                  background: "var(--surface-2)", border: "1px solid var(--border)",
+                }}>
+                  <div className="text-sm" style={{ lineHeight: 1.8 }}>{env.miss.message}</div>
+                  {env.miss.suggestions && env.miss.suggestions.length > 0 && (
+                    <div className="flex" style={{ gap: "0.35rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+                      {env.miss.suggestions.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => patch({ street: n })}
+                          style={{
+                            padding: "0.25rem 0.7rem", fontSize: "0.85rem", cursor: "pointer",
+                            border: "1px solid var(--border)", borderRadius: 999, background: "none",
+                          }}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {env.miss.reason === "street_not_located" && (
+                    <button
+                      type="button"
+                      onClick={() => patch({ tab: null })}
+                      style={{
+                        marginTop: "0.5rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem",
+                        cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6,
+                        background: "none",
+                      }}
+                    >
+                      מעבר למפה ואיתור החלקה בנגיעה
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-muted">לא נמצאו חלקות להזנה הזו.</div>
+              )
             )}
 
             {results.map((p) => (

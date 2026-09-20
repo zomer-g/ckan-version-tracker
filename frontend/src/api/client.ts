@@ -3017,6 +3017,19 @@ export interface NadlanProperty {
   geometry: string | null;
 }
 
+/** Why an address lookup came back empty. An empty list is the one answer a
+ *  person cannot act on: unknown town, different spelling and a street that no
+ *  source can place are three different next moves. */
+export interface NadlanMiss {
+  reason: "settlement_unknown" | "street_unknown" | "street_not_located" | "no_house_match";
+  message: string;
+  settlement_code?: number;
+  settlement_name?: string | null;
+  street_name?: string | null;
+  official_code?: number | null;
+  suggestions?: string[];
+}
+
 export interface NadlanEnvelope {
   query: Record<string, unknown>;
   data: NadlanProperty[];
@@ -3026,6 +3039,7 @@ export interface NadlanEnvelope {
   addresses?: Record<string, unknown>[];
   alternatives?: { mode: string; parsed: Record<string, unknown> }[];
   hint?: string;
+  miss?: NadlanMiss;
 }
 
 export interface NadlanStats {
@@ -3051,6 +3065,9 @@ export interface NadlanStreet {
   name: string;
   settlement_code: number;
   settlement_name: string | null;
+  /** False for a street only רשות האוכלוסין's register knows: real, but nothing
+   *  we hold places it, so a lookup on it cannot return a parcel. */
+  located?: boolean;
 }
 
 export const nadlan = {
