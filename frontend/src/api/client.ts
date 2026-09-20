@@ -2212,6 +2212,14 @@ export interface OdataImportJob {
 }
 
 export const admin = {
+  // Parquet mirrors. Both are admin-only and go through request(), which
+  // carries the logged-in token — the reason this exists as a button at all.
+  parquetTables: () => request<ParquetTablesResponse>("/admin/parquet/tables"),
+  parquetBuild: (table?: string) =>
+    request<{ status: string; tables: number; message: string }>(
+      `/admin/parquet/build${table ? `?table=${encodeURIComponent(table)}` : ""}`,
+      { method: "POST" },
+    ),
   pending: () => request<PendingRequest[]>("/admin/pending"),
   // One page of active datasets for the admin "מאגרים פעילים" tab. The tab used
   // to pull the entire catalog (~1,100 rows / 1MB) from the public /datasets on
@@ -2853,6 +2861,26 @@ export const ocalAdmin = {
 // spatial identity you start from, the answer carries the property's identity
 // in every other codespace plus a per-source block linking to that source's
 // untouched full row on /data.
+
+export interface ParquetTable {
+  table: string;
+  dataset_id: string;
+  dataset_title: string | null;
+  resource_name: string | null;
+  est_rows: number;
+  parquet_key: string;
+  parquet_bytes: number | null;
+  built: boolean;
+}
+
+export interface ParquetTablesResponse {
+  available: boolean;
+  unavailable_reason: string | null;
+  min_rows: number;
+  tables: ParquetTable[];
+  built: number;
+  total: number;
+}
 
 export interface NadlanDeal {
   date: string | null;
