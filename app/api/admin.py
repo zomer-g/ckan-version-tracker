@@ -3393,6 +3393,44 @@ async def nadlan_geocode_merge(request: Request, user: User = Depends(get_admin_
     return await geocode_queue.merge_into_addresses()
 
 
+@router.get("/nadlan/municipal/report")
+@limiter.limit("6/minute")
+async def nadlan_municipal_report(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """What the seven municipal address layers would contribute, without doing it.
+
+    Per layer: rows, how many key successfully, how many addresses OVER has no
+    row for, and how many existing rows with no point this would fill.
+    """
+    from app.services import address_municipal
+    return {"layers": await address_municipal.layer_report()}
+
+
+@router.post("/nadlan/municipal/merge")
+@limiter.limit("2/minute")
+async def nadlan_municipal_merge(
+    request: Request,
+    dry_run: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Fold the municipal layers into over_re_addresses.
+
+    Never overwrites an existing point, and stamps every point it does set with
+    the layer that produced it (``municipal_<layer id>``), so a third source
+    cannot quietly dissolve the register/GovMap accuracy distinction that
+    ``point_source`` exists to keep.
+    """
+    from app.services import address_municipal
+    res = await address_municipal.merge(dry_run=dry_run)
+    logger.warning("municipal address merge by %s (dry_run=%s): "
+                   "filled=%s inserted=%s skipped=%s",
+                   user.email, dry_run, res.get("filled"), res.get("inserted"),
+                   res.get("skipped"))
+    return res
+
+
 @router.get("/nadlan/dataset/state")
 @limiter.limit("30/minute")
 async def nadlan_dataset_state(
