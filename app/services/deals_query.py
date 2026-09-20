@@ -63,6 +63,13 @@ SOURCE_URL = "https://nadlan.taxes.gov.il/svinfonadlan2010/startpage.aspx"
 # Same budget as the nadlan lookup: a browse that needs longer is a missing
 # index, and should fail loudly rather than hold a Neon compute open.
 _TIMEOUT_MS = 8000
+# The cached whole-table aggregates get their own, longer ceiling. Measured in
+# production: the browse, the series and the per-settlement list all answer in
+# 1-5s, but stats() counts DISTINCT (gush||'-'||chelka) over 3.84 M rows and
+# came in just over 8s — it 500'd on the first deploy. It is cached, so it runs
+# a few times an hour rather than per page load, and the page renders without
+# it either way; the ceiling is here to bound it, not to make it fail.
+_AGGREGATE_TIMEOUT_MS = 25000
 MAX_LIMIT = 200
 # An exact COUNT over a settlement's whole history is a real cost for a number
 # nobody reads past the first page, so the total is counted to here and then
@@ -78,11 +85,11 @@ SORT_MODES = {
 }
 
 
-async def _fetch(sql: str, *args) -> list[dict]:
+async def _fetch(sql: str, *args, timeout_ms: int = _TIMEOUT_MS) -> list[dict]:
     pool = await append_store.get_readonly_pool()
     async with pool.acquire() as conn:
         async with conn.transaction(readonly=True):
-            await conn.execute(f"SET LOCAL statement_timeout = {_TIMEOUT_MS}")
+            await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             rows = await conn.fetch(sql, *args)
     return [dict(r) for r in rows]
 
@@ -212,7 +219,10 @@ async def series(filters: dict) -> list[dict]:
 
 
 async def breakdown(filters: dict, limit: int = 20) -> list[dict]:
-    """The deal types present under the filter, biggest first."""
+    """The deal types present under the filter, biggest first.
+
+    Unfiltered this is a whole-table group-by (measured at 4.7s in production),
+    which is why natures() caches it and why it gets the aggregate ceiling."""
     where, args = _where(filters)
     src = await _src()
     rows = await _fetch(f"""
@@ -222,7 +232,7 @@ async def breakdown(filters: dict, limit: int = 20) -> list[dict]:
         FROM {_t(src)}
         WHERE {where}
         GROUP BY 1 ORDER BY deals DESC LIMIT {max(1, min(int(limit), 60))}
-    """, *args)
+    """, *args, timeout_ms=_AGGREGATE_TIMEOUT_MS if not filters else _TIMEOUT_MS)
     return [dict(r) for r in rows]
 
 
@@ -299,7 +309,7 @@ async def compare_settlements(year_from: int, year_to: int, *, nature: str | Non
 # Each is a whole-table aggregate over 3.84 M rows. They only move when the
 # scraper appends a new sampling, so they are served from a process-local cache
 # on the same rationale (and with the same shape) as nadlan_query.stats().
-_TTL_SECONDS = 900.0
+_TTL_SECONDS = 3600.0
 _cache: dict[str, tuple[float, object]] = {}
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -334,7 +344,7 @@ async def stats() -> dict:
                    count(DISTINCT deal_nature) AS natures,
                    max(scraped_at) AS scraped_at
             FROM {_t(src)}
-        """)
+        """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
         s = dict(rows[0]) if rows else {}
         s["first_deal"] = _iso(s.get("first_deal"))
         s["last_deal"] = _iso(s.get("last_deal"))
@@ -367,7 +377,7 @@ async def settlements() -> list[dict]:
             FROM {_t(src)}
             WHERE btrim(settlement) <> ''
             GROUP BY 1 ORDER BY deals DESC
-        """)
+        """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
         return [{"settlement": r["settlement"], "settlement_code": r["settlement_code"],
                  "deals": r["deals"], "last_deal": _iso(r["last_deal"])} for r in rows]
 

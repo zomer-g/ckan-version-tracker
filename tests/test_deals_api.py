@@ -46,8 +46,8 @@ def seen(monkeypatch):
     """Capture every statement the router causes, with its parameters."""
     captured: list[tuple[str, tuple]] = []
 
-    async def _fetch(sql, *args):
-        captured.append((sql, args))
+    async def _fetch(sql, *args, **kw):
+        captured.append((sql, args, kw))
         if " count(*) AS n " in sql:
             return [{"n": 42}]
         if "btrim(settlement) AS settlement" in sql:
@@ -85,7 +85,7 @@ def client(monkeypatch, seen):
 
 
 def _sql(seen, needle: str) -> str:
-    matches = [s for s, _ in seen if needle in s]
+    matches = [s for s, _, _ in seen if needle in s]
     assert matches, f"no statement containing {needle!r}"
     return matches[0]
 
@@ -136,7 +136,7 @@ def test_an_unset_filter_is_absent_from_the_sql(client, seen):
 def test_each_filter_becomes_a_parameter_never_an_inlined_value(client, seen):
     client.get("/api/deals/search?settlement=פתח תקווה&gush=6319&helka=225"
                "&nature=דירה בבית קומות&min_amount=1000000")
-    sql, args = next((s, a) for s, a in seen if "ORDER BY" in s)
+    sql, args = next((s, a) for s, a, _ in seen if "ORDER BY" in s)
     assert "פתח תקווה" not in sql and "6319" not in sql
     assert "פתח תקווה" in args and "6319" in args and 1_000_000 in args
 
@@ -145,7 +145,7 @@ def test_a_date_range_is_compared_on_the_indexed_expression(client, seen):
     """``to_date`` is only STABLE, so neither an expression index nor a correct
     ordering is available through it — both go through the same ``substr``."""
     client.get("/api/deals/search?date_from=2020-01-01&date_to=2024-12-31")
-    sql, args = next((s, a) for s, a in seen if "ORDER BY" in s)
+    sql, args = next((s, a) for s, a, _ in seen if "ORDER BY" in s)
     assert sql.count(DEAL_SORT_KEY) >= 3           # two bounds + the ORDER BY
     assert "20200101" in args and "20241231" in args
     assert "to_date(" not in sql
@@ -155,7 +155,7 @@ def test_the_sub_parcel_is_zero_padded_to_the_published_form(client, seen):
     """The register writes תת-חלקה as three digits ('007'); a caller typing 7
     must not silently match nothing."""
     client.get("/api/deals/search?sub_parcel=7")
-    _, args = next((s, a) for s, a in seen if "ORDER BY" in s)
+    _, args = next((s, a) for s, a, _ in seen if "ORDER BY" in s)
     assert "007" in args
 
 
@@ -173,16 +173,16 @@ def test_the_chart_and_the_table_describe_the_same_rows(client, seen):
     summarise a different population than the listing beside it."""
     q = "settlement=פתח תקווה&nature=דירה בבית קומות&date_from=2020-01-01"
     client.get(f"/api/deals/search?{q}")
-    table_args = next(a for s, a in seen if "ORDER BY" in s and "GROUP BY" not in s)
+    table_args = next(a for s, a, _ in seen if "ORDER BY" in s and "GROUP BY" not in s)
     seen.clear()
     client.get(f"/api/deals/series?{q}")
-    series_args = next(a for s, a in seen if "GROUP BY" in s)
+    series_args = next(a for s, a, _ in seen if "GROUP BY" in s)
     assert table_args == series_args
 
 
 # ── paging and counting ───────────────────────────────────────────────────────
 def test_the_total_is_capped_and_says_so(client, monkeypatch, seen):
-    async def _fetch(sql, *args):
+    async def _fetch(sql, *args, **kw):
         if " count(*) AS n " in sql:
             return [{"n": deals_query.COUNT_CAP + 1}]
         return [_ROW]
@@ -239,7 +239,7 @@ def test_the_settlement_list_is_cached(client, seen):
     assert client.get("/api/deals/settlements").status_code == 200
     body = client.get("/api/deals/settlements").json()
     assert body["count"] == 1 and body["data"][0]["last_deal"] == "2025-04-23"
-    assert len([s for s, _ in seen if "GROUP BY" in s]) == 1
+    assert len([s for s, _, _ in seen if "GROUP BY" in s]) == 1
 
 
 def test_the_settlement_list_is_grouped_by_name_not_code(client, seen):
@@ -249,3 +249,18 @@ def test_the_settlement_list_is_grouped_by_name_not_code(client, seen):
     sql = _sql(seen, "GROUP BY")
     assert "btrim(settlement) AS settlement" in sql
     assert "GROUP BY 1" in sql
+
+
+def test_the_cached_whole_table_aggregates_get_a_longer_ceiling(client, seen):
+    """stats() counts DISTINCT (gush||'-'||chelka) over 3.84 M rows and came in
+    just over the 8s browse budget — it 500'd on the first production deploy.
+    It is cached, so it runs a few times an hour, and the browse budget stays
+    tight: a browse that needs longer is a missing index."""
+    client.get("/api/deals/stats")
+    stats_kw = next(kw for s, _, kw in seen if "max(scraped_at)" in s)
+    assert stats_kw["timeout_ms"] == deals_query._AGGREGATE_TIMEOUT_MS
+
+    seen.clear()
+    client.get("/api/deals/search?settlement=חיפה")
+    browse_kw = next(kw for s, _, kw in seen if "ORDER BY" in s)
+    assert browse_kw == {}, "the browse keeps the tight default"
