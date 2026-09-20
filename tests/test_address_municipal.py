@@ -129,3 +129,13 @@ def test_geometry_is_centroided_because_only_three_layers_are_points():
     assert "ST_Centroid" in src
     assert "ST_Y(extensions.ST_Centroid" in src
     assert "ST_Y(l.geom)" not in src, "a bare ST_Y crashes on the 4 non-point layers"
+
+
+def test_the_report_predicts_what_the_merge_will_actually_insert():
+    """The insert keys on address_key, which carries house_suffix — so a
+    layer's "5א" where OVER has "5" is a new doorway. A report that ignored the
+    suffix under-predicted the real merge by 1,374 rows (20,739 against 19,365
+    forecast), and a dry run that cannot predict the run is worth nothing."""
+    src = inspect.getsource(am.layer_report)
+    assert "o.house_suffix IS NOT DISTINCT FROM d.house_suffix" in src, (
+        "the report's existence test must use the same key as the insert")

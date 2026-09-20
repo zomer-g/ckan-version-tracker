@@ -120,11 +120,20 @@ async def layer_report() -> list[dict]:
                 SELECT (SELECT count(*) FROM idx."{table}")            AS layer_rows,
                        (SELECT count(*) FROM d)                        AS keyed,
                        (SELECT count(*) FROM d WHERE street_key IS NULL) AS unresolved_street,
+                       -- Keyed on the SUFFIX too, because the insert is: an
+                       -- address_key carries it, so a layer's "5א" where OVER
+                       -- has "5" is a new doorway and not a duplicate.
+                       -- Ignoring it here made this report under-predict the
+                       -- real merge by 1,374 rows (20,739 inserted against
+                       -- 19,365 forecast), which is exactly the kind of gap
+                       -- that makes a dry run worth nothing.
                        (SELECT count(*) FROM d WHERE NOT EXISTS (
                           SELECT 1 FROM public."{ADDRESSES_TABLE}" o
                           WHERE o.settlement_code = d.sc
                             AND o.street_key = d.street_key
-                            AND o.house_num = d.house_num)) AS new_addresses,
+                            AND o.house_num = d.house_num
+                            AND o.house_suffix IS NOT DISTINCT FROM d.house_suffix))
+                         AS new_addresses,
                        (SELECT count(*) FROM public."{ADDRESSES_TABLE}" o
                          WHERE o.point IS NULL AND EXISTS (
                            SELECT 1 FROM d WHERE d.sc = o.settlement_code
