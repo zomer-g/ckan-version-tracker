@@ -111,6 +111,20 @@ export default function KnessetDbPage() {
   const [sqlText, setSqlText] = useState(() => searchParams.get("sql") || DEFAULT_SQL);
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
+  // See DataSqlPage: a link cannot carry the bearer token the export endpoint
+  // requires, so this is a fetch with a pending state and a real error path.
+  const [exporting, setExporting] = useState(false);
+  const runExport = async (go: () => Promise<void>) => {
+    setExporting(true);
+    setSqlError(null);
+    try {
+      await go();
+    } catch (e) {
+      setSqlError(e instanceof Error ? e.message : "הייצוא נכשל");
+    } finally {
+      setExporting(false);
+    }
+  };
   const [sqlRunning, setSqlRunning] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
@@ -374,13 +388,16 @@ export default function KnessetDbPage() {
             </button>
           )}
           {sqlText.trim() && (
-            <a className="card-export-link"
-              href={knessetDb.exportUrl(sqlText)}
-              style={{ fontSize: "0.82rem", color: "var(--text-muted)", textDecoration: "underline" }}
+            <button
+              type="button"
+              className="card-export-link"
+              disabled={exporting}
+              onClick={() => void runExport(() => knessetDb.exportCsv(sqlText))}
+              style={{ fontSize: "0.82rem", color: "var(--text-muted)", textDecoration: "underline", background: "none", border: "none", padding: 0, cursor: "pointer" }}
               title="הרצת השאילתה בשרת וייצוא מלא (עד 200,000 שורות)"
             >
-              ייצוא מלא מהשרת (עד 200 אלף שורות)
-            </a>
+              {exporting ? "מייצא…" : "ייצוא מלא מהשרת (עד 200 אלף שורות)"}
+            </button>
           )}
         </div>
         {sqlError && (

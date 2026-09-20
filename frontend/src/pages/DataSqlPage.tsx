@@ -1021,6 +1021,22 @@ export default function DataSqlPage() {
   const [sqlText, setSqlText] = useState(() => sqlFromUrl(searchParams) || PLACEHOLDER_SQL);
   const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
+  // The server-side export is a fetch now (it has to carry the bearer token),
+  // so it has the two things a link never had: a pending state and an error
+  // that lands in the same place as every other console error — which is what
+  // makes the sign-in notice appear instead of a downloaded 401 page.
+  const [exporting, setExporting] = useState(false);
+  const runExport = async (go: () => Promise<void>) => {
+    setExporting(true);
+    setSqlError(null);
+    try {
+      await go();
+    } catch (e) {
+      setSqlError(e instanceof Error ? e.message : "הייצוא נכשל");
+    } finally {
+      setExporting(false);
+    }
+  };
   const [sqlRunning, setSqlRunning] = useState(false);
   // Post-run cooldown: keeps "run" locked briefly after each query so rapid
   // repeated runs (impatient clicking / holding Ctrl+Enter) can't machine-gun
@@ -1569,13 +1585,16 @@ export default function DataSqlPage() {
             </button>
           )}
           {sqlText.trim() && (
-            <a className="card-export-link"
-              href={dataCatalog.exportUrl(sqlText)}
-              style={{ fontSize: "0.82rem", color: "var(--text-muted)", textDecoration: "underline" }}
+            <button
+              type="button"
+              className="card-export-link"
+              disabled={exporting}
+              onClick={() => void runExport(() => dataCatalog.exportCsv(sqlText))}
+              style={{ fontSize: "0.82rem", color: "var(--text-muted)", textDecoration: "underline", background: "none", border: "none", padding: 0, cursor: "pointer" }}
               title="הרצת השאילתה בשרת וייצוא מלא (עד 200,000 שורות)"
             >
-              ייצוא מלא מהשרת (עד 200 אלף שורות)
-            </a>
+              {exporting ? "מייצא…" : "ייצוא מלא מהשרת (עד 200 אלף שורות)"}
+            </button>
           )}
         </div>
         {/* Which tables feed this query — chips in the source's colors; click
@@ -1984,10 +2003,14 @@ export default function DataSqlPage() {
                   </a>
                 )}
                 {selectedTable.kind === "knesset" && (
-                  <a href={dataCatalog.exportUrl(`SELECT * FROM ${selectedTable.table}`)}
-                     style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--fill-brand)", color: "var(--on-fill-brand)", textDecoration: "none", fontWeight: 500 }}>
-                    &#8595; CSV — כל הנתונים
-                  </a>
+                  <button
+                    type="button"
+                    disabled={exporting}
+                    onClick={() => void runExport(
+                      () => dataCatalog.exportCsv(`SELECT * FROM ${selectedTable.table}`))}
+                    style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, background: "var(--fill-brand)", color: "var(--on-fill-brand)", border: "none", fontWeight: 500, cursor: "pointer" }}>
+                    {exporting ? "מייצא…" : "\u2193 CSV — כל הנתונים"}
+                  </button>
                 )}
                 {selectedTable.archive_url && (
                   <Link to={selectedTable.archive_url}

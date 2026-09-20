@@ -19,6 +19,64 @@ export function clearToken() {
 export const SIGN_IN_REQUIRED =
   "כדי להריץ שאילתה צריך להתחבר. ההתחברות היא לזיהוי בלבד, הנתונים עצמם ציבוריים, וה-API, מחבר Looker ושרתי ה-MCP ממשיכים לעבוד ללא שינוי.";
 
+/** Translate a failed response into the message the consoles expect.
+ *  Shared by request() and downloadCsv() so a 401 on an export reads the same
+ *  as a 401 on a query — as an instruction to sign in, not as a fault. */
+async function failureMessage(resp: Response, path: string): Promise<string> {
+  // Read as text first so a NON-JSON error (e.g. a Cloudflare WAF block page,
+  // which is HTML) still yields an informative message instead of a blank one.
+  const raw = await resp.text().catch(() => "");
+  let detail = "";
+  try {
+    const j = JSON.parse(raw);
+    detail = j?.detail || j?.message || "";
+  } catch {
+    /* not JSON — fall through to the heuristics below */
+  }
+  // The SQL consoles now require a signed-in account (attribution and a
+  // per-account budget — every table they reach is public). FastAPI's own
+  // 401/403 for a missing bearer says "Not authenticated", which reads as a
+  // fault rather than an instruction, so name the action instead.
+  if (resp.status === 401 || (resp.status === 403 && /not authenticated/i.test(detail))) {
+    if (/\/sql|\/export\.csv/.test(path)) return SIGN_IN_REQUIRED;
+  }
+  if (!detail) {
+    const blocked = resp.status === 403 && /cloudflare|blocked|attention required|<html/i.test(raw);
+    detail = blocked
+      ? 'הבקשה נחסמה (403) על-ידי Cloudflare — ברוב המקרים זו הגבלת-קצב (המתינו כמה שניות ונסו שוב). אם זה חוזר גם אחרי המתנה, ייתכן שחוקת אבטחה חסמה את השאילתה — נסו לנסח אותה מחדש.'
+      : `שגיאת שרת (${resp.status}${resp.statusText ? " " + resp.statusText : ""})`;
+  }
+  return detail;
+}
+
+/** GET a streamed file and save it, carrying the bearer token.
+ *
+ *  The export endpoints are auth-gated, and an <a href> cannot carry a header —
+ *  which is why the "full export" button answered "Not authenticated" for every
+ *  signed-in user until this existed. The response is streamed by the server;
+ *  the browser still materialises it as a Blob to save, which is fine for the
+ *  200k-row ceiling the endpoint enforces. */
+export async function downloadCsv(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const resp = await fetch(`${BASE}${path}`, { headers });
+  if (!resp.ok) throw new Error(await failureMessage(resp, path));
+
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked on the next tick: revoking synchronously can cancel the download
+  // in some browsers before it has read the blob.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
@@ -37,32 +95,7 @@ async function request<T>(
   const resp = await fetch(`${BASE}${path}`, { ...options, headers });
 
   if (!resp.ok) {
-    // Read as text first so a NON-JSON error (e.g. a Cloudflare WAF block page,
-    // which is HTML) still yields an informative message instead of a blank one.
-    const raw = await resp.text().catch(() => "");
-    let detail = "";
-    try {
-      const j = JSON.parse(raw);
-      detail = j?.detail || j?.message || "";
-    } catch {
-      /* not JSON — fall through to the heuristics below */
-    }
-    // The SQL consoles now require a signed-in account (attribution and a
-    // per-account budget — every table they reach is public). FastAPI's own
-    // 401/403 for a missing bearer says "Not authenticated", which reads as a
-    // fault rather than an instruction, so name the action instead.
-    if (resp.status === 401 || (resp.status === 403 && /not authenticated/i.test(detail))) {
-      if (/\/sql|\/export\.csv/.test(path)) {
-        throw new Error(SIGN_IN_REQUIRED);
-      }
-    }
-    if (!detail) {
-      const blocked = resp.status === 403 && /cloudflare|blocked|attention required|<html/i.test(raw);
-      detail = blocked
-        ? 'הבקשה נחסמה (403) על-ידי Cloudflare — ברוב המקרים זו הגבלת-קצב (המתינו כמה שניות ונסו שוב). אם זה חוזר גם אחרי המתנה, ייתכן שחוקת אבטחה חסמה את השאילתה — נסו לנסח אותה מחדש.'
-        : `שגיאת שרת (${resp.status}${resp.statusText ? " " + resp.statusText : ""})`;
-    }
-    throw new Error(detail);
+    throw new Error(await failureMessage(resp, path));
   }
 
   if (resp.status === 204) return undefined as T;
@@ -1260,9 +1293,12 @@ export const knessetDb = {
       method: "POST",
       body: JSON.stringify({ sql }),
     }),
-  // Direct browser download (streams server-side); not a fetch.
-  exportUrl: (sql: string) =>
-    `/api/knesset-db/export.csv?sql=${encodeURIComponent(sql)}`,
+  // A fetch, not a link: the endpoint is auth-gated and an <a href> carries no
+  // Authorization header, which is why this answered "Not authenticated" for
+  // every signed-in user for as long as it existed.
+  exportCsv: (sql: string) =>
+    downloadCsv(`/knesset-db/export.csv?sql=${encodeURIComponent(sql)}`,
+                "knesset_query.csv"),
   // Admin: kick a sync pass now (optionally one table, optionally re-walk it).
   sync: (opts: { table?: string; reset?: boolean } = {}) =>
     request<{ started: boolean }>("/knesset-db/sync", {
@@ -1388,10 +1424,12 @@ export const dataCatalog = {
       method: "POST",
       body: JSON.stringify({ sql_b64: utf8ToBase64(sql) }),
     }),
-  // Direct browser download (server streams); not a fetch. base64 for the same
-  // WAF reason — the query would otherwise sit in the URL as plain SQL.
-  exportUrl: (sql: string) =>
-    `/api/tables/export.csv?sql_b64=${encodeURIComponent(utf8ToBase64(sql))}`,
+  // A fetch, not a link — see knessetDb.exportCsv. base64 for the same WAF
+  // reason as `sql` above: the query would otherwise sit in the URL as plain
+  // SQL and trip Cloudflare's injection rules.
+  exportCsv: (sql: string) =>
+    downloadCsv(`/tables/export.csv?sql_b64=${encodeURIComponent(utf8ToBase64(sql))}`,
+                "over_query.csv"),
   schemaTxtUrl: (table?: string) =>
     `/api/tables/schema.txt${table ? `?table=${encodeURIComponent(table)}` : ""}`,
   // Short share links: the query is stored server-side and addressed by slug,
