@@ -208,7 +208,10 @@
 
   footer.foot { padding: 0 0 60px; color: var(--ink-faint); font-size: 12.5px; text-align:center; }
 
-  @media (max-width: 620px) {
+  /* 760, not 620: the page is also EMBEDDED in an iframe on /about, and at a
+     typical embed width the four-column stat row breaks a date range across
+     two lines. Anything narrower than a comfortable four columns gets two. */
+  @media (max-width: 760px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
     header.hero { padding: 48px 0 30px; }
     .chapter-when { display: none; }

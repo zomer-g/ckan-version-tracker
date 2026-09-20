@@ -137,6 +137,45 @@ export default function AboutPage() {
           </ul>
         </div>
 
+        {/* The two story documents are served by the backend straight from the
+            repo root (GET /story/<name>), not bundled into the SPA — so they
+            are reached with a plain <a>, never a react-router <Link>, which
+            would try to resolve them client-side and land on a 404.
+
+            They are embedded rather than only linked because someone reading
+            "what is this project" should be able to see the answer without
+            leaving the page; each carries its own full-page link for a reader
+            who wants it larger, or wants to present from it. */}
+        <div className="about-card" id="story">
+          <h2>{t("about.story_title")}</h2>
+          <p>{t("about.story_intro")}</p>
+
+          <h3 className="story-embed-head">{t("about.story_deck_title")}</h3>
+          <p className="text-muted text-sm">{t("about.story_deck_desc")}</p>
+          <iframe
+            className="story-embed story-embed--deck"
+            src="/story/deck"
+            title={t("about.story_deck_title")}
+            loading="lazy"
+            allow="fullscreen"
+          />
+          <p className="story-embed-link">
+            <ExtLink href="/story/deck">{t("about.story_open_deck")}</ExtLink>
+          </p>
+
+          <h3 className="story-embed-head">{t("about.story_timeline_title")}</h3>
+          <p className="text-muted text-sm">{t("about.story_timeline_desc")}</p>
+          <iframe
+            className="story-embed story-embed--timeline"
+            src="/story/timeline"
+            title={t("about.story_timeline_title")}
+            loading="lazy"
+          />
+          <p className="story-embed-link">
+            <ExtLink href="/story/timeline">{t("about.story_open_timeline")}</ExtLink>
+          </p>
+        </div>
+
         {/* WCAG 3.1.3 (Unusual Words) and 3.1.4 (Abbreviations) ask that a
             reader be able to look up jargon they cannot work out from context.
             The site is full of it — CKAN, ODATA, WFS, גוש/חלקה. One list, read

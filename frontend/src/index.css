@@ -1705,6 +1705,63 @@ label {
   margin-top: 0.75rem;
 }
 
+/* The two story documents embedded on /about (#story).
+   Each is a whole self-contained page inside an iframe, so it brings its own
+   layout, its own dark mode and its own scrolling. What is set here is only
+   the frame: a height that leaves the host page obviously in charge, and a
+   full-page link underneath for a reader who wants it bigger. */
+.about-card .story-embed-head {
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 1.5rem 0 0.15rem;
+}
+
+.about-card .story-embed-head:first-of-type {
+  margin-top: 1.25rem;
+}
+
+.about-card .story-embed {
+  display: block;
+  width: 100%;
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  /* A dark-scheme iframe paints its own background; without this the light
+     host page shows a hairline of --surface-2 around it while it loads. */
+  color-scheme: light dark;
+}
+
+/* The deck is a fixed stage: give it the shape it was designed in.
+   The timeline is a long scrolling document, so it gets a window rather than
+   a full height — deliberately shorter than the deck, so it reads as a
+   preview you can open, not as a page inside a page. */
+.about-card .story-embed--deck {
+  height: clamp(420px, 66vh, 700px);
+}
+
+.about-card .story-embed--timeline {
+  height: clamp(380px, 52vh, 560px);
+}
+
+.about-card .story-embed-link {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  /* A scrolling document inside a scrolling page is a trap on a phone: the
+     embeds shrink to a glance and the full-page link does the real work. */
+  .about-card .story-embed--deck {
+    height: 340px;
+  }
+
+  .about-card .story-embed--timeline {
+    height: 300px;
+  }
+}
+
 /* Rationale page (/rationale) — shares the about-* shell */
 .rationale-hero-sub {
   color: rgba(255, 255, 255, 0.85);

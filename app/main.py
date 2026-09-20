@@ -693,6 +693,35 @@ async def legacy_ocoi_search(request: Request, q: str = ""):
     return RedirectResponse(url=f"/projects/ocoi{suffix}", status_code=301)
 
 
+# ── the project's own story: the timeline and the features deck ─────────────
+#
+# Both are single self-contained HTML documents (no network, no build step)
+# that live in the repo root, because each has an update skill that treats the
+# root file as the source of truth. They are served FROM THERE rather than
+# copied into frontend/public, so that updating the canonical file is the whole
+# job: a copy is a second source of truth, and the one thing we know about this
+# pair is that they go stale — they sat 371 commits behind before anyone
+# noticed. The About page embeds and links to these two routes.
+_STORY_PAGES = {
+    "timeline": Path(__file__).parent.parent / "over-timeline.html",
+    "deck": Path(__file__).parent.parent / "over-features-deck.html",
+}
+
+
+@app.get("/story/{name}", include_in_schema=False)
+async def serve_story_page(name: str):
+    page = _STORY_PAGES.get(name)
+    if page is None or not page.is_file():
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(
+        page,
+        media_type="text/html; charset=utf-8",
+        # Revalidated hourly: these change when someone runs the update skill,
+        # which is rare but should not need a cache bust to become visible.
+        headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"},
+    )
+
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"
