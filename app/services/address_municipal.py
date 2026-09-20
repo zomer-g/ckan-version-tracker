@@ -86,9 +86,21 @@ def _layer_cte(table: str, town: str, st: str, hn: str, ot: str | None) -> str:
                coalesce(over_house_suffix(l.{hn}::text), {suffix})    AS house_suffix,
                l.{st}::text                                           AS street_raw,
                l.{hn}::text                                           AS house_raw,
-               extensions.ST_Y(l.geom)                                AS lat,
-               extensions.ST_X(l.geom)                                AS lon,
-               l.geom                                                 AS point
+               -- ST_Centroid, not the geometry itself: only 3 of the 7 layers
+               -- are ST_Point. ערד and קרית טבעון publish ST_MultiPoint and
+               -- שדרות publishes ST_MultiLineString, and ST_X/ST_Y reject
+               -- anything that is not a POINT — which is exactly how the
+               -- first run of this died, after three layers had committed.
+               -- Measured before choosing the centroid: every one of those
+               -- geometries is SINGLE-part (max 1 sub-geometry), so for the
+               -- two MultiPoint layers the centroid IS that point, losslessly;
+               -- שדרות's lines are at most 12.7 m end to end, so its centroid
+               -- sits within ~6 m of either end. The `point` column is typed
+               -- geometry(Point,4326), so it would have rejected the raw
+               -- geometry anyway.
+               extensions.ST_Y(extensions.ST_Centroid(l.geom))        AS lat,
+               extensions.ST_X(extensions.ST_Centroid(l.geom))        AS lon,
+               extensions.ST_Centroid(l.geom)                         AS point
         FROM idx."{table}" l
         WHERE l.geom IS NOT NULL
           AND btrim(coalesce(l.{st}::text,'')) <> ''

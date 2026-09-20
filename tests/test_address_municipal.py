@@ -116,3 +116,16 @@ def test_the_report_does_not_write():
     src = inspect.getsource(am.layer_report)
     for verb in ("INSERT", "UPDATE ", "DELETE"):
         assert verb not in src, f"{verb} has no business in a report"
+
+
+def test_geometry_is_centroided_because_only_three_layers_are_points():
+    """Only 3 of the 7 layers are ST_Point: ערד and קרית טבעון publish
+    ST_MultiPoint and שדרות ST_MultiLineString. ST_X/ST_Y reject anything that
+    is not a POINT — which is how the first production run died, after three
+    layers had already committed. The target column is geometry(Point,4326)
+    and would have rejected the raw geometry regardless."""
+    import inspect
+    src = inspect.getsource(am._layer_cte)
+    assert "ST_Centroid" in src
+    assert "ST_Y(extensions.ST_Centroid" in src
+    assert "ST_Y(l.geom)" not in src, "a bare ST_Y crashes on the 4 non-point layers"
