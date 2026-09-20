@@ -442,7 +442,10 @@ export default function NadlanPage() {
                     {stats.coverage.addresses_linked_pct}% משויכות לחלקה ·{" "}
                     {stats.coverage.addresses_with_zip_pct}% עם מיקוד (מתוכם{" "}
                     {stats.coverage.addresses_with_address_zip_pct}% ברמת הכתובת) ·{" "}
-                    {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר.
+                    {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר ·{" "}
+                    {stats.coverage.streets_in_gazetteer_pct}% מהרחובות שיש להם מיקום מוכרים
+                    גם לגזטיר, ועוד {stats.coverage.streets_register_only_pct}% מהרחובות
+                    באינדקס מגיעים ממרשם הרחובות הרשמי בלבד ואין להם מיקום.
                   </li>
                 )}
               </ul>

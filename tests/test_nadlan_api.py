@@ -533,3 +533,27 @@ def test_a_single_word_that_matches_nothing_is_not_retried(monkeypatch):
     monkeypatch.setattr(nadlan_query, "_suggest_streets_prefix", _prefix)
     assert asyncio.run(nadlan_query.suggest_streets("קווזימודו", 2200, 8)) == []
     assert asked == ["קווזימודו"]
+
+
+def test_the_gazetteer_rate_is_measured_over_what_it_could_match(monkeypatch):
+    """Seeding the street index from the official register took it from 37,681
+    to 65,795 rows. Reported against ALL of them, a gazetteer match rate that
+    had RISEN from 76.6% to 94.7% published itself as a fall to 50.3%, because
+    the new rows are streets the gazetteer has no reason to carry. A metric that
+    reads as a regression while the thing it measures improved is worse than no
+    metric."""
+    import asyncio
+
+    async def _fetch(sql, *args):
+        return [{"streets": 65_795, "streets_located": 37_832,
+                 "streets_register_only": 27_963, "streets_in_gazetteer": 32_875,
+                 "addresses": 617_876}]
+
+    monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    nadlan_query.invalidate_stats_cache()
+    try:
+        cov = asyncio.run(nadlan_query.stats())["coverage"]
+        assert cov["streets_in_gazetteer_pct"] == 86.9     # 32,875 / 37,832
+        assert cov["streets_register_only_pct"] == 42.5    # 27,963 / 65,795
+    finally:
+        nadlan_query.invalidate_stats_cache()

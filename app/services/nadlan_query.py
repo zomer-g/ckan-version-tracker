@@ -830,6 +830,13 @@ async def _stats_uncached() -> dict:
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
              WHERE parcel_match = 'pip')                                              AS addresses_linked_pip,
           (SELECT count(*) FROM public.{_qi(STREETS_TABLE)})                          AS streets,
+          -- The streets some source with a LOCATION knows. The rest come from
+          -- רשות האוכלוסין's register alone: real streets that nothing we hold
+          -- can place, and not a population the gazetteer could ever match.
+          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)}
+             WHERE in_address_list OR in_postal OR in_gazetteer)                      AS streets_located,
+          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)}
+             WHERE NOT (in_address_list OR in_postal OR in_gazetteer))                AS streets_register_only,
           (SELECT count(*) FROM public.{_qi(STREETS_TABLE)} WHERE in_gazetteer)       AS streets_in_gazetteer,
           (SELECT count(*) FROM public.{_qi(ZIP5_TABLE)})                             AS zip5_codes,
           (SELECT count(DISTINCT settlement_code) FROM public.{_qi(ADDRESSES_TABLE)}) AS localities_with_addresses
@@ -848,7 +855,12 @@ async def _stats_uncached() -> dict:
         "addresses_with_locality_zip_pct": pct("addresses_with_locality_zip", "addresses"),
         "addresses_linked_pct": pct("addresses_linked_pip", "addresses"),
         "parcels_with_gazetteer_pct": pct("parcels_with_gazetteer", "parcels"),
-        "streets_in_gazetteer_pct": pct("streets_in_gazetteer", "streets"),
+        # Over the streets it COULD match, not over every street in the index.
+        # Seeding from the official register doubled the index, and reporting
+        # this against the whole of it made a match rate that had risen from
+        # 76.6% to 94.7% publish itself as a fall to 50.3%.
+        "streets_in_gazetteer_pct": pct("streets_in_gazetteer", "streets_located"),
+        "streets_register_only_pct": pct("streets_register_only", "streets"),
     }
     return s
 
