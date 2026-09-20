@@ -394,7 +394,48 @@ export default function NadlanPage() {
                       ))}
                     </div>
                   )}
-                  {env.miss.reason === "street_not_located" && (
+                  {/* The address matched and has no parcel: 30.4% of the index
+                      is in that state, and the row we are holding — its zip
+                      codes above all — is a real answer to "what is here". */}
+                  {env.miss.reason === "addresses_without_parcel" && env.addresses && (
+                    <div style={{ marginTop: "0.6rem" }}>
+                      <div className="text-sm" style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
+                        מה שידוע על הכתובת
+                      </div>
+                      <div tabIndex={0} role="region" aria-label="כתובות שנמצאו"
+                           className="scroll-region" style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
+                              {["רחוב", "מס׳", "מיקוד", "שכונה"].map((h) => (
+                                <th key={h} scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {env.addresses.slice(0, 20).map((a, i) => (
+                              <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                                <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.street_name ?? "—")}</td>
+                                <td style={{ padding: "0.2rem 0.4rem" }}>
+                                  {String(a.house_num ?? "—")}{String(a.house_suffix ?? "")}
+                                </td>
+                                <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.zip7 ?? "—")}</td>
+                                <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.neighbourhood ?? "—")}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {env.addresses.length > 20 && (
+                        <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+                          מוצגות 20 מתוך {env.addresses.length.toLocaleString("he-IL")} שורות.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(env.miss.reason === "street_not_located"
+                    || env.miss.reason === "addresses_without_parcel") && (
                     <button
                       type="button"
                       onClick={() => patch({ tab: null })}

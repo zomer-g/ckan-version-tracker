@@ -443,6 +443,36 @@ to roughly 67,000. Most of the new rows are streets that cannot answer a
 lookup — `suggest_streets` returns `located` so a caller can tell, and ranks the
 ones that can answer first.
 
+## An address without a parcel is still an answer
+
+Found 2026-09-20 by doing what the field report described instead of trusting
+that the fixes covered it: 14 REAL Dimona addresses, sampled out of the index so
+every one of them is known to be there, run through the live API. Nine answered.
+Three of the five that did not are rows the index holds — `שד יגאל אלון 221` is
+in there with **nine zip codes** — and the API returned a blank screen with a
+`miss` that blamed the house number.
+
+The cause is structural, not a bug in the lookup: `property_envelope` is built
+from PARCELS. `by_address` finds the address rows and hands them back in
+`envelope.addresses`, and then `data` comes out empty because there is no parcel
+to build a property from. So:
+
+| | |
+|---|---|
+| addresses with no `parcel_key` | **187,819 of 617,876 (30.4%)** |
+| …of those, carrying a zip | 186,313 |
+| Dimona alone | 2,403 of 5,622 (43%) |
+
+Every one of them answered nothing while the index held its street, its house
+number and its postcode.
+
+`explain_address_miss` now takes the rows the lookup matched and answers from
+them FIRST, before any probe query — if there are rows, the settlement and the
+street resolved by construction, and the reader is owed them whether or not a
+second query succeeds. The reason is `addresses_without_parcel`, which is
+deliberately distinguishable from `no_house_match`: one is our gap, the other is
+the reader's typo, and they have different next moves.
+
 ## `pip` is not optional, and the day it looked optional
 
 2026-09-20. The default six stages ran green, and the address spine came out

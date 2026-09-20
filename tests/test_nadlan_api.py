@@ -471,7 +471,7 @@ def test_an_explicit_radius_is_never_quietly_widened(client, monkeypatch):
 def test_an_empty_address_answer_says_why(client, monkeypatch):
     """Empty is the one answer a person cannot act on: unknown town, different
     spelling and a street nothing can place are three different next moves."""
-    async def _miss(city, street):
+    async def _miss(city, street, addresses=None):
         return {"reason": "street_not_located", "message": "…", "official_code": 391}
 
     monkeypatch.setattr(nadlan_query, "explain_address_miss", _miss)
@@ -557,3 +557,36 @@ def test_the_gazetteer_rate_is_measured_over_what_it_could_match(monkeypatch):
         assert cov["streets_register_only_pct"] == 42.5    # 27,963 / 65,795
     finally:
         nadlan_query.invalidate_stats_cache()
+
+
+# ── an address we found is an answer, parcel or no parcel ────────────────────
+_ADDR = {"parcel_key": None, "street_name": "שד יגאל אלון", "house_num": 221,
+         "house_suffix": None, "entrance": None, "zip7": "8603162", "zip5": "86031",
+         "neighbourhood": None, "lat": None, "lon": None, "parcel_match": None,
+         "settlement_name": "דימונה", "point": None}
+
+
+def test_an_address_with_no_parcel_is_reported_as_found_not_as_missing(client, monkeypatch):
+    """Measured on the live index: 187,819 of 617,876 addresses (30.4%) carry no
+    parcel_key and 186,313 of those carry a zip. The envelope is built from
+    PARCELS, so all of them answered a blank screen — and the miss blamed the
+    house number, which had matched perfectly. שד יגאל אלון 221 in Dimona is in
+    the index with nine zip codes."""
+    _stub_lookup(monkeypatch, parcels=(), addresses=(_ADDR,))
+    body = client.get("/api/nadlan/address?city=דימונה&street=שד יגאל אלון&number=221").json()
+    assert body["count"] == 0
+    miss = body["miss"]
+    assert miss["reason"] == "addresses_without_parcel"
+    assert miss["n_addresses"] == 1 and miss["zip7"] == ["8603162"]
+    assert "לא נמצאה" not in miss["message"], "it WAS found"
+    # The rows themselves ride the envelope, so the page can show what we hold.
+    assert body["addresses"][0]["zip7"] == "8603162"
+
+
+def test_a_house_number_that_really_is_absent_still_says_so(client, monkeypatch):
+    """The two must stay distinguishable: one is our gap, the other is the
+    reader's typo, and they have different next moves."""
+    _stub_lookup(monkeypatch, parcels=(), addresses=())
+    body = client.get("/api/nadlan/address?city=דימונה&street=הרצל&number=99999").json()
+    assert body["miss"]["reason"] in ("no_house_match", "street_unknown",
+                                      "settlement_unknown")

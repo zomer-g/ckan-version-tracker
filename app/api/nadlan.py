@@ -229,7 +229,11 @@ async def nadlan_address(
     # An empty list is the one answer a person cannot act on: it does not say
     # whether the town, the spelling or the street itself is the problem, and
     # each of those is a different next move.
-    extra = {} if data else {"miss": await nadlan_query.explain_address_miss(city, street)}
+    # `addrs` is passed in on purpose: an address that matched and simply has
+    # no parcel behind it is the COMMON empty answer, not a miss, and the reader
+    # is owed what we do hold about it rather than a blank screen.
+    extra = ({} if data else
+             {"miss": await nadlan_query.explain_address_miss(city, street, addrs)})
     return _envelope("address", {"city": city, "street": street, "number": number},
                      data, addresses=addrs, **extra)
 

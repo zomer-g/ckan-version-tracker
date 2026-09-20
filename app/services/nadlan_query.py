@@ -206,7 +206,8 @@ async def by_address(city: str, street: str, number: str | None = None
     return addrs, parcels
 
 
-async def explain_address_miss(city: str, street: str) -> dict:
+async def explain_address_miss(city: str, street: str,
+                               addresses: list[dict] | None = None) -> dict:
     """Why an address lookup came back empty, and what to try instead.
 
     An empty list is the one answer a person cannot act on: it does not say
@@ -219,7 +220,38 @@ async def explain_address_miss(city: str, street: str) -> dict:
     is absent by construction — 29,454 of 63,567 official streets as measured on
     2026-09-20. הר הצופים in Dimona is one of them: it is in the register, and
     in neither the gazetteer, the postal file nor the address list, so nothing
-    we hold can place it."""
+    we hold can place it.
+
+    ``addresses`` is what the lookup actually matched. It matters because the
+    most common empty answer is not a miss at all: the address was found and has
+    no PARCEL behind it, which the envelope cannot represent because it is built
+    from parcels. 187,819 of 617,876 addresses (30.4%) are in that state and
+    186,313 of them carry a zip. Reporting that as "no matching address" blamed
+    the reader for a question they had asked correctly."""
+    # Answered from what the lookup ACTUALLY matched, before any second query.
+    # If there are rows, the settlement and street resolved by construction, and
+    # the reader is owed them whether or not the probe below succeeds. This is
+    # the common empty answer: 187,819 of 617,876 addresses (30.4%) have no
+    # parcel, and 186,313 of those have a zip.
+    if addresses:
+        zips = sorted({a["zip7"] for a in addresses if a.get("zip7")})
+        points = [a for a in addresses
+                  if a.get("point") is not None or a.get("lat") is not None]
+        why = ("הכתובת אינה משויכת לחלקה, ולכן אין חלקה להציג. שיוך נעשה לפי "
+               "נקודה בתוך פוליגון, "
+               + ("ולכתובת הזו אין קואורדינטות." if not points
+                  else "והנקודה של הכתובת הזו אינה נופלת בתוך חלקה רשומה.")
+               + " כ-30% מהכתובות בישראל במצב הזה. אפשר לאתר את החלקה בלשונית המפה.")
+        return {
+            "reason": "addresses_without_parcel",
+            "settlement_name": (addresses[0].get("settlement_name") or city),
+            "street_name": (addresses[0].get("street_name") or street),
+            "n_addresses": len(addresses),
+            "zip7": zips,
+            "has_point": bool(points),
+            "message": "הכתובת נמצאה במאגר. " + why,
+        }
+
     rows = await _fetch(
         """
         WITH sc AS (SELECT public.over_settlement_code($1) AS code)
@@ -262,7 +294,7 @@ async def explain_address_miss(city: str, street: str) -> dict:
             "settlement_name": r.get("settlement_name"),
             "street_name": r.get("street_name"),
             "message": (f"הרחוב \"{r.get('street_name')}\" מוכר, אך לא נמצאה כתובת "
-                        f"תואמת. נסו בלי מספר בית.")}
+                        f"תואמת במספר הבית הזה. נסו בלי מספר בית.")}
 
 
 # ── the two layers that hang off a parcel ─────────────────────────────────────

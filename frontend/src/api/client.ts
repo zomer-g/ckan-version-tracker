@@ -3028,7 +3028,7 @@ export interface NadlanProperty {
  *  source can place are three different next moves. */
 export interface NadlanMiss {
   reason: "settlement_unknown" | "street_unknown" | "street_not_located"
-        | "no_house_match" | "no_parcel_near";
+        | "no_house_match" | "no_parcel_near" | "addresses_without_parcel";
   message: string;
   settlement_code?: number;
   settlement_name?: string | null;
@@ -3036,6 +3036,10 @@ export interface NadlanMiss {
   official_code?: number | null;
   suggestions?: string[];
   radius_tried_m?: number;
+  /** addresses_without_parcel: what we DO hold about the address that matched. */
+  n_addresses?: number;
+  zip7?: string[];
+  has_point?: boolean;
 }
 
 export interface NadlanEnvelope {
