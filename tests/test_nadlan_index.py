@@ -283,3 +283,52 @@ def test_a_genuine_tie_between_two_streets_still_designates_neither():
     keyed = {(a[0], a[1]): a[2] for a in aliases}
     assert (7900, "המלך") not in keyed
     assert len(streets) == 2
+
+
+# ── the official register as a source of streets, not only of codes ──────────
+def _off(sc, name, code, status="official"):
+    return {"sc": sc, "name": name, "official_code": code, "status": status}
+
+
+def test_a_street_only_the_register_knows_still_enters_the_index():
+    """The canonical universe is the address list ∪ the postal file, so a street
+    neither carries used to be absent entirely — 29,454 of 63,567 official
+    streets (46.3%) as measured on 2026-09-20, which is why הר הצופים in Dimona
+    answered nothing at all."""
+    streets, _a, _u = ni._resolve_streets(
+        [_canon(2200, "הרצל")], [], official_rows=[_off(2200, "הר הצופים", 391)])
+    rows = _by_key(streets)
+    assert "2200-הרהצופים" in rows
+    row = rows["2200-הרהצופים"]
+    # in_postal / in_address_list / in_gazetteer all false is exactly what tells
+    # a reader the street is real and nothing we hold places it.
+    assert (row[7], row[8], row[9]) == (False, False, False)
+    assert row[10] == 391                      # official_code
+
+
+def test_a_register_street_never_duplicates_an_existing_name():
+    """over_re_streets is unique on (settlement_code, name_norm), and that is
+    NOT the grouping key: a canonical street that took its code from a synonym
+    row is grouped under `c<code>`, so an official row spelling the same name
+    under a different code passes the key check and then collides in the
+    database. The first production run died on exactly this."""
+    canon = [_canon(3000, "נזלת אבו סוואיס מ2")]
+    official = [
+        # gives the canonical street its code, via a differently-spelled synonym
+        _off(3000, "נזלת אבו סוואיס", 111, status="synonym of 111"),
+        _off(3000, "נזלת אבו סוואיס מ2", 111),
+        # the same NAME again under a different official code
+        _off(3000, "נזלת אבו סוואיס מ2", 222),
+    ]
+    streets, _a, _u = ni._resolve_streets(canon, [], official_rows=official)
+    norms = [(r[1], r[3]) for r in streets]
+    assert len(norms) == len(set(norms)), f"duplicate (settlement, name_norm): {norms}"
+
+
+def test_the_register_does_not_overwrite_what_a_located_source_says():
+    """A street both sides know keeps the canonical spelling and its flags."""
+    streets, _a, _u = ni._resolve_streets(
+        [_canon(7900, "רוטשילד", in_addr=True)], [],
+        official_rows=[_off(7900, "שדרות רוטשילד", 77)])
+    located = [r for r in streets if r[8]]          # in_address_list
+    assert len(located) == 1 and located[0][2] == "רוטשילד"

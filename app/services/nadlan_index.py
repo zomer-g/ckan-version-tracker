@@ -677,6 +677,18 @@ async def ensure_functions() -> None:
 
 
 # ── build-state bookkeeping ───────────────────────────────────────────────────
+async def _stage_failed(stage: str, error: str) -> None:
+    """Close out a stage whose builder raised, so the row stops saying 'running'."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"""UPDATE public.{_qi(STATE_TABLE)}
+                   SET status = 'failed', finished_at = now(),
+                       duration_ms = EXTRACT(EPOCH FROM (now() - started_at)) * 1000,
+                       note = $2
+                 WHERE stage = $1""", stage, error[:1000])
+
+
 async def _stage_start(conn, stage: str) -> float:
     await conn.execute(
         f"""INSERT INTO public.{_qi(STATE_TABLE)} (stage, started_at, status)
@@ -1245,21 +1257,31 @@ def _resolve_streets(canon_rows, gaz_rows, official_rows=(),
     # They are added with in_post / in_addr / in_gaz all false, which is what
     # tells a reader the difference: the street is real, and no source we hold
     # places it. `explain_address_miss` reads exactly that flag combination.
+    #
+    # Deduped on the FINAL (settlement, name_norm), not on the grouping key.
+    # over_re_streets carries a unique index on that pair, and the two are not
+    # the same thing: a canonical street that took its code from a SYNONYM row
+    # is grouped under `c<code>`, so an official row spelling the same name
+    # under a different code passes both key checks and then collides in the
+    # database. Measured the hard way — the first production run of this died on
+    # (3000, נזלתאבוסוואיסמ2) four seconds in.
+    taken_norms = {(s["sc"], s["norm"]) for s in streets.values()}
     for r in official_rows:
         if not str(r.get("status") or "").strip().lower().startswith("official"):
             continue
         sc, name = r.get("sc"), (r.get("name") or "").strip()
         nm = nadlan_text.norm(name)
         code = r.get("official_code")
-        if sc is None or not nm:
+        if sc is None or not nm or (sc, nm) in taken_norms:
             continue
         k = (sc, f"c{code}" if code is not None else nm)
-        if k in streets or (sc, nm) in streets:
+        if k in streets:
             continue
         streets[k] = {"sc": sc, "name": name, "norm": nm, "n": 0,
                       "postal_id": None, "gaz_code": None, "name_en": None,
                       "official_code": code,
                       "in_post": False, "in_addr": False, "in_gaz": False}
+        taken_norms.add((sc, nm))
 
     # street_key stays `{sc}-{norm of the representative spelling}` so its shape
     # does not depend on whether the official file happened to cover the street.
@@ -1725,6 +1747,15 @@ async def build(stages: list[str] | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.exception("nadlan stage %s failed", stage)
             out[stage] = {"error": str(e)}
+            # The row still says 'running' — _stage_start wrote it and
+            # _stage_done never ran — so without this the state table reports a
+            # build that is still going forever, and the admin panel polls it
+            # forever. Best-effort: a failure here must not replace the real
+            # error with a second one.
+            try:
+                await _stage_failed(stage, str(e))
+            except Exception:  # noqa: BLE001
+                logger.debug("nadlan: could not mark %s failed", stage, exc_info=True)
             break
     from app.services import data_catalog, nadlan_query
     data_catalog.invalidate_catalog_cache()
