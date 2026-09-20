@@ -434,6 +434,54 @@ export default function NadlanPage() {
                     </div>
                   )}
 
+                  {/* A street only the official register knows, placed by
+                      GovMap's street index and verified to be in the right
+                      town. These are the parcels the street runs through, not
+                      the parcel of a house number — said as that. */}
+                  {env.miss.reason === "street_located_externally" && env.miss.nearby_parcels && (
+                    <div style={{ marginTop: "0.6rem" }}>
+                      <div className="text-sm" style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
+                        החלקות בסביבת הרחוב
+                      </div>
+                      <div className="flex" style={{ gap: "0.35rem", flexWrap: "wrap" }}>
+                        {env.miss.nearby_parcels.map((p) => (
+                          <button
+                            key={p.parcel_key}
+                            type="button"
+                            onClick={() => patch({ tab: "gush", g: String(p.gush), h: String(p.helka) })}
+                            style={{
+                              padding: "0.3rem 0.7rem", fontSize: "0.85rem", cursor: "pointer",
+                              border: "1px solid var(--border)", borderRadius: 6, background: "none",
+                            }}
+                          >
+                            גוש {p.gush} חלקה {p.helka}
+                            <span className="text-muted" style={{ fontSize: "0.75rem" }}>
+                              {" "}· {Math.round(p.distance_m)} מ׳
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                      {env.miss.street_point && (
+                        <button
+                          type="button"
+                          onClick={() => patch({
+                            tab: null,
+                            lat: String(env.miss!.street_point!.lat),
+                            lon: String(env.miss!.street_point!.lon),
+                            r: "250",
+                          })}
+                          style={{
+                            marginTop: "0.5rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem",
+                            cursor: "pointer", border: "1px solid var(--border)",
+                            borderRadius: 6, background: "none",
+                          }}
+                        >
+                          פתיחת המפה על הרחוב
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {(env.miss.reason === "street_not_located"
                     || env.miss.reason === "addresses_without_parcel") && (
                     <button

@@ -206,6 +206,68 @@ async def by_address(city: str, street: str, number: str | None = None
     return addrs, parcels
 
 
+# How near a parcel of the SETTLEMENT WE ASKED FOR a geocoded street point
+# must land to be believed. GovMap answers the street name and ignores the
+# locality — asked for הר הצופים in Dimona under the address index it returns
+# sixteen streets in Kiryat Shmona, 240 km away — so this is not a formality,
+# it is the whole difference between placing a street and inventing one.
+# 2 km is generous for a street inside a town and nowhere near another town.
+STREET_GEOCODE_GUARD_M = 2000
+# What to show around a street we placed. Not "the address": the parcels the
+# street runs through, said as that.
+STREET_GEOCODE_PARCELS = 6
+
+
+async def locate_register_only_street(settlement_code: int, settlement_name: str,
+                                      street: str) -> dict | None:
+    """A point for a street only the register knows, and the parcels around it.
+
+    None unless GovMap answers AND the answer is inside the settlement that was
+    asked for. Best-effort throughout: this runs in a request path, on a query
+    that has already failed, and a geocoder that is slow or down must cost the
+    reader nothing beyond the answer they were already getting."""
+    from app.services import street_geocode
+    try:
+        hit = await street_geocode.locate_street(settlement_name, street)
+    except Exception as e:  # noqa: BLE001
+        logger.info("nadlan: street geocode failed for %s: %s", street, e)
+        return None
+    if not hit:
+        return None
+
+    near = await _fetch(
+        f"""
+        SELECT p.parcel_key, p.gush, p.gush_suffix, p.parcel, p.settlement_code,
+               round({_qi(PG_EXT_SCHEMA)}.ST_Distance(
+                 p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
+                 {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+                   {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
+                   {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography)::numeric, 0) AS distance_m
+        FROM public.{_qi(PARCELS_TABLE)} p
+        WHERE p.settlement_code = $3
+          AND {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
+                p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
+                {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+                  {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
+                  {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography, $4)
+        ORDER BY distance_m
+        LIMIT {STREET_GEOCODE_PARCELS}
+    """, hit["lat"], hit["lon"], settlement_code, float(STREET_GEOCODE_GUARD_M))
+
+    if not near:
+        # The point is not in the settlement we asked about. This is the Kiryat
+        # Shmona case, and it is REFUSED rather than shown with a caveat.
+        logger.info("nadlan: geocoded %s outside settlement %s — refused",
+                    street, settlement_code)
+        return None
+
+    return {"lat": hit["lat"], "lon": hit["lon"], "label": hit.get("label"),
+            "source": "GovMap — אינדקס הרחובות",
+            "parcels": [{"parcel_key": r["parcel_key"], "gush": r["gush"],
+                         "gush_suffix": r["gush_suffix"], "helka": r["parcel"],
+                         "distance_m": float(r["distance_m"])} for r in near]}
+
+
 async def explain_address_miss(city: str, street: str,
                                addresses: list[dict] | None = None) -> dict:
     """Why an address lookup came back empty, and what to try instead.
@@ -270,16 +332,52 @@ async def explain_address_miss(city: str, street: str,
                 "message": f"לא זוהה יישוב בשם \"{city}\"."}
 
     sc = r["settlement_code"]
+    # Where to send a reader we cannot help directly. Averaged over the
+    # settlement's parcel centroids on the settlement_code btree — cheap, and
+    # precise enough to open a map on the right town, which is the difference
+    # between an honest dead end and an honest next step.
+    town = await _fetch(
+        f"""SELECT round(avg(lat)::numeric, 6) AS lat, round(avg(lon)::numeric, 6) AS lon
+            FROM public.{_qi(PARCELS_TABLE)}
+            WHERE settlement_code = $1 AND lat IS NOT NULL""", sc)
+    point = ({"lat": float(town[0]["lat"]), "lon": float(town[0]["lon"])}
+             if town and town[0].get("lat") is not None else None)
+
     if not r.get("street_key"):
         near = await suggest_streets(street, sc, 8)
         return {"reason": "street_unknown", "settlement_code": sc,
                 "settlement_name": r.get("settlement_name"),
                 "message": (f"לא נמצא רחוב בשם \"{street}\" ב{r.get('settlement_name') or city}."
                             + (" האם התכוונתם לאחד מאלה?" if near else "")),
-                "suggestions": [n["name"] for n in near]}
+                "suggestions": [n["name"] for n in near],
+                "settlement_point": point}
 
     located = any(r.get(k) for k in ("in_address_list", "in_postal", "in_gazetteer"))
     if not located:
+        # The register knows the street and nothing we hold places it — so ask
+        # the one index that can, and only believe it inside this settlement.
+        placed = await locate_register_only_street(
+            sc, r.get("settlement_name") or city, r.get("street_name") or street)
+        if placed:
+            return {
+                "reason": "street_located_externally",
+                "settlement_code": sc,
+                "settlement_name": r.get("settlement_name"),
+                "street_name": r.get("street_name"),
+                "official_code": r.get("official_code"),
+                "street_point": {"lat": placed["lat"], "lon": placed["lon"]},
+                "street_point_source": placed["source"],
+                "nearby_parcels": placed["parcels"],
+                "settlement_point": point,
+                "message": (
+                    f"הרחוב \"{r.get('street_name')}\" קיים במרשם הרחובות הרשמי "
+                    f"(קוד {r.get('official_code')}) ואינו מופיע באף אחד משלושת "
+                    f"המקורות שאנחנו מצליבים, ולכן אין לנו כתובות משלו. "
+                    f"מיקום הרחוב נלקח מאינדקס הרחובות של GovMap ואומת שהוא "
+                    f"בתוך {r.get('settlement_name') or city}. אלה החלקות "
+                    f"שבסביבתו — לא בהכרח החלקה של מספר הבית שחיפשתם."),
+            }
+
         return {"reason": "street_not_located", "settlement_code": sc,
                 "settlement_name": r.get("settlement_name"),
                 "street_name": r.get("street_name"),
@@ -288,7 +386,8 @@ async def explain_address_miss(city: str, street: str,
                             f"(קוד {r.get('official_code')}), אבל אף אחד משלושת המקורות "
                             f"שנושאים מיקום — רשימת הכתובות, קובץ המיקוד וגזטיר הנכסים — "
                             f"אינו מזכיר אותו, ולכן אין באפשרותנו למקם אותו על המפה. "
-                            f"אפשר לאתר את החלקה בלשונית המפה.")}
+                            f"אפשר לאתר את החלקה בלשונית המפה."),
+                "settlement_point": point}
 
     return {"reason": "no_house_match", "settlement_code": sc,
             "settlement_name": r.get("settlement_name"),

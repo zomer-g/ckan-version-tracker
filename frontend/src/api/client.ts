@@ -3028,7 +3028,8 @@ export interface NadlanProperty {
  *  source can place are three different next moves. */
 export interface NadlanMiss {
   reason: "settlement_unknown" | "street_unknown" | "street_not_located"
-        | "no_house_match" | "no_parcel_near" | "addresses_without_parcel";
+        | "no_house_match" | "no_parcel_near" | "addresses_without_parcel"
+        | "street_located_externally";
   message: string;
   settlement_code?: number;
   settlement_name?: string | null;
@@ -3040,6 +3041,15 @@ export interface NadlanMiss {
   n_addresses?: number;
   zip7?: string[];
   has_point?: boolean;
+  /** street_located_externally: GovMap's street index placed it, and the point
+   *  was verified to sit inside the settlement that was asked for. */
+  street_point?: { lat: number; lon: number };
+  street_point_source?: string;
+  nearby_parcels?: Array<{
+    parcel_key: string; gush: number; gush_suffix: number;
+    helka: number; distance_m: number;
+  }>;
+  settlement_point?: { lat: number; lon: number } | null;
 }
 
 export interface NadlanEnvelope {

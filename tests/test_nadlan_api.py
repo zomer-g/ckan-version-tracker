@@ -590,3 +590,68 @@ def test_a_house_number_that_really_is_absent_still_says_so(client, monkeypatch)
     body = client.get("/api/nadlan/address?city=דימונה&street=הרצל&number=99999").json()
     assert body["miss"]["reason"] in ("no_house_match", "street_unknown",
                                       "settlement_unknown")
+
+
+# ── placing a street only the register knows ─────────────────────────────────
+def test_a_geocoded_street_outside_the_settlement_is_refused(monkeypatch):
+    """The trap this guard exists for, measured: asked for הר הצופים in Dimona
+    under GovMap's ADDRESS index, sixteen of sixteen results are in Kiryat
+    Shmona, 240 km away, because it answers the street name and ignores the
+    locality. A point with no parcel of the asked-for settlement near it is
+    refused outright, never shown with a caveat."""
+    import asyncio
+    from app.services import street_geocode
+
+    async def _hit(settlement_name, street):
+        return {"lat": 33.2231, "lon": 35.5699, "label": "הר הצופים 1 ק השמונה"}
+
+    async def _none(sql, *args):
+        return []          # no Dimona parcel within the guard radius
+
+    monkeypatch.setattr(street_geocode, "locate_street", _hit)
+    monkeypatch.setattr(nadlan_query, "_fetch", _none)
+    out = asyncio.run(nadlan_query.locate_register_only_street(2200, "דימונה", "הר הצופים"))
+    assert out is None
+
+
+def test_a_geocoded_street_inside_the_settlement_is_accepted(monkeypatch):
+    """The real answer: GovMap's STREET index puts הר הצופים דימונה at ITM
+    202667/554833, which is גוש 39932 in Dimona."""
+    import asyncio
+    from app.services import street_geocode
+
+    async def _hit(settlement_name, street):
+        return {"lat": 31.084611, "lon": 35.028489, "label": "הר הצופים דימונה"}
+
+    async def _near(sql, *args):
+        return [{"parcel_key": "39932-0-15", "gush": 39932, "gush_suffix": 0,
+                 "parcel": 15, "settlement_code": 2200, "distance_m": 21}]
+
+    monkeypatch.setattr(street_geocode, "locate_street", _hit)
+    monkeypatch.setattr(nadlan_query, "_fetch", _near)
+    out = asyncio.run(nadlan_query.locate_register_only_street(2200, "דימונה", "הר הצופים"))
+    assert out is not None
+    assert out["parcels"][0]["gush"] == 39932
+    assert "GovMap" in out["source"]
+
+
+def test_a_geocoder_that_is_down_costs_the_answer_nothing(monkeypatch):
+    """This runs in a request path, on a query that has already failed."""
+    import asyncio
+    from app.services import street_geocode
+
+    async def _boom(settlement_name, street):
+        raise RuntimeError("govmap is down")
+
+    monkeypatch.setattr(street_geocode, "locate_street", _boom)
+    assert asyncio.run(
+        nadlan_query.locate_register_only_street(2200, "דימונה", "הר הצופים")) is None
+
+
+def test_the_web_mercator_conversion_matches_govmaps_own_share_link():
+    """GovMap's UI puts ITM in its share links; its API returns EPSG:3857. The
+    street point below round-trips to 202667/554833, which is exactly what
+    govmap.gov.il/?c=202667.17,554833.51 shows for this street."""
+    from app.services.street_geocode import _web_mercator_to_wgs84
+    lat, lon = _web_mercator_to_wgs84(3899353.529921332, 3643742.379966282)
+    assert abs(lat - 31.084611) < 1e-5 and abs(lon - 35.028489) < 1e-5
