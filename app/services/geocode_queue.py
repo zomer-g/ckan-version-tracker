@@ -525,7 +525,13 @@ async def merge_into_addresses() -> dict:
             tag = await conn.execute(f"""
                 UPDATE public.{_qi(ADDRESSES_TABLE)} a
                 SET lat = j.lat, lon = j.lon,
-                    point = {x}.ST_SetSRID({x}.ST_MakePoint(j.lon, j.lat), {GEOM_SRID})
+                    point = {x}.ST_SetSRID({x}.ST_MakePoint(j.lon, j.lat), {GEOM_SRID}),
+                    -- Stamped by the only code that knows: over_re_geocode is
+                    -- not readable by the console role, so a reader can never
+                    -- work out afterwards which points are ours and which are
+                    -- the register's own — and the two differ in accuracy by
+                    -- more than an order of magnitude (~1.5 m vs exact).
+                    point_source = 'govmap'
                 FROM _geo_judged j
                 WHERE j.address_key = a.address_key AND a.point IS NULL
                   AND (j.near OR NOT j.checkable)
