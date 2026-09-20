@@ -485,3 +485,51 @@ def test_a_found_address_carries_no_miss_block(client, monkeypatch):
     _stub_lookup(monkeypatch)
     body = client.get("/api/nadlan/address?city=פתח תקווה&street=אבימלך").json()
     assert body["count"] == 1 and "miss" not in body
+
+
+def test_a_tap_on_open_ground_says_what_it_tried(client, monkeypatch):
+    """Nothing under the point and nothing within the fallback either — real for
+    points inside Dimona's own envelope. An empty list on a map reads as a
+    broken map, so the answer names the radius it looked in."""
+    async def _point(lat, lon, r=0.0, limit=50):
+        return []
+
+    _stub_lookup(monkeypatch)
+    monkeypatch.setattr(nadlan_query, "by_point", _point)
+    body = client.get("/api/nadlan/point?lat=31.1784&lon=34.9657").json()
+    assert body["count"] == 0
+    assert body["miss"]["reason"] == "no_parcel_near"
+    assert body["miss"]["radius_tried_m"] == nadlan_query.POINT_FALLBACK_RADIUS_M
+    assert "150" in body["miss"]["message"]
+
+
+def test_street_suggestions_fall_back_to_the_first_word(monkeypatch):
+    """A prefix match on the whole name answers nothing for a name we do not
+    carry: "הר הצופים" starts with הרהצופים and nothing does. The first word is
+    what turns a blank list into הר ארבל / הר גולן / הר חרמון."""
+    import asyncio
+    asked: list[str] = []
+
+    async def _prefix(q, sc, limit):
+        asked.append(q)
+        return [] if " " in q else [{"name": "הר ארבל"}]
+
+    monkeypatch.setattr(nadlan_query, "_suggest_streets_prefix", _prefix)
+    out = asyncio.run(nadlan_query.suggest_streets("הר הצופים", 2200, 8))
+    assert asked == ["הר הצופים", "הר"]
+    assert out == [{"name": "הר ארבל"}]
+
+
+def test_a_single_word_that_matches_nothing_is_not_retried(monkeypatch):
+    """There is no shorter form to fall back to, and asking twice for the same
+    thing is just a second query."""
+    import asyncio
+    asked: list[str] = []
+
+    async def _prefix(q, sc, limit):
+        asked.append(q)
+        return []
+
+    monkeypatch.setattr(nadlan_query, "_suggest_streets_prefix", _prefix)
+    assert asyncio.run(nadlan_query.suggest_streets("קווזימודו", 2200, 8)) == []
+    assert asked == ["קווזימודו"]

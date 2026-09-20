@@ -174,8 +174,21 @@ async def nadlan_point(
     parcels, used = await nadlan_query.by_point_or_near(lat, lon, radius_m, limit)
     data = await nadlan_query.property_envelope(
         parcels, with_geometry=geometry, with_stat_area=stat_area, with_deals=deals)
+    # Open ground: nothing under the point and nothing within the fallback
+    # either. Say what was tried — an empty list on a map reads as a broken map.
+    extra = {} if data else {"miss": {
+        "reason": "no_parcel_near",
+        "message": (
+            "לא נמצאה חלקה רשומה בנקודה הזו"
+            + (f" ואף לא ברדיוס {nadlan_query.POINT_FALLBACK_RADIUS_M:.0f} מ׳"
+               if not radius_m else f" ברדיוס {radius_m:.0f} מ׳")
+            + ". חלקות אינן מרצפות את השטח: כבישים, שטחים פתוחים וקרקע שאינה "
+              "מוסדרת נמצאים ביניהן. נסו נקודה קרובה יותר לבינוי, או רדיוס גדול יותר."),
+        "radius_tried_m": used or (radius_m or nadlan_query.POINT_FALLBACK_RADIUS_M),
+    }}
     return _envelope("point", {"lat": lat, "lon": lon, "radius_m": radius_m,
-                               "radius_used": used, "widened": used > radius_m}, data)
+                               "radius_used": used, "widened": used > radius_m},
+                     data, **extra)
 
 
 @router.get("/zip/{zip_code}")

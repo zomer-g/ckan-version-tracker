@@ -735,7 +735,25 @@ async def parcel_geometry(gush: int, suffix: int, helka: int,
 
 async def suggest_streets(q: str, settlement_code: int | None = None,
                           limit: int = 20) -> list[dict]:
+    """Streets whose name starts with ``q``, best first.
+
+    A prefix match on the WHOLE name answers nothing for a name we do not carry
+    — "הר הצופים" starts with הרהצופים and nothing does — so a query of more
+    than one word that finds nothing retries on its first word. That is what
+    turns a blank suggestion list into הר ארבל / הר גולן / הר חרמון, which is
+    the help a person who mistyped actually needs."""
     limit = max(1, min(int(limit), 50))
+    rows = await _suggest_streets_prefix(q, settlement_code, limit)
+    if rows:
+        return rows
+    head = (q or "").strip().split()[0] if (q or "").strip().split() else ""
+    if head and head != (q or "").strip():
+        return await _suggest_streets_prefix(head, settlement_code, limit)
+    return rows
+
+
+async def _suggest_streets_prefix(q: str, settlement_code: int | None,
+                                  limit: int) -> list[dict]:
     return await _fetch(
         f"""
         SELECT s.street_key, s.name, s.settlement_code, st.name AS settlement_name,

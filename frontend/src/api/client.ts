@@ -3021,13 +3021,15 @@ export interface NadlanProperty {
  *  person cannot act on: unknown town, different spelling and a street that no
  *  source can place are three different next moves. */
 export interface NadlanMiss {
-  reason: "settlement_unknown" | "street_unknown" | "street_not_located" | "no_house_match";
+  reason: "settlement_unknown" | "street_unknown" | "street_not_located"
+        | "no_house_match" | "no_parcel_near";
   message: string;
   settlement_code?: number;
   settlement_name?: string | null;
   street_name?: string | null;
   official_code?: number | null;
   suggestions?: string[];
+  radius_tried_m?: number;
 }
 
 export interface NadlanEnvelope {
