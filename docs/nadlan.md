@@ -467,8 +467,16 @@ The restore also showed the pair is stable: 340,190 of 357,679 points linked,
 ⚠ One more thing an address rebuild throws away: the **geocoded** points. The
 ~94k GovMap points live in `over_re_geocode` and reach the spine only through
 `merge_into_addresses()`, so after an `addresses` run they have to be merged
-again. That is now a button in the admin panel rather than an API call nobody
-would think to make.
+again.
+
+That merge is **automatic**: `geocode_enqueue_job` runs on a 15-minute
+`IntervalTrigger` and calls it at the end of every tick, gated on the
+`govmap-geocode` tracked dataset — which exists (status `hidden`, migration
+063, so it is deliberately absent from the public dataset list; a query that
+does not pass `status=all` will report it missing and I did exactly that once).
+So a rebuild self-heals within 15 minutes. The admin button added beside the
+build stages only brings that forward, which is worth having right after a
+rebuild, but it is not a step anyone has to remember.
 
 ## The two layers that describe a property
 
