@@ -150,7 +150,15 @@ async def current_counts() -> dict:
                    count(*) FILTER (WHERE point_source = 'govmap') AS govmap,
                    count(*) FILTER (WHERE point_source = 'address_register')
                                                                    AS register,
-                   count(parcel_key)                               AS with_parcel
+                   count(parcel_key)                               AS with_parcel,
+                   -- The two reasons a row has no parcel, kept apart because
+                   -- they mean different things to a reader: no point at all
+                   -- (point-in-polygon was never possible) versus a point that
+                   -- falls outside every parcel polygon.
+                   count(*) FILTER (WHERE parcel_key IS NULL AND point IS NULL)
+                                                                   AS no_parcel_no_point,
+                   count(*) FILTER (WHERE parcel_key IS NULL AND point IS NOT NULL)
+                                                                   AS no_parcel_has_point
             FROM public."{ADDRESSES_TABLE}"
         """)
     return dict(row)
@@ -331,10 +339,19 @@ async def snapshot(db, *, force: bool = False) -> dict:
             "rows_written": rows,
             "bytes": size,
             "previous_counts": previous or None,
+            # Stated, not left to be discovered. `parcel_key` is NULL on 30.4%
+            # of the rows (2026-09-20), and a consumer reading it as "the
+            # parcel this address is in" will otherwise meet that absence one
+            # row at a time. The column is honestly NULL; the rate is the part
+            # that belongs in the version, next to the number it qualifies.
             "note": (
                 f"{counts['with_point']:,} של-{counts['rows']:,} הכתובות נושאות "
                 f"נצ — {counts['register']:,} ממרשם הכתובות ו-"
-                f"{counts['govmap']:,} מגיאוקודינג מול GovMap"
+                f"{counts['govmap']:,} מגיאוקודינג מול GovMap. "
+                f"ל-{counts['with_parcel']:,} יש שיוך לחלקה; "
+                f"{counts.get('no_parcel_no_point', 0):,} כתובות ללא נצ כלל "
+                f"(אי אפשר לשייך) ו-{counts.get('no_parcel_has_point', 0):,} "
+                f"עם נצ שנופל מחוץ לכל פוליגון חלקה"
             ),
         },
     )

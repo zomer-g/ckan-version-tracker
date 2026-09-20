@@ -179,3 +179,21 @@ def test_force_exists_for_a_human_and_is_not_the_default():
     sig = inspect.signature(ad.snapshot)
     assert sig.parameters["force"].default is False
     assert sig.parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_the_version_note_states_the_parcel_absence_rate():
+    """30.4% of rows have a NULL parcel_key. A consumer reading that column as
+    'the parcel this address is in' meets the absence one row at a time unless
+    the version says so up front — and the two reasons differ: no point at all
+    versus a point outside every polygon."""
+    import inspect
+    src = inspect.getsource(ad.snapshot)
+    assert "no_parcel_no_point" in src and "no_parcel_has_point" in src
+    assert "with_parcel" in src
+
+
+def test_both_reasons_for_a_missing_parcel_are_counted():
+    import inspect
+    src = inspect.getsource(ad.current_counts)
+    assert "parcel_key IS NULL AND point IS NULL" in src
+    assert "parcel_key IS NULL AND point IS NOT NULL" in src
