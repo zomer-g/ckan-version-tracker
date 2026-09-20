@@ -183,12 +183,12 @@
       <div class="eyebrow">במספרים</div>
       <h2>איפה הפרויקט היום</h2>
       <div class="statrow">
-        <div class="statbox"><div class="n">~22</div><div class="l">מקורות מידע</div></div>
-        <div class="statbox"><div class="n">4</div><div class="l">שרתי MCP חיים</div></div>
+        <div class="statbox"><div class="n">4,265</div><div class="l">מאגרים במעקב</div></div>
+        <div class="statbox"><div class="n">10</div><div class="l">שרתי MCP חיים</div></div>
         <div class="statbox"><div class="n">3</div><div class="l">קונסולות SQL ציבוריות</div></div>
-        <div class="statbox"><div class="n">556</div><div class="l">קומיטים ב‑4 חודשים</div></div>
+        <div class="statbox"><div class="n">945</div><div class="l">קומיטים בחצי שנה</div></div>
       </div>
-      <p class="kicker" style="margin-top:22px">מ‑18.3 ל‑27.7.2026 — כלי מעקב CKAN בודד הפך לתשתית שקיפות רב‑מקורית.</p>
+      <p class="kicker" style="margin-top:22px">מ‑18.3 ל‑20.9.2026 — כלי מעקב CKAN בודד הפך לתשתית שקיפות רב‑מקורית: 1,779 טבלאות שאפשר לשאול, למעלה מ‑125 מיליון שורות, ו‑31,564 קבצים שמורים.</p>
       <div class="pagenum">03</div>
     </section>
 
@@ -227,7 +227,7 @@
 
     <!-- 6 · SOURCES -->
     <section class="slide">
-      <div class="eyebrow">המקורות · כ‑22</div>
+      <div class="eyebrow">המקורות · 26</div>
       <h2>מ‑data.gov.il לכל הממשלה</h2>
       <div class="srcgrid">
         <span class="chip" style="--cat:var(--c-source)">data.gov.il</span>
@@ -251,6 +251,11 @@
         <span class="chip" style="--cat:var(--c-spatial)">מערכת אמו"ן</span>
         <span class="chip" style="--cat:var(--c-source)">מידע לעם</span>
         <span class="chip" style="--cat:var(--c-mcp)">יומן לעם</span>
+        <span class="chip" style="--cat:var(--c-mcp)">ניגוד עניינים לעם</span>
+        <span class="chip" style="--cat:var(--c-spatial)">חלקות · גזטיר · מיקוד</span>
+        <span class="chip" style="--cat:var(--c-source)">כתובות · רשות האוכלוסין</span>
+        <span class="chip" style="--cat:var(--c-source)">עסקאות מיסוי מקרקעין</span>
+        <span class="chip" style="--cat:var(--c-source)">מימון בחירות</span>
       </div>
       <div class="legendline">
         <span><i style="background:var(--c-source)"></i> מקור נתונים</span>
@@ -272,6 +277,7 @@
         <div class="card" style="--cat:var(--c-sql)"><h3>לכל מאגר</h3><p>קונסולת ארכיון לכל dataset מבוסס‑NEON, עם ייצוא CSV.</p></div>
       </div>
       <p class="kicker" style="margin-top:18px">📊 תרשימים: עוגה / עמודות / קו / פיזור / מפה — עם ייצוא PNG/SVG ושיתוף בקישור.</p>
+      <p class="kicker" style="margin-top:10px">🔗 <strong>JOIN מרפא</strong>: חיבור שני מאגרים לפי שם יישוב או רשות נפתר לקוד רשמי בשני הצדדים, ולא נופל בשקט על כתיב שונה. 🧊 <strong>מראת Parquet</strong> לכל טבלה מעל 500 אלף שורות, להורדה ולעבודה מקומית.</p>
       <div class="pagenum">07</div>
     </section>
 
@@ -284,6 +290,8 @@
         <div class="card" style="--cat:var(--c-spatial)"><h3>מפה אינטראקטיבית</h3><p>תצוגת מפה חיה בעמוד המאגר: פילטרים קטגוריאליים, מסך מלא, זרימת נתונים.</p></div>
         <div class="card" style="--cat:var(--c-spatial)"><h3>PostGIS</h3><p>עמודת geom על שכבות ממורות — ST_* אמיתי, ניתוח מרחבי וחיתוכי פוליגונים.</p></div>
         <div class="card" style="--cat:var(--c-spatial)"><h3>ניתוח על מפה</h3><p>תוצאות SQL מרחביות מצוירות על מפה, צבועות לפי קטגוריה, ישר בקונסולה.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><h3>הצלבת נכסים</h3><p>חלקה, כתובת, מיקוד, גוש‑חלקה ואזור סטטיסטי של הלמ"ס — כל אחד מהם מחזיר את כל היתר, על 1.1 מיליון חלקות ו‑622 אלף כתובות.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><h3>סימבולוגיה יורדת עם השכבה</h3><p>הורדת שכבת GovMap כוללת את העיצוב שלה, בדיאלקט של QGIS ובהמרה מיידית גם לזה של ArcGIS.</p></div>
       </div>
       <div class="pagenum">08</div>
     </section>
@@ -291,13 +299,19 @@
     <!-- 9 · MCP -->
     <section class="slide">
       <div class="eyebrow">MCP / AI</div>
-      <h2>ארבעה שרתי MCP חיים</h2>
+      <h2>עשרה שרתי MCP חיים</h2>
       <p class="kicker">הנתונים חשופים ישירות ל‑Claude / ChatGPT / Cursor דרך MCP — עם OAuth של Google, גישה בהזמנה בלבד ומדידת שימוש.</p>
       <div class="grid g4">
         <div class="card" style="--cat:var(--c-mcp)"><h3>/mcp</h3><p>קטלוג המאגרים ושאילתות תוכן.</p></div>
         <div class="card" style="--cat:var(--c-mcp)"><h3>/cbs/mcp</h3><p>אינדקס התוכן של הלמ"ס.</p></div>
         <div class="card" style="--cat:var(--c-mcp)"><h3>/knesset/mcp</h3><p>פרוטוקולי ועדות ומחקרי ממ"מ.</p></div>
         <div class="card" style="--cat:var(--c-mcp)"><h3>/ocal/mcp</h3><p>יומני עבודה של נבחרי ציבור.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/data/mcp</h3><p>SQL חופשי מעל כל מסד הנתונים.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/ocoi/mcp</h3><p>הצהרות ניגוד עניינים וגרף הישויות.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/odata/mcp</h3><p>הקטלוג של «מידע לעם».</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/nadlan/mcp</h3><p>גוש‑חלקה או כתובת, וכל שאר המרכיבים.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/deals/mcp</h3><p>מאגר עסקאות הנדל"ן בשפה חופשית.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><h3>/elections/mcp</h3><p>מימון בחירות, לפי אדם.</p></div>
       </div>
       <div class="pagenum">09</div>
     </section>
@@ -324,6 +338,7 @@
         <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">כנסת</span><h3>חיפוש עמוק (TAG‑IT)</h3><p>מצב "עמוק" שמחפש טקסט מלא בתוך גוף המסמכים — פרוטוקולים ומחקרי ממ"מ.</p></div>
       </div>
       <p class="kicker" style="margin-top:18px">חיפוש כלל‑אתרי בעמוד הבית מכסה גם את המאגרים המנוטרים, עם משוב לייק/דיסלייק שמכייל את הדירוג.</p>
+      <p class="kicker" style="margin-top:10px">🧭 <strong>שאלות לעם</strong>: שאלה אחת נשלחת ל‑13 קורפוסים במקביל, כולל חיפוש בגוף המסמכים, וכל מקור מדווח כמה מצא ומה הכיסוי שלו. 💬 ובקונסולה: שאלה בעברית שמתקמפלת ל‑JSON מאומת, כך שהמודל לא כותב את ה‑SQL בעצמו.</p>
       <div class="pagenum">11</div>
     </section>
 
@@ -335,7 +350,12 @@
         <div class="card" style="--cat:var(--c-source)"><span class="tagname">מידע לעם</span><h3>חיפוש מְשׁוּיָּךְ וייבוא ל‑SQL</h3><p>חיפוש לפי ארגונים ופורמטים, וייבוא אוצר‑אדמין של משאבים לטבלאות ניתנות‑לשאילתה, בסימון "נתונים מעובדים".</p></div>
         <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">יומן לעם</span><h3>יומני עבודה של נבחרי ציבור</h3><p>הגירה מלאה ל‑OVER: מסד ייעודי, /api/ocal, עמוד /projects/ocal, MCP רביעי, ייבוא‑אוטומטי, העשרת ישויות ו‑AI‑NER.</p></div>
       </div>
-      <p class="kicker" style="margin-top:18px">עמוד ה‑/api מציג כעת ארבעה מקורות: data.gov.il · סורקים · מידע לעם · יומן לעם.</p>
+      <div class="grid g2" style="margin-top:14px">
+        <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">ניגוד עניינים לעם</span><h3>הצהרות ניגוד עניינים</h3><p>הקורפוס עבר פנימה כדי לא להיסגר: סכימה משלו, 854 מסמכים, עמוד עם גרף ישויות, API, MCP, וכתובות ocoi.org.il שממשיכות לעבוד.</p></div>
+        <div class="card" style="--cat:var(--c-spatial)"><span class="tagname">נדל"ן לעם</span><h3>נכס אחד, כל המזהים</h3><p>נקודה במפה, כתובת, מיקוד או גוש‑חלקה — והשאר מגיע מעצמו, כולל אזור סטטיסטי ועסקאות המקרקעין של אותו נכס.</p></div>
+        <div class="card" style="--cat:var(--c-source)"><span class="tagname">עסקאות נדל"ן</span><h3>מאגר העסקאות במלואו</h3><p>«פערים מול מיסוי מקרקעין» ו«שניים אוחזין בעסקה» עברו לפרויקט משלהם, לצד עיון חופשי בכל העסקאות.</p></div>
+        <div class="card" style="--cat:var(--c-mcp)"><span class="tagname">מימון בחירות לעם</span><h3>מי מימן את מי</h3><p>שרת MCP שעונה על מימון מערכות בחירות לפי אדם.</p></div>
+      </div>
       <div class="pagenum">12</div>
     </section>
 
@@ -350,6 +370,7 @@
         <div class="card" style="--cat:var(--c-infra)"><h3>מקורות דקלרטיביים</h3><p>ה‑Worker מכריז על מקור חדש דרך manifest — בלי קוד ב‑OVER.</p></div>
       </div>
       <p class="kicker" style="margin-top:18px">המסע: מ‑ODATA כאחסון בלעדי → ל‑R2+NEON; מהוספת מקור בשני repos → להכרזה דקלרטיבית אחת.</p>
+      <p class="kicker" style="margin-top:10px">🏠 ובספטמבר 2026 — מעבר בית: הארכיון מועתק אל מסד הערוץ ב‑xhostd בגלים, עם הקפאת גרסאות כדי שדבר לא ישתנה תוך כדי, והעתקה שמתחדשת מנקודת העצירה.</p>
       <div class="pagenum">13</div>
     </section>
 
@@ -360,9 +381,9 @@
       <div class="grid g3">
         <div class="card" style="--cat:var(--c-product)"><h3>פאנל אדמין</h3><p>תור גירוד, ניהול אחסון per‑dataset, ייצוא לדרייב, ועריכת טקסטים בזמן ריצה.</p></div>
         <div class="card" style="--cat:var(--c-product)"><h3>לוג פעילות</h3><p>יומן lifecycle append‑only לכל אירוע מאגר/גירוד.</p></div>
-        <div class="card" style="--cat:var(--c-sec)"><h3>אבטחה</h3><p>SQL על תפקיד read‑only במסד נפרד; בלי JWT ב‑URL; rate‑limit לכל endpoint.</p></div>
+        <div class="card" style="--cat:var(--c-sec)"><h3>אבטחה</h3><p>SQL על תפקיד read‑only שנכשל סגור; הרשאת אדמין מסוד של הפלטפורמה ולא משדה במסד; טבלאות ההרשאה והאפליקציה בסכימות משלהן, כך ש‑public מכיל רק נתונים שפורסמו.</p></div>
       </div>
-      <p class="kicker" style="margin-top:18px">שער גרסת Worker מונע מ‑worker מיושן לדחוף נתונים; שומרי memory מגנים על dyno של 512MB.</p>
+      <p class="kicker" style="margin-top:18px">שער גרסת Worker מונע מ‑worker מיושן לדחוף נתונים; שומרי memory מגנים על dyno של 512MB; ובכל אתחול המערכת שואלת את Postgres עצמו מה התפקיד הציבורי באמת רשאי לקרוא — הוכחה, לא הנחה.</p>
       <div class="pagenum">14</div>
     </section>
 
@@ -372,8 +393,9 @@
       <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
       <p class="kicker">כל מקור ממשלתי נשמר, מגורסן, ונחשף בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. זו לא עוד ראי נתונים; זו זיכרון ציבורי שאפשר לאמת.</p>
       <div class="chips2">
-        <span>~22 מקורות</span><span>גרסון היסטורי</span><span>3 קונסולות SQL</span>
-        <span>4 שרתי MCP</span><span>מפות + PostGIS</span><span>מחבר Looker</span><span>פרויקטים אחים</span>
+        <span>4,265 מאגרים</span><span>גרסון היסטורי</span><span>3 קונסולות SQL</span>
+        <span>10 שרתי MCP</span><span>מפות + PostGIS</span><span>מחבר Looker</span><span>פרויקטים אחים</span>
+        <span>חיפוש חוצה‑מאגרים</span><span>הצלבת נכסים</span>
       </div>
       <div class="pagenum" style="color:rgba(255,255,255,.7)">over.org.il</div>
     </section>

@@ -227,10 +227,10 @@
     <h1>גרסאות לעם<span class="sub">ציר הזמן של הפרויקט</span></h1>
     <p class="lede">איך כלי קטן שעוקב אחרי שינויים במאגר data.gov.il הפך, בתוך ארבעה חודשים, לתשתית שקיפות שמארכבת עשרות מקורות ממשלתיים, מגישה אותם ב‑SQL, במפות וב‑MCP — ושומרת כל גרסה היסטורית.</p>
     <div class="stats">
-      <div class="stat"><div class="n">18.3–27.7</div><div class="l">מ‑2026, כ‑4 חודשי פיתוח</div></div>
-      <div class="stat"><div class="n">~22</div><div class="l">מקורות מידע נתמכים</div></div>
-      <div class="stat"><div class="n">4</div><div class="l">שרתי MCP חיים</div></div>
-      <div class="stat"><div class="n">556</div><div class="l">קומיטים</div></div>
+      <div class="stat"><div class="n">18.3–20.9</div><div class="l">מ‑2026, חצי שנה של פיתוח</div></div>
+      <div class="stat"><div class="n">4,265</div><div class="l">מאגרים במעקב</div></div>
+      <div class="stat"><div class="n">10</div><div class="l">שרתי MCP חיים</div></div>
+      <div class="stat"><div class="n">945</div><div class="l">קומיטים</div></div>
     </div>
   </div>
 </header>
@@ -529,25 +529,178 @@
     </div>
   </section>
 
+  <!-- ===================== CHAPTER 7 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 07</span>
+      <h2>ללמד את המאגרים לדבר זה עם זה</h2>
+      <span class="chapter-when">סוף יולי – תחילת אוגוסט 2026</span>
+    </div>
+    <p class="chapter-lede">המכשול הגדול בנתוני ממשלה אינו הגישה אלא השמות: «תל אביב‑יפו», «ת"א יפו» ו«עיריית תל אביב» הם שלושה דברים שונים לכל JOIN. הפרק הזה בונה שכבת שמות אחת, ומעליה מרשה לשאול בעברית.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">27.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span><span class="firstof">שכבת השמות הראשונה</span></div>
+        <h3>מפתח היישובים של הלמ"ס</h3>
+        <p>אינדקס יישובים רשמי עם כ‑30,800 הטיות ושתי פונקציות SQL, ולצדו קציר אליאסים שלומד מהנתונים עצמם וממשיך להשתפר בלולאת LLM.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">28.07</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>JOIN מרפא, ובונה ויזואלי מעליו</h3>
+        <p>חיבור שני מאגרים לפי שם יישוב או רשות מפסיק ליפול בשקט על כל כתיב שאינו זהה, כי שני הצדדים נפתרים לקוד. לצדו בונה ויזואלי, מדריך ב‑/data/guide עם דוגמאות שרצות בתוך העמוד, ומנרמל רשימות ב‑/data/normalize.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">29.07</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>קישור עמוק לפי כתובת המקור</h3>
+        <p>הדבקת כתובת של מאגר ממשלתי אחרי over.org.il/direct/ מגיעה ישר לעמוד הגרסאות שלו, ורק מה שבאמת אינו נעקב מציע טופס בקשה.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">01.08</span><span class="cat-label"><span class="dot"></span> MCP / AI</span><span class="firstof">שאלה בעברית על הקונסולה</span></div>
+        <h3>שכבה סמנטית, לא text‑to‑SQL</h3>
+        <p>שאלה חופשית בעברית מתקמפלת ל‑JSON מאומת ומשם ל‑SQL, כך שהמודל לעולם אינו כותב את השאילתה בעצמו. אחריה הגיעו JOIN חוצה‑מאגרים, ניסיון תיקון, ושליפה שבוחרת מאגר לפי הנושא ולא לפי שמות העמודות.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">02.08</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>הסייר המודרך</h3>
+        <p>אותה שליפה בדיוק, רק שאדם מחליט: ארבעה צעדים עד ההצלבה, כל שימוש נרשם כדוגמה מתויגת, ומקורות רשמיים מדורגים לפני נתונים שנתרמו.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">03.08</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>צביעת מפה לפי כל מדד שהיא נושאת</h3>
+        <p>כל עמודה מספרית הופכת לסקאלת צבע על טווח הערכים של עצמה, ועמודה בשם מכונה נושאת לצדה את הכותרת העברית שלה.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">04.08</span><span class="cat-label"><span class="dot"></span> MCP / AI</span></div>
+        <h3>שרת MCP מעל כל מסד הנתונים</h3>
+        <p>האינדקס של האתר עצמו הופך לשתי טבלאות שאפשר לשאול, ומעל המסד כולו עולה שרת MCP ייעודי, SQL חופשי מכל לקוח שמדבר בפרוטוקול.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">05.08</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>הסכימה מזהירה מראש</h3>
+        <p>ערך חסר שהוא מחרוזת ריקה, תאריך בפורמט של המפרסם, וחיבור לפי שם בטקסט חופשי: שלוש המלכודות שמפילות שאילתה שנראית תקינה כתובות עכשיו במקום שבו הקורא הבא יסתכל.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 8 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 08</span>
+      <h2>שאלה אחת, כל המאגרים</h2>
+      <span class="chapter-when">אוגוסט 2026</span>
+    </div>
+    <p class="chapter-lede">אוגוסט הוא החודש שבו האוסף הופך לרשת: חיפוש אחד שנשלח לכל הקורפוסים בבת אחת, הצלבת נכסים שמחברת חלקה לכתובת ולמיקוד, ופרויקט אח שלם שנכנס פנימה כדי לא להיסגר.</p>
+    <div class="rail">
+      <div class="entry major" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">10.08</span><span class="cat-label"><span class="dot"></span> MCP / AI</span><span class="firstof">החיפוש חוצה‑המאגרים הראשון</span></div>
+        <h3>שאלות לעם — שאילתה אחת ל‑13 קורפוסים</h3>
+        <p>שאלה אחת מתפצלת לכל המאגרים במקביל, כולל חיפוש בגוף המסמכים עצמם, וכל מקור מדווח כמה מצא ומה הכיסוי שלו ולא רק וי ירוק.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">10.08</span><span class="cat-label"><span class="dot"></span> מרחבי</span><span class="firstof">הצלבת הנכסים הראשונה</span></div>
+        <h3>נדל"ן לעם — חלקה, כתובת, מיקוד וגוש על מפתח אחד</h3>
+        <p>1.1 מיליון חלקות ו‑622 אלף כתובות מוצלבות זו לזו, עם פוליגון אמיתי בכל חיפוש, קובץ הרחובות הרשמי של רשות האוכלוסין מעל הניחוש, וגיאוקודינג לכתובות שהגיעו בלי קואורדינטה.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">13.08</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>שכבה יורדת עם הסימבולוגיה שלה</h3>
+        <p>הורדת שכבת GovMap כוללת מעכשיו את העיצוב שלה, בדיאלקט של QGIS ובהמרה מיידית גם לזה של ArcGIS.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-source)">
+        <div class="entry-top"><span class="date">14.08</span><span class="cat-label"><span class="dot"></span> מקור חדש</span><span class="firstof">פרויקט אח נכנס במלואו</span></div>
+        <h3>ניגוד עניינים לעם — קורפוס, עמוד, API ו‑MCP</h3>
+        <p>הקורפוס עובר לסכימה משלו ב‑Neon ו‑854 מסמכים ל‑R2, ואחריהם API ציבורי, עמוד עם חיפוש וגרף ישויות, שרת MCP ייעודי, ומנהל מלא בארבעה גלים.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-mcp)">
+        <div class="entry-top"><span class="date">15.08</span><span class="cat-label"><span class="dot"></span> MCP / AI</span></div>
+        <h3>מידע לעם כעמודה בחיפוש העמוק</h3>
+        <p>שרת MCP שעובר אל הקטלוג האח, ומעליו עמודה בחיפוש, כולל כל 44 המפרסמים בפילטר הנקראים מהקטלוג עצמו.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-spatial)">
+        <div class="entry-top"><span class="date">19.08</span><span class="cat-label"><span class="dot"></span> מרחבי</span></div>
+        <h3>שכבות המפה דרך ה‑API</h3>
+        <p>GeoJSON לפי תיבה תוחמת על השכבות הממוראות, עם תיעוד ותקרת מראה של 100MB.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">21.08</span><span class="cat-label"><span class="dot"></span> מוצר</span><span class="firstof">AAA</span></div>
+        <h3>נגישות ברמת WCAG 2.2 AAA</h3>
+        <p>כל הממשק עולה לרמה הגבוהה של התקן, לא לרמת המינימום.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">24.08</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>האתר מפסיק להיות בלתי נראה למנועי חיפוש</h3>
+        <p>ל‑SPA יש עכשיו ראש אמיתי לכל עמוד, מפת אתר ו‑robots.txt.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CHAPTER 9 ===================== -->
+  <section class="chapter">
+    <div class="chapter-head">
+      <span class="chapter-num">פרק 09</span>
+      <h2>בית חדש, וגבולות ברורים</h2>
+      <span class="chapter-when">ספטמבר 2026</span>
+    </div>
+    <p class="chapter-lede">ספטמבר הוא חודש של תשתית ואבטחה: ההרשאות מופרדות ברמת הסכימה ונבדקות באתחול, הארכיון עובר למסד חדש בלי לעצור את השירות, ועסקאות הנדל"ן מקבלות פרויקט משל עצמן.</p>
+    <div class="rail">
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">01.09</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>הכתובות הישנות ממשיכות לעבוד</h3>
+        <p>הקישורים של ocoi.org.il שורדים את סגירת האתר המקורי, ולצדם עולה שרת MCP ל«מימון בחירות לעם» שעונה לפי אדם.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sec)">
+        <div class="entry-top"><span class="date">10.09</span><span class="cat-label"><span class="dot"></span> אבטחה</span><span class="firstof">הוכחה, לא הנחה</span></div>
+        <h3>ההרשאות עוברות לסכימה משלהן, ונבדקות באתחול</h3>
+        <p>הרשאת אדמין נגזרת מסוד של הפלטפורמה ולא משדה במסד, טבלאות ההרשאה עוברות לסכימה <code>auth</code>, החיבור לקריאה בלבד נכשל סגור, ובאתחול המערכת שואלת את Postgres עצמו מה התפקיד הציבורי באמת רשאי לקרוא. כל 26 טבלאות האפליקציה יוצאות מ‑<code>public</code>, כך שמה שנשאר שם הוא רק נתונים שפורסמו.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">11.09</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>הארכיון עובר בית</h3>
+        <p>מעבר ל‑xhostd בגלים: הרצה במקביל בלי לשנות את הקיים, הקפאת גרסאות כדי שדבר לא ישתנה תוך כדי ההעתקה, העתקה שמתחדשת מנקודת העצירה, והחזרת ההרשאות בכל אתחול.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">12.09</span><span class="cat-label"><span class="dot"></span> מוצר</span></div>
+        <h3>מדיניות פרטיות והצהרת נגישות</h3>
+        <p>שני המסמכים שמאתר ציבורי חייב, כתובים ומפורסמים.</p>
+      </div>
+      <div class="entry" style="--cat:var(--c-infra)">
+        <div class="entry-top"><span class="date">18.09</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
+        <h3>מאגר שנדחף מבחוץ</h3>
+        <p>מאגר יכול להכריז שגרסאותיו מגיעות מחוץ לצי, וכל Poller מכריז אילו מקורות הוא יודע להריץ ומקבל רק אותם.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-sql)">
+        <div class="entry-top"><span class="date">20.09</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span></div>
+        <h3>מראת Parquet לכל טבלה גדולה</h3>
+        <p>כל טבלה מעל 500 אלף שורות מקבלת עותק Parquet להורדה ולעבודה מקומית, וגרסה שלמה יורדת כ‑ZIP אחד במקום 51 הורדות נפרדות.</p>
+      </div>
+      <div class="entry major" style="--cat:var(--c-product)">
+        <div class="entry-top"><span class="date">20.09</span><span class="cat-label"><span class="dot"></span> מוצר</span><span class="firstof">השרת העשירי</span></div>
+        <h3>עסקאות נדל"ן — פרויקט משלו, ושני שרתי MCP חדשים</h3>
+        <p>נקודה במפה, כתובת, מיקוד או גוש‑חלקה מחזירים את כל היתר, כולל אזור סטטיסטי של הלמ"ס ועסקאות המקרקעין של אותו נכס. «פערים מול מיסוי מקרקעין» ו«שניים אוחזין בעסקה» עוברים לפרויקט «עסקאות נדל"ן» יחד עם מאגר העסקאות כולו, ולשני הפרויקטים שרת MCP ייעודי לשאלות בשפה חופשית.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ===================== OUTRO ===================== -->
   <section class="outro">
     <div class="outro-card">
       <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
-      <p>הקו המנחה לאורך כל הדרך: כל מקור ממשלתי שנוסף נשמר, מגורסן, ונחשף בכמה שפות בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. הארכיטקטורה זזה מ‑ODATA ל‑R2+NEON, והוספת מקור חדש עברה מקוד ידני בשני repos להכרזה דקלרטיבית של ה‑Worker.</p>
+      <p>הקו המנחה לאורך כל הדרך: כל מקור ממשלתי שנוסף נשמר, מגורסן, ונחשף בכמה שפות בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. הארכיטקטורה זזה מ‑ODATA ל‑R2+NEON, והוספת מקור חדש עברה מקוד ידני בשני repos להכרזה דקלרטיבית של ה‑Worker. מאז נוספה מעליהם שכבת שמות שמאפשרת לחבר מאגר למאגר, חיפוש אחד שנשלח לכל הקורפוסים, והפרדת הרשאות ברמת הסכימה שנבדקת בכל אתחול.</p>
       <div class="arc">
         <span>גרסון היסטורי</span>
-        <span>~22 מקורות</span>
+        <span>1,779 טבלאות</span>
         <span>SQL ציבורי</span>
-        <span>4 שרתי MCP</span>
+        <span>10 שרתי MCP</span>
         <span>מפות + PostGIS</span>
         <span>מחבר Looker</span>
         <span>פרויקטים אחים</span>
+        <span>חיפוש חוצה‑מאגרים</span>
+        <span>הצלבת נכסים</span>
       </div>
     </div>
   </section>
 
   <footer class="foot">
-    נבנה מתוך היסטוריית ה‑git של over.org.il · 556 קומיטים, 18.03–27.07.2026
+    נבנה מתוך היסטוריית ה‑git של over.org.il · 945 קומיטים, 18.03–20.09.2026
   </footer>
 
 </main>
