@@ -25,7 +25,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.nadlan import router as nadlan_router
 from app.rate_limit import limiter
-from app.services import nadlan_query
+from app.services import nadlan_index, nadlan_query
 
 
 _PARCEL = {
@@ -58,7 +58,13 @@ def _stub_lookup(monkeypatch, parcels=(_PARCEL,), addresses=()):
     async def _fetch(sql, *args):
         return []
 
+    async def _deals_table():
+        # The corpus is discovered, not named: without this the envelope would
+        # reach the database to ask where it lives.
+        return ("public", "append_taxes_nadlan_full_f41fb496_fd06f5ae")
+
     monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    monkeypatch.setattr(nadlan_index, "deals_table", _deals_table)
 
     async def _gush(g, h, s=None):
         return list(parcels)
@@ -113,7 +119,8 @@ def test_gush_helka_returns_the_envelope(client, monkeypatch):
     assert prop["parcel_key"] == "6319-0-225"
     assert prop["identity"]["settlement"]["name"] == "פתח תקווה"
     # Every source is represented, each with a link to its untouched full row.
-    assert set(prop["sources"]) == {"parcels", "gazetteer", "postal", "address_list"}
+    assert set(prop["sources"]) == {"parcels", "gazetteer", "postal", "address_list",
+                                    "deals", "stat_area"}
     assert prop["sources"]["parcels"]["row_url"].startswith("https://www.over.org.il/data?q=")
 
 
@@ -138,9 +145,11 @@ def test_caveats_travel_with_every_answer(client, monkeypatch):
     _stub_lookup(monkeypatch)
     body = client.get("/api/nadlan/parcel/6319/225").json()
     assert body["processed"] is True
-    assert len(body["caveats"]) == 3
-    assert any("91" in c for c in body["caveats"])        # postal locality limit
-    assert any("מספר בית" in c for c in body["caveats"])  # gazetteer street-only
+    assert len(body["caveats"]) == 5
+    assert any("91" in c for c in body["caveats"])         # postal locality limit
+    assert any("מספר בית" in c for c in body["caveats"])   # gazetteer street-only
+    assert any("תת-גוש" in c for c in body["caveats"])     # deals key on gush+helka
+    assert any("2011" in c for c in body["caveats"])       # the socio index division
 
 
 def test_ambiguous_parcel_is_downgraded_not_hidden(client, monkeypatch):
@@ -266,3 +275,155 @@ def test_stats_is_cached_and_invalidated_by_a_build(monkeypatch):
 
     asyncio.run(run())
     nadlan_query.invalidate_stats_cache()
+
+
+# ── the two descriptive layers ────────────────────────────────────────────────
+_AREA = {"code": 517, "yishuv_stat": 79000517, "settlement_name": "פתח תקווה",
+         "rova": 5, "tat_rova": 51, "division": "2022", "population": 1574,
+         "population_year": 2024, "main_function": "מגורים",
+         "socio": {"eshkol": 7, "index_year": 2021, "division": "2011",
+                   "yishuv_stat": 79000517}}
+_DEALS = {"deals": 12, "first_deal": "2004-03-01", "last_deal": "2025-04-23",
+          "sub_parcels": 4,
+          "latest": {"date": "2025-04-23", "amount": 2_450_000,
+                     "nature": "דירה בבית קומות", "rooms": 4}}
+
+
+def _stub_layers(monkeypatch, area=_AREA, deals=_DEALS):
+    calls = {"stat_area": 0, "deals": 0}
+
+    async def _areas(keys):
+        calls["stat_area"] += 1
+        return {k: area for k in keys} if area else {}
+
+    async def _summaries(parcels):
+        calls["deals"] += 1
+        return {p["parcel_key"]: deals for p in parcels} if deals else {}
+
+    monkeypatch.setattr(nadlan_query, "stat_areas", _areas)
+    monkeypatch.setattr(nadlan_query, "deal_summaries", _summaries)
+    return calls
+
+
+def test_every_mode_carries_the_statistical_area_and_the_deals(client, monkeypatch):
+    """Both layers describe the property rather than identify it, so they ride
+    the SAME envelope as the identity — whichever identity you searched by."""
+    _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    for url in ("/api/nadlan/parcel/6319/225",
+                "/api/nadlan/point?lat=32.0789&lon=34.9171",
+                "/api/nadlan/zip/4935048",
+                "/api/nadlan/address?city=פתח תקווה&street=אבימלך"):
+        prop = client.get(url).json()["data"][0]
+        assert prop["stat_area"]["code"] == 517, url
+        assert prop["deals"]["deals"] == 12, url
+
+
+def test_the_socio_index_keeps_its_own_division(client, monkeypatch):
+    """It is published on the 2011 areas, which are NOT the 2022 areas — so it
+    stays a block of its own, labelled, rather than a field of the 2022 area."""
+    _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    area = client.get("/api/nadlan/parcel/6319/225").json()["data"][0]["stat_area"]
+    assert area["division"] == "2022"
+    assert area["socio"]["division"] == "2011" and area["socio"]["eshkol"] == 7
+
+
+@pytest.mark.parametrize("url", [
+    "/api/nadlan/parcel/6319/225?stat_area=false&deals=false",
+    "/api/nadlan/point?lat=32.0789&lon=34.9171&stat_area=false&deals=false",
+    "/api/nadlan/zip/4935048?stat_area=false&deals=false",
+    "/api/nadlan/address?city=פתח תקווה&street=אבימלך&stat_area=false&deals=false",
+])
+def test_both_layers_can_be_switched_off(client, monkeypatch, url):
+    """A caller that only wants the identity must not pay for either read.
+
+    Every mode, because the two switches are ONE shared Query declaration: a
+    mode where it silently stopped binding would be invisible otherwise."""
+    calls = _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    body = client.get(url).json()
+    assert calls == {"stat_area": 0, "deals": 0}, url
+    assert body["data"][0]["stat_area"] is None
+    assert body["data"][0]["deals"] is None
+
+
+def test_the_deal_list_is_its_own_paged_endpoint(client, monkeypatch):
+    """The envelope carries a summary; a condo tower's 1,850 deals do not."""
+    async def _deals(gush, helka, limit=50, offset=0, sub_parcel=None):
+        assert (gush, helka, sub_parcel) == (6319, 225, "007")
+        return [{"date": "2025-04-23", "amount": 2_450_000}], 143
+
+    monkeypatch.setattr(nadlan_query, "parcel_deals", _deals)
+    body = client.get("/api/nadlan/parcel/6319/225/deals?sub_parcel=7").json()
+    assert body["total"] == 143 and body["count"] == 1
+    assert body["data"][0]["amount"] == 2_450_000
+
+
+# ── the unified lookup ────────────────────────────────────────────────────────
+def test_lookup_answers_every_identity_with_one_envelope(client, monkeypatch):
+    _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    for url, mode in (
+        ("/api/nadlan/lookup?gush=6319&helka=225", "gush_helka"),
+        ("/api/nadlan/lookup?lat=32.0789&lon=34.9171", "point"),
+        ("/api/nadlan/lookup?zip=4935048", "zip"),
+        ("/api/nadlan/lookup?city=פתח תקווה&street=אבימלך", "address"),
+        ("/api/nadlan/lookup?q=גוש 6319 חלקה 225", "gush_helka"),
+    ):
+        body = client.get(url).json()
+        assert body["query"]["mode"] == mode, url
+        assert body["data"][0]["parcel_key"] == "6319-0-225", url
+
+
+def test_lookup_prefers_an_explicit_identifier_over_the_free_text_box(client, monkeypatch):
+    """A caller that named גוש and חלקה has said what it means; sniffing over
+    that could only get it wrong."""
+    _stub_lookup(monkeypatch)
+    body = client.get("/api/nadlan/lookup?gush=6319&helka=225&q=4935048").json()
+    assert body["query"]["mode"] == "gush_helka"
+
+
+def test_lookup_returns_only_the_requested_fields(client, monkeypatch):
+    _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    body = client.get("/api/nadlan/lookup?gush=6319&helka=225&fields=zip,stat_area").json()
+    prop = body["data"][0]
+    assert body["query"]["fields"] == ["stat_area", "zip"]
+    assert set(prop) == {"parcel_key", "identity", "stat_area"}
+    # The parcel identity always survives: an answer you cannot tie back to a
+    # parcel is not an answer.
+    assert prop["identity"]["gush"] == 6319 and "zip7" in prop["identity"]
+    assert "addresses" not in prop["identity"] and "deals" not in prop
+
+
+def test_lookup_field_selection_skips_the_reads_it_did_not_ask_for(client, monkeypatch):
+    calls = _stub_layers(monkeypatch)
+    _stub_lookup(monkeypatch)
+    client.get("/api/nadlan/lookup?gush=6319&helka=225&fields=identity")
+    assert calls == {"stat_area": 0, "deals": 0}
+
+
+def test_lookup_refuses_an_unknown_field(client, monkeypatch):
+    """A typo that quietly drops a block is the worst failure mode here."""
+    _stub_lookup(monkeypatch)
+    r = client.get("/api/nadlan/lookup?gush=6319&helka=225&fields=identity,prices")
+    assert r.status_code == 422 and "prices" in r.json()["detail"]
+
+
+def test_lookup_needs_at_least_one_identifier(client, monkeypatch):
+    _stub_lookup(monkeypatch)
+    assert client.get("/api/nadlan/lookup").status_code == 422
+
+
+def test_lookup_all_includes_the_polygon(client, monkeypatch):
+    _stub_layers(monkeypatch)
+
+    async def _geoms(keys, simplify=None):
+        return {k: _POLY for k in keys}
+
+    monkeypatch.setattr(nadlan_query, "parcel_geometries", _geoms)
+    _stub_lookup(monkeypatch)
+    prop = client.get("/api/nadlan/lookup?gush=6319&helka=225&fields=all").json()["data"][0]
+    assert prop["geometry"] == _POLY
+    assert set(prop) >= {"stat_area", "deals", "sources", "match"}

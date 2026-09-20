@@ -6,9 +6,11 @@
  * envelope from /api/nadlan, the property's identity in every other codespace
  * plus a link to each source's full row on /data.
  *
- * A fifth tab is not a lookup at all: "פערים מול מיסוי מקרקעין" is a written
- * comparison of nadlan.gov.il against the tax authority's register, which is
- * where the parcel identities in the other four tabs ultimately come from.
+ * Every answer also carries the two layers that DESCRIBE the property rather
+ * than identify it: its CBS statistical area (א"ס) and a summary of the מיסוי
+ * מקרקעין deals reported on its גוש/חלקה. The deal REGISTER itself, and the
+ * written comparison of it against nadlan.gov.il, are a project of their own at
+ * /projects/deals — they were the only two tabs here that were not a lookup.
  *
  * Everything lives in the query string (?tab=&lat=&lon=&r=&g=&h=&zip=&city=…)
  * so every result is a shareable link, the convention the /data console and
@@ -17,25 +19,21 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { GeoJsonObject } from "geojson";
 import { nadlan, NadlanEnvelope, NadlanProperty, NadlanStats } from "../api/client";
 import NadlanResultCard from "../components/nadlan/NadlanResultCard";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanMap = lazy(() => import("../components/nadlan/NadlanMap"));
-const NadlanGaps = lazy(() => import("../components/nadlan/NadlanGaps"));
-const NadlanQuiz = lazy(() => import("../components/nadlan/NadlanQuiz"));
 
-type Tab = "map" | "address" | "zip" | "gush" | "gaps" | "quiz";
-const TAB_IDS: Tab[] = ["map", "address", "zip", "gush", "gaps", "quiz"];
+type Tab = "map" | "address" | "zip" | "gush";
+const TAB_IDS: Tab[] = ["map", "address", "zip", "gush"];
 const TAB_LABELS: [Tab, string][] = [
   ["map", "🗺 לפי מפה"],
   ["address", "🏠 לפי כתובת"],
   ["zip", "✉️ לפי מיקוד"],
   ["gush", "📐 לפי גוש־חלקה"],
-  ["gaps", "🔍 פערים מול מיסוי מקרקעין"],
-  ["quiz", "🏛 שניים אוחזין בעסקה"],
 ];
 
 const RADII = [0, 100, 250, 500, 1000, 2000];
@@ -49,8 +47,18 @@ export default function NadlanPage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
 
-  const urlTab = params.get("tab") as Tab | null;
-  const tab: Tab = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "map";
+  const urlTab = params.get("tab");
+  const tab: Tab = urlTab && TAB_IDS.includes(urlTab as Tab) ? (urlTab as Tab) : "map";
+
+  // The gap report and the quiz were tabs here until they became a project of
+  // their own. Links to them are out in the world (the quiz shares its own
+  // URL), so the two old names still resolve — to the new address.
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (urlTab === "gaps" || urlTab === "quiz") {
+      navigate(`/projects/deals?tab=${urlTab}`, { replace: true });
+    }
+  }, [urlTab, navigate]);
 
   const [stats, setStats] = useState<NadlanStats | null>(null);
   const [env, setEnv] = useState<NadlanEnvelope | null>(null);
@@ -150,8 +158,9 @@ export default function NadlanPage() {
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             טיוב וקישור של מידע מרחבי ברמת הנכס: שכבת החלקות, גזטיר הנכסים, קובץ המיקוד ורשימת
             הכתובות, מוצלבים זה לזה. הזינו כל אחת מצורות הזיהוי, נקודה על המפה, מיקוד, כתובת או
-            גוש־חלקה, וקבלו את כל השאר. שתי הלשוניות האחרונות אינן חיפוש: האחת משווה את
-            אתר הנדל״ן הממשלתי למאגר מיסוי מקרקעין, והשנייה הופכת את הפערים האלה למשחק.
+            גוש־חלקה, וקבלו את כל השאר — כולל האזור הסטטיסטי של הנקודה ועסקאות המקרקעין
+            שדווחו עליה. מאגר העסקאות המלא, והפערים שבינו לבין אתר הנדל״ן הממשלתי, נמצאים
+            ב<a href="/projects/deals">עסקאות נדל״ן</a>.
             {stats && (
               <div style={{ marginTop: "0.4rem" }}>
                 {stats.parcels.toLocaleString("he-IL")} חלקות ·{" "}
@@ -263,10 +272,9 @@ export default function NadlanPage() {
           </form>
         )}
 
-        {/* Everything below is the lookup half of the page. The gaps report is a
-            written comparison, not a query, so none of it applies there. */}
-        {tab !== "gaps" && tab !== "quiz" && (
-          <>
+        {/* Everything below is the lookup half of the page, and now the whole of
+            it: the two report tabs moved to /projects/deals. */}
+        <>
             {/* The map is NOT exclusive to the map tab: a property found by address,
                 zip or gush/helka has to be locatable on the map too, so the same
                 polygon layer is shown for every mode and fits itself to the result. */}
@@ -336,22 +344,10 @@ export default function NadlanPage() {
 
             <div className="text-sm text-muted" style={{ margin: "1rem 0 0.5rem" }}>
               המידע מעובד, הצלבה שנגזרה מארבעה מקורות, לא מקור ממשלתי ראשוני. כל שדה מקושר לשורת
-              המקור שלו בקונסולת <a href="/data">/data</a>.
+              המקור שלו בקונסולת <a href="/data">/data</a>. העסקאות עצמן הן שורות המקור של רשות
+              המסים, ומוצגות במלואן ב<a href="/projects/deals">עסקאות נדל״ן</a>.
             </div>
-          </>
-        )}
-
-        {tab === "gaps" && (
-          <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
-            <NadlanGaps />
-          </Suspense>
-        )}
-
-        {tab === "quiz" && (
-          <Suspense fallback={<div className="text-sm text-muted">מסדר את השאלות…</div>}>
-            <NadlanQuiz onReadReport={() => patch({ tab: "gaps" })} />
-          </Suspense>
-        )}
+        </>
       </div>
     </div>
   );

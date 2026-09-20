@@ -29,8 +29,9 @@ from app.services.append_store import _qi
 from app.services.index_mirror import GEOM_SRID, PG_EXT_SCHEMA
 from app.services import nadlan_index
 from app.services.nadlan_index import (
-    ADDRESSES_TABLE, GAZ_TABLE, PARCELS_SRC, PARCELS_TABLE, STREETS_TABLE,
-    ZIP5_TABLE, GAZTIR_SRC, POSTAL_SRC, ADDR_SRC, _t,
+    ADDRESSES_TABLE, DEAL_SORT_KEY, GAZ_TABLE, PARCELS_SRC,
+    PARCELS_TABLE, STAT_AREA_POP_SRC, STAT_AREA_SOCIO_SRC, STAT_AREA_SRC,
+    STREETS_TABLE, ZIP5_TABLE, GAZTIR_SRC, POSTAL_SRC, ADDR_SRC, _t,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,16 +181,227 @@ async def by_address(city: str, street: str, number: str | None = None
     return addrs, parcels
 
 
+# ── the two layers that hang off a parcel ─────────────────────────────────────
+# Neither identifies the property, they describe it, so both are attached to the
+# envelope rather than folded into ``identity``, and both are computed per lookup
+# instead of being stamped onto the 1.1 M-row spine: each is one index-backed
+# read over a result set capped at 200 parcels, so a build stage (and the compute
+# bill that comes with it) would buy nothing here.
+
+
+def _iso(yyyymmdd: str | None) -> str | None:
+    """The register's DD/MM/YYYY date, already rearranged to YYYYMMDD by
+    ``DEAL_SORT_KEY``, handed out as ISO."""
+    v = (yyyymmdd or "").strip()
+    return f"{v[0:4]}-{v[4:6]}-{v[6:8]}" if len(v) == 8 and v.isdigit() else None
+
+
+def _cbs_int(v) -> int | None:
+    """CBS publishes every field of a .gdb layer as float text ('613.0')."""
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+async def stat_areas(parcel_keys: list[str]) -> dict[str, dict]:
+    """parcel_key -> its CBS statistical area (א"ס).
+
+    Resolved SPATIALLY, by putting the parcel centroid inside an area polygon: a
+    settlement holds dozens of areas, so its code cannot answer this, and the
+    2022 layer is the only place the division is drawn.
+
+    Two divisions are read and they are NOT merged. Identity and population come
+    from the 2022 division (the population file is published on the same
+    geometry, so it attaches by code, 3,847 of 3,857 areas). The socio-economic
+    cluster exists only on the older 2011 division, which draws different
+    boundaries, so it gets its own point-in-polygon against its own polygons and
+    is labelled with its own year rather than being passed off as a property of
+    the 2022 area.
+    """
+    keys = list(dict.fromkeys(k for k in parcel_keys if k))[:MAX_LIMIT]
+    if not keys:
+        return {}
+    rows = await _fetch(f"""
+        WITH k AS (
+          SELECT parcel_key, centroid FROM public.{_qi(PARCELS_TABLE)}
+          WHERE parcel_key = ANY($1::text[]) AND centroid IS NOT NULL
+        )
+        SELECT k.parcel_key,
+               sa.stat_code, sa.yishuv_stat, sa.area_name, sa.rova, sa.tat_rova,
+               nullif(btrim(pop."Pop_Total"), '')         AS pop_total,
+               nullif(btrim(pop."Main_Function_Txt"), '') AS main_function,
+               nullif(btrim(so.eshkol_madad2021), '')     AS eshkol_2021,
+               nullif(btrim(so."YISHUV_STAT11"), '')      AS yishuv_stat_2011
+        FROM k
+        LEFT JOIN LATERAL (
+          SELECT nullif(btrim(a."STAT_2022"), '')        AS stat_code,
+                 nullif(btrim(a."YISHUV_STAT_2022"), '') AS yishuv_stat,
+                 nullif(btrim(a."SHEM_YISHUV"), '')      AS area_name,
+                 nullif(btrim(a."ROVA"), '')             AS rova,
+                 nullif(btrim(a."TAT_ROVA"), '')         AS tat_rova
+          FROM {_t(STAT_AREA_SRC)} a
+          WHERE a.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) k.centroid
+            AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(a.geom, k.centroid)
+          LIMIT 1
+        ) sa ON true
+        LEFT JOIN {_t(STAT_AREA_POP_SRC)} pop
+               ON btrim(pop."YISHUV_STAT22") = sa.yishuv_stat
+        LEFT JOIN LATERAL (
+          SELECT b.eshkol_madad2021, b."YISHUV_STAT11"
+          FROM {_t(STAT_AREA_SOCIO_SRC)} b
+          WHERE b.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) k.centroid
+            AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(b.geom, k.centroid)
+          LIMIT 1
+        ) so ON true
+    """, keys)
+
+    out: dict[str, dict] = {}
+    for r in rows:
+        code = _cbs_int(r.get("stat_code"))
+        full = _cbs_int(r.get("yishuv_stat"))
+        socio = _cbs_int(r.get("eshkol_2021"))
+        if code is None and full is None and socio is None:
+            continue
+        out[r["parcel_key"]] = {
+            # The area's own number inside its settlement, and the national
+            # 8-digit form (settlement * 10000 + area) that CBS tables key on.
+            "code": code,
+            "yishuv_stat": full,
+            "settlement_name": r.get("area_name"),
+            "rova": _cbs_int(r.get("rova")),
+            "tat_rova": _cbs_int(r.get("tat_rova")),
+            "division": "2022",
+            "population": _cbs_int(r.get("pop_total")),
+            "population_year": 2024,
+            "main_function": r.get("main_function"),
+            # Kept apart on purpose: a DIFFERENT division, so it carries the year
+            # of both the boundaries and the index.
+            "socio": ({"eshkol": socio, "index_year": 2021, "division": "2011",
+                       "yishuv_stat": _cbs_int(r.get("yishuv_stat_2011"))}
+                      if socio is not None else None),
+        }
+    return out
+
+
+# A parcel in a condo tower carries hundreds of deals (1,850 on the busiest one
+# measured), so the envelope gets a SUMMARY and the full list is its own paged
+# endpoint, the same split the polygon already uses.
+MAX_DEALS = 200
+
+
+def _deal_row(r: dict) -> dict:
+    """One deal, typed. Every numeric column in the register is clean integer
+    text (measured over all 3.84 M rows), so a value that fails to parse means
+    the publisher changed the format: the field is dropped, never guessed at."""
+    def num(key):
+        try:
+            return int(str(r.get(key) or "").strip())
+        except ValueError:
+            return None
+
+    d = (r.get("deal_date") or "").strip()
+    return {
+        "date": f"{d[6:10]}-{d[3:5]}-{d[0:2]}" if len(d) == 10 else None,
+        "date_src": d or None,
+        "amount": num("deal_amount"),
+        "declared_amount": num("declared_amount"),
+        "nature": (r.get("deal_nature") or "").strip() or None,
+        "area_sqm": num("asset_area"),
+        "rooms": num("room_num"),
+        "year_built": num("year_built"),
+        "portion": (r.get("portion") or "").strip() or None,
+        "sub_parcel": (r.get("sub_chelka") or "").strip() or None,
+    }
+
+
+async def deal_summaries(parcels: list[dict]) -> dict[str, dict]:
+    """parcel_key -> a summary of its מיסוי מקרקעין deals.
+
+    The register publishes no gush suffix, so deals attach on גוש+חלקה, the
+    suffix-less ``gp_key``. Where that pair covers several real parcels the same
+    deals are reported against each of them, which is why ``gp_ambiguous``
+    downgrades this block exactly as it downgrades the gazetteer."""
+    pairs = list(dict.fromkeys((str(p["gush"]), str(p["parcel"])) for p in parcels))[:MAX_LIMIT]
+    src = await nadlan_index.deals_table()
+    if not pairs or not src:
+        return {}
+    rows = await _fetch(f"""
+        WITH k AS (SELECT * FROM unnest($1::text[], $2::text[]) AS t(g, h))
+        SELECT k.g, k.h, agg.deals, agg.first_deal, agg.last_deal, agg.sub_parcels,
+               newest.deal_date, newest.deal_amount, newest.declared_amount,
+               newest.deal_nature, newest.asset_area, newest.room_num,
+               newest.year_built, newest.portion, newest.sub_chelka
+        FROM k
+        JOIN LATERAL (
+          SELECT count(*) AS deals,
+                 min({DEAL_SORT_KEY}) AS first_deal,
+                 max({DEAL_SORT_KEY}) AS last_deal,
+                 count(DISTINCT sub_chelka) AS sub_parcels
+          FROM {_t(src)} WHERE gush = k.g AND chelka = k.h
+        ) agg ON agg.deals > 0
+        LEFT JOIN LATERAL (
+          SELECT deal_date, deal_amount, declared_amount, deal_nature, asset_area,
+                 room_num, year_built, portion, sub_chelka
+          FROM {_t(src)} WHERE gush = k.g AND chelka = k.h
+          ORDER BY {DEAL_SORT_KEY} DESC LIMIT 1
+        ) newest ON true
+    """, [g for g, _ in pairs], [h for _, h in pairs])
+
+    by_gp = {f"{r['g']}-{r['h']}": {
+        "deals": r["deals"],
+        "first_deal": _iso(r["first_deal"]),
+        "last_deal": _iso(r["last_deal"]),
+        "sub_parcels": r["sub_parcels"],
+        "latest": _deal_row(r),
+    } for r in rows}
+    return {p["parcel_key"]: by_gp[p["gp_key"]]
+            for p in parcels if p.get("gp_key") in by_gp}
+
+
+async def parcel_deals(gush: int, helka: int, limit: int = 50, offset: int = 0,
+                       sub_parcel: str | None = None) -> tuple[list[dict], int]:
+    """Every deal reported on one גוש/חלקה, newest first, plus the total.
+
+    ``sub_parcel`` narrows to one תת-חלקה, which in a condo tower is the single
+    apartment: the only grain at which a price series means anything."""
+    limit = max(1, min(int(limit), MAX_DEALS))
+    src = await nadlan_index.deals_table()
+    if not src:
+        return [], 0
+    rows = await _fetch(f"""
+        SELECT settlement_code, settlement, gush, chelka, sub_chelka, deal_date,
+               deal_amount, declared_amount, deal_nature, portion, year_built,
+               asset_area, room_num, count(*) OVER () AS total
+        FROM {_t(src)}
+        WHERE gush = $1 AND chelka = $2
+          AND ($4::text IS NULL OR sub_chelka = $4)
+        ORDER BY {DEAL_SORT_KEY} DESC
+        LIMIT {limit} OFFSET $3::int
+    """, str(gush), str(helka), int(max(0, offset)), sub_parcel)
+    total = rows[0]["total"] if rows else 0
+    return [_deal_row(r) | {"settlement": (r.get("settlement") or "").strip() or None,
+                            "settlement_code": _cbs_int(r.get("settlement_code"))}
+            for r in rows], total
+
+
 # ── the unified envelope ──────────────────────────────────────────────────────
 async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None = None,
                             include_addresses: bool = True,
-                            with_geometry: bool = False) -> list[dict]:
+                            with_geometry: bool = False,
+                            with_stat_area: bool = True,
+                            with_deals: bool = True) -> list[dict]:
     """Turn parcel rows into the full cross-source answer.
 
     One shape for all four entry modes: identity in every codespace, one block
     per source (each with a deep-link to its untouched full row), and an explicit
     ``match`` block saying how certain the link is — ``gp_ambiguous`` downgrades
-    the gazetteer to "approximate" instead of pretending the suffix was known."""
+    the gazetteer to "approximate" instead of pretending the suffix was known.
+
+    ``stat_area`` and ``deals`` are on by default because they are what a caller
+    asking about a point actually wants, and both are index-backed reads over a
+    capped result set. They are still switchable: a caller that only needs the
+    identity should not pay for either."""
     if not parcels:
         return []
     keys = [p["parcel_key"] for p in parcels]
@@ -199,22 +411,26 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
     # clicking it — the identity and its shape never diverge.
     geoms = await parcel_geometries(keys) if with_geometry else {}
 
+    # Independent of each other and of everything above, so they go together
+    # rather than one round trip after the other.
+    # Best-effort, and deliberately not fatal: both corpora are tracked
+    # datasets like any other, so a deployment that does not track one — or one
+    # mid-reseed — must still answer the four identity sources rather than 500.
+    areas, deals = await asyncio.gather(
+        stat_areas(keys) if with_stat_area else _none(),
+        deal_summaries(parcels) if with_deals else _none(),
+        return_exceptions=True,
+    )
+    for name, value in (("stat_area", areas), ("deals", deals)):
+        if isinstance(value, BaseException):
+            logger.warning("nadlan: %s lookup unavailable: %s", name, value)
+    areas = areas if isinstance(areas, dict) else {}
+    deals = deals if isinstance(deals, dict) else {}
+    deals_src = await nadlan_index.deals_table() if with_deals else None
+
     gaz = {g["parcel_key"]: g for g in await _fetch(
         f"""SELECT * FROM public.{_qi(GAZ_TABLE)}
             WHERE parcel_key = ANY($1::text[])""", keys)}
-
-    # Best-effort, and deliberately not fatal: the deals corpus is a tracked
-    # dataset like any other, so a deployment that does not track it — or one
-    # mid-reseed — must still answer the other four sources rather than 500.
-    deals_src = None
-    deals_by_parcel: dict[str, list[dict]] = {}
-    try:
-        deals_src = await nadlan_index.find_deals_table()
-        if deals_src:
-            deals_by_parcel = await _deals_for_parcels(parcels)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("nadlan: deals lookup unavailable: %s", e)
-        deals_src = None
 
     addr_by_parcel: dict[str, list[dict]] = {}
     if include_addresses:
@@ -296,9 +512,28 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
                         f"AND street = {_lit(a.get('street_name') or '')})"
                         for a in addrs[:20]) or "false"),
                     fields={"n_addresses": len(addrs)}),
-                **({"deals": _deals_block(deals_src, deals_by_parcel.get(pk))}
-                   if deals_src else {}),
+                # Absent, not empty, on a deployment that does not track the
+                # deals corpus: a link to a table that is not there is worse
+                # than no block.
+                **({"deals": _src_block(
+                    *deals_src,
+                    where=f'gush = {_lit(p["gush"])} AND chelka = {_lit(p["parcel"])}',
+                    fields={k: (deals.get(pk) or {}).get(k)
+                            for k in ("deals", "first_deal", "last_deal",
+                                      "sub_parcels")})} if deals_src else {}),
+                "stat_area": _src_block(
+                    *STAT_AREA_SRC,
+                    where=(f'"YISHUV_STAT_2022" = {_lit((areas.get(pk) or {}).get("yishuv_stat"))}'
+                           if (areas.get(pk) or {}).get("yishuv_stat") else "false"),
+                    fields={k: (areas.get(pk) or {}).get(k)
+                            for k in ("code", "yishuv_stat", "rova", "tat_rova",
+                                      "population", "main_function")}),
             },
+            # The two descriptive layers. ``stat_area`` is spatial (the centroid
+            # inside a CBS area) and so is exact wherever the parcel has a point;
+            # ``deals`` attaches on גוש+חלקה and therefore inherits gp_ambiguous.
+            "stat_area": areas.get(pk),
+            "deals": deals.get(pk),
             "match": {"method": "gp_key" if g else None,
                       "confidence": confidence, "notes": notes},
             "geometry": geoms.get(pk),
@@ -306,100 +541,55 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
     return out
 
 
-def _lit(v) -> str:
-    """A single-quoted SQL literal for the deep-link text (never executed here)."""
-    return "'" + str(v).replace("'", "''") + "'"
+# ── choosing what comes back ──────────────────────────────────────────────────
+# The unified lookup lets a caller say which parts of the answer it wants. The
+# names are the envelope's own keys, so ``fields=`` is readable against a sample
+# response rather than against this list — and an unknown name is refused rather
+# than silently ignored, because a typo that quietly drops a block is the worst
+# failure mode an API like this has.
+FIELDS = ("identity", "point", "zip", "streets", "addresses", "stat_area",
+          "deals", "geometry", "sources", "match")
+# Everything except the polygon: it is the one part that reads the 4.58 GB
+# source table, so it is always asked for explicitly.
+DEFAULT_FIELDS = tuple(f for f in FIELDS if f != "geometry")
 
 
-# ── עסקאות נדל"ן ──────────────────────────────────────────────────────────────
-# The deals corpus is the one source here that is not a register of what a
-# property IS but of what happened to it, so the block carries a small summary
-# rather than a field list: how many deals, over what span, and the most recent
-# one. Everything else stays one click away at /data, exactly like the other
-# four blocks.
-_DEALS_RECENT = 5
+def project_property(prop: dict, fields: set[str]) -> dict:
+    """One property, narrowed to the requested parts.
 
-
-async def _deals_for_parcels(parcels: list[dict]) -> dict[str, list[dict]]:
-    """Recent deals + a count per parcel, keyed by parcel_key.
-
-    Matched on gush+chelka as TEXT: both sides are canonical plain integers
-    (verified against production — no leading zeros, no ".0" form), so the
-    comparison rides the (gush, chelka) btree that nadlan_index builds. Casting
-    the column to int instead would type-check and then scan every row.
-
-    תת-חלקה is deliberately NOT part of the match. A deal is reported on the
-    apartment (sub_chelka), the crosswalk's spine is the חלקה, and a parcel's
-    deals are all of its sub-parcels' deals — filtering by the parcel's own
-    suffix would hide most of them.
-    """
-    pairs = {(str(p["gush"]), str(p["parcel"])): p["parcel_key"] for p in parcels}
-    if not pairs:
-        return {}
-    src = await nadlan_index.find_deals_table()
-    if not src:
-        return {}
-    schema, table = src
-    gushim = [g for g, _ in pairs]
-    helkot = [h for _, h in pairs]
-    rows = await _fetch(
-        f"""
-        SELECT gush, chelka, sub_chelka, deal_date, deal_amount, deal_nature,
-               room_num, asset_area, year_built
-        FROM {_qi(schema)}.{_qi(table)}
-        WHERE (gush, chelka) IN (
-            SELECT * FROM unnest($1::text[], $2::text[])
-        )
-        """, gushim, helkot)
-    out: dict[str, list[dict]] = {}
-    for r in rows:
-        pk = pairs.get((r["gush"], r["chelka"]))
-        if pk:
-            out.setdefault(pk, []).append(r)
+    ``parcel_key`` and the גוש/חלקה identity always survive: an answer you
+    cannot tie back to a parcel is not an answer."""
+    ident = prop["identity"]
+    out = {"parcel_key": prop["parcel_key"], "identity": {
+        k: ident[k] for k in ("gush", "gush_suffix", "helka", "gp_key")}}
+    if "identity" in fields:
+        out["identity"].update({"settlement": ident["settlement"],
+                                "region": ident["region"],
+                                "distance_m": ident["distance_m"]})
+    if "point" in fields:
+        out["identity"]["point"] = ident["point"]
+    if "zip" in fields:
+        out["identity"]["zip7"] = ident["zip7"]
+        out["identity"]["zip5"] = ident["zip5"]
+    if "streets" in fields:
+        out["identity"]["streets"] = ident["streets"]
+    if "addresses" in fields:
+        out["identity"]["addresses"] = ident["addresses"]
+    for key in ("stat_area", "deals", "geometry", "sources", "match"):
+        if key in fields:
+            out[key] = prop[key]
     return out
 
 
-def _deal_sort_key(d: dict):
-    """Newest first, by the DD/MM/YYYY the source publishes.
-
-    Sorted in Python rather than SQL: to_date over the whole corpus would have
-    to run before the LIMIT, and a row whose date is malformed would abort the
-    query instead of just sorting last. An unparseable date sorts oldest.
-    """
-    raw = (d.get("deal_date") or "").strip()
-    parts = raw.split("/")
-    if len(parts) == 3 and all(p.isdigit() for p in parts):
-        return (parts[2], parts[1], parts[0])
-    return ("", "", "")
+async def _none() -> dict:
+    """An awaitable empty result, so a disabled enrichment still fits the
+    ``asyncio.gather`` above instead of branching around it."""
+    return {}
 
 
-def _deals_block(src: tuple[str, str], deals: list[dict] | None) -> dict:
-    schema, table = src
-    deals = sorted(deals or [], key=_deal_sort_key, reverse=True)
-    years = sorted({_deal_sort_key(d)[0] for d in deals if _deal_sort_key(d)[0]})
-    fields: dict = {"n_deals": len(deals)}
-    if years:
-        fields["deal_years"] = (years[0] if years[0] == years[-1]
-                                else f"{years[0]}–{years[-1]}")
-    if deals:
-        fields["last_deal_date"] = deals[0].get("deal_date")
-        fields["last_deal_amount"] = deals[0].get("deal_amount")
-    block = _src_block(
-        schema, table,
-        where=(f"gush = {_lit(deals[0]['gush'])} AND chelka = {_lit(deals[0]['chelka'])}"
-               if deals else "false"),
-        fields=fields)
-    # The rows themselves, so the card can list the recent ones without a second
-    # round trip. Capped: a חלקה in a tower block has hundreds of deals and this
-    # rides on an envelope that already carries up to 100 addresses.
-    block["recent"] = [
-        {"date": d.get("deal_date"), "amount": d.get("deal_amount"),
-         "nature": d.get("deal_nature"), "rooms": d.get("room_num"),
-         "area": d.get("asset_area"), "year_built": d.get("year_built"),
-         "sub_chelka": d.get("sub_chelka")}
-        for d in deals[:_DEALS_RECENT]
-    ]
-    return block
+def _lit(v) -> str:
+    """A single-quoted SQL literal for the deep-link text (never executed here)."""
+    return "'" + str(v).replace("'", "''") + "'"
 
 
 # ── detail + support ──────────────────────────────────────────────────────────

@@ -46,6 +46,7 @@ Design decisions that are load-bearing (each one was measured, see docs):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -72,6 +73,31 @@ POSTAL_LOCALITY_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_65b5335b")
 # (קפלנסקי שלמה/קפלנסקי). A second authoritative source, not a replacement.
 POSTAL_STREET_SYN_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_068c856b")
 ADDR_SRC = ("odata", "ac1ae1fa_6d43_4685_8434_9953e950ca9b_19c5be7f")
+
+# ── the two layers that hang off a parcel rather than identify it ─────────────
+# Both are ALREADY tracked datasets in the append DB, so nothing here scrapes or
+# copies them; the crosswalk only learns how to reach them from a parcel.
+#
+# מיסוי מקרקעין — every reported real-estate deal, 3.84 M rows back to 1998,
+# keyed by settlement + גוש + חלקה + תת-חלקה (dataset fd06f5ae). The register
+# publishes NO gush suffix, so a deal attaches on the suffix-less ``gp_key``,
+# exactly like the gazetteer, and carries the same ambiguity caveat.
+# ...and it is NOT named here. See find_deals_table(): the physical name
+# carries the tracked dataset's id, and the corpus was published as one file per
+# settlement, so the table it lives in has changed once already.
+# א"ס — the CBS statistical-area division of 2022 (dataset 693e114c). This is
+# the identity layer: code, רובע, תת-רובע. It is joined SPATIALLY (the parcel
+# centroid inside the area polygon), never by settlement code, because a
+# settlement holds many areas.
+STAT_AREA_SRC = ("public", "append_cbs_pub_file_42a1e1f0_693e114c")
+# ...and the population file published on the SAME 2022 division (dataset
+# a13c151c), so it attaches by code: 3,847 of 3,857 areas match.
+STAT_AREA_POP_SRC = ("public", "append_cbs_pub_file_a74ad779_a13c151c")
+# The socio-economic cluster (אשכול 1-10) is published only on the OLDER 2011
+# division (dataset 5fa5cab4), which is a different geography — so it gets its
+# own point-in-polygon against its own polygons and is labelled with its own
+# year. Joining it to a 2022 area by code would be quietly wrong.
+STAT_AREA_SOCIO_SRC = ("public", "append_cbs_pub_file_afb48290_5fa5cab4")
 
 # The repo's canonical ITM is 6991, not 2039 — they differ only in datum
 # realisation (~0.4 mm), and index_mirror already standardised on 6991. The
@@ -227,9 +253,28 @@ _DDL = [
         -- 'pip'    → point-in-polygon, exact
         -- 'street' → inherited from the street's gazetteer parcels, approximate
         parcel_match    text,
+        -- Where `point` came from. Written by whoever set the point, never
+        -- derived afterwards: the two producers are the only things that know,
+        -- and `over_re_geocode` is not readable by the console role, so a
+        -- reader cannot reconstruct this by joining. Values:
+        --   'address_register' → the official address file's own ITM X/Y
+        --   'govmap'           → geocoded against GovMap's search service
+        point_source    text,
         in_postal       boolean NOT NULL DEFAULT false,
         in_address_list boolean NOT NULL DEFAULT false,
-        refreshed_at    timestamptz DEFAULT now()
+        refreshed_at    timestamptz DEFAULT now(),
+        -- רשת ישראל. The register publishes ITM and `build_addresses` converts
+        -- it to WGS84 to store `point`; without these, every consumer that
+        -- wants the grid the country actually uses has to convert it back by
+        -- hand on each export. STORED (not a view) so /data and export.csv
+        -- both see real columns. ST_Transform/ST_X/ST_Y are IMMUTABLE, which
+        -- is what a generated column requires.
+        itm_x double precision
+            GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_X(
+                {_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED,
+        itm_y double precision
+            GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_Y(
+                {_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED
     )
     """,
     f"""
@@ -285,6 +330,16 @@ _INDEXES = [
 _COLUMN_ADDITIONS = [
     (STREETS_TABLE, "official_code", "integer"),
     (ADDRESSES_TABLE, "zip_level", "text"),
+    (ADDRESSES_TABLE, "point_source", "text"),
+    # Adding a STORED generated column rewrites the table (~618k rows, seconds)
+    # under an ACCESS EXCLUSIVE lock. Done once, at the same point in startup
+    # as every other DDL here.
+    (ADDRESSES_TABLE, "itm_x",
+     f"double precision GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_X("
+     f"{_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED"),
+    (ADDRESSES_TABLE, "itm_y",
+     f"double precision GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_Y("
+     f"{_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED"),
 ]
 
 
@@ -299,7 +354,41 @@ async def ensure_tables() -> None:
                 f"ADD COLUMN IF NOT EXISTS {_qi(column)} {coltype}")
         for stmt in _INDEXES:
             await conn.execute(stmt, timeout=_LONG_TIMEOUT)
+        await _backfill_point_source(conn)
     await _grant_readonly()
+
+
+async def _backfill_point_source(conn) -> None:
+    """Give the points that predate the `point_source` column their provenance.
+
+    Authoritative, not inferred: ``over_re_geocode`` IS the list of addresses we
+    geocoded, so anything merged from it is 'govmap' and every other point came
+    out of the register in ``build_addresses``. The alternative — re-joining to
+    the register's X/Y and calling a <10 cm match "register" — would have to
+    guess about the addresses the register lists WITHOUT coordinates, and would
+    silently mislabel GovMap points that happen to land on the register's own.
+
+    Idempotent and self-retiring: both statements are keyed on
+    ``point_source IS NULL``, so after the first run they match nothing.
+    """
+    await conn.execute("""
+        DO $$
+        BEGIN
+          IF to_regclass('public.over_re_geocode') IS NOT NULL THEN
+            UPDATE public.over_re_addresses a
+               SET point_source = 'govmap'
+              FROM public.over_re_geocode g
+             WHERE g.address_key = a.address_key
+               AND g.status = 'hit' AND g.merged
+               AND a.point IS NOT NULL AND a.point_source IS NULL;
+          END IF;
+        END $$
+    """, timeout=_LONG_TIMEOUT)
+    await conn.execute(
+        """UPDATE public.over_re_addresses
+              SET point_source = 'address_register'
+            WHERE point IS NOT NULL AND point_source IS NULL""",
+        timeout=_LONG_TIMEOUT)
 
 
 async def _grant_readonly() -> None:
@@ -318,6 +407,15 @@ async def _grant_readonly() -> None:
                 await conn.execute(f"GRANT SELECT ON public.{_qi(t)} TO {_qi(role)}")
             except Exception:  # noqa: BLE001 — a missing role must not fail a build
                 logger.debug("nadlan: grant on %s failed", t, exc_info=True)
+
+
+# ``deal_date`` is published as DD/MM/YYYY text and ``to_date`` is only STABLE,
+# so neither an expression index on it nor a correct ORDER BY is available. This
+# rearranges the same characters into a sortable YYYYMMDD with ``substr``, which
+# IS immutable — one expression, shared by the index below and by every query in
+# deals_query, so the two can never drift apart and silently lose the index.
+DEAL_SORT_KEY = ("substr(deal_date,7,4) || substr(deal_date,4,2) "
+                 "|| substr(deal_date,1,2)")
 
 
 # ── source indexes ────────────────────────────────────────────────────────────
@@ -358,25 +456,37 @@ async def ensure_source_indexes() -> dict:
                 failed.append(f"{name}: {e}")
                 logger.warning("nadlan: source index %s failed: %s", name, e)
         # The deals corpus is found rather than named (see find_deals_table), so
-        # its index cannot live in the static list above. Without it a per-parcel
-        # lookup is a sequential scan of every deal ever recorded, which is the
-        # difference between the deals block being servable from the property
-        # card and not.
+        # its indexes cannot live in the static list above. Without the first, a
+        # per-parcel lookup is a sequential scan of every deal ever recorded; the
+        # other two are what make the browse on /projects/deals answerable, and
+        # they are expressions because the published date is DD/MM/YYYY text and
+        # ``to_date`` is only STABLE.
         deals = await find_deals_table()
         if deals:
             d_schema, d_table = deals
-            idx = f"{d_table[:50]}_gush_chelka_idx"
+            stem = d_table[:46]
+            for idx, cols in (
+                (f"{stem}_gush_chelka_idx", "(gush, chelka)"),
+                # Keyed on the NAME, not the code: 674,340 of the 3.84 M deals
+                # (17.5%) carry an empty settlement_code, and only 2,171 carry
+                # an empty name.
+                (f"{stem}_settlement_idx", f"(settlement, ({DEAL_SORT_KEY}))"),
+                (f"{stem}_date_idx", f"(({DEAL_SORT_KEY}))"),
+            ):
+                try:
+                    await conn.execute(
+                        f"CREATE INDEX IF NOT EXISTS {_qi(idx)} "
+                        f"ON {_qi(d_schema)}.{_qi(d_table)} {cols}",
+                        timeout=_LONG_TIMEOUT)
+                    made.append(idx)
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"{idx}: {e}")
+                    logger.warning("nadlan: deals index %s failed: %s", idx, e)
             try:
                 await conn.execute(
-                    f"CREATE INDEX IF NOT EXISTS {_qi(idx)} "
-                    f"ON {_qi(d_schema)}.{_qi(d_table)} (gush, chelka)",
-                    timeout=_LONG_TIMEOUT)
-                made.append(idx)
-                await conn.execute(
                     f"ANALYZE {_qi(d_schema)}.{_qi(d_table)}", timeout=_LONG_TIMEOUT)
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"{idx}: {e}")
-                logger.warning("nadlan: deals index %s failed: %s", idx, e)
+            except Exception:  # noqa: BLE001
+                logger.debug("nadlan: analyze deals failed", exc_info=True)
 
         for schema, table in (GAZTIR_SRC, POSTAL_SRC, ADDR_SRC):
             try:
@@ -837,6 +947,35 @@ async def find_deals_table() -> tuple[str, str] | None:
     return best
 
 
+# find_deals_table() scans three schemas' column lists and estimates row
+# counts, which is fine once per build and wrong once per request — and every
+# property lookup, every browse and every MCP call now needs the answer. The
+# corpus moves when a dataset is re-registered or a reseed lands, i.e. minutes
+# at worst, so a short process-local cache is the whole fix. Same shape as
+# nadlan_query.stats().
+_DEALS_TABLE_TTL = 300.0
+_deals_table_cache: tuple[float, tuple[str, str] | None] | None = None
+_deals_table_lock = asyncio.Lock()
+
+
+def invalidate_deals_table_cache() -> None:
+    global _deals_table_cache
+    _deals_table_cache = None
+
+
+async def deals_table() -> tuple[str, str] | None:
+    """find_deals_table(), memoised. None when the corpus is not tracked here."""
+    global _deals_table_cache
+    if _deals_table_cache and time.monotonic() - _deals_table_cache[0] < _DEALS_TABLE_TTL:
+        return _deals_table_cache[1]
+    async with _deals_table_lock:
+        if _deals_table_cache and time.monotonic() - _deals_table_cache[0] < _DEALS_TABLE_TTL:
+            return _deals_table_cache[1]
+        found = await find_deals_table()
+        _deals_table_cache = (time.monotonic(), found)
+        return found
+
+
 async def find_official_streets_table() -> tuple[str, str] | None:
     for schema in ("public", "odata", "idx"):
         try:
@@ -1251,6 +1390,25 @@ async def build_addresses() -> dict:
         t0 = await _stage_start(conn, "addresses")
         async with conn.transaction():
             await conn.execute(f"TRUNCATE public.{_qi(ADDRESSES_TABLE)}")
+            # TRUNCATE throws away every point the geocoder merged in, and the
+            # merge only ever considers rows with `merged = false` — so without
+            # this reset a rebuild DELETES those points permanently and no
+            # later run puts them back. Measured 2026-09-20: 93,988 of the
+            # 451,667 points came from geocoding, i.e. a rebuild would have
+            # published a corpus 20.8% smaller while reporting success.
+            # Clearing the flag makes the next merge re-apply them all.
+            # Guarded: over_re_geocode is created by geocode_queue, which
+            # imports THIS module — so it may legitimately not exist yet, and a
+            # missing-table error here would abort the whole build transaction.
+            await conn.execute("""
+                DO $$
+                BEGIN
+                  IF to_regclass('public.over_re_geocode') IS NOT NULL THEN
+                    UPDATE public.over_re_geocode SET merged = false
+                     WHERE merged AND status = 'hit';
+                  END IF;
+                END $$
+            """)
             await conn.execute(
                 f"""
                 -- The (locality, street) universe is ~33k pairs while the address
@@ -1328,7 +1486,8 @@ async def build_addresses() -> dict:
                   (address_key, settlement_code, settlement_name, street_key, street_name,
                    house_num, house_suffix, entrance, house_raw, zip5, zip7, zip_level,
                    neighbourhood, district,
-                   lat, lon, point, in_postal, in_address_list, refreshed_at)
+                   lat, lon, point, point_source, in_postal, in_address_list,
+                   refreshed_at)
                 SELECT k.sc || '|' || k.key_part || '|' ||
                          coalesce(k.house_num::text,'?') || coalesce(k.house_suffix,'') ||
                          '|' || coalesce(k.entrance,''),
@@ -1343,6 +1502,10 @@ async def build_addresses() -> dict:
                        {_qi(PG_EXT_SCHEMA)}.ST_Y((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
                        {_qi(PG_EXT_SCHEMA)}.ST_X((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
                        (array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1],
+                       -- Only a point actually set here is the register's; a
+                       -- row with none is left NULL for the geocoder to claim.
+                       CASE WHEN (array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]
+                                 IS NOT NULL THEN 'address_register' END,
                        bool_or(k.src='post'), bool_or(k.src='addr'), now()
                 FROM keyed k
                 LEFT JOIN public.over_settlements s ON s.code = k.sc

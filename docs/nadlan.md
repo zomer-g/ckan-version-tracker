@@ -404,103 +404,125 @@ timescale on which GovMap's index could actually change, and never-asked
 addresses sort ahead of previously-asked ones.
 
 
-## The fifth tab: nadlan.gov.il against מיסוי מקרקעין
+## The two layers that describe a property
 
-`/projects/nadlan?tab=gaps` is not a lookup. It is a written comparison of the
-two government sites that publish the same property transactions, added
-2026-09-09 from a hand check of ten random parcels read page by page on both
-sites, and revised 2026-09-10 after a re-check that also opened the previous-sales
-window behind every nadlan.gov.il row.
+Added 2026-09-20. Everything above identifies a property; these two say
+something about it, and they ride the SAME envelope rather than sitting behind
+another call, because they are what someone who clicks a point actually wants.
 
-The headline is that nadlan.gov.il's deals table shows **one row per property**,
-the latest sale, and keeps every earlier sale of that property in a
-"עסקאות קודמות לנכס" window that opens only on a click. Read as a table it shows
-93 sales against the tax authority's 161; opened row by row it shows 145, and 140
-of those match the tax authority on date and amount (120 to the shekel, 20 rounded
-to the thousand). The first version of the report, written before those windows
-were opened, read the same numbers as "one sale per sub-parcel, the last one"
-and was wrong. What survives is seven tax-authority sales that appear nowhere on
-nadlan.gov.il, amounts that differ, a whole parcel with no page, an area off by a
-factor of ten, and the fact that every transaction carries two official amounts
-(תמורה מוצהרת and שווי מכירה) of which nadlan.gov.il publishes only one, unmarked.
+### א"ס — the CBS statistical area
 
-It matters here because the crosswalk's own consumers hit the same traps:
+Resolved **spatially**: the parcel centroid inside an area polygon. A settlement
+holds dozens of areas, so its code cannot answer this, and the 2022 layer
+(`append_cbs_pub_file_42a1e1f0_693e114c`, dataset `693e114c`) is the only place
+the division is drawn. The population file is published on the same geometry, so
+it attaches by code — 3,847 of 3,857 areas match.
 
-* Counting rows on nadlan.gov.il, or trusting its "נמצאו N עסקאות", counts
-  **properties**, not sales: 52 of the 145 sales sit behind the rows.
-* An amount there is the **assessed** value, never the declared one.
-* Joining the two registers **by locality name** silently drops rows. Two of the
-  ten parcels carry a different locality name on each site, which is the same
-  failure mode `over_settlement_code()` exists to prevent.
-* A parcel that returns "0 עסקאות", or no page at all, is not evidence that
-  nothing was sold there. About a quarter of page loads returned an empty table
-  for a parcel that has transactions.
+**The socio-economic cluster is a separate block on purpose.** `eshkol_madad2021`
+exists only on the **2011** division (`append_cbs_pub_file_afb48290_5fa5cab4`),
+which draws different boundaries: parcel `6319-0-225` sits in area 517 of 2022
+and area 516 of 2011. So it gets its own point-in-polygon against its own
+polygons, and carries both its index year and its division year. Joining the two
+divisions by code would read as one fact when it is two.
 
-### Where it lives
+Not stamped onto the spine. 200 centroids against a GiST index is milliseconds,
+and a build stage over 1.1 M parcels would buy nothing but a compute bill and a
+column that goes stale when CBS republishes.
 
-| piece | path |
+### Deals — מיסוי מקרקעין
+
+3.84 M reported deals from 1998, in a table that is **found rather than named**
+(`find_deals_table()`, by column signature): its physical name carries the
+dataset id and the corpus moved once already, from 47 per-settlement partitions
+into one table. The register publishes **no gush suffix**, so a deal
+attaches on the suffix-less `gp_key`, exactly like the gazetteer, and carries the
+same ambiguity caveat: where a גוש/חלקה pair covers several real parcels, the
+same deals are reported against each.
+
+The envelope carries a **summary** (count, span, sub-parcels, the latest deal);
+the full list is its own paged endpoint, because one parcel in a condo tower
+holds up to 1,850 deals — `7104-289` on Rothschild, across 392 sub-parcels.
+
+Every numeric column in the register parses as a clean integer, measured over all
+3.84 M rows, and every date is DD/MM/YYYY. That is what makes `_deal_row()` able
+to drop a field that fails to parse rather than guess: a failure means the
+publisher changed the format.
+
+**`to_date` is only STABLE**, so it can carry neither an expression index nor a
+correct ORDER BY. Both go through `nadlan_index.DEAL_SORT_KEY` — the same
+immutable `substr` rearrangement into sortable YYYYMMDD — which the index is
+built on and every query imports rather than retypes.
+
+### One endpoint for all of it
+
+`GET /api/nadlan/lookup` takes whichever identity the caller holds (`lat`+`lon`,
+`city`+`street`+`number`, `zip`, `gush`+`helka`, or free-text `q`) and returns
+whichever parts `fields=` asks for: `identity, point, zip, streets, addresses,
+stat_area, deals, geometry, sources, match`, or `all`. Two rules that are load
+bearing:
+
+* **An explicit identifier beats `q`.** A caller that named a גוש and a חלקה has
+  said what it means; sniffing over that could only get it wrong.
+* **An unknown field name is a 422, not a shrug.** A typo that quietly drops a
+  block is the worst failure mode an API shaped like this has.
+
+The four dedicated endpoints remain and return exactly the same envelope. The
+field selection also skips the *reads* it did not ask for, so `fields=identity`
+costs neither the statistical-area PIP nor the deals lookup.
+
+### Indexes it needs
+
+`ensure_source_indexes()` (stage `source_indexes`, opt-in) now also covers the
+deal register:
+
+| index | why |
 |---|---|
-| the report | `frontend/src/components/nadlan/NadlanGaps.tsx` (lazy chunk, ~10 kB gz) |
-| figure metadata | `frontend/src/components/nadlan/nadlanGapsFigures.ts` |
-| screenshots | `frontend/public/nadlan-gaps/fig-NN.jpg` + `thumb-NN.jpg` |
-| styles | `.ngap-*` block at the end of `frontend/src/index.css` |
+| `…_gush_chelka_idx (gush, chelka)` | the per-property lookup |
+| `…_settlement_idx (settlement, DEAL_SORT_KEY)` | the browse, keyed on the **name**: 674,340 rows (17.5%) carry an empty `settlement_code` and only 2,171 lack a name |
+| `…_date_idx (DEAL_SORT_KEY)` | date ranges and ordering across the whole register |
 
-Two things about it are deliberate and easy to undo by accident:
+They are named after the discovered table rather than declared statically, for
+the same reason the table is. The first already exists in production; run the
+stage to create the other two.
 
-1. **The screenshots are static files, not data URIs.** The report arrived as a
-   single HTML page with every image inlined in base64 (4 MB and 36 images
-   at first, 5.5 MB and 68 after the re-check). Inlined, they
-   would sit in the JS bundle and be paid for by every visitor to every page.
-2. **The grid shows separate 520px crops.** `loading="lazy"` on the full images
-   did not hold them back, the browser fetched every one on tab open, so the grid
-   has its own copies: all 68 pictures for 0.75 MB instead of 3.9 MB. The
-   full image is fetched only when the lightbox opens.
+## The MCP resource (`/nadlan/mcp`)
 
-A third is the `Ltr` helper. A cell like `+132,712 · 18%` is entirely
-bidi-neutral, so an RTL paragraph reorders it into `18% · 132,712+` and a
-leading minus lands after the digits. Numeric cells that carry a sign, a
-separator or two values are wrapped in an LTR isolate; cells that mix Hebrew
-with a number isolate only the numeric tail, and units such as מ״ר were moved
-into the column header rather than repeated per cell.
+Added 2026-09-20. A protected resource of its own on the shared authorization
+server, beside `/data/mcp`, `/elections/mcp` and the rest — one login, one
+`api_users` invite, one usage log.
 
-## The sixth tab: "שניים אוחזין בעסקה"
+**Why not a corner of the generic SQL MCP.** Answering "what is at גוש 6319
+חלקה 225" from a SQL console means knowing four things that are not visible in
+the schema, each of which returns a plausible wrong answer to a caller who was
+not told:
 
-`/projects/nadlan?tab=quiz` is the gap report as a trivia round. Every question,
-every number and every distractor comes from the report next door; nothing in
-the bank is invented.
+* gush/parcel pairs are ambiguous 0.63% of the time;
+* address→parcel is point-in-polygon, not a string join;
+* the statistical area is a spatial lookup, and its socio-economic index is
+  published on a **different** division;
+* the deal register carries no gush suffix.
 
-It exists because prose does not stick. A reader who is told that "מחיר העסקה"
-on nadlan.gov.il is the assessed value rather than the declared one nods and
-forgets; a player who guesses wrong and is told why remembers. So the round is
-built to be cheated on: the explanation follows every answer, right or wrong,
-and a link to the report sits on screen the whole time.
+So the knowledge is the product. `SERVER_INSTRUCTIONS` states all four as rules
+the caller must apply before presenting an answer, and every tool result carries
+`match.confidence` and the measured `caveats` rather than leaving them to be
+remembered.
 
-| piece | path |
+| tool | answers |
 |---|---|
-| the game | `frontend/src/components/nadlan/NadlanQuiz.tsx` (lazy chunk, ~7 kB gz) |
-| the bank | `frontend/src/components/nadlan/nadlanQuizQuestions.ts` |
-| styles | `.nquiz-*` block at the end of `frontend/src/index.css` |
+| `lookup_property` | any identifier in (gush+helka / city+street+number / zip / lat+lon / free text `q`), everything else out |
+| `parcel_deals` | that parcel's full deal history, paged, optionally one תת-חלקה |
+| `suggest_streets` | the official spelling, which is what an address lookup that returned nothing usually needs |
+| `parcel_geometry` | the polygon as GeoJSON |
+| `coverage_stats` | the counters and the real coverage percentages |
 
-Rules of the thing, in case it gets extended:
+The tools call the same functions as the REST API and the page, so the three
+surfaces cannot disagree about one property. `_caveats()` imports the REST
+router's list rather than keeping a second copy, which would drift the first
+time one is corrected.
 
-* **The bank is larger than a round**: 38 questions, 25 per round
-  (`ROUND_SIZE`). The surplus is what makes a
-  second round a different round; drop it and replays become identical.
-* **Both the questions and the answers are shuffled.** Without the second
-  shuffle, "the longest option" becomes a winning strategy, because the correct
-  answer is usually the one that needs a qualifier.
-* **Every question carries a `finding`**, the numbered section of the report at
-  `?tab=gaps` it is drawn from, and the number is shown with the explanation. A
-  player who wants to argue with an answer is told exactly where to go and check.
-  `finding: 0` means the appendix or the method section.
-* **No timer, no streak, no prompt to come back.** The tab is opt-in and it stays
-  that way.
-* **The bank follows the report.** A question whose answer the report no longer
-  supports is worse than no question. The 2026-09-10 re-check rewrote five whose
-  premise was "one sale per sub-parcel", corrected the numbers in four more, and
-  added eight about the history window.
+## The deal register itself
 
-The result is a score out of 25, a rank, and a Wordle-style 5×5 grid of 🟩/🟥
-that shares as plain text through `navigator.share` where it exists and through
-the clipboard elsewhere. Both can be refused by the browser, so the failure is
-reported in the UI rather than swallowed.
+The two tabs that were not lookups — the nadlan.gov.il gap report and the quiz
+built on it — moved to a project of their own at `/projects/deals` on
+2026-09-20, together with a browse over the whole register. See
+[docs/deals.md](deals.md).

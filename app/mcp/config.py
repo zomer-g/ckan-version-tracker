@@ -40,6 +40,18 @@ SQL_MCP_PREFIX = "/data/mcp"
 # means resolving a name across six tables whose recipient columns deliberately
 # differ. That join is the product; a caller should not have to rediscover it.
 ELECTIONS_MCP_PREFIX = "/elections/mcp"
+# Dedicated נדל"ן לעם MCP — one property, every identity. A resource of its own
+# rather than a corner of the SQL MCP because answering "what is at גוש 6319
+# חלקה 225" means knowing that the pair is ambiguous 0.63% of the time, that
+# address→parcel is point-in-polygon, and that the statistical area's
+# socio-economic index lives on a DIFFERENT CBS division. Each of those returns
+# a plausible wrong answer to a caller who was not told.
+NADLAN_MCP_PREFIX = "/nadlan/mcp"
+# Dedicated עסקאות נדל"ן MCP — the מיסוי מקרקעין register as free-text
+# questions. Separate from the property lookup because the questions are about
+# the MARKET ("where did prices move") rather than about one address, and they
+# are answered by aggregates that must be medians over a stated deal type.
+DEALS_MCP_PREFIX = "/deals/mcp"
 MCP_JWT_AUDIENCE = "over-mcp"
 MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60          # 1 hour
 MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -135,6 +147,28 @@ def elections_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the elections resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/elections/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{ELECTIONS_MCP_PREFIX}"
+
+
+def nadlan_mcp_url(request: Request, path: str = "") -> str:
+    """The נדל"ן לעם MCP resource URL, e.g. https://www.over.org.il/nadlan/mcp."""
+    return f"{base_url(request)}{NADLAN_MCP_PREFIX}{path}"
+
+
+def nadlan_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the nadlan resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/nadlan/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{NADLAN_MCP_PREFIX}"
+
+
+def deals_mcp_url(request: Request, path: str = "") -> str:
+    """The עסקאות נדל"ן MCP resource URL, e.g. https://www.over.org.il/deals/mcp."""
+    return f"{base_url(request)}{DEALS_MCP_PREFIX}{path}"
+
+
+def deals_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the deals resource's protected-resource metadata:
+    /.well-known/oauth-protected-resource/deals/mcp at the ROOT host."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{DEALS_MCP_PREFIX}"
 
 
 def google_callback_url(request: Request) -> str:

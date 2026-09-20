@@ -2882,25 +2882,11 @@ export interface ParquetTablesResponse {
   total: number;
 }
 
-export interface NadlanDeal {
-  date: string | null;
-  amount: string | null;
-  nature: string | null;
-  rooms: string | null;
-  area: string | null;
-  year_built: string | null;
-  sub_chelka: string | null;
-}
-
 export interface NadlanSourceBlock {
   table: string;
   fields: Record<string, unknown>;
   console_sql: string;
   row_url: string;
-  // Only the deals block carries rows inline. It is the one source that records
-  // what HAPPENED to a property rather than what it is, so a count and a link
-  // answer less than the last few deals do.
-  recent?: NadlanDeal[];
 }
 
 export interface NadlanAddress {
@@ -2913,6 +2899,56 @@ export interface NadlanAddress {
   lat: number | null;
   lon: number | null;
   match: string | null;
+}
+
+/** A property's CBS statistical area (א"ס), resolved by putting the parcel
+ *  centroid inside an area polygon. `socio` is deliberately a block of its own:
+ *  the socio-economic cluster is published only on the OLDER 2011 division,
+ *  which draws different boundaries, so it carries its own years. */
+export interface NadlanStatArea {
+  code: number | null;
+  yishuv_stat: number | null;
+  settlement_name: string | null;
+  rova: number | null;
+  tat_rova: number | null;
+  division: string;
+  population: number | null;
+  population_year: number;
+  main_function: string | null;
+  socio: {
+    eshkol: number | null;
+    index_year: number;
+    division: string;
+    yishuv_stat: number | null;
+  } | null;
+}
+
+/** One reported deal from the מיסוי מקרקעין register, typed. */
+export interface NadlanDeal {
+  date: string | null;
+  date_src: string | null;
+  amount: number | null;
+  declared_amount: number | null;
+  nature: string | null;
+  area_sqm: number | null;
+  rooms: number | null;
+  year_built: number | null;
+  portion: string | null;
+  sub_parcel: string | null;
+  settlement?: string | null;
+  settlement_code?: string | null;
+  gush?: string | null;
+  helka?: string | null;
+}
+
+/** What the envelope carries about a parcel's deals. The full list is its own
+ *  paged endpoint: one parcel in a condo tower holds up to 1,850 deals. */
+export interface NadlanDealSummary {
+  deals: number;
+  first_deal: string | null;
+  last_deal: string | null;
+  sub_parcels: number;
+  latest: NadlanDeal;
 }
 
 export interface NadlanProperty {
@@ -2931,6 +2967,11 @@ export interface NadlanProperty {
     streets: string[];
     addresses: NadlanAddress[];
   };
+  /** The two layers that DESCRIBE the property rather than identify it. Both
+   *  ride the same envelope as the identity, and both are null when the caller
+   *  switched them off or the parcel has nothing in them. */
+  stat_area: NadlanStatArea | null;
+  deals: NadlanDealSummary | null;
   sources: {
     parcels: NadlanSourceBlock;
     gazetteer: NadlanSourceBlock;
@@ -2938,6 +2979,7 @@ export interface NadlanProperty {
     address_list: NadlanSourceBlock;
     // Absent on a deployment that does not track the deals corpus.
     deals?: NadlanSourceBlock;
+    stat_area: NadlanSourceBlock;
   };
   match: { method: string | null; confidence: string; notes: string[] };
   // The parcel polygon as a GeoJSON *string*, present when the request asked
@@ -3009,6 +3051,135 @@ export const nadlan = {
   resolve: (q: string, radius_m = 0) =>
     request<NadlanEnvelope>(
       `/nadlan/resolve?q=${encodeURIComponent(q)}&radius_m=${radius_m}`),
+  /** One parcel's full deal history, newest first. Paged, because the envelope
+   *  only carries a summary — see NadlanDealSummary. */
+  deals: (gush: number, helka: number, limit = 50, offset = 0, subParcel?: string) =>
+    request<{ data: NadlanDeal[]; total: number; count: number }>(
+      `/nadlan/parcel/${gush}/${helka}/deals?limit=${limit}&offset=${offset}` +
+      (subParcel ? `&sub_parcel=${encodeURIComponent(subParcel)}` : "")),
+  /** The unified entry point: any identifier in, any subset of the answer out.
+   *  The dedicated calls above return the same envelope; this one exists so a
+   *  caller does not have to know which of them to use. */
+  lookup: (params: Record<string, string | number | undefined>) =>
+    request<NadlanEnvelope>("/nadlan/lookup?" + new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined && v !== "")
+        .map(([k, v]) => [k, String(v)])).toString()),
+};
+
+// ── עסקאות נדל"ן (deals) — the מיסוי מקרקעין register ───────────────────────
+// One publisher's rows, passed through rather than derived: `processed` is
+// false here, unlike every נדל"ן לעם answer. The same filter drives the
+// listing, the yearly series and the per-type breakdown, so a chart can never
+// describe a different population than the table beside it.
+
+export interface DealFilters {
+  settlement?: string;
+  settlement_code?: string;
+  gush?: number | string;
+  helka?: number | string;
+  sub_parcel?: string;
+  nature?: string;
+  date_from?: string;
+  date_to?: string;
+  min_amount?: number;
+  max_amount?: number;
+  min_rooms?: number;
+  max_rooms?: number;
+}
+
+export interface DealsStats {
+  deals: number;
+  first_deal: string | null;
+  last_deal: string | null;
+  settlements: number;
+  parcels: number;
+  natures: number;
+  scraped_at: string | null;
+  dataset_id: string;
+  source_url: string;
+  table: string;
+}
+
+export interface DealsSearchResult {
+  query: DealFilters;
+  data: NadlanDeal[];
+  count: number;
+  /** Counted to 10,000 and then reported as capped: an exact count of a city's
+   *  whole history costs real compute for a number nobody reads. */
+  total: number;
+  total_capped: boolean;
+  limit: number;
+  offset: number;
+  sort: string;
+  console_sql: string;
+  row_url: string;
+  processed: false;
+  caveats: string[];
+}
+
+export interface DealYear {
+  year: number;
+  deals: number;
+  median_amount: number | null;
+  median_area: number | null;
+}
+
+export interface DealNature {
+  nature: string | null;
+  deals: number;
+  median_amount: number | null;
+}
+
+export interface DealSettlement {
+  settlement: string;
+  settlement_code: string | null;
+  deals: number;
+  last_deal: string | null;
+}
+
+function dealQuery(f: DealFilters, extra: Record<string, string | number> = {}): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...f, ...extra })) {
+    if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+  }
+  return p.toString();
+}
+
+export interface DealComparison {
+  settlement: string;
+  year_from: number;
+  year_to: number;
+  deals_from: number;
+  deals_to: number;
+  median_from: number | null;
+  median_to: number | null;
+  change_pct: number | null;
+}
+
+export const deals = {
+  stats: () => request<DealsStats>("/deals/stats"),
+  settlements: () =>
+    request<{ data: DealSettlement[]; count: number }>("/deals/settlements"),
+  natures: () => request<{ data: DealNature[]; count: number }>("/deals/natures"),
+  search: (f: DealFilters, limit = 50, offset = 0, sort = "date_desc") =>
+    request<DealsSearchResult>("/deals/search?" + dealQuery(f, { limit, offset, sort })),
+  series: (f: DealFilters) =>
+    request<{ data: DealYear[] }>("/deals/series?" + dealQuery(f)),
+  breakdown: (f: DealFilters, limit = 20) =>
+    request<{ data: DealNature[] }>("/deals/breakdown?" + dealQuery(f, { limit })),
+  parcel: (gush: number, helka: number, limit = 50, offset = 0) =>
+    request<{ data: NadlanDeal[]; total: number }>(
+      `/deals/parcel/${gush}/${helka}?limit=${limit}&offset=${offset}`),
+  /** Two years, every settlement, side by side. `nature` matters: without it a
+   *  settlement whose mix shifted from flats to plots shows a "price change"
+   *  that is a composition change, and the response says so. */
+  compare: (yearFrom: number, yearTo: number, nature?: string, minDeals = 30,
+            order = "change_desc", limit = 30) =>
+    request<{ data: DealComparison[]; warning?: string }>(
+      `/deals/compare?year_from=${yearFrom}&year_to=${yearTo}` +
+      `&min_deals=${minDeals}&order=${order}&limit=${limit}` +
+      (nature ? `&nature=${encodeURIComponent(nature)}` : "")),
 };
 
 // ── שאלות לעם — חיפוש רוחבי (cross-source deep search) ──────────────────────

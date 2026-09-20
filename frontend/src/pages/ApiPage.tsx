@@ -13,6 +13,8 @@ import Abbr from "../components/a11y/Abbr";
  *   • Knesset — committee protocols + ODATA  (/api/knesset-db, /api/knesset-protocols)
  *   • Ocal    — public-figure diaries        (/api/ocal)
  *   • שאלות לעם — cross-source deep search   (/api/deep-search)
+ *   • נדל"ן לעם — one property, every identity (/api/nadlan)
+ *   • עסקאות נדל"ן — the מיסוי מקרקעין register (/api/deals)
  *   • SQL       — every queryable table + GeoJSON (/api/tables)
  * Each source also has a dedicated MCP server (see MCP_SERVERS / McpCard) —
  * including two with no public REST surface of their own (SQL, מידע לעם).
@@ -379,6 +381,128 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
     ],
   },
   {
+    id: "nadlan",
+    title: 'נדל"ן לעם — נכס אחד, כל צורות הזיהוי',
+    note: "הצלבה ברמת הנכס בין שכבת החלקות, גזטיר הנכסים, קובץ המיקוד ורשימת הכתובות. כתובת בסיס: /api/nadlan. · העיקרון: נכנסים עם צורת הזיהוי שיש לכם ויוצאים עם כל השאר, באותה עטיפה בדיוק — לא משנה באיזו נקודת כניסה השתמשתם. מעבר לזהות, כל תשובה נושאת גם את שתי השכבות שמתארות את הנכס: האזור הסטטיסטי (א\"ס) של הנקודה, שנקבע לפי מרכז החלקה בתוך שכבת הלמ\"ס, וסיכום עסקאות מיסוי מקרקעין שדווחו על אותם גוש וחלקה. · הנתונים מעובדים (processed=true) וכל תשובה נושאת את מגבלות הכיסוי שלה בשדה caveats — אלה מדידות, לא הסתייגות כללית.",
+    endpoints: [
+      {
+        path: "/api/nadlan/lookup",
+        description:
+          "נקודת הכניסה האחת: מזינים כל אחד מהמזהים — נקודה (lat+lon), כתובת (city+street+number), מיקוד (zip) או גוש־חלקה (gush+helka) — ובוחרים ב-fields אילו חלקים מהתשובה מעניינים אתכם. מזהה מפורש גובר על q: מי שנקב בגוש ובחלקה אמר מה כוונתו. שם שדה שאינו חלק מהעטיפה מוחזר כשגיאה ולא מתעלמים ממנו בשקט.",
+        params: [
+          { name: "lat / lon / radius_m", desc: "נקודה על המפה; radius_m=0 מחזיר את החלקה שמתחת לנקודה, וערך גדול יותר את החלקות שמרכזן במרחק הזה (עד 2,000 מ׳)" },
+          { name: "gush / helka / suffix", desc: "גוש, חלקה ותת-גוש" },
+          { name: "zip", desc: "מיקוד, 5 או 7 ספרות" },
+          { name: "city / street / number", desc: "כתובת" },
+          { name: "q", desc: "טקסט חופשי — נקודה, מיקוד או \"גוש 6319 חלקה 225\". נופל אחורה לכתובת מפורשת" },
+          { name: "fields", desc: 'אילו חלקים להחזיר, מופרדים בפסיק, או all: identity, point, zip, streets, addresses, stat_area, deals, geometry, sources, match. ברירת המחדל היא הכול למעט geometry — הוא הקריאה היחידה שנוגעת בטבלת החלקות (4.58 GB)' },
+          { name: "limit", desc: "מספר חלקות בתשובה (1-200, ברירת מחדל 50)" },
+        ],
+        example: "/api/nadlan/lookup?lat=32.0682&lon=34.7847&fields=identity,zip,stat_area,deals",
+      },
+      {
+        path: "/api/nadlan/parcel/{gush}/{helka}",
+        description:
+          "אותה תשובה, לפי גוש וחלקה. suffix מצמצם לתת-גוש; geometry=true מצרף את פוליגון החלקה; stat_area=false / deals=false מכבים את שתי שכבות התיאור כשלא צריך אותן.",
+        example: "/api/nadlan/parcel/6319/225?geometry=true",
+      },
+      {
+        path: "/api/nadlan/parcel/{gush}/{helka}/deals",
+        description:
+          "כל עסקאות מיסוי מקרקעין שדווחו על החלקה, מהחדשה לישנה, עם עימוד. בעטיפה עצמה יש רק סיכום, כי חלקה של מגדל מגורים מחזיקה מאות עסקאות (1,850 בשיא שנמדד). sub_parcel מצמצם לתת-חלקה אחת — במגדל זו הדירה הבודדת, והרמה היחידה שבה סדרת מחירים אומרת משהו.",
+        params: [
+          { name: "sub_parcel", desc: "תת-חלקה (שלוש ספרות; גם 7 יתקבל)" },
+          { name: "limit / offset", desc: "עימוד (limit 1-200)" },
+        ],
+        example: "/api/nadlan/parcel/7104/289/deals?sub_parcel=118",
+      },
+      {
+        path: "/api/nadlan/point / /zip/{zip} / /address",
+        description:
+          "שלוש נקודות הכניסה האחרות, כל אחת עם אותה עטיפה: לפי נקודה ורדיוס, לפי מיקוד (5 או 7 ספרות), ולפי יישוב+רחוב+מספר.",
+        example: "/api/nadlan/address?city=פתח תקווה&street=אבימלך&number=8",
+      },
+      {
+        path: "/api/nadlan/streets",
+        description: "השלמה אוטומטית לשמות רחובות, עם אפשרות לצמצם ליישוב אחד.",
+        example: "/api/nadlan/streets?q=אבימ&settlement=7900",
+      },
+      {
+        path: "/api/nadlan/stats",
+        description: "מוני העל של הפרויקט ואחוזי הכיסוי בפועל — כמה כתובות עם נקודה, כמה משויכות לחלקה, כמה עם מיקוד ברמת הכתובת.",
+        example: "/api/nadlan/stats",
+      },
+    ],
+  },
+  {
+    id: "deals",
+    title: 'עסקאות נדל"ן — מאגר מיסוי מקרקעין',
+    note: "3.84 מיליון עסקאות מקרקעין מדווחות מ-1998 ואילך, שהמפרסם מאפשר לקרוא גוש אחד בכל פעם. כתובת בסיס: /api/deals. · שלוש נקודות הקצה /search, /series ו-/breakdown מקבלות את אותם מסננים בדיוק, כדי שסיכום לא יוכל לתאר אוכלוסייה אחרת מזו שבטבלה שלידו. · בניגוד לשאר פרויקטי \"לעם\", כאן processed=false: אלה שורות המקור כפי שפורסמו, בלי חישוב ובלי תיקון. · total נספר עד 10,000 ואז מדווח total_capped=true — ספירה מדויקת של היסטוריית עיר שלמה היא עלות אמיתית עבור מספר שאיש לא קורא.",
+    endpoints: [
+      {
+        path: "/api/deals/search",
+        description:
+          "המאגר, מסונן וממוין. הסינון לפי יישוב הוא לפי השם כפי שפורסם (ל-17.5% מהשורות אין קוד יישוב במקור), והשמות המדויקים מגיעים מ-/settlements. כל תשובה נושאת גם console_sql ו-row_url — אותה שאילתה עצמה, להרצה ישירה בקונסולת /data.",
+        params: [
+          { name: "settlement", desc: "שם היישוב כפי שמופיע ב-/api/deals/settlements" },
+          { name: "gush / helka / sub_parcel", desc: "גוש, חלקה ותת-חלקה" },
+          { name: "nature", desc: "מהות העסקה, מתוך /api/deals/natures" },
+          { name: "date_from / date_to", desc: "טווח תאריכים בפורמט YYYY-MM-DD" },
+          { name: "min_amount / max_amount", desc: "טווח שווי מדווח בשקלים" },
+          { name: "min_rooms / max_rooms", desc: "טווח חדרים" },
+          { name: "sort", desc: "date_desc (ברירת מחדל) | date_asc | amount_desc | amount_asc | area_desc" },
+          { name: "limit / offset", desc: "עימוד (limit 1-200)" },
+        ],
+        example: "/api/deals/search?settlement=חיפה&nature=דירה&date_from=2024-01-01&sort=amount_desc",
+      },
+      {
+        path: "/api/deals/series",
+        description:
+          "מספר העסקאות וחציון השווי המדווח לכל שנה, תחת אותם מסננים בדיוק כמו /search. חציון ולא ממוצע: המאגר מערבב דירה אחת עם מכירת בניין שלם, ושורה אחת כזו מזיזה ממוצע במיליונים.",
+        example: "/api/deals/series?settlement=חיפה&nature=דירה",
+      },
+      {
+        path: "/api/deals/breakdown",
+        description: "פילוח לפי מהות העסקה תחת אותם מסננים — כמה עסקאות וחציון שווי לכל סוג.",
+        example: "/api/deals/breakdown?settlement=חיפה",
+      },
+      {
+        path: "/api/deals/compare",
+        description:
+          "שתי שנים, כל היישובים, זה לצד זה: מספר העסקאות וחציון המחיר בכל אחת, והשינוי באחוזים. min_deals חל על שתי השנים בנפרד, כדי שיישוב עם קומץ מכירות לא יראה קפיצה שהיא עסקה חריגה אחת. בלי nature התשובה מחזירה warning: תמהיל שהשתנה בין השנים נראה כמו שינוי מחיר.",
+        params: [
+          { name: "year_from / year_to", desc: "שתי שנים להשוואה" },
+          { name: "nature", desc: "מהות העסקה — מומלץ מאוד" },
+          { name: "min_deals", desc: "מינימום עסקאות בכל אחת מהשנים (ברירת מחדל 30)" },
+          { name: "order", desc: "change_desc (ברירת מחדל) | change_asc | median_desc | deals_desc" },
+          { name: "limit", desc: "מספר יישובים (1-200)" },
+        ],
+        example: "/api/deals/compare?year_from=2019&year_to=2025&nature=דירה בבית קומות",
+      },
+      {
+        path: "/api/deals/settlements",
+        description:
+          "כל היישובים שבמאגר, עם מספר העסקאות ותאריך העסקה האחרונה בכל אחד. השמות מוחזרים כלשונם במקור — הם המחרוזות המדויקות ש-/search מסנן לפיהן.",
+        example: "/api/deals/settlements",
+      },
+      {
+        path: "/api/deals/natures",
+        description: "סוגי העסקאות (47 במאגר), עם מספר העסקאות וחציון השווי בכל סוג.",
+        example: "/api/deals/natures",
+      },
+      {
+        path: "/api/deals/parcel/{gush}/{helka}",
+        description: "כל העסקאות בחלקה אחת, מהחדשה לישנה — אותה רשימה שמופיעה בעמוד הנכס בנדל\"ן לעם.",
+        example: "/api/deals/parcel/7104/289",
+      },
+      {
+        path: "/api/deals/stats",
+        description: "מוני העל: כמה עסקאות, מאיזה תאריך עד איזה, כמה יישובים וכמה חלקות — ומזהה המאגר במעקב, כדי שכל מספר יהיה קליק אחד ממקורו.",
+        example: "/api/deals/stats",
+      },
+    ],
+  },
+  {
     id: "deep-search",
     title: "שאלות לעם — חיפוש רוחבי בכל המקורות",
     note: "שאילתה אחת שנשלחת במקביל לכל הקורפוסים שגרסאות לעם מגיעה אליהם — מאגרים במעקב, טבלאות SQL, הלמ״ס, פרוטוקולי ועדות, ממ״מ, דוחות מבקר המדינה, החלטות ממשלה, יומני נבחרי ציבור, תאגידים, מפתח התקציב ומידע לעם. כתובת בסיס: /api/deep-search. · שני דברים שכדאי לדעת לפני שמשתמשים: (1) בקשה אחת לכל מקור — הדף שולח את המקורות בנפרד כדי שכל עמודה תיצבע ברגע שהיא חוזרת, וזו גם הסיבה שהמסננים שטוחים (f_<id>) ולא ממוענים לפי מקור. (2) total יכול לחזור null, וזה לעולם לא אומר אפס — הוא אומר שהספירה לא בוצעה (בקורפוסי טקסט מלא מוותרים עליה כי היא מכפילה את זמן התשובה). המספר האמיתי של התוצאות שהוחזרו הוא אורך results.",
@@ -463,6 +587,22 @@ const MCP_SERVERS: {
     purpose:
       "מרשם מימון הבחירות של מבקר המדינה: כל תרומה, ערבות והלוואה שדווחו בבחירות לרשויות המקומיות, למועצות אזוריות, למפלגות, בבחירות מקדימות ובבחירות מיוחדות. תשאול לפי שם אדם — מה נתן תורם מסוים ולמי, ומי מימן מועמד או מפלגה — עם סינון לפי סוג הפרסום (תרומה/ערבות/הלוואה), סוג הבחירות, יישוב, טווח תאריכים וטווח סכומים. שם אינו מזהה ייחודי, ולכן כל תשובה מפרטת אילו כתיבים נכללו בסכום.",
     tools: ["search_donations", "donor_profile", "recipient_profile", "top_donors", "stats", "list_election_types"],
+  },
+  {
+    key: "nadlan",
+    label: 'נדל"ן לעם — נכס אחד, כל צורות הזיהוי',
+    path: "/nadlan/mcp",
+    purpose:
+      "שואלים בשפה חופשית על נכס — \"מה יש בגוש 6319 חלקה 225\", \"מה הכתובת הזו\" — ומקבלים את כל צורות הזיהוי האחרות: גוש, חלקה ותת-גוש, יישוב ומחוז, כתובות ומיקודים, הנקודה על המפה, האזור הסטטיסטי (א\"ס) עם אוכלוסייה ומדד חברתי-כלכלי, וסיכום עסקאות מיסוי מקרקעין. השרת יודע את המלכודות שמפילות תשובה שנראית נכונה: צמד גוש-חלקה עמום, שיוך כתובת שהוא ספציאלי ולא השוואת מחרוזות, ומדד חברתי-כלכלי שמתפרסם על חלוקת אזורים אחרת.",
+    tools: ["lookup_property", "parcel_deals", "suggest_streets", "parcel_geometry", "coverage_stats"],
+  },
+  {
+    key: "deals",
+    label: 'עסקאות נדל"ן — מאגר מיסוי מקרקעין',
+    path: "/deals/mcp",
+    purpose:
+      "שאלות בשפה חופשית על שוק הנדל\"ן מעל 3.84 מיליון עסקאות מדווחות מ-1998: כמה נמכר, באיזה מחיר, איך זה השתנה לאורך השנים, ואיפה עלה או ירד יותר מכל. כל חישוב הוא חציון ולא ממוצע (שורה אחת יכולה להיות דירה או בניין שלם), ההשוואה בין יישובים דורשת מינימום עסקאות בשתי השנים, והסינון לפי יישוב הוא לפי השם — ל-17.5% מהשורות אין קוד יישוב במקור.",
+    tools: ["search_deals", "price_series", "compare_settlements", "list_settlements", "list_deal_types", "parcel_deals", "register_stats"],
   },
   {
     key: "odata",

@@ -22,6 +22,7 @@ export default function Footer() {
         { label: t("nav.ocal", "יומן לעם"), to: "/projects/ocal" },
         { label: t("nav.ocoi", "ניגוד עניינים לעם"), to: "/projects/ocoi" },
         { label: t("nav.nadlan", 'נדל"ן לעם'), to: "/projects/nadlan" },
+        { label: t("nav.deals", 'עסקאות נדל"ן'), to: "/projects/deals" },
       ],
     },
     {

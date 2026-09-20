@@ -21,7 +21,7 @@ import { useCallback, useMemo, useState } from "react";
 import { QUIZ_QUESTIONS, QuizQuestion, ROUND_SIZE } from "./nadlanQuizQuestions";
 
 const GAME_NAME = "שניים אוחזין בעסקה";
-const GAME_PATH = "/projects/nadlan?tab=quiz";
+const GAME_PATH = "/projects/deals?tab=quiz";
 
 /** One question as a round actually serves it: options shuffled, answer moved. */
 type Served = {

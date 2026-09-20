@@ -166,6 +166,13 @@ _STATIC: dict[str, PageMeta] = {
         description="הצלבה בין חלקות, גושים, כתובות ומיקוד — מיליון ומאה אלף חלקות מקושרות לכתובות.",
         canonical_path="/projects/nadlan",
     ),
+    "/projects/deals": PageMeta(
+        title="עסקאות נדל\"ן",
+        description=("מאגר עסקאות הנדל\"ן של מיסוי מקרקעין — 3.8 מיליון עסקאות "
+                     "מדווחות מ-1998, לחיפוש ולהשוואה, לצד דוח הפערים מול "
+                     "אתר הנדל\"ן הממשלתי."),
+        canonical_path="/projects/deals",
+    ),
     "/projects/odata": PageMeta(
         title="מידע לעם",
         description="מאגרי מידע שהתקבלו בבקשות חופש מידע, מיובאים ופתוחים לתשאול.",

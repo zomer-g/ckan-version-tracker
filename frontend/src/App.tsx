@@ -23,6 +23,7 @@ import ProjectImportPage from "./pages/ProjectImportPage";
 import OcalPage from "./pages/OcalPage";
 import OcoiPage from "./pages/OcoiPage";
 import NadlanPage from "./pages/NadlanPage";
+import DealsPage from "./pages/DealsPage";
 import QuestionsPage from "./pages/QuestionsPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
@@ -172,6 +173,9 @@ export default function App() {
           <Route path="/projects/ocal" element={<OcalPage />} />
           <Route path="/projects/ocoi" element={<OcoiPage />} />
           <Route path="/projects/nadlan" element={<NadlanPage />} />
+          {/* The deal register and the gap report, which used to be two tabs of
+              /projects/nadlan and were never property lookups. */}
+          <Route path="/projects/deals" element={<DealsPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/rationale" element={<RationalePage />} />
           {/* The page itself gates on `published` server-side, so the route may

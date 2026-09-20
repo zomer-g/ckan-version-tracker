@@ -60,6 +60,7 @@ from app.api.ocal import router as ocal_router
 from app.api.ocoi import router as ocoi_router
 from app.api.ocoi_admin import router as ocoi_admin_router
 from app.api.ocal_admin import router as ocal_admin_router
+from app.api.deals import router as deals_router
 from app.api.nadlan import router as nadlan_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
@@ -541,6 +542,7 @@ app.include_router(ocoi_router)
 app.include_router(ocoi_admin_router)
 app.include_router(ocal_admin_router)
 app.include_router(nadlan_router)
+app.include_router(deals_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)
@@ -611,6 +613,20 @@ app.include_router(elections_mcp_router)
 from app.mcp.sql_routes import sql_mcp_router, sql_mcp_wellknown_router
 app.include_router(sql_mcp_wellknown_router)
 app.include_router(sql_mcp_router)
+
+# Dedicated property MCP at /nadlan/mcp and deal-register MCP at /deals/mcp
+# (same OAuth server + api_users gate). Two resources rather than one because
+# they answer different shapes of question: "what is at this address" is a
+# lookup that has to state its own confidence, while "where did prices move" is
+# an aggregate that is only honest as a median over a stated deal type.
+# Registered before the SPA fallback so neither is swallowed by React.
+from app.mcp.nadlan_routes import nadlan_mcp_router, nadlan_mcp_wellknown_router
+app.include_router(nadlan_mcp_wellknown_router)
+app.include_router(nadlan_mcp_router)
+
+from app.mcp.deals_routes import deals_mcp_router, deals_mcp_wellknown_router
+app.include_router(deals_mcp_wellknown_router)
+app.include_router(deals_mcp_router)
 
 # Short links for shared /data console views: /s/<slug>. Registered before the
 # SPA fallback so the path resolves here rather than being swallowed as a React
