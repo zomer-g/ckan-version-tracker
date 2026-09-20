@@ -390,6 +390,36 @@ async def init_scheduler() -> None:
         misfire_grace_time=600,
     )
 
+    # נדל"ן לעם address spine → a tracked dataset with real version history.
+    # The interval is NOT the publish schedule: address_dataset.snapshot()
+    # refuses on its own count gate whenever the corpus is mid-build (a rebuild
+    # before the geocoded points are merged back is 20.8% short, and looks like
+    # a healthy build from every stage's own account). So this tick only asks;
+    # the answer is usually "not yet", and the cost of asking is two counts.
+    async def address_dataset_snapshot_job() -> None:
+        if not _settings.append_database_url:
+            return
+        from app.database import async_session
+        from app.services import address_dataset
+        try:
+            async with async_session() as db:
+                res = await address_dataset.snapshot(db)
+                await db.commit()
+            if res.get("published"):
+                logger.info("address_dataset: published v%s (%s rows)",
+                            res.get("version"), res.get("rows"))
+        except Exception:  # noqa: BLE001 — never kill the scheduler
+            logger.exception("address dataset snapshot tick failed")
+
+    scheduler.add_job(
+        address_dataset_snapshot_job,
+        trigger=IntervalTrigger(hours=6),
+        id="address_dataset_snapshot",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     # Admin "dataset sizes" cache: one package_show per active dataset on the
     # odata mirror, fanned out with a small concurrency cap (see
     # app/api/admin.py _compute_dataset_sizes). Used to run inline from the

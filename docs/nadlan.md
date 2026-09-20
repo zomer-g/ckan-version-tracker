@@ -600,3 +600,80 @@ The two tabs that were not lookups — the nadlan.gov.il gap report and the quiz
 built on it — moved to a project of their own at `/projects/deals` on
 2026-09-20, together with a browse over the whole register. See
 [docs/deals.md](deals.md).
+
+## The address spine is a published dataset (2026-09-20)
+
+`over_re_addresses` used to exist only as a console table: queryable at `/data`,
+but with no page, no version history, no download and nothing archiving it over
+time. It is now a tracked dataset in its own right — slug `over-re-addresses`,
+one CSV resource per version in R2.
+
+### Both grids, and where each point came from
+
+Three columns landed on the table first, and they are the reason publishing it
+is worth anything:
+
+| column | what it is |
+|---|---|
+| `itm_x`, `itm_y` | רשת ישראל, EPSG:6991. `GENERATED ALWAYS AS (ST_X\|ST_Y(ST_Transform(point, 6991))) STORED` |
+| `point_source` | `address_register` or `govmap` — written by whichever code set the point |
+
+The ITM was always in the data and was being thrown away: the official register
+publishes X/Y in Israeli TM, `build_addresses` converts it to WGS84 to store
+`point`, and every consumer that wanted the grid the country actually uses had
+to convert it back on each export. The round trip is lossless — for
+לויד ג'ורג' 4 ירושלים the stored point returns 221117.92 / 630263.29 against the
+register's raw 221117.92502654 / 630263.2939939, i.e. within a centimetre.
+
+`point_source` cannot be reconstructed after the fact: `over_re_geocode` is
+`permission denied` for the console role, so a reader joining the two tables
+cannot tell the two kinds of point apart. It matters because they differ by more
+than an order of magnitude. Measured against the register's raw X/Y on 45,863
+addresses: **87.2% agree within 10 cm, 9.4% within 5 m, 3.0% are 5–50 m out, and
+0.38% (175) are over 50 m, the worst at 5.5 km.** A confident wrong point lands
+inside somebody else's parcel and nothing downstream notices — which is exactly
+why the column is published next to the coordinate.
+
+Current split, from production: **357,689 `address_register` (79.2%) /
+93,978 `govmap` (20.8%)** of 451,667 points, over 617,876 addresses. That split
+is also why the dataset is filed under גרסאות לעם as a processed product and not
+under GovMap: four fifths of it is the state's own register.
+
+### The gate: a version is decided by counts, never by a schedule
+
+The table passes through states that look finished and are not, and both would
+publish a version that is quietly, plausibly wrong:
+
+* `addresses` TRUNCATEs the spine and rebuilds from the two source files alone —
+  **357,679 points against 451,667** once the geocoded ones are folded back.
+* `pip` links only the points that exist when it runs, and
+  `merge_into_addresses` runs on its own 15-minute tick independent of the
+  build. So "after pip" is not sufficient either: a build finishing pip before
+  the next merge tick leaves 357,679 points *and* links for only those.
+
+Every stage reports `ok` in both cases. What separates them from a finished
+corpus is the row count, so `address_dataset.gate()` reads counts and refuses
+below 98% of the previous version's points or parcel links.
+
+**A refusal is never silent, and that is deliberate.** A bare high-water mark
+has no way down: a legitimate permanent shrink — a locality dropped from the
+address list, a dedupe, a source correction — would freeze the dataset for good,
+and a silent freeze is indistinguishable from "nothing has changed since the
+last version". That is [the mevaker failure](WEEKLY_HEALTH_CHECK.md) wearing
+different clothes. So each refusal is written to `last_error`, and three in a row
+raise `import_warning`, which the dataset page shows to readers. A human then
+decides whether the corpus really shrank and passes `force`.
+
+### Running it
+
+The scheduler asks every 6 hours (`address_dataset_snapshot`); the interval is
+not a publish schedule, because the gate answers "not yet" for most of them.
+
+```
+GET  /api/admin/nadlan/dataset/state       → counts, previous counts, `blocked`
+POST /api/admin/nadlan/dataset/snapshot    → publish now
+POST /api/admin/nadlan/dataset/snapshot?force=true   → override the gate
+```
+
+`state` returns the refusal without performing it, so a panel can show the
+reason rather than offering a button that silently does nothing.

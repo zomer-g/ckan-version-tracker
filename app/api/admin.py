@@ -3393,6 +3393,75 @@ async def nadlan_geocode_merge(request: Request, user: User = Depends(get_admin_
     return await geocode_queue.merge_into_addresses()
 
 
+@router.get("/nadlan/dataset/state")
+@limiter.limit("30/minute")
+async def nadlan_dataset_state(
+    request: Request,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What a snapshot would do right now, without doing it.
+
+    Returns the live counts, the counts the last published version carried, and
+    ``blocked`` — the gate's refusal in Hebrew, or null when a snapshot would
+    publish. The panel can show the reason instead of offering a button that
+    silently does nothing.
+    """
+    from app.services import address_dataset
+    from app.models.version_index import VersionIndex
+    from sqlalchemy import select as _select
+
+    counts = await address_dataset.current_counts()
+    ds = (await db.execute(
+        _select(TrackedDataset).where(
+            TrackedDataset.ckan_name == address_dataset.DATASET_SLUG)
+    )).scalar_one_or_none()
+    latest = None
+    if ds is not None:
+        latest = (await db.execute(
+            _select(VersionIndex)
+            .where(VersionIndex.tracked_dataset_id == ds.id)
+            .order_by(VersionIndex.version_number.desc()).limit(1)
+        )).scalar_one_or_none()
+    previous = address_dataset._previous_counts(latest)
+    return {
+        "dataset_id": str(ds.id) if ds else None,
+        "slug": address_dataset.DATASET_SLUG,
+        "latest_version": latest.version_number if latest else None,
+        "counts": counts,
+        "previous_counts": previous or None,
+        "blocked": address_dataset.gate(counts, previous),
+        "refusal_streak": ((ds.scraper_config or {}).get("refusal_streak")
+                           if ds else None),
+        "import_warning": ds.import_warning if ds else None,
+    }
+
+
+@router.post("/nadlan/dataset/snapshot")
+@limiter.limit("6/minute")
+async def nadlan_dataset_snapshot(
+    request: Request,
+    force: bool = False,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Publish a version of the address spine now, or say why it was withheld.
+
+    ``force=true`` bypasses the count gate — for the case where the corpus
+    legitimately shrank and a human has looked at it. It is logged with the
+    admin's address precisely because it overrides the guard.
+    """
+    from app.services import address_dataset
+    res = await address_dataset.snapshot(db, force=force)
+    await db.commit()
+    if force:
+        logger.warning("address dataset snapshot FORCED by %s: %s",
+                       user.email, res.get("published"))
+    else:
+        logger.info("address dataset snapshot by %s: %s", user.email, res)
+    return res
+
+
 @router.get("/nadlan/geocode/state")
 @limiter.limit("30/minute")
 async def nadlan_geocode_state(
