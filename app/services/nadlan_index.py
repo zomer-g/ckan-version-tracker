@@ -119,7 +119,7 @@ ALL_TABLES = [PARCELS_TABLE, GAZ_TABLE, STREETS_TABLE, STREET_ALIASES_TABLE,
               ZIP5_TABLE, STATE_TABLE]
 
 STAGES = ["source_indexes", "parcels", "gazetteer", "postal_localities",
-          "streets", "addresses", "zip5", "pip"]
+          "streets", "addresses", "zip5", "municipal", "pip"]
 # What a bare build() leaves out. `pip` is NOT in here: see build()'s docstring —
 # it rebuilds the links that `addresses` has just thrown away, and a rebuild that
 # skips it leaves the address spine with no parcel at all.
@@ -1720,6 +1720,27 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
 
 
 # ── driver ────────────────────────────────────────────────────────────────────
+async def _build_municipal() -> dict:
+    """Re-fold the municipal address layers into the spine.
+
+    A stage, and a DEFAULT one, for the same reason ``pip`` had to become one:
+    ``addresses`` TRUNCATE+INSERTs the spine from the two source files alone, so
+    a rebuild deletes every address that came from a municipal layer — 22,095 of
+    them as of 2026-09-20 — and nothing else would put them back. The geocoded
+    points survive a rebuild because ``build_addresses`` re-arms them; these have
+    no such mechanism and do not need one, because the merge is idempotent.
+
+    Ordered AFTER ``addresses`` (which must exist first) and BEFORE ``pip``
+    (which links the rows it adds). Getting that order wrong is how the first
+    run left 22,095 addresses with a coordinate and no parcel.
+
+    Imported inside the function: ``address_municipal`` imports from this
+    module, so a module-level import would be circular.
+    """
+    from app.services import address_municipal
+    return await address_municipal.merge()
+
+
 _BUILDERS = {
     "source_indexes": ensure_source_indexes,
     "parcels": build_parcels,
@@ -1728,6 +1749,7 @@ _BUILDERS = {
     "streets": build_streets,
     "addresses": build_addresses,
     "zip5": build_zip5,
+    "municipal": lambda: _build_municipal(),
     "pip": build_pip,
 }
 

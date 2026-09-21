@@ -119,7 +119,7 @@ def test_the_report_does_not_write():
 
 
 def test_geometry_is_centroided_because_only_three_layers_are_points():
-    """Only 3 of the 7 layers are ST_Point: ערד and קרית טבעון publish
+    """4 of the 7 layers are ST_Point and 3 are not: ערד and קרית טבעון publish
     ST_MultiPoint and שדרות ST_MultiLineString. ST_X/ST_Y reject anything that
     is not a POINT — which is how the first production run died, after three
     layers had already committed. The target column is geometry(Point,4326)
@@ -139,3 +139,30 @@ def test_the_report_predicts_what_the_merge_will_actually_insert():
     src = inspect.getsource(am.layer_report)
     assert "o.house_suffix IS NOT DISTINCT FROM d.house_suffix" in src, (
         "the report's existence test must use the same key as the insert")
+
+
+# ── a rebuild must not delete what the merge added ────────────────────────────
+def test_the_merge_is_a_build_stage():
+    """`addresses` TRUNCATE+INSERTs the spine from the two source files alone,
+    so a rebuild deletes every municipally-sourced address — 22,095 of them —
+    and nothing else puts them back. The geocoded points survive because
+    build_addresses re-arms them; these need the merge re-run instead."""
+    from app.services import nadlan_index as ni
+    assert "municipal" in ni.STAGES
+    assert "municipal" in ni._BUILDERS
+
+
+def test_it_is_in_the_default_set():
+    """Opt-in is how pip came to delete every parcel link on each default
+    build. The same mistake is available here."""
+    from app.services import nadlan_index as ni
+    assert "municipal" not in ni.DEFAULT_SKIP
+
+
+def test_it_runs_after_addresses_and_before_pip():
+    """After `addresses`, which must exist first; before `pip`, which links the
+    rows it adds. Getting that order wrong is exactly how the first production
+    run left 22,095 addresses with a coordinate and no parcel."""
+    from app.services import nadlan_index as ni
+    assert ni.STAGES.index("addresses") < ni.STAGES.index("municipal")
+    assert ni.STAGES.index("municipal") < ni.STAGES.index("pip")

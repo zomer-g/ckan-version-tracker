@@ -86,8 +86,9 @@ def _layer_cte(table: str, town: str, st: str, hn: str, ot: str | None) -> str:
                coalesce(over_house_suffix(l.{hn}::text), {suffix})    AS house_suffix,
                l.{st}::text                                           AS street_raw,
                l.{hn}::text                                           AS house_raw,
-               -- ST_Centroid, not the geometry itself: only 3 of the 7 layers
-               -- are ST_Point. ערד and קרית טבעון publish ST_MultiPoint and
+               -- ST_Centroid, not the geometry itself: 4 of the 7 layers are
+               -- ST_Point (באר שבע, מודיעין, נס ציונה, בית אל) and 3 are not.
+               -- ערד and קרית טבעון publish ST_MultiPoint and
                -- שדרות publishes ST_MultiLineString, and ST_X/ST_Y reject
                -- anything that is not a POINT — which is exactly how the
                -- first run of this died, after three layers had committed.

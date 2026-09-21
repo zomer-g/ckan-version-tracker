@@ -183,13 +183,27 @@ def test_every_stage_has_a_builder():
     assert set(ni.STAGES) == set(ni._BUILDERS)
 
 
-def test_default_build_skips_the_two_expensive_opt_ins():
-    """source_indexes is a one-off and pip is the only stage with material Neon
-    compute cost — neither may run just because someone pressed rebuild."""
-    default = [s for s in ni.STAGES if s not in ("source_indexes", "pip")]
-    assert "pip" not in default and "source_indexes" not in default
+def test_the_default_build_skips_only_source_indexes():
+    """Rewritten 2026-09-21. This used to assert that `pip` was skipped too, and
+    it kept passing after that stopped being true only because it computed its
+    own exclusion list instead of reading DEFAULT_SKIP — so it asserted the
+    module's behaviour matched a hardcoded array rather than its own declared
+    intent. pip is now deliberately in the default set: `addresses`
+    TRUNCATE+INSERTs the spine and only `pip` writes parcel_key, so a default
+    build without it silently deleted every address→parcel link (observed in
+    production 2026-09-20: 617,876 addresses, 0 with a parcel).
+
+    What the test guards now is the thing that is still true — source_indexes is
+    a one-off over tables this module does not own — and it reads DEFAULT_SKIP,
+    so a future change to what is skipped shows up here instead of hiding."""
+    default = [s for s in ni.STAGES if s not in ni.DEFAULT_SKIP]
+    assert ni.DEFAULT_SKIP == ("source_indexes",)
+    assert "source_indexes" not in default
+    # The stages that repair what `addresses` throws away must be in the
+    # default set, or a bare rebuild is destructive.
+    assert "pip" in default and "municipal" in default
     assert default == ["parcels", "gazetteer", "postal_localities",
-                       "streets", "addresses", "zip5"]
+                       "streets", "addresses", "zip5", "municipal", "pip"]
 
 
 def test_every_ddl_column_added_after_launch_has_a_migration():
