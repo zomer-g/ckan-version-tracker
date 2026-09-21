@@ -49,6 +49,16 @@ CAVEATS = [
     "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא "
     "מיקוד כלל-יישובי אחד (מסומן zip_level=locality).",
     "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד — לא למספר בית.",
+    # A municipal address layer is not obliged to publish a POINT. Measured on
+    # the seven layers merged so far: four are ST_Point, two are single-part
+    # ST_MultiPoint (whose centroid is that same point, so nothing is lost),
+    # and one publishes ST_MultiLineString — segments of at most 12.7 m, 3.2 m
+    # on average, so its centroid is within about six metres of either end.
+    # Close enough to place a house on its parcel, not close enough to call a
+    # doorway, and the reader is told which rather than left to assume.
+    "נקודות כתובת שמקורן בשכבות כתובות עירוניות מסומנות "
+    "point_source='municipal_<מזהה שכבה>'. כשהשכבה העירונית מפרסמת קו במקום "
+    "נקודה, הנקודה השמורה היא מרכז אותו קו — מיקום של הכתובת, לא של פתח הבניין.",
     "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
     # The deal register is keyed on גוש+חלקה with no suffix, exactly like the
     # gazetteer — so it inherits the same ambiguity, and says so.

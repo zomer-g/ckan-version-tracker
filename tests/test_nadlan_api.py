@@ -146,11 +146,15 @@ def test_caveats_travel_with_every_answer(client, monkeypatch):
     _stub_lookup(monkeypatch)
     body = client.get("/api/nadlan/parcel/6319/225").json()
     assert body["processed"] is True
-    assert len(body["caveats"]) == 5
+    # Each limit is pinned by the thing that makes it that limit, rather than by
+    # a count of them: the count is not the invariant, and a test that asserts
+    # it fails on the one change we WANT to be easy — disclosing one more.
     assert any("91" in c for c in body["caveats"])         # postal locality limit
     assert any("מספר בית" in c for c in body["caveats"])   # gazetteer street-only
     assert any("תת-גוש" in c for c in body["caveats"])     # deals key on gush+helka
     assert any("2011" in c for c in body["caveats"])       # the socio index division
+    assert any("municipal_" in c for c in body["caveats"])  # a line's centroid
+    assert all(c.strip() == c and len(c) > 20 for c in body["caveats"])
 
 
 def test_ambiguous_parcel_is_downgraded_not_hidden(client, monkeypatch):
