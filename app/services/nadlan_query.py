@@ -299,18 +299,44 @@ async def explain_address_miss(city: str, street: str,
         zips = sorted({a["zip7"] for a in addresses if a.get("zip7")})
         points = [a for a in addresses
                   if a.get("point") is not None or a.get("lat") is not None]
-        why = ("הכתובת אינה משויכת לחלקה, ולכן אין חלקה להציג. שיוך נעשה לפי "
-               "נקודה בתוך פוליגון, "
-               + ("ולכתובת הזו אין קואורדינטות." if not points
-                  else "והנקודה של הכתובת הזו אינה נופלת בתוך חלקה רשומה.")
-               + " כ-30% מהכתובות בישראל במצב הזה. אפשר לאתר את החלקה בלשונית המפה.")
+
+        # "The point does not fall inside a registered parcel" is a claim about
+        # THIS address, and it is the wrong claim for a locality the parcel
+        # register does not cover at all: there is nothing there to fall into.
+        # 51 of 321 localities with addresses hold no parcels under their own
+        # settlement code, covering 13,681 addresses (measured 2026-09-21).
+        # Some are beyond the Green Line, where the register genuinely stops;
+        # others file their parcels under a parent locality's code, and there
+        # the point-in-polygon link succeeds anyway — which is why this asks the
+        # register rather than assuming either.
+        sc = addresses[0].get("settlement_code")
+        covered = True
+        if sc is not None:
+            probe = await _fetch(
+                f"SELECT EXISTS (SELECT 1 FROM public.{_qi(PARCELS_TABLE)} "
+                "WHERE settlement_code = $1) AS ok", sc)
+            covered = bool(probe and probe[0]["ok"])
+
+        if not covered:
+            why = ("מרשם החלקות שבידינו אינו כולל חלקות ביישוב הזה כלל, ולכן "
+                   "אין גוש-חלקה להציג עבורה. זו מגבלת כיסוי של המרשם ולא כשל "
+                   "בהתאמה — הכתובת עצמה נמצאה, והמיקום שלה תקף.")
+        else:
+            why = ("הכתובת אינה משויכת לחלקה, ולכן אין חלקה להציג. שיוך נעשה "
+                   "לפי נקודה בתוך פוליגון, "
+                   + ("ולכתובת הזו אין קואורדינטות." if not points
+                      else "והנקודה של הכתובת הזו אינה נופלת בתוך חלקה רשומה.")
+                   + " כ-29% מהכתובות בישראל במצב הזה. אפשר לאתר את החלקה "
+                     "בלשונית המפה.")
         return {
-            "reason": "addresses_without_parcel",
+            "reason": ("locality_not_in_parcel_register" if not covered
+                       else "addresses_without_parcel"),
             "settlement_name": (addresses[0].get("settlement_name") or city),
             "street_name": (addresses[0].get("street_name") or street),
             "n_addresses": len(addresses),
             "zip7": zips,
             "has_point": bool(points),
+            "parcel_register_covers_locality": covered,
             "message": "הכתובת נמצאה במאגר. " + why,
         }
 

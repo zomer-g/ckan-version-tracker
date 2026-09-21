@@ -51,11 +51,17 @@ def client(monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _stub_lookup(monkeypatch, parcels=(_PARCEL,), addresses=()):
+def _stub_lookup(monkeypatch, parcels=(_PARCEL,), addresses=(),
+                 parcel_register_covers=True):
     # Only the DB layer is stubbed — property_envelope() itself runs for real,
     # so the envelope shape, the source deep-links and the confidence downgrade
     # are genuinely exercised rather than mocked away.
     async def _fetch(sql, *args):
+        # The miss path asks whether the parcel register holds ANY parcel for
+        # this locality before it blames the address's own point. Answering []
+        # here would make every stubbed locality look uncovered.
+        if "EXISTS" in sql and "settlement_code" in sql:
+            return [{"ok": parcel_register_covers}]
         return []
 
     async def _deals_table():
@@ -585,6 +591,41 @@ def test_an_address_with_no_parcel_is_reported_as_found_not_as_missing(client, m
     assert "לא נמצאה" not in miss["message"], "it WAS found"
     # The rows themselves ride the envelope, so the page can show what we hold.
     assert body["addresses"][0]["zip7"] == "8603162"
+
+
+def test_a_locality_the_register_does_not_cover_says_so_instead(client, monkeypatch):
+    """"The point does not fall inside a registered parcel" is a claim about
+    this address, and it is false where the register holds no parcels for the
+    locality at all — there is nothing there to fall into.
+
+    Measured on the live index 2026-09-21: 51 of the 321 localities that have
+    addresses hold zero parcels under their own settlement_code, covering
+    13,681 addresses. Some are beyond the Green Line, where the parcel register
+    stops; others file their parcels under a parent locality's code, and there
+    the link succeeds anyway. The two cannot be told apart by guessing, so the
+    miss path asks the register — and a reader in the first group is told about
+    coverage rather than blamed for a correct question."""
+    addr = dict(_ADDR, settlement_name="בית אל", settlement_code=3574)
+    _stub_lookup(monkeypatch, parcels=(), addresses=(addr,),
+                 parcel_register_covers=False)
+    body = client.get("/api/nadlan/address?city=בית אל&street=הרצל&number=1").json()
+    miss = body["miss"]
+    assert miss["reason"] == "locality_not_in_parcel_register"
+    assert miss["parcel_register_covers_locality"] is False
+    assert "מגבלת כיסוי" in miss["message"]
+    assert "אינה נופלת" not in miss["message"], "that would blame the address"
+
+
+def test_a_covered_locality_still_blames_the_point_not_the_register(client, monkeypatch):
+    """The other side of the same fork, so the two cannot collapse into one."""
+    addr = dict(_ADDR, settlement_code=2200, lat=31.06, lon=35.03)
+    _stub_lookup(monkeypatch, parcels=(), addresses=(addr,),
+                 parcel_register_covers=True)
+    miss = client.get(
+        "/api/nadlan/address?city=דימונה&street=הרצל&number=1").json()["miss"]
+    assert miss["reason"] == "addresses_without_parcel"
+    assert miss["parcel_register_covers_locality"] is True
+    assert "מגבלת כיסוי" not in miss["message"]
 
 
 def test_a_house_number_that_really_is_absent_still_says_so(client, monkeypatch):
