@@ -702,24 +702,41 @@ async def legacy_ocoi_search(request: Request, q: str = ""):
 # job: a copy is a second source of truth, and the one thing we know about this
 # pair is that they go stale — they sat 371 commits behind before anyone
 # noticed. The About page embeds and links to these two routes.
+_REPO_ROOT = Path(__file__).parent.parent
+_HTML = "text/html; charset=utf-8"
+_PPTX = ("application/vnd.openxmlformats-officedocument"
+         ".presentationml.presentation")
+
 _STORY_PAGES = {
-    "timeline": Path(__file__).parent.parent / "over-timeline.html",
-    "deck": Path(__file__).parent.parent / "over-features-deck.html",
+    # name: (file, media type, download filename or None to render in place)
+    "timeline": ("over-timeline.html", _HTML, None),
+    "deck": ("over-features-deck.html", _HTML, None),
+    # The spatial deck is a real .pptx — built by scripts/build_spatial_deck.py
+    # from scripts/spatial_deck_content.py, so its numbers can be corrected and
+    # the file rebuilt rather than hand-edited in PowerPoint.
+    "spatial-deck.pptx": ("over-spatial-deck.pptx", _PPTX,
+                          "over-spatial-deck.pptx"),
 }
 
 
 @app.get("/story/{name}", include_in_schema=False)
 async def serve_story_page(name: str):
-    page = _STORY_PAGES.get(name)
-    if page is None or not page.is_file():
+    entry = _STORY_PAGES.get(name)
+    if entry is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    return FileResponse(
-        page,
-        media_type="text/html; charset=utf-8",
-        # Revalidated hourly: these change when someone runs the update skill,
-        # which is rare but should not need a cache bust to become visible.
-        headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"},
-    )
+    filename, media_type, download_as = entry
+    page = _REPO_ROOT / filename
+    if not page.is_file():
+        raise HTTPException(status_code=404, detail="Not Found")
+    headers = {
+        # Revalidated hourly: these change when someone runs the update skill or
+        # rebuilds the deck, which is rare but should not need a cache bust to
+        # become visible.
+        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+    }
+    if download_as:
+        headers["Content-Disposition"] = 'attachment; filename="%s"' % download_as
+    return FileResponse(page, media_type=media_type, headers=headers)
 
 
 # Serve frontend SPA (built by Vite)

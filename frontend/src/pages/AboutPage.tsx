@@ -174,6 +174,18 @@ export default function AboutPage() {
           <p className="story-embed-link">
             <ExtLink href="/story/timeline">{t("about.story_open_timeline")}</ExtLink>
           </p>
+
+          {/* A .pptx cannot be embedded, so this one is presented as what it
+              is: a file to download and present from. Not an <ExtLink> — the
+              route answers with Content-Disposition: attachment, so a new tab
+              would open and immediately close itself. */}
+          <h3 className="story-embed-head">{t("about.story_pptx_title")}</h3>
+          <p className="text-muted text-sm">{t("about.story_pptx_desc")}</p>
+          <p className="story-embed-link">
+            <a href="/story/spatial-deck.pptx" download>
+              {t("about.story_download_pptx")}
+            </a>
+          </p>
         </div>
 
         {/* WCAG 3.1.3 (Unusual Words) and 3.1.4 (Abbreviations) ask that a
