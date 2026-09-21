@@ -197,3 +197,54 @@ def test_both_reasons_for_a_missing_parcel_are_counted():
     src = inspect.getsource(ad.current_counts)
     assert "parcel_key IS NULL AND point IS NULL" in src
     assert "parcel_key IS NULL AND point IS NOT NULL" in src
+
+
+# ── never handed to the worker fleet ─────────────────────────────────────────
+def test_the_dataset_declares_itself_externally_pushed():
+    """No worker can produce this: it is built here from our own tables. Without
+    push_mode=external every poll queued a scrape task that a worker claimed and
+    failed with "no engine for kind='over_internal'" — 20 failures in 40
+    seconds on 2026-09-22, filling the admin's recent-failures panel."""
+    src = __import__("inspect").getsource(ad.ensure_dataset)
+    assert '"push_mode": "external"' in src
+
+
+def test_the_row_that_already_exists_is_backfilled(monkeypatch):
+    """ensure_dataset returned early for an existing row, so declaring the key
+    only at creation would never have reached the one row in production."""
+    import asyncio
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(scraper_config={"kind": "over_internal",
+                                          "storage_backend": "r2"})
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return row
+
+    class _DB:
+        flushed = 0
+
+        async def execute(self, *_a, **_k):
+            return _Result()
+
+        async def flush(self):
+            _DB.flushed += 1
+
+    got = asyncio.run(ad.ensure_dataset(_DB()))
+    assert got is row
+    assert row.scraper_config["push_mode"] == "external"
+    assert row.scraper_config["kind"] == "over_internal", "nothing else changes"
+    assert _DB.flushed == 1
+
+    # ...and a second call is a no-op, not a second write.
+    asyncio.run(ad.ensure_dataset(_DB()))
+    assert _DB.flushed == 1
+
+
+def test_an_externally_pushed_dataset_is_recognised_by_the_model():
+    """The declaration only helps if it is the key the poll loop reads."""
+    from app.models.tracked_dataset import TrackedDataset
+    ds = TrackedDataset(scraper_config={"kind": "over_internal",
+                                        "push_mode": "external"})
+    assert ds.is_externally_pushed is True

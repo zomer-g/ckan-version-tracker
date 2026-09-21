@@ -655,6 +655,21 @@ def add_poll_job(
     Subsequent fires anchor off previous_fire_time, so the chosen
     1-second offset doesn't propagate into the cadence.
     """
+    # A non-positive interval means "do not poll this", and it must not be
+    # handed to APScheduler: IntervalTrigger(seconds=0) is silently rewritten to
+    # ONE SECOND. That is how the נדל"ן לעם address dataset — registered with
+    # poll_interval=0 precisely because nothing polls it — was polled every
+    # second from the moment it existed, each poll queueing a scrape task that
+    # a worker claimed and failed ("no engine for kind='over_internal'"),
+    # 20 failures in 40 seconds on 2026-09-22 and filling the admin's
+    # recent-failures panel. It was the only dataset in the catalog with a
+    # zero interval, so this changes nothing else.
+    if not interval_seconds or interval_seconds <= 0:
+        remove_poll_job(dataset_id)
+        logger.info("No poll job for %s: interval %r means not polled",
+                    dataset_id, interval_seconds)
+        return
+
     now = datetime.now(timezone.utc)
     interval = timedelta(seconds=interval_seconds)
     immediate = now + timedelta(seconds=1)

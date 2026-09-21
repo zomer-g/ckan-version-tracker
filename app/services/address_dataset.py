@@ -111,6 +111,16 @@ async def ensure_dataset(db) -> TrackedDataset:
         select(TrackedDataset).where(TrackedDataset.ckan_name == DATASET_SLUG)
     )).scalar_one_or_none()
     if ds is not None:
+        # Backfill for the row that already exists in production: it was
+        # created before push_mode was declared below, and an early return
+        # would leave it exposed to the worker loop forever.
+        cfg = dict(ds.scraper_config or {})
+        if cfg.get("push_mode") != "external":
+            cfg["push_mode"] = "external"
+            ds.scraper_config = cfg
+            await db.flush()
+            logger.info("address_dataset: declared %s externally pushed",
+                        DATASET_SLUG)
         return ds
     ds = TrackedDataset(
         id=_uuid.uuid4(),
@@ -131,7 +141,13 @@ async def ensure_dataset(db) -> TrackedDataset:
         status="active",
         poll_interval=0,
         storage_mode="full_snapshot",
-        scraper_config={"kind": "over_internal", "storage_backend": "r2"},
+        # push_mode=external: no worker in the fleet can produce this — it is
+        # built here from our own tables — so the scrape-task loop must step
+        # aside (TrackedDataset.is_externally_pushed). Without it every poll
+        # queued a task that a worker claimed and failed with "no engine for
+        # kind='over_internal'".
+        scraper_config={"kind": "over_internal", "storage_backend": "r2",
+                        "push_mode": "external"},
     )
     db.add(ds)
     await db.flush()
