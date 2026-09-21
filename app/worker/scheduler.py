@@ -209,6 +209,43 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # GovMap's parcel address sweep: fold what arrived into over_re_addresses.
+    #
+    # The ingest is continuous — the sweep on the worker posts every checkpoint,
+    # about once a minute for the ~51 days the walk takes — but the merge was
+    # admin-only, so the rows it delivered sat in the ledger until a person
+    # pressed a button. "Continuously updated" was the requirement, and half a
+    # pipeline does not meet it.
+    #
+    # Hourly, and with no cheap "has anything changed" precheck, deliberately.
+    # The merge is idempotent, single-flight, and cost about 13 s over 36,360
+    # ingested rows; the obvious precheck would be a remembered high-water mark,
+    # i.e. a second copy of state that is free to disagree with the table. The
+    # scan is the honest price of not keeping one, and an hour of sweeping only
+    # adds ~900 rows to it.
+    from app.services import address_govmap_parcels as _gmp
+
+    async def govmap_parcels_merge_job() -> None:
+        if not settings.append_database_url:
+            return
+        try:
+            res = await _gmp.merge()
+            # Silence when nothing moved: this runs 24 times a day and a log
+            # line per no-op would bury the runs that did something.
+            if any(res.values()):
+                logger.info("govmap_parcels scheduled merge: %s", res)
+        except Exception:  # noqa: BLE001 — a bad merge must not kill the job
+            logger.exception("govmap_parcels scheduled merge failed")
+
+    scheduler.add_job(
+        govmap_parcels_merge_job,
+        trigger=IntervalTrigger(hours=1),
+        id="govmap_parcels_merge",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+
     # Knesset ODATA mirror: advance the sync within a per-tick time budget
     # (initial full load of ~3M rows spans many ticks; each tick checkpoints,
     # then it settles into 12h incremental refreshes). Memory-safe: at most

@@ -207,3 +207,58 @@ def test_it_runs_after_the_better_point_sources_and_before_pip():
     assert ni.STAGES.index("addresses") < ni.STAGES.index("govmap_parcels")
     assert ni.STAGES.index("municipal") < ni.STAGES.index("govmap_parcels")
     assert ni.STAGES.index("govmap_parcels") < ni.STAGES.index("pip")
+
+
+# ── the forecast has to be able to forecast ──────────────────────────────────
+def test_the_report_projects_the_parcels_it_has_not_resolved_yet():
+    """The first live run filled 555 parcels against a dry run that had
+    reported zero — because resolution only happens inside the real merge, so
+    the report was reading a column that was still empty. A forecast that
+    cannot see one of its own three effects is worth nothing."""
+    src = inspect.getsource(gp.report)
+    assert "_proj" in src
+    assert "project_resolution=True" in src
+
+
+def test_the_projection_is_costed_per_parcel_not_per_address():
+    assert "DISTINCT ON (parcel_object_id)" in gp._PROJECTED_RESOLUTION
+    assert "over_parcel_at(" in gp._PROJECTED_RESOLUTION
+
+
+def test_the_projection_stays_out_of_the_real_merge():
+    """The merge resolves and STORES first, so by the time it reads the table
+    every parcel has its answer. Projecting again would pay for the lookup
+    twice."""
+    src = inspect.getsource(gp.merge)
+    assert "_proj" not in src
+    assert "project_resolution" not in src
+
+
+def test_the_projection_writes_nothing():
+    for verb in ("INSERT", "UPDATE ", "DELETE"):
+        assert verb not in gp._PROJECTED_RESOLUTION
+
+
+# ── the merge runs on its own ────────────────────────────────────────────────
+def test_the_merge_is_scheduled_and_not_only_a_button():
+    """The ingest is continuous; the merge was admin-only, so rows sat in the
+    ledger until someone pressed a button. Half a pipeline is not a
+    continuously-updated dataset."""
+    import app.worker.scheduler as sch
+    src = inspect.getsource(sch.init_scheduler)
+    assert "govmap_parcels_merge" in src
+    assert "address_govmap_parcels" in src
+
+
+def test_the_scheduled_merge_is_single_flight_and_cannot_kill_the_job():
+    """Two jobs merging at once would race the same three statements, and one
+    raised exception inside an APScheduler job takes the job down for the life
+    of the process."""
+    import app.worker.scheduler as sch
+    src = inspect.getsource(sch.init_scheduler)
+    # Just this job's block: from its function to the start of the next job.
+    block = src[src.index("async def govmap_parcels_merge_job"):]
+    block = block[:block.index("# Knesset ODATA mirror")]
+    assert "max_instances=1" in block
+    assert "except Exception" in block
+    assert "replace_existing=True" in block

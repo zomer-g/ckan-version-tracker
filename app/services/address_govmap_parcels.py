@@ -276,20 +276,45 @@ async def resolve_parcels(limit: int = RESOLVE_BATCH) -> dict:
 
 
 # ── the merge ─────────────────────────────────────────────────────────────────
-def _keyed_cte() -> str:
+#: A projection of what ``resolve_parcels()`` WOULD store, computed without
+#: storing it. Only the report uses this: the real merge resolves first, so by
+#: the time it reads the table every parcel already has its answer.
+_PROJECTED_RESOLUTION = f"""
+    SELECT DISTINCT ON (parcel_object_id) parcel_object_id,
+           over_parcel_at(lat, lon) AS parcel_key
+    FROM public.{_qi(TABLE)}
+    WHERE NOT parcel_resolved AND lat IS NOT NULL AND lon IS NOT NULL
+    ORDER BY parcel_object_id
+"""
+
+
+def _keyed_cte(*, project_resolution: bool = False) -> str:
     """The ingest table, normalised onto the spine's own keys.
 
     ``settlement_code`` is used directly — it is the CBS code (438 of 439
     verified against ``over_settlements``), so unlike the municipal layers there
     is no name to resolve and no spelling to get wrong.
+
+    ``project_resolution`` fills in the parcel a row has not been resolved to
+    YET, by asking ``over_parcel_at()`` in the query rather than reading the
+    stored answer. The report needs it and the merge does not: without it a dry
+    run reports ``fills_a_parcel: 0`` no matter what the truth is, because
+    resolution only happens inside the real merge — the first live run filled
+    555 parcels against a forecast of zero, which is a forecast worth nothing.
+    Costed per distinct PARCEL, not per address, and read-only.
     """
+    parcel = ("coalesce(g.parcel_key, r.parcel_key)" if project_resolution
+              else "g.parcel_key")
+    join = ("LEFT JOIN _proj r ON r.parcel_object_id = g.parcel_object_id"
+            if project_resolution else "")
     return f"""
         SELECT g.settlement_code                                     AS sc,
                over_street_key(g.settlement_code, g.street_name)     AS street_key,
                g.street_name                                         AS street_raw,
                g.house_num                                           AS house_num,
-               g.lat, g.lon, g.parcel_key
+               g.lat, g.lon, {parcel}                                AS parcel_key
         FROM public.{_qi(TABLE)} g
+        {join}
         WHERE g.settlement_code IS NOT NULL
           AND g.house_num IS NOT NULL
           AND g.lat IS NOT NULL AND g.lon IS NOT NULL
@@ -317,12 +342,19 @@ def _distinct_cte() -> str:
 
 
 async def report() -> dict:
-    """What a merge would do, without doing it."""
+    """What a merge would do, without doing it — including the parcels.
+
+    It projects the parcel resolution instead of reading it (see
+    ``_keyed_cte``), so the forecast covers all three effects rather than
+    silently reporting zero for the one this source is best at.
+    """
     await ensure_tables()
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(f"""
-            WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
+            WITH _proj AS ({_PROJECTED_RESOLUTION}),
+                 k AS ({_keyed_cte(project_resolution=True)}),
+                 d AS ({_distinct_cte()})
             SELECT (SELECT count(*) FROM public.{_qi(TABLE)})            AS ingested_rows,
                    (SELECT count(*) FROM k WHERE street_key IS NULL)     AS unresolved_street,
                    (SELECT count(*) FROM d)                              AS doorways,
