@@ -119,7 +119,7 @@ ALL_TABLES = [PARCELS_TABLE, GAZ_TABLE, STREETS_TABLE, STREET_ALIASES_TABLE,
               ZIP5_TABLE, STATE_TABLE]
 
 STAGES = ["source_indexes", "parcels", "gazetteer", "postal_localities",
-          "streets", "addresses", "zip5", "municipal", "pip"]
+          "streets", "addresses", "zip5", "municipal", "govmap_parcels", "pip"]
 # What a bare build() leaves out. `pip` is NOT in here: see build()'s docstring —
 # it rebuilds the links that `addresses` has just thrown away, and a rebuild that
 # skips it leaves the address spine with no parcel at all.
@@ -1741,6 +1741,28 @@ async def _build_municipal() -> dict:
     return await address_municipal.merge()
 
 
+async def _build_govmap_parcels() -> dict:
+    """Re-fold GovMap's swept parcel addresses into the spine.
+
+    A stage for exactly the reason ``municipal`` is one: ``addresses``
+    TRUNCATE+INSERTs the spine from the two source files, so every address this
+    source discovered would be deleted by a rebuild. Its raw rows live in
+    ``over_re_govmap_parcels``, which no rebuild touches, and the merge is
+    idempotent — so re-running the stage is always sufficient to restore them.
+
+    Ordered AFTER ``municipal`` deliberately. Both fill only a point that is
+    still NULL, so between two sources for the same doorway the one that runs
+    first wins — and this source's coordinate is a parcel CENTROID, not a
+    doorway (353 addresses were observed sharing one), so it goes last among the
+    fillers. It still runs BEFORE ``pip``, which links whatever rows it adds.
+
+    Imported inside the function: ``address_govmap_parcels`` imports from this
+    module, so a module-level import would be circular.
+    """
+    from app.services import address_govmap_parcels
+    return await address_govmap_parcels.merge()
+
+
 _BUILDERS = {
     "source_indexes": ensure_source_indexes,
     "parcels": build_parcels,
@@ -1750,6 +1772,7 @@ _BUILDERS = {
     "addresses": build_addresses,
     "zip5": build_zip5,
     "municipal": lambda: _build_municipal(),
+    "govmap_parcels": lambda: _build_govmap_parcels(),
     "pip": build_pip,
 }
 

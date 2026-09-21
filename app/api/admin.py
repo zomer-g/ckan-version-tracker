@@ -3431,6 +3431,40 @@ async def nadlan_municipal_merge(
     return res
 
 
+@router.post("/nadlan/govmap-parcels/merge")
+@limiter.limit("2/minute")
+async def nadlan_govmap_parcels_merge(
+    request: Request,
+    dry_run: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Fold GovMap's swept parcel addresses into over_re_addresses.
+
+    The source that ENUMERATES rather than geocodes: 58% of what it brings is
+    addresses with no row here at all, and each arrives with its parcel
+    attached. Its coordinate is a parcel centroid, not a doorway, so it fills
+    only an empty point and stamps it ``govmap_parcel`` — deliberately distinct
+    from the geocoder's ``govmap``, which is a different order of precision.
+    """
+    from app.services import address_govmap_parcels
+    res = await address_govmap_parcels.merge(dry_run=dry_run)
+    logger.warning("govmap parcel address merge by %s (dry_run=%s): %s",
+                   user.email, dry_run, res)
+    return res
+
+
+@router.get("/nadlan/govmap-parcels/state")
+@limiter.limit("30/minute")
+async def nadlan_govmap_parcels_state(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """What the sweep has delivered so far, and what a merge would do with it."""
+    from app.services import address_govmap_parcels
+    return {"ingested": await address_govmap_parcels.stats(),
+            "would_merge": await address_govmap_parcels.report()}
+
+
 @router.get("/nadlan/dataset/state")
 @limiter.limit("30/minute")
 async def nadlan_dataset_state(

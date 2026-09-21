@@ -202,8 +202,10 @@ def test_the_default_build_skips_only_source_indexes():
     # The stages that repair what `addresses` throws away must be in the
     # default set, or a bare rebuild is destructive.
     assert "pip" in default and "municipal" in default
+    assert "govmap_parcels" in default
     assert default == ["parcels", "gazetteer", "postal_localities",
-                       "streets", "addresses", "zip5", "municipal", "pip"]
+                       "streets", "addresses", "zip5", "municipal",
+                       "govmap_parcels", "pip"]
 
 
 def test_every_ddl_column_added_after_launch_has_a_migration():

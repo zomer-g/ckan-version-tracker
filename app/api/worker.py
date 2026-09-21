@@ -3870,6 +3870,36 @@ async def geocode_results(
     return {"status": "recorded", **summary}
 
 
+# ── GovMap's parcel address sweep ─────────────────────────────────────────────
+# The opposite direction to the geocoder above. That one takes an address we
+# already have and asks GovMap where it is; this one ENUMERATES — a long-running
+# sweep on the worker walks GovMap's parcel object ids and is answered with every
+# address on each parcel, so it finds addresses no source here has a row for.
+#
+# It is push-only, with no task and no queue, because unlike geocoding there is
+# nothing for this end to hand out: the work list is GovMap's id space, the
+# sweep holds its own checkpoint, and its pace is fixed by GovMap's published
+# 15-requests-per-minute budget. Inventing a task to wrap that would be a second
+# copy of a cursor that already exists on the worker.
+
+@router.post("/govmap-parcels/ingest")
+async def govmap_parcels_ingest(request: Request, body: dict):
+    """Store one checkpoint's worth of swept addresses.
+
+    ``{"addresses": [{address_objectid, parcel_object_id, settlement_code,
+    settlement_name, street_code, street_name, house_num, lat, lon, itm_x,
+    itm_y, geometry_level}, ...]}``
+
+    Idempotent on ``address_objectid``: the sweep is restartable and re-walks
+    ids after a crash, so the same address will arrive twice and must land on
+    the same row rather than conflict. Nothing reaches ``over_re_addresses``
+    here — that merge is a separate, admin-triggered build stage.
+    """
+    _verify_worker_key(request)
+    from app.services import address_govmap_parcels
+    return await address_govmap_parcels.record_batch(body)
+
+
 # ── יומן לעם (Ocal) diary import via the residential worker ────────────────────
 # odata.org.il's file downloads 403 Render's datacenter IP, so the Render backend
 # can discover diaries + parse/import their bytes but cannot DOWNLOAD them. The
