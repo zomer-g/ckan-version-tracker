@@ -239,7 +239,16 @@ async def init_scheduler() -> None:
 
     scheduler.add_job(
         govmap_parcels_merge_job,
-        trigger=IntervalTrigger(hours=1),
+        trigger=IntervalTrigger(
+            hours=1,
+            # An IntervalTrigger with no start_date first fires a full interval
+            # after BOOT, so every deploy pushed the next merge an hour out. On
+            # 2026-09-21 there were several deploys within an hour and the
+            # merge went 28 minutes without running while the sweep kept
+            # posting. Five minutes after boot, clear of the +2/+3 minute
+            # registration burst above; hourly from there.
+            start_date=datetime.now(timezone.utc) + timedelta(minutes=5),
+        ),
         id="govmap_parcels_merge",
         replace_existing=True,
         max_instances=1,

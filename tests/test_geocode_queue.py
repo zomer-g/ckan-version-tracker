@@ -333,3 +333,16 @@ def test_the_scheduler_tick_uses_the_linking_merge():
     tick = tick[:tick.index("scheduler.add_job")]
     assert "merge_and_link()" in tick
     assert "merge_into_addresses()" not in tick
+
+
+def test_the_sweep_merge_runs_soon_after_boot_not_an_hour_after():
+    """An IntervalTrigger with no start_date first fires a full interval after
+    boot, so each deploy pushed the hourly GovMap-sweep merge an hour out — on a
+    day of several deploys it barely ran while the sweep kept posting. The job
+    must name its own first run."""
+    import inspect
+    from app.worker import scheduler
+    src = inspect.getsource(scheduler)
+    job = src[src.index("govmap_parcels_merge_job,"):]
+    job = job[:job.index('id="govmap_parcels_merge"')]
+    assert "start_date=" in job, "the merge must not wait a full hour after boot"
