@@ -173,6 +173,10 @@ export default function AboutPage() {
           />
           <p className="story-embed-link">
             <ExtLink href="/story/timeline">{t("about.story_open_timeline")}</ExtLink>
+            {" · "}
+            <a href="/story/timeline-deck.pptx" download>
+              {t("about.story_download_timeline_pptx")}
+            </a>
           </p>
 
           {/* A .pptx cannot be embedded, so this one is presented as what it

@@ -357,6 +357,7 @@
     "story_timeline_desc": "Nine chapters from March 2026 to today, with key events marked by category.",
     "story_open_deck": "Open the deck as a full page",
     "story_open_timeline": "Open the timeline as a full page",
+    "story_download_timeline_pptx": "Download as a PPTX deck",
     "story_pptx_title": "Mapping and spatial deck (PPTX)",
     "story_pptx_desc": "Fourteen slides on the spatial side alone: GIS layers and their symbology, the map on every dataset page, the public PostGIS, the property crosswalk, the land-transaction register, and the spatial pitfalls. A file to download and present from.",
     "story_download_pptx": "Download the mapping deck",
