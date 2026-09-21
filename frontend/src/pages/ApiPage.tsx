@@ -671,9 +671,8 @@ function McpCard() {
       <p className="api-mcp-lead">
         גישה מובנית לדאטה דרך Model Context Protocol — ה-LLM מחפש ומושך נתונים
         מתוך השיחה, בלי לעבור דרך ה-API הציבורי. {mcpServerCountLabel(MCP_SERVERS.length)}{" "}
-        <strong>חיים</strong>, אחד לכל מקור. הגישה בהזמנה (Google + רשימת מוזמנים) — לקבלת גישה שלחו
-        אימייל ל-<a href="mailto:guy@z-g.co.il">guy@z-g.co.il</a> עם כתובת ה-Google
-        שאיתה תתחברו ושורה על השימוש המתוכנן.
+        <strong>חיים</strong>, אחד לכל מקור. הגישה פתוחה לכל מי שמתחבר עם חשבון Google, בלי
+        הרשמה מראש ובלי לחכות לאישור: ההתחברות הראשונה פותחת לכם גישה (ביתא) לכל השרתים.
       </p>
 
       <div className="api-mcp-grid">
@@ -707,12 +706,12 @@ function McpCard() {
             הדביקו את כתובת השרת הרצוי מלמעלה (למשל <code dir="ltr">{origin}/knesset/mcp</code>).
           </li>
           <li>
-            לחצו <strong>Connect</strong> — ייפתח חלון Google. התחברו{" "}
-            <strong>עם אותה כתובת מייל</strong> שעליה ביקשתם הזמנה.
+            לחצו <strong>Connect</strong>. ייפתח חלון Google, ובו בוחרים את החשבון שאיתו
+            מתחברים. בהתחברות הראשונה החשבון נרשם אוטומטית.
           </li>
           <li>
             ה-connector יסומן Connected, ובסרגל הכלים של השיחה יופיעו הפעולות של
-            אותו שרת. אפשר לחבר את כל ארבעת השרתים במקביל.
+            אותו שרת. אפשר לחבר את כל השרתים במקביל, וכולם עובדים עם אותה התחברות.
           </li>
         </ol>
       </div>

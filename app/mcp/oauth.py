@@ -1,9 +1,11 @@
 """OAuth 2.1 + PKCE authorization server for the MCP endpoint.
 
 Google is the upstream identity provider (reusing OVER's existing Google
-OAuth client); the ``api_users`` table is the closed-beta access gate. Ported
-from the Ocal project. Flow: client DCR-registers → /authorize redirects to
-Google → /google/callback verifies the email against api_users and mints our
+OAuth client); the ``api_users`` table is the user list: a first Google login
+self-registers the user at tier ``beta``, and an admin gates by disabling a
+row, not by inviting one. Ported from the Ocal project. Flow: client
+DCR-registers → /authorize redirects to Google → /google/callback finds or
+creates the api_users row, refuses a disabled one, and mints our
 own PKCE auth code → client exchanges it at /token for a JWT access token.
 """
 from __future__ import annotations
@@ -89,7 +91,7 @@ def protected_resource_metadata(request: Request) -> JSONResponse:
 def cbs_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the CBS index MCP. Its authorization server is the
     SAME as the main MCP's (the /mcp OAuth endpoints) — only the resource
-    identity differs, so one login + one api_users invite grants both."""
+    identity differs, so one Google login (which self-registers in api_users) grants both."""
     return JSONResponse({
         "resource": cbs_mcp_url(request),
         "authorization_servers": [mcp_url(request)],
@@ -101,7 +103,7 @@ def cbs_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def knesset_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the Knesset committee-protocols MCP. Same
-    authorization server as the main MCP — one login + one api_users invite
+    authorization server as the main MCP — one Google login (which self-registers in api_users)
     (or the service token) grants all three resources."""
     return JSONResponse({
         "resource": knesset_mcp_url(request),
@@ -114,7 +116,7 @@ def knesset_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def ocal_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the יומן לעם (Ocal) MCP. Same authorization server
-    as the main MCP — one login + one api_users invite (or the service token)
+    as the main MCP — one Google login (which self-registers in api_users) (or the service token)
     grants all resources."""
     return JSONResponse({
         "resource": ocal_mcp_url(request),
@@ -127,7 +129,7 @@ def ocal_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def ocoi_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the ניגוד עניינים לעם (OCOI) MCP. Same authorization
-    server as the main MCP — one login + one api_users invite (or the service
+    server as the main MCP — one Google login (which self-registers in api_users) (or the service
     token) grants all resources."""
     return JSONResponse({
         "resource": ocoi_mcp_url(request),
@@ -140,7 +142,7 @@ def ocoi_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def odata_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the מידע לעם (odata.org.il) MCP. Same authorization
-    server as the main MCP — one login + one api_users invite (or the service
+    server as the main MCP — one Google login (which self-registers in api_users) (or the service
     token) grants all resources."""
     return JSONResponse({
         "resource": odata_mcp_url(request),
@@ -153,7 +155,7 @@ def odata_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def sql_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the whole-site SQL MCP. Same authorization server
-    as the main MCP — one login + one api_users invite (or the service token)
+    as the main MCP — one Google login (which self-registers in api_users) (or the service token)
     grants all resources."""
     return JSONResponse({
         "resource": sql_mcp_url(request),
@@ -166,7 +168,7 @@ def sql_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def elections_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the election-finance MCP. Same authorization server
-    as the main MCP — one login + one api_users invite (or the service token)
+    as the main MCP — one Google login (which self-registers in api_users) (or the service token)
     grants all resources."""
     return JSONResponse({
         "resource": elections_mcp_url(request),
@@ -179,7 +181,7 @@ def elections_protected_resource_metadata(request: Request) -> JSONResponse:
 
 def nadlan_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 metadata for the נדל"ן לעם MCP. Same authorization server as the
-    main MCP — one login + one api_users invite (or the service token) grants
+    main MCP — one Google login (which self-registers in api_users) (or the service token) grants
     all resources."""
     return JSONResponse({
         "resource": nadlan_mcp_url(request),
@@ -342,12 +344,23 @@ async def google_callback(request: Request, db: AsyncSession) -> Response:
     if not email:
         return _err_html(400, "חסר אימייל", "Google לא החזיר כתובת אימייל.")
 
+    if info.get("verified_email") is False:
+        return _err_html(403, "אימייל לא מאומת",
+                         "חשבון ה-Google הזה לא אימת את כתובת האימייל שלו, ולכן אי אפשר "
+                         "להתחבר איתו ל-MCP.")
+
     api_user = (await db.execute(select(ApiUser).where(ApiUser.email == email))).scalar_one_or_none()
     if not api_user:
-        logger.warning("MCP: email %s not in api_users — invite required", email)
-        return _err_html(403, "אין הרשאה ל-MCP",
-                         f"הכתובת <strong>{email}</strong> אינה מוזמנת ל-MCP של גרסאות לעם. "
-                         f"לקבלת הזמנה יש לפנות למנהל המערכת.")
+        # Open sign-up: anyone who completes Google SSO joins the list at the
+        # default tier (beta), no invite needed. The admin's lever is the
+        # other direction, disabling a row (is_active=false), which the branch
+        # below still enforces. invited_by stays NULL, which is how the admin
+        # list tells a self-registered user from an invited one.
+        api_user = ApiUser(email=email, name=info.get("name"), google_id=info.get("id"),
+                           tier="beta", is_active=True)
+        db.add(api_user)
+        await db.flush()
+        logger.info("MCP: self-registered %s", email)
     if not api_user.is_active:
         return _err_html(403, "חשבון מושבת", "החשבון שלך מושבת. פנה למנהל המערכת.")
 

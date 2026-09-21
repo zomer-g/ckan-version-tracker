@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse, Response
 from app.mcp.config import (
     MCP_JWT_AUDIENCE, mcp_jwt_secret, mcp_service_token, mcp_url,
 )
+from app.mcp.usage import current_server, server_from_path
 from app.models.mcp import ApiUser
 
 # Fixed identity of the machine-to-machine "service gateway" principal. This
@@ -75,6 +76,9 @@ async def authenticate(
     allow-list is shared."""
     def _challenge(err: str, desc: str) -> JSONResponse:
         return challenge(request, err, desc, resource_metadata)
+
+    # Stamp the server for this request's usage rows (app/mcp/usage.py).
+    current_server.set(server_from_path(request.url.path))
 
     header = request.headers.get("authorization") or ""
     if not header.lower().startswith("bearer "):

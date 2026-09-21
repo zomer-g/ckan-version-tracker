@@ -2132,6 +2132,10 @@ export interface McpUser {
   last_seen_at: string | null;
   created_at: string;
   calls_30d: number;
+  calls_total: number;
+  /** Calls per MCP server, most-used first; server is null for pre-067 rows it could not identify. */
+  usage_by_server: { server: string | null; calls: number; calls_30d: number; last_at: string | null }[];
+  self_registered: boolean;
 }
 
 // Activity-log event types (mirror app/models/activity_log.py).

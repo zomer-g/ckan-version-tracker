@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import { admin as adminApi, McpUser } from "../api/client";
 
-// Closed-beta access management for the MCP server: invite by email, toggle
-// active, change tier. An invited (active) email can connect Claude.ai/etc to
-// https://www.over.org.il/mcp and complete the Google OAuth flow.
+// The MCP user list. Anyone who completes Google SSO on an MCP server joins it
+// automatically at tier beta (app/mcp/oauth.py); the admin's levers are
+// disabling a user, changing a tier, and adding an address ahead of its first
+// login. Usage is shown per MCP server, from mcp_usage_events.mcp_server.
 
 const MCP_URL =
   typeof window !== "undefined" ? `${window.location.origin}/mcp` : "https://www.over.org.il/mcp";
+
+// Server key (app/mcp/usage.py:server_from_path) -> the label the API page uses.
+const SERVER_LABELS: Record<string, string> = {
+  over: "גרסאות לעם", cbs: "למ\"ס", knesset: "כנסת", ocal: "יומן לעם",
+  ocoi: "ניגוד עניינים", odata: "מידע לעם", data: "SQL", elections: "מימון בחירות",
+  nadlan: "נדל\"ן לעם", deals: "עסקאות נדל\"ן", deep_search: "חיפוש עומק",
+};
+const serverLabel = (s: string | null) => (s ? SERVER_LABELS[s] ?? s : "לא ידוע");
 
 function fmt(iso: string | null): string {
   if (!iso) return "—";
@@ -70,20 +79,21 @@ export default function McpUsersPanel() {
   return (
     <section className="card mb-2" style={{ padding: "1rem 1.25rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
-        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">🔌</span> גישת MCP (בטא סגורה)</h2>
-        <span className="text-muted" style={{ fontSize: "0.85rem" }}>{users.length} מוזמנים</span>
+        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}><span aria-hidden="true">🔌</span> משתמשי MCP (בטא)</h2>
+        <span className="text-muted" style={{ fontSize: "0.85rem" }}>{users.length} משתמשים</span>
       </div>
 
       <div className="text-sm" style={{ marginTop: "0.5rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
-        רק כתובות מייל מוזמנות (ופעילות) יכולות לחבר את שרת ה-MCP ב-Claude / ChatGPT / Cursor.
-        כתובת השרת: <code dir="ltr" style={{ background: "var(--surface)", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>{MCP_URL}</code>
-        {" · "}המשתמש מתחבר עם אותה כתובת Google שהוזמנה.
+        כל מי שמתחבר עם חשבון Google לאחד משרתי ה-MCP נוסף לכאן אוטומטית ברמת beta, בלי הזמנה.
+        משתמש מושבת לא יכול להתחבר. כתובת השרת הראשי:{" "}
+        <code dir="ltr" style={{ background: "var(--surface)", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>{MCP_URL}</code>
+        {" · "}אפשר גם להוסיף כתובת מראש, לפני ההתחברות הראשונה שלה.
       </div>
 
       <form onSubmit={invite} style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: "0.85rem 0" }}>
-        <input aria-label="כתובת Google להזמנה"
+        <input aria-label="כתובת Google להוספה מראש"
           type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-          placeholder="כתובת Google להזמנה" dir="ltr"
+          placeholder="כתובת Google להוספה מראש" dir="ltr"
           style={{ flex: "1 1 16rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
         />
         <input aria-label="שם (אופציונלי)"
@@ -92,7 +102,7 @@ export default function McpUsersPanel() {
           style={{ flex: "0 1 12rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
         />
         <button className="btn-primary" type="submit" disabled={busy} style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}>
-          {busy ? "מזמין…" : "הזמן"}
+          {busy ? "מוסיף…" : "הוסף"}
         </button>
       </form>
 
@@ -101,7 +111,7 @@ export default function McpUsersPanel() {
       {loading ? (
         <div className="empty-state" style={{ padding: "1.5rem" }}>טוען…</div>
       ) : users.length === 0 ? (
-        <div className="empty-state" style={{ padding: "1.5rem" }}>אין עדיין משתמשים מוזמנים. הזמן את עצמך כדי להתחבר.</div>
+        <div className="empty-state" style={{ padding: "1.5rem" }}>אין עדיין משתמשים. הם יופיעו כאן אחרי ההתחברות הראשונה שלהם.</div>
       ) : (
         <div tabIndex={0} role="region" aria-label="משתמשי MCP" className="scroll-region" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
@@ -111,7 +121,8 @@ export default function McpUsersPanel() {
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>שם</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>סטטוס</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>רמה</th>
-                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>קריאות (30 יום)</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>קריאות (30 יום / סה״כ)</th>
+                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>לפי שירות (סה״כ)</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>נראה לאחרונה</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>פעולות</th>
               </tr>
@@ -119,7 +130,12 @@ export default function McpUsersPanel() {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} style={{ borderBottom: "1px solid var(--border)", opacity: u.is_active ? 1 : 0.55 }}>
-                  <td style={{ padding: "0.5rem 0.6rem" }} dir="ltr">{u.email}</td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>
+                    <span dir="ltr">{u.email}</span>
+                    {u.self_registered && (
+                      <span className="text-muted" style={{ fontSize: "0.72rem", marginInlineStart: "0.4rem" }}>הצטרף לבד</span>
+                    )}
+                  </td>
                   <td style={{ padding: "0.5rem 0.6rem" }}>{u.name || "—"}</td>
                   <td style={{ padding: "0.5rem 0.6rem" }}>
                     <span style={{
@@ -136,7 +152,16 @@ export default function McpUsersPanel() {
                       <option value="pro">pro</option>
                     </select>
                   </td>
-                  <td style={{ padding: "0.5rem 0.6rem", fontVariantNumeric: "tabular-nums" }}>{u.calls_30d.toLocaleString()}</td>
+                  <td style={{ padding: "0.5rem 0.6rem", fontVariantNumeric: "tabular-nums" }}>
+                    {u.calls_30d.toLocaleString()} / {u.calls_total.toLocaleString()}
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem", fontSize: "0.78rem", lineHeight: 1.5 }}>
+                    {u.usage_by_server.length === 0 ? "—" : u.usage_by_server.map((e) => (
+                      <div key={e.server ?? "unknown"} title={`30 יום: ${e.calls_30d.toLocaleString()} · אחרונה: ${fmt(e.last_at)}`}>
+                        {serverLabel(e.server)}: <span style={{ fontVariantNumeric: "tabular-nums" }}>{e.calls.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </td>
                   <td style={{ padding: "0.5rem 0.6rem", color: "var(--text-muted)" }}>{fmt(u.last_seen_at)}</td>
                   <td style={{ padding: "0.5rem 0.6rem" }}>
                     <button onClick={() => toggle(u)} className={u.is_active ? "btn-danger" : "btn-secondary"}

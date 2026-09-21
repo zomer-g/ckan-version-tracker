@@ -78,6 +78,8 @@ class McpUsageEvent(Base):
     client_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.mcp_oauth_clients.client_id", ondelete="SET NULL"))
     mcp_session_id: Mapped[str | None] = mapped_column(Text)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which MCP server served the call ("over", "deals", ...; migration 067).
+    mcp_server: Mapped[str | None] = mapped_column(String(40))
     request_params: Mapped[dict | None] = mapped_column(JSONB)
     result_count: Mapped[int | None] = mapped_column(Integer)
     result_bytes: Mapped[int | None] = mapped_column(Integer)

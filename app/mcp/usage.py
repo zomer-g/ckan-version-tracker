@@ -6,6 +6,7 @@ usage logging is observability, never load-bearing.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import uuid
 
@@ -13,6 +14,21 @@ from app.database import async_session
 from app.models.mcp import McpUsageEvent
 
 logger = logging.getLogger(__name__)
+
+# Which MCP server the current request is being served by. Set once per request
+# by app.mcp.auth.authenticate (every server's route calls it before any tool
+# runs), so the ten servers' own log_usage calls need not name themselves.
+current_server: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_server", default=None)
+# The in-process deep search dispatches tools without an MCP request and logs
+# under this fixed session id (app/services/deep_search.py:_USAGE_SESSION).
+_DEEP_SEARCH_SESSION = "deep-search"
+
+
+def server_from_path(path: str) -> str:
+    """'/deals/mcp/...' -> 'deals'; the main '/mcp' resource is 'over'."""
+    head = path.split("/mcp", 1)[0].strip("/")
+    return (head.rsplit("/", 1)[-1] or "over")[:40]
 
 
 async def log_usage(
@@ -35,6 +51,8 @@ async def log_usage(
                 client_id=client_id,
                 mcp_session_id=(session_id or None),
                 tool_name=tool_name[:200],
+                mcp_server=current_server.get() or (
+                    "deep_search" if session_id == _DEEP_SEARCH_SESSION else None),
                 request_params=request_params,
                 result_count=result_count,
                 result_bytes=result_bytes,
