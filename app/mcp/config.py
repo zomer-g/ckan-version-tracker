@@ -172,7 +172,16 @@ def deals_resource_metadata_url(request: Request) -> str:
 
 
 def google_callback_url(request: Request) -> str:
-    return f"{base_url(request)}{GOOGLE_CALLBACK_PATH}"
+    """Pinned to APP_BASE_URL, NOT the request host: Google only accepts
+    redirect URIs registered in the Cloud Console, and the site answers on
+    several hosts (over.org.il, www.over.org.il, the platform URL). A client
+    that connected via an unregistered host got ``redirect_uri_mismatch``.
+    The callback is stateless (signed JWT state), so landing on a different
+    host than the one the flow started on is harmless."""
+    base = (settings.app_base_url or "").rstrip("/")
+    if not base or "localhost" in base:
+        base = base_url(request)
+    return f"{base}{GOOGLE_CALLBACK_PATH}"
 
 
 def mcp_jwt_secret() -> str:
