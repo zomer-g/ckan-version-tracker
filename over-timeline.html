@@ -388,7 +388,7 @@
       <div class="entry major" style="--cat:var(--c-infra)">
         <div class="entry-top"><span class="date">26.06</span><span class="cat-label"><span class="dot"></span> תשתית</span></div>
         <h3>מסד NEON ייעודי ל‑append + ייצוא לדרייב</h3>
-        <p>R2 הופך לברירת מחדל; משיכות datastore נשמרות ב‑Postgres נפרד; רישום טיסות ורכבים; "ייצוא לדרייב" server‑side; ו‑Worker שמעדכן את עצמו בין משימות.</p>
+        <p>R2 הופך לברירת מחדל; משיכות datastore נשמרות ב‑Postgres נפרד; רישום טיסות ורכבים; "ייצוא לדרייב" server‑side; ו‑Worker שמעדכן את עצמו בין משימות. <em>המסד הזה שירת עד ספטמבר 2026, ואז הארכיון כולו עבר למסד של xhostd (פרק 09).</em></p>
       </div>
       <div class="entry major" style="--cat:var(--c-sql)">
         <div class="entry-top"><span class="date">28.06</span><span class="cat-label"><span class="dot"></span> SQL / נתונים</span><span class="firstof">ה‑SQL הראשון</span></div>
@@ -687,13 +687,14 @@
   <section class="outro">
     <div class="outro-card">
       <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
-      <p>הקו המנחה לאורך כל הדרך: כל מקור ממשלתי שנוסף נשמר, מגורסן, ונחשף בכמה שפות בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. הארכיטקטורה זזה מ‑ODATA ל‑R2+NEON, והוספת מקור חדש עברה מקוד ידני בשני repos להכרזה דקלרטיבית של ה‑Worker. מאז נוספה מעליהם שכבת שמות שמאפשרת לחבר מאגר למאגר, חיפוש אחד שנשלח לכל הקורפוסים, והפרדת הרשאות ברמת הסכימה שנבדקת בכל אתחול.</p>
+      <p>הקו המנחה לאורך כל הדרך: כל מקור ממשלתי שנוסף נשמר, מגורסן, ונחשף בכמה שפות בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. הארכיטקטורה זזה מ‑ODATA ל‑R2 ולמסד ייעודי, ומשם — בספטמבר 2026 — אל מסד הערוץ של xhostd, שם יושב היום כל הארכיון הניתן לשאילתה; והוספת מקור חדש עברה מקוד ידני בשני repos להכרזה דקלרטיבית של ה‑Worker. מאז נוספה מעליהם שכבת שמות שמאפשרת לחבר מאגר למאגר, חיפוש אחד שנשלח לכל הקורפוסים, והפרדת הרשאות ברמת הסכימה שנבדקת בכל אתחול.</p>
       <div class="arc">
-        <span>גרסון היסטורי</span>
+        <span>ארכיון גרסאות</span>
         <span>1,779 טבלאות</span>
         <span>SQL ציבורי</span>
         <span>10 שרתי MCP</span>
         <span>מפות + PostGIS</span>
+        <span>xhostd</span>
         <span>מחבר Looker</span>
         <span>פרויקטים אחים</span>
         <span>חיפוש חוצה‑מאגרים</span>

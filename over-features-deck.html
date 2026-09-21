@@ -208,14 +208,14 @@
           <div class="out">🤖 MCP</div>
         </div>
       </div>
-      <p class="kicker" style="margin-top:22px">מאחורי הקלעים: Worker חיצוני מגרד, האחסון ב‑R2, והנתונים הטבלאיים ב‑NEON — כך שכל צורת הגשה קוראת מאותו מקור אמת.</p>
+      <p class="kicker" style="margin-top:22px">מאחורי הקלעים: Worker חיצוני מגרד, האחסון ב‑R2, והנתונים הטבלאיים במסד של xhostd — כך שכל צורת הגשה קוראת מאותו מקור אמת.</p>
       <div class="pagenum">04</div>
     </section>
 
     <!-- 5 · VERSIONING -->
     <section class="slide">
       <div class="eyebrow">הליבה</div>
-      <h2>גרסון וארכיון היסטורי</h2>
+      <h2>ניהול גרסאות וארכיון היסטורי</h2>
       <div class="grid g2">
         <div class="card" style="--cat:var(--c-sql)"><span class="tagname">גרסה לכל שינוי</span><h3>דגימה תקופתית</h3><p>כל מאגר נדגם בתדירות שנקבעת לו; זוהה שינוי → נוצרת גרסה חדשה, ללא כפילויות.</p></div>
         <div class="card" style="--cat:var(--c-sql)"><span class="tagname">Append / Snapshot</span><h3>שני מודלים</h3><p>snapshot מלא לכל גרסה, או ארכוב הצטברותי (append‑only) עם חותמת first_seen לכל שורה.</p></div>
@@ -273,8 +273,8 @@
       <p class="kicker">קונסולות SQL ציבוריות לקריאה בלבד, על תפקיד DB בעל הרשאות מינימום — עם השלמה אוטומטית, תיקון שגיאות והפניית סכימה ל‑AI.</p>
       <div class="grid g3">
         <div class="card" style="--cat:var(--c-sql)"><h3>/data מרכזי</h3><p>SQL חוצה‑סכמות מעל כל טבלאות האתר, עם בונה‑תרשימים ללא‑קוד.</p></div>
-        <div class="card" style="--cat:var(--c-sql)"><h3>/knesset</h3><p>48 טבלאות ODATA‑v4 של הכנסת ממורות ל‑Neon, עם עמודות מוקלדות.</p></div>
-        <div class="card" style="--cat:var(--c-sql)"><h3>לכל מאגר</h3><p>קונסולת ארכיון לכל dataset מבוסס‑NEON, עם ייצוא CSV.</p></div>
+        <div class="card" style="--cat:var(--c-sql)"><h3>/knesset</h3><p>48 טבלאות ODATA‑v4 של הכנסת ממורות למסד, עם עמודות מוקלדות.</p></div>
+        <div class="card" style="--cat:var(--c-sql)"><h3>לכל מאגר</h3><p>קונסולת ארכיון לכל מאגר שנשמר כטבלה, עם ייצוא CSV.</p></div>
       </div>
       <p class="kicker" style="margin-top:18px">📊 תרשימים: עוגה / עמודות / קו / פיזור / מפה — עם ייצוא PNG/SVG ושיתוף בקישור.</p>
       <p class="kicker" style="margin-top:10px">🔗 <strong>JOIN מרפא</strong>: חיבור שני מאגרים לפי שם יישוב או רשות נפתר לקוד רשמי בשני הצדדים, ולא נופל בשקט על כתיב שונה. 🧊 <strong>מראת Parquet</strong> לכל טבלה מעל 500 אלף שורות, להורדה ולעבודה מקומית.</p>
@@ -366,10 +366,10 @@
       <div class="grid g4">
         <div class="card" style="--cat:var(--c-infra)"><h3>Worker חיצוני</h3><p>govil‑scraper בתור משימות, מעדכן את עצמו בין ריצות, ריבוי‑מכונות.</p></div>
         <div class="card" style="--cat:var(--c-infra)"><h3>אחסון R2</h3><p>Cloudflare R2 כ‑backend עצמאי, עם העלאות presigned ישירות.</p></div>
-        <div class="card" style="--cat:var(--c-infra)"><h3>NEON Postgres</h3><p>מסד append נפרד מהסודות, לטבלאות ניתנות‑לשאילתה.</p></div>
+        <div class="card" style="--cat:var(--c-infra)"><h3>מסד xhostd</h3><p>מסד הערוץ של האפליקציה (PostgreSQL 18). ההפרדה בין נתונים שפורסמו לבין טבלאות האפליקציה היא ברמת הסכימה והתפקיד, ונבדקת בכל אתחול.</p></div>
         <div class="card" style="--cat:var(--c-infra)"><h3>מקורות דקלרטיביים</h3><p>ה‑Worker מכריז על מקור חדש דרך manifest — בלי קוד ב‑OVER.</p></div>
       </div>
-      <p class="kicker" style="margin-top:18px">המסע: מ‑ODATA כאחסון בלעדי → ל‑R2+NEON; מהוספת מקור בשני repos → להכרזה דקלרטיבית אחת.</p>
+      <p class="kicker" style="margin-top:18px">המסע: מ‑ODATA כאחסון בלעדי → ל‑R2 ולמסד ייעודי; מ‑Neon → למסד של xhostd (ספטמבר 2026); ומהוספת מקור בשני repos → להכרזה דקלרטיבית אחת.</p>
       <p class="kicker" style="margin-top:10px">🏠 ובספטמבר 2026 — מעבר בית: הארכיון מועתק אל מסד הערוץ ב‑xhostd בגלים, עם הקפאת גרסאות כדי שדבר לא ישתנה תוך כדי, והעתקה שמתחדשת מנקודת העצירה.</p>
       <div class="pagenum">13</div>
     </section>
@@ -393,8 +393,8 @@
       <h2>מ‑CKAN בודד לתשתית שקיפות</h2>
       <p class="kicker">כל מקור ממשלתי נשמר, מגורסן, ונחשף בבת אחת — קובץ, טבלה, מפה, API ו‑MCP. זו לא עוד ראי נתונים; זו זיכרון ציבורי שאפשר לאמת.</p>
       <div class="chips2">
-        <span>4,265 מאגרים</span><span>גרסון היסטורי</span><span>3 קונסולות SQL</span>
-        <span>10 שרתי MCP</span><span>מפות + PostGIS</span><span>מחבר Looker</span><span>פרויקטים אחים</span>
+        <span>4,265 מאגרים</span><span>ארכיון גרסאות</span><span>3 קונסולות SQL</span>
+        <span>10 שרתי MCP</span><span>מפות + PostGIS</span><span>xhostd</span><span>מחבר Looker</span><span>פרויקטים אחים</span>
         <span>חיפוש חוצה‑מאגרים</span><span>הצלבת נכסים</span>
       </div>
       <div class="pagenum" style="color:rgba(255,255,255,.7)">over.org.il</div>
