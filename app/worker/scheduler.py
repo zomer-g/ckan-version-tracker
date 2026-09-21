@@ -413,8 +413,10 @@ async def init_scheduler() -> None:
                 else:
                     await geocode_queue.enqueue_next_batch(db)
                 # Fold in whatever the last batch returned, so coverage moves
-                # without waiting for a manual merge.
-                await geocode_queue.merge_into_addresses()
+                # without waiting for a manual merge — and link it to its
+                # parcel in the same tick, because a point with no גוש-חלקה is
+                # only half an answer on נדל"ן לעם.
+                await geocode_queue.merge_and_link()
         except Exception:  # noqa: BLE001 — enrichment must never kill a tick
             logger.exception("geocode enqueue tick failed")
 

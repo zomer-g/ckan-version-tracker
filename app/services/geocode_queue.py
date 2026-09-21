@@ -557,6 +557,35 @@ async def merge_into_addresses() -> dict:
     return {"merged": merged, "rejected_outside_locality": rejected}
 
 
+async def merge_and_link() -> dict:
+    """Merge the geocoder's points, then give them a parcel.
+
+    ``merge_into_addresses`` fills a POINT and nothing else, and only ``pip``
+    writes ``parcel_key``. pip had no schedule of its own, so an address the
+    worker geocoded arrived in נדל"ן לעם with a coordinate and no גוש-חלקה, and
+    stayed that way until someone rebuilt — the same half-pipeline that left
+    the municipal layers at 0% linked on 2026-09-20.
+
+    Measured before writing this, 2026-09-22: zero geocoded points were waiting
+    (all 4,085 unlinked ones had been TRIED and sit outside every polygon,
+    ``parcel_match = 'none'``). So this closes a gap that is latent, not one
+    that is open — the next address the geocoder finds is the first it saves.
+
+    Only when the merge placed something: pip scans for untried rows and counts
+    the spine, and doing that every fifteen minutes to link nothing would be a
+    cost with no answer attached. pip is idempotent and touches only rows with
+    ``parcel_match IS NULL``, so it is safe beside a rebuild's own pip pass.
+    """
+    res = await merge_into_addresses()
+    if res.get("merged"):
+        from app.services import nadlan_index
+        linked = await nadlan_index.build(["pip"])
+        res["pip"] = linked.get("pip")
+        from app.services import nadlan_query
+        nadlan_query.invalidate_stats_cache()
+    return res
+
+
 async def stats() -> dict:
     pool = await append_store.get_pool()   # not the console role: see _revoke_from_public_console
     async with pool.acquire() as conn:

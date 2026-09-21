@@ -283,3 +283,53 @@ def test_the_count_and_the_work_list_cannot_drift():
     assert "_eligible()" in cnt, "the count must share the selection's predicate"
     for clause in ("wrong_locality", "a.point IS NULL", "days'"):
         assert clause in sel and clause in gq._eligible()
+
+
+# ── a geocoded point must reach its parcel without a person ──────────────────
+def _merge_and_link(monkeypatch, merged):
+    """Run merge_and_link with the DB stubbed, recording whether pip ran."""
+    from app.services import nadlan_index, nadlan_query
+
+    calls = []
+
+    async def _merge():
+        return {"merged": merged, "rejected_outside_locality": 0}
+
+    async def _build(stages=None):
+        calls.append(stages)
+        return {"pip": {"processed": merged, "linked": merged, "remaining": 0}}
+
+    monkeypatch.setattr(gq, "merge_into_addresses", _merge)
+    monkeypatch.setattr(nadlan_index, "build", _build)
+    monkeypatch.setattr(nadlan_query, "invalidate_stats_cache", lambda: None)
+    return asyncio.run(gq.merge_and_link()), calls
+
+
+def test_a_merged_point_is_linked_to_its_parcel_in_the_same_tick(monkeypatch):
+    """merge_into_addresses fills a POINT and nothing else; only pip writes
+    parcel_key. Before this, an address the worker geocoded reached נדל"ן לעם
+    with a coordinate and no גוש-חלקה until someone rebuilt — the same half
+    pipeline that left the municipal layers at 0% linked on 2026-09-20."""
+    res, calls = _merge_and_link(monkeypatch, merged=37)
+    assert calls == [["pip"]], "pip must run, and only pip — never a rebuild"
+    assert res["merged"] == 37 and res["pip"]["linked"] == 37
+
+
+def test_nothing_merged_means_no_pip_pass(monkeypatch):
+    """pip scans for untried rows and counts the spine. Doing that every
+    fifteen minutes to link nothing is a cost with no answer attached."""
+    res, calls = _merge_and_link(monkeypatch, merged=0)
+    assert calls == []
+    assert "pip" not in res
+
+
+def test_the_scheduler_tick_uses_the_linking_merge():
+    """The fix is worthless if the tick still calls the half that only places
+    points, so pin the call site rather than trust it."""
+    import inspect
+    from app.worker import scheduler
+    src = inspect.getsource(scheduler)
+    tick = src[src.index("async def geocode_enqueue_job"):]
+    tick = tick[:tick.index("scheduler.add_job")]
+    assert "merge_and_link()" in tick
+    assert "merge_into_addresses()" not in tick
