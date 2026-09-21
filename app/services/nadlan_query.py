@@ -542,16 +542,31 @@ def _deal_row(r: dict) -> dict:
             return None
 
     d = (r.get("deal_date") or "").strip()
+    amount, area = num("deal_amount"), num("asset_area")
+    # `portion` is the share of the asset that changed hands (0.000-1.000, all
+    # 3.84 M rows clean), while `asset_area` is the WHOLE asset's area and the
+    # amount pays only for the share. amount/area therefore halves on a 50%
+    # sale; amount/(area*portion) is the price per sqm actually bought, the one
+    # figure comparable across deals. A share of 0.000 is a sub-0.0005 share
+    # rounded away and gets no normalised price rather than a division by zero.
+    try:
+        share = float((r.get("portion") or "").strip())
+    except ValueError:
+        share = None
     return {
         "date": f"{d[6:10]}-{d[3:5]}-{d[0:2]}" if len(d) == 10 else None,
         "date_src": d or None,
-        "amount": num("deal_amount"),
+        "amount": amount,
         "declared_amount": num("declared_amount"),
         "nature": (r.get("deal_nature") or "").strip() or None,
-        "area_sqm": num("asset_area"),
+        "area_sqm": area,
         "rooms": num("room_num"),
         "year_built": num("year_built"),
         "portion": (r.get("portion") or "").strip() or None,
+        "portion_fraction": share,
+        "price_per_sqm": round(amount / area) if amount and area else None,
+        "price_per_sqm_normalized": (round(amount / (area * share))
+                                     if amount and area and share else None),
         "sub_parcel": (r.get("sub_chelka") or "").strip() or None,
     }
 

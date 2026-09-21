@@ -119,9 +119,25 @@ def test_the_data_is_not_presented_as_processed(client):
     through. Claiming otherwise would be the wrong kind of honest."""
     body = client.get("/api/deals/search").json()
     assert body["processed"] is False
-    assert len(body["caveats"]) == 3
+    assert len(body["caveats"]) == 4
     assert any("תת-גוש" in c for c in body["caveats"])
     assert any("חציון" in c for c in body["caveats"])
+    assert any("portion" in c for c in body["caveats"])
+
+
+def test_price_per_sqm_is_normalised_by_the_share_sold():
+    """The area is the whole asset's and the amount pays for the share only, so
+    half a flat must price per sqm like a whole one, not at half of it."""
+    from app.services.nadlan_query import _deal_row
+    half = _deal_row({"deal_amount": "1000000", "asset_area": "80", "portion": "0.500"})
+    assert half["portion_fraction"] == 0.5
+    assert half["price_per_sqm"] == 12500
+    assert half["price_per_sqm_normalized"] == 25000
+    # A share rounded to 0.000, or no area, gets no figure rather than a crash.
+    assert _deal_row({"deal_amount": "5", "asset_area": "80",
+                      "portion": "0.000"})["price_per_sqm_normalized"] is None
+    assert _deal_row({"deal_amount": "5", "asset_area": "0",
+                      "portion": "1.000"})["price_per_sqm_normalized"] is None
 
 
 # ── the filter ────────────────────────────────────────────────────────────────

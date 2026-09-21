@@ -76,6 +76,14 @@ MAX_LIMIT = 200
 # reported as "more than". 10,001 rows is a few milliseconds on the index.
 COUNT_CAP = 10_000
 
+# Price per sqm actually bought: amount / (whole-asset area × share sold). The
+# register's area is the whole asset's while the amount pays for the share only,
+# so the raw amount/area of a 50% sale reads as half the market price (measured:
+# 19.3k vs 33.3k median for flats in the three big cities, 2024-25, same median
+# area). NULL when the area or the share is zero — never a division by zero.
+PPSQM_NORM = ("nullif(deal_amount, '')::numeric / nullif(nullif(asset_area, '')::numeric"
+              " * nullif(portion, '')::numeric, 0)")
+
 SORT_MODES = {
     "date_desc": f"{DEAL_SORT_KEY} DESC",
     "date_asc": f"{DEAL_SORT_KEY} ASC",
@@ -92,6 +100,15 @@ async def _fetch(sql: str, *args, timeout_ms: int = _TIMEOUT_MS) -> list[dict]:
             await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             rows = await conn.fetch(sql, *args)
     return [dict(r) for r in rows]
+
+
+def _int(v):
+    # numeric medians come back as Decimal; hand JSON a plain int.
+    return int(v) if v is not None else None
+
+
+def _num(v):
+    return float(v) if v is not None else None
 
 
 # ── the filter, in one place ──────────────────────────────────────────────────
@@ -208,13 +225,16 @@ async def series(filters: dict) -> list[dict]:
                percentile_disc(0.5) WITHIN GROUP (ORDER BY nullif(deal_amount, '')::bigint)
                  AS median_amount,
                percentile_disc(0.5) WITHIN GROUP (ORDER BY nullif(asset_area, '')::bigint)
-                 AS median_area
+                 AS median_area,
+               round(percentile_disc(0.5) WITHIN GROUP (ORDER BY {PPSQM_NORM}))
+                 AS median_ppsqm_normalized
         FROM {_t(src)}
         WHERE {where} AND deal_date ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}$'
         GROUP BY 1 ORDER BY 1
     """, *args)
     return [{"year": int(r["year"]), "deals": r["deals"],
-             "median_amount": r["median_amount"], "median_area": r["median_area"]}
+             "median_amount": r["median_amount"], "median_area": r["median_area"],
+             "median_ppsqm_normalized": _int(r["median_ppsqm_normalized"])}
             for r in rows if (r["year"] or "").isdigit()]
 
 
@@ -228,12 +248,15 @@ async def breakdown(filters: dict, limit: int = 20) -> list[dict]:
     rows = await _fetch(f"""
         SELECT nullif(btrim(deal_nature), '') AS nature, count(*) AS deals,
                percentile_disc(0.5) WITHIN GROUP (ORDER BY nullif(deal_amount, '')::bigint)
-                 AS median_amount
+                 AS median_amount,
+               round(percentile_disc(0.5) WITHIN GROUP (ORDER BY {PPSQM_NORM}))
+                 AS median_ppsqm_normalized
         FROM {_t(src)}
         WHERE {where}
         GROUP BY 1 ORDER BY deals DESC LIMIT {max(1, min(int(limit), 60))}
     """, *args, timeout_ms=_AGGREGATE_TIMEOUT_MS if not filters else _TIMEOUT_MS)
-    return [dict(r) for r in rows]
+    return [dict(r) | {"median_ppsqm_normalized": _int(r["median_ppsqm_normalized"])}
+            for r in rows]
 
 
 async def compare_settlements(year_from: int, year_to: int, *, nature: str | None = None,
@@ -281,7 +304,8 @@ async def compare_settlements(year_from: int, year_to: int, *, nature: str | Non
         WITH f AS (
           SELECT btrim(settlement) AS settlement,
                  substr(deal_date, 7, 4) AS yr,
-                 nullif(deal_amount, '')::bigint AS amt
+                 nullif(deal_amount, '')::bigint AS amt,
+                 {PPSQM_NORM} AS ppsqm
           FROM {_t(src)}
           WHERE {' AND '.join(where)}
             AND substr(deal_date, 7, 4) IN ('{y1}', '{y2}')
@@ -292,17 +316,26 @@ async def compare_settlements(year_from: int, year_to: int, *, nature: str | Non
                  percentile_disc(0.5) WITHIN GROUP (ORDER BY amt)
                    FILTER (WHERE yr = '{y1}') AS median_from,
                  percentile_disc(0.5) WITHIN GROUP (ORDER BY amt)
-                   FILTER (WHERE yr = '{y2}') AS median_to
+                   FILTER (WHERE yr = '{y2}') AS median_to,
+                 round(percentile_disc(0.5) WITHIN GROUP (ORDER BY ppsqm)
+                   FILTER (WHERE yr = '{y1}')) AS ppsqm_from,
+                 round(percentile_disc(0.5) WITHIN GROUP (ORDER BY ppsqm)
+                   FILTER (WHERE yr = '{y2}')) AS ppsqm_to
           FROM f GROUP BY 1
         )
         SELECT *, round(100.0 * (median_to - median_from)
-                        / nullif(median_from, 0), 1) AS change_pct
+                        / nullif(median_from, 0), 1) AS change_pct,
+               round(100.0 * (ppsqm_to - ppsqm_from)
+                     / nullif(ppsqm_from, 0), 1) AS ppsqm_change_pct
         FROM g
         WHERE deals_from >= {floor} AND deals_to >= {floor}
         ORDER BY {order_sql}
         LIMIT {cap}
     """, *args)
-    return [dict(r) | {"year_from": int(y1), "year_to": int(y2)} for r in rows]
+    return [dict(r) | {"ppsqm_from": _int(r["ppsqm_from"]), "ppsqm_to": _int(r["ppsqm_to"]),
+                       "ppsqm_change_pct": _num(r["ppsqm_change_pct"]),
+                       "change_pct": _num(r["change_pct"]),
+                       "year_from": int(y1), "year_to": int(y2)} for r in rows]
 
 
 # ── pick lists and counters, cached ───────────────────────────────────────────
