@@ -157,10 +157,15 @@ async def _watch_ckan_org(org: str) -> dict:
         # cadence: the poll is what routes the files to a worker on a home
         # connection, and once it has, last_error is clear and this stops.
         extended_ids = {row.id for row, _ in plan["extend"]}
+        # Likewise a dataset whose blocked files are still missing: the poll
+        # re-queues the worker task, so a task that failed (a worker without a
+        # browser, an allowlist gone stale) is retried daily, not monthly.
+        from app.services import blocked_resources
         refused = []
         for r in rows:
             if (r.status == "active" and r.id not in extended_ids
-                    and "403 Forbidden" in (r.last_error or "")):
+                    and ("403 Forbidden" in (r.last_error or "")
+                         or blocked_resources.pending(blocked_resources.stored(r)))):
                 r.last_modified = None  # else the unchanged-metadata shortcut skips it
                 refused.append(str(r.id))
         await db.commit()
@@ -178,7 +183,7 @@ async def _watch_ckan_org(org: str) -> dict:
         "packages": len(packages),
         "onboarded": [{"id": i, "name": n, "title": t} for i, n, t, _ in onboarded],
         "resources_added": [{"id": i, "name": n, "resource_ids": m} for i, n, m in extended],
-        "repolled_after_403": refused,
+        "repolled_blocked": refused,
         "skipped": [{"name": n, "reason": why} for n, why in plan["skipped"]
                     if not why.startswith("untouched")],
     }
