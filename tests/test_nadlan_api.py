@@ -700,3 +700,37 @@ def test_the_web_mercator_conversion_matches_govmaps_own_share_link():
     from app.services.street_geocode import _web_mercator_to_wgs84
     lat, lon = _web_mercator_to_wgs84(3899353.529921332, 3643742.379966282)
     assert abs(lat - 31.084611) < 1e-5 and abs(lon - 35.028489) < 1e-5
+
+
+def test_linked_coverage_counts_every_route_to_a_parcel(monkeypatch):
+    """The page publishes this number as "משויכות לחלקה", so it must mean
+    "has a parcel", not "has one by point-in-polygon".
+
+    GovMap's parcel sweep arrives with the parcel already attached and stamps
+    parcel_match='govmap_parcel', so pip stopped being the only route. Measured
+    in production 2026-09-23: 484,319 of 670,577 addresses carry a parcel
+    (72.2%), while the pip-only count published 67.3% — and the sweep was
+    adding roughly 4,000 a day, so the understatement grew daily."""
+    import asyncio
+
+    async def _fetch(sql, *args):
+        return [{"addresses": 670_577,
+                 "addresses_with_parcel": 484_319,
+                 "addresses_linked_pip": 451_033,
+                 "addresses_linked_govmap_parcel": 33_286,
+                 "streets": 65_795, "streets_located": 37_832,
+                 "streets_in_gazetteer": 32_875, "streets_register_only": 27_963}]
+
+    monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    nadlan_query.invalidate_stats_cache()
+    try:
+        s = asyncio.run(nadlan_query.stats())
+        assert s["coverage"]["addresses_linked_pct"] == 72.2
+        # The two routes stay visible beside it: a computed containment and a
+        # parcel the source handed us are different facts.
+        assert s["addresses_linked_pip"] == 451_033
+        assert s["addresses_linked_govmap_parcel"] == 33_286
+        assert (s["addresses_linked_pip"] + s["addresses_linked_govmap_parcel"]
+                == s["addresses_with_parcel"])
+    finally:
+        nadlan_query.invalidate_stats_cache()

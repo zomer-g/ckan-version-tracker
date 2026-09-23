@@ -3116,7 +3116,9 @@ export interface NadlanStats {
   addresses_with_zip: number;
   addresses_with_address_zip: number;
   addresses_with_locality_zip: number;
+  addresses_with_parcel: number;
   addresses_linked_pip: number;
+  addresses_linked_govmap_parcel: number;
   streets: number;
   streets_in_gazetteer: number;
   zip5_codes: number;

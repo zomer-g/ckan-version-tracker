@@ -999,8 +999,20 @@ async def _stats_uncached() -> dict:
              WHERE zip_level = 'address')                                             AS addresses_with_address_zip,
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
              WHERE zip_level = 'locality')                                            AS addresses_with_locality_zip,
+          -- Linked to a parcel BY ANY ROUTE. point-in-polygon is no longer the
+          -- only one: GovMap's parcel sweep arrives with the parcel already
+          -- attached and stamps parcel_match='govmap_parcel', so counting pip
+          -- alone understated the coverage the page publishes as "משויכות
+          -- לחלקה" — 67.3% against a real 72.2% on 2026-09-23 — and the gap
+          -- grew by roughly 4,000 addresses a day as the sweep advanced.
+          (SELECT count(parcel_key) FROM public.{_qi(ADDRESSES_TABLE)})               AS addresses_with_parcel,
+          -- Kept beside it as the METHOD breakdown, not as the headline: a
+          -- computed containment and a parcel the source handed us are
+          -- different facts, and the caveats say which is which.
           (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
              WHERE parcel_match = 'pip')                                              AS addresses_linked_pip,
+          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
+             WHERE parcel_match = 'govmap_parcel')                                    AS addresses_linked_govmap_parcel,
           (SELECT count(*) FROM public.{_qi(STREETS_TABLE)})                          AS streets,
           -- The streets some source with a LOCATION knows. The rest come from
           -- רשות האוכלוסין's register alone: real streets that nothing we hold
@@ -1025,7 +1037,7 @@ async def _stats_uncached() -> dict:
         # doorway's own, and collapsing them would overstate precision.
         "addresses_with_address_zip_pct": pct("addresses_with_address_zip", "addresses"),
         "addresses_with_locality_zip_pct": pct("addresses_with_locality_zip", "addresses"),
-        "addresses_linked_pct": pct("addresses_linked_pip", "addresses"),
+        "addresses_linked_pct": pct("addresses_with_parcel", "addresses"),
         "parcels_with_gazetteer_pct": pct("parcels_with_gazetteer", "parcels"),
         # Over the streets it COULD match, not over every street in the index.
         # Seeding from the official register doubled the index, and reporting
