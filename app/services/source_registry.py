@@ -99,7 +99,10 @@ class UrlPattern(BaseModel):
     # picks up its own page_type, config, title and cadence with nothing
     # special-cased. Companions are NOT followed recursively: one level only,
     # so two patterns naming each other cannot loop.
-    companions: list[str] = Field(default_factory=list, max_length=8)
+    #
+    # Up to 48: the price-transparency source opens one dataset per retailer
+    # (33 today) from the regulator's single list page.
+    companions: list[str] = Field(default_factory=list, max_length=48)
 
     @field_validator("regex")
     @classmethod

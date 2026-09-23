@@ -165,7 +165,7 @@ def _stamp_col(ds) -> str | None:
     as a one-liner so adding it to a new call site is cheaper than forgetting
     it."""
     from app.services import sampling_runs
-    return (sampling_runs.sampling_spec(ds) or {}).get("sample_column")
+    return sampling_runs.stamp_column(ds)
 
 async def _archive_streaming_to_db(
     *,

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from fastapi.responses import StreamingResponse
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request,
                      Response, UploadFile)
 from pydantic import BaseModel
@@ -807,6 +808,57 @@ async def poll_for_task(
 _NEON_BG_TASKS: set = set()
 
 
+@router.get("/dataset/{dataset_id}/append-export")
+@limiter.limit("60/minute")
+async def dataset_append_export(
+    dataset_id: str,
+    request: Request,
+    table: str,
+    open_column: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """One of a dataset's SQL tables, streamed as CSV, for the worker.
+
+    A source that keeps a local cache of what it has published (the prices
+    source's change log) rebuilds it from here when the machine that ran the
+    dataset last is not this one. ``table`` is the RESOURCE name the source
+    published it under; ``open_column`` keeps only rows whose value there is
+    empty. A resource with no table yet streams an empty body.
+
+    Worker-authenticated and read-only.
+    """
+    _verify_worker_key(request)
+    try:
+        uid = uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="dataset_id must be a UUID")
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    from app.services import append_tables
+    entries = await append_tables.resolve_tables(ds, db)
+    physical = next((e["table"] for e in entries
+                     if (e.get("resource_name") or "") == table), None)
+    if physical is None:
+        # The latest version's mapping lists only the tables IT loaded rows
+        # into; a resource that published nothing that day (no promotions
+        # changed) is absent there but very much exists. Its name is
+        # deterministic, so look for it directly.
+        candidate = append_store.table_name_for_scraper_resource(ds, table)
+        if await append_store.user_columns(candidate):
+            physical = candidate
+
+    async def _empty():
+        yield b""
+
+    stream = (append_store.iter_csv_open(physical, open_column=open_column)
+              if physical else _empty())
+    return StreamingResponse(stream, media_type="text/csv; charset=utf-8",
+                             headers={"X-Over-Table": physical or ""})
+
+
 @router.get("/dataset/{dataset_id}/keys")
 @limiter.limit("120/minute")
 async def dataset_item_keys(
@@ -1100,7 +1152,7 @@ async def _sample_column_for(ds_id) -> str | None:
                 select(_TD).where(_TD.id == ds_id))).scalar_one_or_none()
         if ds is None:
             return None
-        return (sampling_runs.sampling_spec(ds) or {}).get("sample_column")
+        return sampling_runs.stamp_column(ds)
     except Exception as e:  # noqa: BLE001 — an optimisation must not break a load
         logger.debug("sample-column lookup failed for %s: %s", ds_id, e)
         return None
@@ -2020,8 +2072,7 @@ async def push_version(
                     # The scraper path. Every sampled source reaches NEON
                     # through here, not through the streaming loaders — which
                     # is why fixing only those left the duplication in place.
-                    stamp_col=(sampling_runs.sampling_spec(ds) or {}).get(
-                        "sample_column"),
+                    stamp_col=sampling_runs.stamp_column(ds),
                 )
                 # Stamped only once the rows are actually in: a table key on a
                 # version whose load threw would point every reader at a table

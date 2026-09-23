@@ -125,6 +125,23 @@ DEFAULT_NEW_SERIES_WINDOW = 2
 SCHEDULABLE_MODES = ("new", "open", "group")
 
 
+def stamp_column(ds) -> str | None:
+    """The column an append table updates in place instead of hashing, or None.
+
+    Two sources can declare one. A SAMPLED source's ``sample_column`` (when was
+    this item last read). And any source's ``scraper_config["append_stamp_column"]``,
+    for a table whose rows are STATES rather than readings: the prices source
+    publishes a state once with an empty ``last_seen_date`` and again, when it
+    ends, with the day it was last seen — the stamp being outside the row's
+    identity is what makes the second land on the first rather than beside it.
+    The sampling spec wins when both exist, since it also drives the UI."""
+    spec = sampling_spec(ds) or {}
+    if spec.get("sample_column"):
+        return spec["sample_column"]
+    value = (getattr(ds, "scraper_config", None) or {}).get("append_stamp_column")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def sampling_spec(ds) -> dict | None:
     """The dataset's ``sampling`` block, or None if it declares none.
 

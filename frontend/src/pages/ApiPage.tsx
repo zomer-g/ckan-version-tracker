@@ -605,6 +605,14 @@ const MCP_SERVERS: {
     tools: ["search_deals", "price_series", "compare_settlements", "list_settlements", "list_deal_types", "parcel_deals", "register_stats"],
   },
   {
+    key: "prices",
+    label: "שקיפות מחירים — מחירי המזון בכל הרשתות",
+    path: "/prices/mcp",
+    purpose:
+      "המחירים, הסניפים והמבצעים שכל רשת מזון גדולה מחויבת לפרסם לפי חוק קידום התחרות — כ-30 רשתות, כל אחת נאספת כמאגר נפרד פעם ביום, ומתושאלות כאן יחד: איפה מוצר זול יותר, כמה עולה סל קניות בכל סניף בעיר, אילו מבצעים חלים עליו ואיך המחיר השתנה לאורך זמן. הזיהוי האמין בין רשתות הוא הברקוד, לכל מחיר מצורף תאריך הקובץ שממנו נלקח, ומבצעים מוצגים בנפרד ואינם מקוזזים מהמחיר.",
+    tools: ["search_products", "compare_prices", "compare_basket", "item_promotions", "price_history", "find_stores", "store_prices", "list_chains"],
+  },
+  {
     key: "odata",
     label: "מידע לעם — בקשות חופש מידע",
     path: "/odata/mcp",
@@ -629,6 +637,8 @@ const HE_COUNT: Record<number, string> = {
   8: "שמונה שרתי MCP",
   9: "תשעה שרתי MCP",
   10: "עשרה שרתי MCP",
+  11: "אחד-עשר שרתי MCP",
+  12: "שנים-עשר שרתי MCP",
 };
 
 export function mcpServerCountLabel(n: number): string {

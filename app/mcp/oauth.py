@@ -36,6 +36,7 @@ from app.mcp.config import (
     cbs_mcp_url,
     deals_mcp_url,
     elections_mcp_url,
+    prices_mcp_url,
     nadlan_mcp_url,
     google_callback_url,
     knesset_mcp_url,
@@ -175,6 +176,18 @@ def elections_protected_resource_metadata(request: Request) -> JSONResponse:
         "authorization_servers": [mcp_url(request)],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base_url(request)}/projects/elections",
+        "scopes_supported": ["mcp"],
+    })
+
+
+def prices_protected_resource_metadata(request: Request) -> JSONResponse:
+    """RFC 9728 metadata for the retail-prices MCP. Same authorization server as
+    the main MCP — one Google login (or the service token) grants all resources."""
+    return JSONResponse({
+        "resource": prices_mcp_url(request),
+        "authorization_servers": [mcp_url(request)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{base_url(request)}/api",
         "scopes_supported": ["mcp"],
     })
 

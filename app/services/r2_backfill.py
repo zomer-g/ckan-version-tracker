@@ -1044,8 +1044,7 @@ async def seed_neon_from_versions(
                     # DO NOTHING keeps the EARLIEST. A seed of a sampled source
                     # without this replays one row per snapshot per item, which
                     # is the duplication this whole change removes.
-                    stamp_col=(sampling_runs.sampling_spec(ds) or {}).get(
-                        "sample_column"),
+                    stamp_col=sampling_runs.stamp_column(ds),
                 )
             except Exception as e:
                 logger.exception("seed_neon: version %d (%s) stream failed",

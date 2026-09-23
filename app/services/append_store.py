@@ -1886,6 +1886,45 @@ async def iter_csv(
                 yield _row_to_csv([rec[c] for c in cols])
 
 
+async def iter_csv_open(table: str, *, open_column: str | None = None):
+    """The whole table as CSV, optionally only rows whose ``open_column`` is
+    empty — a state source's still-in-force rows (see sampling_runs.stamp_column).
+
+    For a worker rebuilding its cache of what it published, so: every source
+    column, no ordering (order costs a sort over millions of rows and the
+    consumer keys by content), server-side cursor. A table that does not exist
+    yields a bare BOM — the caller decides whether empty is plausible."""
+    import csv as _csv
+    import io as _io
+
+    cols = await user_columns(table)
+    if not cols:
+        yield "﻿".encode("utf-8")
+        return
+    where = ""
+    if open_column and open_column in cols:
+        where = f" WHERE COALESCE({_qi(open_column)}::text, '') = ''"
+    sql = f"SELECT {', '.join(_qi(c) for c in cols)} FROM {_qi(table)}{where}"
+    head = _io.StringIO()
+    _csv.writer(head).writerow(cols)
+    yield ("﻿" + head.getvalue()).encode("utf-8")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            buf = _io.StringIO()
+            writer = _csv.writer(buf)
+            n = 0
+            async for rec in conn.cursor(sql, prefetch=2000):
+                writer.writerow(["" if rec[c] is None else str(rec[c]) for c in cols])
+                n += 1
+                if n % 2000 == 0:
+                    yield buf.getvalue().encode("utf-8")
+                    buf.seek(0)
+                    buf.truncate()
+            if buf.tell():
+                yield buf.getvalue().encode("utf-8")
+
+
 # ── Reading the archive as a set of ITEMS (see app/services/sampling_runs.py) ──
 # Three reads that answer "what does OVER already know", which is what decides
 # what a targeted re-sample should go and fetch. All three collapse the archive

@@ -40,6 +40,7 @@ SQL_MCP_PREFIX = "/data/mcp"
 # means resolving a name across six tables whose recipient columns deliberately
 # differ. That join is the product; a caller should not have to rediscover it.
 ELECTIONS_MCP_PREFIX = "/elections/mcp"
+PRICES_MCP_PREFIX = "/prices/mcp"
 # Dedicated נדל"ן לעם MCP — one property, every identity. A resource of its own
 # rather than a corner of the SQL MCP because answering "what is at גוש 6319
 # חלקה 225" means knowing that the pair is ambiguous 0.63% of the time, that
@@ -147,6 +148,16 @@ def elections_resource_metadata_url(request: Request) -> str:
     """RFC 9728 location of the elections resource's protected-resource metadata:
     /.well-known/oauth-protected-resource/elections/mcp at the ROOT host."""
     return f"{base_url(request)}/.well-known/oauth-protected-resource{ELECTIONS_MCP_PREFIX}"
+
+
+def prices_mcp_url(request: Request, path: str = "") -> str:
+    """The retail-prices MCP resource URL, e.g. https://www.over.org.il/prices/mcp."""
+    return f"{base_url(request)}{PRICES_MCP_PREFIX}{path}"
+
+
+def prices_resource_metadata_url(request: Request) -> str:
+    """RFC 9728 location of the prices resource's protected-resource metadata."""
+    return f"{base_url(request)}/.well-known/oauth-protected-resource{PRICES_MCP_PREFIX}"
 
 
 def nadlan_mcp_url(request: Request, path: str = "") -> str:

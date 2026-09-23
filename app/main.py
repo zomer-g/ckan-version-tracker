@@ -61,6 +61,7 @@ from app.api.ocoi import router as ocoi_router
 from app.api.ocoi_admin import router as ocoi_admin_router
 from app.api.ocal_admin import router as ocal_admin_router
 from app.api.deals import router as deals_router
+from app.api.prices import router as prices_router
 from app.api.nadlan import router as nadlan_router
 from app.api.organizations import router as organizations_router
 from app.api.organizations import admin_router as admin_organizations_router
@@ -543,6 +544,7 @@ app.include_router(ocoi_admin_router)
 app.include_router(ocal_admin_router)
 app.include_router(nadlan_router)
 app.include_router(deals_router)
+app.include_router(prices_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)
 app.include_router(tags_router)
@@ -609,6 +611,13 @@ from app.mcp.elections_routes import (
 )
 app.include_router(elections_mcp_wellknown_router)
 app.include_router(elections_mcp_router)
+
+# Dedicated retail-prices MCP at /prices/mcp (same OAuth server + api_users gate).
+# Every food retailer's published prices, one dataset per chain, queried as one
+# market — the cross-chain union is the product, so it gets its own resource.
+from app.mcp.prices_routes import prices_mcp_router, prices_mcp_wellknown_router
+app.include_router(prices_mcp_wellknown_router)
+app.include_router(prices_mcp_router)
 
 from app.mcp.sql_routes import sql_mcp_router, sql_mcp_wellknown_router
 app.include_router(sql_mcp_wellknown_router)

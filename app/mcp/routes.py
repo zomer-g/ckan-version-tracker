@@ -182,6 +182,7 @@ _MCP_PREFIXES = (
     config.ODATA_MCP_PREFIX,
     config.SQL_MCP_PREFIX,
     config.ELECTIONS_MCP_PREFIX,
+    config.PRICES_MCP_PREFIX,
 )
 
 
