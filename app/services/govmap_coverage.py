@@ -295,9 +295,10 @@ async def populate_from_catalog(db) -> dict:
 def _active_coverage_tasks_q():
     """Active (pending/running) scrape tasks that belong to COVERAGE-managed
     datasets. Regular datasets' tasks don't count against the rollout's
-    concurrency target — they share the queue but have their own cadence."""
+    concurrency target — they share the queue but have their own cadence.
+    Rows are ``(tracked_dataset_id, priority)``."""
     return (
-        select(ScrapeTask.tracked_dataset_id)
+        select(ScrapeTask.tracked_dataset_id, ScrapeTask.priority)
         .where(
             ScrapeTask.status.in_(("pending", "running")),
             ScrapeTask.tracked_dataset_id.in_(
@@ -411,7 +412,10 @@ async def scrape_next_layer() -> dict:
     initial 859-layer import finished — a permanent treadmill cycling the
     whole catalog every ~2-3 days instead of quarterly. With it, a fully
     fresh & healthy inventory makes this tick a cheap no-op."""
+    from app.models.scrape_task import PRIORITY_NEW_LAYER
+
     target = max(1, int(settings.govmap_coverage_concurrency))
+    new_target = max(0, int(settings.govmap_new_layer_slots))
     refresh_cutoff = datetime.now(timezone.utc) - timedelta(
         days=float(settings.govmap_coverage_refresh_days))
     # A layer captured before the engine epoch is missing fields the current
@@ -421,59 +425,76 @@ async def scrape_next_layer() -> dict:
     epoch = engine_epoch()
     cutoff = max(refresh_cutoff, epoch) if epoch else refresh_cutoff
     async with async_session() as db:
-        active_ids = [
-            r[0] for r in (await db.execute(_active_coverage_tasks_q())).all()
-        ]
-        slots = target - len(active_ids)
-        if slots <= 0:
-            logger.info("govmap coverage: %d task(s) active ≥ target %d — skip",
-                        len(active_ids), target)
-            return {"skipped": "at_concurrency", "active": len(active_ids)}
+        active = (await db.execute(_active_coverage_tasks_q())).all()
+        active_ids = [r[0] for r in active]
+        new_active = sum(1 for r in active if r[1] == PRIORITY_NEW_LAYER)
+        slots = target - (len(active) - new_active)
+        new_slots = new_target - new_active
 
-        due = (
-            GovmapCoverage.last_triggered_at.is_(None)
-            | (GovmapCoverage.last_triggered_at < cutoff)
-        )
+        def _not_active(q):
+            if active_ids:
+                q = q.where(
+                    (GovmapCoverage.tracked_dataset_id.is_(None))
+                    | (GovmapCoverage.tracked_dataset_id.not_in(active_ids))
+                )
+            return q
 
-        # Next DUE layers: never-scraped first (a brand-new catalog entry has
-        # NO data at all — that beats refreshing one that merely has stale
-        # data), then HEAVIEST first: layer_kind 2=polygon > 1=line > 0=point,
-        # tie-broken by GovMap's own complexity score.
-        #
-        # Heavy-first is the operator's call for the epoch backfill: the big
-        # polygon/line layers are the ones that fail, time out, or expose
-        # engine bugs, so hitting them at the START of a day-long backfill
-        # leaves the whole day to react — rather than discovering at hour 20
-        # that the hard half doesn't work. The cost is that the early hours
-        # show slow numeric progress (few, slow layers) and that a routine
-        # poll arriving mid-backfill may wait behind a long-running layer;
-        # priority can reorder the queue but cannot preempt a running task.
-        #
-        # Exclude layers whose dataset already has an active task (their
-        # last_triggered_at may be old — e.g. a giant layer still scraping
-        # since yesterday's tick).
-        q = (
-            select(GovmapCoverage)
-            .where(due)
-            .order_by(
-                GovmapCoverage.last_triggered_at.is_(None).desc(),
-                GovmapCoverage.layer_kind.desc().nullslast(),
-                GovmapCoverage.complexity.desc().nullslast(),
-                GovmapCoverage.sort_order.asc(),
+        # Layers we hold NO copy of — never triggered, no dataset — have their
+        # own slots and a band above the refresh. Without them a brand-new
+        # layer waited behind whatever the refresh band had queued: on
+        # 2026-09-23 the national cadastre's new layers sat all day behind six
+        # multi-hour polygon re-scrapes. Newest layer ids first, as the newest
+        # publications are the ones most likely to be missing everywhere else.
+        new_rows: list[GovmapCoverage] = []
+        if new_slots > 0:
+            new_rows = (await db.execute(_not_active(
+                select(GovmapCoverage)
+                .where(GovmapCoverage.last_triggered_at.is_(None),
+                       GovmapCoverage.tracked_dataset_id.is_(None))
+                .order_by(GovmapCoverage.sort_order.desc())
+                .limit(new_slots)
+            ))).scalars().all()
+
+        rows: list[GovmapCoverage] = []
+        if slots > 0:
+            due = (
+                GovmapCoverage.last_triggered_at.is_(None)
+                | (GovmapCoverage.last_triggered_at < cutoff)
             )
-            .limit(slots)
-        )
-        if active_ids:
-            q = q.where(
-                (GovmapCoverage.tracked_dataset_id.is_(None))
-                | (GovmapCoverage.tracked_dataset_id.not_in(active_ids))
+            # Next DUE layers: never-scraped first, then HEAVIEST first:
+            # layer_kind 2=polygon > 1=line > 0=point, tie-broken by GovMap's
+            # own complexity score. Heavy-first is the operator's call for the
+            # epoch backfill: the big layers are the ones that fail or expose
+            # engine bugs, so hitting them early leaves the day to react.
+            q = _not_active(
+                select(GovmapCoverage)
+                .where(due)
+                .order_by(
+                    GovmapCoverage.last_triggered_at.is_(None).desc(),
+                    GovmapCoverage.layer_kind.desc().nullslast(),
+                    GovmapCoverage.complexity.desc().nullslast(),
+                    GovmapCoverage.sort_order.asc(),
+                )
+                .limit(slots)
             )
-        rows = (await db.execute(q)).scalars().all()
-        if not rows:
+            picked = {r.layer_id for r in new_rows}
+            if picked:
+                q = q.where(GovmapCoverage.layer_id.not_in(picked))
+            rows = (await db.execute(q)).scalars().all()
+
+        if not rows and not new_rows:
+            if slots <= 0 and new_slots <= 0:
+                logger.info("govmap coverage: %d task(s) active ≥ target %d+%d — skip",
+                            len(active), target, new_target)
+                return {"skipped": "at_concurrency", "active": len(active)}
             logger.debug("govmap coverage: nothing due — inventory fresh")
             return {"skipped": "nothing_due"}
 
         triggered = []
+        for row in new_rows:
+            ds = await _ensure_dataset(db, row)
+            row.last_triggered_at = datetime.now(timezone.utc)
+            triggered.append((str(ds.id), row.layer_id, row.caption, PRIORITY_NEW_LAYER))
         for row in rows:
             ds = await _ensure_dataset(db, row)
             # Band the task by WHY this layer is due — read before overwriting
@@ -496,8 +517,9 @@ async def scrape_next_layer() -> dict:
             {"layer_id": lid, "caption": cap, "dataset_id": dsid, "priority": prio}
             for dsid, lid, cap, prio in triggered
         ],
-        "active_before": len(active_ids),
+        "active_before": len(active),
         "target": target,
+        "new_layer_target": new_target,
     }
 
 

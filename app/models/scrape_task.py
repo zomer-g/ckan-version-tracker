@@ -26,6 +26,10 @@ from app.database import Base
 PRIORITY_PROMOTED = 300    # admin picked this row OUT of the queue: strictly next
 PRIORITY_MANUAL = 200      # admin "דגום" — a human is watching, jump the queue
 PRIORITY_ROUTINE = 100     # scheduled polls: the normal cadence of the system
+# A GovMap layer we have never captured at all. Above the rollout's refresh
+# band: a layer with NO copy is a gap, one with an old copy is only stale — and
+# a layer can be withdrawn from the catalog before the refresh band drains.
+PRIORITY_NEW_LAYER = 50
 PRIORITY_COVERAGE = 10     # GovMap coverage rollout's routine quarterly refresh
 PRIORITY_BACKFILL = 0      # one-shot whole-catalog re-scrapes; strictly last
 # Below BOTH GovMap bands on purpose: a GovMap layer entering the queue must be

@@ -553,6 +553,10 @@ class Settings(BaseSettings):
     # last trigger is older than REFRESH_DAYS (routine re-scrape), or when its
     # latest attempt FAILED and RETRY_HOURS passed (bounded retry). A fresh &
     # healthy inventory makes every tick a no-op.
+    # Extra slots, on top of GOVMAP_COVERAGE_CONCURRENCY, reserved for layers
+    # we hold no copy of at all; their tasks go in at PRIORITY_NEW_LAYER, ahead
+    # of the refresh band. 0 folds them back into the ordinary rollout.
+    govmap_new_layer_slots: int = 3
     govmap_coverage_refresh_days: float = 90.0
     govmap_coverage_retry_hours: float = 6.0
 

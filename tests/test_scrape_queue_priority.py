@@ -347,3 +347,75 @@ def test_a_normal_scraper_dataset_still_queues():
             )).all()
             assert len(tasks) == 1
     _run(go())
+
+
+# ── 5. never-captured GovMap layers have their own slots ────────────────────
+
+def test_new_layers_get_their_own_slots_above_the_refresh_band(monkeypatch):
+    """2026-09-23: the cadastre's new layers sat all day behind six multi-hour
+    refresh re-scrapes that held every rollout slot. A layer we hold no copy of
+    must be queued anyway, and ahead of those."""
+    from app.config import settings
+    from app.models.govmap_coverage import GovmapCoverage
+    from app.models.scrape_task import PRIORITY_NEW_LAYER
+    from app.services import govmap_coverage as gc
+
+    async def go():
+        engine = create_async_engine("sqlite+aiosqlite://")
+        async with engine.begin() as conn:
+            for table in (Tag.__table__, dataset_tags, TrackedDataset.__table__,
+                          ScrapeTask.__table__, GovmapCoverage.__table__):
+                await conn.run_sync(lambda c, t=table: t.create(c))
+        Session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with Session() as db:
+            # Six refresh tasks already hold every ordinary slot.
+            for i in range(6):
+                ds = _dataset(f"old{i}")
+                db.add(ds)
+                db.add(GovmapCoverage(layer_id=f"{i}", tracked_dataset_id=ds.id,
+                                      last_triggered_at=NOW, sort_order=i))
+                db.add(ScrapeTask(id=uuid.uuid4(), tracked_dataset_id=ds.id,
+                                  status="pending", priority=PRIORITY_COVERAGE))
+            # Republished: has a dataset, due again, must NOT take a new slot.
+            rep = _dataset("rep")
+            db.add(rep)
+            db.add(GovmapCoverage(layer_id="15", tracked_dataset_id=rep.id,
+                                  last_triggered_at=None, sort_order=10))
+            # Never captured: newest ids first.
+            for lid, order in (("237293", 20), ("240040", 21), ("243154", 22), ("243012", 23)):
+                db.add(GovmapCoverage(layer_id=lid, last_triggered_at=None, sort_order=order))
+            await db.commit()
+
+        async def fake_ensure(db, row):
+            ds = _dataset(f"new{row.layer_id}")
+            db.add(ds)
+            await db.flush()
+            row.tracked_dataset_id = ds.id
+            return ds
+
+        queued = []
+
+        async def fake_poll(ds_id, priority=None):
+            queued.append(priority)
+            async with Session() as db:
+                db.add(ScrapeTask(id=uuid.uuid4(), tracked_dataset_id=uuid.UUID(ds_id),
+                                  status="pending", priority=priority))
+                await db.commit()
+
+        import app.worker.poll_job as pj
+        monkeypatch.setattr(gc, "async_session", Session)
+        monkeypatch.setattr(gc, "_ensure_dataset", fake_ensure)
+        monkeypatch.setattr(pj, "poll_dataset", fake_poll)
+        monkeypatch.setattr(settings, "govmap_coverage_concurrency", 6)
+        monkeypatch.setattr(settings, "govmap_new_layer_slots", 3)
+
+        res = await gc.scrape_next_layer()
+        assert [t["layer_id"] for t in res["triggered"]] == ["243012", "243154", "240040"]
+        assert queued == [PRIORITY_NEW_LAYER] * 3
+        assert PRIORITY_COVERAGE < PRIORITY_NEW_LAYER < PRIORITY_ROUTINE
+
+        # Next tick: new slots full, ordinary slots full → nothing more.
+        res = await gc.scrape_next_layer()
+        assert res == {"skipped": "at_concurrency", "active": 9}
+    _run(go())
