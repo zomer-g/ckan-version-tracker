@@ -209,6 +209,24 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # Daily catalog watch: re-read GovMap's layer catalog (new layers join the
+    # rollout above, never-triggered first) and the watched data.gov.il orgs.
+    # First run a few minutes after boot, so a deploy is also a check.
+    # See app/services/catalog_watch.py.
+    if settings.catalog_watch_enabled:
+        from app.services.catalog_watch import run_catalog_watch
+        scheduler.add_job(
+            run_catalog_watch,
+            trigger=IntervalTrigger(
+                hours=settings.catalog_watch_interval_hours,
+                start_date=datetime.now(timezone.utc) + timedelta(minutes=5),
+            ),
+            id="catalog_watch",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
     # GovMap's parcel address sweep: fold what arrived into over_re_addresses.
     #
     # The ingest is continuous — the sweep on the worker posts every checkpoint,

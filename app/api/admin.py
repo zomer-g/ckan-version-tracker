@@ -1169,6 +1169,29 @@ async def govmap_coverage_scrape_next(
     return await scrape_next_layer()
 
 
+@router.get("/catalog-watch")
+@limiter.limit("60/minute")
+async def catalog_watch_status(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """The newest daily catalog-watch summary (new GovMap layers, republished
+    layers, data.gov.il datasets/resources added). Null until the first run."""
+    from app.services import catalog_watch
+    return {"last_result": catalog_watch.last_result}
+
+
+@router.post("/catalog-watch/run-once")
+@limiter.limit("3/minute")
+async def catalog_watch_run_once(
+    request: Request,
+    user: User = Depends(get_admin_user),
+):
+    """Run the daily catalog watch now, even if CATALOG_WATCH_ENABLED is off."""
+    from app.services.catalog_watch import run_catalog_watch
+    return await run_catalog_watch(force=True)
+
+
 @router.get("/discovery/coverage")
 @limiter.limit("6/minute")
 async def discovery_coverage(

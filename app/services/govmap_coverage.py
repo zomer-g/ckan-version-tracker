@@ -22,6 +22,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from zoneinfo import ZoneInfo
+
 import httpx
 from sqlalchemy import func, select
 
@@ -154,6 +156,7 @@ def _extract_layers(catalog: dict) -> list[dict]:
                 "caption": (title or "")[:500] or None,
                 "layer_kind": it.get("layerKind"),
                 "complexity": it.get("complexity"),
+                "update_date": it.get("updateDate"),
             }
         if found:
             return list(found.values())
@@ -180,10 +183,57 @@ def _extract_layers(catalog: dict) -> list[dict]:
     return list(found.values())
 
 
+_CATALOG_TZ = ZoneInfo("Asia/Jerusalem")
+
+
+def parse_update_date(raw) -> datetime | None:
+    """GovMap's ``updateDate`` ("2026-09-23 00:04:31.207584") as aware UTC.
+
+    The catalog writes it naive, in Israel time. Anything unparseable is None:
+    one odd row must not fail the whole catalog refresh."""
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_CATALOG_TZ)
+    return dt.astimezone(timezone.utc)
+
+
+def changed_since_capture(
+    update_date: datetime | None,
+    last_triggered_at: datetime | None,
+    now: datetime,
+    min_days: float,
+) -> bool:
+    """Whether GovMap republished a layer after we last scraped it.
+
+    Such a layer is due NOW, not at the 90-day refresh: a republish can change
+    the schema itself (the national cadastre moved to a new one on 2026-09-23,
+    over layers 15 and 21), and 90 days of silence would lose every
+    intermediate state. ``min_days`` is the floor between two such re-scrapes —
+    a layer the publisher refreshes daily (the cadastre does, from 2026-09) is
+    captured at most once per floor, not every day.
+
+    A layer never triggered is already due by the normal rule; this is only
+    about the ones that were."""
+    if update_date is None or last_triggered_at is None:
+        return False
+    if update_date <= last_triggered_at:
+        return False
+    return now - last_triggered_at >= timedelta(days=float(min_days))
+
+
 async def populate_from_catalog(db) -> dict:
     """Fetch the GovMap catalog and upsert the coverage inventory. Idempotent:
     inserts new layers, refreshes caption/kind on existing ones, preserves
-    last_triggered_at / tracked_dataset_id. Returns a small summary."""
+    last_triggered_at / tracked_dataset_id. Returns a small summary.
+
+    A layer GovMap republished since we last scraped it (see
+    ``changed_since_capture``) has its ``last_triggered_at`` cleared, which
+    puts it at the head of the rollout queue with the brand-new layers."""
     async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
         r = await client.get(CATALOG_URL, headers=_catalog_headers())
         r.raise_for_status()
@@ -198,6 +248,10 @@ async def populate_from_catalog(db) -> dict:
     }
     inserted = 0
     retitled = 0
+    new_layers: list[dict] = []
+    republished: list[dict] = []
+    now = datetime.now(timezone.utc)
+    min_days = float(settings.govmap_republish_min_days)
     for i, lay in enumerate(sorted(layers, key=lambda x: int(x["layer_id"]) if x["layer_id"].isdigit() else 0)):
         row = existing.get(lay["layer_id"])
         if row is None:
@@ -209,7 +263,12 @@ async def populate_from_catalog(db) -> dict:
                 sort_order=i,
             ))
             inserted += 1
+            new_layers.append({"layer_id": lay["layer_id"], "caption": lay["caption"]})
         else:
+            if changed_since_capture(parse_update_date(lay.get("update_date")),
+                                     row.last_triggered_at, now, min_days):
+                row.last_triggered_at = None
+                republished.append({"layer_id": lay["layer_id"], "caption": lay["caption"]})
             # Propagate a caption change to the linked dataset's title, but
             # only when the title still equals the OLD caption (i.e. it was
             # auto-generated); a user-customized title is never overwritten.
@@ -229,7 +288,8 @@ async def populate_from_catalog(db) -> dict:
     total = (await db.execute(select(func.count()).select_from(GovmapCoverage))).scalar() or 0
     return {"fetched": len(layers), "inserted": inserted,
             "updated": len(layers) - inserted, "retitled": retitled,
-            "total": int(total)}
+            "total": int(total),
+            "new_layers": new_layers, "republished": republished}
 
 
 def _active_coverage_tasks_q():

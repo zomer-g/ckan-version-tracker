@@ -170,6 +170,21 @@ class CKANClient:
     async def package_list(self, limit: int = 100, offset: int = 0) -> list[str]:
         return await self._get("package_list", {"limit": limit, "offset": offset})
 
+    async def organization_packages(self, org: str) -> list[dict]:
+        """Every package of one organization, with its resources, paged."""
+        out: list[dict] = []
+        start = 0
+        while True:
+            page = await self._get(
+                "package_search",
+                {"fq": f"organization:{org}", "rows": 1000, "start": start},
+            )
+            results = page.get("results") or []
+            out.extend(results)
+            start += len(results)
+            if not results or start >= (page.get("count") or 0):
+                return out
+
     async def organization_list(self, all_fields: bool = False) -> list:
         return await self._get("organization_list", {"all_fields": all_fields})
 

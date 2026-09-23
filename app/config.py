@@ -576,6 +576,27 @@ class Settings(BaseSettings):
     # existing capture obsolete.
     govmap_engine_epoch: str = "2026-07-30T13:00:00Z"
 
+    # Daily catalog watch (app/services/catalog_watch.py). Once a day, and a
+    # few minutes after every boot: re-read GovMap's layer catalog so a new
+    # layer enters the coverage rollout the day it appears, and walk the
+    # watched data.gov.il organizations for packages and resources nobody
+    # added. Before this the GovMap catalog was read only when an admin pressed
+    # "populate", and 83 layers — the new national cadastre among them — sat
+    # outside the inventory.
+    catalog_watch_enabled: bool = True
+    catalog_watch_interval_hours: float = 24.0
+    # A layer GovMap republished since we last scraped it is re-scraped, but
+    # no more often than this. The cadastre republishes daily from 2026-09.
+    govmap_republish_min_days: float = 7.0
+    # data.gov.il organizations whose every package should be tracked. Comma
+    # separated slugs. israel_mapping_center = מפ"י (the cadastre, תצ"ר, תת"ג).
+    catalog_watch_ckan_orgs: str = "israel_mapping_center"
+    # Only packages touched on or after this date are onboarded automatically.
+    # MAPI's catalog also holds ~80 aerial-photo sheets from 2023 that nobody
+    # asked for; everything published or edited since is taken whole.
+    catalog_watch_ckan_since: str = "2026-01-01"
+    catalog_watch_ckan_poll_interval: int = 604_800  # weekly
+
     cors_origins: str = ""
 
     # ── Public-API data budget (anti-abuse) ──
