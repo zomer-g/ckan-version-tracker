@@ -3,6 +3,8 @@ import json
 import logging
 from typing import Any
 
+import httpx
+
 from app.services.ckan_client import ckan_client
 
 logger = logging.getLogger(__name__)
@@ -104,7 +106,15 @@ async def detect_resource_changes(
             # preserving the prior hash so the skip doesn't register as a change
             # (which would churn a new version on every poll). Surface only real
             # download errors.
-            blocked = "Got HTML" in str(e) or "IAP" in str(e)
+            # Since ~2026-09 the wall has a second face: a server IP is sent to
+            # aws-e.data.gov.il and refused with a bare 403, while a home IP
+            # gets the same URL as a 200 ZIP. Same wall, same remedy — the
+            # worker fleet runs on home connections.
+            forbidden = (isinstance(e, httpx.HTTPStatusError)
+                         and e.response is not None
+                         and e.response.status_code == 403)
+            forbidden = forbidden or "403 Forbidden" in str(e)
+            blocked = forbidden or "Got HTML" in str(e) or "IAP" in str(e)
             if blocked and not resource.get("datastore_active"):
                 logger.info(
                     "Skipping IAP-blocked non-datastore resource %s (%s) — "

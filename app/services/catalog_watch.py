@@ -152,6 +152,17 @@ async def _watch_ckan_org(org: str) -> dict:
             row.last_modified = None
             row.last_error = None
             extended.append((str(row.id), row.ckan_name, missing))
+        # A watched dataset whose last poll was refused (data.gov.il's 403 to a
+        # server IP) is polled again now rather than at its weekly/monthly
+        # cadence: the poll is what routes the files to a worker on a home
+        # connection, and once it has, last_error is clear and this stops.
+        extended_ids = {row.id for row, _ in plan["extend"]}
+        refused = []
+        for r in rows:
+            if (r.status == "active" and r.id not in extended_ids
+                    and "403 Forbidden" in (r.last_error or "")):
+                r.last_modified = None  # else the unchanged-metadata shortcut skips it
+                refused.append(str(r.id))
         await db.commit()
         onboarded = [(str(d.id), d.ckan_name, d.title, d.poll_interval) for d in created]
 
@@ -159,12 +170,15 @@ async def _watch_ckan_org(org: str) -> dict:
         add_poll_job(ds_id, interval)
     for ds_id, _name, _missing in extended:
         await poll_dataset(ds_id)
+    for ds_id in refused:
+        await poll_dataset(ds_id)
 
     return {
         "org": org,
         "packages": len(packages),
         "onboarded": [{"id": i, "name": n, "title": t} for i, n, t, _ in onboarded],
         "resources_added": [{"id": i, "name": n, "resource_ids": m} for i, n, m in extended],
+        "repolled_after_403": refused,
         "skipped": [{"name": n, "reason": why} for n, why in plan["skipped"]
                     if not why.startswith("untouched")],
     }

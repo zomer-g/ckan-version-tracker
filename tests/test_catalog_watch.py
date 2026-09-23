@@ -111,3 +111,31 @@ def test_catalog_extraction_keeps_the_update_date():
                             "publisherId": 2, "publicPublishType": 0}]}
     [lay] = _extract_layers(catalog)
     assert lay["update_date"] == "2026-09-23 00:05:06.951315"
+
+
+# --- data.gov.il's 403 face of the wall ---------------------------------------
+
+def test_403_on_a_file_is_blocked_not_an_error():
+    import asyncio
+
+    import httpx
+
+    from app.services import version_detector as vd
+
+    async def fake_download(url, resource_id="", max_bytes=None):
+        req = httpx.Request("GET", "https://aws-e.data.gov.il/x.zip")
+        raise httpx.HTTPStatusError(
+            "Client error '403 Forbidden' for url 'https://aws-e.data.gov.il/x.zip'",
+            request=req, response=httpx.Response(403, request=req))
+
+    real = vd.ckan_client.download_resource
+    vd.ckan_client.download_resource = fake_download
+    try:
+        changed, hashes, errors, blocked = asyncio.run(vd.detect_resource_changes(
+            {"_hashes": {"zip": "old"}},
+            [{"id": "zip", "url": "https://data.gov.il/x.zip", "format": "ZIP"}]))
+    finally:
+        vd.ckan_client.download_resource = real
+    assert blocked == {"zip"}
+    assert errors == []
+    assert hashes == {"zip": "old"}  # a skip is not a change
