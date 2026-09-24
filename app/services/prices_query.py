@@ -147,11 +147,48 @@ async def chains(db: AsyncSession, *, refresh: bool = False) -> list[dict]:
         })
         if table in existing:
             entry["tables"][role] = table
-    out = sorted((e for e in by_ds.values() if "prices" in e["tables"]),
-                 key=lambda e: e["name"])
+    out = [e for e in by_ds.values() if "prices" in e["tables"]]
+    await _published_names(out)
+    out.sort(key=lambda e: e["name"])
     _cache.update(at=now, chains=out)
     _schedule_indexes(out)
+    _schedule_views(out)
     return out
+
+
+def _schedule_views(entries: list[dict]) -> None:
+    """Keep the uniform views (prices_unified) in step with the chain tables."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    from app.services import prices_unified
+    loop.create_task(prices_unified.build_views_safely(entries))
+
+
+async def _published_names(entries: list[dict]) -> None:
+    """``name`` becomes the chain's own Hebrew name — the most common
+    ``chain_name`` in its stores file ("רמי לוי שיווק השקמה"); the dataset
+    title only carries the portal account ("RamiLevi"), kept as ``account``
+    so a filter may still name the chain either way. One query for all."""
+    for e in entries:
+        e["account"] = e["name"]
+    with_stores = [e for e in entries if e["tables"].get("stores")]
+    if not with_stores:
+        return
+    sql = "\nUNION ALL\n".join(
+        f"(SELECT {_lit(e['chain'])} AS chain, chain_name FROM public.{_qi(e['tables']['stores'])} "
+        f"WHERE chain_name <> '' GROUP BY chain_name ORDER BY count(*) DESC LIMIT 1)"
+        for e in with_stores)
+    try:
+        rows = await _fetch(sql, [])
+    except Exception as ex:  # noqa: BLE001 — a name is never worth a failed read
+        logger.warning("prices: published chain names unreadable: %s", ex)
+        return
+    names = {r["chain"]: (r["chain_name"] or "").strip() for r in rows}
+    for e in entries:
+        if names.get(e["chain"]):
+            e["name"] = names[e["chain"]]
 
 
 def _schedule_indexes(entries: list[dict]) -> None:
@@ -209,7 +246,8 @@ async def _require(db: AsyncSession, chain_filter: list[str] | None, role: str =
         entries = [e for e in entries
                    if e["chain"].lower() in wanted
                    or e["chain"].split(":", 1)[-1].lower() in wanted
-                   or e["name"].lower() in wanted]
+                   or e["name"].lower() in wanted
+                   or e.get("account", "").lower() in wanted]
     entries = [e for e in entries if role in e["tables"]]
     if not entries:
         raise NotCollectedYet(
@@ -294,9 +332,9 @@ async def list_chains(db: AsyncSession) -> list[dict]:
     entries = await chains(db)
     out = []
     for e in entries:
-        info = {"chain": e["chain"], "name": e["name"], "dataset_id": e["dataset_id"],
-                "source_url": e["source_url"], "last_polled_at": e["last_polled_at"],
-                "stores": None, "latest_snapshot": None}
+        info = {"chain": e["chain"], "name": e["name"], "account": e.get("account"),
+                "dataset_id": e["dataset_id"], "source_url": e["source_url"],
+                "last_polled_at": e["last_polled_at"], "stores": None, "latest_snapshot": None}
         cov = e["tables"].get("coverage")
         if cov:
             try:

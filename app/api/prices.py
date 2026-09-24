@@ -13,6 +13,10 @@ Endpoints (all public, rate-limited):
     GET  /api/prices/history?item_code=…        every price state of an item
     GET  /api/prices/promotions?item_code=…     promotions covering an item
 
+    GET  /api/prices/tables                     the six UNIFORM tables and their columns
+    GET  /api/prices/table/{name}?<col>=…       rows of one uniform table, every chain
+                                                in one schema (app/services/prices_unified.py)
+
 ``chains`` everywhere takes a comma-separated list of chain keys
 (``shufersal:shufersal``), bare accounts (``ramilevi``) or names (``רמי לוי``).
 Every answer carries ``caveats`` — properties of the published data that a
@@ -21,13 +25,18 @@ consumer must not forget.
 # No ``from __future__ import annotations`` here: every route is wrapped by
 # slowapi, and FastAPI resolves string annotations against the wrapper's
 # globals — see tests/test_route_annotations.py.
+import csv
+import io
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.rate_limit import limiter
 from app.services import prices_query as pq
+from app.services import prices_unified as pu
 
 router = APIRouter(prefix="/api/prices", tags=["prices"])
 
@@ -44,6 +53,8 @@ async def _run(coro):
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
     return {**data, "caveats": pq.CAVEATS, "source": pq.SOURCE_PAGE,
             "processed": False}
 
@@ -147,3 +158,70 @@ async def promotions(request: Request,
     return await _run(pq.item_promotions(db, item_code=item_code,
                                          chains_filter=_chains(chains),
                                          active_only=active_only, limit=limit))
+
+
+# ---------------------------------------------------------------------------
+# The uniform tables — every chain in one schema
+# ---------------------------------------------------------------------------
+
+# Query-string keys that are not column filters.
+_RESERVED = {"q", "city", "current", "date", "min_price", "max_price", "columns",
+             "order", "limit", "offset", "format"}
+
+
+@router.get("/tables")
+@limiter.limit("60/minute")
+async def tables(request: Request):
+    """The six uniform tables, their columns, and how to query them."""
+    return {"tables": pu.describe(),
+            "usage": {
+                "endpoint": "/api/prices/table/{name}",
+                "column_filters": "כל עמודה בטבלה היא פרמטר: ?chain=…&store_id=…; כמה ערכים "
+                                  "מופרדים בפסיק. item_code מתעלם מאפסים מובילים; chain "
+                                  "מקבל מפתח, חשבון או שם.",
+                "q": "חיפוש חופשי: שם מוצר (ב-prices_market מתורגם לברקודים דרך "
+                     "prices_products), שם סניף/כתובת, או תיאור מבצע",
+                "city": "שם עיר — מנורמל לסמל יישוב של הלמ\"ס",
+                "current": "true (ברירת מחדל) = רק מה שבתוקף עכשיו; false = כל ההיסטוריה",
+                "date": "YYYY-MM-DD — מה שהיה בתוקף ביום הזה (גובר על current)",
+                "min_price / max_price": "טווח מחיר (item_price או discounted_price)",
+                "columns": "אילו עמודות להחזיר, מופרדות בפסיק",
+                "order": "עמודות למיון, מופרדות בפסיק; '-' לפני השם = יורד",
+                "limit / offset": f"עד {pu.MAX_LIMIT} שורות בעמוד",
+                "format": "json (ברירת מחדל) או csv",
+                "sql": "אותן טבלאות זמינות בשמן בקונסולת ה-SQL (over.org.il/data) "
+                       "ובשרת ה-SQL MCP; כל תשובה מחזירה console_sql — השאילתה המקבילה.",
+            },
+            "caveats": pq.CAVEATS, "source": pq.SOURCE_PAGE, "processed": False}
+
+
+@router.get("/table/{name}")
+@limiter.limit("60/minute")
+async def table(request: Request, name: str,
+                q: str | None = Query(None, max_length=100),
+                city: str | None = Query(None, max_length=60),
+                current: bool = True,
+                date: str | None = Query(None, max_length=10,
+                                         description="YYYY-MM-DD — המצב שבתוקף ביום הזה"),
+                min_price: float | None = Query(None, ge=0),
+                max_price: float | None = Query(None, ge=0),
+                columns: str | None = Query(None, max_length=1000),
+                order: str | None = Query(None, max_length=200),
+                limit: int = Query(100, ge=1, le=pu.MAX_LIMIT),
+                offset: int = Query(0, ge=0, le=pu.MAX_OFFSET),
+                format: str = Query("json", pattern="^(json|csv)$"),
+                db: AsyncSession = Depends(get_db)):
+    """Rows of one uniform table. Every other query parameter is a column filter."""
+    filters = {k: v for k, v in request.query_params.items() if k not in _RESERVED}
+    cols = [c.strip() for c in (columns or "").split(",") if c.strip()] or None
+    data = await _run(pu.query(db, name, filters=filters, q=q, city=city, current=current,
+                               on_date=date, min_price=min_price, max_price=max_price,
+                               columns=cols, order=order, limit=limit, offset=offset))
+    if format == "csv":
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=data["columns"], extrasaction="ignore")
+        w.writeheader()
+        w.writerows(data["rows"])
+        return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
+    return data

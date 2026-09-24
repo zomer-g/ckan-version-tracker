@@ -15,6 +15,7 @@ import Abbr from "../components/a11y/Abbr";
  *   • שאלות לעם — cross-source deep search   (/api/deep-search)
  *   • נדל"ן לעם — one property, every identity (/api/nadlan)
  *   • עסקאות נדל"ן — the מיסוי מקרקעין register (/api/deals)
+ *   • שקיפות מחירים — every food retailer as one market (/api/prices)
  *   • SQL       — every queryable table + GeoJSON (/api/tables)
  * Each source also has a dedicated MCP server (see MCP_SERVERS / McpCard) —
  * including two with no public REST surface of their own (SQL, מידע לעם).
@@ -503,6 +504,76 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
     ],
   },
   {
+    id: "prices",
+    title: "שקיפות מחירים — מחירי המזון בכל הרשתות",
+    note: "כ-30 רשתות מזון, שכל אחת מפרסמת בפורמט שלה ונאספת כאן כמאגר נפרד פעם ביום, מתושאלות דרך /api/prices כשוק אחד. · הבסיס הוא שש טבלאות אחידות — prices_market (כל מצב מחיר בכל סניף, עם שם המוצר, הסניף והעיר), prices_products, prices_stores, prices_promotions, prices_promotion_items ו-prices_coverage — שמאחדות את כל הרשתות בסכמה אחת. אותן טבלאות בדיוק זמינות בשמן בקונסולת /data, ב-POST /api/tables/sql ובשרת ה-SQL MCP, וכל תשובה של /table מחזירה console_sql ו-row_url — אותה שאילתה להרצה ב-/data. · שורה היא מצב, לא קריאה: last_seen_date ריק (NULL) = המחיר עדיין בתוקף, ו-as_of הוא תאריך הקובץ האחרון של הסניף. · ההתאמה בין רשתות היא לפי ברקוד בלי אפסים מובילים (item_code_bare). מבצעים אינם מקוזזים מהמחיר. processed=false: הערכים כפי שהרשתות פרסמו.",
+    endpoints: [
+      {
+        path: "/api/prices/tables",
+        description: "שש הטבלאות האחידות: שם, תיאור, וכל עמודה עם הטיפוס וההסבר שלה, והוראות השימוש ב-/table.",
+        example: "/api/prices/tables",
+      },
+      {
+        path: "/api/prices/table/{name}",
+        description:
+          "שאילתה אחידה על כל הרשתות יחד: כל עמודה בטבלה היא פרמטר סינון (כמה ערכים מופרדים בפסיק). ב-prices_market חובה לציין item_code, q או store_id יחד עם chain — הטבלה מכילה כ-16 מיליון מצבי מחיר. מחזיר עד 1,000 שורות בעמוד, has_more לעמוד הבא, ו-format=csv להורדה.",
+        params: [
+          { name: "<עמודה>", desc: "סינון לפי כל עמודה בטבלה, למשל chain, store_id, item_code, promotion_id, city_code. item_code מתעלם מאפסים מובילים; chain מקבל מפתח (cerberus:ramilevi), חשבון (ramilevi) או שם" },
+          { name: "q", desc: "חיפוש חופשי: שם מוצר (ב-prices_market מתורגם לברקודים דרך prices_products), שם סניף או כתובת, או תיאור מבצע" },
+          { name: "city", desc: "שם עיר — מנורמל לסמל יישוב של הלמ\"ס; סניף שהרשת לא פרסמה לו קוד מותאם לפי שמו וכתובתו" },
+          { name: "current / date", desc: "current=true (ברירת מחדל) — רק מה שבתוקף עכשיו; current=false — כל ההיסטוריה; date=YYYY-MM-DD — מה שהיה בתוקף ביום הזה" },
+          { name: "min_price / max_price", desc: "טווח מחיר (item_price, ובטבלאות המבצעים discounted_price)" },
+          { name: "columns / order", desc: "אילו עמודות להחזיר; מיון לפי עד שלוש עמודות, '-' לפני השם = יורד" },
+          { name: "limit / offset / format", desc: "עד 1,000 שורות; format=csv להורדה" },
+        ],
+        example: "/api/prices/table/prices_market?item_code=7290000066134&city=חיפה&columns=chain_name,store_name,city,item_name,item_price,as_of",
+      },
+      {
+        path: "/api/prices/chains",
+        description: "הרשתות שנאספות: מפתח, השם שהרשת מפרסמת, מספר סניפים, תאריך הקובץ האחרון וקישור למאגר ולהיסטוריית הגרסאות שלו.",
+        example: "/api/prices/chains",
+      },
+      {
+        path: "/api/prices/products",
+        description: "חיפוש מוצר לפי שם או ברקוד בכל הרשתות, מקובץ לפי ברקוד: השמות שכל רשת נותנת לו, היצרן, הגודל ובאילו רשתות הוא נמכר.",
+        params: [{ name: "q", desc: "שם מוצר (מילים) או ברקוד" }, { name: "chains", desc: "סינון רשתות, מופרדות בפסיק" }],
+        example: "/api/prices/products?q=חלב 3%",
+      },
+      {
+        path: "/api/prices/compare",
+        description: "המחיר הנוכחי של מוצר (או כמה) בכל רשת — מינימום, חציון ומקסימום על פני הסניפים, הסניף הזול בכל רשת והסניפים הזולים בסך הכול.",
+        params: [{ name: "item_code", desc: "ברקוד, או כמה מופרדים בפסיק" }, { name: "city", desc: "הגבלה לעיר" }, { name: "top", desc: "כמה סניפים זולים להחזיר" }],
+        example: "/api/prices/compare?item_code=7290000066134&city=חיפה",
+      },
+      {
+        path: "/api/prices/basket",
+        method: "POST",
+        description: "עלות סל בכל סניף בעיר, מהזול ליקר — קודם לפי כמה מפריטי הסל יש בסניף ורק אחר כך לפי הסכום. גוף הבקשה: {items: [{item_code, quantity}], city, chains?, top?}.",
+        example: "/api/prices/basket",
+      },
+      {
+        path: "/api/prices/promotions",
+        description: "המבצעים שחלים על מוצר בכל הרשתות, עם תנאיהם ובכמה סניפים כל מבצע רץ.",
+        example: "/api/prices/promotions?item_code=7290000066134",
+      },
+      {
+        path: "/api/prices/history",
+        description: "כל מצבי המחיר של מוצר לאורך זמן: מתי כל מחיר התחיל ומתי נראה לאחרונה, בכל סניף, וציר זמן לפי רשת.",
+        example: "/api/prices/history?item_code=7290000066134&chains=ramilevi",
+      },
+      {
+        path: "/api/prices/stores",
+        description: "סניפים לפי עיר, שם או כתובת, בכל הרשתות.",
+        example: "/api/prices/stores?city=חיפה",
+      },
+      {
+        path: "/api/prices/store/{chain}/{store_id}",
+        description: "המחירון הנוכחי של סניף אחד, עם סינון לפי שם מוצר או ברקוד.",
+        example: "/api/prices/store/ramilevi/19?q=חלב",
+      },
+    ],
+  },
+  {
     id: "deep-search",
     title: "שאלות לעם — חיפוש רוחבי בכל המקורות",
     note: "שאילתה אחת שנשלחת במקביל לכל הקורפוסים שגרסאות לעם מגיעה אליהם — מאגרים במעקב, טבלאות SQL, הלמ״ס, פרוטוקולי ועדות, ממ״מ, דוחות מבקר המדינה, החלטות ממשלה, יומני נבחרי ציבור, תאגידים, מפתח התקציב ומידע לעם. כתובת בסיס: /api/deep-search. · שני דברים שכדאי לדעת לפני שמשתמשים: (1) בקשה אחת לכל מקור — הדף שולח את המקורות בנפרד כדי שכל עמודה תיצבע ברגע שהיא חוזרת, וזו גם הסיבה שהמסננים שטוחים (f_<id>) ולא ממוענים לפי מקור. (2) total יכול לחזור null, וזה לעולם לא אומר אפס — הוא אומר שהספירה לא בוצעה (בקורפוסי טקסט מלא מוותרים עליה כי היא מכפילה את זמן התשובה). המספר האמיתי של התוצאות שהוחזרו הוא אורך results.",
@@ -610,7 +681,7 @@ const MCP_SERVERS: {
     path: "/prices/mcp",
     purpose:
       "המחירים, הסניפים והמבצעים שכל רשת מזון גדולה מחויבת לפרסם לפי חוק קידום התחרות — כ-30 רשתות, כל אחת נאספת כמאגר נפרד פעם ביום, ומתושאלות כאן יחד: איפה מוצר זול יותר, כמה עולה סל קניות בכל סניף בעיר, אילו מבצעים חלים עליו ואיך המחיר השתנה לאורך זמן. הזיהוי האמין בין רשתות הוא הברקוד, לכל מחיר מצורף תאריך הקובץ שממנו נלקח, ומבצעים מוצגים בנפרד ואינם מקוזזים מהמחיר.",
-    tools: ["search_products", "compare_prices", "compare_basket", "item_promotions", "price_history", "find_stores", "store_prices", "list_chains"],
+    tools: ["search_products", "compare_prices", "compare_basket", "item_promotions", "price_history", "find_stores", "store_prices", "list_chains", "query_table"],
   },
   {
     key: "odata",
@@ -689,7 +760,7 @@ function McpCard() {
         {MCP_SERVERS.map((s) => {
           const url = `${origin}${s.path}`;
           return (
-            <div className="api-mcp-subcard" key={s.key}>
+            <div className="api-mcp-subcard" key={s.key} id={`mcp-${s.key}`}>
               <h3 className="api-mcp-subtitle">{s.label}</h3>
               <p>{s.purpose}</p>
               <div className="api-mcp-url-row" dir="ltr">
@@ -887,7 +958,7 @@ export default function ApiPage() {
 
         <h2 className="api-endpoints-heading">{t("api.endpoints", "נקודות קצה")}</h2>
         {ENDPOINT_GROUPS.map((group) => (
-          <section key={group.id} className="api-endpoint-group" aria-label={group.title}>
+          <section key={group.id} id={group.id} className="api-endpoint-group" aria-label={group.title}>
             <h3 className="api-endpoint-group-title">{group.title}</h3>
             {group.note && <p className="api-endpoint-group-note">{group.note}</p>}
             <div className="api-endpoint-list">

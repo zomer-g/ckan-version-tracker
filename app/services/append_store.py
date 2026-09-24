@@ -314,10 +314,13 @@ def _index_name(table: str, suffix: str) -> str:
 
 async def drop_table(table: str) -> None:
     """Drop a dataset's append table (used to reset a mis-created table before a
-    clean re-seed). Idempotent."""
+    clean re-seed). Idempotent.
+
+    CASCADE: a view laid over dataset tables (prices_unified's uniform views)
+    must never block a reset. The view's owner rebuilds it on its next check."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(f'DROP TABLE IF EXISTS {_qi(table)}')
+        await conn.execute(f'DROP TABLE IF EXISTS {_qi(table)} CASCADE')
 
 
 def tables_from_mappings(ds, mappings: dict | None) -> list[dict]:

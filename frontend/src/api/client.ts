@@ -3738,3 +3738,137 @@ export const ocoiAdmin = {
   saveContent: (key: string, value: string) =>
     request<OcoiAdminEnvelope<Record<string, unknown>>>(`${OB}/content/${key}`, { method: "PUT", ...jbody({ value }) }),
 };
+
+// ── שקיפות מחירים (prices) — every food retailer as one market ────────────────
+// Each chain is its own dataset; /api/prices queries across all of them. The
+// "uniform tables" (/api/prices/table/{name}) are SQL views that put every
+// chain in one schema, and are queryable by the same names in /data.
+
+export interface PriceChain {
+  chain: string;
+  /** The chain's own name, from its stores file (Hebrew). */
+  name: string;
+  /** The portal account the dataset is titled by ("RamiLevi"). */
+  account: string | null;
+  dataset_id: string;
+  source_url: string | null;
+  last_polled_at: string | null;
+  stores: number | null;
+  latest_snapshot: string | null;
+}
+
+export interface PriceProduct {
+  item_code: string;
+  names: string[];
+  manufacturer: string | null;
+  quantity: string | null;
+  unit_qty: string | null;
+  unit_of_measure: string | null;
+  is_weighted: string | null;
+  chains: { chain: string; name: string }[];
+}
+
+export interface PriceStoreView {
+  chain: string;
+  chain_name: string;
+  store_id: string;
+  sub_chain_id: string;
+  store_name: string | null;
+  city: string | null;
+  address: string | null;
+  price: number | null;
+  unit_price: number | null;
+  since: string | null;
+  as_of: string | null;
+}
+
+export interface PriceCompareItem {
+  item_code: string;
+  item_name: string | null;
+  store_count: number;
+  chains: {
+    chain: string; chain_name: string; stores: number; min_price: number;
+    median_price: number; max_price: number; as_of: string | null;
+    cheapest_store: PriceStoreView;
+  }[];
+  cheapest_stores: PriceStoreView[];
+}
+
+export interface PriceBasketStore {
+  chain: string;
+  chain_name: string;
+  store_id: string;
+  store_name: string | null;
+  city: string | null;
+  address: string | null;
+  as_of: string | null;
+  total: number;
+  items_found: number;
+  items_missing: string[];
+  lines: { item_code: string; item_name: string | null; quantity: number; price: number; line_total: number }[];
+}
+
+export interface PricePromotion {
+  chain: string;
+  chain_name: string;
+  promotion_id: string;
+  description: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  discounted_price: string | null;
+  promo_discounted_price: string | null;
+  min_qty: string | null;
+  promo_min_qty: string | null;
+  club_id: string | null;
+  restrictions: string | null;
+  stores: number;
+}
+
+export interface PriceTableColumn { name: string; description: string; type: string }
+export interface PriceTableSpec { name: string; title: string; description: string; columns: PriceTableColumn[] }
+
+export interface PriceTableResult {
+  table: string;
+  columns: string[];
+  rows: Record<string, string | number | boolean | null>[];
+  count: number;
+  has_more: boolean;
+  limit: number;
+  offset: number;
+  resolved_item_codes: string[] | null;
+  elapsed_ms: number;
+  console_sql: string | null;
+  row_url: string | null;
+}
+
+interface PriceEnvelope { caveats: string[]; source: string }
+
+export const prices = {
+  chains: () => request<{ chains: PriceChain[] } & PriceEnvelope>("/prices/chains"),
+  products: (q: string, limit = 30) =>
+    request<{ items: PriceProduct[]; count: number; truncated: boolean } & PriceEnvelope>(
+      `/prices/products?q=${encodeURIComponent(q)}&limit=${limit}`),
+  compare: (codes: string[], city?: string, top = 10) =>
+    request<{ items: PriceCompareItem[]; not_found: string[]; city: string | null } & PriceEnvelope>(
+      `/prices/compare?item_code=${encodeURIComponent(codes.join(","))}&top=${top}` +
+      (city ? `&city=${encodeURIComponent(city)}` : "")),
+  basket: (items: { item_code: string; quantity: number }[], city: string, top = 15) =>
+    request<{ stores: PriceBasketStore[]; stores_compared: number; basket_size: number;
+              best_per_chain: { chain: string; chain_name: string; store_name: string | null;
+                                total: number; items_found: number }[] } & PriceEnvelope>(
+      "/prices/basket", { method: "POST", body: JSON.stringify({ items, city, top }) }),
+  promotions: (code: string) =>
+    request<{ promotions: PricePromotion[]; count: number } & PriceEnvelope>(
+      `/prices/promotions?item_code=${encodeURIComponent(code)}&limit=50`),
+  tables: () => request<{ tables: PriceTableSpec[] } & PriceEnvelope>("/prices/tables"),
+  /** `params` are column filters plus q / city / current / date / order / limit / offset. */
+  table: (name: string, params: Record<string, string>) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== ""));
+    return request<PriceTableResult>(`/prices/table/${name}?${qs.toString()}`);
+  },
+  tableUrl: (name: string, params: Record<string, string>, format?: "csv") => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== ""));
+    if (format) qs.set("format", format);
+    return `${BASE}/prices/table/${name}?${qs.toString()}`;
+  },
+};

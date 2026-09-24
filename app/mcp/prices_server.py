@@ -24,6 +24,7 @@ from app.mcp.auth import McpUser
 from app.mcp.config import base_url
 from app.mcp.usage import log_usage
 from app.services import prices_query as pq
+from app.services import prices_unified as pu
 
 SERVER_NAME = "over-prices-mcp"
 SERVER_VERSION = "0.1.0"
@@ -43,7 +44,9 @@ SERVER_INSTRUCTIONS = (
     "ורק אז השווה לפי item_code.\n\n"
     "סדר עבודה: search_products (שם → ברקוד) → compare_prices / compare_basket "
     "(עם city) → item_promotions / price_history. find_stores לאיתור סניפים לפי עיר, "
-    "store_prices למחירון של סניף אחד."
+    "store_prices למחירון של סניף אחד. לכל שאלה שהכלים האלה "
+    "לא עונים עליה — query_table על הטבלאות האחידות (prices_market ועוד), שהן גם "
+    "טבלאות SQL באותו שם בקונסולה over.org.il/data."
 )
 
 _CHAINS_PROP = {"type": "string",
@@ -143,6 +146,30 @@ TOOLS: list[dict] = [
             "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
         }, "required": ["item_code"]},
     },
+    {
+        "name": "query_table",
+        "description": (
+            "שאילתה ישירה על אחת משש הטבלאות האחידות — כל הרשתות בסכמה אחת: "
+            "prices_market (מחירים + שם מוצר + סניף + עיר), prices_products, prices_stores, "
+            "prices_promotions, prices_promotion_items, prices_coverage. filters הוא מילון "
+            "עמודה→ערך (כמה ערכים מופרדים בפסיק). ב-prices_market חובה item_code, q או "
+            "store_id+chain. מחזיר גם console_sql — אותה שאילתה ל-over.org.il/data."),
+        "inputSchema": {"type": "object", "properties": {
+            "table": {"type": "string", "enum": list(pu.VIEWS)},
+            "filters": {"type": "object", "description": "עמודה → ערך, למשל "
+                        "{\"chain\": \"ramilevi\", \"item_code\": \"7290000066134\"}"},
+            "q": {"type": "string", "description": "חיפוש חופשי (שם מוצר / סניף / מבצע)"},
+            "city": {"type": "string"},
+            "current": {"type": "boolean", "default": True,
+                        "description": "false = כל היסטוריית המצבים"},
+            "date": {"type": "string", "description": "YYYY-MM-DD — מה שהיה בתוקף ביום הזה"},
+            "min_price": {"type": "number"}, "max_price": {"type": "number"},
+            "columns": {"type": "array", "items": {"type": "string"}},
+            "order": {"type": "string", "description": "עמודות מופרדות בפסיק, '-' = יורד"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            "offset": {"type": "integer", "minimum": 0, "default": 0},
+        }, "required": ["table"]},
+    },
 ]
 
 
@@ -240,6 +267,26 @@ async def _tool_item_promotions(request, db, user, a):
     return await _wrap(request, db, data, len(data["promotions"]))
 
 
+async def _tool_query_table(request, db, user, a):
+    filters = a.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise ValueError("filters חייב להיות מילון עמודה→ערך")
+    cols = a.get("columns")
+    if isinstance(cols, str):
+        cols = [c.strip() for c in cols.split(",") if c.strip()]
+    current = a.get("current")
+    data = await pu.query(db, str(a.get("table") or ""),
+                          filters={str(k): ",".join(map(str, v)) if isinstance(v, list) else str(v)
+                                   for k, v in filters.items()},
+                          q=a.get("q") or None, city=a.get("city") or None,
+                          current=True if current is None else bool(current),
+                          on_date=a.get("date") or None,
+                          min_price=a.get("min_price"), max_price=a.get("max_price"),
+                          columns=cols or None, order=a.get("order") or None,
+                          limit=int(a.get("limit") or 100), offset=int(a.get("offset") or 0))
+    return await _wrap(request, db, data, data["count"])
+
+
 _IMPL = {
     "list_chains": _tool_list_chains,
     "search_products": _tool_search_products,
@@ -249,6 +296,7 @@ _IMPL = {
     "store_prices": _tool_store_prices,
     "price_history": _tool_price_history,
     "item_promotions": _tool_item_promotions,
+    "query_table": _tool_query_table,
 }
 
 
@@ -291,7 +339,7 @@ async def _run_tool(request: Request, db: AsyncSession, user: McpUser, session_i
         out = json.dumps(data, ensure_ascii=False, indent=2, default=str)
         await log("ok", count, len(out.encode("utf-8")))
         return {"content": [{"type": "text", "text": out}]}
-    except (pq.NotCollectedYet, ValueError) as e:
+    except (pq.NotCollectedYet, ValueError, TimeoutError) as e:
         # A caller mistake or "not collected yet" — said plainly, not as a crash.
         await log("error", error=str(e)[:1000])
         return {"content": [{"type": "text", "text": str(e)}], "isError": True}

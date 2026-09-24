@@ -141,6 +141,7 @@ export default function Navbar() {
         { to: "/projects/ocoi", label: t("nav.ocoi", "ניגוד עניינים לעם") },
         { to: "/projects/nadlan", label: t("nav.nadlan", 'נדל"ן לעם') },
         { to: "/projects/deals", label: t("nav.deals", 'עסקאות נדל"ן') },
+        { to: "/projects/prices", label: t("nav.prices", "שקיפות מחירים") },
       ],
     },
     {
