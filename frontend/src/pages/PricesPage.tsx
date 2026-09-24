@@ -6,12 +6,14 @@
  * OVER collects each chain as its own dataset (~30 of them); this page is where
  * they are read together.
  *
- * Four tabs:
+ * Five tabs:
  *   compare — find an item by name or barcode, see its price at every chain
  *   basket  — a list of items, the stores in a city ranked by what it costs
  *   table   — the uniform tables themselves: every chain in one schema, with
  *             filters, CSV, the API URL and the same query in /data
  *   chains  — who is collected, how many stores, how fresh
+ *   nadlan  — research: Shufersal's shelf against apartment prices per
+ *             settlement (a snapshot; see components/PricesNadlanTab.tsx)
  *
  * Everything lives in the query string so every view is a shareable link, the
  * convention /data and עסקאות נדל"ן follow.
@@ -23,13 +25,15 @@ import {
   PricePromotion, PriceTableResult, PriceTableSpec,
 } from "../api/client";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import PricesNadlanTab from "../components/PricesNadlanTab";
 
-type Tab = "compare" | "basket" | "table" | "chains";
+type Tab = "compare" | "basket" | "table" | "chains" | "nadlan";
 const TABS: [Tab, string][] = [
   ["compare", "🔎 השוואת מחיר"],
   ["basket", "🛒 סל קניות"],
   ["table", "🗂 הטבלה האחידה"],
   ["chains", "🏪 הרשתות"],
+  ["nadlan", "🏠 מדף מול נדל\"ן"],
 ];
 
 const NIS = new Intl.NumberFormat("he-IL", { style: "currency", currency: "ILS", minimumFractionDigits: 2 });
@@ -704,6 +708,7 @@ export default function PricesPage() {
         {tab === "basket" && <BasketTab params={params} patch={patch} />}
         {tab === "table" && <TableTab params={params} patch={patch} chains={chains ?? []} />}
         {tab === "chains" && <ChainsTab chains={chains} error={chainsError} />}
+        {tab === "nadlan" && <PricesNadlanTab params={params} patch={patch} />}
 
         {caveats.length > 0 && (
           <details style={{ margin: "1.5rem 0 1rem" }}>
