@@ -218,3 +218,29 @@ def test_text_search_on_stores(captured):
     run(pu.query(None, "prices_stores", q="קניון עזריאלי"))
     sql = captured["sql"]
     assert sql.count("ILIKE") == 6                               # 2 terms × 3 columns
+
+
+# --------------------------------------------------------------------------
+# /data catalog: the views sit with גרסאות לעם's processed indexes
+# --------------------------------------------------------------------------
+
+def test_views_are_listed_as_processed_over_tables(monkeypatch):
+    from app.services import append_store, data_catalog
+
+    async def cols(schema):
+        return {"prices_market": [{"name": "chain", "type": "text"},
+                                  {"name": "item_price", "type": "numeric"}],
+                "over_settlements": [{"name": "code", "type": "int"}],
+                "some_other_view": [{"name": "x", "type": "text"}]}
+
+    async def est():
+        return {}
+
+    monkeypatch.setattr(append_store, "schema_table_columns", cols)
+    monkeypatch.setattr(append_store, "list_public_tables", est)
+    recs = {r["table"]: r for r in run(data_catalog._over_index_records())}
+    assert set(recs) == {"prices_market", "over_settlements"}
+    market = recs["prices_market"]
+    assert market["kind"] == "over"                     # → "גרסאות לעם (אינדקסים מעובדים)"
+    assert "שקיפות מחירים" in market["title"]
+    assert market["columns"][1]["alias"] == "המחיר (₪)"

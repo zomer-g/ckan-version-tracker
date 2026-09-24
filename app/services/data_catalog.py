@@ -267,24 +267,36 @@ async def _over_index_records() -> list[dict]:
     except Exception:  # noqa: BLE001 — never break the whole catalog
         logger.debug("data_catalog: over_ index columns failed", exc_info=True)
         return []
+    # The price-transparency uniform tables: VIEWS that put every retail
+    # chain's tables into one schema (app/services/prices_unified.py). Also
+    # built BY גרסאות לעם, so they sit with its processed indexes.
+    from app.services import prices_unified
     recs: list[dict] = []
     for table, columns in sorted(cols_by_table.items()):
-        if not table.startswith("over_") or not columns:
+        spec = prices_unified.VIEWS.get(table)
+        if not columns or not (table.startswith("over_") or spec):
             continue
         if table in _OVER_HIDDEN:
             continue
+        if spec:
+            captions = {c[0]: c[2] for c in prices_unified.COMMON + spec["columns"]}
+            columns = column_aliases.apply(columns, captions)
         recs.append({
             "table": table,
             "schema": "public",
             "kind": "over",
-            "title": _OVER_TITLES.get(table, table),
-            "description": "גרסאות לעם (over.org.il) — אינדקס מעובד",
+            "title": (f"שקיפות מחירים — {spec['title']} (טבלה אחידה)" if spec
+                      else _OVER_TITLES.get(table, table)),
+            "description": (spec["description"] + " כל הרשתות בסכמה אחת; ב-prices_market "
+                            "סננו לפי item_code_bare / chain+store_id, לא סריקה מלאה."
+                            if spec else "גרסאות לעם (over.org.il) — אינדקס מעובד"),
             "dataset_id": None,
             "version_id": None,
             "organization": None,
             "ckan_id": None,
             "source_type": "over",
-            "source_url": "https://www.over.org.il/data",
+            "source_url": ("https://www.over.org.il/projects/prices?tab=table" if spec
+                           else "https://www.over.org.il/data"),
             "tags": [],
             "columns": columns,
             "est_rows": est.get(table),

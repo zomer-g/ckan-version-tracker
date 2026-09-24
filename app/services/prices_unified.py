@@ -70,7 +70,7 @@ def _lit(value) -> str:
 # "num" = numeric when it parses, "date_end" = NULL for an open state.
 # Columns every view starts with are added by _branch (chain, chain_name, dataset_id).
 
-_COMMON = [
+COMMON = [
     ("chain", "meta", "מפתח הרשת (למשל cerberus:ramilevi)"),
     ("chain_name", "meta", "שם הרשת כפי שהיא מפרסמת אותו בקובץ הסניפים"),
     ("dataset_id", "meta", "מזהה המאגר של הרשת ב-over.org.il (/versions/<id>)"),
@@ -223,7 +223,7 @@ _SELECTIVE = ("item_code", "q", "store_id", "promotion_id")
 
 
 def column_names(view: str) -> list[str]:
-    return [c[0] for c in _COMMON + VIEWS[view]["columns"]]
+    return [c[0] for c in COMMON + VIEWS[view]["columns"]]
 
 
 def describe() -> list[dict]:
@@ -232,7 +232,7 @@ def describe() -> list[dict]:
                           "type": ("numeric" if c[1] == "num" else
                                    "boolean" if c[1] == "current" else
                                    "integer" if c[0] == "city_code" else "text")}
-                         for c in _COMMON + v["columns"]]}
+                         for c in COMMON + v["columns"]]}
             for name, v in VIEWS.items()]
 
 

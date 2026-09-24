@@ -897,7 +897,10 @@ async def _run_over_records(db, records: list[dict], *, enrich: bool, force: boo
     done, skipped, errors, enriched = [], [], [], 0
     for rec in records:
         schema, table = rec.get("schema", "public"), rec["table"]
-        if table.startswith("over_") or table == PROFILE_TABLE:
+        # OVER's own indexes, including the prices uniform VIEWS (kind "over"):
+        # a view over ~16M rows would be re-scanned whole, and its chain tables
+        # are profiled on their own.
+        if rec.get("kind") == "over" or table.startswith("over_") or table == PROFILE_TABLE:
             continue
         try:
             if not force:
