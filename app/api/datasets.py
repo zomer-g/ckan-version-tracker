@@ -1620,8 +1620,9 @@ async def update_tracked(
     # so the next fire is "last poll + new interval", not "now + interval".
     if interval_changed and ds.status == "active":
         try:
-            from app.worker.scheduler import add_poll_job
-            add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at)
+            from app.worker.scheduler import add_poll_job, poll_at_hour
+            add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at,
+                         at_hour=poll_at_hour(ds))
         except Exception as e:
             # A scheduler that refused the job is not a reason to fail the
             # edit — the interval is already committed, and the next restart

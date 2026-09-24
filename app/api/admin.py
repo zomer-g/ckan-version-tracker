@@ -39,7 +39,7 @@ from app.services.r2_backfill import (
     rebuild_dataset_versions,
     seed_neon_from_versions,
 )
-from app.worker.scheduler import add_poll_job, scheduler
+from app.worker.scheduler import add_poll_job, poll_at_hour, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ async def approve_request(
     await db.commit()
 
     # Add poll job to scheduler
-    add_poll_job(str(ds.id), ds.poll_interval)
+    add_poll_job(str(ds.id), ds.poll_interval, at_hour=poll_at_hour(ds))
 
     # Auto-trigger first poll immediately after approval
     from app.worker.poll_job import poll_dataset
@@ -516,7 +516,8 @@ async def register_append_datasets_endpoint(
                     select(TrackedDataset).where(TrackedDataset.id == parse_uuid(r["id"], "id"))
                 )).scalar_one_or_none()
                 if ds:
-                    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at)
+                    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at,
+                                 at_hour=poll_at_hour(ds))
                     if poll:
                         from app.worker.poll_job import poll_dataset
                         background_tasks.add_task(poll_dataset, str(ds.id))

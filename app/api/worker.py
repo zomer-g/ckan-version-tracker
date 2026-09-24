@@ -1133,6 +1133,27 @@ async def _clear_short_load_warning(ds_id, res_name: str) -> None:
         logger.warning("could not clear the short-load warning: %s", e)
 
 
+def _reschedule_if_hour_changed(ds, patch: dict | None) -> None:
+    """A source may pin its daily poll to an hour (``poll_at_hour``) from the
+    worker side; re-register the job when that changes, or the pin waits for
+    the next deploy to take effect."""
+    if not isinstance(patch, dict) or "poll_at_hour" not in patch:
+        return
+    try:
+        from app.worker.scheduler import poll_at_hour, scheduler, schedule_dataset
+        job = scheduler.get_job(f"poll_{ds.id}")
+        hour = poll_at_hour(ds)
+        if hour is None:
+            return
+        if job is not None and getattr(job, "next_run_time", None) is not None:
+            from zoneinfo import ZoneInfo
+            if job.next_run_time.astimezone(ZoneInfo("Asia/Jerusalem")).hour == hour:
+                return
+        schedule_dataset(ds)
+    except Exception as e:  # noqa: BLE001 — scheduling nicety, never fail a push
+        logger.warning("could not reschedule %s at its hour: %s", ds.id, e)
+
+
 async def _sample_column_for(ds_id) -> str | None:
     """The source's own "when was this sampled" column, or None.
 
@@ -1751,6 +1772,7 @@ async def push_version(
             current = dict(ds.scraper_config or {})
             current.update(body.scraper_config_patch)
             ds.scraper_config = current
+            _reschedule_if_hour_changed(ds, body.scraper_config_patch)
         ds.last_polled_at = datetime.now(timezone.utc)
         task_result = await db.execute(
             select(ScrapeTask).where(
@@ -2772,6 +2794,7 @@ async def push_version(
             current.update(body.scraper_config_patch)
             ds.scraper_config = current
             await db.commit()
+            _reschedule_if_hour_changed(ds, body.scraper_config_patch)
         except Exception as e:
             logger.warning("Failed to save scraper_config_patch for %s: %s", ds.id, e)
 

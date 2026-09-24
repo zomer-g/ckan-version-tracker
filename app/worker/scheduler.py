@@ -80,10 +80,7 @@ async def init_scheduler() -> None:
             # never mass-fire the whole catalog on a deploy).
             if (ds.scraper_config or {}).get("coverage_managed"):
                 continue
-            add_poll_job(
-                str(ds.id), ds.poll_interval,
-                last_polled_at=ds.last_polled_at,
-            )
+            schedule_dataset(ds)
             logger.info(
                 "Scheduled poll for %s every %ds (last=%s)",
                 ds.ckan_name, ds.poll_interval, ds.last_polled_at,
@@ -640,10 +637,47 @@ async def init_scheduler() -> None:
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 
 
+_ISRAEL_TZ = "Asia/Jerusalem"
+
+
+def poll_at_hour(ds) -> int | None:
+    """The Israel-time hour a dataset asked to be polled at, or None.
+
+    ``scraper_config["poll_at_hour"]`` (0-23). For a source whose upstream is
+    only complete at a certain time of day — a price file published at 03:00,
+    a listing that holds TODAY's files only and is empty just after midnight —
+    "every 24 hours from whenever it was approved" is the wrong cadence: the
+    retail-prices datasets were approved near midnight and every one of them
+    then ran at 00:04, when laibcatalog's list is empty."""
+    value = (getattr(ds, "scraper_config", None) or {}).get("poll_at_hour")
+    try:
+        hour = int(value)
+    except (TypeError, ValueError):
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def _next_at_hour(hour: int, now: datetime) -> datetime:
+    from zoneinfo import ZoneInfo
+
+    local = now.astimezone(ZoneInfo(_ISRAEL_TZ))
+    target = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= local:
+        target += timedelta(days=1)
+    return target.astimezone(timezone.utc)
+
+
+def schedule_dataset(ds) -> None:
+    """(Re)register a dataset's poll job from the dataset itself."""
+    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at,
+                 at_hour=poll_at_hour(ds))
+
+
 def add_poll_job(
     dataset_id: str,
     interval_seconds: int,
     last_polled_at: datetime | None = None,
+    at_hour: int | None = None,
 ) -> None:
     """Add or replace a poll job for a dataset.
 
@@ -691,7 +725,12 @@ def add_poll_job(
     now = datetime.now(timezone.utc)
     interval = timedelta(seconds=interval_seconds)
     immediate = now + timedelta(seconds=1)
-    if last_polled_at is None:
+    if at_hour is not None and interval_seconds % 86400 == 0:
+        # Pinned to a time of day: the next occurrence of that hour, and every
+        # interval after it. An overdue dataset waits for its hour rather than
+        # firing now — firing now is exactly what would move it off the hour.
+        start_date = _next_at_hour(at_hour, now)
+    elif last_polled_at is None:
         # Brand-new dataset — fire on next tick.
         start_date = immediate
     else:
