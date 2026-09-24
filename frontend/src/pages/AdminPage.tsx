@@ -846,6 +846,40 @@ export default function AdminPage() {
     }
   };
 
+  // Every failure in the panel, retried at once. A dataset that failed several
+  // times in the window is polled ONCE (its other entries are just cleared) —
+  // polling it twice would only queue a duplicate the server refuses anyway.
+  const [retryingAll, setRetryingAll] = useState(false);
+  const handleRetryAllFailed = async () => {
+    const failed = queue?.failed ?? [];
+    if (!failed.length) return;
+    const datasets = new Map<string, string>();
+    for (const f of failed) if (!datasets.has(f.dataset_id)) datasets.set(f.dataset_id, f.dataset_title);
+    if (!confirm(`לנסות שוב את כל ${datasets.size} המאגרים שנכשלו (${failed.length} כשלים)?`)) return;
+    setRetryingAll(true);
+    let queued = 0;
+    const errors: string[] = [];
+    try {
+      for (const f of failed) {
+        try { await adminApi.cancelScrapeTask(f.task_id); } catch { /* already gone */ }
+      }
+      for (const [id, title] of datasets) {
+        try {
+          await datasetsApi.poll(id);
+          queued += 1;
+        } catch (e: any) {
+          errors.push(`${title}: ${e?.message || e}`);
+        }
+      }
+      await loadQueue();
+    } finally {
+      setRetryingAll(false);
+    }
+    alert(errors.length
+      ? `נשלחו ${queued} מתוך ${datasets.size}. לא נשלחו:\n${errors.slice(0, 10).join("\n")}`
+      : `נשלחו לגירוד מחדש ${queued} מאגרים.`);
+  };
+
   const handleUpdateInterval = async (id: string, interval: number) => {
     try {
       await datasetsApi.update(id, { poll_interval: interval });
@@ -1511,6 +1545,18 @@ export default function AdminPage() {
                   </span>
                   {/* Plain-text digest of every failure (title | phase | time +
                       the FULL error) — built for pasting into a debugging chat. */}
+                  <button
+                    onClick={handleRetryAllFailed}
+                    disabled={retryingAll}
+                    title="מנקה את כל הכשלים ושולח כל מאגר שנכשל לגירוד מחדש"
+                    style={{
+                      background: "none", border: "1px solid var(--success)", color: "var(--success)",
+                      cursor: retryingAll ? "wait" : "pointer", fontSize: "0.75rem",
+                      padding: "0.2rem 0.5rem", borderRadius: "4px", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {retryingAll ? "שולח..." : "↻ נסה שוב הכל"}
+                  </button>
                   <CopyListButton
                     label="העתק שגיאות"
                     getText={() =>
