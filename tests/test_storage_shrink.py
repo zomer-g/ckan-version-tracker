@@ -1,8 +1,8 @@
-"""Compact dedup hashes (uuid) and moving a dataset's rows to files."""
+"""Compact dedup hashes (uuid)."""
 import asyncio
 import uuid
 
-from app.services import append_store, hash_compaction, sql_offload
+from app.services import append_store, hash_compaction
 
 SHA = "ab" * 32  # a 64-hex digest
 
@@ -59,34 +59,3 @@ def test_alter_sql():
     assert hash_compaction.alter_sql("idx", 'we"ird', "_row_hash") == (
         'ALTER TABLE "idx"."we""ird" ALTER COLUMN "_row_hash" TYPE uuid '
         'USING left("_row_hash", 32)::uuid')
-
-
-def test_export_query_drops_internal_columns():
-    q = sql_offload.export_query("append_x", ["year", "pr", "first_seen", "row_hash", "geom"])
-    assert q == 'SELECT "year", "pr", "first_seen" FROM public."append_x"'
-
-
-def test_repoint_multi_resource_dict():
-    m = {"_resource_ids": ["r1", "r2"], "_names": {"r1": "a", "r2": "b"},
-         "_append_tables": {"r1": "append_a", "r2": "append_b"}}
-    moved = {"append_a": {"value": "r2:k/a.csv", "resource_id": "r1", "name": "a (all)"}}
-    out = sql_offload.repoint_mappings(m, moved)
-    assert out["r1"] == "r2:k/a.csv" and out["_names"]["r1"] == "a (all)"
-    assert out["_append_tables"] == {"r2": "append_b"}  # untouched table stays
-    both = {**moved, "append_b": {"value": "r2:k/b.csv", "resource_id": "r2", "name": "b"}}
-    out = sql_offload.repoint_mappings(m, both)
-    assert "_append_tables" not in out and out["r2"] == "r2:k/b.csv"
-    assert m["_append_tables"] == {"r1": "append_a", "r2": "append_b"}  # input not mutated
-
-
-def test_repoint_single_table_and_list_shape():
-    out = sql_offload.repoint_mappings(
-        {"append_table": "append_s", "_resource_ids": ["rid"]},
-        {"append_s": {"value": "r2:k/s.csv", "resource_id": "rid", "name": "s"}})
-    assert "append_table" not in out and out["rid"] == "r2:k/s.csv"
-    out = sql_offload.repoint_mappings(
-        {"_append_tables": [{"resource": "docs", "table": "append_d"}]},
-        {"append_d": {"value": "r2:k/d.csv", "resource_id": None, "name": "docs"}})
-    assert "_append_tables" not in out
-    rid = [k for k in out["_resource_ids"]][0]
-    assert out[rid] == "r2:k/d.csv" and out["_names"][rid] == "docs"

@@ -154,55 +154,6 @@ function HashCompactionCard() {
   );
 }
 
-interface OffloadRun { state: "running" | "done" | "failed"; done: number; total: number | null; current: string | null; error: string | null }
-
-/** Move one dataset's SQL tables to CSV files on R2 (app/services/sql_offload.py). */
-function OffloadButton({ datasetId, title }: { datasetId: string; title: string }) {
-  const [run, setRun] = useState<OffloadRun | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (run?.state !== "running") return;
-    const t = setInterval(async () => {
-      try { setRun((await call<{ run: OffloadRun | null }>(`/offload/${datasetId}`)).run); } catch { /* keep polling */ }
-    }, 4000);
-    return () => clearInterval(t);
-  }, [run?.state, datasetId]);
-
-  const start = async () => {
-    setBusy(true);
-    try {
-      const plan = await call<{ tables: unknown[]; bytes: number; est_rows: number }>(`/offload/${datasetId}`);
-      const ok = window.confirm(
-        `להעביר את "${title}" מ-SQL לקבצים?\n\n` +
-        `${plan.tables.length} טבלאות, כ-${plan.est_rows.toLocaleString("he-IL")} שורות, ${formatBytes(plan.bytes)}.\n` +
-        "כל טבלה תיוצא ל-CSV ב-R2 ותיבדק, הגרסאות יפנו לקבצים, תוכנית האחסון תעבור ל-R2, " +
-        "ורק אז הטבלאות יימחקו. המאגר לא יהיה עוד שאילתי ב-/data.");
-      if (!ok) return;
-      await call(`/offload/${datasetId}`, "POST");
-      setRun({ state: "running", done: 0, total: plan.tables.length, current: null, error: null });
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "הפעולה נכשלה");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (run?.state === "running") {
-    return <span className="text-muted"> · מעביר לקבצים {run.done}/{run.total ?? "?"}…</span>;
-  }
-  if (run?.state === "done") return <span style={{ color: "var(--success)" }}> · הועבר לקבצים ✓</span>;
-  return (
-    <>
-      {run?.state === "failed" && <span style={{ color: "var(--danger)" }} title={run.error ?? ""}> · ההעברה נכשלה</span>}
-      {" · "}
-      <button type="button" onClick={() => void start()} disabled={busy}
-              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary)", font: "inherit", textDecoration: "underline" }}>
-        העבר לקבצים
-      </button>
-    </>
-  );
-}
-
 function pct(part: number, whole: number): string {
   if (!whole) return "0%";
   const p = (part / whole) * 100;
@@ -429,7 +380,6 @@ export default function StorageUsagePanel() {
                         <div className="text-muted" style={{ fontSize: "0.75rem" }}>
                           {ds.source} · {STATUS_LABELS[ds.status] ?? ds.status}
                           {ds.org ? ` · ${ds.org}` : ""} · <Link to={`/versions/${ds.id}`}>דף המאגר</Link>
-                          <OffloadButton datasetId={ds.id} title={ds.title} />
                         </div>
                       )}
                     </td>

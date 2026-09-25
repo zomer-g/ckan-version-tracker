@@ -270,10 +270,38 @@ async def _over_index_records() -> list[dict]:
     # The price-transparency uniform tables: VIEWS that put every retail
     # chain's tables into one schema (app/services/prices_unified.py). Also
     # built BY גרסאות לעם, so they sit with its processed indexes.
-    from app.services import prices_unified
+    from app.services import prices_unified, union_views
+    # A dataset split into one table per resource, joined back into one view
+    # with the split's dimension as a column (app/services/union_views.py).
+    try:
+        import asyncio
+        asyncio.get_running_loop().create_task(union_views.ensure_views_safely())
+    except RuntimeError:
+        pass
     recs: list[dict] = []
     for table, columns in sorted(cols_by_table.items()):
         spec = prices_unified.VIEWS.get(table)
+        union = union_views.spec_for_view(table)
+        if union and columns:
+            ds_id, uspec = union
+            recs.append({
+                "table": table,
+                "schema": "public",
+                "kind": "over",
+                "title": uspec["title"],
+                "description": uspec["description"],
+                "dataset_id": ds_id,
+                "version_id": None,
+                "organization": None,
+                "ckan_id": None,
+                "source_type": "over",
+                "source_url": f"https://www.over.org.il/versions/{ds_id}",
+                "tags": [],
+                "columns": column_aliases.apply(
+                    columns, {uspec["label_column"]: uspec["label_caption"]}),
+                "est_rows": None,
+            })
+            continue
         if not columns or not (table.startswith("over_") or spec):
             continue
         if table in _OVER_HIDDEN:

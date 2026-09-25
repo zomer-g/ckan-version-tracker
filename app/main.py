@@ -360,6 +360,8 @@ async def lifespan(app: FastAPI):
     from app.database import async_session
     from app.services import source_registry
     asyncio.create_task(source_registry.warm_cache(async_session))
+    from app.services import union_views
+    asyncio.create_task(union_views.ensure_views_safely())
     yield
     from app.services import api_access_log
     await api_access_log.flush()
