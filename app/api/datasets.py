@@ -1565,7 +1565,7 @@ async def update_tracked(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "NEON archiving is only available for CKAN (data.gov.il) "
+                    "SQL row tables are only available for CKAN (data.gov.il) "
                     "datasets with tabular rows; this source archives files/"
                     "catalog data. Choose 'local', 'r2' or 'odata'."
                 ),

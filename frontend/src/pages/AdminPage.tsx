@@ -66,8 +66,8 @@ function storageTargetOptions(
   opts.push({ value: "r2", label: "R2 — סנפשוט מלא", disabled: false });
   opts.push({ value: "odata", label: "ODATA (legacy)", disabled: false });
   if (neonEligible) {
-    opts.push({ value: "neon", label: "NEON — DB טבלאי", disabled: false });
-    opts.push({ value: "r2+neon", label: "R2 + NEON — סנפשוט וגם DB", disabled: false });
+    opts.push({ value: "neon", label: "SQL — טבלת שורות", disabled: false });
+    opts.push({ value: "r2+neon", label: "R2 + SQL — סנפשוט וגם טבלת שורות", disabled: false });
   }
   return opts;
 }
@@ -78,10 +78,10 @@ function storageTargetOptions(
 const STORAGE_TARGET_LABELS: Record<string, string> = {
   local: "מקומי (לא ב-OVER)",
   r2: "R2",
-  "r2+neon": "R2 + NEON",
-  neon: "NEON בלבד",
+  "r2+neon": "R2 + SQL",
+  neon: "SQL בלבד",
   odata: "ODATA",
-  "odata+neon": "ODATA + NEON",
+  "odata+neon": "ODATA + SQL",
 };
 
 const STORAGE_MODE_LABELS: Record<string, string> = {
@@ -2427,7 +2427,7 @@ export default function AdminPage() {
                         onChange={(e) =>
                           handleUpdateStorageTarget(ds.id, e.target.value as StorageTarget)
                         }
-                        title="תוכנית האחסון: היכן נשמרים הקבצים (מקומי / R2 / ODATA) והאם השורות הטבלאיות נשמרות גם ב-NEON (DB לתשאול). NEON זמין למאגרי data.gov.il טבלאיים בלבד."
+                        title="תוכנית האחסון: היכן נשמרים הקבצים (מקומי / R2 / ODATA) והאם השורות הטבלאיות נשמרות גם כטבלת SQL לתשאול. טבלת SQL זמינה למאגרי data.gov.il טבלאיים בלבד."
                         style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "var(--danger)" : (ds.storage_target?.includes("neon") ? "#035887" : undefined) }}
                       >
                         {storageTargetOptions(ds.neon_eligible ?? (ds.source_type === "ckan")).map((o) => (

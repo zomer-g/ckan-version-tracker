@@ -200,7 +200,7 @@ async def approve_request(
         raise HTTPException(
             status_code=400,
             detail=(
-                "NEON archiving is only available for CKAN (data.gov.il) "
+                "SQL row tables are only available for CKAN (data.gov.il) "
                 "tabular datasets; this source archives files/catalog data."
             ),
         )
@@ -663,7 +663,7 @@ async def seed_neon_endpoint(
     uid = parse_uuid(dataset_id, "dataset_id")
     from app.services import append_store as _as
     if not _as.is_configured():
-        raise HTTPException(status_code=409, detail="NEON append DB is not configured")
+        raise HTTPException(status_code=409, detail="The SQL archive database is not configured")
     if not apply:
         s = await seed_neon_from_versions(db, uid, apply=False)
         if s.get("error"):
@@ -3289,7 +3289,7 @@ async def profiler_run(
     from app.services import append_store as _as
     from app.services import table_profiler
     if not _as.is_configured():
-        raise HTTPException(status_code=409, detail="NEON append DB is not configured")
+        raise HTTPException(status_code=409, detail="The SQL archive database is not configured")
 
     if body.scope == "table":
         if not body.schema_name or not body.table_name:

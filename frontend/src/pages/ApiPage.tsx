@@ -120,7 +120,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/append/{id}/datastore_search",
         description:
-          "תשאול תוכן מאגר (השורות עצמן, לא רק הקבצים) — בהשראת datastore_search של CKAN. זמין למאגרים שתוכנם נשמר ב-NEON (append). מחזיר עטיפת CKAN: {success, result:{fields:[{id,type}], records, total, _links}}.",
+          "תשאול תוכן מאגר (השורות עצמן, לא רק הקבצים) — בהשראת datastore_search של CKAN. זמין למאגרים שתוכנם נשמר כטבלת SQL. מחזיר עטיפת CKAN: {success, result:{fields:[{id,type}], records, total, _links}}.",
         params: [
           { name: "filters", desc: "אובייקט JSON של עמודה→ערך (התאמה מדויקת; ערך יכול להיות רשימה ל-IN)" },
           { name: "q", desc: "חיפוש מחרוזת בכל העמודות" },
@@ -175,7 +175,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/append/{id}/schema",
         description:
-          "סכמת תוכן המאגר ב-NEON: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות.",
+          "סכמת טבלת ה-SQL של המאגר: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות.",
         example: "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/schema",
       },
     ],
@@ -611,7 +611,7 @@ const MCP_SERVERS: {
     key: "over",
     label: "OVER — מאגרי מידע ממשלתיים",
     path: "/mcp",
-    purpose: "חיפוש מאגרים שבמעקב, שליפת גרסאות וקבצים, תגיות וארגונים, ותשאול תוכן השורות (NEON).",
+    purpose: "חיפוש מאגרים שבמעקב, שליפת גרסאות וקבצים, תגיות וארגונים, ותשאול תוכן השורות (SQL).",
     tools: ["search_datasets", "get_dataset", "query_dataset_rows", "list_tags", "list_organizations", "get_stats"],
   },
   {

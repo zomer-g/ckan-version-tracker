@@ -117,6 +117,23 @@ def _guard_db_separation() -> bool:
     return collides
 
 
+def _refuse_neon() -> None:
+    """Neon is not used any more; refuse to boot against it.
+
+    All data moved to the xhostd channel's own database on 2026-09-11. A Neon
+    address reaching one of the DB settings (a stale secret, a copied env) would
+    silently split reads and writes across two databases, so it stops startup
+    instead. "neon" in dataset config and log lines is only a legacy NAME for the
+    SQL archive, which is the local database."""
+    bad = settings.neon_database_urls()
+    if bad:
+        raise RuntimeError(
+            "Neon is no longer used, but these settings point at a Neon host: "
+            + ", ".join(n.upper() for n in bad)
+            + ". Remove them so the app uses the local database."
+        )
+
+
 SENSITIVE_SCHEMA = "auth"
 
 # Names that must never be readable by the console role, in ANY schema. The
@@ -308,6 +325,7 @@ def _refuse_platform_bucket_as_archive() -> None:
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
     _refuse_platform_bucket_as_archive()
+    _refuse_neon()
     shared_db = _guard_db_separation()
     # Before the scheduler and before any request: prove, from the database's own
     # answer, that the public console's role cannot read a credential table. This

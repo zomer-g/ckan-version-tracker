@@ -8,9 +8,9 @@
 #
 # One database is the xhostd topology, so each of those defaults to the injected
 # one. OVER_DATABASE_URL exists only because DATABASE_URL is reserved: it points
-# the app somewhere else while the data still lives there (wave 2: Neon), and
-# then the archive variables must be given explicitly too, or the app would pair
-# a Neon app database with the platform's read-only role.
+# the app at another database, and then the archive variables must be given
+# explicitly too, or the app would pair that database with the platform's
+# read-only role. Neon is retired: app/main.py refuses to boot on a Neon address.
 
 over_to_asyncpg() {
   case "$1" in

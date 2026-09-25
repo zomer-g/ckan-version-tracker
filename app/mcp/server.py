@@ -75,7 +75,7 @@ TOOLS: list[dict] = [
     },
     {
         "name": "query_dataset_rows",
-        "description": "תשאול תוכן (שורות) של מאגר טבלאי שנשמר ב-NEON (append). פילטרים/חיפוש/עימוד. רק למאגרים עם נתונים טבלאיים. שים לב: למאגר אחד יכולות להיות כמה טבלאות (טבלה לכל משאב) — התשובה מחזירה אז את השדה tables, וכל קריאה מחזירה טבלה אחת בלבד. בחר טבלה אחרת עם table.",
+        "description": "תשאול תוכן (שורות) של מאגר טבלאי שנשמר כטבלת SQL. פילטרים/חיפוש/עימוד. רק למאגרים עם נתונים טבלאיים. שים לב: למאגר אחד יכולות להיות כמה טבלאות (טבלה לכל משאב) — התשובה מחזירה אז את השדה tables, וכל קריאה מחזירה טבלה אחת בלבד. בחר טבלה אחרת עם table.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -203,7 +203,7 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
     if not d:
         raise ValueError("מאגר לא נמצא")
     if not append_store.is_configured():
-        raise ValueError("אחסון NEON לא מוגדר בשרת")
+        raise ValueError("מסד ה-SQL לא מוגדר בשרת")
     # Via the shared resolver, NOT table_name(d). This used to guess the
     # deterministic single-table name and never read resource_mappings at all, so
     # every multi-resource dataset answered `total: 0` — and a model reading that

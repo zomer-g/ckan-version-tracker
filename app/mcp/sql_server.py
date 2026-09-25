@@ -235,7 +235,7 @@ TOOLS: list[dict] = [
 
 def _require_configured() -> None:
     if not append_store.is_configured():
-        raise ValueError("מסד הנתונים השאילתי (NEON) אינו מוגדר בשרת")
+        raise ValueError("מסד הנתונים השאילתי אינו מוגדר בשרת")
 
 
 async def _catalog(db: AsyncSession) -> list[dict]:

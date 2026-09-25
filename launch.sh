@@ -4,9 +4,6 @@
 # receives stop signals.
 set -eu
 cd "$(dirname "$0")"
-# The channel's own database, saved before xhostd-env.sh maps DATABASE_URL onto
-# whatever the app should use (Neon, until the archive switch).
-export XHOST_LOCAL_DATABASE_URL="${DATABASE_URL:-}"
 . ./xhostd-env.sh
 export PYTHONPATH="$PWD"
 
@@ -24,16 +21,6 @@ if [ -n "${DATABASE_URL:-}" ] && [ "${APPEND_DATABASE_URL:-}" = "${DATABASE_URL:
   python3 scripts/xhostd_db_grants.py || true
 fi
 
-# The archive copy from Neon (ARCHIVE_LOADER=run) runs beside the web server and
-# resumes where it stopped after any restart. See scripts/xhostd_archive_loader.py.
-if [ "${ARCHIVE_LOADER:-}" = "run" ]; then
-  python3 scripts/xhostd_archive_loader.py &
-fi
-# The app database (schemas app, auth) from Neon, once per APP_DB_LOADER token.
-# See scripts/xhostd_app_db_loader.py.
-if [ -n "${APP_DB_LOADER:-}" ]; then
-  python3 scripts/xhostd_app_db_loader.py &
-fi
 
 # Trusted forwarders: loopback and the private ranges, as on Render, never "*".
 # Narrow to the ingress range measured on xhostd once it is known (plan, wave 2).

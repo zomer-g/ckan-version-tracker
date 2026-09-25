@@ -76,7 +76,7 @@ const MISMATCH: Record<string, string> = {
     "המאגר במעקב אך טרם נוצרה לו גרסה — אין שום נתון שמור.",
   sample_only:
     "תוכנית האחסון מבטיחה שמירת נתונים, ובפועל נשמר רק חוסך מטא־דאטה. " +
-    "כדי לשמור את השורות עצמן יש להעביר את המאגר ל-NEON (‏r2+neon).",
+    "כדי לשמור את השורות עצמן יש להעביר את המאגר לתוכנית R2 + SQL.",
   file_store:
     "הקבצים של הגרסה האחרונה עדיין יושבים בארכיון הלגסי (ODATA) ולא ביעד " +
     "שבתוכנית. הנתונים לא אבדו — הם פשוט טרם הועברו ל-R2.",
@@ -222,7 +222,7 @@ export default function ArchiveChips(props: {
         {f.label}
       </Chip>
       {store && <StoreChip title="אחסון הקבצים בגרסה האחרונה">{store}</StoreChip>}
-      {a.row_store === "neon" && <StoreChip title="טבלת שורות ב-NEON">NEON</StoreChip>}
+      {a.row_store === "neon" && <StoreChip title="טבלת שורות במסד ה-SQL">SQL</StoreChip>}
       {a.sample_of != null && (
         <span className="text-muted" style={{ fontSize: "0.65rem" }}>
           ({rowsLabel(a.sample_of)})

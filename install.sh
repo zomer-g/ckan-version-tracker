@@ -5,8 +5,8 @@
 set -eu
 python3 --version
 node --version
-# PostgreSQL 18 client from PGDG, for scripts/xhostd_archive_loader.py (pg_dump |
-# psql from Neon into this channel's database). Proven in the dress rehearsal.
+# PostgreSQL 18 client from PGDG (pg_dump / psql against this channel's
+# database; the platform image ships an older one).
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends curl ca-certificates gnupg >/dev/null
 install -d /usr/share/postgresql-common/pgdg

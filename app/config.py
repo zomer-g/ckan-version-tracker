@@ -817,4 +817,28 @@ class Settings(BaseSettings):
             return False, details
         return (main == append), details
 
+    def neon_database_urls(self) -> list[str]:
+        """The database settings that still address a Neon host.
+
+        Neon is gone (2026-09-11: everything lives in the xhostd channel's own
+        Postgres). The code keeps "neon" in NAMES — ``storage_backend: "neon"``,
+        ``archive_neon``, log lines — meaning "the SQL archive", which is that
+        same local database. An actual Neon ADDRESS in any of these settings is
+        therefore always a mistake, and app/main.py refuses to start on one."""
+        out = []
+        for name in _DATABASE_URL_SETTINGS:
+            target = parse_pg_target(getattr(self, name, "") or "")
+            if target and any(target[0] == h or target[0].endswith("." + h)
+                              for h in NEON_HOST_SUFFIXES):
+                out.append(name)
+        return out
+
+
+# Every setting that holds a Postgres address.
+_DATABASE_URL_SETTINGS = (
+    "database_url", "append_database_url", "append_readonly_database_url",
+    "ocal_database_url", "ocoi_database_url",
+)
+NEON_HOST_SUFFIXES = ("neon.tech", "neon.build")
+
 settings = Settings()
