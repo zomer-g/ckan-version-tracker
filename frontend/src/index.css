@@ -631,6 +631,115 @@ label {
   text-overflow: ellipsis;
 }
 
+/* Brand + the "!" caveat button travel together on the start side, so the
+   caveat stays visible at every width (the desktop nav collapses on phones). */
+.navbar-start {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+/* The "!" caveat button. Amber on the dark header so it reads as a warning,
+   with dark ink for contrast (about 12:1), a visible label beside the glyph,
+   and a 44px target. Fixed values, not tokens: the header ground is fixed-dark
+   in both themes. */
+.navbar .btn-caveat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  padding-block: 0.2rem;
+  padding-inline: 0.3rem 0.75rem;
+  background: #FCD34D;
+  color: #3B2300;
+  border: 2px solid #FFFFFF;
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.navbar .btn-caveat:hover {
+  background: #FDE68A;
+}
+.navbar .btn-caveat:focus-visible {
+  outline: 3px solid #FFFFFF;
+  outline-offset: 2px;
+}
+.btn-caveat-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 9999px;
+  background: #3B2300;
+  color: #FCD34D;
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1;
+}
+@media (max-width: 640px) {
+  /* On a phone only the round "!" stays; its accessible name is unchanged. */
+  .navbar .btn-caveat {
+    padding-inline: 0;
+    justify-content: center;
+    width: var(--target-min);
+  }
+  .btn-caveat-text {
+    display: none;
+  }
+}
+
+/* The caveat dialog's text: short lines, generous leading, clear headings. */
+.caveat-body {
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+.caveat-body section + section {
+  margin-top: 1.1rem;
+}
+.caveat-body h3 {
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin: 0 0 0.35rem;
+}
+.caveat-body p {
+  margin: 0 0 0.5rem;
+}
+.caveat-body ul,
+.caveat-body ol {
+  margin: 0 0 0.5rem;
+  padding-inline-start: 1.3rem;
+}
+.caveat-body li + li {
+  margin-top: 0.25rem;
+}
+.caveat-risks,
+.caveat-todo {
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  border-inline-start: 4px solid;
+}
+.caveat-risks {
+  background: var(--tint-warn-bg);
+  color: var(--tint-warn-fg);
+  border-color: var(--tint-warn-bd);
+  border-inline-start-color: var(--warning);
+}
+.caveat-todo {
+  background: var(--tint-info-bg);
+  color: var(--tint-info-fg);
+  border-color: var(--tint-info-bd);
+}
+.caveat-more {
+  margin-top: 1rem !important;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
 /* Subtle "pending requests waiting" indicator next to the site title.
    Public (everyone sees it); a small white dot with a soft, slow pulse so
    it's noticeable without being loud. Only rendered when count > 0. */

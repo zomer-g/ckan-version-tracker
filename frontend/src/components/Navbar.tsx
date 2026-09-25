@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { datasets as datasetsApi } from "../api/client";
 import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 import { useTheme } from "../hooks/useTheme";
+import DataCaveatNotice from "./DataCaveatNotice";
 
 import { autoRefreshPaused } from "../hooks/useAutoRefresh";
 /**
@@ -217,6 +218,7 @@ export default function Navbar() {
         dir={i18n.language === "he" ? "rtl" : "ltr"}
       >
         <div className="container navbar-inner">
+          <div className="navbar-start">
           <Link
             to="/"
             className="brand"
@@ -232,6 +234,10 @@ export default function Navbar() {
               </>
             )}
           </Link>
+          {/* Outside the desktop nav on purpose: the caveat must stay one tap
+              away on a phone too, not buried in the hamburger panel. */}
+          <DataCaveatNotice />
+          </div>
 
           {/* Desktop nav — visible at ≥640px */}
           <div className="navbar-nav-desktop" ref={navDesktopRef}>

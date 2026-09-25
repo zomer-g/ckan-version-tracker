@@ -32,8 +32,10 @@ export default function Modal(props: {
   width?: string;
   /** Skip the backdrop-click close where a stray click would lose work. */
   closeOnBackdrop?: boolean;
+  /** Accessible name of the close controls, for a dialog shown in English. */
+  closeLabel?: string;
 }) {
-  const { title, onClose, children, footer, width = "32rem" } = props;
+  const { title, onClose, children, footer, width = "32rem", closeLabel = "סגירת החלון" } = props;
   const closeOnBackdrop = props.closeOnBackdrop !== false;
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<Element | null>(null);
@@ -107,7 +109,7 @@ export default function Modal(props: {
         <button
           type="button"
           onClick={onClose}
-          aria-label="סגירת החלון"
+          aria-label={closeLabel}
           tabIndex={-1}
           style={{
             position: "absolute",
@@ -135,7 +137,7 @@ export default function Modal(props: {
           <button
             type="button"
             onClick={onClose}
-            aria-label="סגירת החלון"
+            aria-label={closeLabel}
             style={{
               background: "none",
               border: "none",
