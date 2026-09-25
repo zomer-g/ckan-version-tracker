@@ -157,6 +157,15 @@ def get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def came_through_cloudflare(request: Request) -> bool:
+    """True when the rightmost public hop is a Cloudflare edge, i.e. the
+    Cloudflare-set headers (CF-Connecting-IP, CF-IPCountry) can be believed."""
+    xff = request.headers.get("x-forwarded-for", "")
+    hops = [ip for ip in (_parse_ip(tok) for tok in xff.split(",")) if ip is not None] if xff else []
+    edge = next((ip for ip in reversed(hops) if not _is_internal(ip)), None)
+    return edge is not None and _in_cloudflare(edge)
+
+
 def client_ip_key(request: Request) -> str:
     """``slowapi`` ``key_func`` — same derivation as everything else, so the
     request rate limiter and the data budget bucket by an identical key."""

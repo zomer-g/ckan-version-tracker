@@ -34,6 +34,7 @@ import ParquetPanel from "../components/ParquetPanel";
 import StorageUsagePanel from "../components/StorageUsagePanel";
 import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
+import ApiAccessPanel from "../components/ApiAccessPanel";
 import NlQueryAdminPanel from "../components/NlQueryAdminPanel";
 import PageContentPanel from "../components/PageContentPanel";
 import DecisionAnalysisPanel from "../components/DecisionAnalysisPanel";
@@ -202,7 +203,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal" | "ocoi" | "nadlan" | "parquet" | "storage";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "api" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal" | "ocoi" | "nadlan" | "parquet" | "storage";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -213,6 +214,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "log",       label: "לוג משימות",        emoji: "📜" },
   { id: "nl",        label: "שאלות חופשיות",     emoji: "💬" },
   { id: "mcp",       label: "גישת MCP",          emoji: "🔌" },
+  { id: "api",       label: "גישה ל-API",        emoji: "📈" },
   { id: "orgs",      label: "ארגונים",           emoji: "🏛" },
   { id: "tags",      label: "תגיות",             emoji: "🏷" },
   { id: "content",   label: "טקסטים",            emoji: "📝" },
@@ -1756,6 +1758,8 @@ export default function AdminPage() {
       {tab === "nl" && <NlQueryAdminPanel />}
 
       {tab === "mcp" && <McpUsersPanel />}
+
+      {tab === "api" && <ApiAccessPanel />}
 
       {tab === "content" && <PageContentPanel />}
 

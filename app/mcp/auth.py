@@ -22,6 +22,7 @@ from app.mcp.config import (
     MCP_JWT_AUDIENCE, mcp_jwt_secret, mcp_service_token, mcp_url,
 )
 from app.mcp.usage import current_server, server_from_path
+from app.services.api_access_log import stamp_actor
 from app.models.mcp import ApiUser
 
 # Fixed identity of the machine-to-machine "service gateway" principal. This
@@ -114,6 +115,7 @@ async def authenticate(
     #     access to only a subset of resources.
     svc = mcp_service_token()
     if svc and hmac.compare_digest(token, svc):
+        stamp_actor(request, "mcp_service", None, "service")
         return _service_user()
 
     # ── otherwise: the normal per-user OAuth flow (JWT + api_users) ──
@@ -132,4 +134,5 @@ async def authenticate(
     )).scalar_one_or_none()
     if not user:
         return _challenge("invalid_token", "User no longer active")
+    stamp_actor(request, "mcp_user", str(user.id), user.email)
     return McpUser(id=user.id, email=user.email, name=user.name, tier=user.tier, client_id=claims.get("cid"))

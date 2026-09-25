@@ -2273,6 +2273,55 @@ export interface NadlanBuildState {
   note?: string;
 }
 
+export interface ApiAccessFilters {
+  days: number;
+  exclude_site: boolean;
+  area?: string; channel?: string; actor_kind?: string; ip?: string;
+  actor_id?: string; client?: string; status?: string; route?: string; target?: string;
+}
+
+function apiAccessParams(f: ApiAccessFilters): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+  }
+  return p.toString();
+}
+
+export interface ApiAccessGroup {
+  key: string | null; requests: number; ips: number; bytes: number; errors: number; avg_ms: number | null;
+}
+
+export interface ApiAccessStats {
+  bucket: "hour" | "day";
+  retention_days: number;
+  totals: {
+    requests: number; unique_ips: number; unique_actors: number; bytes: number;
+    errors: number; throttled: number; p50_ms: number | null; p95_ms: number | null;
+    first_ts: string | null; last_ts: string | null;
+  };
+  series: { t: string; requests: number; ips: number; bytes: number; errors: number }[];
+  by_area: ApiAccessGroup[]; by_channel: ApiAccessGroup[]; by_client: ApiAccessGroup[];
+  by_actor_kind: ApiAccessGroup[]; by_country: ApiAccessGroup[]; by_status: ApiAccessGroup[];
+  by_target: ApiAccessGroup[]; by_referer: ApiAccessGroup[];
+  routes: { area: string; method: string; route: string; requests: number; ips: number;
+            bytes: number; errors: number; avg_ms: number | null }[];
+  top_ips: { ip: string; requests: number; bytes: number; errors: number; routes: number;
+             client: string | null; channel: string | null; country: string | null;
+             top_area: string | null; actor_label: string | null; first_ts: string; last_ts: string }[];
+  top_actors: { actor_kind: string; actor_id: string | null; label: string | null; requests: number;
+                bytes: number; ips: number; top_area: string | null; last_ts: string }[];
+  heatmap: { dow: number; hour: number; requests: number }[];
+}
+
+export interface ApiAccessRow {
+  id: number; ts: string; method: string; path: string; route: string | null; area: string;
+  query: string | null; target: string | null; status: number; duration_ms: number;
+  bytes_out: number; ip: string | null; country: string | null; user_agent: string | null;
+  client: string | null; channel: string; actor_kind: string; actor_id: string | null;
+  actor_label: string | null; referer_host: string | null;
+}
+
 export const admin = {
   // נדל"ן לעם: the crosswalk build. Eight idempotent stages; the panel exists
   // because two of them are opt-in and were otherwise reachable only by hand-
@@ -2369,6 +2418,12 @@ export const admin = {
   overCoverage: () => request<CoverageReport>("/admin/over-coverage"),
   overCoverageFix: () => request<CoverageReport>("/admin/over-coverage/fix", { method: "POST" }),
   mcpUsers: () => request<McpUser[]>("/admin/mcp-users"),
+  // API access log (admin "גישה ל-API" tab): statistics + raw rows.
+  apiAccessStats: (f: ApiAccessFilters) =>
+    request<ApiAccessStats>(`/admin/api-access/stats?${apiAccessParams(f)}`),
+  apiAccessRecent: (f: ApiAccessFilters, limit = 200, offset = 0) =>
+    request<{ rows: ApiAccessRow[] }>(
+      `/admin/api-access/recent?${apiAccessParams(f)}&limit=${limit}&offset=${offset}`),
   mcpInvite: (email: string, name?: string, tier?: string) =>
     request<McpUser>("/admin/mcp-users", { method: "POST", body: JSON.stringify({ email, name, tier: tier || "beta" }) }),
   mcpUpdateUser: (id: string, data: { tier?: string; is_active?: boolean; monthly_quota?: number | null }) =>

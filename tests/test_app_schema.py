@@ -33,8 +33,12 @@ def _migration_066():
 
 # ── the lists agree ──────────────────────────────────────────────────────────
 
+# App tables born after 066, created in `app` by name by their own migration.
+CREATED_IN_APP_LATER = {"api_access_log"}  # 068
+
+
 def test_migration_moves_exactly_the_runtime_app_tables():
-    assert set(_migration_066().TABLES) == set(D.APP_TABLES)
+    assert set(_migration_066().TABLES) | CREATED_IN_APP_LATER == set(D.APP_TABLES)
 
 
 def test_every_model_without_a_schema_is_a_known_app_table():

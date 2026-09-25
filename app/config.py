@@ -615,6 +615,15 @@ class Settings(BaseSettings):
     api_budget_window_seconds: int = 86400        # rolling 24h
     api_contact_email: str = "guy@z-g.co.il"
 
+    # ── API access log (admin "גישה ל-API" tab) ──
+    # One row per request to /api/* and every MCP server, written in batches off
+    # the request path (app/services/api_access_log.py). Rows older than the
+    # retention are deleted daily.
+    api_access_log_enabled: bool = True
+    api_access_log_retention_days: int = 180
+    # Query strings (search terms, questions) are blanked sooner than the row.
+    api_access_log_query_retention_days: int = 30
+
     # ── Looker Studio community-connector API (/api/connector) ──
     # All Looker Studio traffic egresses from a small pool of Google IPs, so it
     # cannot ride the per-IP budget above — a valid X-Connector-Key routes it to

@@ -17,6 +17,7 @@ from app.models.source_limit import SourceLimit
 from app.models.worker_node import WorkerNode
 from app.models.decision_analysis import DecisionAnalysis
 from app.models.sql_share import SqlShare
+from app.models.api_access_log import ApiAccessLog
 
 __all__ = [
     "User",
@@ -39,4 +40,5 @@ __all__ = [
     "WorkerNode",
     "DecisionAnalysis",
     "SqlShare",
+    "ApiAccessLog",
 ]

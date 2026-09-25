@@ -86,6 +86,37 @@ async def init_scheduler() -> None:
                 ds.ckan_name, ds.poll_interval, ds.last_polled_at,
             )
 
+    # The boot-time proof that the public console role reads nothing private,
+    # repeated: a grant made after boot would otherwise go unseen until a
+    # restart. It logs CRITICAL on an exposure; the next boot refuses to start.
+    async def recheck_console_role() -> None:
+        from app.main import _prove_console_role_cannot_read_secrets
+        try:
+            await _prove_console_role_cannot_read_secrets()
+        except RuntimeError:
+            pass  # already logged as CRITICAL with the table names
+
+    scheduler.add_job(
+        recheck_console_role,
+        trigger=IntervalTrigger(minutes=15),
+        id="recheck_console_role",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
+    # API access log retention, nightly. A cron, not a 24h interval: an interval
+    # restarts from zero on every deploy and would never fire.
+    from app.services.api_access_log import purge_old as purge_api_access_log
+    scheduler.add_job(
+        purge_api_access_log,
+        trigger=CronTrigger(hour=3, minute=17, timezone="Asia/Jerusalem"),
+        id="purge_api_access_log",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     # Periodic cleanup of stuck scrape tasks (every 5 min)
     scheduler.add_job(
         cleanup_stuck_scrape_tasks,

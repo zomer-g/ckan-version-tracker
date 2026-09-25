@@ -68,6 +68,7 @@ from app.api.organizations import admin_router as admin_organizations_router
 from app.api.tags import router as tags_router
 from app.api.tags import admin_router as admin_tags_router
 from app.api.admin_mcp_users import router as admin_mcp_users_router
+from app.api.admin_api_access import router as admin_api_access_router
 from app.api.page_content import router as page_content_router
 from app.api.page_content import admin_router as admin_page_content_router
 from app.api.decision_analysis import router as decision_analysis_router
@@ -180,9 +181,12 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
         SELECT n.nspname AS schema, c.relname AS name
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-          AND has_table_privilege(c.oid, 'SELECT')
+          -- A sequence's last value leaks a count; a column-level grant reads
+          -- data without a table-level one.
+          AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'SELECT')
+                   ELSE has_any_column_privilege(c.oid, 'SELECT') END
         """
     )
 
@@ -339,6 +343,8 @@ async def lifespan(app: FastAPI):
     from app.services import source_registry
     asyncio.create_task(source_registry.warm_cache(async_session))
     yield
+    from app.services import api_access_log
+    await api_access_log.flush()
     shutdown_scheduler()
     logger.info("Shutting down גרסאות לעם")
 
@@ -374,6 +380,12 @@ app.add_middleware(
 # restrictive global policy can reject it, and no-ops on every other path.
 from app.mcp.routes import MCPCorsMiddleware
 app.add_middleware(MCPCorsMiddleware)
+
+# API access log: one row per /api/* and MCP request (who, how, what, when),
+# written in batches off the request path. Outermost, so it also records the
+# budget middleware's 429s. See app/api_access_log_middleware.py.
+from app.api_access_log_middleware import ApiAccessLogMiddleware
+app.add_middleware(ApiAccessLogMiddleware)
 
 
 # Referrer policy. The /data console keeps the current query in the page URL so
@@ -552,6 +564,7 @@ app.include_router(tags_router)
 app.include_router(admin_tags_router)
 app.include_router(v1_router)
 app.include_router(admin_mcp_users_router)
+app.include_router(admin_api_access_router)
 app.include_router(page_content_router)
 app.include_router(admin_page_content_router)
 app.include_router(decision_analysis_router)

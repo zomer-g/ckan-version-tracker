@@ -14,6 +14,7 @@ APP_SCHEMA = "app"
 APP_SEARCH_PATH = "app, public"
 APP_TABLES = frozenset({
     "activity_log",
+    "api_access_log",
     "cbs_featured",
     "cbs_feedback",
     "cbs_gazetteer",
@@ -114,6 +115,9 @@ db_url, connect_args = _prepare_db_url_and_args()
 engine = create_async_engine(
     db_url,
     echo=False,
+    # Errors must not carry bound values into the logs: they include visitor
+    # IPs and emails (api_access_log) and tokens (auth).
+    hide_parameters=True,
     connect_args=connect_args,
     pool_recycle=300,        # Recycle connections after 5 min (Neon idle timeout)
     pool_pre_ping=True,      # Test connections before use (detects closed connections)
