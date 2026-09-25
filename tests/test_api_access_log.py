@@ -173,3 +173,29 @@ def test_flush_failure_does_not_log_row_contents(monkeypatch, caplog):
     asyncio.run(log.flush())
     assert "RuntimeError" in caplog.text
     assert "203.0.113.77" not in caplog.text and "secret@" not in caplog.text
+
+
+def test_admin_queries_name_every_table_in_full():
+    """users lives in `auth`, outside the app search_path: a bare `users` 500s."""
+    import asyncio
+    import app.api.admin_api_access as A
+    seen = []
+
+    async def fake(db, sql, params):
+        seen.append(sql)
+        return [{"first_ts": None, "last_ts": None}] if "percentile_cont" in sql else []
+
+    orig = A._rows
+    A._rows = fake
+    try:
+        f = A._filters(days=7, exclude_site=True, area=None, channel=None, actor_kind=None, ip=None,
+                       actor_id=None, client=None, status=None, route=None, target=None)
+        stats = getattr(A.api_access_stats, "__wrapped__", A.api_access_stats)
+        recent = getattr(A.api_access_recent, "__wrapped__", A.api_access_recent)
+        asyncio.run(stats(None, f, None, None))
+        asyncio.run(recent(None, f, 10, 0, None, None))
+    finally:
+        A._rows = orig
+    joins = [s for s in seen if " JOIN " in s]
+    assert len(joins) == 2
+    assert all("JOIN auth.users u" in s for s in joins)

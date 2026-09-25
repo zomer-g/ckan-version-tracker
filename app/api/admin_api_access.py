@@ -20,6 +20,8 @@ from app.rate_limit import limiter
 router = APIRouter(prefix="/api/admin/api-access", tags=["admin-api-access"])
 
 TZ = "Asia/Jerusalem"
+# users lives in schema `auth` (065), outside the app search_path: name it in full.
+_USERS = User.__table__.fullname
 
 
 def _where(
@@ -152,7 +154,7 @@ async def api_access_stats(
                mode() WITHIN GROUP (ORDER BY l.area) AS top_area,
                max(l.ts) AS last_ts
         FROM api_access_log l
-        LEFT JOIN users u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
+        LEFT JOIN {_USERS} u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
         WHERE {where} AND l.actor_kind <> 'anonymous'
         GROUP BY 1, 2 ORDER BY requests DESC LIMIT 30""", p), "last_ts")
 
@@ -200,7 +202,7 @@ async def api_access_recent(
                l.channel, l.actor_kind, l.actor_id,
                coalesce(u.email, l.actor_label) AS actor_label, l.referer_host
         FROM api_access_log l
-        LEFT JOIN users u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
+        LEFT JOIN {_USERS} u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
         WHERE {where}
         ORDER BY l.ts DESC LIMIT :limit OFFSET :offset""", {**p, "limit": limit, "offset": offset})
     for r in rows:
