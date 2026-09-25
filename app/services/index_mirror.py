@@ -268,7 +268,7 @@ def _hash_index_name(table: str) -> str:
     return _index_name(table, "hash_ix")
 
 
-def _hash_expr(columns: list[str], alias: str = "") -> str:
+def _hash_expr(columns: list[str], alias: str = "", *, as_uuid: bool = False) -> str:
     """SQL expression for a row's identity, over ``columns`` in the given order.
 
     Delegates to append_store so ``idx`` and ``public.append_*`` hash a row the
@@ -277,8 +277,15 @@ def _hash_expr(columns: list[str], alias: str = "") -> str:
     ORDER IS PART OF THE IDENTITY. Every caller must pass the LIVE table's
     column order, not the CSV's: the two can differ (a source that reorders its
     columns without changing them), and hashing in CSV order would make every
-    existing row look new."""
-    return append_store._content_hash_expr(columns, alias)
+    existing row look new.
+
+    ``as_uuid`` must match the target column (append_store.hash_column_is_uuid):
+    a table built before the compact hash keeps text until it is converted."""
+    return append_store._content_hash_expr(columns, alias, as_uuid=as_uuid)
+
+
+async def _hash_is_uuid(conn, table: str, schema: str = SCHEMA) -> bool:
+    return await append_store.hash_column_is_uuid(conn, table, HASH_COLUMN, schema)
 
 
 async def _live_columns(conn, table: str, schema: str = SCHEMA) -> list[str] | None:
@@ -613,9 +620,10 @@ async def _ensure_degrees(conn, table: str, schema: str = SCHEMA) -> tuple[str, 
                 f"{ext}.ST_AsText({ext}.ST_Transform({parsed}, {GEOM_SRID})) "
                 f"WHERE {have} AND {parsed} IS NOT NULL")
             if HASH_COLUMN in live:
+                as_uuid = await _hash_is_uuid(conn, table, schema)
                 await conn.execute(
                     f"UPDATE {_qt(table, schema)} SET {_qi(HASH_COLUMN)} = "
-                    f"{_hash_expr(_source_columns(live))}")
+                    f"{_hash_expr(_source_columns(live), as_uuid=as_uuid)}")
     except Exception as exc:  # noqa: BLE001 — the load must survive this
         logger.warning("idx mirror: ITM→WGS84 conversion failed for %s", table,
                        exc_info=True)
@@ -876,7 +884,7 @@ async def _rebuild(conn, tmp: str, table: str, columns: list[str],
     await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
     await conn.execute(
         f"CREATE TABLE {_qt(staging)} ({defs}, "
-        f"{_qi(HASH_COLUMN)} text, "
+        f"{_qi(HASH_COLUMN)} uuid, "
         f"{_qi(FIRST_SEEN_COLUMN)} timestamptz NOT NULL DEFAULT now())")
 
     rows = 0
@@ -890,7 +898,8 @@ async def _rebuild(conn, tmp: str, table: str, columns: list[str],
         # One pass to stamp the identity every later sync diffs against. Paid
         # once per table, not once per version — which is the whole point.
         await conn.execute(
-            f"UPDATE {_qt(staging)} SET {_qi(HASH_COLUMN)} = {_hash_expr(columns)}")
+            f"UPDATE {_qt(staging)} SET {_qi(HASH_COLUMN)} = "
+            f"{_hash_expr(columns, as_uuid=True)}")
         await conn.execute(
             f"CREATE INDEX {_qi(_hash_index_name(staging))} "
             f"ON {_qt(staging)} ({_qi(HASH_COLUMN)})")
@@ -992,9 +1001,10 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
         # The CTE's hash column is prefixed because a source column really can
         # be called anything — an index CSV with an `_h` column would otherwise
         # make this ambiguous.
+        as_uuid = await _hash_is_uuid(conn, table)
         tag = await conn.execute(f"""
             WITH h AS (
-                SELECT {src}, {_hash_expr(live_cols, alias='s')} AS _idx_h
+                SELECT {src}, {_hash_expr(live_cols, alias='s', as_uuid=as_uuid)} AS _idx_h
                 FROM {_qt(staging)} s
             )
             INSERT INTO {_qt(table)} ({src}, {_qi(HASH_COLUMN)})

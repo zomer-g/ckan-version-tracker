@@ -35,6 +35,7 @@ import json
 import logging
 import re
 import ssl
+import uuid as _uuid
 
 from app.pg_ssl import asyncpg_ssl_for
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -389,6 +390,53 @@ def tables_from_mappings(ds, mappings: dict | None) -> list[dict]:
     return [{"table": table_name(ds), "resource_id": rid, "resource_name": None}]
 
 
+# ── The dedup hash's column type ─────────────────────────────────────────────
+#
+# The hash used to be stored as 64-char hex TEXT with a UNIQUE index on it: 65
+# bytes a row plus an index entry of about the same, ~23 GB of a ~60 GB database
+# (2026-09-25) — wider than the data itself in narrow tables. It is now a
+# ``uuid`` holding the FIRST 128 BITS of the same digest (16 bytes), for new
+# tables at creation and for old ones through app/services/hash_compaction.py.
+#
+# Old and new tables coexist, so every writer asks the TABLE which type it has
+# and writes that shape. Never the other way round: a short hash written into a
+# column still holding long ones gives every existing row a new identity, and
+# the next load silently doubles the table (text accepts either, nothing
+# errors). 128 bits of SHA-256/md5 keep the collision odds at nil for any table
+# this archive will ever hold.
+
+_UUID_HASH_COLS: set[tuple[str, str, str]] = set()
+
+
+async def hash_column_is_uuid(conn, table: str, column: str = "row_hash",
+                              schema: str = "public") -> bool:
+    """Whether ``schema.table.column`` is already the compact uuid hash.
+
+    Only a uuid answer is cached: a column never goes back to text, while a text
+    one may be converted at any moment by the compaction job."""
+    key = (schema, table, column)
+    if key in _UUID_HASH_COLS:
+        return True
+    t = await conn.fetchval(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_schema=$1 AND table_name=$2 AND column_name=$3",
+        schema, table, column)
+    if t == "uuid":
+        _UUID_HASH_COLS.add(key)
+        return True
+    return False
+
+
+def mark_hash_uuid(table: str, column: str = "row_hash", schema: str = "public") -> None:
+    """Record that a column was just converted (the compaction job calls this)."""
+    _UUID_HASH_COLS.add((schema, table, column))
+
+
+def compact_hash(hex_digest: str) -> _uuid.UUID:
+    """The uuid form of a hex digest: its first 128 bits."""
+    return _uuid.UUID(hex_digest[:32])
+
+
 def row_hash(row: dict, cols: list[str], *, exclude: tuple[str, ...] = ()) -> str:
     """SHA-256 over the row's column values (str-coerced, None→''), used as the
     dedup identity for keyless datasets. Matches version_detector._row_identity
@@ -424,6 +472,7 @@ def build_insert(
     keyless: bool,
     first_seen=None,  # datetime | None — explicit backfill timestamp, else now()
     stamp_col: str | None = None,
+    hash_uuid: bool = False,
 ) -> tuple[str, list]:
     """Build one multi-row ``INSERT … ON CONFLICT`` for a chunk.
 
@@ -447,7 +496,10 @@ def build_insert(
 
     Only the stamp is updated, never a content column: a row that differs in any
     hashed field is a different identity and inserts on its own, so an UPDATE
-    reaching content would be rewriting history rather than dating it."""
+    reaching content would be rewriting history rather than dating it.
+
+    ``hash_uuid`` binds the compact form (see hash_column_is_uuid) — pass what
+    the TABLE's column is, never a guess."""
     insert_cols = list(cols) + ["first_seen"] + (["row_hash"] if keyless else [])
     conflict_target = "row_hash" if keyless else key_col
     # A stamp that isn't in this table's columns is a manifest declaring a column
@@ -483,7 +535,7 @@ def build_insert(
         else:
             placeholders.append("now()")
         if keyless:
-            params.append(ident)
+            params.append(compact_hash(ident) if hash_uuid else ident)
             placeholders.append(f"${p}")
             p += 1
         values_sql.append("(" + ",".join(placeholders) + ")")
@@ -525,7 +577,7 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
         existing = {r["column_name"] for r in rows}
         if not existing:
             cols_sql = ", ".join(f"{_qi(c)} text" for c in source_cols)
-            hashcol = ', "row_hash" text' if keyless else ""
+            hashcol = ', "row_hash" uuid' if keyless else ""
             try:
                 await conn.execute(
                     f'CREATE TABLE IF NOT EXISTS {_qi(table)} '
@@ -545,8 +597,9 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
                         f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS {_qi(c)} text'
                     )
             if keyless and "row_hash" not in existing:
+                # A new, empty column: nothing to stay compatible with.
                 await conn.execute(
-                    f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" text'
+                    f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" uuid'
                 )
         target = "row_hash" if keyless else key_col
         idx = _index_name(table, "uq")
@@ -583,9 +636,12 @@ async def append_rows(
     inserted = 0
     async with pool.acquire() as conn:
         for i in range(0, len(rows), size):
+            # Asked per chunk, not once: the compaction job may convert this
+            # table between two chunks of one long load.
+            hash_uuid = keyless and await hash_column_is_uuid(conn, table)
             sql, params = build_insert(
                 table, source_cols, rows[i:i + size], key_col=key_col, keyless=keyless,
-                first_seen=first_seen, stamp_col=stamp_col,
+                first_seen=first_seen, stamp_col=stamp_col, hash_uuid=hash_uuid,
             )
             if not sql:
                 continue
@@ -639,12 +695,13 @@ async def fill_geometry(table: str, source_cols: list[str]) -> dict:
 _HASH_SEP = "chr(31)"  # unit separator — won't appear in the text values
 
 
-def _content_hash_expr(cols: list[str], alias: str = "") -> str:
+def _content_hash_expr(cols: list[str], alias: str = "", *, as_uuid: bool = False) -> str:
     """SQL expression hashing the row's source columns (NULL→'') in a fixed
-    order. Identical for the backfill (no alias) and the staging diff (alias)."""
+    order. Identical for the backfill (no alias) and the staging diff (alias).
+    ``as_uuid`` for a compact hash column: md5 is 128 bits, exactly a uuid."""
     pfx = (alias + ".") if alias else ""
     parts = ",".join(f"coalesce({pfx}{_qi(c)}::text,'')" for c in cols)
-    return f"md5(concat_ws({_HASH_SEP},{parts}))"
+    return f"md5(concat_ws({_HASH_SEP},{parts}))" + ("::uuid" if as_uuid else "")
 
 
 async def ensure_content_diff(table: str, source_cols: list[str], key_col: str | None) -> None:
@@ -654,9 +711,10 @@ async def ensure_content_diff(table: str, source_cols: list[str], key_col: str |
     would block a changed row that reuses the same key), and add a UNIQUE index
     on ``row_hash``. After the migration every call is a few cheap no-ops."""
     pool = await get_pool()
-    expr = _content_hash_expr(source_cols)
     async with pool.acquire() as conn:
-        await conn.execute(f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" text')
+        # New column → compact; one that exists keeps its type (IF NOT EXISTS).
+        await conn.execute(f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" uuid')
+        expr = _content_hash_expr(source_cols, as_uuid=await hash_column_is_uuid(conn, table))
     # Batched backfill — each batch is its own committed statement so an
     # interrupted migration resumes from WHERE row_hash IS NULL.
     while True:
@@ -688,7 +746,6 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
     if not rows:
         return 0
     pool = await get_pool()
-    expr_s = _content_hash_expr(source_cols, alias="s")
     cols_q = ",".join(_qi(c) for c in source_cols)
     sel_q = ",".join("s." + _qi(c) for c in source_cols)
     records = [
@@ -697,6 +754,8 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
     ]
     stg_def = ", ".join(f"{_qi(c)} text" for c in source_cols)
     async with pool.acquire() as conn:
+        expr_s = _content_hash_expr(
+            source_cols, alias="s", as_uuid=await hash_column_is_uuid(conn, table))
         async with conn.transaction():
             # Staging holds ONLY the source columns (all text). Using LIKE the
             # target would inherit first_seen's NOT NULL without its DEFAULT, and

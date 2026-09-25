@@ -54,9 +54,10 @@ const STATUS_LABELS: Record<string, string> = {
 
 const NO_DATASET = "__none__";
 
-async function fetchReport(refresh: boolean): Promise<StorageReport> {
+async function call<T>(path: string, method: "GET" | "POST" = "GET"): Promise<T> {
   const token = localStorage.getItem("token");
-  const resp = await fetch(`/api/admin/storage${refresh ? "?refresh=1" : ""}`, {
+  const resp = await fetch(`/api/admin/storage${path}`, {
+    method,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!resp.ok) {
@@ -65,6 +66,141 @@ async function fetchReport(refresh: boolean): Promise<StorageReport> {
     throw new Error(detail);
   }
   return resp.json();
+}
+
+const fetchReport = (refresh: boolean) => call<StorageReport>(refresh ? "?refresh=1" : "");
+
+interface HashCompaction {
+  pending_tables: number;
+  pending_bytes: number;
+  running: boolean;
+  current: string | null;
+  done: number;
+  done_bytes_before: number;
+  done_bytes_after: number;
+  failed: { table: string; error: string }[];
+  skipped_busy: string[];
+  finished_at: string | null;
+}
+
+/** The dedup hash stored as 64-char text costs ~23 GB; as uuid about a third.
+ *  The job converts table by table, smallest first (app/services/hash_compaction.py). */
+function HashCompactionCard() {
+  const [st, setSt] = useState<HashCompaction | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try { setSt(await call<HashCompaction>("/hash-compaction")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!st?.running) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [st?.running, load]);
+
+  const act = async (what: "start" | "stop") => {
+    if (what === "start" && !window.confirm(
+      `להמיר ${st?.pending_tables.toLocaleString("he-IL")} טבלאות? כל טבלה ננעלת לכתיבה ולקריאה ` +
+      "למשך ההמרה שלה (שניות, ובגדולות עד דקה-שתיים). אפשר לעצור בכל רגע.")) return;
+    try { await call(`/hash-compaction/${what}`, "POST"); await load(); }
+    catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  const saved = st ? st.done_bytes_before - st.done_bytes_after : 0;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.6rem 0.8rem", marginBottom: "0.9rem", background: "var(--bg-secondary)" }}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>דחיסת row_hash</strong>
+        <span className="text-sm text-muted">
+          מזהה הכפילויות נשמר כטקסט של 64 תווים; כ-uuid הוא תופס 16 בתים.
+        </span>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)" }}>{err}</div>}
+      {st && (
+        <div className="flex text-sm" style={{ gap: "0.8rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+          <span>נותרו {st.pending_tables.toLocaleString("he-IL")} טבלאות (<Bytes n={st.pending_bytes} />)</span>
+          {(st.running || st.done > 0) && (
+            <span>
+              הומרו {st.done.toLocaleString("he-IL")} · נחסכו <Bytes n={saved} />
+              {st.running && st.current ? <> · עכשיו: <bdi dir="ltr">{st.current}</bdi></> : null}
+            </span>
+          )}
+          {st.failed.length > 0 && (
+            <span style={{ color: "var(--danger)" }} title={st.failed.map((f) => `${f.table}: ${f.error}`).join("\n")}>
+              {st.failed.length} נכשלו
+            </span>
+          )}
+          {st.skipped_busy.length > 0 && (
+            <span className="text-muted" title={st.skipped_busy.join("\n")}>
+              {st.skipped_busy.length} היו תפוסות (הריצו שוב)
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          {st.running ? (
+            <button type="button" className="text-sm" onClick={() => void act("stop")}
+                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+              עצור
+            </button>
+          ) : st.pending_tables > 0 ? (
+            <button type="button" className="text-sm" onClick={() => void act("start")}
+                    style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: 4, padding: "0.25rem 0.8rem", cursor: "pointer", fontWeight: 600 }}>
+              המר עכשיו
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface OffloadRun { state: "running" | "done" | "failed"; done: number; total: number | null; current: string | null; error: string | null }
+
+/** Move one dataset's SQL tables to CSV files on R2 (app/services/sql_offload.py). */
+function OffloadButton({ datasetId, title }: { datasetId: string; title: string }) {
+  const [run, setRun] = useState<OffloadRun | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (run?.state !== "running") return;
+    const t = setInterval(async () => {
+      try { setRun((await call<{ run: OffloadRun | null }>(`/offload/${datasetId}`)).run); } catch { /* keep polling */ }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [run?.state, datasetId]);
+
+  const start = async () => {
+    setBusy(true);
+    try {
+      const plan = await call<{ tables: unknown[]; bytes: number; est_rows: number }>(`/offload/${datasetId}`);
+      const ok = window.confirm(
+        `להעביר את "${title}" מ-SQL לקבצים?\n\n` +
+        `${plan.tables.length} טבלאות, כ-${plan.est_rows.toLocaleString("he-IL")} שורות, ${formatBytes(plan.bytes)}.\n` +
+        "כל טבלה תיוצא ל-CSV ב-R2 ותיבדק, הגרסאות יפנו לקבצים, תוכנית האחסון תעבור ל-R2, " +
+        "ורק אז הטבלאות יימחקו. המאגר לא יהיה עוד שאילתי ב-/data.");
+      if (!ok) return;
+      await call(`/offload/${datasetId}`, "POST");
+      setRun({ state: "running", done: 0, total: plan.tables.length, current: null, error: null });
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "הפעולה נכשלה");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (run?.state === "running") {
+    return <span className="text-muted"> · מעביר לקבצים {run.done}/{run.total ?? "?"}…</span>;
+  }
+  if (run?.state === "done") return <span style={{ color: "var(--success)" }}> · הועבר לקבצים ✓</span>;
+  return (
+    <>
+      {run?.state === "failed" && <span style={{ color: "var(--danger)" }} title={run.error ?? ""}> · ההעברה נכשלה</span>}
+      {" · "}
+      <button type="button" onClick={() => void start()} disabled={busy}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary)", font: "inherit", textDecoration: "underline" }}>
+        העבר לקבצים
+      </button>
+    </>
+  );
 }
 
 function pct(part: number, whole: number): string {
@@ -180,6 +316,8 @@ export default function StorageUsagePanel() {
 
       {error && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{error}</div>}
 
+      <HashCompactionCard />
+
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.6rem", marginBottom: "0.9rem" }}>
           <Stat label="גודל המסד" value={<Bytes n={data.database_bytes} />} />
@@ -291,6 +429,7 @@ export default function StorageUsagePanel() {
                         <div className="text-muted" style={{ fontSize: "0.75rem" }}>
                           {ds.source} · {STATUS_LABELS[ds.status] ?? ds.status}
                           {ds.org ? ` · ${ds.org}` : ""} · <Link to={`/versions/${ds.id}`}>דף המאגר</Link>
+                          <OffloadButton datasetId={ds.id} title={ds.title} />
                         </div>
                       )}
                     </td>

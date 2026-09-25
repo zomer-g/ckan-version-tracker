@@ -4,6 +4,12 @@
                                       a project, a source and (when it has one)
                                       the dataset that owns it
   GET /api/admin/storage?refresh=1  — the same, bypassing the 10-minute cache
+  GET/POST /api/admin/storage/hash-compaction[/start|/stop]
+                                    — convert the dedup hashes to uuid
+                                      (app/services/hash_compaction.py)
+  GET/POST /api/admin/storage/offload/{dataset_id}
+                                    — move a dataset's rows to CSV files on R2
+                                      (app/services/sql_offload.py)
 
 The breakdown itself (by project / source / schema / dataset) is done in the
 browser from the one table list, so every grouping and every drill-down adds
@@ -21,7 +27,7 @@ dataset no longer exists is reported as an orphan: it is space nothing reads.
 Everything that is not a dataset table belongs to a project by schema or by
 name prefix (``ocal``, ``over_re_*`` …), see :func:`project_of`.
 
-Read-only: catalog functions only, nothing is written.
+The report is read-only (catalog functions); the two shrinking actions write.
 """
 import logging
 import time
@@ -210,3 +216,77 @@ async def storage_report(
         raise HTTPException(status_code=502, detail=f"קריאת גדלי הטבלאות נכשלה: {e}")
     _cache.update(at=now, data=data)
     return {**data, "cached": False}
+
+
+# ── Shrinking: compact hashes, move rows to files ───────────────────────────
+
+@router.get("/hash-compaction")
+async def hash_compaction_status(_: User = Depends(get_admin_user)):
+    """How many hash columns are still text, and the running job's progress."""
+    from app.services import hash_compaction
+    return await hash_compaction.summary()
+
+
+@router.post("/hash-compaction/start")
+async def hash_compaction_start(_: User = Depends(get_admin_user)):
+    import asyncio
+    from app.services import hash_compaction
+    if hash_compaction.status()["running"]:
+        return {"started": False, "reason": "already running"}
+    asyncio.create_task(hash_compaction.run())
+    return {"started": True}
+
+
+@router.post("/hash-compaction/stop")
+async def hash_compaction_stop(_: User = Depends(get_admin_user)):
+    from app.services import hash_compaction
+    hash_compaction.request_stop()
+    return {"stopping": True}
+
+
+@router.get("/offload/{dataset_id}")
+async def offload_plan(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Dry run of moving a dataset's rows to files, plus any run's progress."""
+    from app.api.utils import parse_uuid
+    from app.services import sql_offload
+    ds_uuid = parse_uuid(dataset_id)
+    try:
+        plan = await sql_offload.plan(db, ds_uuid)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="המאגר לא נמצא")
+    return {**plan, "run": sql_offload.status(str(ds_uuid))}
+
+
+@router.post("/offload/{dataset_id}")
+async def offload_start(
+    dataset_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Move a dataset's SQL tables to CSV files on R2, in the background."""
+    import asyncio
+    from app.api.utils import parse_uuid
+    from app.database import async_session
+    from app.services import sql_offload
+    ds_uuid = parse_uuid(dataset_id)
+    run = sql_offload.status(str(ds_uuid))
+    if run and run.get("state") == "running":
+        return {"started": False, "reason": "already running", "run": run}
+    try:
+        plan = await sql_offload.plan(db, ds_uuid)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="המאגר לא נמצא")
+    if not plan["tables"]:
+        raise HTTPException(status_code=409, detail="למאגר אין טבלאות SQL להעביר")
+
+    async def _go():
+        async with async_session() as s:
+            await sql_offload.offload(s, ds_uuid)
+        _cache["data"] = None  # the storage report is stale now
+
+    asyncio.create_task(_go())
+    return {"started": True, "tables": len(plan["tables"]), "bytes": plan["bytes"]}
