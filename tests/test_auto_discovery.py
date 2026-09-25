@@ -4,6 +4,7 @@ Locks the two selection invariants that keep random onboarding safe:
   1. A candidate with no datastore-backed resource is rejected (NEON needs rows).
   2. A candidate whose largest resource exceeds the row cap is rejected whole
      (size guard — never onboard a multi-million-row registry by chance).
+  3. So is one whose resources TOGETHER exceed the total cap (60 x 1M rows).
 Only datastore-active resources with a real schema are chosen.
 """
 import asyncio
@@ -72,3 +73,29 @@ def test_rejects_dataset_with_no_datastore_resources():
     }
     _install_fakes(pkg, {})
     assert asyncio.run(ad._evaluate_candidate("files-only")) is None
+
+
+def test_rejects_dataset_whose_resources_add_up_past_total_cap():
+    # The rain forecast: every resource under the per-resource cap, the sum not.
+    settings.auto_discover_max_rows = 2_000_000
+    settings.auto_discover_max_total_rows = 3_000_000
+    rids = [f"station-{i}" for i in range(60)]
+    pkg = {
+        "id": "pkg-4", "name": "rain-forecast",
+        "resources": [{"id": r, "datastore_active": True} for r in rids],
+    }
+    _install_fakes(pkg, {r: 1_037_142 for r in rids})
+    assert asyncio.run(ad._evaluate_candidate("rain-forecast")) is None
+
+
+def test_accepts_many_small_resources_under_total_cap():
+    settings.auto_discover_max_rows = 2_000_000
+    settings.auto_discover_max_total_rows = 3_000_000
+    rids = [f"r-{i}" for i in range(10)]
+    pkg = {
+        "id": "pkg-5", "name": "many-small",
+        "resources": [{"id": r, "datastore_active": True} for r in rids],
+    }
+    _install_fakes(pkg, {r: 200_000 for r in rids})
+    info = asyncio.run(ad._evaluate_candidate("many-small"))
+    assert info is not None and info["resource_ids"] == rids

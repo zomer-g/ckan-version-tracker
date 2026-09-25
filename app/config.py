@@ -403,6 +403,10 @@ class Settings(BaseSettings):
     # -row registry and spike the dyno's memory / the NEON archive. Oversized
     # candidates are passed over and another is drawn.
     auto_discover_max_rows: int = 2_000_000
+    # ...and the SUM over the dataset's resources. The per-resource cap alone let
+    # through "נתונים חזויים- גשם" (2026-08-14): 60 resources of 1.04M rows each,
+    # 62M rows and 15.5 GB in one unattended pick, a quarter of the database.
+    auto_discover_max_total_rows: int = 3_000_000
     # Poll cadence assigned to each auto-onboarded dataset. QUARTERLY (90d):
     # these are bulk-onboarded at 4/day with no human curating them, so a
     # weekly re-poll of an ever-growing set would keep re-streaming hundreds of

@@ -12,8 +12,10 @@ Design choices (see the config block in app/config.py):
     ``scraper_config = {"storage_backend": "neon"}`` is what routes the poll
     to the NEON streaming path (see storage_client.dataset_archives_neon).
   • Size guard — a candidate whose largest datastore resource exceeds
-    ``auto_discover_max_rows`` is skipped and another is drawn, so a random
-    pick never lands on a multi-million-row registry and OOMs the dyno.
+    ``auto_discover_max_rows``, or whose resources together exceed
+    ``auto_discover_max_total_rows``, is skipped and another is drawn, so a
+    random pick never lands on a multi-million-row registry and OOMs the dyno —
+    nor on sixty modest resources that add up to one (the rain forecast).
   • Datastore-backed only — a candidate is onboarded only if it has at least
     one ``datastore_active`` resource (NEON needs tabular rows to archive).
 """
@@ -68,8 +70,9 @@ async def _tracked_ckan_names(db) -> set[str]:
 async def _evaluate_candidate(name: str) -> dict | None:
     """Return onboarding info for ``name`` if it's a suitable candidate, else None.
 
-    Suitable = has ≥1 datastore-backed resource and no single resource exceeds
-    the row cap. Returns ``{pkg, resource_ids}`` on success.
+    Suitable = has ≥1 datastore-backed resource, no single resource exceeds
+    the row cap, and the chosen resources together stay under the total cap.
+    Returns ``{pkg, resource_ids}`` on success.
     """
     try:
         pkg = await ckan_client.package_show(name)
@@ -78,6 +81,7 @@ async def _evaluate_candidate(name: str) -> dict | None:
         return None
 
     chosen: list[str] = []
+    total_rows = 0
     for r in pkg.get("resources", []):
         rid = r.get("id")
         if not rid or not r.get("datastore_active"):
@@ -95,6 +99,13 @@ async def _evaluate_candidate(name: str) -> dict | None:
         # datastore-active with a real schema — archivable to NEON
         if info.get("fields"):
             chosen.append(rid)
+            total_rows += info.get("total", 0)
+            if total_rows > settings.auto_discover_max_total_rows:
+                logger.info(
+                    "auto-discover: skipping %s — %d resources already hold %d rows (> total cap %d)",
+                    name, len(chosen), total_rows, settings.auto_discover_max_total_rows,
+                )
+                return None
 
     if not chosen:
         return None
