@@ -191,3 +191,38 @@ def test_marking_an_unknown_resource_changes_nothing():
     br.remember(ds, br.describe(RESOURCES, {"a"}))
     assert br.mark_fetched(ds, ["zzz"], modified=MOD) is False
     assert br.mark_fetched(ds, [], modified=MOD) is False
+
+
+# ---------------------------------------------------------------------------
+# a file that arrived empty is not archived (2026-09-27: 161 of 202 חצב files)
+# ---------------------------------------------------------------------------
+
+def test_a_raw_file_counts_as_delivered_only_with_a_size():
+    assert br.delivered({"status": "features"})
+    assert br.delivered({"status": "raw_only", "bytes": 248703})
+    assert not br.delivered({"status": "raw_only"})          # the worker omits 0
+    assert not br.delivered({"status": "raw_only", "bytes": 0})
+    assert not br.delivered({"status": "failed", "bytes": 5})
+
+
+def test_a_file_stamped_empty_is_made_pending_again():
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a", "c"}))
+    br.mark_fetched(ds, ["a", "c"], modified=MOD, version=1)
+    summary = {"scrape_metadata": {"blocked_files": {"resources": [
+        {"resource_id": "a", "status": "raw_only",
+         "reason": "unrecognised container — archived as a file"},
+        {"resource_id": "c", "status": "raw_only", "bytes": 10}]}}}
+
+    empty = br.empty_deliveries(br.stored(ds), {1: summary})
+    assert empty == {"a"}
+    assert br.unstamp(ds, empty) is True
+    assert [e["id"] for e in br.pending(br.stored(ds))] == ["a"]
+    assert br.unstamp(ds, empty) is False, "already pending"
+
+
+def test_a_stamp_with_no_record_is_left_alone():
+    ds = _DS()
+    br.remember(ds, br.describe(RESOURCES, {"a"}))
+    br.mark_fetched(ds, ["a"], modified=MOD, version=3)
+    assert br.empty_deliveries(br.stored(ds), {}) == set()

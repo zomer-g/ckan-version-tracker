@@ -2679,7 +2679,7 @@ async def push_version(
         r.get("resource_id") or r.get("id")
         for r in ((body.scrape_metadata or {}).get("blocked_files", {})
                   .get("resources") or [])
-        if r.get("status") in ("features", "raw_only")
+        if blocked_resources.delivered(r)
     ]
     if _delivered:
         blocked_resources.mark_fetched(

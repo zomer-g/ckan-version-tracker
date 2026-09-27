@@ -113,6 +113,53 @@ def carry_fetch_state(entries: list[dict], previous: list[dict] | None,
     return out
 
 
+def delivered(record: dict) -> bool:
+    """Did a worker's per-resource record actually deliver the file?
+
+    A raw file counts only with a size: the worker omits ``bytes`` for a
+    0-byte file, and data.gov.il answers a burst with exactly that — 200 and no
+    body. Stamped, such a file was never asked for again (161 of 202 חצב files
+    on 2026-09-27).
+    """
+    status = record.get("status")
+    return status == "features" or (status == "raw_only" and bool(record.get("bytes")))
+
+
+def empty_deliveries(entries: list[dict] | None, versions: dict) -> set[str]:
+    """Stamped entries whose delivering version shows they arrived empty.
+
+    ``versions`` maps a version number to that version's ``change_summary``.
+    Stamps made before :func:`delivered` existed are judged by the same rule.
+    """
+    out = set()
+    for e in entries or []:
+        if not e.get("fetched_at"):
+            continue
+        summary = versions.get(e.get("fetched_version")) or {}
+        records = ((summary.get("scrape_metadata") or {}).get("blocked_files") or {}).get("resources") or []
+        rec = next((r for r in records
+                    if (r.get("resource_id") or r.get("id")) == e.get("id")), None)
+        if rec is not None and not delivered(rec):
+            out.add(e["id"])
+    return out
+
+
+def unstamp(ds, resource_ids) -> bool:
+    """Make these resources pending again. Returns True if anything changed."""
+    ids = set(resource_ids or ())
+    entries = stored(ds)
+    out, changed = [], False
+    for entry in entries:
+        if entry.get("id") in ids and entry.get("fetched_at"):
+            entry = {k: v for k, v in entry.items()
+                     if k not in ("fetched_at", "fetched_modified", "fetched_version")}
+            changed = True
+        out.append(entry)
+    if changed:
+        ds.scraper_config = {**(ds.scraper_config or {}), CONFIG_KEY: out}
+    return changed
+
+
 def mark_fetched(ds, resource_ids, *, modified: str | None,
                  version: int | None = None, now: str | None = None) -> bool:
     """Record that a worker delivered these resources. Returns True if changed.

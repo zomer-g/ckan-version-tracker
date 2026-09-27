@@ -107,6 +107,39 @@ async def _ensure_tag(db, name: str, description: str, dataset_ids: list) -> int
     return result.rowcount or 0
 
 
+async def _unstamp_empty_deliveries(db, rows) -> int:
+    """Clear the fetched stamp on every blocked file that arrived empty,
+    judged from the delivering version's own per-resource record."""
+    from app.models.version_index import VersionIndex
+    from app.services import blocked_resources
+
+    wanted = {(r.id, e.get("fetched_version")) for r in rows
+              for e in blocked_resources.stored(r) if e.get("fetched_at")}
+    if not wanted:
+        return 0
+    from sqlalchemy import tuple_
+
+    wanted = {(ds_id, n) for ds_id, n in wanted if isinstance(n, int)}
+    if not wanted:
+        return 0
+    summaries: dict = {}
+    for v in (await db.execute(
+        select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
+               VersionIndex.change_summary)
+        .where(tuple_(VersionIndex.tracked_dataset_id, VersionIndex.version_number)
+               .in_(list(wanted)))
+    )).all():
+        summaries.setdefault(v.tracked_dataset_id, {})[v.version_number] = v.change_summary or {}
+    total = 0
+    for r in rows:
+        empty = blocked_resources.empty_deliveries(
+            blocked_resources.stored(r), summaries.get(r.id, {}))
+        if empty and blocked_resources.unstamp(r, empty):
+            logger.info("catalog watch: %s — %d empty file(s) requeued", r.ckan_name, len(empty))
+            total += len(empty)
+    return total
+
+
 def watched_orgs() -> list[str]:
     return [o.strip() for o in (settings.catalog_watch_ckan_orgs or "").split(",") if o.strip()]
 
@@ -244,6 +277,9 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
         # re-queues the worker task, so a task that failed (a worker without a
         # browser, an allowlist gone stale) is retried daily, not monthly.
         from app.services import blocked_resources
+        # A file a worker "delivered" as 0 bytes is not archived: make it
+        # pending again so the re-poll below asks for it once more.
+        unstamped = await _unstamp_empty_deliveries(db, rows)
         refused = []
         for r in rows:
             if (r.status == "active" and r.id not in extended_ids
@@ -275,6 +311,7 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
         "onboarded": [{"id": i, "name": n, "title": t} for i, n, t, _ in onboarded],
         "resources_added": [{"id": i, "name": n, "resource_ids": m} for i, n, m in extended],
         "repolled_blocked": refused,
+        "empty_files_requeued": unstamped,
         "tagged": tagged,
         "skipped": [{"name": n, "reason": why} for n, why in plan["skipped"]
                     if not why.startswith("untouched")],
