@@ -588,7 +588,47 @@ function AddressMatch({ m }: { m: DealAddressMatch }) {
       ) : (
         <><strong>{where}</strong>: {miss[m.status]}</>
       )}
+      <AddressCaveat />
     </div>
+  );
+}
+
+/** Why a search by address can be wrong in both directions. The register has
+ *  no address at all; every address result here is our own crosswalk, and on
+ *  טוב צפורה, רחובות it showed a different building from the Tax Authority's
+ *  own street search, with no deal in common. Said on every address search,
+ *  not only when it misses, because a confident-looking table is the case in
+ *  which nobody thinks to ask. */
+function AddressCaveat() {
+  return (
+    <details style={{
+      marginTop: "0.45rem", paddingInlineStart: "0.6rem",
+      borderInlineStart: "3px solid var(--warning)",
+    }}>
+      <summary style={{ cursor: "pointer", color: "var(--warning)", fontWeight: 600 }}>
+        שימו לב: החיבור בין עסקאות לכתובת אינו מדויק
+      </summary>
+      <div style={{ marginTop: "0.3rem", lineHeight: 1.6 }}>
+        <p style={{ margin: "0 0 0.35rem" }}>
+          במאגר של רשות המסים אין כתובת, רק גוש וחלקה. את הכתובת אנחנו מחברים
+          בעצמנו: לכל כתובת יש נקודה על המפה, והחלקה שהנקודה נופלת בה היא החלקה
+          של הכתובת. לכן התוצאה יכולה לטעות לשני הכיוונים:
+        </p>
+        <ul style={{ margin: "0 0 0.35rem", paddingInlineStart: "1.2rem" }}>
+          <li><strong>יותר מדי עסקאות:</strong> מוצגות כל העסקאות על החלקה, גם של
+            בניינים וכניסות אחרים שעומדים עליה, וגם של בניין פינתי שכתובתו ברחוב אחר.</li>
+          <li><strong>פחות מדי עסקאות:</strong> בניין שלכתובת שלו אין נקודה ממוקמת לא
+            יחובר לרחוב, וכל העסקאות שלו חסרות כאן.</li>
+          <li><strong>חלקה לא נכונה:</strong> חלק מהנקודות מוקמו בחיפוש אוטומטי ב־GovMap,
+            שלפעמים מחזיר רחוב דומה בשמו. אנחנו מסננים תשובות כאלה, אבל ייתכנו שאריות.</li>
+        </ul>
+        <p style={{ margin: 0 }}>
+          באתר רשות המסים החיפוש לפי רחוב נשען על הכתובת שנרשמה בדיווח עצמו,
+          ולכן המספרים שם יכולים להיות שונים לגמרי. כדי לבדוק נכס מסוים,
+          חפשו לפי גוש וחלקה.
+        </p>
+      </div>
+    </details>
   );
 }
 
