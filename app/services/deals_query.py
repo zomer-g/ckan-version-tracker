@@ -385,15 +385,22 @@ async def _cached(key: str, producer):
 async def stats() -> dict:
     async def produce():
         src = await _src()
+        # Each distinct count is its own subquery: four count(DISTINCT …) in one
+        # pass are four sorts of 3.84 M rows, which ran past even the 25s
+        # ceiling on 2026-09-27, while a DISTINCT subquery hashes (and min/max
+        # ride the date index) — 1.8s measured for the same numbers.
+        t = _t(src)
         rows = await _fetch(f"""
-            SELECT count(*) AS deals,
-                   min({DEAL_SORT_KEY}) AS first_deal,
-                   max({DEAL_SORT_KEY}) AS last_deal,
-                   count(DISTINCT settlement) AS settlements,
-                   count(DISTINCT (gush || '-' || chelka)) AS parcels,
-                   count(DISTINCT deal_nature) AS natures,
-                   max(scraped_at) AS scraped_at
-            FROM {_t(src)}
+            SELECT (SELECT count(*) FROM {t}) AS deals,
+                   (SELECT min({DEAL_SORT_KEY}) FROM {t}) AS first_deal,
+                   (SELECT max({DEAL_SORT_KEY}) FROM {t}) AS last_deal,
+                   (SELECT count(*) FROM (SELECT DISTINCT settlement FROM {t}
+                     WHERE settlement IS NOT NULL) s) AS settlements,
+                   (SELECT count(*) FROM (SELECT DISTINCT gush, chelka FROM {t}
+                     WHERE gush IS NOT NULL AND chelka IS NOT NULL) p) AS parcels,
+                   (SELECT count(*) FROM (SELECT DISTINCT deal_nature FROM {t}
+                     WHERE deal_nature IS NOT NULL) n) AS natures,
+                   (SELECT max(scraped_at) FROM {t}) AS scraped_at
         """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
         s = dict(rows[0]) if rows else {}
         s["first_deal"] = _iso(s.get("first_deal"))
