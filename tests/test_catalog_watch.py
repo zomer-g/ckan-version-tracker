@@ -60,6 +60,34 @@ def test_pinned_org_is_walked_for_its_pins_only(monkeypatch):
     assert cw.orgs_to_walk() == [("ministry_of_transport", None)]
 
 
+def test_hatzav_layers_are_tagged_and_the_insert_compiles():
+    import asyncio
+    import uuid
+
+    from sqlalchemy.dialects import postgresql
+
+    from app.services import catalog_watch as cw
+
+    assert cw.PINNED_TAGS["ministry_of_transport"][0] == "חצב"
+    tag_id, ds = uuid.uuid4(), [uuid.uuid4(), uuid.uuid4()]
+    seen = []
+
+    class _Result:
+        rowcount = 2
+
+        def scalars(self):
+            return SimpleNamespace(first=lambda: SimpleNamespace(id=tag_id))
+
+    class _DB:
+        async def execute(self, stmt):
+            seen.append(str(stmt.compile(dialect=postgresql.dialect())))
+            return _Result()
+
+    assert asyncio.run(cw._ensure_tag(_DB(), "חצב", "", ds)) == 2
+    assert "ON CONFLICT DO NOTHING" in seen[-1]
+    assert asyncio.run(cw._ensure_tag(_DB(), "חצב", "", [])) == 0
+
+
 def test_tracked_by_uuid_alone_counts_as_tracked():
     pkg = _pkg("tatag", "2026-06-21T00:00:00", "r1", pid="abc")
     row = _row("some-other-slug", resource_ids=["r1"], ckan_id="abc")

@@ -72,6 +72,41 @@ PINNED_PACKAGES: dict[str, frozenset[str]] = {
 }
 
 
+# The tag every pinned package of an org carries, as (name, description). The
+# watch adds it daily, so a layer pinned later is tagged on the day it lands.
+PINNED_TAGS: dict[str, tuple[str, str]] = {
+    "ministry_of_transport": (
+        "חצב",
+        'שכבות מערכת חצב של משרד התחבורה (geo.mot.gov.il), כפי שהן מפורסמות ב-data.gov.il',
+    ),
+}
+
+
+async def _ensure_tag(db, name: str, description: str, dataset_ids: list) -> int:
+    """Find or create the tag ``name`` and attach it to every dataset in
+    ``dataset_ids`` that does not carry it yet. Returns how many it attached."""
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.models.tag import Tag, dataset_tags
+
+    if not dataset_ids:
+        return 0
+    tag = (await db.execute(
+        select(Tag).where(func.lower(Tag.name) == name.lower())
+    )).scalars().first()
+    if tag is None:
+        tag = Tag(name=name, description=description)
+        db.add(tag)
+        await db.flush()
+    result = await db.execute(
+        insert(dataset_tags)
+        .values([{"dataset_id": i, "tag_id": tag.id} for i in dataset_ids])
+        .on_conflict_do_nothing()
+    )
+    return result.rowcount or 0
+
+
 def watched_orgs() -> list[str]:
     return [o.strip() for o in (settings.catalog_watch_ckan_orgs or "").split(",") if o.strip()]
 
@@ -216,6 +251,14 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
                          or blocked_resources.pending(blocked_resources.stored(r)))):
                 r.last_modified = None  # else the unchanged-metadata shortcut skips it
                 refused.append(str(r.id))
+        tagged = 0
+        if org in PINNED_TAGS:
+            await db.flush()  # the new rows' ids
+            pinned = PINNED_PACKAGES.get(org, frozenset())
+            pinned_ids = {p["id"] for p in packages if p["name"] in pinned}
+            tagged = await _ensure_tag(db, *PINNED_TAGS[org], [
+                r.id for r in list(rows) + created
+                if r.ckan_name in pinned or r.ckan_id in pinned_ids])
         await db.commit()
         onboarded = [(str(d.id), d.ckan_name, d.title, d.poll_interval) for d in created]
 
@@ -232,6 +275,7 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
         "onboarded": [{"id": i, "name": n, "title": t} for i, n, t, _ in onboarded],
         "resources_added": [{"id": i, "name": n, "resource_ids": m} for i, n, m in extended],
         "repolled_blocked": refused,
+        "tagged": tagged,
         "skipped": [{"name": n, "reason": why} for n, why in plan["skipped"]
                     if not why.startswith("untouched")],
     }
