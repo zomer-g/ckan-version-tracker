@@ -73,11 +73,23 @@ CREATE TABLE IF NOT EXISTS public.{_qi(GEOCODE_TABLE)} (
     fetched_at    timestamptz DEFAULT now()
 )
 """
+#: Added after the table shipped, so it is its own statement: CREATE TABLE IF
+#: NOT EXISTS does nothing to a table that already exists. True once the hit
+#: has been held against the address it was asked for (see _MATCH_AGREES) —
+#: the ~94k points merged before that check existed start at false and are
+#: judged once each, not on every tick.
+_ALTERS = [
+    f"ALTER TABLE public.{_qi(GEOCODE_TABLE)} "
+    f"ADD COLUMN IF NOT EXISTS address_checked boolean NOT NULL DEFAULT false",
+]
 _INDEXES = [
     f"CREATE INDEX IF NOT EXISTS {_qi(GEOCODE_TABLE + '_status_idx')} "
     f"ON public.{_qi(GEOCODE_TABLE)} (status)",
     f"CREATE INDEX IF NOT EXISTS {_qi(GEOCODE_TABLE + '_unmerged_idx')} "
     f"ON public.{_qi(GEOCODE_TABLE)} (merged) WHERE status = 'hit'",
+    f"CREATE INDEX IF NOT EXISTS {_qi(GEOCODE_TABLE + '_unchecked_idx')} "
+    f"ON public.{_qi(GEOCODE_TABLE)} (address_key) "
+    f"WHERE status = 'hit' AND merged AND NOT address_checked",
 ]
 
 
@@ -85,7 +97,7 @@ async def ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
-        for stmt in _INDEXES:
+        for stmt in _ALTERS + _INDEXES:
             await conn.execute(stmt)
     from app.services.nadlan_index import _grant_readonly
     await _grant_readonly()          # grants the nine PUBLISHED tables, not this one
@@ -215,7 +227,7 @@ _ELIGIBLE = """
           AND a.house_num IS NOT NULL
           AND a.settlement_name IS NOT NULL
           AND (g.address_key IS NULL
-               OR (g.status NOT IN ('hit', 'wrong_locality')
+               OR (g.status NOT IN ('hit', 'wrong_locality', 'wrong_address')
                    AND g.attempts < {max_attempts}
                    AND g.fetched_at < now() - interval '{retry_days} days'))
 """
@@ -471,6 +483,100 @@ async def recent_hit_rate(hours: int = 2) -> float | None:
     return (row["hits"] or 0) / row["total"]
 
 
+#: GovMap's matched text, split into the street and the house number it names:
+#: '<street> <number>[letter] <locality>'. The street is GREEDY so a street
+#: whose name is a number keeps it ('רח 3694 6 תל אביב -יפו' → 'רח 3694', 6),
+#: and the locality is the digit-free tail. Anything else does not parse, and
+#: an answer we cannot read is not an answer we can vouch for.
+MATCHED_TEXT_RE = r"^(.*\S)\s+([0-9]+)[א-ת]?\s+[^0-9]*$"
+
+#: Whether the address GovMap answered with is the one we asked about, as SQL
+#: over a row carrying ``g.matched_text``, ``a.settlement_code``,
+#: ``a.street_key`` and ``a.house_num``.
+#:
+#: The locality check below cannot catch this, because the wrong answer is
+#: next door: 'ציפורי 1 רחובות' came back as 'טוב צפורה 1 רחובות' (a parcel of
+#: its own, 6 deals, and every deal on it then showed up under ציפורי), and
+#: 'טבנקין 21 גבעתיים' as 'שינקין 21'. GovMap's search is fuzzy even with
+#: isAccurate, and its score does not tell a near-miss from a hit. Measured
+#: 2026-09-27 by re-asking 150 merged points: 21 (14%) were another address —
+#: הירמוך→הירקון, הנביאים→הנשיאים, רות→רום, 102→103 — and every one of the
+#: 21 was a real mismatch, none a spelling this check misread.
+#:
+#: Street is compared as a KEY, through the same alias ladder every other
+#: lookup uses, so a spelling GovMap writes differently ('רמת-גן', 'לוי
+#: אשכול' for 'אשכול לוי') still agrees. The letter is ignored: 6 and 6ג are
+#: one building, and the register cannot tell them apart anyway.
+_MATCH_AGREES = f"""
+    coalesce((
+      SELECT public.over_street_key(a.settlement_code, m[1]) = a.street_key
+             AND m[2]::int = a.house_num
+      FROM regexp_match(g.matched_text, '{MATCHED_TEXT_RE}') AS m
+    ), false)
+"""
+
+
+#: How many already-merged points one tick re-judges. The backlog is every
+#: point merged before the address check existed; a bounded slice per 15-minute
+#: tick clears it in hours without making any one tick long.
+UNMERGE_BATCH = 20_000
+
+
+async def unmerge_wrong_addresses(limit: int = UNMERGE_BATCH) -> dict:
+    """Take back the points already merged from an answer about another address.
+
+    Before ``_MATCH_AGREES`` existed a hit was merged on locality alone, so a
+    point GovMap gave for the street next door sits in ``over_re_addresses``
+    with a parcel pip derived from it, and every deal on that parcel then shows
+    under the wrong street. This judges those merged hits once each and, for
+    the ones that disagree:
+
+    * clears the point, but only where ``point_source = 'govmap'``: a point the
+      register or the parcel sweep supplied is not ours to take back;
+    * clears the parcel only where pip derived it from that point
+      (``parcel_match`` 'pip' or 'none'). A ``govmap_parcel`` link came from
+      GovMap's own parcel answer and stands on its own;
+    * marks the ledger row ``wrong_address``, which the selection excludes, so
+      the address is not handed straight back to GovMap for the same answer.
+    """
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(f"""
+                CREATE TEMP TABLE _geo_recheck ON COMMIT DROP AS
+                SELECT g.address_key, {_MATCH_AGREES} AS agrees
+                FROM public.{_qi(GEOCODE_TABLE)} g
+                JOIN public.{_qi(ADDRESSES_TABLE)} a USING (address_key)
+                WHERE g.status = 'hit' AND g.merged AND NOT g.address_checked
+                LIMIT {int(limit)}
+            """, timeout=1800)
+            tag = await conn.execute(f"""
+                UPDATE public.{_qi(ADDRESSES_TABLE)} a
+                   SET lat = NULL, lon = NULL, point = NULL, point_source = NULL,
+                       parcel_key = CASE WHEN a.parcel_match IN ('pip', 'none')
+                                         THEN NULL ELSE a.parcel_key END,
+                       parcel_match = CASE WHEN a.parcel_match IN ('pip', 'none')
+                                           THEN NULL ELSE a.parcel_match END
+                FROM _geo_recheck r
+                WHERE r.address_key = a.address_key AND NOT r.agrees
+                  AND a.point_source = 'govmap'
+            """, timeout=1800)
+            cleared = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+            tag = await conn.execute(f"""
+                UPDATE public.{_qi(GEOCODE_TABLE)} g
+                   SET address_checked = true,
+                       status = CASE WHEN r.agrees THEN g.status ELSE 'wrong_address' END,
+                       merged = r.agrees
+                FROM _geo_recheck r
+                WHERE r.address_key = g.address_key
+            """, timeout=1800)
+            checked = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+    if cleared:
+        logger.warning("geocode: took back %d merged points that GovMap gave for "
+                       "a different address (%d re-judged)", cleared, checked)
+    return {"rechecked": checked, "unmerged_wrong_address": cleared}
+
+
 async def merge_into_addresses() -> dict:
     """Fill missing points from the geocoder — never overwrite an existing one.
 
@@ -496,17 +602,19 @@ async def merge_into_addresses() -> dict:
     x = _qi(PG_EXT_SCHEMA)
     point = (f"{x}.ST_SetSRID({x}.ST_MakePoint(c.lon, c.lat), {GEOM_SRID})"
              f"::{x}.geography")
+    unmerged = await unmerge_wrong_addresses()
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(f"""
                 CREATE TEMP TABLE _geo_judged ON COMMIT DROP AS
                 WITH cand AS (
-                  SELECT g.address_key, g.lat, g.lon, a.settlement_code
+                  SELECT g.address_key, g.lat, g.lon, a.settlement_code,
+                         {_MATCH_AGREES} AS agrees
                   FROM public.{_qi(GEOCODE_TABLE)} g
                   JOIN public.{_qi(ADDRESSES_TABLE)} a USING (address_key)
                   WHERE g.status = 'hit' AND NOT g.merged AND a.point IS NULL
                 )
-                SELECT c.address_key, c.lat, c.lon,
+                SELECT c.address_key, c.lat, c.lon, c.agrees,
                        EXISTS (SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
                                 WHERE p.settlement_code = c.settlement_code)
                          AS checkable,
@@ -518,7 +626,7 @@ async def merge_into_addresses() -> dict:
                 FROM cand c
                 WHERE c.settlement_code IS NOT NULL
                 UNION ALL
-                SELECT c.address_key, c.lat, c.lon, false, true
+                SELECT c.address_key, c.lat, c.lon, c.agrees, false, true
                 FROM cand c WHERE c.settlement_code IS NULL
             """, timeout=1800)
             # Accepted: near a parcel of its own locality, or nothing to check.
@@ -534,27 +642,47 @@ async def merge_into_addresses() -> dict:
                     point_source = 'govmap'
                 FROM _geo_judged j
                 WHERE j.address_key = a.address_key AND a.point IS NULL
+                  AND j.agrees
                   AND (j.near OR NOT j.checkable)
             """, timeout=1800)
             merged = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+            # Rejected: GovMap answered with a different address. Judged ahead
+            # of the locality, because a neighbouring street IS in the
+            # locality. Terminal like wrong_locality: re-asking gets the same
+            # answer.
+            tag = await conn.execute(f"""
+                UPDATE public.{_qi(GEOCODE_TABLE)} g
+                   SET status = 'wrong_address', address_checked = true
+                FROM _geo_judged j
+                WHERE j.address_key = g.address_key AND NOT j.agrees
+            """)
+            wrong_address = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
             # Rejected: we could check, and it was somewhere else entirely.
             tag = await conn.execute(f"""
                 UPDATE public.{_qi(GEOCODE_TABLE)} g SET status = 'wrong_locality'
                 FROM _geo_judged j
-                WHERE j.address_key = g.address_key
+                WHERE j.address_key = g.address_key AND j.agrees
                   AND j.checkable AND NOT j.near
             """)
             rejected = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
+            # A hit merged in this tick passed the address check on the way in,
+            # so it is born checked and the re-judging pass never reads it.
             await conn.execute(
-                f"""UPDATE public.{_qi(GEOCODE_TABLE)} g SET merged = true
+                f"""UPDATE public.{_qi(GEOCODE_TABLE)} g
+                       SET merged = true,
+                           address_checked = g.address_checked OR EXISTS (
+                             SELECT 1 FROM _geo_judged j
+                              WHERE j.address_key = g.address_key AND j.agrees)
                     FROM public.{_qi(ADDRESSES_TABLE)} a
                     WHERE a.address_key = g.address_key
                       AND g.status = 'hit' AND a.point IS NOT NULL""")
     from app.services import nadlan_query
     nadlan_query.invalidate_stats_cache()
-    if rejected:
-        logger.info("geocode: %d points rejected as wrong locality (terminal)", rejected)
-    return {"merged": merged, "rejected_outside_locality": rejected}
+    if rejected or wrong_address:
+        logger.info("geocode: rejected %d as wrong locality, %d as a different "
+                    "address (terminal)", rejected, wrong_address)
+    return {"merged": merged, "rejected_outside_locality": rejected,
+            "rejected_wrong_address": wrong_address, **unmerged}
 
 
 async def merge_and_link() -> dict:
@@ -596,6 +724,10 @@ async def stats() -> dict:
               (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
                  WHERE status='hit' AND NOT merged)                                       AS unmerged,
               (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
-                 WHERE status='wrong_locality')                                           AS wrong_locality
+                 WHERE status='wrong_locality')                                           AS wrong_locality,
+              (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
+                 WHERE status='wrong_address')                                            AS wrong_address,
+              (SELECT count(*) FROM public.{_qi(GEOCODE_TABLE)}
+                 WHERE status='hit' AND merged AND NOT address_checked)                   AS awaiting_address_check
         """)
     return {**dict(row or {}), "remaining": await remaining_count()}

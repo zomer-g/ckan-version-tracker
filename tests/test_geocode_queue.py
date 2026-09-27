@@ -143,7 +143,7 @@ def test_selection_reoffers_failed_but_not_settled_hits():
     sql = gq._selection_sql(10)
     assert "a.point IS NULL" in sql
     assert "g.address_key IS NULL" in sql          # never asked → offer
-    assert "NOT IN ('hit', 'wrong_locality')" in sql  # both are settled
+    assert "NOT IN ('hit', 'wrong_locality', 'wrong_address')" in sql  # all settled
     assert f"g.attempts < {gq.MAX_ATTEMPTS}" in sql  # a repeated miss goes terminal
     assert "a.address_key" in sql.split("ORDER BY")[1]   # deterministic order
     # It must not filter on a reservation column — that would be the second copy
@@ -244,7 +244,7 @@ def test_a_wrong_locality_answer_is_terminal_not_limbo():
     GovMap will answer חדרה again."""
     sql = gq._selection_sql(10)
     assert "'wrong_locality'" in sql
-    assert "g.status NOT IN ('hit', 'wrong_locality')" in sql
+    assert "g.status NOT IN ('hit', 'wrong_locality', 'wrong_address')" in sql
 
 
 def test_a_locality_with_no_parcels_does_not_reject_its_points():
@@ -283,6 +283,65 @@ def test_the_count_and_the_work_list_cannot_drift():
     assert "_eligible()" in cnt, "the count must share the selection's predicate"
     for clause in ("wrong_locality", "a.point IS NULL", "days'"):
         assert clause in sel and clause in gq._eligible()
+
+
+# ── the answer must be the address we asked about ───────────────────────────
+import re as _re  # noqa: E402
+
+
+def _parse(text):
+    m = _re.match(gq.MATCHED_TEXT_RE, text)
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def test_matched_text_splits_into_street_and_house():
+    """GovMap's text is '<street> <number>[letter] <locality>'. The street is
+    greedy, so a street NAMED by a number keeps it, and the locality is
+    whatever digit-free tail follows. Cases are GovMap's own answers."""
+    assert _parse("טוב צפורה 1 רחובות") == ("טוב צפורה", 1)
+    assert _parse("שינקין 21 גבעתיים") == ("שינקין", 21)
+    assert _parse("רח 3694 6 תל אביב -יפו") == ("רח 3694", 6)
+    assert _parse("בן אליעזר אריה 8 רמת-גן") == ("בן אליעזר אריה", 8)
+    assert _parse("אבימלך 10א פתח תקווה") == ("אבימלך", 10)
+    # No house number, nothing to vouch for.
+    assert _parse("טוב צפורה רחובות") is None
+
+
+def test_a_neighbouring_street_is_never_merged():
+    """'ציפורי 1 רחובות' came back as 'טוב צפורה 1 רחובות', same locality,
+    so the 3 km guard passed it; pip then filed ציפורי under טוב צפורה's parcel
+    and its six deals showed up under the wrong street. 'טבנקין 21 גבעתיים'
+    came back as 'שינקין 21'. The street is compared as a KEY and the house as
+    a number, and a point is accepted only when both agree."""
+    import inspect
+    assert "over_street_key(a.settlement_code, m[1]) = a.street_key" in gq._MATCH_AGREES
+    assert "m[2]::int = a.house_num" in gq._MATCH_AGREES
+    # An unparseable answer is a disagreement, not a pass.
+    assert gq._MATCH_AGREES.strip().startswith("coalesce(")
+    src = inspect.getsource(gq.merge_into_addresses)
+    assert "AND j.agrees" in src
+    assert "'wrong_address'" in src
+
+
+def test_a_wrong_address_is_terminal_not_re_asked():
+    """GovMap answers the same fuzzy match every time; re-asking only spends
+    its budget on an answer already rejected."""
+    assert "'wrong_address'" in gq._selection_sql(10)
+    assert "'wrong_address'" in gq._eligible()
+
+
+def test_taking_back_a_point_only_touches_what_the_geocoder_put_there(sink):
+    """Points merged before the check existed are judged once each. Only a
+    point the geocoder supplied may be cleared, and only a parcel pip derived
+    from it: a register point or a parcel from GovMap's own parcel answer is
+    not the geocoder's to take back."""
+    res = asyncio.run(gq.unmerge_wrong_addresses(limit=5))
+    sql = "\n".join(c[1] for c in sink if c[0] == "execute")
+    assert "AND a.point_source = 'govmap'" in sql
+    assert "a.parcel_match IN ('pip', 'none')" in sql
+    assert "NOT g.address_checked" in sql and "LIMIT 5" in sql
+    assert "ELSE 'wrong_address'" in sql
+    assert res == {"rechecked": 0, "unmerged_wrong_address": 0}
 
 
 # ── a geocoded point must reach its parcel without a person ──────────────────
