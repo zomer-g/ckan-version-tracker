@@ -40,6 +40,26 @@ def test_untracked_recent_package_is_onboarded_old_one_is_not():
     assert plan["skipped"] == [("bqt", "untouched since 2026-01-01")]
 
 
+def test_pinned_package_is_onboarded_whatever_its_age():
+    # strat_border (a חצב layer) was last edited 2023-03-21.
+    pkgs = [_pkg("strat_border", "2023-03-21T18:32:47", "r1"),
+            _pkg("bqt", "2023-03-21T10:00:00", "r2")]
+    plan = plan_org(pkgs, [], "2026-01-01", frozenset({"strat_border"}))
+    assert [p["name"] for p in plan["onboard"]] == ["strat_border"]
+    assert plan["skipped"] == [("bqt", "untouched since 2026-01-01")]
+
+
+def test_pinned_org_is_walked_for_its_pins_only(monkeypatch):
+    from app.services import catalog_watch as cw
+    monkeypatch.setattr(cw.settings, "catalog_watch_ckan_orgs", "israel_mapping_center")
+    walk = dict(cw.orgs_to_walk())
+    assert walk["israel_mapping_center"] is None
+    assert "strat_border" in walk["ministry_of_transport"]
+    # A pinned org that is also watched whole is walked once, whole.
+    monkeypatch.setattr(cw.settings, "catalog_watch_ckan_orgs", "ministry_of_transport")
+    assert cw.orgs_to_walk() == [("ministry_of_transport", None)]
+
+
 def test_tracked_by_uuid_alone_counts_as_tracked():
     pkg = _pkg("tatag", "2026-06-21T00:00:00", "r1", pid="abc")
     row = _row("some-other-slug", resource_ids=["r1"], ckan_id="abc")

@@ -36,8 +36,52 @@ logger = logging.getLogger(__name__)
 last_result: dict | None = None
 
 
+# Packages tracked whatever their age, per organization. An org listed here but
+# not in ``catalog_watch_ckan_orgs`` is walked for these packages only.
+#
+# ministry_of_transport: every data.gov.il package the חצב catalog
+# (geo.mot.gov.il) links a layer to, read from the live catalog on 2026-09-27.
+# The catalog itself is tracked as a scraper dataset with links only, and until
+# then 64 of these 88 layers had no dataset of their own; most were last edited
+# in 2023-2025, so a date cutoff would have kept them out.
+PINNED_PACKAGES: dict[str, frozenset[str]] = {
+    "ministry_of_transport": frozenset({
+        "accid_taz", "accidents_municipal", "agg_charge_stations", "airport",
+        "airstrip", "area_authority", "ashdod_metro_bus", "bike_net_center",
+        "bike_net_tlv", "bph_infra_exist", "bph_infra_plan", "brt_line",
+        "bus_speed", "bus_terminal_fcl", "bus_terminal_strat", "cong_tax_rings",
+        "cvfr", "depo_lrt", "depo_metro", "fast_lane_gate", "fast_lanes",
+        "functional_areas", "helipad", "hov_2024", "hoze_zhut", "ims_stat",
+        "kishuriyut_metronit", "kishuriyut_nofit", "kishuriyut_prj",
+        "levelseparation", "lrt_line", "lrt_stat", "lrt_tunnels",
+        "mahirlair_city", "mataan_ashkelon", "mataan_ashkelon_app",
+        "mataan_brshva", "mataan_haifa", "mataan_hdr_ntn", "mataan_jlm_2040",
+        "mataan_jlm_2050", "mataan_ntn_app", "mataan_tlv", "mataan_tlv_2040",
+        "metro_line", "metro_line_jlm", "metro_stat", "metrofan", "metronit",
+        "mile_post", "miutim_poi", "miutim_prj", "miutim_risk", "nataz_kayam",
+        "nataz_planned", "nti_zhut_dereh", "ofneidan", "park_n_ride",
+        "rail_flow_2040", "rail_freq_2026", "rail_freq_2040", "rail_stat",
+        "rail_strat_station", "rail_strategic", "rail_tunnels",
+        "road_strat_2030", "road_strat_2050", "roadauthority", "roadnumber_tma",
+        "roadnumbers", "roundabout", "sfirot", "speed_survey_2022",
+        "strat_border", "tma_23", "tma_23a4_dipo", "tma_23a4_lines", "tma_3",
+        "tma_3_plans", "tma_3_points", "tma_42", "traffic_light_junction",
+        "ttl_transport", "urban_intersections", "urban_road_safety_elements",
+        "vor", "wplan_muni", "zmt_names",
+    }),
+}
+
+
 def watched_orgs() -> list[str]:
     return [o.strip() for o in (settings.catalog_watch_ckan_orgs or "").split(",") if o.strip()]
+
+
+def orgs_to_walk() -> list[tuple[str, frozenset[str] | None]]:
+    """``(org, only)`` pairs: ``only`` is None for a fully watched org, else
+    the pinned package names that are all the watch looks at there."""
+    whole = watched_orgs()
+    return [(o, None) for o in whole] + [
+        (o, names) for o, names in PINNED_PACKAGES.items() if o not in whole]
 
 
 def _tracked_ids(row: TrackedDataset) -> set[str]:
@@ -47,15 +91,16 @@ def _tracked_ids(row: TrackedDataset) -> set[str]:
     return ids
 
 
-def plan_org(packages: list[dict], rows: list[TrackedDataset], since: str) -> dict:
+def plan_org(packages: list[dict], rows: list[TrackedDataset], since: str,
+             pinned: frozenset[str] = frozenset()) -> dict:
     """Decide, without touching anything, what the watch does for one org.
 
     Returns ``{"onboard": [pkg, ...], "extend": [(row, [rid, ...]), ...],
     "skipped": [(name, reason), ...]}``.
 
     * A package with no tracked row at all is onboarded — if it was touched on
-      or after ``since``. A row in ANY status counts as tracked: a package an
-      admin rejected stays rejected.
+      or after ``since``, or is ``pinned``. A row in ANY status counts as
+      tracked: a package an admin rejected stays rejected.
     * A package with an active "whole package" row (``resource_ids`` set, no
       single ``resource_id``) gets every source resource none of its active
       rows track. Split-mode packages (one row per resource) are reported, not
@@ -77,7 +122,7 @@ def plan_org(packages: list[dict], rows: list[TrackedDataset], since: str) -> di
         if not mine:
             if not source_ids:
                 skipped.append((pkg["name"], "no resources"))
-            elif (pkg.get("metadata_modified") or "")[:10] >= since:
+            elif pkg["name"] in pinned or (pkg.get("metadata_modified") or "")[:10] >= since:
                 onboard.append(pkg)
             else:
                 skipped.append((pkg["name"], "untouched since " + since))
@@ -99,12 +144,14 @@ def plan_org(packages: list[dict], rows: list[TrackedDataset], since: str) -> di
     return {"onboard": onboard, "extend": extend, "skipped": skipped}
 
 
-async def _watch_ckan_org(org: str) -> dict:
+async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
     from app.api.datasets import apply_storage_target, default_storage_target
     from app.worker.poll_job import poll_dataset
     from app.worker.scheduler import add_poll_job
 
     packages = await ckan_client.organization_packages(org)
+    if only is not None:
+        packages = [p for p in packages if p["name"] in only]
     ids = [p["id"] for p in packages]
     names = [p["name"] for p in packages]
     async with async_session() as db:
@@ -113,7 +160,8 @@ async def _watch_ckan_org(org: str) -> dict:
                 (TrackedDataset.ckan_id.in_(ids)) | (TrackedDataset.ckan_name.in_(names))
             )
         )).scalars().all()
-        plan = plan_org(packages, rows, settings.catalog_watch_ckan_since)
+        plan = plan_org(packages, rows, settings.catalog_watch_ckan_since,
+                        PINNED_PACKAGES.get(org, frozenset()))
 
         org_id = (await db.execute(
             select(Organization.id).where(Organization.name == org)
@@ -207,9 +255,9 @@ async def run_catalog_watch(force: bool = False) -> dict | None:
         out["govmap"] = {"error": str(e)[:300]}
 
     out["ckan"] = []
-    for org in watched_orgs():
+    for org, only in orgs_to_walk():
         try:
-            out["ckan"].append(await _watch_ckan_org(org))
+            out["ckan"].append(await _watch_ckan_org(org, only))
         except Exception as e:  # noqa: BLE001
             logger.exception("catalog watch: data.gov.il org %s failed", org)
             out["ckan"].append({"org": org, "error": str(e)[:300]})
