@@ -18,6 +18,7 @@ validates ``page`` / ``lang`` and stores whatever value it is given (the value
 keeps the ``<1>``/``<2>``/``<strong>`` inline-tag convention the pages render
 through <Trans>). See app/models/page_content.py.
 """
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -36,8 +37,30 @@ from app.rate_limit import limiter
 logger = logging.getLogger(__name__)
 
 # Pages whose copy is editable. Keep in sync with the frontend page namespaces.
-PAGES = {"about", "rationale"}
+# "home" is not copy: it holds one setting, FEATURED_KEY, the datasets an admin
+# pinned to the top of the homepage list (stored under lang "he").
+PAGES = {"about", "rationale", "home"}
 LANGS = {"he", "en"}
+
+FEATURED_KEY = "featured_datasets"
+FEATURED_MAX = 3
+
+
+def _validate_featured(value: str) -> None:
+    """The featured list is a JSON array of at most FEATURED_MAX dataset ids."""
+    try:
+        ids = json.loads(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="featured_datasets must be JSON")
+    if (
+        not isinstance(ids, list)
+        or len(ids) > FEATURED_MAX
+        or not all(isinstance(i, str) and 0 < len(i) <= 64 for i in ids)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"featured_datasets must be a list of up to {FEATURED_MAX} ids",
+        )
 
 router = APIRouter(prefix="/api/page-content", tags=["page-content"])
 admin_router = APIRouter(prefix="/api/admin/page-content", tags=["admin"])
@@ -89,6 +112,8 @@ async def upsert_page_content(
     key = body.key.strip()
     if not key:
         raise HTTPException(status_code=422, detail="key is required")
+    if body.page == "home" and key == FEATURED_KEY:
+        _validate_featured(body.value)
     stmt = (
         pg_insert(PageContent)
         .values(

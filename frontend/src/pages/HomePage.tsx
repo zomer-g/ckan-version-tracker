@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
+import { ckan, publicApi, pageContent, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 import TagChips from "../components/TagChips";
 import Pagination from "../components/Pagination";
@@ -57,6 +57,7 @@ import { EDEN_PATTERN } from "../utils/edenPattern";
 import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { useAuth } from "../auth/AuthContext";
 const ODATA_BASE = "https://www.odata.org.il";
 
 /** Detect gov.il collector URLs */
@@ -227,9 +228,14 @@ function formatInterval(seconds: number, t: (k: string) => string): string {
   return `${quarters} ${t("tracked.quarters")}`;
 }
 
+// page_content key holding the pinned datasets (see app/api/page_content.py).
+const FEATURED_KEY = "featured_datasets";
+
 export default function HomePage() {
   useDocumentTitle("מאגרי מידע ממשלתיים במעקב");
   const { t, i18n } = useTranslation();
+  const { user } = useAuth();
+  const isAdmin = !!user?.is_admin;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
@@ -271,10 +277,47 @@ export default function HomePage() {
     (Array.isArray((ds as any).tags) ? (ds as any).tags : []).some(
       (tg: any) => (typeof tg === "string" ? tg : tg?.name || "") === KNESSET_COMMITTEE_TAG,
     );
-  const restTracked = useMemo(
-    () => trackedDatasets.filter((ds) => !isCommitteeDataset(ds)),
-    [trackedDatasets],
-  );
+  // Up to FEATURED_MAX datasets an admin pinned to the head of the list, in
+  // the order they were pinned. Stored as a JSON id list in the page_content
+  // table (page "home"), so a pin goes live without a deploy. The ★ badge on
+  // the card says the position is an editorial choice, not the natural order.
+  const FEATURED_MAX = 3;
+  const [featuredIds, setFeaturedIds] = useState<string[]>([]);
+  const featuredSet = useMemo(() => new Set(featuredIds), [featuredIds]);
+  useEffect(() => {
+    pageContent.get("home")
+      .then((o) => {
+        const ids = JSON.parse(o.he?.[FEATURED_KEY] || "[]");
+        if (Array.isArray(ids)) setFeaturedIds(ids.filter((i) => typeof i === "string"));
+      })
+      .catch(() => {});
+  }, []);
+  const toggleFeatured = async (id: string) => {
+    const next = featuredSet.has(id)
+      ? featuredIds.filter((i) => i !== id)
+      : [...featuredIds, id];
+    if (next.length > FEATURED_MAX) {
+      alert(`אפשר להציג עד ${FEATURED_MAX} מאגרים מומלצים. הסירו אחד קודם.`);
+      return;
+    }
+    try {
+      if (next.length) await pageContent.save("home", "he", FEATURED_KEY, JSON.stringify(next));
+      else await pageContent.revert("home", "he", FEATURED_KEY);
+      setFeaturedIds(next);
+    } catch (e: any) {
+      alert(e?.message || "השמירה נכשלה");
+    }
+  };
+
+  const restTracked = useMemo(() => {
+    const rest = trackedDatasets.filter((ds) => !isCommitteeDataset(ds));
+    if (!featuredIds.length) return rest;
+    // Featured first, in pin order; a pinned id that is no longer listed
+    // (deleted, hidden) simply drops out.
+    const byId = new Map(rest.map((ds) => [ds.id, ds]));
+    const head = featuredIds.map((id) => byId.get(id)).filter(Boolean) as TrackedDataset[];
+    return [...head, ...rest.filter((ds) => !featuredSet.has(ds.id))];
+  }, [trackedDatasets, featuredIds, featuredSet]);
   const committeeGroup = useMemo(() => {
     const list = trackedDatasets.filter(isCommitteeDataset);
     if (list.length === 0) return null;
@@ -889,6 +932,154 @@ export default function HomePage() {
     if (query.trim()) search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // One tracked-dataset card. A function, not inline JSX, because the
+  // featured cards render before the Knesset-committees tile and the rest
+  // after it — two passes over the same page slice.
+  const renderTrackedCard = (ds: TrackedDataset) => (
+    <article
+      key={ds.id}
+      className="card"
+      style={featuredSet.has(ds.id) ? { borderInlineStart: "3px solid var(--tint-warn-fg)" } : undefined}
+    >
+      {featuredSet.has(ds.id) && (
+        <p
+          className="text-sm"
+          style={{ margin: "0 0 0.35rem", color: "var(--tint-warn-fg)", fontWeight: 600 }}
+          title="המאגר הוצב בראש הרשימה בבחירת עורכי האתר, לא לפי הסדר הרגיל"
+        >
+          <span aria-hidden="true">★ </span>מומלץ · הוצב בראש הרשימה
+        </p>
+      )}
+      <div className="flex-between mb-1">
+        <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+          <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
+        </h3>
+        <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => toggleFeatured(ds.id)}
+              aria-pressed={featuredSet.has(ds.id)}
+              aria-label={`${featuredSet.has(ds.id) ? "הסרה מהמומלצים" : "הצבה בראש הרשימה"} — ${ds.title}`}
+              title={featuredSet.has(ds.id) ? "הסרה מהמומלצים" : `הצבה בראש הרשימה (עד ${FEATURED_MAX})`}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "1.1rem",
+                lineHeight: 1,
+                padding: "0.1rem 0.2rem",
+                color: featuredSet.has(ds.id) ? "var(--tint-warn-fg)" : "var(--text-muted)",
+              }}
+            >
+              {featuredSet.has(ds.id) ? "★" : "☆"}
+            </button>
+          )}
+          <SourceChip
+            sourceType={ds.source_type}
+            organization={ds.organization}
+            ckanId={ds.ckan_id}
+          />
+          <span className="badge badge-info">
+            {ds.version_count} {t("home.versions_count")}
+          </span>
+        </div>
+      </div>
+
+      {ds.resource_name && (
+        <p className="text-sm mb-1" style={{ color: "var(--primary)", fontWeight: 500 }}>
+          {ds.resource_name}
+        </p>
+      )}
+
+      <p className="text-sm text-muted mb-1">
+        {ds.organization_id ? (
+          <Link
+            to={`/organizations/${ds.organization_id}`}
+            style={{ color: "var(--primary)", textDecoration: "none" }}
+          >
+            {ds.organization_title || ds.organization}
+          </Link>
+        ) : (
+          ds.organization
+        )}
+        {" · "}
+        {t("tracked.poll_interval")}: {formatInterval(ds.poll_interval, t)}
+      </p>
+
+      <TagChips tags={ds.tags} />
+
+      <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
+        <Link
+          to={`/versions/${ds.id}`}
+          className="btn-primary"
+          // The visible word is "גרסאות" on every card. Out of
+          // context that names nothing, so the accessible name
+          // carries the dataset (WCAG 2.4.9).
+          aria-label={`${t("tracked.versions")} — ${ds.title}`}
+          style={{ textDecoration: "none", fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}
+        >
+          {t("tracked.versions")}
+        </Link>
+
+        {ds.odata_dataset_id && (
+          <a
+            href={`${ODATA_BASE}/dataset/${ds.odata_dataset_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="card-source-link"
+            // Promoted from "small underlined ODATA text"
+            // to a visible outlined button so casual users
+            // notice the archived files exist. Outlined
+            // (not filled) so it stays clearly secondary
+            // to the primary "גרסאות" button next to it.
+            style={{
+              fontSize: "0.85rem",
+              padding: "0.35rem 0.85rem",
+              background: "var(--surface)",
+              color: "var(--primary)",
+              border: "1px solid var(--primary)",
+              borderRadius: 4,
+              textDecoration: "none",
+              fontWeight: 500,
+            }}
+            aria-label={`${t("tracked.open_archive_short")} — ${ds.title}`}
+          >
+            {t("tracked.open_archive_short")}
+            <span aria-hidden="true"> &#8599;</span>
+            <span className="sr-only"> (נפתח בחלון חדש)</span>
+          </a>
+        )}
+
+        {(() => {
+          const sourceHref =
+            ds.source_type === "scraper" || ds.source_type === "govmap"
+              ? ds.source_url
+              : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
+          if (!sourceHref) return null;
+          const dsBadge = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
+          // Worker-declared sources label themselves from their manifest.
+          const linkLabel = dsBadge.sourceLinkLabel ?? t(dsBadge.sourceLinkKey);
+          return (
+            <a
+              href={sourceHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm card-source-link"
+              aria-label={`${linkLabel} — ${ds.title}`}
+              style={{ color: "var(--text-muted)", textDecoration: "none" }}
+            >
+              {linkLabel}
+              <span aria-hidden="true"> &#8599;</span>
+              <span className="sr-only"> (נפתח בחלון חדש)</span>
+            </a>
+          );
+        })()}
+
+      </div>
+    </article>
+  );
 
   return (
     <div>
@@ -2026,6 +2217,7 @@ export default function HomePage() {
             </div>
           ) : (
             <div className="grid grid-2">
+              {pageTracked.filter((ds) => featuredSet.has(ds.id)).map(renderTrackedCard)}
               {showCommitteeCard && trackedPage === 1 && committeeGroup && (
                 <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid var(--tint-indigo-fg)" }}>
                   <div className="flex-between mb-1">
@@ -2050,117 +2242,7 @@ export default function HomePage() {
                   </div>
                 </article>
               )}
-              {pageTracked.map((ds) => (
-                <article key={ds.id} className="card">
-                  <div className="flex-between mb-1">
-                    <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
-                      <Link to={`/versions/${ds.id}`}>{ds.title}</Link>
-                    </h3>
-                    <div className="flex" style={{ gap: "0.4rem", alignItems: "center" }}>
-                      <SourceChip
-                        sourceType={ds.source_type}
-                        organization={ds.organization}
-                        ckanId={ds.ckan_id}
-                      />
-                      <span className="badge badge-info">
-                        {ds.version_count} {t("home.versions_count")}
-                      </span>
-                    </div>
-                  </div>
-
-                  {ds.resource_name && (
-                    <p className="text-sm mb-1" style={{ color: "var(--primary)", fontWeight: 500 }}>
-                      {ds.resource_name}
-                    </p>
-                  )}
-
-                  <p className="text-sm text-muted mb-1">
-                    {ds.organization_id ? (
-                      <Link
-                        to={`/organizations/${ds.organization_id}`}
-                        style={{ color: "var(--primary)", textDecoration: "none" }}
-                      >
-                        {ds.organization_title || ds.organization}
-                      </Link>
-                    ) : (
-                      ds.organization
-                    )}
-                    {" · "}
-                    {t("tracked.poll_interval")}: {formatInterval(ds.poll_interval, t)}
-                  </p>
-
-                  <TagChips tags={ds.tags} />
-
-                  <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
-                    <Link
-                      to={`/versions/${ds.id}`}
-                      className="btn-primary"
-                      // The visible word is "גרסאות" on every card. Out of
-                      // context that names nothing, so the accessible name
-                      // carries the dataset (WCAG 2.4.9).
-                      aria-label={`${t("tracked.versions")} — ${ds.title}`}
-                      style={{ textDecoration: "none", fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}
-                    >
-                      {t("tracked.versions")}
-                    </Link>
-
-                    {ds.odata_dataset_id && (
-                      <a
-                        href={`${ODATA_BASE}/dataset/${ds.odata_dataset_id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="card-source-link"
-                        // Promoted from "small underlined ODATA text"
-                        // to a visible outlined button so casual users
-                        // notice the archived files exist. Outlined
-                        // (not filled) so it stays clearly secondary
-                        // to the primary "גרסאות" button next to it.
-                        style={{
-                          fontSize: "0.85rem",
-                          padding: "0.35rem 0.85rem",
-                          background: "var(--surface)",
-                          color: "var(--primary)",
-                          border: "1px solid var(--primary)",
-                          borderRadius: 4,
-                          textDecoration: "none",
-                          fontWeight: 500,
-                        }}
-                        aria-label={`${t("tracked.open_archive_short")} — ${ds.title}`}
-                      >
-                        {t("tracked.open_archive_short")}
-                        <span aria-hidden="true"> &#8599;</span>
-                        <span className="sr-only"> (נפתח בחלון חדש)</span>
-                      </a>
-                    )}
-
-                    {(() => {
-                      const sourceHref =
-                        ds.source_type === "scraper" || ds.source_type === "govmap"
-                          ? ds.source_url
-                          : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
-                      if (!sourceHref) return null;
-                      const dsBadge = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
-                      // Worker-declared sources label themselves from their manifest.
-                      const linkLabel = dsBadge.sourceLinkLabel ?? t(dsBadge.sourceLinkKey);
-                      return (
-                        <a
-                          href={sourceHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm card-source-link"
-                          aria-label={`${linkLabel} — ${ds.title}`}
-                          style={{ color: "var(--text-muted)", textDecoration: "none" }}
-                        >
-                          {linkLabel}
-                          <span aria-hidden="true"> &#8599;</span>
-                          <span className="sr-only"> (נפתח בחלון חדש)</span>
-                        </a>
-                      );
-                    })()}
-
-                  </div>
-                </article>
-              ))}
+              {pageTracked.filter((ds) => !featuredSet.has(ds.id)).map(renderTrackedCard)}
             </div>
           )}
 
