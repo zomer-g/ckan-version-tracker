@@ -218,6 +218,23 @@ async def series(filters: dict) -> list[dict]:
 
     Median rather than mean: the register mixes a single flat with the sale of a
     whole building, and one such row moves an average by millions."""
+    # No settlement or gush filter means no index narrows the rows: the page's
+    # default, unfiltered view is three medians per year over all 3.84 M deals,
+    # which fits under 10s with one median and not with three. It 500'd 85
+    # times in the first 20 minutes after the deals indexes were restored. Such a
+    # view is the same for everyone until the next sampling, so it is cached for
+    # an hour, gets the aggregate ceiling, and concurrent callers share one query.
+    if not any(filters.get(k) for k in ("settlement", "settlement_code", "gush")):
+        key = "series:" + repr(sorted((k, v) for k, v in filters.items() if v))
+        if sum(k.startswith("series:") for k in _cache) >= 200:
+            for k in [k for k in _cache if k.startswith("series:")]:
+                _cache.pop(k, None)
+                _locks.pop(k, None)
+        return await _cached(key, lambda: _series(filters, _AGGREGATE_TIMEOUT_MS))
+    return await _series(filters, _TIMEOUT_MS)
+
+
+async def _series(filters: dict, timeout_ms: int) -> list[dict]:
     where, args = _where(filters)
     src = await _src()
     rows = await _fetch(f"""
@@ -231,7 +248,7 @@ async def series(filters: dict) -> list[dict]:
         FROM {_t(src)}
         WHERE {where} AND deal_date ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}$'
         GROUP BY 1 ORDER BY 1
-    """, *args)
+    """, *args, timeout_ms=timeout_ms)
     return [{"year": int(r["year"]), "deals": r["deals"],
              "median_amount": r["median_amount"], "median_area": r["median_area"],
              "median_ppsqm_normalized": _int(r["median_ppsqm_normalized"])}

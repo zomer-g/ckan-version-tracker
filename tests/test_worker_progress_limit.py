@@ -58,3 +58,22 @@ def test_nothing_is_built_or_analyzed_when_all_indexes_exist():
     res = _run(conn)
     assert res == {"made": [], "failed": []}
     assert conn.executed == []
+
+
+def test_broad_deals_series_is_cached_with_the_aggregate_ceiling():
+    from app.services import deals_query as dq
+    calls = []
+
+    async def fake_fetch(sql, *args, timeout_ms=dq._TIMEOUT_MS):
+        calls.append(timeout_ms)
+        return [{"year": "2024", "deals": 1, "median_amount": 1, "median_area": 1,
+                 "median_ppsqm_normalized": 1}]
+
+    dq.invalidate_cache()
+    with mock.patch.object(dq, "_fetch", fake_fetch), \
+         mock.patch.object(dq, "_src", mock.AsyncMock(return_value=("public", "d"))):
+        asyncio.run(dq.series({}))
+        asyncio.run(dq.series({}))
+        asyncio.run(dq.series({"settlement": "חולון"}))
+    dq.invalidate_cache()
+    assert calls == [dq._AGGREGATE_TIMEOUT_MS, dq._TIMEOUT_MS]
