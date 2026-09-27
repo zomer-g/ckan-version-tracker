@@ -48,6 +48,11 @@ const SORTS: [string, string][] = [
 
 const PAGE_SIZE = 50;
 
+/** The URL parameters the form edits, and that the "חיפוש" button applies. */
+const DRAFT_KEYS = ["settlement", "nature", "street", "no", "gush", "helka",
+  "from", "to", "min", "sort"] as const;
+type DraftKey = typeof DRAFT_KEYS[number];
+
 const NIS = new Intl.NumberFormat("he-IL", {
   style: "currency", currency: "ILS", maximumFractionDigits: 0,
 });
@@ -174,17 +179,38 @@ export default function DealsPage() {
     .map((n) => ({ value: n.nature!, label: n.nature!, hint: n.deals.toLocaleString("he-IL") })),
   [natures]);
 
+  // ── the draft: what the form says, before anyone presses "חיפוש" ──────────
+  // Every field edits the draft only; the search runs when the draft is written
+  // into the URL. Searching on every keystroke and every pick fired a query per
+  // letter of a settlement name, each one a scan of 3.8M rows.
+  const appliedKey = DRAFT_KEYS.map((k) => params.get(k) ?? "").join("\u0001");
+  const applied = useMemo(() => {
+    const vals = appliedKey.split("\u0001");
+    return Object.fromEntries(DRAFT_KEYS.map((k, i) => [k, vals[i]])) as Record<DraftKey, string>;
+  }, [appliedKey]);
+  const [draft, setDraft] = useState<Record<DraftKey, string>>(applied);
+  // A filter that moved on its own — back/forward, "ניקוי הסינון", a shared
+  // link — is what the form shows next. Paging does not touch the draft.
+  useEffect(() => { setDraft(applied); }, [applied]);
+  const edit = (next: Partial<Record<DraftKey, string>>) => setDraft((d) => ({ ...d, ...next }));
+  const dirty = DRAFT_KEYS.some((k) => (draft[k] ?? "").trim() !== (applied[k] ?? ""));
+  const runSearch = () => {
+    const next: Record<string, string | null> = {};
+    for (const k of DRAFT_KEYS) next[k] = draft[k].trim() || null;
+    if (next.sort === "date_desc") next.sort = null;
+    // An address only means something inside a settlement.
+    if (!next.settlement) { next.street = null; next.no = null; }
+    if (next.min) next.min = next.min.replace(/\D/g, "") || null;
+    patch(next);
+  };
+
   // Street suggestions come from the נדל"ן לעם street index, which is keyed by
   // the CBS code: a settlement the register published without one simply gets
   // no suggestions, and the name-based resolution still works.
-  const settlementCode = settlements.find((s) => s.settlement === filters.settlement)?.settlement_code;
-  const [streetDraft, setStreetDraft] = useState(filters.street ?? "");
-  const [houseDraft, setHouseDraft] = useState(filters.house ?? "");
+  const settlementCode = settlements.find((s) => s.settlement === draft.settlement)?.settlement_code;
   const [streetHints, setStreetHints] = useState<string[]>([]);
-  useEffect(() => { setStreetDraft(filters.street ?? ""); }, [filters.street]);
-  useEffect(() => { setHouseDraft(filters.house ?? ""); }, [filters.house]);
   useEffect(() => {
-    const q = streetDraft.trim();
+    const q = draft.street.trim();
     if (!settlementCode || q.length < 2) { setStreetHints([]); return; }
     const t = setTimeout(() => {
       nadlanApi.streets(q, Number(settlementCode), 15)
@@ -192,8 +218,7 @@ export default function DealsPage() {
         .catch(() => setStreetHints([]));
     }, 250);
     return () => clearTimeout(t);
-  }, [streetDraft, settlementCode]);
-  const commitAddress = () => patch({ street: streetDraft.trim(), no: houseDraft.trim() });
+  }, [draft.street, settlementCode]);
 
   const rows: NadlanDeal[] = result?.data ?? [];
   const hasFilter = Object.keys(filters).length > 0;
@@ -260,17 +285,18 @@ export default function DealsPage() {
             <form
               className="flex"
               style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.8rem", alignItems: "flex-end" }}
-              onSubmit={(e) => e.preventDefault()}
+              // Enter in any field is the same as pressing "חיפוש".
+              onSubmit={(e) => { e.preventDefault(); runSearch(); }}
             >
               <label className="text-sm">
                 יישוב
                 <br />
                 <SearchableSelect
                   ariaLabel="יישוב"
-                  value={filters.settlement ?? ""}
+                  value={draft.settlement}
                   // A street belongs to one settlement; carrying it across to
                   // another would filter on a street that is not there.
-                  onChange={(v) => patch({ settlement: v || null, street: null, no: null })}
+                  onChange={(v) => edit({ settlement: v || "", street: "", no: "" })}
                   allLabel="כל היישובים"
                   options={settlementOptions}
                   style={{ width: 230 }}
@@ -282,8 +308,8 @@ export default function DealsPage() {
                 <br />
                 <SearchableSelect
                   ariaLabel="מהות"
-                  value={filters.nature ?? ""}
-                  onChange={(v) => patch({ nature: v || null })}
+                  value={draft.nature}
+                  onChange={(v) => edit({ nature: v || "" })}
                   allLabel="כל המהויות"
                   options={natureOptions}
                   style={{ width: 220 }}
@@ -294,14 +320,12 @@ export default function DealsPage() {
                 רחוב
                 <br />
                 <input
-                  value={streetDraft}
-                  disabled={!filters.settlement}
-                  placeholder={filters.settlement ? "למשל הרצל" : "בחרו יישוב קודם"}
+                  value={draft.street}
+                  disabled={!draft.settlement}
+                  placeholder={draft.settlement ? "למשל הרצל" : "בחרו יישוב קודם"}
                   list="deals-street-hints"
                   enterKeyHint="search"
-                  onChange={(e) => setStreetDraft(e.target.value)}
-                  onBlur={commitAddress}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitAddress(); } }}
+                  onChange={(e) => edit({ street: e.target.value })}
                   style={{ padding: "0.35rem 0.5rem", width: 150 }}
                 />
                 <datalist id="deals-street-hints">
@@ -313,13 +337,11 @@ export default function DealsPage() {
                 מס׳ בית
                 <br />
                 <input
-                  value={houseDraft}
-                  disabled={!filters.settlement}
+                  value={draft.no}
+                  disabled={!draft.settlement}
                   inputMode="numeric"
                   enterKeyHint="search"
-                  onChange={(e) => setHouseDraft(e.target.value)}
-                  onBlur={commitAddress}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitAddress(); } }}
+                  onChange={(e) => edit({ no: e.target.value })}
                   style={{ padding: "0.35rem 0.5rem", width: 70 }}
                 />
               </label>
@@ -328,9 +350,10 @@ export default function DealsPage() {
                 גוש
                 <br />
                 <input
-                  defaultValue={String(filters.gush ?? "")}
-                  onBlur={(e) => patch({ gush: e.target.value.trim() })}
+                  value={draft.gush}
+                  onChange={(e) => edit({ gush: e.target.value })}
                   inputMode="numeric"
+                  enterKeyHint="search"
                   style={{ padding: "0.35rem 0.5rem", width: 100 }}
                 />
               </label>
@@ -339,9 +362,10 @@ export default function DealsPage() {
                 חלקה
                 <br />
                 <input
-                  defaultValue={String(filters.helka ?? "")}
-                  onBlur={(e) => patch({ helka: e.target.value.trim() })}
+                  value={draft.helka}
+                  onChange={(e) => edit({ helka: e.target.value })}
                   inputMode="numeric"
+                  enterKeyHint="search"
                   style={{ padding: "0.35rem 0.5rem", width: 100 }}
                 />
               </label>
@@ -351,8 +375,8 @@ export default function DealsPage() {
                 <br />
                 <input
                   type="date"
-                  defaultValue={filters.date_from ?? ""}
-                  onChange={(e) => patch({ from: e.target.value })}
+                  value={draft.from}
+                  onChange={(e) => edit({ from: e.target.value })}
                   style={{ padding: "0.3rem 0.4rem" }}
                 />
               </label>
@@ -362,8 +386,8 @@ export default function DealsPage() {
                 <br />
                 <input
                   type="date"
-                  defaultValue={filters.date_to ?? ""}
-                  onChange={(e) => patch({ to: e.target.value })}
+                  value={draft.to}
+                  onChange={(e) => edit({ to: e.target.value })}
                   style={{ padding: "0.3rem 0.4rem" }}
                 />
               </label>
@@ -372,9 +396,10 @@ export default function DealsPage() {
                 שווי מינימלי
                 <br />
                 <input
-                  defaultValue={filters.min_amount ? String(filters.min_amount) : ""}
-                  onBlur={(e) => patch({ min: e.target.value.replace(/\D/g, "") })}
+                  value={draft.min}
+                  onChange={(e) => edit({ min: e.target.value })}
                   inputMode="numeric"
+                  enterKeyHint="search"
                   placeholder="₪"
                   style={{ padding: "0.35rem 0.5rem", width: 120 }}
                 />
@@ -384,13 +409,22 @@ export default function DealsPage() {
                 מיון
                 <br />
                 <select
-                  value={sort}
-                  onChange={(e) => patch({ sort: e.target.value === "date_desc" ? null : e.target.value })}
+                  value={draft.sort || "date_desc"}
+                  onChange={(e) => edit({ sort: e.target.value === "date_desc" ? "" : e.target.value })}
                   style={{ padding: "0.35rem 0.5rem" }}
                 >
                   {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
                 </select>
               </label>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loading && !dirty}
+                style={{ padding: "0.4rem 1.3rem", fontSize: "0.95rem", fontWeight: 700, cursor: "pointer" }}
+              >
+                🔍 חיפוש
+              </button>
 
               {hasFilter && (
                 <button
@@ -403,6 +437,12 @@ export default function DealsPage() {
                 >
                   ניקוי הסינון
                 </button>
+              )}
+
+              {dirty && (
+                <span className="text-sm" role="status" style={{ color: "var(--warning)", alignSelf: "center" }}>
+                  יש שינויים בסינון — לחצו על "חיפוש" כדי להציג אותם
+                </span>
               )}
             </form>
 
@@ -601,14 +641,19 @@ function AddressMatch({ m }: { m: DealAddressMatch }) {
  *  which nobody thinks to ask. */
 function AddressCaveat() {
   return (
-    <details style={{
-      marginTop: "0.45rem", paddingInlineStart: "0.6rem",
-      borderInlineStart: "3px solid var(--warning)",
+    // Open, not a collapsed <details>: a warning that has to be clicked open
+    // is a warning nobody reads, and this one changes what the table means.
+    <div role="alert" style={{
+      marginTop: "0.6rem", padding: "0.75rem 0.95rem", borderRadius: 8,
+      border: "2px solid var(--warning)",
+      borderInlineStartWidth: 6,
+      background: "color-mix(in srgb, var(--warning) 12%, transparent)",
+      color: "var(--text)",
     }}>
-      <summary style={{ cursor: "pointer", color: "var(--warning)", fontWeight: 600 }}>
-        שימו לב: החיבור בין עסקאות לכתובת אינו מדויק
-      </summary>
-      <div style={{ marginTop: "0.3rem", lineHeight: 1.6 }}>
+      <div style={{ color: "var(--warning)", fontWeight: 800, fontSize: "1.05rem", marginBottom: "0.4rem" }}>
+        ⚠️ שימו לב: החיבור בין עסקאות לכתובת אינו מדויק
+      </div>
+      <div style={{ lineHeight: 1.65, fontSize: "0.92rem" }}>
         <p style={{ margin: "0 0 0.35rem" }}>
           במאגר של רשות המסים אין כתובת, רק גוש וחלקה. את הכתובת אנחנו מחברים
           בעצמנו: לכל כתובת יש נקודה על המפה, והחלקה שהנקודה נופלת בה היא החלקה
@@ -624,11 +669,11 @@ function AddressCaveat() {
         </ul>
         <p style={{ margin: 0 }}>
           באתר רשות המסים החיפוש לפי רחוב נשען על הכתובת שנרשמה בדיווח עצמו,
-          ולכן המספרים שם יכולים להיות שונים לגמרי. כדי לבדוק נכס מסוים,
-          חפשו לפי גוש וחלקה.
+          ולכן המספרים שם יכולים להיות שונים לגמרי.{" "}
+          <strong>כדי לבדוק נכס מסוים, חפשו לפי גוש וחלקה.</strong>
         </p>
       </div>
-    </details>
+    </div>
   );
 }
 
