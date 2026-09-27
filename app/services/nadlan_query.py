@@ -985,45 +985,55 @@ async def stats() -> dict:
 
 
 async def _stats_uncached() -> dict:
+    # One pass per table, the counts as FILTERs. It used to be ~20 scalar
+    # subqueries, nine of them separate scans of the 622k-row address table,
+    # and it ran into the timeout (500s on /api/nadlan/stats in every
+    # container, 2026-09-25..27); this form measured 1.0s for the same numbers.
     rows = await _fetch(f"""
-        SELECT
-          (SELECT count(*) FROM public.{_qi(PARCELS_TABLE)})                          AS parcels,
-          (SELECT count(*) FROM public.{_qi(PARCELS_TABLE)} WHERE gp_ambiguous)       AS parcels_ambiguous,
-          (SELECT count(*) FROM public.{_qi(PARCELS_TABLE)}
-             WHERE settlement_code IS NOT NULL)                                       AS parcels_with_settlement,
-          (SELECT count(*) FROM public.{_qi(GAZ_TABLE)})                              AS parcels_with_gazetteer,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)})                        AS addresses,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE point IS NOT NULL) AS addresses_with_point,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE zip7 IS NOT NULL)  AS addresses_with_zip,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
-             WHERE zip_level = 'address')                                             AS addresses_with_address_zip,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
-             WHERE zip_level = 'locality')                                            AS addresses_with_locality_zip,
-          -- Linked to a parcel BY ANY ROUTE. point-in-polygon is no longer the
-          -- only one: GovMap's parcel sweep arrives with the parcel already
-          -- attached and stamps parcel_match='govmap_parcel', so counting pip
-          -- alone understated the coverage the page publishes as "משויכות
-          -- לחלקה" — 67.3% against a real 72.2% on 2026-09-23 — and the gap
-          -- grew by roughly 4,000 addresses a day as the sweep advanced.
-          (SELECT count(parcel_key) FROM public.{_qi(ADDRESSES_TABLE)})               AS addresses_with_parcel,
-          -- Kept beside it as the METHOD breakdown, not as the headline: a
-          -- computed containment and a parcel the source handed us are
-          -- different facts, and the caveats say which is which.
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
-             WHERE parcel_match = 'pip')                                              AS addresses_linked_pip,
-          (SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)}
-             WHERE parcel_match = 'govmap_parcel')                                    AS addresses_linked_govmap_parcel,
-          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)})                          AS streets,
-          -- The streets some source with a LOCATION knows. The rest come from
-          -- רשות האוכלוסין's register alone: real streets that nothing we hold
-          -- can place, and not a population the gazetteer could ever match.
-          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)}
-             WHERE in_address_list OR in_postal OR in_gazetteer)                      AS streets_located,
-          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)}
-             WHERE NOT (in_address_list OR in_postal OR in_gazetteer))                AS streets_register_only,
-          (SELECT count(*) FROM public.{_qi(STREETS_TABLE)} WHERE in_gazetteer)       AS streets_in_gazetteer,
-          (SELECT count(*) FROM public.{_qi(ZIP5_TABLE)})                             AS zip5_codes,
-          (SELECT count(DISTINCT settlement_code) FROM public.{_qi(ADDRESSES_TABLE)}) AS localities_with_addresses
+        WITH p AS (
+          SELECT count(*)                                AS parcels,
+                 count(*) FILTER (WHERE gp_ambiguous)    AS parcels_ambiguous,
+                 count(settlement_code)                  AS parcels_with_settlement
+          FROM public.{_qi(PARCELS_TABLE)}
+        ), a AS (
+          SELECT count(*)                                        AS addresses,
+                 count(point)                                    AS addresses_with_point,
+                 count(zip7)                                     AS addresses_with_zip,
+                 count(*) FILTER (WHERE zip_level = 'address')   AS addresses_with_address_zip,
+                 count(*) FILTER (WHERE zip_level = 'locality')  AS addresses_with_locality_zip,
+                 -- Linked to a parcel BY ANY ROUTE. point-in-polygon is no longer
+                 -- the only one: GovMap's parcel sweep arrives with the parcel
+                 -- already attached and stamps parcel_match='govmap_parcel', so
+                 -- counting pip alone understated the coverage the page publishes
+                 -- as "משויכות לחלקה" — 67.3% against a real 72.2% on 2026-09-23.
+                 count(parcel_key)                               AS addresses_with_parcel,
+                 -- Kept beside it as the METHOD breakdown, not as the headline: a
+                 -- computed containment and a parcel the source handed us are
+                 -- different facts, and the caveats say which is which.
+                 count(*) FILTER (WHERE parcel_match = 'pip')    AS addresses_linked_pip,
+                 count(*) FILTER (WHERE parcel_match = 'govmap_parcel')
+                                                                 AS addresses_linked_govmap_parcel
+          FROM public.{_qi(ADDRESSES_TABLE)}
+        ), st AS (
+          SELECT count(*) AS streets,
+                 -- The streets some source with a LOCATION knows. The rest come
+                 -- from רשות האוכלוסין's register alone: real streets that nothing
+                 -- we hold can place, and not a population the gazetteer could
+                 -- ever match.
+                 count(*) FILTER (WHERE in_address_list OR in_postal OR in_gazetteer)
+                                                                 AS streets_located,
+                 count(*) FILTER (WHERE NOT (in_address_list OR in_postal OR in_gazetteer))
+                                                                 AS streets_register_only,
+                 count(*) FILTER (WHERE in_gazetteer)            AS streets_in_gazetteer
+          FROM public.{_qi(STREETS_TABLE)}
+        )
+        SELECT p.*, a.*, st.*,
+          (SELECT count(*) FROM public.{_qi(GAZ_TABLE)})   AS parcels_with_gazetteer,
+          (SELECT count(*) FROM public.{_qi(ZIP5_TABLE)})  AS zip5_codes,
+          (SELECT count(*) FROM (SELECT DISTINCT settlement_code
+             FROM public.{_qi(ADDRESSES_TABLE)} WHERE settlement_code IS NOT NULL) l)
+                                                           AS localities_with_addresses
+        FROM p, a, st
     """)
     s = rows[0] if rows else {}
 
