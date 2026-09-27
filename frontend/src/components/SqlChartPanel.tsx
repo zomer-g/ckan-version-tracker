@@ -41,6 +41,15 @@ const PALETTE = [
   "#1baf7a", "#eb6834", "#4a3aa7", "#e34948",
 ];
 const MAX_SERIES = PALETTE.length;
+// Series past the first 8 (e.g. twenty authorities over time) continue in a
+// second, distinct set of hues rather than repeating the first eight. The map's
+// category colours keep cycling PALETTE, as before.
+const SERIES_PALETTE = [
+  ...PALETTE,
+  "#17becf", "#8c564b", "#bcbd22", "#7f7f7f", "#9467bd", "#0b5394", "#c27c0e", "#2e7d32",
+  "#ad1457", "#00838f", "#6d4c41", "#5e35b1", "#827717", "#37474f", "#d84315", "#1565c0",
+];
+const MAX_CHART_SERIES = SERIES_PALETTE.length;
 
 export type ChartType = "bar" | "barh" | "line" | "area" | "pie" | "scatter" | "stat" | "map";
 type BarMode = "group" | "stack" | "stack100";
@@ -561,7 +570,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
   const yOptions = (type === "scatter" ? numCols : numCols).filter((n) => n !== xCol);
   const activeY = (singleValue ? yCols.slice(0, 1) : yCols)
     .filter((y) => y !== xCol && numCols.includes(y))
-    .slice(0, MAX_SERIES);
+    .slice(0, MAX_CHART_SERIES);
   const countMode = agg === "count" && type !== "scatter" && type !== "stat";
   const hasSeries = countMode || activeY.length > 0;
 
@@ -579,7 +588,7 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, rows, xCol, activeY.join("|"), effAgg, sort, effTopN, fold, xKind, isXSorted]);
 
-  const colorFor = (name: string, i: number) => colorOverrides[name] || PALETTE[i % MAX_SERIES];
+  const colorFor = (name: string, i: number) => colorOverrides[name] || SERIES_PALETTE[i % MAX_CHART_SERIES];
 
   // Map features. Colours come from the SAME colorOverrides the series pickers
   // write to, so "colour by category" on the map and per-series colours on a
@@ -911,6 +920,20 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
             ) : (
               <span className="text-sm text-muted" style={{ display: "inline-flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "center" }}>
                 סדרות (Y):
+                <button
+                  type="button"
+                  onClick={() => setYCols(yOptions.slice(0, MAX_CHART_SERIES))}
+                  disabled={yOptions.every((c) => yCols.includes(c))}
+                  style={{ fontSize: "0.75rem", padding: "0.1rem 0.5rem", borderRadius: 4,
+                           border: "1px solid var(--border)", background: "none", color: "var(--text)", cursor: "pointer" }}
+                >בחר הכל</button>
+                <button
+                  type="button"
+                  onClick={() => setYCols([])}
+                  disabled={!yCols.length}
+                  style={{ fontSize: "0.75rem", padding: "0.1rem 0.5rem", borderRadius: 4,
+                           border: "1px solid var(--border)", background: "none", color: "var(--text)", cursor: "pointer" }}
+                >נקה</button>
                 {yOptions.map((c) => (
                   <label key={c} style={{ display: "inline-flex", gap: "0.25rem", alignItems: "center" }}>
                     <input
@@ -918,14 +941,14 @@ export default function SqlChartPanel({ columns, rows, resultId = 0 }: {
                       checked={yCols.includes(c)}
                       onChange={(e) =>
                         setYCols((prev) => e.target.checked
-                          ? (prev.length >= MAX_SERIES ? prev : [...prev, c])
+                          ? (prev.length >= MAX_CHART_SERIES ? prev : [...prev, c])
                           : prev.filter((x) => x !== c))
                       }
                     />
                     <span style={{ color: "var(--text)" }}>{c}</span>
                   </label>
                 ))}
-                {yCols.length >= MAX_SERIES && <span style={{ fontSize: "0.72rem" }}>(עד {MAX_SERIES} סדרות)</span>}
+                {yCols.length >= MAX_CHART_SERIES && <span style={{ fontSize: "0.72rem" }}>(עד {MAX_CHART_SERIES} סדרות)</span>}
               </span>
             )}
 
