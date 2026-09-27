@@ -1647,7 +1647,10 @@ function ScaleLegend({ scale, missing }: {
         {scale.col}
         {scale.mode === "quantile" ? " — סולם לפי התפלגות" : ""}
       </div>
-      <div style={{ display: "inline-block", maxWidth: "100%" }}>
+      {/* The ramp and its numbers are laid out in ONE direction. The numbers
+          need ltr, and a ramp left to inherit the page's rtl ran the other way,
+          putting the darkest swatch over the lowest value. */}
+      <div dir="ltr" style={{ display: "inline-block", maxWidth: "100%" }}>
         <div style={{ display: "flex", gap: 2 }}>
           {SEQUENTIAL_RAMP.map((c, i) => (
             <span
@@ -1662,7 +1665,7 @@ function ScaleLegend({ scale, missing }: {
         {/* Only the two ends and the middle are labelled — a number under every
             step is unreadable at this width, and the ends are what the scale
             actually promises. */}
-        <div className="text-sm text-muted" dir="ltr"
+        <div className="text-sm text-muted"
              style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginTop: 2 }}>
           <span>{fmtNum(breaks[0])}</span>
           <span>{fmtNum(breaks[Math.floor(breaks.length / 2)])}</span>
