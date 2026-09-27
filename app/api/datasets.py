@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -1868,14 +1869,30 @@ async def pending_count(request: Request, db: AsyncSession = Depends(get_db)):
     """Public, lightweight count of pending tracking requests. Powers the
     subtle "you have requests waiting" dot next to the site title — visible to
     everyone so the admin spots a backlog the moment they land on the site,
-    without logging in. Exposes only a number (no titles / requesters)."""
+    without logging in. Exposes only a number (no titles / requesters).
+
+    Every open tab polls this, so it was the busiest route on the site (~330
+    requests a minute on 2026-09-27) and each one took a pool connection. The
+    number is served from memory for ``_PENDING_COUNT_TTL`` seconds: a dot that
+    appears a minute late costs nothing; a pool slot per page view did. The
+    session is created lazily, so a cache hit never touches the pool."""
+    now = time.monotonic()
+    if _pending_count_cache and now - _pending_count_cache[0] < _PENDING_COUNT_TTL:
+        return {"count": _pending_count_cache[1]}
     from sqlalchemy import func
-    total = (await db.execute(
+    total = int((await db.execute(
         select(func.count()).select_from(TrackedDataset).where(
             TrackedDataset.status == "pending"
         )
-    )).scalar() or 0
-    return {"count": int(total)}
+    )).scalar() or 0)
+    _pending_count_cache[:] = [now, total]
+    return {"count": total}
+
+
+_PENDING_COUNT_TTL = 60.0
+# [monotonic_ts, count]; empty until the first read. A list so the route can
+# refill it in place without a `global`.
+_pending_count_cache: list = []
 
 
 @router.get("/ckan-coverage/{ckan_id}")

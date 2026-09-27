@@ -62,7 +62,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.sql_access import SqlCaller, admit, sql_caller
 
 from app.api.utils import MAX_API_OFFSET, parse_uuid
-from app.database import get_db
+from app.database import get_db, release_connection
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
@@ -229,9 +229,14 @@ async def _resolve(dataset_id: str, db: AsyncSession,
     # opted into the r2+neon plan (archive_neon) and seeded retroactively before
     # its first forward dual-write version exists.
     if not has_mapping and not append_tables.is_append_archive(ds):
+        await release_connection(db)
         raise HTTPException(status_code=409,
                             detail=await _not_here_detail(ds))
     tables = await append_tables.resolve_tables(ds, db)
+    # Everything after this runs on the archive's own asyncpg pool — a free-text
+    # search over the 3.8M-row deals table is 45-70s, a CSV download longer.
+    # Holding this session through it is what starved the app's pool.
+    await release_connection(db)
     return ds, _pick(tables, selector)["table"], tables
 
 

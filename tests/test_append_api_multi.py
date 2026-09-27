@@ -174,8 +174,15 @@ class _DB:
     """Answers _resolve's two queries in order: the dataset, then the versions'
     resource_mappings newest-first."""
 
+    # _resolve hands the connection back before the archive query runs
+    # (database.release_connection); a read-only fake has nothing pending.
+    new = dirty = deleted = ()
+
     def __init__(self, ds, mapping_rows):
         self.ds, self.mapping_rows, self.n = ds, mapping_rows, 0
+
+    def in_transaction(self):
+        return False
 
     async def execute(self, q):
         self.n += 1

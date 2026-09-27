@@ -85,6 +85,10 @@ export default function Navbar() {
   // Subtle public "requests waiting" dot: poll the pending count so the admin
   // (or anyone) notices a backlog on landing, without logging in. Best-effort
   // — a failed fetch just leaves the dot hidden.
+  //
+  // Only a tab someone is looking at polls. Every open tab used to ask once a
+  // minute forever, background ones included — ~330 requests a minute, the
+  // busiest route on the site. A tab coming back into view asks at once.
   const [pendingCount, setPendingCount] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -95,8 +99,14 @@ export default function Navbar() {
         .catch(() => {});
     load();
     if (autoRefreshPaused()) return () => { alive = false; };
-    const id = setInterval(load, 60000);
-    return () => { alive = false; clearInterval(id); };
+    const id = setInterval(() => { if (!document.hidden) load(); }, 120000);
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const toggleLang = () => {

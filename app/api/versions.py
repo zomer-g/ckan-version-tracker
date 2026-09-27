@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import parse_uuid
 from app.auth.dependencies import get_admin_user
-from app.database import get_db
+from app.database import get_db, release_connection
 from app.rate_limit import limiter
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
@@ -756,6 +756,9 @@ async def download_version_zip(
     nice = _zip_safe((ds.title if ds and ds.title else "version"), "version")
     nice = nice + " - v" + str(version.version_number) + ".zip"
     ascii_name = "version-" + str(version.version_number) + ".zip"
+    # The ZIP streams from R2 for as long as the download takes; the pooled
+    # connection must not ride along with it.
+    await release_connection(db)
     disposition = ('attachment; filename="' + ascii_name + '"; '
                    "filename*=UTF-8''" + quote(nice))
     return StreamingResponse(

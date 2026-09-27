@@ -86,7 +86,12 @@ def _call(table, monkeypatch, *, catalog=(_REC,), **kw):
     async def fake_catalog(_db):
         return list(catalog)
 
+    async def no_session_to_release(_db):
+        pass
+
     monkeypatch.setattr(api.data_catalog, "build_catalog", fake_catalog)
+    # db is None here; the release itself is covered in test_db_pool_release.
+    monkeypatch.setattr(api, "release_connection", no_session_to_release)
     monkeypatch.setattr(api.append_store, "is_configured", lambda: True)
     # The route is rate-limited, and slowapi's wrapper reaches into the real
     # Request; turn it off so these tests exercise the handler, not the limiter.

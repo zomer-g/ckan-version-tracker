@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_signed_in_user
-from app.database import get_db
+from app.database import get_db, release_connection
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, sql_shares
@@ -91,6 +91,7 @@ async def table_profile(table: str, request: Request, db: AsyncSession = Depends
     _require_enabled()
     from app.services import table_profiler
     catalog = await data_catalog.build_catalog(db)
+    await release_connection(db)
     rec = next((r for r in catalog if r["table"] == table), None)
     if rec is None:
         raise HTTPException(status_code=404, detail="Unknown table")
@@ -163,6 +164,8 @@ async def table_features(
         raise HTTPException(status_code=400, detail=str(e))
 
     catalog = await data_catalog.build_catalog(db)
+    # The features query runs on the archive pool; don't hold this one meanwhile.
+    await release_connection(db)
     rec = next((r for r in catalog if r["table"] == table), None)
     if rec is None:
         raise HTTPException(status_code=404, detail="Unknown table")
@@ -302,6 +305,7 @@ async def schema_txt(request: Request, table: str | None = None,
     if table:
         rec = next((r for r in await data_catalog.build_catalog(db)
                     if r["table"] == table), None)
+        await release_connection(db)
         if rec is None:
             raise HTTPException(status_code=404, detail="Unknown table")
         if rec["kind"] == "knesset":

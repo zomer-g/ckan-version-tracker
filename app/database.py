@@ -133,3 +133,25 @@ class Base(DeclarativeBase):
 async def get_db():
     async with async_session() as session:
         yield session
+
+
+async def release_connection(db: AsyncSession) -> None:
+    """Give the request's pooled connection back before slow work that isn't ours.
+
+    A session checks a connection out on its first query and keeps it — idle in
+    transaction — until it closes, and get_db closes it only when the request
+    ends. A route that reads a row and then waits on something else (the append
+    archive's own asyncpg pool, a 45-second ILIKE over 3.8M rows, a ZIP streamed
+    from R2) held one of the pool's 15 connections for that whole wait. Fifteen
+    such requests and every other route in the app timed out on
+    "QueuePool limit of size 5 overflow 10 reached" (2026-09-27: ~12,000 of them).
+
+    Ending the read transaction returns the connection. expire_on_commit=False
+    keeps the loaded objects readable, and the session opens a fresh transaction
+    if it is used again. Read paths only: pending writes would be committed, so
+    they are refused rather than published by accident.
+    """
+    if db.new or db.dirty or db.deleted:
+        raise RuntimeError("release_connection() on a session with pending writes")
+    if db.in_transaction():
+        await db.commit()
