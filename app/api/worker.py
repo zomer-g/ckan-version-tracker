@@ -3691,8 +3691,20 @@ def _sweep_stale_uploads(tmp_dir: str) -> None:
             pass
 
 
+def _progress_limit_key(request: Request) -> str:
+    """One bucket per (IP, task), not per IP.
+
+    Every worker machine sits behind the same public IP, so an IP-keyed
+    120/minute was one budget for the whole fleet: 14,169 progress reports were
+    429'd over 2026-09-25..27, 72% of all API errors. The report is also the
+    task's heartbeat (updated_at below), so a busy fleet was starving the
+    heartbeat of whichever long task happened to lose the race."""
+    from app.client_ip import get_client_ip
+    return f"{get_client_ip(request)}|{request.path_params.get('task_id', '')}"
+
+
 @router.post("/progress/{task_id}")
-@limiter.limit("120/minute")
+@limiter.limit("120/minute", key_func=_progress_limit_key)
 async def update_progress(
     request: Request,
     task_id: str,

@@ -437,6 +437,70 @@ _SOURCE_INDEXES = [
 ]
 
 
+def _deals_index_specs(d_table: str) -> list[tuple[str, str]]:
+    # The deals corpus is found rather than named (see find_deals_table), so
+    # its indexes cannot live in the static list above. Without the first, a
+    # per-parcel lookup is a sequential scan of every deal ever recorded; the
+    # other two are what make the browse on /projects/deals answerable, and
+    # they are expressions because the published date is DD/MM/YYYY text and
+    # ``to_date`` is only STABLE.
+    stem = d_table[:46]
+    return [
+        (f"{stem}_gush_chelka_idx", "(gush, chelka)"),
+        # Keyed on the NAME, not the code: 674,340 of the 3.84 M deals (17.5%)
+        # carry an empty settlement_code, and only 2,171 carry an empty name.
+        (f"{stem}_settlement_idx", f"(settlement, ({DEAL_SORT_KEY}))"),
+        (f"{stem}_date_idx", f"(({DEAL_SORT_KEY}))"),
+    ]
+
+
+async def _ensure_deals_indexes(conn, analyze: bool = False) -> dict:
+    """Create whichever deals indexes are missing; a no-op SELECT otherwise.
+
+    Found missing in production on 2026-09-27: the table had only its row_hash
+    and (gush, chelka) indexes, so every /api/deals/series for a settlement
+    scanned 3.84 M rows into the 8s timeout, ~800 times in two days, and the
+    scans held enough connections to 500 unrelated pages too. The stage that
+    creates them was a one-off, so nothing noticed they were gone. The
+    scheduler now calls this after every boot."""
+    made: list[str] = []
+    failed: list[str] = []
+    deals = await find_deals_table()
+    if not deals:
+        return {"made": made, "failed": failed}
+    d_schema, d_table = deals
+    have = {r["indexname"] for r in await conn.fetch(
+        "SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = $2",
+        d_schema, d_table)}
+    for idx, cols in _deals_index_specs(d_table):
+        if idx in have:
+            continue
+        try:
+            await conn.execute(
+                f"CREATE INDEX IF NOT EXISTS {_qi(idx)} "
+                f"ON {_qi(d_schema)}.{_qi(d_table)} {cols}",
+                timeout=_LONG_TIMEOUT)
+            made.append(idx)
+            logger.info("nadlan: created missing deals index %s", idx)
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{idx}: {e}")
+            logger.warning("nadlan: deals index %s failed: %s", idx, e)
+    if made or analyze:
+        try:
+            await conn.execute(
+                f"ANALYZE {_qi(d_schema)}.{_qi(d_table)}", timeout=_LONG_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            logger.debug("nadlan: analyze deals failed", exc_info=True)
+    return {"made": made, "failed": failed}
+
+
+async def ensure_deals_indexes() -> dict:
+    """The deals indexes alone, on their own connection (see _ensure_deals_indexes)."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        return await _ensure_deals_indexes(conn)
+
+
 async def ensure_source_indexes() -> dict:
     """Index the three un-indexed odata source tables.
 
@@ -459,38 +523,9 @@ async def ensure_source_indexes() -> dict:
             except Exception as e:  # noqa: BLE001
                 failed.append(f"{name}: {e}")
                 logger.warning("nadlan: source index %s failed: %s", name, e)
-        # The deals corpus is found rather than named (see find_deals_table), so
-        # its indexes cannot live in the static list above. Without the first, a
-        # per-parcel lookup is a sequential scan of every deal ever recorded; the
-        # other two are what make the browse on /projects/deals answerable, and
-        # they are expressions because the published date is DD/MM/YYYY text and
-        # ``to_date`` is only STABLE.
-        deals = await find_deals_table()
-        if deals:
-            d_schema, d_table = deals
-            stem = d_table[:46]
-            for idx, cols in (
-                (f"{stem}_gush_chelka_idx", "(gush, chelka)"),
-                # Keyed on the NAME, not the code: 674,340 of the 3.84 M deals
-                # (17.5%) carry an empty settlement_code, and only 2,171 carry
-                # an empty name.
-                (f"{stem}_settlement_idx", f"(settlement, ({DEAL_SORT_KEY}))"),
-                (f"{stem}_date_idx", f"(({DEAL_SORT_KEY}))"),
-            ):
-                try:
-                    await conn.execute(
-                        f"CREATE INDEX IF NOT EXISTS {_qi(idx)} "
-                        f"ON {_qi(d_schema)}.{_qi(d_table)} {cols}",
-                        timeout=_LONG_TIMEOUT)
-                    made.append(idx)
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"{idx}: {e}")
-                    logger.warning("nadlan: deals index %s failed: %s", idx, e)
-            try:
-                await conn.execute(
-                    f"ANALYZE {_qi(d_schema)}.{_qi(d_table)}", timeout=_LONG_TIMEOUT)
-            except Exception:  # noqa: BLE001
-                logger.debug("nadlan: analyze deals failed", exc_info=True)
+        res = await _ensure_deals_indexes(conn, analyze=True)
+        made += res["made"]
+        failed += res["failed"]
 
         for schema, table in (GAZTIR_SRC, POSTAL_SRC, ADDR_SRC):
             try:

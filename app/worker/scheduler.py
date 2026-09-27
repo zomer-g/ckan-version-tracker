@@ -301,6 +301,34 @@ async def init_scheduler() -> None:
         misfire_grace_time=600,
     )
 
+    # The deals register's indexes, re-checked after every boot and daily. They
+    # went missing once without anything noticing (the stage that makes them was
+    # a one-off), and every settlement page then scanned 3.84 M rows. The check
+    # is one pg_indexes SELECT; only a missing index costs a build.
+    from app.services import nadlan_index as _nadlan_index
+
+    async def deals_indexes_job() -> None:
+        if not settings.append_database_url:
+            return
+        try:
+            res = await _nadlan_index.ensure_deals_indexes()
+            if res["made"] or res["failed"]:
+                logger.warning("deals indexes: %s", res)
+        except Exception:  # noqa: BLE001
+            logger.exception("deals indexes check failed")
+
+    scheduler.add_job(
+        deals_indexes_job,
+        trigger=IntervalTrigger(
+            hours=24,
+            start_date=datetime.now(timezone.utc) + timedelta(minutes=4),
+        ),
+        id="deals_indexes",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     # Knesset ODATA mirror: advance the sync within a per-tick time budget
     # (initial full load of ~3M rows spans many ticks; each tick checkpoints,
     # then it settles into 12h incremental refreshes). Memory-safe: at most
