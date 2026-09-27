@@ -920,12 +920,21 @@ async def suggest_streets(q: str, settlement_code: int | None = None,
         return rows
     head = (q or "").strip().split()[0] if (q or "").strip().split() else ""
     if head and head != (q or "").strip():
-        return await _suggest_streets_prefix(head, settlement_code, limit)
+        rows = await _suggest_streets_prefix(head, settlement_code, limit)
+        if rows:
+            return rows
+    # Last, the name ANYWHERE, not just at the start: the canonical name often
+    # opens with its type, so "רוטש" finds nothing by prefix while the street is
+    # "שדרות רוטשילד". Only as a fallback, so a prefix hit still ranks first.
+    # Two letters is where a contains-match stops being noise.
+    if len((q or "").strip()) >= 2:
+        return await _suggest_streets_prefix(q, settlement_code, limit, anywhere=True)
     return rows
 
 
 async def _suggest_streets_prefix(q: str, settlement_code: int | None,
-                                  limit: int) -> list[dict]:
+                                  limit: int, anywhere: bool = False) -> list[dict]:
+    lead = "'%' || " if anywhere else ""
     return await _fetch(
         f"""
         SELECT s.street_key, s.name, s.settlement_code, st.name AS settlement_name,
@@ -933,7 +942,7 @@ async def _suggest_streets_prefix(q: str, settlement_code: int | None,
         FROM public.{_qi(STREETS_TABLE)} s
         LEFT JOIN public.over_settlements st ON st.code = s.settlement_code
         WHERE ($2::int IS NULL OR s.settlement_code = $2)
-          AND s.name_norm LIKE public.over_settlement_norm($1) || '%'
+          AND s.name_norm LIKE {lead}public.over_settlement_norm($1) || '%'
         -- A street we can place ranks above one the register alone knows: both
         -- are real, only one of them can answer a lookup.
         ORDER BY (s.in_address_list OR s.in_postal OR s.in_gazetteer) DESC,

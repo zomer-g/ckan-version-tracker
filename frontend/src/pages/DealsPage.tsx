@@ -21,8 +21,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { Trans } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import {
-  deals as dealsApi, DealFilters, DealNature, DealSettlement, DealsSearchResult,
-  DealsStats, DealYear, NadlanDeal,
+  deals as dealsApi, nadlan as nadlanApi, DealAddressMatch, DealFilters, DealNature,
+  DealSettlement, DealsSearchResult, DealsStats, DealYear, NadlanDeal,
 } from "../api/client";
 
 import SearchableSelect, { SearchableOption } from "../components/SearchableSelect";
@@ -109,6 +109,8 @@ export default function DealsPage() {
     const minAmount = params.get("min");
     const maxAmount = params.get("max");
     const minRooms = params.get("rooms");
+    const street = params.get("street");
+    const house = params.get("no");
     if (settlement) f.settlement = settlement;
     if (gush) f.gush = gush;
     if (helka) f.helka = helka;
@@ -118,6 +120,12 @@ export default function DealsPage() {
     if (minAmount) f.min_amount = Number(minAmount);
     if (maxAmount) f.max_amount = Number(maxAmount);
     if (minRooms) f.min_rooms = Number(minRooms);
+    // An address only means something inside a settlement; the server refuses
+    // it without one, so it is not sent without one either.
+    if (settlement && street) {
+      f.street = street;
+      if (house) f.house = house;
+    }
     return f;
   }, [params]);
 
@@ -165,6 +173,27 @@ export default function DealsPage() {
     .filter((n) => n.nature)
     .map((n) => ({ value: n.nature!, label: n.nature!, hint: n.deals.toLocaleString("he-IL") })),
   [natures]);
+
+  // Street suggestions come from the נדל"ן לעם street index, which is keyed by
+  // the CBS code: a settlement the register published without one simply gets
+  // no suggestions, and the name-based resolution still works.
+  const settlementCode = settlements.find((s) => s.settlement === filters.settlement)?.settlement_code;
+  const [streetDraft, setStreetDraft] = useState(filters.street ?? "");
+  const [houseDraft, setHouseDraft] = useState(filters.house ?? "");
+  const [streetHints, setStreetHints] = useState<string[]>([]);
+  useEffect(() => { setStreetDraft(filters.street ?? ""); }, [filters.street]);
+  useEffect(() => { setHouseDraft(filters.house ?? ""); }, [filters.house]);
+  useEffect(() => {
+    const q = streetDraft.trim();
+    if (!settlementCode || q.length < 2) { setStreetHints([]); return; }
+    const t = setTimeout(() => {
+      nadlanApi.streets(q, Number(settlementCode), 15)
+        .then((r) => setStreetHints(r.data.map((s) => s.name)))
+        .catch(() => setStreetHints([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [streetDraft, settlementCode]);
+  const commitAddress = () => patch({ street: streetDraft.trim(), no: houseDraft.trim() });
 
   const rows: NadlanDeal[] = result?.data ?? [];
   const hasFilter = Object.keys(filters).length > 0;
@@ -239,7 +268,9 @@ export default function DealsPage() {
                 <SearchableSelect
                   ariaLabel="יישוב"
                   value={filters.settlement ?? ""}
-                  onChange={(v) => patch({ settlement: v || null })}
+                  // A street belongs to one settlement; carrying it across to
+                  // another would filter on a street that is not there.
+                  onChange={(v) => patch({ settlement: v || null, street: null, no: null })}
                   allLabel="כל היישובים"
                   options={settlementOptions}
                   style={{ width: 230 }}
@@ -256,6 +287,40 @@ export default function DealsPage() {
                   allLabel="כל המהויות"
                   options={natureOptions}
                   style={{ width: 220 }}
+                />
+              </label>
+
+              <label className="text-sm">
+                רחוב
+                <br />
+                <input
+                  value={streetDraft}
+                  disabled={!filters.settlement}
+                  placeholder={filters.settlement ? "למשל הרצל" : "בחרו יישוב קודם"}
+                  list="deals-street-hints"
+                  enterKeyHint="search"
+                  onChange={(e) => setStreetDraft(e.target.value)}
+                  onBlur={commitAddress}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitAddress(); } }}
+                  style={{ padding: "0.35rem 0.5rem", width: 150 }}
+                />
+                <datalist id="deals-street-hints">
+                  {streetHints.map((n) => <option key={n} value={n} />)}
+                </datalist>
+              </label>
+
+              <label className="text-sm">
+                מס׳ בית
+                <br />
+                <input
+                  value={houseDraft}
+                  disabled={!filters.settlement}
+                  inputMode="numeric"
+                  enterKeyHint="search"
+                  onChange={(e) => setHouseDraft(e.target.value)}
+                  onBlur={commitAddress}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitAddress(); } }}
+                  style={{ padding: "0.35rem 0.5rem", width: 70 }}
                 />
               </label>
 
@@ -348,6 +413,8 @@ export default function DealsPage() {
             {loading && <div className="text-sm text-muted">מחפש…</div>}
             {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
 
+            {result?.address && <AddressMatch m={result.address} />}
+
             {result && (
               <div className="text-sm text-muted" style={{ margin: "0.6rem 0 0.4rem" }}>
                 {result.total === 0
@@ -370,7 +437,7 @@ export default function DealsPage() {
                 <table style={{ width: "100%", fontSize: "0.86rem", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                      {["תאריך", "יישוב", "גוש־חלקה", "תת-חלקה", "שווי", "מהות", "חדרים",
+                      {["תאריך", "יישוב", "כתובת", "גוש־חלקה", "תת-חלקה", "שווי", "מהות", "חדרים",
                         "שטח (מ״ר)", "שנת בנייה", "חלק"].map((h) => (
                         <th key={h} scope="col" style={{ textAlign: "start", padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
                           {h}
@@ -383,11 +450,27 @@ export default function DealsPage() {
                       <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
                         <td style={{ padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}><Ltr>{heDate(d.date)}</Ltr></td>
                         <td style={{ padding: "0.3rem 0.45rem" }}>{d.settlement ?? "—"}</td>
+                        <td style={{ padding: "0.3rem 0.45rem" }}
+                            title={(d.addresses_total ?? 0) > (d.addresses?.length ?? 0)
+                              ? `ועוד ${(d.addresses_total ?? 0) - (d.addresses?.length ?? 0)} כתובות על אותה חלקה`
+                              : undefined}>
+                          {d.addresses && d.addresses.length > 0 ? (
+                            <>
+                              {d.addresses.join(", ")}
+                              {(d.addresses_total ?? 0) > d.addresses.length && (
+                                <span className="text-muted"> (+{(d.addresses_total ?? 0) - d.addresses.length})</span>
+                              )}
+                            </>
+                          ) : <span className="text-muted">—</span>}
+                        </td>
                         <td style={{ padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
                           {d.gush && d.helka ? (
                             <a href={`/projects/nadlan?tab=gush&g=${d.gush}&h=${d.helka}`}
-                               title="לעמוד הנכס בנדל״ן לעם">
-                              <Ltr>{d.gush}־{d.helka}</Ltr>
+                               title={`גוש ${d.gush}, חלקה ${d.helka}. לעמוד הנכס בנדל״ן לעם`}>
+                              {/* An ASCII hyphen: the Hebrew maqaf is a right-to-left
+                                  character, and inside this ltr isolate it pushed
+                                  itself to the edge and fused the two numbers. */}
+                              <Ltr>{d.gush}-{d.helka}</Ltr>
                             </a>
                           ) : "—"}
                         </td>
@@ -474,6 +557,37 @@ export default function DealsPage() {
           </Suspense>
         )}
       </div>
+    </div>
+  );
+}
+
+/** What an address filter turned into, or why it turned into nothing. The
+ *  register carries no address, so a search by one is only as good as the
+ *  crosswalk under it, and a miss has to say which link was missing. */
+function AddressMatch({ m }: { m: DealAddressMatch }) {
+  const where = `${m.street}${m.house ? " " + m.house : ""}, ${m.settlement}`;
+  const miss: Record<Exclude<DealAddressMatch["status"], "ok">, string> = {
+    settlement_unknown: "היישוב לא זוהה במאגר הכתובות.",
+    street_unknown: "הרחוב לא נמצא ביישוב הזה. נסו כתיב אחר או בחרו מההצעות.",
+    street_not_located: "הרחוב קיים ברשימת הרחובות הרשמית, אבל אין לו כתובות ממוקמות, ולכן אי אפשר לקשר אותו לחלקה.",
+    house_unknown: "מספר הבית לא נמצא ברחוב הזה. נסו בלי מספר בית כדי לראות את כל הרחוב.",
+    not_linked: "הכתובת נמצאה, אבל אין לה נקודה שמקשרת אותה לחלקה.",
+  };
+  return (
+    <div className="text-sm" role="status" style={{
+      margin: "0.2rem 0 0.5rem", padding: "0.45rem 0.7rem", borderRadius: 6,
+      border: "1px solid var(--border)", background: "var(--surface-2)",
+    }}>
+      {m.status === "ok" ? (
+        <>
+          <strong>{where}</strong>: {m.parcels.length === 1 ? "חלקה אחת" : `${m.parcels.length} חלקות`}{" "}
+          (<Ltr>{m.parcels.slice(0, 8).join(", ")}</Ltr>{m.parcels.length > 8 ? ", …" : ""}).
+          <span className="text-muted"> המאגר אינו מכיל כתובת, ולכן מוצגות כל העסקאות על החלקות
+          האלה, כולל דירות בכניסות אחרות של אותו בניין.</span>
+        </>
+      ) : (
+        <><strong>{where}</strong>: {miss[m.status]}</>
+      )}
     </div>
   );
 }

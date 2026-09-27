@@ -3071,6 +3071,10 @@ export interface NadlanDeal {
   settlement_code?: string | null;
   gush?: string | null;
   helka?: string | null;
+  /** Addresses the נדל"ן לעם crosswalk links to this row's גוש/חלקה. NOT from
+   *  the register, which carries no address; the first few, and the count. */
+  addresses?: string[];
+  addresses_total?: number;
 }
 
 /** What the envelope carries about a parcel's deals. The full list is its own
@@ -3253,6 +3257,22 @@ export interface DealFilters {
   max_amount?: number;
   min_rooms?: number;
   max_rooms?: number;
+  /** Needs `settlement`; resolved to גוש/חלקה pairs server-side. */
+  street?: string;
+  house?: string;
+}
+
+/** How an address filter resolved. Anything but "ok" answers no deals, and the
+ *  status says which of the failures it was. */
+export interface DealAddressMatch {
+  status: "ok" | "settlement_unknown" | "street_unknown" | "street_not_located"
+    | "house_unknown" | "not_linked";
+  settlement: string;
+  street: string;
+  house: string | null;
+  addresses: number;
+  linked: number;
+  parcels: string[];
 }
 
 export interface DealsStats {
@@ -3281,6 +3301,7 @@ export interface DealsSearchResult {
   sort: string;
   console_sql: string;
   row_url: string;
+  address: DealAddressMatch | null;
   processed: false;
   caveats: string[];
 }

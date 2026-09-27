@@ -39,6 +39,7 @@ import time
 
 from app.services import append_store
 from app.services import nadlan_index
+from app.services import nadlan_text
 from app.services.nadlan_index import DEAL_SORT_KEY, _t
 from app.services.nadlan_query import _console_url, _deal_row, _iso, _lit
 
@@ -150,7 +151,117 @@ def _where(f: dict) -> tuple[str, list]:
         clauses.append(f"nullif(room_num, '')::numeric >= {arg(float(f['min_rooms']))}")
     if f.get("max_rooms"):
         clauses.append(f"nullif(room_num, '')::numeric <= {arg(float(f['max_rooms']))}")
+    # An address, already resolved to the גוש/חלקה pairs it stands on (see
+    # resolve_address). Checked by presence, not truthiness: an address that
+    # resolved to NO parcel must answer nothing, not drop out of the filter
+    # and answer the whole settlement.
+    if "parcels" in f:
+        gs, hs = f["parcels"]
+        clauses.append(f"(gush, chelka) IN (SELECT g, h FROM unnest({arg(list(gs))}::text[], "
+                       f"{arg(list(hs))}::text[]) AS t(g, h))")
     return (" AND ".join(clauses) or "true"), args
+
+
+# ── address → parcels ─────────────────────────────────────────────────────────
+# The register has no address column at all: it is published per גוש/חלקה. An
+# address therefore reaches it only through the נדל"ן לעם crosswalk, where each
+# address in the national address list is linked to the parcel its point falls
+# in. That link exists for a minority of the register (measured 2026-09-27 on a
+# 2025 sample: 37% of the parcels that had a deal carry any address), because
+# the address list covers the big cities and the geocoded remainder. A miss is
+# therefore usually coverage, and resolve_address says which of the three
+# failures it was rather than just "nothing found".
+MAX_ADDRESS_PARCELS = 1000
+# A whole street, pairs and all, is too long for the /data deep-link; the link
+# carries the resolution as a subquery instead, which also shows HOW it was done.
+_ADDR_T = f"public.{nadlan_index._qi(nadlan_index.ADDRESSES_TABLE)}"
+_PARCEL_T = f"public.{nadlan_index._qi(nadlan_index.PARCELS_TABLE)}"
+
+
+async def resolve_address(settlement: str, street: str, house: str | None) -> dict:
+    """The גוש/חלקה pairs under an address (or a whole street), with how it went.
+
+    ``house`` may carry a letter (12א); the letter is ignored, so 12א finds every
+    entrance of 12 — the register could not tell them apart anyway, it has no
+    address to tell them apart by."""
+    num, _sfx = nadlan_text.parse_house_number(house) if house else (None, None)
+    rows = await _fetch(f"""
+        WITH sc AS (SELECT public.over_settlement_code($1) AS code),
+             sk AS (SELECT sc.code, public.over_street_key(sc.code, $2) AS key FROM sc),
+             a AS (
+               SELECT a.parcel_key FROM {_ADDR_T} a, sk
+               WHERE a.settlement_code = sk.code AND a.street_key = sk.key
+                 AND ($3::int IS NULL OR a.house_num = $3)
+             )
+        SELECT sk.code, sk.key,
+               (SELECT count(*) FROM a) AS addresses,
+               (SELECT count(*) FROM a WHERE a.parcel_key IS NOT NULL) AS linked,
+               (SELECT coalesce(array_agg(DISTINCT p.gush::text || '-' || p.parcel::text), '{{}}')
+                  FROM a JOIN {_PARCEL_T} p ON p.parcel_key = a.parcel_key) AS pairs
+        FROM sk
+    """, settlement, street, num)
+    r = rows[0] if rows else {}
+    pairs = sorted(r.get("pairs") or [])[:MAX_ADDRESS_PARCELS]
+    if not r.get("code"):
+        status = "settlement_unknown"
+    elif not r.get("key"):
+        status = "street_unknown"
+    elif not r.get("addresses"):
+        status = "house_unknown" if num is not None else "street_not_located"
+    elif not pairs:
+        status = "not_linked"
+    else:
+        status = "ok"
+    return {
+        "status": status, "settlement": settlement, "street": street,
+        "house": house or None, "addresses": r.get("addresses") or 0,
+        "linked": r.get("linked") or 0, "parcels": pairs,
+        "_pairs": ([p.split("-")[0] for p in pairs], [p.split("-")[1] for p in pairs]),
+    }
+
+
+def _address_console_where(f: dict) -> str:
+    num, _ = nadlan_text.parse_house_number(f["house"]) if f.get("house") else (None, None)
+    sc = f"public.over_settlement_code({_lit(f['settlement'])})"
+    house = f" AND a.house_num = {int(num)}" if num is not None else ""
+    return (f"(gush, chelka) IN (SELECT p.gush::text, p.parcel::text\n"
+            f"  FROM {_ADDR_T} a JOIN {_PARCEL_T} p ON p.parcel_key = a.parcel_key\n"
+            f"  WHERE a.settlement_code = {sc}\n"
+            f"    AND a.street_key = public.over_street_key({sc}, {_lit(f['street'])}){house})")
+
+
+async def addresses_for(pairs: list[tuple[str, str]], per_parcel: int = 3) -> dict[str, dict]:
+    """``"gush-helka"`` -> the addresses the crosswalk links to that parcel.
+
+    For DISPLAY beside a deal. A parcel is often a building with several
+    entrances, or a block with several buildings, so it can carry many; the
+    first few are shown and the rest counted. Best-effort: a deployment without
+    the נדל"ן לעם tables still serves the register, just without the column."""
+    keys = sorted({f"{g}-{h}" for g, h in pairs if g and h})
+    if not keys:
+        return {}
+    try:
+        rows = await _fetch(f"""
+            SELECT DISTINCT p.gp_key, a.street_name, a.house_num, coalesce(a.house_suffix, '') AS sfx
+            FROM {_PARCEL_T} p JOIN {_ADDR_T} a ON a.parcel_key = p.parcel_key
+            WHERE p.gp_key = ANY($1::text[])
+            ORDER BY p.gp_key, a.street_name, a.house_num, sfx
+        """, keys)
+    except Exception as e:  # noqa: BLE001
+        logger.info("deals: address lookup unavailable: %s", e)
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        name = (r.get("street_name") or "").strip()
+        if not name or name == "?" or not r.get("gp_key"):
+            continue
+        house = r.get("house_num")
+        label = name + (f" {house}{r.get('sfx') or ''}" if house is not None else "")
+        slot = out.setdefault(r["gp_key"], {"addresses": [], "total": 0})
+        slot["total"] += 1
+        if len(slot["addresses"]) < per_parcel:
+            slot["addresses"].append(label)
+    return out
 
 
 def _console_sql(src: tuple[str, str], f: dict) -> str:
@@ -167,6 +278,8 @@ def _console_sql(src: tuple[str, str], f: dict) -> str:
         parts.append(f"{DEAL_SORT_KEY} >= {_lit(f['date_from'].replace('-', ''))}")
     if f.get("date_to"):
         parts.append(f"{DEAL_SORT_KEY} <= {_lit(f['date_to'].replace('-', ''))}")
+    if f.get("street") and f.get("settlement"):
+        parts.append(_address_console_where(f))
     where = " AND ".join(parts) or "true"
     return (f'SELECT * FROM {_t(src)}\nWHERE {where}\n'
             f'ORDER BY {DEAL_SORT_KEY} DESC\nLIMIT 200')
@@ -198,13 +311,17 @@ async def search(filters: dict, limit: int = 50, offset: int = 0,
         """, *args),
     )
     total = counted[0]["n"] if counted else 0
+    pairs = [((r.get("gush") or "").strip(), (r.get("chelka") or "").strip()) for r in rows]
+    addrs = await addresses_for(pairs)
     return {
         "data": [_deal_row(r) | {
             "settlement": (r.get("settlement") or "").strip() or None,
             "settlement_code": (r.get("settlement_code") or "").strip() or None,
-            "gush": (r.get("gush") or "").strip() or None,
-            "helka": (r.get("chelka") or "").strip() or None,
-        } for r in rows],
+            "gush": g or None,
+            "helka": h or None,
+            "addresses": addrs.get(f"{g}-{h}", {}).get("addresses", []),
+            "addresses_total": addrs.get(f"{g}-{h}", {}).get("total", 0),
+        } for r, (g, h) in zip(rows, pairs)],
         "total": min(total, COUNT_CAP),
         "total_capped": total > COUNT_CAP,
         "limit": limit, "offset": offset, "sort": sort,

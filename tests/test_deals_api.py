@@ -40,6 +40,11 @@ _ROW = {
     "asset_area": "104", "room_num": "4",
 }
 
+# What the address resolution answers for אבימלך 8, פתח תקווה: one doorway,
+# linked to one parcel.
+_RESOLVED = {"code": 7900, "key": "7900-אבימלך", "addresses": 1, "linked": 1,
+             "pairs": ["6319-225"]}
+
 
 @pytest.fixture
 def seen(monkeypatch):
@@ -48,6 +53,11 @@ def seen(monkeypatch):
 
     async def _fetch(sql, *args, **kw):
         captured.append((sql, args, kw))
+        if "over_street_key" in sql:
+            return [_RESOLVED]
+        if "p.gp_key = ANY" in sql:
+            return [{"gp_key": "6319-225", "street_name": "אבימלך", "house_num": 8, "sfx": ""},
+                    {"gp_key": "6319-225", "street_name": "אבימלך", "house_num": 10, "sfx": "א"}]
         if " count(*) AS n " in sql:
             return [{"n": 42}]
         if "btrim(settlement) AS settlement" in sql:
@@ -119,7 +129,7 @@ def test_the_data_is_not_presented_as_processed(client):
     through. Claiming otherwise would be the wrong kind of honest."""
     body = client.get("/api/deals/search").json()
     assert body["processed"] is False
-    assert len(body["caveats"]) == 4
+    assert len(body["caveats"]) == 5
     assert any("תת-גוש" in c for c in body["caveats"])
     assert any("חציון" in c for c in body["caveats"])
     assert any("portion" in c for c in body["caveats"])
@@ -280,3 +290,61 @@ def test_the_cached_whole_table_aggregates_get_a_longer_ceiling(client, seen):
     client.get("/api/deals/search?settlement=חיפה")
     browse_kw = next(kw for s, _, kw in seen if "ORDER BY" in s)
     assert browse_kw == {}, "the browse keeps the tight default"
+
+
+# ── the address, which the register itself does not carry ────────────────────
+def test_an_address_filters_on_the_parcels_it_resolves_to(client, seen):
+    body = client.get("/api/deals/search?settlement=פתח תקווה&street=אבימלך&house=8").json()
+    assert body["address"]["status"] == "ok"
+    assert body["address"]["parcels"] == ["6319-225"]
+    assert "_pairs" not in body["address"]
+    sql, args = next((s, a) for s, a, _ in seen if "ORDER BY" in s and "gp_key" not in s)
+    assert "(gush, chelka) IN" in sql
+    assert ["6319"] in args and ["225"] in args
+    assert "אבימלך" not in sql                     # a parameter, never inlined
+
+
+def test_an_address_that_resolves_to_nothing_answers_nothing(client, monkeypatch, seen):
+    """Not the whole settlement: an address filter that found no parcel must
+    stay in the WHERE clause, as an empty set."""
+    async def _fetch(sql, *args, **kw):
+        seen.append((sql, args, kw))
+        if "over_street_key" in sql:
+            return [{"code": 7900, "key": None, "addresses": 0, "linked": 0, "pairs": []}]
+        return []
+    monkeypatch.setattr(deals_query, "_fetch", _fetch)
+    body = client.get("/api/deals/search?settlement=פתח תקווה&street=אין כזה").json()
+    assert body["address"]["status"] == "street_unknown"
+    sql, args = next((s, a) for s, a, _ in seen if "ORDER BY" in s)
+    assert "(gush, chelka) IN" in sql and [] in args
+
+
+def test_the_chart_filters_on_the_same_address_as_the_table(client, seen):
+    q = "settlement=פתח תקווה&street=אבימלך&house=8"
+    client.get(f"/api/deals/search?{q}")
+    table_args = next(a for s, a, _ in seen if "ORDER BY" in s and "GROUP BY" not in s
+                      and "gp_key" not in s)
+    seen.clear()
+    client.get(f"/api/deals/series?{q}")
+    series_args = next(a for s, a, _ in seen if "GROUP BY" in s)
+    assert table_args == series_args
+
+
+@pytest.mark.parametrize("url", [
+    "/api/deals/search?street=אבימלך",                        # no settlement
+    "/api/deals/search?settlement=פתח תקווה&house=8",         # a number with no street
+])
+def test_an_incomplete_address_is_refused(client, url):
+    assert client.get(url).status_code == 422
+
+
+def test_each_row_carries_the_addresses_on_its_parcel(client):
+    row = client.get("/api/deals/search").json()["data"][0]
+    assert row["addresses"] == ["אבימלך 8", "אבימלך 10א"]
+    assert row["addresses_total"] == 2
+
+
+def test_the_console_link_carries_the_address_resolution(client):
+    body = client.get("/api/deals/search?settlement=פתח תקווה&street=אבימלך&house=8").json()
+    assert "over_street_key" in body["console_sql"]
+    assert "a.house_num = 8" in body["console_sql"]

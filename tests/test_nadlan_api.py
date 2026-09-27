@@ -520,7 +520,7 @@ def test_street_suggestions_fall_back_to_the_first_word(monkeypatch):
     import asyncio
     asked: list[str] = []
 
-    async def _prefix(q, sc, limit):
+    async def _prefix(q, sc, limit, anywhere=False):
         asked.append(q)
         return [] if " " in q else [{"name": "הר ארבל"}]
 
@@ -531,18 +531,31 @@ def test_street_suggestions_fall_back_to_the_first_word(monkeypatch):
 
 
 def test_a_single_word_that_matches_nothing_is_not_retried(monkeypatch):
-    """There is no shorter form to fall back to, and asking twice for the same
-    thing is just a second query."""
+    """There is no shorter form to fall back to, and asking the same prefix
+    twice is just a second query. What it does get is ONE match anywhere in
+    the name, which is a different question."""
     import asyncio
-    asked: list[str] = []
+    asked: list[tuple[str, bool]] = []
 
-    async def _prefix(q, sc, limit):
-        asked.append(q)
+    async def _prefix(q, sc, limit, anywhere=False):
+        asked.append((q, anywhere))
         return []
 
     monkeypatch.setattr(nadlan_query, "_suggest_streets_prefix", _prefix)
     assert asyncio.run(nadlan_query.suggest_streets("קווזימודו", 2200, 8)) == []
-    assert asked == ["קווזימודו"]
+    assert asked == [("קווזימודו", False), ("קווזימודו", True)]
+
+
+def test_a_street_named_with_its_type_is_found_mid_name(monkeypatch):
+    """The canonical name often opens with its type, so "רוטש" is no prefix of
+    "שדרות רוטשילד"; it is found anywhere in the name once the prefix fails."""
+    import asyncio
+
+    async def _prefix(q, sc, limit, anywhere=False):
+        return [{"name": "שדרות רוטשילד"}] if anywhere else []
+
+    monkeypatch.setattr(nadlan_query, "_suggest_streets_prefix", _prefix)
+    assert asyncio.run(nadlan_query.suggest_streets("רוטש", 5000, 8)) == [{"name": "שדרות רוטשילד"}]
 
 
 def test_the_gazetteer_rate_is_measured_over_what_it_could_match(monkeypatch):

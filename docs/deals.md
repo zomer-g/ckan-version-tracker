@@ -71,6 +71,24 @@ building, and one such row moves an average by millions.
 `$n IS NULL OR settlement = $n`. The second form reads as equivalent and defeats
 the index this project adds. There is a test pinning it.
 
+## Addresses: borrowed from נדל"ן לעם, not from the register
+
+The register has no address column. `street` + `house` (which need
+`settlement`) are resolved server-side by `deals_query.resolve_address()` to the
+גוש/חלקה pairs the נדל"ן לעם crosswalk links that address to, and handed to
+`_where()` as `parcels`, so /search, /series and /breakdown filter on the same
+pairs. The response's `address` block says how it resolved (`ok`,
+`settlement_unknown`, `street_unknown`, `street_not_located`, `house_unknown`,
+`not_linked`), and an address that resolved to nothing filters to an EMPTY set,
+never to the whole settlement.
+
+The other direction, for display: every row carries `addresses` (the first
+three linked to its parcel) and `addresses_total`. Measured 2026-09-27 on a 2025
+sample, 37% of the parcels with a deal have any linked address; the rest is the
+address list's coverage (big cities first), not a bug. The match is on the
+parcel, so an address search also returns the other entrances of the same
+building, which the register has no way to tell apart.
+
 ## The MCP resource (`/deals/mcp`)
 
 Added 2026-09-20, on the shared authorization server. This one exists for

@@ -40,6 +40,9 @@ router = APIRouter(prefix="/api/deals", tags=["deals"])
 CAVEATS = [
     "המאגר מדווח לפי גוש וחלקה בלבד, ללא תת-גוש וללא כתובת: הקישור לנכס מסוים "
     "עובר דרך הצלבת גוש-חלקה ואינו מבחין בין חלקות שחולקות מספר.",
+    "הכתובות המוצגות והחיפוש לפי כתובת אינם מהמאגר: הם מגיעים מהצלבת הכתובות של "
+    "נדל\"ן לעם, שמקשרת כתובת לחלקה שהנקודה שלה נופלת בה. לחלק ניכר מהחלקות (בעיקר "
+    "מחוץ לערים הגדולות) אין כתובת מקושרת, ולכן היעדר כתובת אינו אומר שאין עסקאות.",
     "ל-674,340 עסקאות (17.5%) אין קוד יישוב במקור, ולכן הסינון לפי יישוב הוא "
     "לפי השם כפי שפורסם.",
     "שווי העסקה הוא הסכום המדווח לרשות המסים, לא מחיר שוק מאומת, ושורה אחת "
@@ -80,6 +83,11 @@ class DealFilters:
         max_amount: int | None = Query(None, ge=0, le=10_000_000_000),
         min_rooms: float | None = Query(None, ge=0, le=99),
         max_rooms: float | None = Query(None, ge=0, le=99),
+        street: str | None = Query(None, max_length=80,
+                                   description="רחוב (דורש settlement). המאגר עצמו אינו "
+                                               "מכיל כתובת: הרחוב מתורגם לגוש-חלקה דרך "
+                                               "הצלבת הכתובות של נדל\"ן לעם"),
+        house: str | None = Query(None, max_length=10, description="מספר בית (עם street)"),
     ):
         self.values = {
             "settlement": settlement, "settlement_code": settlement_code,
@@ -87,10 +95,30 @@ class DealFilters:
             "nature": nature, "date_from": date_from, "date_to": date_to,
             "min_amount": min_amount, "max_amount": max_amount,
             "min_rooms": min_rooms, "max_rooms": max_rooms,
+            "street": (street or "").strip() or None,
+            "house": (house or "").strip() or None,
         }
 
     def as_dict(self) -> dict:
         return {k: v for k, v in self.values.items() if v not in (None, "")}
+
+
+async def _with_address(f: dict) -> tuple[dict, dict | None]:
+    """Resolve a street/house filter to the parcels it stands on.
+
+    Done here, once, and handed to the query layer as ``parcels`` so /search,
+    /series and /breakdown filter on exactly the same pairs. Returns the filter
+    for the query and the resolution report for the response (None when no
+    address was asked for)."""
+    if f.get("house") and not f.get("street"):
+        raise HTTPException(status_code=422, detail="מספר בית דורש גם רחוב.")
+    if not f.get("street"):
+        return f, None
+    if not f.get("settlement"):
+        raise HTTPException(status_code=422, detail="חיפוש לפי כתובת דורש יישוב.")
+    res = await deals_query.resolve_address(f["settlement"], f["street"], f.get("house"))
+    pairs = res.pop("_pairs")
+    return f | {"parcels": pairs}, res
 
 
 @router.get("/stats")
@@ -136,8 +164,9 @@ async def deals_search(
     reads past the first page."""
     await _require_ready()
     f = filters.as_dict()
-    res = await deals_query.search(f, limit=limit, offset=offset, sort=sort)
-    return {"query": f, **res, "count": len(res["data"]),
+    qf, address = await _with_address(f)
+    res = await deals_query.search(qf, limit=limit, offset=offset, sort=sort)
+    return {"query": f, **res, "count": len(res["data"]), "address": address,
             "processed": False, "caveats": CAVEATS}
 
 
@@ -149,7 +178,8 @@ async def deals_series(request: Request, filters: DealFilters = Depends()):
     millions and the register mixes the two."""
     await _require_ready()
     f = filters.as_dict()
-    data = await deals_query.series(f)
+    qf, _ = await _with_address(f)
+    data = await deals_query.series(qf)
     return {"query": f, "data": data, "count": len(data),
             "processed": False, "caveats": CAVEATS}
 
@@ -163,7 +193,8 @@ async def deals_breakdown(
 ):
     await _require_ready()
     f = filters.as_dict()
-    data = await deals_query.breakdown(f, limit=limit)
+    qf, _ = await _with_address(f)
+    data = await deals_query.breakdown(qf, limit=limit)
     return {"query": f, "data": data, "count": len(data),
             "processed": False, "caveats": CAVEATS}
 
