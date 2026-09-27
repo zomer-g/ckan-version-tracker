@@ -25,6 +25,7 @@ import {
   DealsStats, DealYear, NadlanDeal,
 } from "../api/client";
 
+import SearchableSelect, { SearchableOption } from "../components/SearchableSelect";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanGaps = lazy(() => import("../components/deals/NadlanGaps"));
 const NadlanQuiz = lazy(() => import("../components/deals/NadlanQuiz"));
@@ -157,6 +158,14 @@ export default function DealsPage() {
     return () => { cancelled = true; };
   }, [tab, filterKey, offset, sort]);
 
+  const settlementOptions: SearchableOption[] = useMemo(() => settlements.map((s) => ({
+    value: s.settlement, label: s.settlement, hint: s.deals.toLocaleString("he-IL"),
+  })), [settlements]);
+  const natureOptions: SearchableOption[] = useMemo(() => natures
+    .filter((n) => n.nature)
+    .map((n) => ({ value: n.nature!, label: n.nature!, hint: n.deals.toLocaleString("he-IL") })),
+  [natures]);
+
   const rows: NadlanDeal[] = result?.data ?? [];
   const hasFilter = Object.keys(filters).length > 0;
 
@@ -227,35 +236,27 @@ export default function DealsPage() {
               <label className="text-sm">
                 יישוב
                 <br />
-                <select
+                <SearchableSelect
+                  ariaLabel="יישוב"
                   value={filters.settlement ?? ""}
-                  onChange={(e) => patch({ settlement: e.target.value || null })}
-                  style={{ padding: "0.35rem 0.5rem", minWidth: 190, maxWidth: 260 }}
-                >
-                  <option value="">כל היישובים</option>
-                  {settlements.map((s) => (
-                    <option key={s.settlement} value={s.settlement}>
-                      {s.settlement} ({s.deals.toLocaleString("he-IL")})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => patch({ settlement: v || null })}
+                  allLabel="כל היישובים"
+                  options={settlementOptions}
+                  style={{ width: 230 }}
+                />
               </label>
 
               <label className="text-sm">
                 מהות
                 <br />
-                <select
+                <SearchableSelect
+                  ariaLabel="מהות"
                   value={filters.nature ?? ""}
-                  onChange={(e) => patch({ nature: e.target.value || null })}
-                  style={{ padding: "0.35rem 0.5rem", minWidth: 180, maxWidth: 240 }}
-                >
-                  <option value="">כל המהויות</option>
-                  {natures.map((n) => (
-                    <option key={n.nature ?? ""} value={n.nature ?? ""}>
-                      {n.nature} ({n.deals.toLocaleString("he-IL")})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => patch({ nature: v || null })}
+                  allLabel="כל המהויות"
+                  options={natureOptions}
+                  style={{ width: 220 }}
+                />
               </label>
 
               <label className="text-sm">
