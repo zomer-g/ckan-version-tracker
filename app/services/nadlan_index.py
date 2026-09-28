@@ -451,6 +451,11 @@ def _deals_index_specs(d_table: str) -> list[tuple[str, str]]:
         # carry an empty settlement_code, and only 2,171 carry an empty name.
         (f"{stem}_settlement_idx", f"(settlement, ({DEAL_SORT_KEY}))"),
         (f"{stem}_date_idx", f"(({DEAL_SORT_KEY}))"),
+        # The incremental pull: an API consumer syncing nightly asks
+        # ``WHERE first_seen > <last sync> ORDER BY first_seen`` through
+        # datastore_search_sql, and without this each page scans all 3.84 M
+        # rows against the 10s SQL timeout.
+        (f"{stem}_first_seen_idx", "(first_seen)"),
     ]
 
 
