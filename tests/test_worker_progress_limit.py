@@ -47,8 +47,9 @@ def _run(conn):
 def test_only_the_missing_deals_indexes_are_built():
     conn = _Conn({"append_deals_gush_chelka_idx"})
     res = _run(conn)
-    assert res["made"] == ["append_deals_settlement_idx", "append_deals_date_idx"]
-    assert sum(s.startswith("CREATE INDEX") for s in conn.executed) == 2
+    assert res["made"] == ["append_deals_settlement_idx", "append_deals_date_idx",
+                           "append_deals_first_seen_idx"]
+    assert sum(s.startswith("CREATE INDEX") for s in conn.executed) == 3
     assert any(s.startswith("ANALYZE") for s in conn.executed)
 
 
