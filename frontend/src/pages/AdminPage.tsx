@@ -1115,7 +1115,7 @@ export default function AdminPage() {
           padding: "0.25rem 0.5rem",
           borderRadius: "4px",
           background: syncToast.startsWith("שגיאה") ? "var(--tint-bad-bg)" : "var(--tint-good-bg)",
-          color: syncToast.startsWith("שגיאה") ? "#941A1A" : "var(--success)",
+          color: syncToast.startsWith("שגיאה") ? "var(--tint-bad-fg)" : "var(--success)",
         }}>{syncToast}</span>
       )}
     </div>
@@ -1293,8 +1293,8 @@ export default function AdminPage() {
                     <div key={t.task_id} style={{
                       padding: "0.6rem 0.75rem",
                       marginBottom: "0.4rem",
-                      background: isStuck ? "#fef2f2" : "#f0fdf4",
-                      border: isStuck ? "1px solid #fca5a5" : "1px solid #bbf7d0",
+                      background: isStuck ? "var(--tint-bad-bg)" : "var(--tint-good-bg)",
+                      border: isStuck ? "1px solid var(--tint-bad-bd)" : "1px solid var(--tint-good-bd)",
                       borderRadius: "6px",
                     }}>
                       <div className="flex-between" style={{ gap: "0.5rem" }}>
@@ -1357,7 +1357,7 @@ export default function AdminPage() {
                         style={{
                         marginTop: "0.4rem",
                         height: "6px",
-                        background: isStuck ? "#fecaca" : "var(--tint-good-bg)",
+                        background: isStuck ? "var(--tint-bad-bd)" : "var(--tint-good-bg)",
                         borderRadius: "3px",
                         overflow: "hidden",
                       }}>
@@ -1413,11 +1413,12 @@ export default function AdminPage() {
                     const chip = priorityChip(t.priority);
                     const isPromoted = t.priority >= PRIORITY_PROMOTED;
                     return (
-                      <li key={t.task_id} style={{
+                      <li key={t.task_id} className="admin-queue-row" style={{
                         padding: "0.4rem 0.6rem",
                         marginBottom: "0.2rem",
-                        background: isOld ? "#fef3c7" : "#fffbeb",
-                        border: isOld ? "1px solid #fbbf24" : "1px solid #fde68a",
+                        flexWrap: "wrap",
+                        background: isOld ? "var(--tint-warn-bg)" : "var(--tint-warn-bg)",
+                        border: isOld ? "1px solid var(--tint-warn-bd)" : "1px solid var(--tint-warn-bd)",
                         borderRadius: "4px",
                         fontSize: "0.85rem",
                         display: "flex",
@@ -1425,7 +1426,7 @@ export default function AdminPage() {
                         gap: "0.5rem",
                         alignItems: "center",
                       }}>
-                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: "1 1 12rem", minWidth: 0 }}>{t.dataset_title}</Link>
                         {chip && (
                           <span style={{
                             fontSize: "0.7rem",
@@ -1446,8 +1447,8 @@ export default function AdminPage() {
                             fontSize: "0.7rem",
                             padding: "0.15rem 0.4rem",
                             borderRadius: "4px",
-                            background: queueToast.ok ? "#dbeafe" : "var(--tint-bad-bg)",
-                            color: queueToast.ok ? "#1e40af" : "#941A1A",
+                            background: queueToast.ok ? "var(--tint-sky-bg)" : "var(--tint-bad-bg)",
+                            color: queueToast.ok ? "var(--tint-sky-fg)" : "var(--tint-bad-fg)",
                             whiteSpace: "nowrap",
                           }}>
                             {queueToast.msg}
@@ -1460,7 +1461,7 @@ export default function AdminPage() {
                             ? "החזר לתור הרגיל"
                             : "העלה לראש התור — יילקח על ידי ה-worker הפנוי הבא"}
                           style={{
-                            background: isPromoted ? "#dbeafe" : "none",
+                            background: isPromoted ? "var(--tint-sky-bg)" : "none",
                             border: "1px solid var(--tint-sky-fg)",
                             color: "var(--tint-sky-fg)",
                             cursor: queueBusy.has(t.task_id) ? "default" : "pointer",
@@ -1518,8 +1519,8 @@ export default function AdminPage() {
                       borderRadius: "4px",
                       fontSize: "0.85rem",
                     }}>
-                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center" }}>
-                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: "1 1 12rem", minWidth: 0 }}>{t.dataset_title}</Link>
                         <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                           {formatRelative(t.completed_at)}
                         </span>
@@ -1596,8 +1597,8 @@ export default function AdminPage() {
                       borderRadius: "4px",
                       fontSize: "0.85rem",
                     }}>
-                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center" }}>
-                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: 1 }}>{t.dataset_title}</Link>
+                      <div className="flex-between" style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <Link to={`/versions/${t.dataset_id}`} style={{ flex: "1 1 12rem", minWidth: 0 }}>{t.dataset_title}</Link>
                         <span className="text-muted" style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                           {formatRelative(t.completed_at)}
                         </span>
@@ -1711,7 +1712,7 @@ export default function AdminPage() {
                   return (
                     <tr key={j.dataset_id} style={{
                       borderBottom: "1px solid var(--border)",
-                      background: !j.scheduled ? "#fef2f2" : overdue ? "#fef3c7" : undefined,
+                      background: !j.scheduled ? "var(--tint-bad-bg)" : overdue ? "var(--tint-warn-bg)" : undefined,
                     }}>
                       <td style={{ padding: "0.4rem 0.6rem" }}>
                         <Link to={`/versions/${j.dataset_id}`}>{j.title}</Link>
@@ -2417,7 +2418,7 @@ export default function AdminPage() {
                         />
                         <label
                           title="מצב DIFF: לוכד גם שינויים בשורות קיימות (לא רק שורות חדשות), עם מיגרציה חד-פעמית כבדה. שמור למקרים קיצוניים בלבד (כמו מאגר הרכב)."
-                          style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", whiteSpace: "nowrap", color: ds.capture_changes ? "#873E07" : "var(--text-muted)", fontWeight: ds.capture_changes ? 600 : 400 }}
+                          style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", whiteSpace: "nowrap", color: ds.capture_changes ? "var(--tint-warn-fg)" : "var(--text-muted)", fontWeight: ds.capture_changes ? 600 : 400 }}
                         >
                           <input
                             type="checkbox"
@@ -2437,7 +2438,7 @@ export default function AdminPage() {
                           handleUpdateStorageTarget(ds.id, e.target.value as StorageTarget)
                         }
                         title="תוכנית האחסון: היכן נשמרים הקבצים (מקומי / R2 / ODATA) והאם השורות הטבלאיות נשמרות גם כטבלת SQL לתשאול. טבלת SQL זמינה למאגרי data.gov.il טבלאיים בלבד."
-                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "var(--danger)" : (ds.storage_target?.includes("neon") ? "#035887" : undefined) }}
+                        style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.storage_target === "local" ? "var(--danger)" : (ds.storage_target?.includes("neon") ? "var(--tint-info-fg)" : undefined) }}
                       >
                         {storageTargetOptions(ds.neon_eligible ?? (ds.source_type === "ckan")).map((o) => (
                           <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
@@ -2522,7 +2523,7 @@ export default function AdminPage() {
                             padding: "0.15rem 0.4rem",
                             borderRadius: "4px",
                             background: pollToast.ok ? "var(--tint-good-bg)" : "var(--tint-bad-bg)",
-                            color: pollToast.ok ? "var(--success)" : "#941A1A",
+                            color: pollToast.ok ? "var(--success)" : "var(--tint-bad-fg)",
                             whiteSpace: "nowrap",
                           }}>
                             {pollToast.msg}
@@ -2862,8 +2863,8 @@ function WorkerFleetPanel() {
             return (
               <li key={w.worker_key} style={{
                 padding: "0.5rem 0.7rem",
-                border: `1px solid ${w.paused ? "#fbbf24" : "var(--border)"}`,
-                background: w.paused ? "#fffbeb" : "var(--surface)",
+                border: `1px solid ${w.paused ? "var(--tint-warn-bd)" : "var(--border)"}`,
+                background: w.paused ? "var(--tint-warn-bg)" : "var(--surface)",
                 borderRadius: 6,
                 fontSize: "0.85rem",
               }}>
@@ -2913,8 +2914,8 @@ function WorkerFleetPanel() {
                       : "אל תיתן למכונה משימות חדשות — המשימה הנוכחית תסתיים כרגיל"}
                     style={{
                       background: w.paused ? "var(--tint-good-bg)" : "none",
-                      border: `1px solid ${w.paused ? "var(--success)" : "#833909"}`,
-                      color: w.paused ? "var(--success)" : "#833909",
+                      border: `1px solid ${w.paused ? "var(--success)" : "var(--tint-warn-fg)"}`,
+                      color: w.paused ? "var(--success)" : "var(--tint-warn-fg)",
                       cursor: isBusy ? "default" : "pointer",
                       opacity: isBusy ? 0.5 : 1,
                       fontSize: "0.72rem", padding: "0.2rem 0.5rem",
@@ -3325,11 +3326,11 @@ function DatastorePushJobsPanel() {
               {jobs.map((j) => {
                 const bg =
                   j.status === "failed"
-                    ? "#fef2f2"
+                    ? "var(--tint-bad-bg)"
                     : j.status === "running"
-                    ? "#fffbeb"
+                    ? "var(--tint-warn-bg)"
                     : j.status === "success"
-                    ? "#f0fdf4"
+                    ? "var(--tint-good-bg)"
                     : undefined;
                 const fmtRows =
                   j.total_rows != null
@@ -3344,15 +3345,15 @@ function DatastorePushJobsPanel() {
                           padding: "0.1rem 0.4rem",
                           borderRadius: 999,
                           background:
-                            j.status === "failed" ? "#fecaca"
-                            : j.status === "running" ? "#fde68a"
-                            : j.status === "success" ? "#bbf7d0"
-                            : "#e5e7eb",
+                            j.status === "failed" ? "var(--tint-bad-bd)"
+                            : j.status === "running" ? "var(--tint-warn-bd)"
+                            : j.status === "success" ? "var(--tint-good-bd)"
+                            : "var(--surface-2)",
                           color:
-                            j.status === "failed" ? "#941A1A"
-                            : j.status === "running" ? "#833909"
+                            j.status === "failed" ? "var(--tint-bad-fg)"
+                            : j.status === "running" ? "var(--tint-warn-fg)"
                             : j.status === "success" ? "var(--success)"
-                            : "#374151",
+                            : "var(--text-muted)",
                           fontWeight: 600,
                         }}
                       >

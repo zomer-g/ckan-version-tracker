@@ -21,12 +21,12 @@ const STAGE_LABEL: Record<string, string> = {
 const STAGE_TONE: Record<string, [string, string]> = {
   cache: ["var(--tint-good-bg)", "var(--success)"], template: ["var(--tint-good-bg)", "var(--success)"],
   deepseek: ["var(--tint-note-bg)", "var(--tint-note-fg)"], anthropic: ["var(--tint-bad-bg)", "var(--danger)"],
-  refused: ["#f1f5f9", "#475569"], invalid: ["#ffedd5", "#c2410c"],
+  refused: ["var(--surface-2)", "var(--text-muted)"], invalid: ["var(--tint-warn-bg)", "var(--tint-warn-fg)"],
   error: ["var(--tint-bad-bg)", "var(--danger)"],
 };
 
 const chip = (stage: string) => {
-  const [bg, fg] = STAGE_TONE[stage] || ["#f1f5f9", "#475569"];
+  const [bg, fg] = STAGE_TONE[stage] || ["var(--surface-2)", "var(--text-muted)"];
   return { display: "inline-block", padding: "0.05rem 0.45rem", borderRadius: 4,
            background: bg, color: fg, fontSize: "0.72rem", whiteSpace: "nowrap" } as const;
 };

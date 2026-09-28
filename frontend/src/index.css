@@ -4006,6 +4006,9 @@ li > a:only-child,
 /* Admin: on a phone the tab sidebar becomes a bar on top with a picker.
    The layout's inline styles set the desktop row, hence !important here. */
 .admin-tab-select { display: none; }
+/* Task errors and messages carry long URLs with no break point; one of them
+   used to widen the whole admin page on a phone. */
+.admin-layout { overflow-wrap: break-word; }
 @media (max-width: 720px) {
   .admin-layout { flex-direction: column !important; gap: 0.75rem !important; align-items: stretch !important; }
   .admin-aside { width: auto !important; position: static !important; }
