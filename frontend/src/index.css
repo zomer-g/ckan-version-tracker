@@ -4002,3 +4002,15 @@ li > a:only-child,
 @media (prefers-reduced-motion: reduce) {
   .nquiz-fill { transition: none; }
 }
+
+/* Admin: on a phone the tab sidebar becomes a bar on top with a picker.
+   The layout's inline styles set the desktop row, hence !important here. */
+.admin-tab-select { display: none; }
+@media (max-width: 720px) {
+  .admin-layout { flex-direction: column !important; gap: 0.75rem !important; align-items: stretch !important; }
+  .admin-aside { width: auto !important; position: static !important; }
+  .admin-aside h1 { font-size: 1.05rem !important; }
+  .admin-tab-nav { display: none !important; }
+  .admin-tab-select { display: block; }
+  .admin-tab-select select { width: 100%; font-size: 1rem; padding: 0.55rem 0.6rem; }
+}

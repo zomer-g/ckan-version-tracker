@@ -1127,8 +1127,9 @@ export default function AdminPage() {
       alignItems: "flex-start",
       flexDirection: "row-reverse",
     }}>
-      {/* Sidebar nav (right side under RTL) */}
-      <aside style={{
+      {/* Sidebar nav (right side under RTL). On a phone it becomes a bar on
+          top with a tab picker: a 210px column left the content ~150px. */}
+      <aside className="admin-aside" style={{
         width: "210px",
         flexShrink: 0,
         position: "sticky",
@@ -1146,7 +1147,15 @@ export default function AdminPage() {
         >
           {t("admin.cbs_feedback", '📊 משוב חיפוש הלמ"ס')}
         </Link>
-        <nav style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+        <label className="admin-tab-select">
+          <span className="sr-only">{t("admin.section", "מסך")}</span>
+          <select value={tab} onChange={(e) => setTab(e.target.value as AdminTab)}>
+            {ADMIN_TABS.map((tt) => (
+              <option key={tt.id} value={tt.id}>{tt.emoji} {tt.label}</option>
+            ))}
+          </select>
+        </label>
+        <nav className="admin-tab-nav" style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
           {ADMIN_TABS.map((tt) => {
             const isActive = tt.id === tab;
             return (
