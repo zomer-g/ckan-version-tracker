@@ -24,20 +24,33 @@ export default function ScrapeStatusBanner({ datasetId }: { datasetId: string })
 
   useEffect(() => {
     let alive = true;
+    let timer: number | undefined;
+    // While a run is in flight the page is worth refreshing every 30s, the
+    // worker's own heartbeat. With no run, a check every 10 minutes is enough
+    // to notice one starting. Only a tab someone is looking at asks: every
+    // open tab used to ask every 30s forever, ~8,000 calls in 2.5 hours for
+    // one popular dataset. The user can switch refresh off (WCAG 2.2.4).
+    const schedule = (running: boolean) => {
+      window.clearTimeout(timer);
+      if (!alive || autoRefreshPaused()) return;
+      timer = window.setTimeout(tick, running ? 30000 : 600000);
+    };
     const load = () =>
       datasetsApi
         .scrapeStatus(datasetId)
-        .then((s) => alive && setStatus(s))
-        .catch(() => alive && setStatus(null));
-    load();
-    // While a run is in flight the page is worth refreshing; the endpoint is
-    // a single indexed row, and 30s matches the worker's own heartbeat. The
-    // user can switch that off globally (WCAG 2.2.4).
-    if (autoRefreshPaused()) return () => { alive = false; };
-    const timer = window.setInterval(load, 30000);
+        .then((s) => { if (alive) { setStatus(s); schedule(!!s?.running); } })
+        .catch(() => { if (alive) { setStatus(null); schedule(false); } });
+    const tick = () => {
+      if (document.hidden) return; // resumes on visibilitychange
+      void load();
+    };
+    const onVisible = () => { if (!document.hidden) void load(); };
+    void load();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [datasetId]);
 

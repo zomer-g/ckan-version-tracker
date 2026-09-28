@@ -61,6 +61,18 @@ def skip_success(path: str, status: int) -> bool:
     return status < 400 and (path.startswith(_QUIET_PREFIXES) or path in _QUIET_EXACT)
 
 
+# Timers in our own pages, not someone using the site: every open tab asks for
+# these on its own (tabs loaded before a deploy keep the old, chattier timer
+# until reloaded). They were ~50% of all logged calls, and drowned the "site"
+# channel. Only the site's own successful calls are skipped; a script polling
+# the public status endpoint is still recorded.
+_SITE_POLL_RE = re.compile(r"^/api/datasets/pending-count$|^/api/v1/datasets/[^/]+/status$")
+
+
+def skip_site_poll(path: str, status: int, channel: str) -> bool:
+    return channel == "site" and status < 400 and bool(_SITE_POLL_RE.match(path))
+
+
 def is_mcp_path(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in MCP_PREFIXES)
 

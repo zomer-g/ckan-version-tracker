@@ -67,6 +67,8 @@ class ApiAccessLogMiddleware:
             channel = log.channel_of(area, headers, client)
         except Exception:  # noqa: BLE001
             client, channel = None, "other"
+        if log.skip_site_poll(path, status, channel):
+            return
         try:
             kind, actor_id, label = log.resolve_actor(scope.get("state") or {}, headers, path, ip)
         except Exception:  # noqa: BLE001 — a malformed header must not drop the row

@@ -24,6 +24,12 @@ def test_should_log_scope():
     assert log.skip_success("/api/admin/pending", 200)
     assert not log.skip_success("/api/admin/pending", 403)
     assert not log.skip_success("/api/administrator", 200)
+    # Our own pages' timers: only the site's successful polls are dropped.
+    assert log.skip_site_poll("/api/datasets/pending-count", 200, "site")
+    assert log.skip_site_poll("/api/v1/datasets/abc/status", 200, "site")
+    assert not log.skip_site_poll("/api/v1/datasets/abc/status", 200, "script")
+    assert not log.skip_site_poll("/api/datasets/pending-count", 500, "site")
+    assert not log.skip_site_poll("/api/v1/datasets/abc/versions", 200, "site")
 
 
 def test_area():
