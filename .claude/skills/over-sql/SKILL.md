@@ -143,6 +143,16 @@ Resolve BOTH sides to the code and join on that. Never join two sources on a raw
 Hebrew name — it silently drops the rows that spell it differently, and the drop
 is invisible in the result.
 
+A source's OWN code column is not a substitute. The deal register
+(`append_taxes_nadlan_full_…`) leaves `settlement_code` empty on 17.5% of its
+rows — every כוכב יאיר deal among them — so join it through
+`over_settlement_code(settlement)`, never through `settlement_code`. The index
+also knows the pre-merger names that registers still publish (צור יגאל →
+כוכב יאיר, גבעת עדה → בנימינה-גבעת עדה, מכבים-רעות, קרית חיים → חיפה); they
+live in `data/settlement_aliases_manual.json` with `historical: true`. A name
+like `מ. א. משגב` is a regional council, not a settlement: it resolves through
+`over_authority_code`, and cannot be pinned to one settlement.
+
 The live list of these functions is printed at the top of every schema dump
 (`describe_schema`, the copy-to-AI button, `/api/tables/schema.txt`), read from
 `pg_proc` — so if a resolver has been added since this skill was written, the

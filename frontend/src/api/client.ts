@@ -3304,6 +3304,10 @@ export interface DealsSearchResult {
   address: DealAddressMatch | null;
   processed: false;
   caveats: string[];
+  /** OVER's notes on the value filtered on — a settlement published under two
+   *  names, a deal type whose rows are mostly not flats. Beside the rows,
+   *  never in them (app/services/deals_notes.py). */
+  notes?: string[];
 }
 
 export interface DealYear {
@@ -3317,6 +3321,10 @@ export interface DealNature {
   nature: string | null;
   deals: number;
   median_amount: number | null;
+  /** Share of this type's rows with no area / no room count (natures only). */
+  pct_no_area?: number | null;
+  pct_no_rooms?: number | null;
+  note?: string | null;
 }
 
 export interface DealSettlement {
@@ -3324,6 +3332,11 @@ export interface DealSettlement {
   settlement_code: string | null;
   deals: number;
   last_deal: string | null;
+  /** OVER's resolution of the published name, beside it: two names with one
+   *  resolved_code are one settlement published twice. */
+  resolved_code?: number | null;
+  resolved_name?: string | null;
+  authority?: string | null;
 }
 
 function dealQuery(f: DealFilters, extra: Record<string, string | number> = {}): string {

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from sqlalchemy import select
 
 from app.config import settings
@@ -326,6 +327,34 @@ async def init_scheduler() -> None:
         id="deals_indexes",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # The curated settlement aliases (data/settlement_aliases_manual.json),
+    # upserted once after boot. The full index rebuild is an admin action, so
+    # without this a historical name added to the JSON (צור יגאל → כוכב יאיר)
+    # would not resolve until someone remembered to run it.
+    from app.services import settlement_index as _settlement_index
+
+    async def settlement_aliases_job() -> None:
+        if not settings.append_database_url:
+            return
+        try:
+            n = await _settlement_index.ensure_manual_aliases()
+            logger.info("settlement aliases: %d curated rows ensured", n)
+            # The deals settlement list caches each name's resolution for an
+            # hour; one filled before this ran would still show צור יגאל as
+            # unresolved.
+            from app.services import deals_query as _deals_query
+            _deals_query.invalidate_cache()
+        except Exception:  # noqa: BLE001
+            logger.exception("settlement aliases upsert failed")
+
+    scheduler.add_job(
+        settlement_aliases_job,
+        trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(minutes=3)),
+        id="settlement_aliases",
+        replace_existing=True,
         misfire_grace_time=3600,
     )
 

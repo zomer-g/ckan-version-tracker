@@ -171,12 +171,20 @@ export default function DealsPage() {
     return () => { cancelled = true; };
   }, [tab, filterKey, offset, sort]);
 
-  const settlementOptions: SearchableOption[] = useMemo(() => settlements.map((s) => ({
-    value: s.settlement, label: s.settlement, hint: s.deals.toLocaleString("he-IL"),
-  })), [settlements]);
+  // A published name that is part of another settlement today (צור יגאל →
+  // כוכב יאיר) says so in the picker, before anyone searches it and concludes
+  // that half a town has no deals.
+  const settlementOptions: SearchableOption[] = useMemo(() => settlements.map((s) => {
+    const other = s.resolved_name && letters(s.resolved_name) !== letters(s.settlement)
+      ? ` · חלק מ${s.resolved_name}`
+      : !s.resolved_code && s.authority ? " · מועצה אזורית" : "";
+    return { value: s.settlement, label: s.settlement,
+             hint: s.deals.toLocaleString("he-IL") + other };
+  }), [settlements]);
   const natureOptions: SearchableOption[] = useMemo(() => natures
     .filter((n) => n.nature)
-    .map((n) => ({ value: n.nature!, label: n.nature!, hint: n.deals.toLocaleString("he-IL") })),
+    .map((n) => ({ value: n.nature!, label: n.nature!,
+                   hint: n.deals.toLocaleString("he-IL") + (n.note ? " · ⚠️" : "") })),
   [natures]);
 
   // ── the draft: what the form says, before anyone presses "חיפוש" ──────────
@@ -455,6 +463,8 @@ export default function DealsPage() {
 
             {result?.address && <AddressMatch m={result.address} />}
 
+            {!!result?.notes?.length && <DataNotes notes={result.notes} />}
+
             {result && (
               <div className="text-sm text-muted" style={{ margin: "0.6rem 0 0.4rem" }}>
                 {result.total === 0
@@ -596,6 +606,35 @@ export default function DealsPage() {
             <NadlanQuiz onReadReport={() => patch({ tab: "gaps" })} />
           </Suspense>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Hebrew letters only, so "סביון*" and "סביון" count as one name. */
+function letters(s: string): string {
+  return s.replace(/[^א-ת]/g, "");
+}
+
+/** OVER's notes on what was filtered on: the register's rows stay as
+ *  published, and what we found about them is said beside them. Open, like
+ *  the address caveat below, because these change what the table means. */
+function DataNotes({ notes }: { notes: string[] }) {
+  return (
+    <div role="note" style={{
+      margin: "0.2rem 0 0.5rem", padding: "0.6rem 0.9rem", borderRadius: 8,
+      border: "2px solid var(--warning)", borderInlineStartWidth: 6,
+      background: "color-mix(in srgb, var(--warning) 12%, transparent)",
+      color: "var(--text)",
+    }}>
+      <div style={{ color: "var(--warning)", fontWeight: 800, marginBottom: "0.3rem" }}>
+        ⚠️ הערות על הנתונים שבחרתם
+      </div>
+      <ul style={{ margin: 0, paddingInlineStart: "1.2rem", lineHeight: 1.65, fontSize: "0.9rem" }}>
+        {notes.map((n, i) => <li key={i}>{n}</li>)}
+      </ul>
+      <div className="text-muted" style={{ fontSize: "0.8rem", marginTop: "0.3rem" }}>
+        השורות עצמן מוצגות כפי שפורסמו; ההערות הן שלנו.
       </div>
     </div>
   );

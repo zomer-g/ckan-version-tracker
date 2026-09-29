@@ -415,6 +415,38 @@ def dedupe_aliases(rows: list[tuple]) -> list[tuple]:
     return list(best.values())
 
 
+async def ensure_manual_aliases() -> int:
+    """Upsert the curated aliases (MANUAL_PATH) without rebuilding the index.
+
+    A full rebuild runs only when an admin calls /api/admin/settlements/load, so
+    an alias added to the JSON would otherwise wait for someone to remember
+    that. This runs after every boot instead: it touches only the curated rows,
+    and a row never LOWERS the weight an existing (variant, code) pair already
+    has, so it cannot demote an official-name hit. Returns the rows written, or
+    0 when the index has not been built on this deployment."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL",
+            f"public.{ALIASES_TABLE}", f"public.{SETTLEMENTS_TABLE}")
+        if not exists:
+            return 0
+        recs = [dict(r) for r in await conn.fetch(
+            f"SELECT code, name FROM public.{_qi(SETTLEMENTS_TABLE)}")]
+        rows = dedupe_aliases(manual_alias_rows(recs))
+        if not rows:
+            return 0
+        await conn.executemany(
+            f"""INSERT INTO public.{_qi(ALIASES_TABLE)} AS a (variant,code,surface,kind,weight)
+                VALUES ($1,$2,$3,$4,$5)
+                ON CONFLICT (variant,code) DO UPDATE SET
+                  surface=EXCLUDED.surface, kind=EXCLUDED.kind, weight=EXCLUDED.weight
+                WHERE a.weight < EXCLUDED.weight""",
+            rows,
+        )
+        return len(rows)
+
+
 async def load(*, rebuild: bool = True) -> dict:
     """(Re)load the settlements + regenerate the alias index from the seed."""
     recs = load_seed()

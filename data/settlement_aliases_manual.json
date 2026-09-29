@@ -13,5 +13,14 @@
   {"variant": "קרית אונו", "name": "קריית אונו", "note": "ktiv haser"},
   {"variant": "קרית מלאכי", "name": "קריית מלאכי", "note": "ktiv haser"},
   {"variant": "קרית עקרון", "name": "קריית עקרון", "note": "ktiv haser"},
-  {"variant": "בית שאן", "name": "בית שאן", "note": "self (placeholder for future)"}
+  {"variant": "בית שאן", "name": "בית שאן", "note": "self (placeholder for future)"},
+  {"variant": "צור יגאל", "name": "כוכב יאיר", "note": "merged 2003 into כוכב יאיר-צור יגאל", "historical": true},
+  {"variant": "גבעת עדה", "name": "בנימינה-גבעת עדה", "note": "merged 2003", "historical": true},
+  {"variant": "מכבים-רעות", "name": "מודיעין-מכבים-רעות", "note": "merged 2003", "historical": true},
+  {"variant": "נווה אפרים", "name": "יהוד-מונוסון", "note": "נווה אפרים (מונוסון) merged 2003", "historical": true},
+  {"variant": "מכר", "name": "ג'דיידה-מכר", "note": "merged 2008", "historical": true},
+  {"variant": "מועאוויה", "name": "מעלה עירון", "note": "one of the villages merged 1996", "historical": true},
+  {"variant": "גת בגליל", "name": "יאנוח-ג'ת", "note": "ג'ת in the Galilee, part of יאנוח-ג'ת", "historical": true},
+  {"variant": "קרית חיים", "name": "חיפה", "note": "a neighbourhood of Haifa, published as its own place", "historical": true},
+  {"variant": "נחלת יהודה", "name": "ראשון לציון", "note": "annexed to ראשון לציון", "historical": true}
 ]

@@ -32,7 +32,7 @@ from starlette.requests import Request
 
 from app.mcp.auth import McpUser
 from app.mcp.usage import log_usage
-from app.services import deals_query, nadlan_query
+from app.services import deals_notes, deals_query, nadlan_query
 
 SERVER_NAME = "over-deals-mcp"
 SERVER_VERSION = "0.2.0"
@@ -51,9 +51,16 @@ SERVER_INSTRUCTIONS = (
     "מחזירים חציון; אל תחשבו ממוצע מתוך search_deals.\n"
     "(2) סננו לפי nature. השוואה בין יישובים או בין שנים בלי מהות עסקה מערבבת "
     "דירה עם מגרש, ותמהיל שהשתנה נראה כמו מחיר שהשתנה. המהות הנפוצה למגורים "
-    "היא 'דירה בבית קומות'; list_deal_types מחזיר את הרשימה עם המספרים.\n"
+    "היא 'דירה בבית קומות'; list_deal_types מחזיר את הרשימה עם המספרים. "
+    "המהות 'מגורים' אינה דירות: ל-99% מהעסקאות שלה אין מספר חדרים ולרובן "
+    "אין שטח.\n"
     "(3) יישוב מזוהה בשם ולא בקוד. ל-17.5% מהשורות אין קוד יישוב במקור. "
-    "קחו את השם המדויק מ-list_settlements — זו המחרוזת שהסינון עובד עליה.\n"
+    "קחו את השם המדויק מ-list_settlements — זו המחרוזת שהסינון עובד עליה. "
+    "יישוב אחד יכול להופיע בשני שמות (שם מלפני איחוד, כמו צור יגאל לצד כוכב "
+    "יאיר): שמות עם אותו resolved_code הם אותו יישוב, וסכמו את שניהם. שם "
+    "בצורת 'מ. א. ...' הוא מועצה אזורית ולא יישוב.\n"
+    "כל תשובה מחזירה notes: הערות של האתר על הערך שסיננתם (יישוב, מהות). "
+    "הן לצד הנתונים ולא בתוכם — העבירו אותן למשתמש.\n"
     "(4) שים לב למספר העסקאות שמאחורי כל חציון. יישוב עם עשר מכירות בשנה "
     "יראה תנודה של עשרות אחוזים שהיא רעש. ציינו את deals לצד המחיר, "
     "ו-compare_settlements ממילא דורש מינימום עסקאות בשתי השנים.\n"
@@ -259,7 +266,8 @@ async def _tool_search(request, db, user, a) -> tuple[dict, int]:
         limit=_clamp(a.get("limit"), 1, deals_query.MAX_LIMIT, 50),
         offset=_clamp(a.get("offset"), 0, 100_000, 0),
         sort=a.get("sort") or "date_desc")
-    return {**SOURCE_NOTE, "query": f, **res, "caveats": _caveats()}, len(res["data"])
+    return {**SOURCE_NOTE, "query": f, **res, "caveats": _caveats(),
+            "notes": await deals_notes.for_filters(f)}, len(res["data"])
 
 
 async def _tool_series(request, db, user, a) -> tuple[dict, int]:
@@ -272,7 +280,7 @@ async def _tool_series(request, db, user, a) -> tuple[dict, int]:
                     "median_ppsqm_normalized הוא חציון השווי חלקי (שטח × חלק "
                     "נמכר), המחיר למ\"ר שנקנה בפועל, ומשווה בין מכירת נכס שלם "
                     "למכירת חלק ממנו.",
-            "caveats": _caveats()}, len(data)
+            "caveats": _caveats(), "notes": await deals_notes.for_filters(f)}, len(data)
 
 
 async def _tool_compare(request, db, user, a) -> tuple[dict, int]:
@@ -284,7 +292,8 @@ async def _tool_compare(request, db, user, a) -> tuple[dict, int]:
         limit=_clamp(a.get("limit"), 1, 200, 30),
         order=a.get("order") or "change_desc")
     out = {**SOURCE_NOTE, "year_from": int(a["year_from"]), "year_to": int(a["year_to"]),
-           "nature": nature, "settlements": rows, "caveats": _caveats()}
+           "nature": nature, "settlements": rows, "caveats": _caveats(),
+           "notes": await deals_notes.for_filters({"nature": nature})}
     if not nature:
         # Said here and not only in the instructions, because this is the one
         # tool whose output looks authoritative enough to quote unqualified.
@@ -303,14 +312,18 @@ async def _tool_settlements(request, db, user, a) -> tuple[dict, int]:
     rows = rows[:_clamp(a.get("limit"), 1, 400, 100)]
     return {**SOURCE_NOTE, "settlements": rows,
             "note": "השמות כלשונם במקור — זו המחרוזת המדויקת שהסינון עובד "
-                    "עליה. ל-17.5% מהשורות אין קוד יישוב, ולכן השם הוא המפתח."
+                    "עליה. ל-17.5% מהשורות אין קוד יישוב, ולכן השם הוא המפתח. "
+                    "resolved_code / resolved_name הם זיהוי היישוב של OVER לצד "
+                    "השם: שני שמות עם אותו resolved_code הם אותו יישוב שפורסם "
+                    "בשני שמות (צור יגאל וכוכב יאיר), ו-authority בלי "
+                    "resolved_code הוא מועצה אזורית ולא יישוב."
             }, len(rows)
 
 
 async def _tool_deal_types(request, db, user, a) -> tuple[dict, int]:
     await _require_ready()
     f = _filters(a)
-    rows = (await deals_query.natures() if not f
+    rows = (deals_notes.annotate_natures(await deals_query.natures()) if not f
             else await deals_query.breakdown(f, limit=_clamp(a.get("limit"), 1, 60, 20)))
     return {**SOURCE_NOTE, "query": f, "deal_types": rows}, len(rows)
 

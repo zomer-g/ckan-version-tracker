@@ -22,7 +22,9 @@ with the data rather than being left for the UI to remember.
 
 Unlike נדל"ן לעם this data is NOT derived: it is one publisher's rows, passed
 through. ``processed`` is therefore false, and the caveats are about what the
-register itself does and does not record.
+register itself does and does not record. ``notes`` are the same idea at the
+level of one filter value (a settlement published under two names, a deal type
+whose rows are mostly not flats): see app/services/deals_notes.py.
 
 The filter is ONE dependency shared by /search, /series and /breakdown. Those
 three are three views of a single population, and a parameter that existed on
@@ -31,7 +33,7 @@ only one of them would quietly let them disagree.
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from app.rate_limit import limiter
-from app.services import deals_query, nadlan_query
+from app.services import deals_notes, deals_query, nadlan_query
 
 router = APIRouter(prefix="/api/deals", tags=["deals"])
 
@@ -146,7 +148,7 @@ async def deals_settlements(request: Request):
 @limiter.limit("60/minute")
 async def deals_natures(request: Request):
     await _require_ready()
-    data = await deals_query.natures()
+    data = deals_notes.annotate_natures(await deals_query.natures())
     return {"data": data, "count": len(data)}
 
 
@@ -167,7 +169,8 @@ async def deals_search(
     qf, address = await _with_address(f)
     res = await deals_query.search(qf, limit=limit, offset=offset, sort=sort)
     return {"query": f, **res, "count": len(res["data"]), "address": address,
-            "processed": False, "caveats": CAVEATS}
+            "processed": False, "caveats": CAVEATS,
+            "notes": await deals_notes.for_filters(f)}
 
 
 @router.get("/series")
@@ -181,7 +184,8 @@ async def deals_series(request: Request, filters: DealFilters = Depends()):
     qf, _ = await _with_address(f)
     data = await deals_query.series(qf)
     return {"query": f, "data": data, "count": len(data),
-            "processed": False, "caveats": CAVEATS}
+            "processed": False, "caveats": CAVEATS,
+            "notes": await deals_notes.for_filters(f)}
 
 
 @router.get("/breakdown")
@@ -196,7 +200,8 @@ async def deals_breakdown(
     qf, _ = await _with_address(f)
     data = await deals_query.breakdown(qf, limit=limit)
     return {"query": f, "data": data, "count": len(data),
-            "processed": False, "caveats": CAVEATS}
+            "processed": False, "caveats": CAVEATS,
+            "notes": await deals_notes.for_filters(f)}
 
 
 @router.get("/compare")
@@ -225,7 +230,8 @@ async def deals_compare(
         limit=limit, order=order)
     out = {"query": {"year_from": year_from, "year_to": year_to, "nature": nature,
                      "min_deals": min_deals, "order": order},
-           "data": rows, "count": len(rows), "processed": False, "caveats": CAVEATS}
+           "data": rows, "count": len(rows), "processed": False, "caveats": CAVEATS,
+           "notes": await deals_notes.for_filters({"nature": nature})}
     if not nature:
         out["warning"] = ("ההשוואה רצה על כל מהויות העסקה יחד; תמהיל שהשתנה בין "
                           "השנים ייראה כמו שינוי מחיר. העבירו nature.")

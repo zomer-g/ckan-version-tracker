@@ -535,6 +535,10 @@ async def stats() -> dict:
     return await _cached("stats", produce)
 
 
+# A field the register left empty: blank, or a zero it prints for "none".
+_MISSING = "(nullif(btrim({c}), '') IS NULL OR {c} ~ '^0+(\\.0*)?$')"
+
+
 async def settlements() -> list[dict]:
     """Every settlement the register names, with its deal count.
 
@@ -543,24 +547,55 @@ async def settlements() -> list[dict]:
     can never produce an empty result through a spelling difference."""
     async def produce():
         src = await _src()
+        # The name is resolved AFTER the group-by, once per distinct name
+        # (~1,300) rather than once per row. ``resolved_*`` is OVER's reading
+        # of the published name, beside it and never instead of it: צור יגאל
+        # stays צור יגאל here, and says it is part of כוכב יאיר today.
         rows = await _fetch(f"""
-            SELECT btrim(settlement) AS settlement,
-                   max(nullif(btrim(settlement_code), '')) AS settlement_code,
-                   count(*) AS deals,
-                   max({DEAL_SORT_KEY}) AS last_deal
-            FROM {_t(src)}
-            WHERE btrim(settlement) <> ''
-            GROUP BY 1 ORDER BY deals DESC
+            WITH g AS (
+              SELECT btrim(settlement) AS settlement,
+                     max(nullif(btrim(settlement_code), '')) AS settlement_code,
+                     count(*) AS deals,
+                     max({DEAL_SORT_KEY}) AS last_deal
+              FROM {_t(src)}
+              WHERE btrim(settlement) <> ''
+              GROUP BY 1
+            )
+            SELECT g.*, public.over_settlement_code(g.settlement) AS resolved_code,
+                   public.over_settlement(g.settlement) AS resolved_name,
+                   public.over_authority(g.settlement) AS authority
+            FROM g ORDER BY deals DESC
         """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
         return [{"settlement": r["settlement"], "settlement_code": r["settlement_code"],
-                 "deals": r["deals"], "last_deal": _iso(r["last_deal"])} for r in rows]
+                 "deals": r["deals"], "last_deal": _iso(r["last_deal"]),
+                 "resolved_code": r.get("resolved_code"),
+                 "resolved_name": r.get("resolved_name"),
+                 "authority": r.get("authority")} for r in rows]
 
     return await _cached("settlements", produce)
 
 
 async def natures() -> list[dict]:
+    """Every deal type with its count, median, and how complete its rows are.
+
+    ``pct_no_area`` / ``pct_no_rooms`` are measured, not asserted: they are what
+    lets the site say that "מגורים" is mostly not flats (99% of its rows carry
+    no room count) instead of leaving a user to find out from the medians."""
     async def produce():
-        return await breakdown({}, limit=60)
+        src = await _src()
+        rows = await _fetch(f"""
+            SELECT nullif(btrim(deal_nature), '') AS nature, count(*) AS deals,
+                   percentile_disc(0.5) WITHIN GROUP (ORDER BY nullif(deal_amount, '')::bigint)
+                     AS median_amount,
+                   round(100.0 * count(*) FILTER (WHERE {_MISSING.format(c='asset_area')})
+                         / count(*)) AS pct_no_area,
+                   round(100.0 * count(*) FILTER (WHERE {_MISSING.format(c='room_num')})
+                         / count(*)) AS pct_no_rooms
+            FROM {_t(src)}
+            GROUP BY 1 ORDER BY deals DESC LIMIT 60
+        """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
+        return [dict(r) | {"pct_no_area": _int(r.get("pct_no_area")),
+                           "pct_no_rooms": _int(r.get("pct_no_rooms"))} for r in rows]
 
     return await _cached("natures", produce)
 
