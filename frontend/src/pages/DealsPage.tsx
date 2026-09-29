@@ -29,13 +29,15 @@ import SearchableSelect, { SearchableOption } from "../components/SearchableSele
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanGaps = lazy(() => import("../components/deals/NadlanGaps"));
 const NadlanQuiz = lazy(() => import("../components/deals/NadlanQuiz"));
+const DealsLogTab = lazy(() => import("../components/deals/DealsLog"));
 
-type Tab = "browse" | "gaps" | "quiz";
-const TAB_IDS: Tab[] = ["browse", "gaps", "quiz"];
+type Tab = "browse" | "gaps" | "quiz" | "log";
+const TAB_IDS: Tab[] = ["browse", "gaps", "quiz", "log"];
 const TAB_LABELS: [Tab, string][] = [
   ["browse", "📊 מאגר העסקאות"],
   ["gaps", "🔍 פערים מול מיסוי מקרקעין"],
   ["quiz", "🏛 שניים אוחזין בעסקה"],
+  ["log", "📝 יומן ממצאים ותיקונים"],
 ];
 
 const SORTS: [string, string][] = [
@@ -584,6 +586,19 @@ export default function DealsPage() {
                     פערים מול מיסוי מקרקעין
                   </button>.
                 </li>
+                <li>
+                  מה מצאנו במאגר ומה שינינו בעקבות זה מתועד בלשונית{" "}
+                  <button
+                    type="button"
+                    onClick={() => patch({ tab: "log" })}
+                    style={{
+                      background: "none", border: "none", padding: 0, font: "inherit",
+                      color: "var(--primary)", textDecoration: "underline", cursor: "pointer",
+                    }}
+                  >
+                    יומן ממצאים ותיקונים
+                  </button>.
+                </li>
               </ul>
             </div>
 
@@ -598,6 +613,12 @@ export default function DealsPage() {
         {tab === "gaps" && (
           <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
             <NadlanGaps />
+          </Suspense>
+        )}
+
+        {tab === "log" && (
+          <Suspense fallback={<div className="text-sm text-muted">טוען את היומן…</div>}>
+            <DealsLogTab />
           </Suspense>
         )}
 
@@ -634,7 +655,8 @@ function DataNotes({ notes }: { notes: string[] }) {
         {notes.map((n, i) => <li key={i}>{n}</li>)}
       </ul>
       <div className="text-muted" style={{ fontSize: "0.8rem", marginTop: "0.3rem" }}>
-        השורות עצמן מוצגות כפי שפורסמו; ההערות הן שלנו.
+        השורות עצמן מוצגות כפי שפורסמו; ההערות הן שלנו. כל הממצאים והתיקונים
+        מתועדים ב<a href="/projects/deals?tab=log">יומן הממצאים והתיקונים</a>.
       </div>
     </div>
   );

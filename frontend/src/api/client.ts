@@ -3358,8 +3358,25 @@ export interface DealComparison {
   change_pct: number | null;
 }
 
+/** The findings-and-fixes log of the deal register (data/deals_log.json). */
+export interface DealsLogEntry {
+  date: string;
+  kind: "finding" | "fix";
+  title: string;
+  credit?: string;
+  body: string[];
+}
+
+export interface DealsLog {
+  intro: string;
+  entries: DealsLogEntry[];
+  open: string[];
+  open_note: string;
+}
+
 export const deals = {
   stats: () => request<DealsStats>("/deals/stats"),
+  log: () => request<DealsLog>("/deals/log"),
   settlements: () =>
     request<{ data: DealSettlement[]; count: number }>("/deals/settlements"),
   natures: () => request<{ data: DealNature[]; count: number }>("/deals/natures"),

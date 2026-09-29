@@ -14,6 +14,7 @@ Endpoints (all public, rate-limited):
     GET /api/deals/settlements             every settlement, with its deal count
     GET /api/deals/natures                 the deal types, with their counts
     GET /api/deals/parcel/{gush}/{helka}   one parcel's deals, newest first
+    GET /api/deals/log                     what was found in the register, and fixed here
 
 Conventions follow app/api/nadlan.py: ``request: Request`` first (slowapi needs
 it), an explicit ``@limiter.limit`` on every route, ``_require_ready()`` → 503
@@ -30,6 +31,9 @@ The filter is ONE dependency shared by /search, /series and /breakdown. Those
 three are three views of a single population, and a parameter that existed on
 only one of them would quietly let them disagree.
 """
+import json
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from app.rate_limit import limiter
@@ -236,6 +240,22 @@ async def deals_compare(
         out["warning"] = ("ההשוואה רצה על כל מהויות העסקה יחד; תמהיל שהשתנה בין "
                           "השנים ייראה כמו שינוי מחיר. העבירו nature.")
     return out
+
+
+# The findings-and-fixes log, one file for the page, the API and anyone reading
+# the repo: what was found in the register, and what changed here because of it.
+_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                         "data", "deals_log.json")
+
+
+@router.get("/log")
+@limiter.limit("60/minute")
+async def deals_log(request: Request):
+    """What was found in the register and what was fixed here, newest first.
+    The rows themselves are never changed; this is where every change around
+    them is accounted for."""
+    with open(_LOG_PATH, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 @router.get("/parcel/{gush}/{helka}")

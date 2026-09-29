@@ -348,3 +348,16 @@ def test_the_console_link_carries_the_address_resolution(client):
     body = client.get("/api/deals/search?settlement=פתח תקווה&street=אבימלך&house=8").json()
     assert "over_street_key" in body["console_sql"]
     assert "a.house_num = 8" in body["console_sql"]
+
+
+# ── the findings-and-fixes log ────────────────────────────────────────────────
+def test_the_log_is_served_newest_first_and_well_formed(client):
+    """The log is what a user of the data reads to learn what was found in the
+    register and what changed here; a malformed entry would break the tab."""
+    body = client.get("/api/deals/log").json()
+    entries = body["entries"]
+    assert entries and body["intro"]
+    assert [e["date"] for e in entries] == sorted((e["date"] for e in entries), reverse=True)
+    for e in entries:
+        assert e["kind"] in ("finding", "fix")
+        assert e["title"] and e["body"] and all(isinstance(p, str) and p for p in e["body"])
