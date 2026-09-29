@@ -344,9 +344,11 @@ async def init_scheduler() -> None:
             logger.info("settlement aliases: %d curated rows ensured", n)
             # The deals settlement list caches each name's resolution for an
             # hour; one filled before this ran would still show צור יגאל as
-            # unresolved.
+            # unresolved. Only that entry: clearing the whole cache also threw
+            # away the unfiltered series, whose recompute then timed out (a 500
+            # on /api/deals/series, 2026-09-29 08:37).
             from app.services import deals_query as _deals_query
-            _deals_query.invalidate_cache()
+            _deals_query._cache.pop("settlements", None)
         except Exception:  # noqa: BLE001
             logger.exception("settlement aliases upsert failed")
 
