@@ -178,11 +178,12 @@ def test_a_revised_package_makes_the_file_pending_again():
     bare done-flag."""
     ds = _DS()
     br.remember(ds, br.describe(RESOURCES, {"a"}))
-    br.mark_fetched(ds, ["a"], modified=MOD, version=1)
+    br.mark_fetched(ds, ["a"], modified=MOD, version=1,
+                    now="2026-08-07T10:00:00+00:00")
 
     carried = br.carry_fetch_state(
         br.describe(RESOURCES, {"a"}), br.stored(ds),
-        modified="2026-09-01T00:00:00")           # the source moved
+        modified="2026-09-01T00:00:00")           # the source moved after
     assert br.pending(carried), "a revised package must be re-fetched"
 
 
@@ -226,3 +227,25 @@ def test_a_stamp_with_no_record_is_left_alone():
     br.remember(ds, br.describe(RESOURCES, {"a"}))
     br.mark_fetched(ds, ["a"], modified=MOD, version=3)
     assert br.empty_deliveries(br.stored(ds), {}) == set()
+
+
+# ---------------------------------------------------------------------------
+# a stamp holds while the file is newer than the source (2026-10-01: the worker
+# stamps its push time, so the equality test never held and every poll
+# fetched — and stored — the same file again)
+# ---------------------------------------------------------------------------
+
+def test_a_file_fetched_after_the_source_changed_stays_fetched():
+    prev = [{"id": "a", "fetched_at": "2026-10-01T13:38:54+00:00",
+             "fetched_modified": "2026-10-01T13:38:40.123456", "fetched_version": 3}]
+    out = br.carry_fetch_state(br.describe(RESOURCES, {"a"}), prev,
+                               modified="2026-07-12T09:11:53.584040")
+    assert br.pending(out) == []
+
+
+def test_a_file_fetched_before_the_source_changed_is_asked_again():
+    prev = [{"id": "a", "fetched_at": "2026-06-01T00:00:00+00:00",
+             "fetched_modified": "2026-06-01T00:00:00", "fetched_version": 1}]
+    out = br.carry_fetch_state(br.describe(RESOURCES, {"a"}), prev,
+                               modified="2026-07-12T09:11:53.584040")
+    assert [e["id"] for e in br.pending(out)] == ["a"]
