@@ -1179,7 +1179,8 @@ async def catalog_watch_status(
     """The newest daily catalog-watch summary (new GovMap layers, republished
     layers, data.gov.il datasets/resources added). Null until the first run."""
     from app.services import catalog_watch
-    return {"last_result": catalog_watch.last_result}
+    return {"last_result": catalog_watch.last_result,
+            "last_blocked_retry": catalog_watch.last_retry_result}
 
 
 @router.post("/catalog-watch/run-once")
