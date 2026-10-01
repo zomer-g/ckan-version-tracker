@@ -292,6 +292,72 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
     }
 
 
+async def _retry_blocked_everywhere(skip_ids: set[str]) -> dict:
+    """Re-poll tracked CKAN datasets whose blocked files are still missing.
+
+    The org walk above retries only the packages it watches, so a file that a
+    worker failed to get anywhere else waited for its dataset's own cadence —
+    90 days for most. The poll is what queues the worker task, so polling is
+    the whole retry. Paced and capped: data.gov.il turns a burst into empty
+    files, and a run that fails everything teaches nothing.
+    """
+    import asyncio
+
+    from app.models.scrape_task import ScrapeTask
+    from app.services import blocked_resources
+    from app.worker.poll_job import poll_dataset
+
+    limit = max(0, int(settings.catalog_watch_blocked_retry_limit))
+    if not limit:
+        return {"repolled": [], "waiting": 0, "empty_files_requeued": 0}
+    async with async_session() as db:
+        rows = (await db.execute(
+            select(TrackedDataset).where(
+                TrackedDataset.source_type == "ckan",
+                TrackedDataset.status == "active",
+                TrackedDataset.is_active.is_(True),
+            )
+        )).scalars().all()
+        rows = [r for r in rows if blocked_resources.stored(r) and str(r.id) not in skip_ids]
+        busy = set((await db.execute(
+            select(ScrapeTask.tracked_dataset_id).where(
+                ScrapeTask.status.in_(["pending", "running"]))
+        )).scalars().all())
+        unstamped = await blocked_resources.unstamp_empty_deliveries(db, rows)
+        due = [r for r in rows
+               if r.id not in busy and blocked_resources.pending(blocked_resources.stored(r))]
+        due.sort(key=lambda r: r.last_polled_at.timestamp() if r.last_polled_at else 0.0)
+        chosen = due[:limit]
+        for r in chosen:
+            r.last_modified = None  # else the unchanged-metadata shortcut skips it
+        await db.commit()
+        chosen_ids = [(str(r.id), r.ckan_name) for r in chosen]
+
+    for i, (ds_id, name) in enumerate(chosen_ids):
+        if i:
+            await asyncio.sleep(settings.catalog_watch_blocked_retry_gap_s)
+        try:
+            await poll_dataset(ds_id)
+        except Exception:  # noqa: BLE001 — one dataset must not stop the rest
+            logger.exception("catalog watch: blocked-file retry of %s failed", name)
+    return {"repolled": [n for _, n in chosen_ids], "waiting": len(due) - len(chosen_ids),
+            "empty_files_requeued": unstamped}
+
+
+_retry_task = None
+last_retry_result: dict | None = None
+
+
+async def _run_blocked_retry(skip_ids: set[str]) -> None:
+    global last_retry_result
+    try:
+        last_retry_result = await _retry_blocked_everywhere(skip_ids)
+        logger.info("catalog watch: blocked-file retry %s", last_retry_result)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("catalog watch: blocked-file retry failed")
+        last_retry_result = {"error": str(e)[:300]}
+
+
 async def run_catalog_watch(force: bool = False) -> dict | None:
     """One pass over both catalogs. Each half fails on its own: GovMap being
     down must not stop the data.gov.il half, nor the other way round."""
@@ -316,6 +382,18 @@ async def run_catalog_watch(force: bool = False) -> dict | None:
         except Exception as e:  # noqa: BLE001
             logger.exception("catalog watch: data.gov.il org %s failed", org)
             out["ckan"].append({"org": org, "error": str(e)[:300]})
+
+    # Paced over up to an hour, so it runs beside the pass rather than inside
+    # it — the admin "run now" button awaits this function.
+    global _retry_task
+    done = {i for c in out["ckan"] for i in c.get("repolled_blocked") or []}
+    if _retry_task is None or _retry_task.done():
+        import asyncio
+
+        _retry_task = asyncio.create_task(_run_blocked_retry(done))
+        out["blocked_retry"] = "started"
+    else:
+        out["blocked_retry"] = "already running"
 
     gm = out["govmap"]
     logger.info(

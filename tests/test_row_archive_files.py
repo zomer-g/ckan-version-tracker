@@ -163,3 +163,52 @@ def test_a_single_tracked_file_is_left_to_the_inline_download(Session):
 
     assert _run(_go()) is False
     assert not br.assessed(ds)
+
+
+# ---------------------------------------------------------------------------
+# The daily retry reaches every package, paced and capped
+# (2026-10-01: 47 of 77 re-polled datasets got empty files in one burst).
+# ---------------------------------------------------------------------------
+
+def test_the_daily_retry_takes_the_oldest_missing_files_and_skips_busy_ones(Session, monkeypatch):
+    from datetime import datetime, timezone
+
+    from app.services import catalog_watch
+
+    entry = {"id": "shp", "name": "SHP", "format": "ZIP", "url": "u"}
+    done = {**entry, "fetched_at": "x", "fetched_modified": MOD, "fetched_version": 1}
+    old = _dataset({"blocked_resources": [entry]})
+    old.last_polled_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new = _dataset({"blocked_resources": [entry]})
+    new.last_polled_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    busy = _dataset({"blocked_resources": [entry]})
+    complete = _dataset({"blocked_resources": [done]})
+    other = _dataset(None)
+
+    async def _seed():
+        async with Session() as db:
+            for d in (old, new, busy, complete, other):
+                db.add(d)
+            db.add(ScrapeTask(tracked_dataset_id=busy.id, status="pending",
+                              phase="queued", params={}))
+            await db.commit()
+    _run(_seed())
+
+    polled = []
+
+    async def _poll(ds_id, **kw):
+        polled.append(ds_id)
+
+    monkeypatch.setattr(catalog_watch, "async_session", Session)
+    monkeypatch.setattr(poll_job, "poll_dataset", _poll)
+    monkeypatch.setattr(settings, "catalog_watch_blocked_retry_limit", 1)
+    monkeypatch.setattr(settings, "catalog_watch_blocked_retry_gap_s", 0)
+
+    out = _run(catalog_watch._retry_blocked_everywhere(set()))
+    assert polled == [str(old.id)]
+    assert out["waiting"] == 1          # `new`, left for tomorrow
+
+    polled.clear()
+    monkeypatch.setattr(settings, "catalog_watch_blocked_retry_limit", 10)
+    _run(catalog_watch._retry_blocked_everywhere({str(old.id)}))
+    assert polled == [str(new.id)]      # not busy, not complete, not skipped
