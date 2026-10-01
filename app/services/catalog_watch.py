@@ -254,11 +254,17 @@ async def _watch_ckan_org(org: str, only: frozenset[str] | None = None) -> dict:
         # A file a worker "delivered" as 0 bytes is not archived: make it
         # pending again so the re-poll below asks for it once more.
         unstamped = await _unstamp_empty_deliveries(db, rows)
+        # Missing blocked files are NOT re-polled here: polling a whole org at
+        # once is the burst data.gov.il answers with empty files (2026-10-01,
+        # ministry_of_transport: ~30 tasks in a minute, nearly all empty). They
+        # go through the paced _retry_blocked_everywhere instead. A plain 403
+        # with nothing assessed yet still polls now — that poll is what turns
+        # the refusal into a worker task.
         refused = []
         for r in rows:
             if (r.status == "active" and r.id not in extended_ids
-                    and ("403 Forbidden" in (r.last_error or "")
-                         or blocked_resources.pending(blocked_resources.stored(r)))):
+                    and "403 Forbidden" in (r.last_error or "")
+                    and not blocked_resources.pending(blocked_resources.stored(r))):
                 r.last_modified = None  # else the unchanged-metadata shortcut skips it
                 refused.append(str(r.id))
         tagged = 0
