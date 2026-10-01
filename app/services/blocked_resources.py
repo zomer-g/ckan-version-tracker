@@ -37,6 +37,10 @@ archive that is behind its plan. That costs one full poll per dataset, once.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 CONFIG_KEY = "blocked_resources"
 
 
@@ -142,6 +146,53 @@ def empty_deliveries(entries: list[dict] | None, versions: dict) -> set[str]:
         if rec is not None and not delivered(rec):
             out.add(e["id"])
     return out
+
+
+def file_resources(resources: list[dict] | None) -> list[dict]:
+    """The resources that are FILES — a URL and no datastore table behind it.
+
+    These are what a datastore-only archive never touches. A dataset whose rows
+    stream to the SQL archive (``archive_neon``) used to be recorded as "checked,
+    nothing blocked" on the strength of its tables alone, so its SHP/KMZ/PDF
+    were never fetched by anyone (rail_stat, 2026-10-01: two tables archived,
+    the map itself not at all).
+    """
+    return [r for r in (resources or []) if r.get("url") and not r.get("datastore_active")]
+
+
+async def unstamp_empty_deliveries(db, rows) -> int:
+    """Clear the fetched stamp on every file that arrived empty, judged from
+    the delivering version's own per-resource record. Returns how many.
+
+    Runs for any dataset, not only the ones the catalog watch reads: the
+    2026-09-27 burst stamped 0-byte files on ministry_of_transport layers too
+    (lrt_stat, metronit, tma_42…), and nothing outside the watch ever looked.
+    """
+    from sqlalchemy import select, tuple_
+
+    from app.models.version_index import VersionIndex
+
+    wanted = {(r.id, e.get("fetched_version")) for r in rows
+              for e in stored(r) if e.get("fetched_at")}
+    wanted = {(ds_id, n) for ds_id, n in wanted if isinstance(n, int)}
+    if not wanted:
+        return 0
+    summaries: dict = {}
+    for v in (await db.execute(
+        select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
+               VersionIndex.change_summary)
+        .where(tuple_(VersionIndex.tracked_dataset_id, VersionIndex.version_number)
+               .in_(list(wanted)))
+    )).all():
+        summaries.setdefault(v.tracked_dataset_id, {})[v.version_number] = v.change_summary or {}
+    total = 0
+    for r in rows:
+        empty = empty_deliveries(stored(r), summaries.get(r.id, {}))
+        if empty and unstamp(r, empty):
+            logger.info("%s — %d empty file(s) made pending again",
+                        getattr(r, "ckan_name", r.id), len(empty))
+            total += len(empty)
+    return total
 
 
 def unstamp(ds, resource_ids) -> bool:
