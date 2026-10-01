@@ -607,10 +607,10 @@ class Settings(BaseSettings):
     # Files data.gov.il has not yet given a worker, in ANY tracked package —
     # not only the watched orgs. Each daily pass re-polls at most this many
     # (oldest-polled first), this many seconds apart: data.gov.il answers a
-    # burst with empty files (2026-09-27, again 2026-10-01: 47 of 77), so the
+    # burst with empty files (2026-09-27, again twice on 2026-10-01), so the
     # backlog drains over days instead of failing in one go.
-    catalog_watch_blocked_retry_limit: int = 30
-    catalog_watch_blocked_retry_gap_s: float = 240.0
+    catalog_watch_blocked_retry_limit: int = 20
+    catalog_watch_blocked_retry_gap_s: float = 360.0
 
     cors_origins: str = ""
 
