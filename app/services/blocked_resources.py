@@ -89,6 +89,33 @@ def note_for(entries: list[dict] | None) -> str | None:
     )
 
 
+def _utc(value):
+    import datetime as _dt
+
+    if not value:
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # data.gov.il's metadata_modified is naive UTC.
+    return t if t.tzinfo else t.replace(tzinfo=_dt.timezone.utc)
+
+
+def _fetched_after(fetched_at, modified) -> bool:
+    """Was the file fetched after the package last changed?
+
+    The stamp's ``fetched_modified`` is whatever the worker pushed as the
+    version's ``metadata_modified`` — the push time, never the package's
+    revision — so an equality test alone never held, and every later poll asked
+    for the same file again and stored it again (accid_taz, road_strat_2030:
+    two identical versions minutes apart on 2026-10-01). A fetch that happened
+    after the source's last change is still the source's current file.
+    """
+    a, m = _utc(fetched_at), _utc(modified)
+    return a is not None and m is not None and a >= m
+
+
 def carry_fetch_state(entries: list[dict], previous: list[dict] | None,
                       *, modified: str | None) -> list[dict]:
     """Re-attach what a previous poll knew about which files have been fetched.
@@ -108,7 +135,8 @@ def carry_fetch_state(entries: list[dict], previous: list[dict] | None,
     out = []
     for entry in entries:
         old = was.get(entry.get("id"))
-        if old and old.get("fetched_modified") == modified:
+        if old and (old.get("fetched_modified") == modified
+                    or _fetched_after(old.get("fetched_at"), modified)):
             entry = {**entry,
                      "fetched_at": old["fetched_at"],
                      "fetched_modified": old.get("fetched_modified"),
