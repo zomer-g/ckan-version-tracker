@@ -71,6 +71,44 @@ def _restate_blocked(ds: TrackedDataset) -> None:
         ds.last_error = note[:2000]
 
 
+async def _assess_files_beside_row_archive(ds: TrackedDataset, pkg: dict,
+                                           new_modified: str, db) -> bool:
+    """Hand a row-archived dataset's FILES to a worker, on every poll.
+
+    A dataset whose rows stream to the SQL archive (``archive_neon``) never
+    downloads anything inline, so detection never sees its SHP/KMZ/PDF — and
+    the streaming branches used to record that as "checked, nothing blocked".
+    rail_stat (2026-10-01) held its two tables and not the map; ~40 packages
+    the same. data.gov.il serves every one of these files from behind the same
+    wall, so no download is spent here: each file resource is simply listed as
+    the worker's work, which tries a direct fetch before a browser anyway.
+
+    Runs BEFORE the unchanged-source shortcuts, because the gap is ours, not
+    the source's — a package that never moves again would otherwise never be
+    asked. Cheap: no I/O beyond one query when stamps exist. Stamps survive
+    while the package revision holds, except stamps whose delivery was empty.
+    """
+    tracked = set(ds.resource_ids or ([ds.resource_id] if ds.resource_id else []))
+    resources = [r for r in pkg.get("resources", []) if not tracked or r.get("id") in tracked]
+    # Only where the poll will NOT download inline: the multi-resource rows
+    # branch. One tracked resource is either a table (no file to miss) or a
+    # file, which the snapshot path downloads and assesses itself.
+    if len(resources) < 2 or not any(r.get("datastore_active") for r in resources):
+        return False
+    files = blocked_resources.file_resources(resources)
+    await blocked_resources.unstamp_empty_deliveries(db, [ds])
+    entries = blocked_resources.carry_fetch_state(
+        blocked_resources.describe(resources, {r["id"] for r in files}),
+        blocked_resources.stored(ds), modified=new_modified)
+    if entries != blocked_resources.stored(ds) or not blocked_resources.assessed(ds):
+        blocked_resources.remember(ds, entries)
+    missing = blocked_resources.pending(entries)
+    if missing:
+        await _queue_blocked_files_task(ds, missing)
+        _restate_blocked(ds)
+    return True
+
+
 async def poll_dataset(
     dataset_id: str, force: bool = False, priority: int | None = None
 ) -> None:
@@ -233,6 +271,15 @@ async def _poll_dataset(
             # re-scanning an unchanged source is a cheap no-op insert.
             is_append = ds.storage_mode == "append_only"
 
+            # Rows go to the SQL archive, files go to a worker — see helper.
+            # A file stamped fetched that arrived as 0 bytes is not archived;
+            # elsewhere it must be asked for again, and the shortcuts below
+            # would otherwise keep it stamped forever.
+            requeued_empty = 0
+            if not (dataset_archives_neon(ds)
+                    and await _assess_files_beside_row_archive(ds, pkg, new_modified, db)):
+                requeued_empty = await blocked_resources.unstamp_empty_deliveries(db, [ds])
+
             # Get the latest version to compare against
             latest_result = await db.execute(
                 select(VersionIndex)
@@ -288,6 +335,7 @@ async def _poll_dataset(
                 and not is_append
                 and not neon_pending
                 and not blocked_unknown
+                and not requeued_empty
                 and not has_metadata_changed(ds.last_modified, new_modified)
             ):
                 logger.info("Dataset %s unchanged (modified=%s)", ds.ckan_name, new_modified)
@@ -310,7 +358,8 @@ async def _poll_dataset(
             #     different tracked set.
             #   • blocked_unknown — we have never checked whether this
             #     dataset's files are being withheld (see above).
-            forced_repoll = force or neon_pending or blocked_unknown or ds.last_modified is None
+            forced_repoll = (force or neon_pending or blocked_unknown or bool(requeued_empty)
+                             or ds.last_modified is None)
             if (
                 not is_append
                 and not forced_repoll
@@ -457,9 +506,9 @@ async def _poll_dataset(
                         next_version=next_version, new_modified=new_modified, db=db,
                     )
                     if handled:
-                        # Datastore rows only, no file fetched — same reasoning
-                        # as the single-resource path above.
-                        blocked_resources.remember(ds, [])
+                        # Rows only. The files beside them were already listed
+                        # for a worker by _assess_files_beside_row_archive —
+                        # recording [] here is what hid rail_stat's map.
                         await db.commit()
                         return
                     logger.info(

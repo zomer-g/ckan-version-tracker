@@ -108,36 +108,10 @@ async def _ensure_tag(db, name: str, description: str, dataset_ids: list) -> int
 
 
 async def _unstamp_empty_deliveries(db, rows) -> int:
-    """Clear the fetched stamp on every blocked file that arrived empty,
-    judged from the delivering version's own per-resource record."""
-    from app.models.version_index import VersionIndex
+    """Clear the fetched stamp on every blocked file that arrived empty."""
     from app.services import blocked_resources
 
-    wanted = {(r.id, e.get("fetched_version")) for r in rows
-              for e in blocked_resources.stored(r) if e.get("fetched_at")}
-    if not wanted:
-        return 0
-    from sqlalchemy import tuple_
-
-    wanted = {(ds_id, n) for ds_id, n in wanted if isinstance(n, int)}
-    if not wanted:
-        return 0
-    summaries: dict = {}
-    for v in (await db.execute(
-        select(VersionIndex.tracked_dataset_id, VersionIndex.version_number,
-               VersionIndex.change_summary)
-        .where(tuple_(VersionIndex.tracked_dataset_id, VersionIndex.version_number)
-               .in_(list(wanted)))
-    )).all():
-        summaries.setdefault(v.tracked_dataset_id, {})[v.version_number] = v.change_summary or {}
-    total = 0
-    for r in rows:
-        empty = blocked_resources.empty_deliveries(
-            blocked_resources.stored(r), summaries.get(r.id, {}))
-        if empty and blocked_resources.unstamp(r, empty):
-            logger.info("catalog watch: %s — %d empty file(s) requeued", r.ckan_name, len(empty))
-            total += len(empty)
-    return total
+    return await blocked_resources.unstamp_empty_deliveries(db, rows)
 
 
 def watched_orgs() -> list[str]:
