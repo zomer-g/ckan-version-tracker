@@ -131,8 +131,7 @@ async def chains(db: AsyncSession, *, refresh: bool = False) -> list[dict]:
                                append_store.table_name_for_scraper_resource(ds, resource)))
     existing: set[str] = set()
     if candidates:
-        pool = await append_store.get_readonly_pool()
-        async with pool.acquire() as conn:
+        async with append_store.readonly_txn() as conn:
             found = await conn.fetch(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name = ANY($1::text[])",

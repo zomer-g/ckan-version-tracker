@@ -36,6 +36,7 @@ import logging
 import re
 import ssl
 import uuid as _uuid
+from contextlib import asynccontextmanager
 
 from app.pg_ssl import asyncpg_ssl_for
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -61,7 +62,8 @@ _MAX_PARAMS = 30000
 # Postgres identifier limit: NAMEDATALEN (64) - 1, counted in BYTES.
 _MAX_IDENT_BYTES = 63
 
-# Backstop statement timeout for the PUBLIC console role (see get_readonly_pool).
+# Backstop statement timeout for the PUBLIC console role, applied per
+# transaction by readonly_txn (see get_readonly_pool).
 _READONLY_STATEMENT_TIMEOUT = "30s"
 
 
@@ -165,15 +167,26 @@ async def get_readonly_pool() -> asyncpg.Pool:
     statement_timeout, row caps) still apply — this is defense-in-depth, not a
     replacement for them.
 
-    The pool also carries a CONNECTION-LEVEL statement_timeout backstop. Every
-    console path today sets its own ``SET LOCAL statement_timeout`` (10s for
+    Every console path sets its own ``SET LOCAL statement_timeout`` (10s for
     run_readonly_sql, 20s for knesset run_sql, 8s for sample_rows, 60s for the
-    CSV exports) and those still win inside their transaction — but a path that
-    forgets to set one would otherwise inherit "no limit". That matters now that
-    index tables hold TOASTed geometry: a query touching a large geometry column
-    was measured at 46 SECONDS of compute, and an unbounded one pins the Neon
-    endpoint for as long as it runs. The backstop applies to the console role
-    only — never to get_pool(), whose COPY/backfill work legitimately runs long.
+    CSV exports). Every other reader on this pool goes through readonly_txn,
+    which applies a 30-second backstop (_READONLY_STATEMENT_TIMEOUT) as
+    ``SET LOCAL statement_timeout`` inside a READ ONLY transaction. That
+    matters because index tables hold TOASTed geometry: a query touching a
+    large geometry column was measured at 46 SECONDS of compute, and an
+    unbounded one pins the endpoint for as long as it runs.
+
+    The backstop is per transaction, not per connection. On xhostd this URL
+    defaults to DATABASE_URL_READONLY, which can go through a transaction-mode
+    PgBouncer. PgBouncer refuses statement_timeout as a startup parameter
+    ("unsupported startup parameter"), so a ``server_settings`` timeout here
+    would stop the pool from connecting at all, and a session-level SET would
+    not survive the pooler. ``command_timeout`` below (180s, client-side:
+    asyncpg cancels the query) stays as the outer limit. None of this applies
+    to get_pool(), whose COPY/backfill work legitimately runs long.
+
+    A new reader on this pool uses readonly_txn, or opens its own READ ONLY
+    transaction whose first statement is ``SET LOCAL statement_timeout``.
 """
     global _ro_pool
     raw = (settings.append_readonly_database_url or "").strip()
@@ -194,13 +207,33 @@ async def get_readonly_pool() -> asyncpg.Pool:
                     min_size=0,      # let Neon scale to zero between queries
                     max_size=5,
                     command_timeout=180,
-                    server_settings={
-                        "statement_timeout": _READONLY_STATEMENT_TIMEOUT,
-                    },
+                    # No server_settings statement_timeout: a transaction-mode
+                    # pooler refuses it at connect. readonly_txn applies it per
+                    # transaction instead. See the docstring.
                     init=_register_geometry_codec,
                 )
                 logger.info("append_store: read-only connection pool created")
     return _ro_pool
+
+
+@asynccontextmanager
+async def readonly_txn(timeout: str = _READONLY_STATEMENT_TIMEOUT):
+    """Yield a read-only-pool connection inside a READ ONLY transaction whose
+    first statement is ``SET LOCAL statement_timeout = <timeout>``.
+
+    This is the 30-second backstop that used to sit on the pool's connections
+    (see get_readonly_pool). SET LOCAL lasts until the transaction ends, so it
+    holds through a transaction-mode pooler and never leaks to the next client
+    of the server connection. ``timeout`` is a Postgres duration such as
+    "30s" or "500ms"; it is validated because SET takes no bind parameters.
+    """
+    if not re.fullmatch(r"\d+(?:ms|s|min)?", timeout or ""):
+        raise ValueError(f"invalid statement_timeout: {timeout!r}")
+    pool = await get_readonly_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = '{timeout}'")
+            yield conn
 
 
 def table_name(ds) -> str:

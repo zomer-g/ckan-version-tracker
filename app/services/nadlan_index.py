@@ -755,8 +755,7 @@ async def _stage_done(conn, stage: str, t0: float, *, rows_in=None, rows_out=Non
 
 
 async def get_state() -> list[dict]:
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         rows = await conn.fetch(
             f"SELECT * FROM public.{_qi(STATE_TABLE)} ORDER BY stage")
     return [dict(r) for r in rows]

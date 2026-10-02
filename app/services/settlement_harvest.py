@@ -410,8 +410,7 @@ async def harvest(*, use_llm: bool = True, per_col_cap: int = 3000) -> dict:
 
 
 async def _resolve_authority(q: str) -> dict | None:
-    ro = await append_store.get_readonly_pool()
-    async with ro.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         row = await conn.fetchrow(
             f"""SELECT s.code, s.name
                 FROM public.{_qi(settlement_index.AUTH_ALIASES_TABLE)} a

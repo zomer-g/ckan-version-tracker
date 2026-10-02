@@ -540,8 +540,7 @@ async def resolve(q: str) -> dict | None:
     key = norm(q)
     if not key:
         return None
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         row = await conn.fetchrow(
             f"""SELECT s.*, a.kind AS match_kind, a.weight AS match_weight
                 FROM public.{_qi(ALIASES_TABLE)} a
@@ -599,8 +598,7 @@ async def resolve_many(names: list[str]) -> list[dict]:
 
 
 async def search(q: str | None, limit: int = 25) -> list[dict]:
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         if q:
             rows = await conn.fetch(
                 f"""SELECT * FROM public.{_qi(SETTLEMENTS_TABLE)}
@@ -615,8 +613,7 @@ async def search(q: str | None, limit: int = 25) -> list[dict]:
 
 
 async def get(code: int) -> dict | None:
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         row = await conn.fetchrow(
             f"SELECT * FROM public.{_qi(SETTLEMENTS_TABLE)} WHERE code=$1", code)
         aliases = await conn.fetch(

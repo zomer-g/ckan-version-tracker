@@ -91,12 +91,45 @@ def test_app_search_path_is_pinned_only_on_direct_postgres(
 
 # ── the console role cannot read an app table ───────────────────────────────
 
+class _FakeConn:
+    """The proof runs through append_store.readonly_txn: acquire, a READ ONLY
+    transaction, SET LOCAL statement_timeout, then the query."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def transaction(self, **_kw):
+        class _Tx:
+            async def __aenter__(_self):
+                return _self
+
+            async def __aexit__(_self, *a):
+                return False
+
+        return _Tx()
+
+    async def execute(self, _sql):
+        return None
+
+    async def fetch(self, _sql):
+        return self._rows
+
+
 class _FakePool:
     def __init__(self, rows):
         self._rows = rows
 
-    async def fetch(self, _sql):
-        return self._rows
+    def acquire(self):
+        rows = self._rows
+
+        class _Acq:
+            async def __aenter__(_self):
+                return _FakeConn(rows)
+
+            async def __aexit__(_self, *a):
+                return False
+
+        return _Acq()
 
 
 def _console_can_read(monkeypatch, rows):

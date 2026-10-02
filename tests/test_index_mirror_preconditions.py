@@ -8,7 +8,8 @@ import asyncio
 
 import pytest
 
-from app.services import append_store, data_catalog, index_mirror
+from app.services import (append_store, data_catalog, deep_search, index_mirror,
+                          nadlan_index, settlement_harvest, settlement_index)
 
 
 # ── 10.2.1 — identifiers are safe at 63 BYTES, not 63 characters ─────────────
@@ -157,9 +158,12 @@ def test_concurrent_cold_reads_rebuild_only_once(monkeypatch):
     assert calls["n"] == 1
 
 
-# ── 10.2.3 — read-only console pool carries a timeout backstop ────────────────
+# ── 10.2.3 — read-only console pool: a 30s backstop on every transaction ──────
 
-def test_readonly_pool_declares_a_statement_timeout(monkeypatch):
+def test_readonly_pool_sends_no_startup_statement_timeout(monkeypatch):
+    """DATABASE_URL_READONLY can reach a transaction-mode PgBouncer, which
+    refuses statement_timeout as a startup parameter. The backstop moves into
+    each transaction instead (readonly_txn, or a path's own SET LOCAL)."""
     captured = {}
 
     class _FakePool:
@@ -175,8 +179,115 @@ def test_readonly_pool_declares_a_statement_timeout(monkeypatch):
     monkeypatch.setattr(append_store, "_ro_pool", None)
 
     asyncio.run(append_store.get_readonly_pool())
-    assert captured["server_settings"]["statement_timeout"] == "30s"
+    assert "statement_timeout" not in captured.get("server_settings", {})
     monkeypatch.setattr(append_store, "_ro_pool", None)
+
+
+def _recording_ro_pool(monkeypatch):
+    """A fake read-only pool that logs acquire, transaction, and SQL in order."""
+    events = []
+
+    class _Conn:
+        def transaction(self, **kw):
+            class _Tx:
+                async def __aenter__(_self):
+                    events.append(("begin", kw))
+                    return _self
+
+                async def __aexit__(_self, *a):
+                    events.append(("end",))
+                    return False
+
+            return _Tx()
+
+        async def execute(self, sql):
+            events.append(("execute", sql))
+
+        async def fetch(self, sql, *args):
+            events.append(("fetch", sql))
+            return []
+
+        async def fetchrow(self, sql, *args):
+            events.append(("fetch", sql))
+            return None
+
+    class _Pool:
+        def acquire(self):
+            class _Acq:
+                async def __aenter__(_self):
+                    events.append(("acquire",))
+                    return _Conn()
+
+                async def __aexit__(_self, *a):
+                    events.append(("release",))
+                    return False
+
+            return _Acq()
+
+    async def fake_ro_pool():
+        return _Pool()
+
+    monkeypatch.setattr(append_store, "get_readonly_pool", fake_ro_pool)
+    return events
+
+
+def test_readonly_txn_sets_the_backstop_first_inside_a_readonly_transaction(monkeypatch):
+    """The 30s backstop that used to ride on the connection now opens every
+    transaction: READ ONLY, then SET LOCAL statement_timeout, then the query."""
+    events = _recording_ro_pool(monkeypatch)
+
+    async def go():
+        async with append_store.readonly_txn() as conn:
+            await conn.fetch("SELECT 1")
+
+    asyncio.run(go())
+    assert append_store._READONLY_STATEMENT_TIMEOUT == "30s"
+    assert events == [
+        ("acquire",),
+        ("begin", {"readonly": True}),
+        ("execute", "SET LOCAL statement_timeout = '30s'"),
+        ("fetch", "SELECT 1"),
+        ("end",),
+        ("release",),
+    ]
+
+
+def test_readonly_txn_refuses_a_timeout_that_is_not_a_duration(monkeypatch):
+    """SET takes no bind parameters, so the value is interpolated: anything but
+    a plain duration is refused before a connection is taken."""
+    events = _recording_ro_pool(monkeypatch)
+
+    async def go(timeout):
+        async with append_store.readonly_txn(timeout):
+            pass
+
+    for bad in ("30s'; RESET ALL; --", "", "thirty", "30 s"):
+        with pytest.raises(ValueError):
+            asyncio.run(go(bad))
+    assert events == []
+
+
+@pytest.mark.parametrize("call", [
+    # An ILIKE '%q%' with user input, on an anonymous page.
+    lambda: deep_search.idx_text_search(
+        "mevaker_reports", ("title",), ("title",), "1", "q", 5),
+    lambda: settlement_index.search("תל"),
+    lambda: settlement_index.resolve("תל אביב"),
+    lambda: settlement_index.get(5000),
+    lambda: settlement_harvest._resolve_authority("עיריית חיפה"),
+    lambda: nadlan_index.get_state(),
+], ids=["deep_search", "settlement_search", "settlement_resolve",
+        "settlement_get", "harvest_authority", "nadlan_state"])
+def test_readers_that_set_no_timeout_of_their_own_run_under_the_backstop(
+        monkeypatch, call):
+    """These readers set no SET LOCAL of their own, so before the backstop
+    moved into the transaction they were bounded only by command_timeout."""
+    events = _recording_ro_pool(monkeypatch)
+    asyncio.run(call())
+    begin = events.index(("begin", {"readonly": True}))
+    assert events[begin + 1] == ("execute", "SET LOCAL statement_timeout = '30s'")
+    assert events[begin + 2][0] == "fetch"
+    assert events.index(("end",)) > begin + 2
 
 
 def test_readwrite_pool_has_no_statement_timeout(monkeypatch):

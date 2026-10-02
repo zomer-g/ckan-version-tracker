@@ -182,7 +182,7 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
     from app.services import append_store
 
     try:
-        pool = await append_store.get_readonly_pool()
+        await append_store.get_readonly_pool()
     except RuntimeError:
         # No console role configured. get_readonly_pool already refuses to hand
         # out the read/write pool, so no console can run — nothing to prove.
@@ -194,19 +194,20 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
         )
         return
 
-    rows = await pool.fetch(
-        """
-        SELECT n.nspname AS schema, c.relname AS name
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-          -- A sequence's last value leaks a count; a column-level grant reads
-          -- data without a table-level one.
-          AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'SELECT')
-                   ELSE has_any_column_privilege(c.oid, 'SELECT') END
-        """
-    )
+    async with append_store.readonly_txn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT n.nspname AS schema, c.relname AS name
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              -- A sequence's last value leaks a count; a column-level grant reads
+              -- data without a table-level one.
+              AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'SELECT')
+                       ELSE has_any_column_privilege(c.oid, 'SELECT') END
+            """
+        )
 
     exposed = [
         f"{r['schema']}.{r['name']}"

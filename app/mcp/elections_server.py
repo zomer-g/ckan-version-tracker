@@ -208,8 +208,7 @@ async def _tables(db: AsyncSession) -> list[dict]:
 
 async def _live_columns(table: str) -> set[str]:
     """Columns a table actually has, so a SELECT never names a missing one."""
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    async with append_store.readonly_txn() as conn:
         rows = await conn.fetch(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema = 'public' AND table_name = $1", table)

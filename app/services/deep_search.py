@@ -112,8 +112,8 @@ async def idx_text_search(table: str, columns: tuple[str, ...], search_in: tuple
     where = " OR ".join(f'"{c}" ILIKE $1' for c in search_in)
     sql = (f"SELECT {cols} FROM idx.{table} WHERE {where} "
            f"ORDER BY {order_sql} LIMIT {int(limit)}")
-    pool = await append_store.get_readonly_pool()
-    async with pool.acquire() as conn:
+    # A leading-wildcard ILIKE on an anonymous page: the 30s backstop bounds it.
+    async with append_store.readonly_txn() as conn:
         rows = await conn.fetch(sql, f"%{q}%")
     return [dict(r) for r in rows]
 

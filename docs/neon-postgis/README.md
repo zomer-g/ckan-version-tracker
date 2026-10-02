@@ -38,12 +38,12 @@ bbox — ואפילו החזרת המחרוזת כמו-שהיא על שכבת ע
 | כל עמודות ה-staging נוצרות `text`; טעינה = `COPY` → **swap אטומי** (`DROP`+`RENAME`) | [index_mirror.py:274–293](../../app/services/index_mirror.py) |
 | כישלון טעינה מנקה את ה-staging **והטבלה הישנה שורדת** ("fail-loud-soft") | [index_mirror.py:294–302](../../app/services/index_mirror.py) |
 | `geometry_wkt` מוסתר מה-preview/cube (`_BULK_COLS`, שכבר כולל גם `geom`) | [append_store.py:968](../../app/services/append_store.py) |
-| הקונסולות: תפקיד read-only ייעודי, `SET LOCAL statement_timeout` (10 שנ') + backstop ברמת החיבור | [append_store.py:126, 161, 748](../../app/services/append_store.py), [create_append_readonly_role.sql](../../scripts/create_append_readonly_role.sql) |
+| הקונסולות: תפקיד read-only ייעודי, `SET LOCAL statement_timeout` (10 שנ') + backstop של 30 שנ' בכל טרנזקציה (`readonly_txn`) | [append_store.py:126, 161, 748](../../app/services/append_store.py), [create_append_readonly_role.sql](../../scripts/create_append_readonly_role.sql) |
 | `search_path` של הקונסולה המרכזית: `"public, knesset, idx"` | [data_catalog.py:37](../../app/services/data_catalog.py) |
 | מאז 8.7.2026 `geometry_wkt` נכתב **WGS84 (4326)**; קודם — ITM 6991. ה-mirror מחזיק "גרסה אחרונה בלבד" ⇒ שכבה שלא נסרקה מאז נושאת **מטרים** | skill `govscraper-spatial`, invariant #1 |
 | ה-pools על `min_size=0` (scale-to-zero של Neon) | [append_store.py:100](../../app/services/append_store.py) |
 | NEON תומך רשמית ב-PostGIS | docs.neon — extensions/postgis |
-| ✅ `APPEND_READONLY_DATABASE_URL` מוגדר ומאומת בפרודקשן (23.7) ⇒ הקונסולות רצות על התפקיד המצומצם, **וה-`statement_timeout` ברמת החיבור פעיל** | [append_store.py:136–149](../../app/services/append_store.py) |
+| ✅ `APPEND_READONLY_DATABASE_URL` מוגדר ומאומת בפרודקשן (23.7) ⇒ הקונסולות רצות על התפקיד המצומצם. **ה-backstop של `statement_timeout` (30 שנ') עבר מרמת החיבור לכל טרנזקציה** (`SET LOCAL` דרך `readonly_txn`): PgBouncer במצב טרנזקציה דוחה `statement_timeout` כפרמטר חיבור | [append_store.py:136–149](../../app/services/append_store.py) |
 
 ---
 
@@ -158,8 +158,8 @@ hex**. התיקון: `set_type_codec` על **שני** ה-pools שמפענח ל-W
 
 ### תנאי מקדים תפעולי — ✅ **הושלם 23.7.2026**
 
-**לא חלק מ-PostGIS, אבל חסם את שלב 4.** מיטיגציית R4 (ה-`statement_timeout`
-ברמת החיבור) קיימת **רק** על ה-pool הקריא-בלבד. הוא פעיל עכשיו:
+**לא חלק מ-PostGIS, אבל חסם את שלב 4.** מיטיגציית R4 (ה-backstop של `statement_timeout`,
+היום `SET LOCAL` של 30 שנ' בכל טרנזקציה) קיימת **רק** על ה-pool הקריא-בלבד. הוא פעיל עכשיו:
 
 - [x] הסקריפט עודכן לכסות את `idx` (סעיף 3b) ואת `extensions` (3c) + טסטים.
 - [x] התפקיד `over_readonly` הוקם על ה-append DB, עם הרשאות SELECT בלבד על
