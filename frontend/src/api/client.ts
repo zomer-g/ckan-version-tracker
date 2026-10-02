@@ -2010,6 +2010,9 @@ export interface ScrapeQueueResponse {
    *  Same row shape as `failed`; kept apart so a closed laptop is never read
    *  as a defect in the scraper. Older builds omit it. */
   interrupted?: ScrapeQueueFailed[];
+  /** Failures of the last 24h hidden because a later run of the same dataset
+   *  succeeded. Older builds omit it. */
+  failed_resolved?: number;
 }
 
 /**

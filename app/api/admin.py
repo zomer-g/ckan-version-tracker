@@ -690,6 +690,49 @@ async def seed_neon_endpoint(
             "message": "Seeding NEON in the background; check /api/append/{id}/schema."}
 
 
+async def _open_failures(db, now: datetime | None = None, limit: int = 20):
+    """The last 24h's failed scrape tasks that no later run has resolved, and
+    how many were left out because one did."""
+    # Failed tasks in the last 24 hours (max 20) that are still failures: a
+    # failure whose dataset completed a task AFTER it has been resolved by that
+    # run. Listing it anyway kept the panel "full of errors" a day after a fix —
+    # on 2026-10-02 all 20 rows were data.gov.il WAF failures from the morning
+    # before, every one of them since archived (see the blocked-files fixes).
+    from datetime import timedelta
+
+    from sqlalchemy import exists
+    from sqlalchemy.orm import aliased
+
+    from app.models.scrape_task import ScrapeTask
+
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=24)
+    later = aliased(ScrapeTask)
+    resolved = exists().where(and_(
+        later.tracked_dataset_id == ScrapeTask.tracked_dataset_id,
+        later.status == "completed",
+        later.completed_at > ScrapeTask.completed_at,
+    ))
+    rows = (await db.execute(
+        select(ScrapeTask, TrackedDataset)
+        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
+        .where(
+            ScrapeTask.status == "failed",
+            ScrapeTask.completed_at >= cutoff,
+            ~resolved,
+        )
+        .order_by(ScrapeTask.completed_at.desc())
+        .limit(limit)
+    )).all()
+    resolved_count = (await db.execute(
+        select(func.count()).select_from(ScrapeTask).where(
+            ScrapeTask.status == "failed",
+            ScrapeTask.completed_at >= cutoff,
+            resolved,
+        )
+    )).scalar() or 0
+    return rows, resolved_count
+
+
 @router.get("/scrape-tasks")
 @limiter.limit("60/minute")
 async def list_scrape_tasks(
@@ -756,18 +799,7 @@ async def list_scrape_tasks(
         for t, ds in pending_result.all()
     ]
 
-    # Failed tasks in the last 24 hours (max 20)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    failed_result = await db.execute(
-        select(ScrapeTask, TrackedDataset)
-        .join(TrackedDataset, ScrapeTask.tracked_dataset_id == TrackedDataset.id)
-        .where(
-            ScrapeTask.status == "failed",
-            ScrapeTask.completed_at >= cutoff,
-        )
-        .order_by(ScrapeTask.completed_at.desc())
-        .limit(20)
-    )
+    failed_rows, resolved_count = await _open_failures(db)
     # A run the operator cut short is not a scrape that failed. Split the two so
     # a closed laptop stops sitting in the same list as GeometryFetchError — see
     # PHASE_INTERRUPTED. Classified on read, so rows written before the phase
@@ -775,7 +807,7 @@ async def list_scrape_tasks(
     from app.models.scrape_task import is_interrupted
 
     failed, interrupted = [], []
-    for t, ds in failed_result.all():
+    for t, ds in failed_rows:
         row = {
             "task_id": str(t.id),
             "dataset_id": str(ds.id),
@@ -789,7 +821,10 @@ async def list_scrape_tasks(
         (interrupted if is_interrupted(t.phase, t.error) else failed).append(row)
 
     return {"running": running, "pending": pending,
-            "failed": failed, "interrupted": interrupted}
+            "failed": failed, "interrupted": interrupted,
+            # Failures of the last 24h that a later successful run resolved —
+            # counted, not listed.
+            "failed_resolved": resolved_count}
 
 
 @router.delete("/scrape-tasks/{task_id}")

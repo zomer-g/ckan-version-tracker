@@ -1550,12 +1550,24 @@ export default function AdminPage() {
               </div>
             )}
 
+            {/* Failures a later run already fixed are counted, not listed. */}
+            {queue.failed.length === 0 && (queue.failed_resolved ?? 0) > 0 && (
+              <div className="text-sm text-muted">
+                אין כשלים פתוחים · {queue.failed_resolved} כשלים מ-24 השעות האחרונות נפתרו בהרצה מאוחרת יותר
+              </div>
+            )}
+
             {/* Failed */}
             {queue.failed.length > 0 && (
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
                   <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--tint-bad-fg)", flex: 1 }}>
                     <span aria-hidden="true">⚠</span> כשלים אחרונים — 24 שעות ({queue.failed.length})
+                    {(queue.failed_resolved ?? 0) > 0 && (
+                      <span className="text-muted" style={{ fontWeight: 400 }}>
+                        {" "}· ועוד {queue.failed_resolved} שנפתרו בהרצה מאוחרת ואינם מוצגים
+                      </span>
+                    )}
                   </span>
                   {/* Plain-text digest of every failure (title | phase | time +
                       the FULL error) — built for pasting into a debugging chat. */}
