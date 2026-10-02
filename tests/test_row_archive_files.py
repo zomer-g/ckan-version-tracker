@@ -83,6 +83,10 @@ async def _assess(S, ds, versions=()):
         await db.commit()
         await poll_job._assess_files_beside_row_archive(ds, PKG, MOD, db)
         await db.commit()
+    # poll_dataset hands the files over only when the poll is done.
+    queued = poll_job._files_after_poll.pop(str(ds.id), None)
+    if queued:
+        await poll_job._queue_blocked_files_task(*queued)
     async with S() as db:
         tasks = (await db.execute(select(ScrapeTask))).scalars().all()
     return tasks
@@ -212,3 +216,30 @@ def test_the_daily_retry_takes_the_oldest_missing_files_and_skips_busy_ones(Sess
     monkeypatch.setattr(settings, "catalog_watch_blocked_retry_limit", 10)
     _run(catalog_watch._retry_blocked_everywhere({str(old.id)}))
     assert polled == [str(new.id)]      # not busy, not complete, not skipped
+
+
+def test_the_worker_is_asked_only_after_the_poll_is_done(Session, monkeypatch):
+    """A worker asked at the start of the poll pushed its version while the
+    poll was still streaming tables; both took the same version number and the
+    poll died on the unique key (2026-10-01, three datasets)."""
+    ds = _dataset({"archive_neon": True})
+    order = []
+
+    async def _poll(dataset_id, force=False, priority=None):
+        async with Session() as db:
+            db.add(ds)
+            await db.commit()
+            await poll_job._assess_files_beside_row_archive(ds, PKG, MOD, db)
+            await db.commit()
+        async with Session() as db:
+            order.append(("during", len((await db.execute(select(ScrapeTask))).scalars().all())))
+
+    monkeypatch.setattr(poll_job, "_poll_dataset", _poll)
+    poll_job._active_polls.clear()
+    _run(poll_job.poll_dataset(str(ds.id), force=True))
+
+    async def _count():
+        async with Session() as db:
+            return len((await db.execute(select(ScrapeTask))).scalars().all())
+    assert order == [("during", 0)], "no task may exist while the poll is running"
+    assert _run(_count()) == 1, "the files are handed over once it is done"

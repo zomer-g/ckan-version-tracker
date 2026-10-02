@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import uuid
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
@@ -42,6 +43,10 @@ logger = logging.getLogger(__name__)
 # streams would double RSS and OOM the dyno. The set is process-local, so a
 # recycle clears it — no risk of a stale lock stranding a dataset.
 _active_polls: set[str] = set()
+
+# Blocked files a poll found missing, handed to a worker once that poll is
+# done — see _assess_files_beside_row_archive.
+_files_after_poll: dict[str, tuple] = {}
 
 # Global concurrency cap across DIFFERENT datasets. `_active_polls` above only
 # stops the SAME dataset overlapping itself; it does nothing when a deploy
@@ -104,7 +109,13 @@ async def _assess_files_beside_row_archive(ds: TrackedDataset, pkg: dict,
         blocked_resources.remember(ds, entries)
     missing = blocked_resources.pending(entries)
     if missing:
-        await _queue_blocked_files_task(ds, missing)
+        # Queued only when this poll is over (poll_dataset's finally): a worker
+        # that started now finished its push while this poll was still
+        # streaming the tables, both took the same version number, and the
+        # poll died on version_index's unique key (accid_taz,
+        # road_strat_2030, mataan_ashkelon on 2026-10-01).
+        _files_after_poll[str(ds.id)] = (
+            SimpleNamespace(id=ds.id, ckan_name=ds.ckan_name), missing)
         _restate_blocked(ds)
     return True
 
@@ -146,6 +157,9 @@ async def poll_dataset(
                 await _poll_dataset(dataset_id, force=force, priority=priority)
     finally:
         _active_polls.discard(dataset_id)
+        queued = _files_after_poll.pop(dataset_id, None)
+        if queued:
+            await _queue_blocked_files_task(*queued)
 
 
 async def resume_interrupted_appends() -> None:
