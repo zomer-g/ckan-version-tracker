@@ -215,35 +215,34 @@ async def load(parquet_value: str, version_number: int) -> dict:
         async with pool.acquire() as conn:
             for t in (RAW, STAGING):
                 await conn.execute(f"DROP TABLE IF EXISTS public.{t}")
-            # Raw rows into an UNLOGGED table, then ONE write of the final
-            # table with its point built in the same pass.
-            await conn.execute(f"CREATE UNLOGGED TABLE public.{RAW} "
-                               f"({ddl}, lon double precision, lat double precision)")
+            # One write: rows COPY straight into the staging table, and the
+            # point is a generated column the database fills during the COPY.
+            # (xhostd refuses UNLOGGED tables — it backs up only logged data —
+            # so a raw table and a second pass would double every write.)
+            gis = await _postgis(conn)
+            geom = (", geom geometry(Point, 4326) GENERATED ALWAYS AS ("
+                    "CASE WHEN lon IS NOT NULL THEN ST_SetSRID(ST_MakePoint(lon, lat), 4326) END"
+                    ") STORED" if gis else "")
+            await conn.execute(f"CREATE TABLE public.{STAGING} "
+                               f"({ddl}, lon double precision, lat double precision{geom})")
             buf: list[tuple] = []
             for batch in pf.iter_batches(batch_size=BATCH):
                 recs = await asyncio.to_thread(records_from_batch, batch)
                 buf.extend(recs)
                 if len(buf) >= BATCH:
-                    await conn.copy_records_to_table(RAW, records=buf, columns=names,
+                    await conn.copy_records_to_table(STAGING, records=buf, columns=names,
                                                      schema_name="public")
                     rows += len(buf)
                     with_point += sum(1 for r in buf if r[-1] is not None)
                     buf = []
             if buf:
-                await conn.copy_records_to_table(RAW, records=buf, columns=names,
+                await conn.copy_records_to_table(STAGING, records=buf, columns=names,
                                                  schema_name="public")
                 rows += len(buf)
                 with_point += sum(1 for r in buf if r[-1] is not None)
             if rows != pf.metadata.num_rows:
                 raise RuntimeError(f"loaded {rows} of {pf.metadata.num_rows} rows")
 
-            gis = await _postgis(conn)
-            geom = (", CASE WHEN lon IS NOT NULL THEN "
-                    "ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geometry(Point, 4326) END AS geom"
-                    if gis else "")
-            await conn.execute(f"CREATE TABLE public.{STAGING} AS "
-                               f"SELECT *{geom} FROM public.{RAW}")
-            await conn.execute(f"DROP TABLE public.{RAW}")
             for name, expr in (
                 ("objectid", "objectid"), ("settlement", "settlement"),
                 ("gush_parcel", "gush, parcel"), ("deal_date", "deal_date"),
