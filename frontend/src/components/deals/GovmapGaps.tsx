@@ -67,9 +67,7 @@ export default function GovmapGaps() {
           <thead>
             <tr>
               <th style={HEAD}>חלקה</th><th style={HEAD}>יישוב</th>
-              <th style={{ ...HEAD, textAlign: "end" }}>נדל״ן<br />טבלה</th>
-              <th style={{ ...HEAD, textAlign: "end" }}>נדל״ן<br />היסטוריה</th>
-              <th style={{ ...HEAD, textAlign: "end", background: "var(--bg-subtle, rgba(0,0,0,0.04))" }}>נדל״ן<br />סה״כ</th>
+              <th style={{ ...HEAD, textAlign: "end", background: "var(--bg-subtle, rgba(0,0,0,0.04))" }}>אתר הנדל״ן<br />עסקאות + היסטוריה</th>
               <th style={{ ...HEAD, textAlign: "end", background: "var(--bg-subtle, rgba(0,0,0,0.04))" }}>GovMap</th>
               <th style={{ ...HEAD, textAlign: "end" }}>מיסים<br />עסקאות</th>
               <th style={{ ...HEAD, textAlign: "end" }}>GovMap ↔ מיסים<br />מתלכדות</th>
@@ -81,10 +79,8 @@ export default function GovmapGaps() {
               <tr key={parcel}>
                 <td style={CELL}><Ltr>{parcel}</Ltr></td>
                 <td style={CELL}>{town}</td>
-                <td style={NUM}>{table}</td>
-                <td style={NUM}>{history}</td>
                 <td style={{ ...NUM, fontWeight: 700, background: "var(--bg-subtle, rgba(0,0,0,0.04))" }}>
-                  {nadlanTotal(table, history) ?? "—"}
+                  {nadlanTotal(table, history) ?? (table === "אין דף" ? "אין דף" : "—")}
                 </td>
                 <td style={{ ...NUM, fontWeight: 700, background: "var(--bg-subtle, rgba(0,0,0,0.04))" }}>
                   {gm}{nadlanTotal(table, history) === gm && <span title="שווה בדיוק לסה״כ באתר הנדל״ן" style={{ color: "var(--success)" }}> ✓</span>}
@@ -96,7 +92,6 @@ export default function GovmapGaps() {
             ))}
             <tr style={{ fontWeight: 700 }}>
               <td style={CELL}>סה״כ</td><td style={CELL}>—</td>
-              <td style={NUM}>93</td><td style={NUM}>52</td>
               <td style={NUM}>145</td>
               <td style={NUM}>149</td><td style={NUM}>161</td>
               <td style={NUM}>144</td><td style={NUM}>137</td>
@@ -106,8 +101,8 @@ export default function GovmapGaps() {
       </div>
       <p className="text-sm" style={{ marginTop: "0.5rem" }}>
         <strong>איך לקרוא את הטבלה:</strong> הטבלה באתר הנדל״ן מציגה <strong>שורה אחת לכל נכס</strong> — המכירה
-        האחרונה שלו — וכל מכירה קודמת של אותו נכס מוסתרת בהיסטוריה שנפתחת מהשורה. לכן את GovMap, שמציג כל
-        מכירה כשורה, יש להשוות ל״נדל״ן סה״כ״ (טבלה + היסטוריה), ולא לעמודת הטבלה לבדה. ✓ — שווה בדיוק.
+        האחרונה שלו — וכל מכירה קודמת של אותו נכס מוסתרת בהיסטוריה שנפתחת מהשורה. העמודה של אתר הנדל״ן סופרת
+        את שתיהן יחד, כמו GovMap, שמציג כל מכירה כשורה. ✓ — שווה בדיוק.
       </p>
       <p className="text-sm text-muted">
         ״מיסים · עסקאות״ סופר מכירות כפי שבדוח הקודם: שורות של אותה תת־חלקה ואותו יום מכירה הן עסקה
