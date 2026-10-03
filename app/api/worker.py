@@ -2786,6 +2786,16 @@ async def push_version(
         except Exception as e:  # noqa: BLE001
             logger.warning("parquet: could not schedule rebuild for %s: %s", ds.id, e)
 
+    # GovMap's deals layer lands as Parquet only; load it into the table the
+    # /deals page searches (app/services/govmap_deals.py). In the background —
+    # 2.5M rows must never hold a push open.
+    try:
+        from app.services import govmap_deals
+        if str(ds.id) == govmap_deals.DATASET_ID and resource_mappings.get("_parquet"):
+            govmap_deals.schedule()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("govmap deals: could not schedule a load: %s", e)
+
     # Persist checkpoint patch back to scraper_config (archive mode).
     # Done after task commit so a failure here doesn't block version creation.
     if body.scraper_config_patch:

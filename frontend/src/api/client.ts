@@ -3377,6 +3377,86 @@ export interface DealsLog {
   open_note: string;
 }
 
+// ── עסקאות GovMap — שכבת העסקאות של GovMap (שכבה 16) ────────────────────────
+// The deals GovMap draws on its map, one point per building, loaded into a
+// table by app/services/govmap_deals.py. Served by app/api/deals_govmap.py.
+
+export interface GovmapDealFilters {
+  settlement?: string;
+  gush?: number | string;
+  helka?: number | string;
+  sub_parcel?: number | string;
+  street?: string;
+  house?: string;
+  property_type?: string;
+  date_from?: string;
+  date_to?: string;
+  min_amount?: number | string;
+  max_amount?: number | string;
+}
+
+export interface GovmapDeal {
+  objectid: number;
+  deal_id: number | null;
+  deal_date: string | null;
+  deal_date_raw: string | null;
+  deal_amount: number | null;
+  settlement: string | null;
+  street: string | null;
+  house_num: string | null;
+  floor: string | null;
+  asset_area: number | null;
+  rooms: number | null;
+  property_type: string | null;
+  deal_nature: string | null;
+  gush: number | null;
+  parcel: number | null;
+  sub_parcel: number | null;
+  polygon_id: string | null;
+  lon: number | null;
+  lat: number | null;
+}
+
+/** One building's point on the map, with how many deals it carries. */
+export interface GovmapPoint {
+  lon: number;
+  lat: number;
+  deals: number;
+  last_deal: string | null;
+  settlement: string | null;
+  street: string | null;
+  house_num: string | null;
+  gush: number | null;
+  parcel: number | null;
+  polygon_id: string | null;
+}
+
+export interface GovmapStats {
+  deals: number;
+  settlements: number;
+  points: number;
+  first_deal: string | null;
+  last_deal: string | null;
+  version: number;
+  loaded_at: string;
+  dataset_id: string;
+  source_url: string;
+  table: string;
+  caveats: string[];
+}
+
+export const govmapDeals = {
+  stats: () => request<GovmapStats>("/deals/govmap/stats"),
+  settlements: () =>
+    request<{ data: { settlement: string; deals: number }[]; count: number }>("/deals/govmap/settlements"),
+  search: (f: GovmapDealFilters, limit = 50, offset = 0, sort = "date_desc") =>
+    request<{ data: GovmapDeal[]; total: number; total_capped: boolean; caveats: string[] }>(
+      "/deals/govmap/search?" + dealQuery(f as DealFilters, { limit, offset, sort })),
+  points: (f: GovmapDealFilters, bbox?: string) =>
+    request<{ data: GovmapPoint[]; count: number; capped: boolean }>(
+      "/deals/govmap/points?" + dealQuery(f as DealFilters, bbox ? { bbox } : {})),
+};
+
 export const deals = {
   stats: () => request<DealsStats>("/deals/stats"),
   log: () => request<DealsLog>("/deals/log"),

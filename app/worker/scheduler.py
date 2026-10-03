@@ -238,6 +238,18 @@ async def init_scheduler() -> None:
         misfire_grace_time=120,
     )
 
+    # GovMap's deals table (app/services/govmap_deals.py): load the latest
+    # layer-16 version once after boot if the table is behind it — which is how
+    # the first load happens, and how a load cut short by a restart recovers.
+    from app.services import govmap_deals
+    scheduler.add_job(
+        govmap_deals.boot_check,
+        trigger="date",
+        run_date=datetime.now(timezone.utc) + timedelta(minutes=10),
+        id="govmap_deals_boot_check",
+        replace_existing=True,
+    )
+
     # Daily catalog watch: re-read GovMap's layer catalog (new layers join the
     # rollout above, never-triggered first) and the watched data.gov.il orgs.
     # First run a few minutes after boot, so a deploy is also a check.

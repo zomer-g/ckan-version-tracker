@@ -30,12 +30,16 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanGaps = lazy(() => import("../components/deals/NadlanGaps"));
 const NadlanQuiz = lazy(() => import("../components/deals/NadlanQuiz"));
 const DealsLogTab = lazy(() => import("../components/deals/DealsLog"));
+const GovmapDeals = lazy(() => import("../components/deals/GovmapDeals"));
+const GovmapGaps = lazy(() => import("../components/deals/GovmapGaps"));
 
-type Tab = "browse" | "gaps" | "quiz" | "log";
-const TAB_IDS: Tab[] = ["browse", "gaps", "quiz", "log"];
+type Tab = "browse" | "govmap" | "gaps" | "govmapgaps" | "quiz" | "log";
+const TAB_IDS: Tab[] = ["browse", "govmap", "gaps", "govmapgaps", "quiz", "log"];
 const TAB_LABELS: [Tab, string][] = [
   ["browse", "📊 מאגר העסקאות"],
+  ["govmap", "🗺️ עסקאות GovMap"],
   ["gaps", "🔍 פערים מול מיסוי מקרקעין"],
+  ["govmapgaps", "🔎 GovMap מול נדל״ן ומיסים"],
   ["quiz", "🏛 שניים אוחזין בעסקה"],
   ["log", "📝 יומן ממצאים ותיקונים"],
 ];
@@ -613,6 +617,18 @@ export default function DealsPage() {
         {tab === "gaps" && (
           <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
             <NadlanGaps />
+          </Suspense>
+        )}
+
+        {tab === "govmap" && (
+          <Suspense fallback={<div className="text-sm text-muted">טוען את עסקאות GovMap…</div>}>
+            <GovmapDeals />
+          </Suspense>
+        )}
+
+        {tab === "govmapgaps" && (
+          <Suspense fallback={<div className="text-sm text-muted">טוען את הדוח…</div>}>
+            <GovmapGaps />
           </Suspense>
         )}
 
