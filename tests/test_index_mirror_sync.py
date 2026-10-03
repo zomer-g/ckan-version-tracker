@@ -665,24 +665,26 @@ def test_append_never_drops_or_renames_the_live_table(tmp_path, monkeypatch):
         assert "RENAME TO" not in sql, sql
 
 
-def test_append_stages_in_an_unlogged_table_not_a_temp_one(tmp_path, monkeypatch):
-    """The CSV still has to be streamed in full (R2 holds a whole snapshot per
-    version). UNLOGGED keeps that read out of the WAL so only the delta is
-    written durably — and it must NOT be TEMP.
+def test_append_stages_in_a_plain_table_neither_unlogged_nor_temp(tmp_path, monkeypatch):
+    """The CSV is streamed in full into a staging table and diffed away.
 
-    Measured in production on the 244MB הסדרים מותנים משטרה CSV: a temp table
-    lives in the session's LOCAL buffer pool, capped by temp_buffers (8MB by
-    default), and Postgres aborted the whole append with "no empty local buffer
-    available" (localbuf.c). An unlogged table uses shared_buffers and has no
-    such ceiling."""
+    Not UNLOGGED: xhostd refuses it ("UNLOGGED tables and sequences are not
+    supported on xhost" — it backs up only logged data), and every incremental
+    sync failed on it after the move (24 in one day, 2026-10-03).
+
+    Not TEMP: measured in production on the 244MB הסדרים מותנים משטרה CSV, a
+    temp table lives in the session's LOCAL buffer pool, capped by temp_buffers
+    (8MB by default), and Postgres aborted the whole append with "no empty
+    local buffer available" (localbuf.c)."""
     monkeypatch.setattr(index_mirror.settings, "index_mirror_postgis_enabled", False)
     conn = _LoadConn()
     path = _csv(tmp_path, "a,b\n1,2\n")
     asyncio.run(index_mirror._append(conn, path, "t", ["a", "b"], ["a", "b"], [0, 1]))
 
-    assert any("CREATE UNLOGGED TABLE" in s for s in conn.executed)
-    assert not any("TEMP" in s for s in conn.executed), \
-        "temp_buffers caps a temp table at a size these CSVs exceed"
+    creates = [s for s in conn.executed if "CREATE" in s and "TABLE" in s]
+    assert creates, "the append must stage its rows"
+    assert not any("UNLOGGED" in s for s in conn.executed), "xhostd refuses UNLOGGED"
+    assert not any("TEMP" in s for s in conn.executed), "temp_buffers caps a temp table at a size these CSVs exceed"
     assert conn.copied and conn.copied[0][1] == "idx"
 
 

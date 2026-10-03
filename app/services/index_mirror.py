@@ -24,7 +24,7 @@ Design decisions, all settled in the pilot (§10.1):
   ~170 MB of relation (plus its indexes, plus the WAL and the Neon history
   behind it) to record 45 rows. The CSV still has to be streamed in full — R2
   holds a whole snapshot per version, so there is nothing smaller to read — but
-  it lands in an UNLOGGED temp table that is diffed away, and only the delta is
+  it lands in a staging table that is diffed away, and only the delta is
   written durably.
 
   What this trades: the table now accumulates every row ever seen instead of
@@ -942,17 +942,17 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
                   columns: list[str], keep: list[int]) -> dict | None:
     """Insert only the rows the table does not already hold.
 
-    The CSV is a full snapshot, so the whole of it still has to be read — but it
-    lands in an UNLOGGED staging table, which Postgres does not WAL-log, and is
-    then diffed away. Only the delta is written durably, which is what makes a
-    refresh cost the size of the CHANGE instead of the size of the table.
+    The CSV is a full snapshot, so the whole of it still has to be read — it
+    lands in a staging table and is then diffed away, so only the delta reaches
+    the live table. (It was UNLOGGED to skip the WAL; xhostd does not allow
+    that, so the staging table is a plain one.)
 
-    UNLOGGED and not TEMP, which is what the first production run taught us the
+    Not TEMP, which is what the first production run taught us the
     hard way: temp tables live in the session's LOCAL buffer pool, capped by
     ``temp_buffers`` (8MB by default), and a 244MB one exhausts it —
     ``no empty local buffer available`` out of Postgres' localbuf.c, with the
     whole append rolled back. An unlogged table uses shared_buffers like any
-    other relation, so it has no such ceiling while still skipping the WAL.
+    other relation, so it has no such ceiling.
 
     The diff is set-based and runs entirely in the database: no hash set is ever
     built in the dyno's memory, so this costs the same whether the table holds a
@@ -977,7 +977,12 @@ async def _append(conn, tmp: str, table: str, live_cols: list[str],
     # around the load, and holding one open across a multi-minute COPY would only
     # pin the target table for longer.
     await conn.execute(f"DROP TABLE IF EXISTS {_qt(staging)}")
-    await conn.execute(f"CREATE UNLOGGED TABLE {_qt(staging)} ({defs})")
+    # A plain (logged) table: xhostd refuses UNLOGGED outright — "UNLOGGED
+    # tables and sequences are not supported on xhost", since it backs up and
+    # restores only logged data — and every incremental sync failed on this
+    # line after the move (24 in one day, 2026-10-03). TEMP stays out for the
+    # reason below. The cost is WAL for the staged snapshot.
+    await conn.execute(f"CREATE TABLE {_qt(staging)} ({defs})")
     try:
         for batch in _iter_batches(tmp, columns, keep):
             await conn.copy_records_to_table(

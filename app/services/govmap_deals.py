@@ -169,12 +169,17 @@ def records_from_batch(batch) -> list[tuple]:
     return out
 
 
-async def _postgis(conn) -> bool:
+async def _postgis(conn) -> str | None:
+    """The schema PostGIS is installed in, or None without PostGIS.
+
+    On xhostd it is ``extensions``, not ``public`` — an unqualified
+    ``geometry`` failed with 'type "geometry" does not exist' (2026-10-03)."""
     try:
-        return bool(await conn.fetchval(
-            "SELECT true FROM pg_extension WHERE extname = 'postgis'"))
+        return await conn.fetchval(
+            "SELECT n.nspname FROM pg_extension e "
+            "JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'postgis'")
     except Exception:  # noqa: BLE001
-        return False
+        return None
 
 
 async def _ensure_state(conn) -> None:
@@ -220,9 +225,11 @@ async def load(parquet_value: str, version_number: int) -> dict:
             # (xhostd refuses UNLOGGED tables — it backs up only logged data —
             # so a raw table and a second pass would double every write.)
             gis = await _postgis(conn)
-            geom = (", geom geometry(Point, 4326) GENERATED ALWAYS AS ("
-                    "CASE WHEN lon IS NOT NULL THEN ST_SetSRID(ST_MakePoint(lon, lat), 4326) END"
-                    ") STORED" if gis else "")
+            q = f'"{gis}".' if gis else ""
+            geom = (f", geom {q}geometry(Point, 4326) GENERATED ALWAYS AS ("
+                    f"CASE WHEN lon IS NOT NULL THEN "
+                    f"{q}ST_SetSRID({q}ST_MakePoint(lon, lat), 4326) END) STORED"
+                    if gis else "")
             await conn.execute(f"CREATE TABLE public.{STAGING} "
                                f"({ddl}, lon double precision, lat double precision{geom})")
             buf: list[tuple] = []
@@ -271,7 +278,7 @@ async def load(parquet_value: str, version_number: int) -> dict:
         logger.info("govmap deals: loaded v%s — %d rows, %d with a point%s",
                     version_number, rows, with_point, "" if gis else " (no PostGIS)")
         return {"version": version_number, "rows": rows, "with_point": with_point,
-                "postgis": gis}
+                "postgis": bool(gis)}
     finally:
         try:
             os.remove(tmp)
