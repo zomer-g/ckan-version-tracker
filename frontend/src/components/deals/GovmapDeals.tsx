@@ -251,7 +251,9 @@ export default function GovmapDeals() {
       </form>
 
       {/* ── the map ── */}
-      <div style={{ height: 420, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: "0.4rem" }}>
+      {/* isolation: Leaflet's panes carry z-index 400+, which put the map on top
+          of the site's own dialogs; a stacking context keeps them inside it. */}
+      <div style={{ height: 420, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: "0.4rem", position: "relative", isolation: "isolate", zIndex: 0 }}>
         <MapContainer center={ISRAEL} zoom={8} style={{ height: "100%", width: "100%" }} preferCanvas>
           <TileLayer url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
