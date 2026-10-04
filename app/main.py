@@ -772,8 +772,9 @@ _STORY_PAGES = {
 # researchers look first. The human-readable version is /security (SPA) and
 # SECURITY.md in the repository; all three name the same address.
 _SECURITY_TXT = (
+    # Email only: GitHub's private reporting is disabled on the repository
+    # because its notifications never reach the maintainer (see /security).
     "Contact: mailto:guy@z-g.co.il\n"
-    "Contact: https://github.com/zomer-g/ckan-version-tracker/security/advisories/new\n"
     "Policy: https://over.org.il/security\n"
     "Preferred-Languages: he, en\n"
     "Canonical: https://over.org.il/.well-known/security.txt\n"

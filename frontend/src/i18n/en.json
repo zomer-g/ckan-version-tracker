@@ -379,7 +379,7 @@
     "report_item_url": "The URL or endpoint where you saw the problem.",
     "report_item_steps": "What you did to reach it, step by step.",
     "report_item_data": "If data was exposed: what kind, and roughly how many records, without copying the data itself into the email.",
-    "report_private": "You can also use <1>GitHub's private vulnerability reporting</1>, which reaches only the project maintainer.",
+    "report_email_only": "Email is the only reporting channel, deliberately: GitHub's private vulnerability reporting notifies only through GitHub's own app and inbox, which are not checked routinely, so a report there could go unanswered. It is therefore disabled on the repository.",
     "report_txt": "The same details are available in the standard format at <1>/.well-known/security.txt</1>.",
     "mail_subject": "Security report: OVER",
     "expect_title": "What happens after a report",
