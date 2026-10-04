@@ -32,8 +32,8 @@ router = APIRouter(prefix="/api/admin/mcp-users", tags=["admin-mcp"])
 
 class McpUserOut(BaseModel):
     id: str
+    # The email is the only personal datum kept per MCP user (migration 070).
     email: str
-    name: str | None
     tier: str
     is_active: bool
     monthly_quota: int | None
@@ -49,7 +49,6 @@ class McpUserOut(BaseModel):
 
 class InviteRequest(BaseModel):
     email: str
-    name: str | None = None
     tier: str = "beta"
 
 
@@ -92,7 +91,7 @@ async def list_mcp_users(
     for entries in by_user.values():
         entries.sort(key=lambda e: -e["calls"])
     return [McpUserOut(
-        id=str(u.id), email=u.email, name=u.name, tier=u.tier, is_active=u.is_active,
+        id=str(u.id), email=u.email, tier=u.tier, is_active=u.is_active,
         monthly_quota=u.monthly_quota,
         last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
         created_at=u.created_at.isoformat() if u.created_at else "",
@@ -117,13 +116,13 @@ async def invite_mcp_user(
     existing = (await db.execute(select(ApiUser).where(ApiUser.email == email))).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="משתמש MCP עם הכתובת הזו כבר קיים")
-    u = ApiUser(email=email, name=body.name, tier=_validate_tier(body.tier), invited_by=user.id)
+    u = ApiUser(email=email, tier=_validate_tier(body.tier), invited_by=user.id)
     db.add(u)
     await db.commit()
     await db.refresh(u)
-    logger.info("MCP user invited: %s by %s", email, user.email)
+    logger.info("MCP user invited: %s by admin %s", u.id, user.id)
     return McpUserOut(
-        id=str(u.id), email=u.email, name=u.name, tier=u.tier, is_active=u.is_active,
+        id=str(u.id), email=u.email, tier=u.tier, is_active=u.is_active,
         monthly_quota=u.monthly_quota, last_seen_at=None,
         created_at=u.created_at.isoformat() if u.created_at else "",
     )
@@ -152,7 +151,7 @@ async def update_mcp_user(
     await db.commit()
     await db.refresh(u)
     return McpUserOut(
-        id=str(u.id), email=u.email, name=u.name, tier=u.tier, is_active=u.is_active,
+        id=str(u.id), email=u.email, tier=u.tier, is_active=u.is_active,
         monthly_quota=u.monthly_quota,
         last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
         created_at=u.created_at.isoformat() if u.created_at else "",
@@ -175,4 +174,4 @@ async def disable_mcp_user(
     u.is_active = False
     u.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    logger.info("MCP user disabled: %s by %s", u.email, user.email)
+    logger.info("MCP user disabled: %s by admin %s", u.id, user.id)

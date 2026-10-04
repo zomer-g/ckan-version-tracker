@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.database import get_db
+from app.models.mcp import ApiUser
 from app.models.user import User
 from app.rate_limit import limiter
 
@@ -22,6 +23,14 @@ router = APIRouter(prefix="/api/admin/api-access", tags=["admin-api-access"])
 TZ = "Asia/Jerusalem"
 # users lives in schema `auth` (065), outside the app search_path: name it in full.
 _USERS = User.__table__.fullname
+_API_USERS = ApiUser.__table__.fullname
+# Who an actor is, resolved at READ time from the one table that holds the
+# address (site users or MCP users), so the log rows themselves carry an id and
+# no email (app/mcp/auth.py stamps the id only).
+_ACTOR_JOINS = f"""
+        LEFT JOIN {_USERS} u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
+        LEFT JOIN {_API_USERS} au ON l.actor_kind = 'mcp_user' AND au.id::text = l.actor_id"""
+_ACTOR_LABEL = "coalesce(u.email, au.email, l.actor_label)"
 
 
 def _where(
@@ -148,13 +157,12 @@ async def api_access_stats(
 
     top_actors = _iso(await _rows(db, f"""
         SELECT l.actor_kind, l.actor_id,
-               coalesce(max(u.email), max(l.actor_label)) AS label,
+               max({_ACTOR_LABEL}) AS label,
                count(*) AS requests, coalesce(sum(l.bytes_out), 0) AS bytes,
                count(DISTINCT l.ip) AS ips,
                mode() WITHIN GROUP (ORDER BY l.area) AS top_area,
                max(l.ts) AS last_ts
-        FROM api_access_log l
-        LEFT JOIN {_USERS} u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
+        FROM api_access_log l {_ACTOR_JOINS}
         WHERE {where} AND l.actor_kind <> 'anonymous'
         GROUP BY 1, 2 ORDER BY requests DESC LIMIT 30""", p), "last_ts")
 
@@ -200,9 +208,8 @@ async def api_access_recent(
         SELECT l.id, l.ts, l.method, l.path, l.route, l.area, l.query, l.target, l.status,
                l.duration_ms, l.bytes_out, l.ip, l.country, l.user_agent, l.client,
                l.channel, l.actor_kind, l.actor_id,
-               coalesce(u.email, l.actor_label) AS actor_label, l.referer_host
-        FROM api_access_log l
-        LEFT JOIN {_USERS} u ON l.actor_kind = 'user' AND u.id::text = l.actor_id
+               {_ACTOR_LABEL} AS actor_label, l.referer_host
+        FROM api_access_log l {_ACTOR_JOINS}
         WHERE {where}
         ORDER BY l.ts DESC LIMIT :limit OFFSET :offset""", {**p, "limit": limit, "offset": offset})
     for r in rows:

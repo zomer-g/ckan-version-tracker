@@ -36,7 +36,6 @@ SERVICE_USER_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 class McpUser:
     id: uuid.UUID
     email: str
-    name: str | None
     tier: str
     client_id: str | None
 
@@ -45,7 +44,6 @@ def _service_user() -> "McpUser":
     return McpUser(
         id=SERVICE_USER_ID,
         email="service-gateway@over.org.il",
-        name="Discovery Gateway (service)",
         tier="service",
         client_id=None,
     )
@@ -134,5 +132,8 @@ async def authenticate(
     )).scalar_one_or_none()
     if not user:
         return _challenge("invalid_token", "User no longer active")
-    stamp_actor(request, "mcp_user", str(user.id), user.email)
-    return McpUser(id=user.id, email=user.email, name=user.name, tier=user.tier, client_id=claims.get("cid"))
+    # The access log gets the row id only; the admin view resolves it to the
+    # address by joining api_users at read time, so the email is stored in
+    # ONE table rather than copied into every request row.
+    stamp_actor(request, "mcp_user", str(user.id), None)
+    return McpUser(id=user.id, email=user.email, tier=user.tier, client_id=claims.get("cid"))

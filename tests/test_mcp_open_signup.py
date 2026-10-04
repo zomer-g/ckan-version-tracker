@@ -99,6 +99,31 @@ def test_a_first_login_self_registers_at_beta(monkeypatch):
     assert any(isinstance(o, McpOauthCode) for o in db.added)
 
 
+def test_only_the_email_is_kept_of_the_person(monkeypatch):
+    """Data minimisation (migration 070): Google's display name and account id
+    arrive in the userinfo payload and must have nowhere to land. The row has
+    no such attributes at all, so a future `api_user.name = ...` fails loudly
+    rather than quietly re-growing the table."""
+    _google(monkeypatch, {"email": "p@example.com", "id": "g9", "name": "Full Name",
+                          "verified_email": True})
+    db = _FakeDb(existing=None)
+    asyncio.run(oauth.google_callback(_request(), db))
+    (user,) = [o for o in db.added if isinstance(o, ApiUser)]
+    assert not hasattr(ApiUser, "name")
+    assert not hasattr(ApiUser, "google_id")
+    assert {c.name for c in ApiUser.__table__.columns} & {"name", "google_id"} == set()
+    assert user.email == "p@example.com"
+
+
+def test_google_is_not_asked_for_the_profile_scope(monkeypatch):
+    """What is never requested cannot be stored: the authorize redirect asks
+    Google for openid + email and nothing else."""
+    import inspect
+    src = inspect.getsource(oauth.authorize)
+    assert '"scope": "openid email"' in src
+    assert "profile" not in src.split('"scope"')[1].split("\n")[0]
+
+
 def test_a_disabled_user_is_still_refused(monkeypatch):
     _google(monkeypatch, {"email": "off@example.com", "id": "g2", "verified_email": True})
     db = _FakeDb(existing=ApiUser(email="off@example.com", tier="beta", is_active=False))

@@ -29,7 +29,6 @@ export default function McpUsersPanel() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -51,9 +50,8 @@ export default function McpUsersPanel() {
     setBusy(true);
     setErr(null);
     try {
-      await adminApi.mcpInvite(email.trim(), name.trim() || undefined);
+      await adminApi.mcpInvite(email.trim());
       setEmail("");
-      setName("");
       await load();
     } catch (e) {
       setErr((e as Error)?.message ?? String(e));
@@ -88,6 +86,7 @@ export default function McpUsersPanel() {
         משתמש מושבת לא יכול להתחבר. כתובת השרת הראשי:{" "}
         <code dir="ltr" style={{ background: "var(--surface)", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>{MCP_URL}</code>
         {" · "}אפשר גם להוסיף כתובת מראש, לפני ההתחברות הראשונה שלה.
+        {" "}על כל משתמש נשמרת כתובת האימייל בלבד, בלי שם ובלי מזהה Google.
       </div>
 
       <form onSubmit={invite} style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: "0.85rem 0" }}>
@@ -95,11 +94,6 @@ export default function McpUsersPanel() {
           type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
           placeholder="כתובת Google להוספה מראש" dir="ltr"
           style={{ flex: "1 1 16rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
-        />
-        <input aria-label="שם (אופציונלי)"
-          type="text" value={name} onChange={(e) => setName(e.target.value)}
-          placeholder="שם (אופציונלי)"
-          style={{ flex: "0 1 12rem", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "0.85rem" }}
         />
         <button className="btn-primary" type="submit" disabled={busy} style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}>
           {busy ? "מוסיף…" : "הוסף"}
@@ -118,7 +112,6 @@ export default function McpUsersPanel() {
             <thead>
               <tr style={{ textAlign: "right", color: "var(--text-muted)", borderBottom: "2px solid var(--border)" }}>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>אימייל</th>
-                <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>שם</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>סטטוס</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>רמה</th>
                 <th scope="col" style={{ padding: "0.5rem 0.6rem" }}>קריאות (30 יום / סה״כ)</th>
@@ -136,7 +129,6 @@ export default function McpUsersPanel() {
                       <span className="text-muted" style={{ fontSize: "0.72rem", marginInlineStart: "0.4rem" }}>הצטרף לבד</span>
                     )}
                   </td>
-                  <td style={{ padding: "0.5rem 0.6rem" }}>{u.name || "—"}</td>
                   <td style={{ padding: "0.5rem 0.6rem" }}>
                     <span style={{
                       padding: "0.1rem 0.5rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600,

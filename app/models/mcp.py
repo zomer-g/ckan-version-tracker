@@ -19,14 +19,20 @@ def _now() -> datetime:
 
 
 class ApiUser(Base):
-    """Closed-beta invite list — the real MCP access gate."""
+    """Closed-beta invite list — the real MCP access gate.
+
+    Data minimisation (migration 070): the row holds the EMAIL and nothing
+    else about the person. The email is the key the gate works on (it is what
+    Google asserts on each login and what the admin disables or pre-adds); the
+    display name and the Google account id that used to sit beside it served
+    no function and were only more to leak, so they are gone and the OAuth
+    request no longer asks Google for the ``profile`` scope.
+    """
     __tablename__ = "api_users"
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    name: Mapped[str | None] = mapped_column(Text)
-    google_id: Mapped[str | None] = mapped_column(Text, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.users.id", ondelete="SET NULL"))
     tier: Mapped[str] = mapped_column(String(20), nullable=False, default="beta")  # beta|free|pro

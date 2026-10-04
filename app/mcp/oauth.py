@@ -317,7 +317,9 @@ async def authorize(request: Request, db: AsyncSession) -> Response:
         "client_id": settings.google_client_id,
         "redirect_uri": google_callback_url(request),
         "response_type": "code",
-        "scope": "openid email profile",
+        # Email only. The gate needs nothing more, and what is not asked for
+        # cannot be stored or leaked (see ApiUser / migration 070).
+        "scope": "openid email",
         "prompt": "select_account",
         "access_type": "online",
         "state": state,
@@ -369,16 +371,14 @@ async def google_callback(request: Request, db: AsyncSession) -> Response:
         # other direction, disabling a row (is_active=false), which the branch
         # below still enforces. invited_by stays NULL, which is how the admin
         # list tells a self-registered user from an invited one.
-        api_user = ApiUser(email=email, name=info.get("name"), google_id=info.get("id"),
-                           tier="beta", is_active=True)
+        # The email is all that is kept of the person (ApiUser docstring).
+        api_user = ApiUser(email=email, tier="beta", is_active=True)
         db.add(api_user)
         await db.flush()
-        logger.info("MCP: self-registered %s", email)
+        logger.info("MCP: self-registered api_user %s", api_user.id)
     if not api_user.is_active:
         return _err_html(403, "חשבון מושבת", "החשבון שלך מושבת. פנה למנהל המערכת.")
 
-    api_user.google_id = info.get("id") or api_user.google_id
-    api_user.name = info.get("name") or api_user.name
     api_user.last_seen_at = datetime.now(timezone.utc)
 
     auth_code = secrets.token_urlsafe(32)
@@ -401,7 +401,10 @@ async def google_callback(request: Request, db: AsyncSession) -> Response:
     if st.get("client_state"):
         query["state"] = st["client_state"]
     dest = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
-    logger.info("MCP authorization code issued for %s (client %s)", email, st["client_id"])
+    # Log the row id, not the address: the server log is one more place an
+    # email would otherwise accumulate.
+    logger.info("MCP authorization code issued for api_user %s (client %s)",
+                api_user.id, st["client_id"])
     return RedirectResponse(url=dest)
 
 
