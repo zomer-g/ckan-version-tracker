@@ -12,7 +12,12 @@
  *     reporter is credited by name only with their consent.
  *   - `exposure` says what was actually reachable, by whom, for how long, as
  *     far as we know. "Nothing was exposed" is a claim and needs the reason.
- *   - A commit hash is one that exists on master of the public repository.
+ *   - A commit hash is one that exists on master of the PUBLIC repository
+ *     (github.com/zomer-g/ckan-version-tracker), which is where the link
+ *     goes. A local SHA is not that: this repo ships to GitHub and to the
+ *     host by cherry-pick, which gives the same commit a different hash on
+ *     each. Check with `git merge-base --is-ancestor <sha> origin/master`
+ *     before writing one here.
  */
 export type SecurityEntryKind = "report" | "internal";
 
@@ -48,12 +53,12 @@ export const SECURITY_LOG: SecurityEntry[] = [
       en: "Requesters' names and email addresses exposed in the public catalog",
     },
     finding: {
-      he: "התשובה של GET /api/datasets, שעמוד הבית טוען לכל גולש בלי התחברות, כללה לכל מאגר את השדות requester_name ו-requester_email. ב-75 מאגרים השדות היו מלאים בשם ובכתובת של המשתמש שביקש את המעקב.",
-      en: "The response of GET /api/datasets, which the home page loads for every visitor without signing in, carried requester_name and requester_email for every dataset. For 75 datasets they held the name and address of the user who had requested the tracking.",
+      he: "התשובה של GET /api/datasets, שעמוד הבית טוען לכל גולש בלי התחברות, כללה לכל מאגר את השדות requester_name ו-requester_email. ב-75 מאגרים השדות היו מלאים בשם ובכתובת של החשבון שפתח את המעקב.",
+      en: "The response of GET /api/datasets, which the home page loads for every visitor without signing in, carried requester_name and requester_email for every dataset. For 75 datasets they held the name and address of the account that had opened the tracking.",
     },
     exposure: {
-      he: "כל מי שפתח את כלי המפתחים בדפדפן, או קרא את ה-API ישירות, יכול היה לראות את הפרטים. איננו יודעים כמה זמן המצב נמשך לפני הדיווח, ואין לנו דרך לדעת אם מישהו אסף את הנתונים. המדווח ציין שלא שמר ולא העביר אותם.",
-      en: "Anyone opening the browser's developer tools, or reading the API directly, could see the details. We do not know how long this had been the case before the report, and have no way to tell whether anyone collected the data. The reporter stated they kept and passed on nothing.",
+      he: "כל מי שפתח את כלי המפתחים בדפדפן, או קרא את ה-API ישירות, יכול היה לראות את השדות. בדיקה של כל המידע שהיה גלוי העלתה שלא נחשף שום מידע על אנשים אחרים: בכל 75 המאגרים הפרטים היו של מפעיל האתר עצמו, שכן בקשות מעקב מהציבור נשמרות בלי זהות, ורק מאגרים שנפתחו מחשבון המפעיל נשאו מבקש. איננו יודעים כמה זמן המצב נמשך לפני הדיווח. המדווח ציין שלא שמר ולא העביר את הנתונים.",
+      en: "Anyone opening the browser's developer tools, or reading the API directly, could see the fields. A review of everything that was visible found that no information about any other person was exposed: in all 75 datasets the details were the site operator's own, because tracking requests from the public are stored without an identity and only datasets opened from the operator's account carried a requester. We do not know how long this had been the case before the report. The reporter stated they kept and passed on nothing.",
     },
     fix: {
       he: "שני השדות חוזרים כ-null בכל תשובה ציבורית וממולאים רק ברשימת הניהול שמאחורי אימות אדמין; נקודת הקצה הציבורית הפסיקה לבצע JOIN לטבלת המשתמשים בכלל. בהמשך לכך צומצם איסוף המידע באתר: טופס הבקשה למעקב אינו מקבל יותר שם או פרטי קשר, ומשתמשי ה-MCP נשמרים לפי כתובת אימייל בלבד, בלי שם ובלי מזהה Google.",
@@ -64,8 +69,8 @@ export const SECURITY_LOG: SecurityEntry[] = [
       en: "Reported privately by email by a user of the site. Thank you.",
     },
     commits: [
-      { sha: "e7eba0d", label: { he: "הקטלוג הציבורי ללא פרטי המבקש", en: "public catalog without requester details" } },
-      { sha: "48a727e", label: { he: "צמצום איסוף: טופס הבקשה ומשתמשי MCP", en: "less collected: request form and MCP users" } },
+      { sha: "468c5c5", label: { he: "הקטלוג הציבורי ללא פרטי המבקש", en: "public catalog without requester details" } },
+      { sha: "245fcae", label: { he: "צמצום איסוף: טופס הבקשה ומשתמשי MCP", en: "less collected: request form and MCP users" } },
     ],
   },
   {
