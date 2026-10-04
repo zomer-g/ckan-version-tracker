@@ -65,8 +65,8 @@ export const SECURITY_LOG: SecurityEntry[] = [
       en: "Both fields are null in every public response and populated only in the admin-gated list; the public endpoint no longer joins the users table at all. As a follow-up the site collects less: the tracking-request form takes no name or contact details, and MCP users are kept as an email address only, with no name and no Google id.",
     },
     credit: {
-      he: "דווח באופן פרטי במייל על ידי משתמש של האתר. תודה.",
-      en: "Reported privately by email by a user of the site. Thank you.",
+      he: "דווח באופן פרטי במייל על ידי אלי גליק. תודה.",
+      en: "Reported privately by email by Eli Glick. Thank you.",
     },
     commits: [
       { sha: "468c5c5", label: { he: "הקטלוג הציבורי ללא פרטי המבקש", en: "public catalog without requester details" } },

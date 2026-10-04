@@ -1,8 +1,11 @@
 # Security policy
 
-**Report a vulnerability by email to guy@z-g.co.il**, or through GitHub's
-private vulnerability reporting on this repository. Please do not open a
-public issue for something that exposes data; let it be fixed first.
+**Report a vulnerability by email to guy@z-g.co.il.** Email is the only
+channel: GitHub's private vulnerability reporting is deliberately disabled on
+this repository, because its notifications reach only GitHub's own app and
+inbox, which the maintainer does not watch, and a report there could go
+unanswered. Please do not open a public issue for something that exposes
+data; let it be fixed first.
 
 What helps: the URL or endpoint, the steps that got you there, and, if data
 was exposed, what kind and roughly how many records, without copying the data

@@ -122,12 +122,11 @@ export default function SecurityPage() {
             <li>{t("security.report_item_steps")}</li>
             <li>{t("security.report_item_data")}</li>
           </ul>
-          <p>
-            <Trans
-              i18nKey="security.report_private"
-              components={{ 1: <ExtLink href={`${REPO_URL}/security/advisories/new`} /> }}
-            />
-          </p>
+          {/* Email is the ONLY channel, on purpose: GitHub's private
+              vulnerability reporting notifies only through GitHub's own
+              app/inbox, which the maintainer does not watch, so a report
+              there could sit unseen. It is disabled on the repository. */}
+          <p>{t("security.report_email_only")}</p>
           <p className="text-sm text-muted">
             <Trans
               i18nKey="security.report_txt"
