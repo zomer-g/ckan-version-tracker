@@ -276,11 +276,8 @@ export default function RequestForm({
           resource_ids: ids.length > 0 ? ids : undefined,
           split_resources: showResourcePicker && splitResources ? true : undefined,
           preferred_interval: interval,
-          // CKAN keeps its own authoritative title; pass a user-supplied
-          // name only when it differs from the prefill, so the admin sees
-          // the requester's preferred label.
-          requester_name:
-            trimmedName && trimmedName !== datasetTitle ? trimmedName : undefined,
+          // CKAN keeps its own authoritative title, so the name typed here is
+          // shown in the review step only and is not sent.
           requester_notes: notes || undefined,
         });
         if (res?.results) {

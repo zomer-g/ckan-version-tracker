@@ -1788,9 +1788,8 @@ export const publicApi = {
     // instead of a single dataset mirroring them together.
     split_resources?: boolean;
     preferred_interval?: number;
-    requester_name?: string;
+    // No requester name / contact: the request is anonymous by design.
     requester_notes?: string;
-    requester_contact?: string;
   }) =>
     request<{
       message: string;
@@ -1816,9 +1815,7 @@ export const publicApi = {
     source_url: string;
     title: string;
     preferred_interval?: number;
-    requester_name?: string;
     requester_notes?: string;
-    requester_contact?: string;
     // Registered sources with a file picker: what was ticked. Server-relative
     // paths normally; absolute file URLs when split_files is set, since each
     // then has to be classified by the registry on its own. Omitted means
@@ -1850,9 +1847,7 @@ export const publicApi = {
     source_urls: string[];
     title?: string;
     preferred_interval?: number;
-    requester_name?: string;
     requester_notes?: string;
-    requester_contact?: string;
   }) =>
     request<{
       message: string;
@@ -2125,11 +2120,10 @@ export interface CoverageReport {
   local_only: CoverageDataset[];
 }
 
-// MCP closed-beta invited user (api_users row).
+// MCP user (api_users row). The email is the only personal datum kept.
 export interface McpUser {
   id: string;
   email: string;
-  name: string | null;
   tier: string;
   is_active: boolean;
   monthly_quota: number | null;
@@ -2428,8 +2422,8 @@ export const admin = {
   apiAccessRecent: (f: ApiAccessFilters, limit = 200, offset = 0) =>
     request<{ rows: ApiAccessRow[] }>(
       `/admin/api-access/recent?${apiAccessParams(f)}&limit=${limit}&offset=${offset}`),
-  mcpInvite: (email: string, name?: string, tier?: string) =>
-    request<McpUser>("/admin/mcp-users", { method: "POST", body: JSON.stringify({ email, name, tier: tier || "beta" }) }),
+  mcpInvite: (email: string, tier?: string) =>
+    request<McpUser>("/admin/mcp-users", { method: "POST", body: JSON.stringify({ email, tier: tier || "beta" }) }),
   mcpUpdateUser: (id: string, data: { tier?: string; is_active?: boolean; monthly_quota?: number | null }) =>
     request<McpUser>(`/admin/mcp-users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   mcpDisableUser: (id: string) => request<void>(`/admin/mcp-users/${id}`, { method: "DELETE" }),

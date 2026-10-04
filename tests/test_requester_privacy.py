@@ -124,6 +124,32 @@ def test_public_catalog_never_carries_the_requester(client):
     assert REQUESTER_NAME not in r.text
 
 
+def test_a_tracking_request_accepts_no_requester_identity():
+    """The public request form used to offer requester_name / requester_contact.
+    The server never read them; now the contract has no such fields at all, so
+    a client that still sends them has them dropped at the model boundary and
+    nothing personal arrives to be stored."""
+    from app.api.datasets import TrackingRequest
+
+    fields = set(TrackingRequest.model_fields)
+    assert not {"requester_name", "requester_contact", "requester_email"} & fields
+    parsed = TrackingRequest(ckan_id="x", requester_name="פלוני", requester_contact="050")
+    assert "פלוני" not in parsed.model_dump_json()
+    assert "050" not in parsed.model_dump_json()
+
+
+def test_mcp_access_log_rows_carry_the_id_not_the_email():
+    """app/mcp/auth.py stamps the api_users id only; the admin view joins the
+    address back at read time, so the email lives in one table, not in every
+    request row (api_access_log keeps rows for the retention period)."""
+    import inspect
+    from app.mcp import auth
+
+    src = inspect.getsource(auth.authenticate)
+    assert 'stamp_actor(request, "mcp_user", str(user.id), None)' in src
+    assert "user.email)" not in src
+
+
 def test_admin_list_still_shows_the_requester(client):
     r = client.get("/api/admin/datasets")
     assert r.status_code == 200, r.text

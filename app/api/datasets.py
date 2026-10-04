@@ -1997,9 +1997,13 @@ class TrackingRequest(BaseModel):
     file_titles: dict[str, str] | None = None
     # Null → the manifest's cadence for a registered source, else weekly.
     preferred_interval: int | None = None
-    requester_name: str = ""
     requester_notes: str = ""
-    requester_contact: str = ""
+    # No requester identity is accepted here, on purpose. This endpoint is
+    # anonymous and a tracking request needs no name or contact to be acted
+    # on; the forms used to offer a "requester_name" / "requester_contact"
+    # pair that the server never read, and after the 2026-10-04 report that
+    # the catalog was serving requester details to every visitor, the right
+    # amount of personal data to collect from a request is none.
 
 
 async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:

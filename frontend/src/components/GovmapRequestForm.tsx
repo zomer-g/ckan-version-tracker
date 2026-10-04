@@ -87,7 +87,10 @@ export default function GovmapRequestForm({ initialUrl, onClose }: GovmapRequest
       const resp = await publicApi.requestGovmap({
         source_urls: validUrls.map((p) => p.url),
         preferred_interval: interval,
-        requester_name: name || undefined,
+        // The field is the DATASET's name (label "שם המאגר"), which the
+        // server applies as the title; with several layers in one submit it
+        // cannot name them all, so it is only sent for a single layer.
+        title: validUrls.length === 1 && name.trim() ? name.trim() : undefined,
         requester_notes: notes || undefined,
       });
       setResults(resp.results);
