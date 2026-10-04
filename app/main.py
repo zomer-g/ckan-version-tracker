@@ -768,6 +768,29 @@ _STORY_PAGES = {
 }
 
 
+# RFC 9116: where to report a security problem, in the place scanners and
+# researchers look first. The human-readable version is /security (SPA) and
+# SECURITY.md in the repository; all three name the same address.
+_SECURITY_TXT = (
+    "Contact: mailto:guy@z-g.co.il\n"
+    "Contact: https://github.com/zomer-g/ckan-version-tracker/security/advisories/new\n"
+    "Policy: https://over.org.il/security\n"
+    "Preferred-Languages: he, en\n"
+    "Canonical: https://over.org.il/.well-known/security.txt\n"
+    # The RFC requires an expiry under a year away; a stale file reads as an
+    # abandoned contact. Revisit together with the log on /security.
+    "Expires: 2027-10-01T00:00:00.000Z\n"
+)
+
+
+@app.get("/.well-known/security.txt", include_in_schema=False)
+async def security_txt():
+    return Response(
+        _SECURITY_TXT, media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/story/{name}", include_in_schema=False)
 async def serve_story_page(name: str):
     entry = _STORY_PAGES.get(name)

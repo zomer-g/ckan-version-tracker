@@ -16,6 +16,7 @@ import VersionsPage from "./pages/VersionsPage";
 import AppendArchivePage from "./pages/AppendArchivePage";
 import AdminPage from "./pages/AdminPage";
 import AboutPage from "./pages/AboutPage";
+import SecurityPage from "./pages/SecurityPage";
 import RationalePage from "./pages/RationalePage";
 import DecisionAnalysisPage from "./pages/DecisionAnalysisPage";
 import ApiPage from "./pages/ApiPage";
@@ -179,6 +180,9 @@ export default function App() {
           <Route path="/projects/deals" element={<DealsPage />} />
           <Route path="/projects/prices" element={<PricesPage />} />
           <Route path="/about" element={<AboutPage />} />
+          {/* Beside the privacy policy and the accessibility statement: how to
+              report, and the public log of what was reported and fixed. */}
+          <Route path="/security" element={<SecurityPage />} />
           <Route path="/rationale" element={<RationalePage />} />
           {/* The page itself gates on `published` server-side, so the route may
               exist while the analysis is still a draft — only an admin sees it. */}
