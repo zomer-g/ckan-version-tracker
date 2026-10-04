@@ -489,6 +489,11 @@ class DatasetResponse(BaseModel):
     last_polled_at: str | None
     last_modified: str | None
     version_count: int = 0
+    # WHO asked for the tracking. Personal data: populated only when the
+    # serializer is called with ``with_requester=True``, which only the
+    # admin-gated list does. The public catalog (GET /api/datasets) is loaded
+    # by the home page for every anonymous visitor and must never carry it
+    # (reported 2026-10-04: 75 datasets exposed name + email in devtools).
     requester_name: str | None = None
     requester_email: str | None = None
     resource_id: str | None = None
@@ -550,6 +555,7 @@ def _build_source_url(ds: TrackedDataset) -> str:
 def build_dataset_response(
     ds, requester, org, version_count: int,
     *, latest_mappings: dict | None = None, with_archive: bool = False,
+    with_requester: bool = False,
 ) -> DatasetResponse:
     """Serialize one tracked dataset row for the list endpoints.
 
@@ -561,6 +567,10 @@ def build_dataset_response(
     ``with_archive`` opts into the plan-vs-reality derivation, which needs the
     dataset's latest ``resource_mappings``. The paginated admin list passes it;
     the unpaginated public catalog does not (see ArchiveState on why).
+
+    ``with_requester`` opts into the requester's name and email. Only the
+    admin list may pass it — the public catalog is anonymous, and whoever
+    opens it in devtools must not learn who asked for each dataset.
     """
     archive = (
         archive_state_for(ds, latest_mappings, has_versions=version_count > 0)
@@ -581,8 +591,12 @@ def build_dataset_response(
         status=ds.status,
         last_polled_at=ds.last_polled_at.isoformat() if ds.last_polled_at else None,
         last_modified=ds.last_modified,
-        requester_name=requester.display_name if requester else None,
-        requester_email=requester.email if requester else None,
+        requester_name=(
+            requester.display_name if (with_requester and requester) else None
+        ),
+        requester_email=(
+            requester.email if (with_requester and requester) else None
+        ),
         resource_id=ds.resource_id,
         resource_name=None,  # resource name is already in the title
         source_url=_build_source_url(ds),
@@ -616,15 +630,17 @@ async def list_tracked(
     db: AsyncSession = Depends(get_db),
 ):
     """Public endpoint — lists all active/pending tracked datasets."""
-    from app.models.user import User as UserModel
     from app.models.version_index import VersionIndex
     from sqlalchemy import func
     from sqlalchemy.orm import selectinload
 
+    # The requester (users row behind created_by) is deliberately NOT joined:
+    # this response is anonymous and the serializer is told so below, so the
+    # user's name and email never reach the wire from here. The admin list
+    # (app/api/admin.py) is the one place that joins and opts in.
     result = await db.execute(
-        select(TrackedDataset, UserModel, Organization)
+        select(TrackedDataset, Organization)
         .options(selectinload(TrackedDataset.tags))
-        .outerjoin(UserModel, TrackedDataset.created_by == UserModel.id)
         .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(
             TrackedDataset.status.in_(["active", "pending"]),
@@ -650,8 +666,8 @@ async def list_tracked(
     version_counts = dict(count_result.all())
     # Build response — no external API calls here (performance critical)
     return [
-        build_dataset_response(ds, requester, org, version_counts.get(ds.id, 0))
-        for ds, requester, org in rows
+        build_dataset_response(ds, None, org, version_counts.get(ds.id, 0))
+        for ds, org in rows
     ]
 
 

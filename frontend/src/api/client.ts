@@ -233,6 +233,7 @@ export interface TrackedDataset {
   last_polled_at: string | null;
   last_modified: string | null;
   version_count: number;
+  // Admin list only; always null on the public catalog (personal data).
   requester_name: string | null;
   requester_email: string | null;
   resource_id: string | null;
