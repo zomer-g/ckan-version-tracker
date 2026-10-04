@@ -2072,6 +2072,7 @@ async def admin_datasets(
                 ds, requester, org, version_counts.get(ds.id, 0),
                 latest_mappings=latest_mappings.get(ds.id),
                 with_archive=True,
+                with_requester=True,
             )
             for ds, requester, org in rows
         ],
