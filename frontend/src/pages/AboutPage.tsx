@@ -223,6 +223,7 @@ export default function AboutPage() {
               components={{
                 strong: <strong />,
                 1: <a href="mailto:guy@z-g.co.il" />,
+                2: <Link to="/security" />,
               }}
             />
           </p>
