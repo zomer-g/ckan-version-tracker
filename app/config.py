@@ -770,7 +770,8 @@ class Settings(BaseSettings):
 
     @property
     def on_xhostd(self) -> bool:
-        return bool(os.environ.get("XHOST_SHA") or os.environ.get("XHOST_HTTP_PORT"))
+        # Both spellings: xhostd renamed XHOST_* to XHOSTD_* (2026-10).
+        return any(os.environ.get(k) for k in ("XHOSTD_SHA", "XHOSTD_HTTP_PORT", "XHOST_SHA", "XHOST_HTTP_PORT"))
 
     @property
     def writers_enabled(self) -> bool:

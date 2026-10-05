@@ -1,6 +1,6 @@
 #!/bin/sh
 # xhostd runtime step: runs at boot as user `app` with the full env. It must
-# answer HTTP on $XHOST_HTTP_PORT within 120 seconds, and exec so uvicorn
+# answer HTTP on $XHOSTD_HTTP_PORT within 120 seconds, and exec so uvicorn
 # receives stop signals.
 set -eu
 cd "$(dirname "$0")"
@@ -24,6 +24,9 @@ fi
 
 # Trusted forwarders: loopback and the private ranges, as on Render, never "*".
 # Narrow to the ingress range measured on xhostd once it is known (plan, wave 2).
-exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$XHOST_HTTP_PORT" \
+# xhostd renamed its variables (XHOST_* -> XHOSTD_*, 2026-10); with `set -u` the
+# old name alone made every boot fail. New name first, then the old, then PORT.
+HTTP_PORT="${XHOSTD_HTTP_PORT:-${XHOST_HTTP_PORT:-${PORT:-}}}"
+exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$HTTP_PORT" \
   --proxy-headers \
   --forwarded-allow-ips="127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"

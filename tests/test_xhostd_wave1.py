@@ -76,8 +76,8 @@ def test_boot_refuses_the_platform_bucket_on_xhostd(monkeypatch):
 
 
 def test_boot_does_not_ask_for_r2_names_elsewhere(monkeypatch):
-    monkeypatch.delenv("XHOST_SHA", raising=False)
-    monkeypatch.delenv("XHOST_HTTP_PORT", raising=False)
+    for k in ("XHOSTD_SHA", "XHOSTD_HTTP_PORT", "XHOST_SHA", "XHOST_HTTP_PORT"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(M.settings, "r2_endpoint", "")
     M._refuse_platform_bucket_as_archive()
 
