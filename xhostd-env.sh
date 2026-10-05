@@ -42,7 +42,14 @@ fi
 export DATABASE_URL_DIRECT
 archive_direct="${APPEND_DATABASE_URL:-$DATABASE_URL_DIRECT}"
 
-DATABASE_URL=$(over_to_asyncpg "${OVER_DATABASE_URL:-${DATABASE_URL:-}}")
+# 2026-10-05: the app engine goes direct as well. Through the transaction-mode
+# pooler the write role has 5 server slots. Scheduler jobs keep a transaction
+# open for minutes, the 5 slots filled, and every further query of the role
+# waited on the pooler: /api answered 500 after 30s, and the boot grants script
+# waited on its first query until the 120s health check killed the container.
+# A direct connection costs one of the role's 15, so app/database.py caps the
+# engine's pool; the read-only console role keeps the pooler.
+DATABASE_URL="$DATABASE_URL_DIRECT"
 export DATABASE_URL
 export APPEND_DATABASE_URL="${APPEND_DATABASE_URL:-$DATABASE_URL}"
 export APPEND_READONLY_DATABASE_URL="${APPEND_READONLY_DATABASE_URL:-${DATABASE_URL_READONLY:-}}"

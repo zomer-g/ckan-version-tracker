@@ -133,6 +133,11 @@ engine = create_async_engine(
     connect_args=connect_args,
     pool_recycle=300,        # Recycle connections after 5 min (Neon idle timeout)
     pool_pre_ping=True,      # Test connections before use (detects closed connections)
+    # xhostd's write role allows 15 server connections, direct and pooled
+    # together, and this engine now connects direct (xhostd-env.sh). 5 + 5 here
+    # leaves room for the archive pool (5), ocal (2) and ocoi (2) at their peaks.
+    pool_size=5,
+    max_overflow=5,
 )
 install_app_search_path(engine.sync_engine, db_url)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
