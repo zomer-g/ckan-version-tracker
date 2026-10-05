@@ -1320,6 +1320,15 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     for v in v_result.all():
         versions_by_ds.setdefault(str(v.tracked_dataset_id), []).append(v)
 
+    # Both reads are done; nothing below touches the session again. Give the
+    # connection back before the fan-out: it awaits odata and R2 for minutes,
+    # and a session holds its connection, idle in transaction, until it ends.
+    # Behind a transaction-mode pooler (xhostd, 2026-10-05) that one held
+    # transaction was one of the write role's five server slots for the whole
+    # wait, and this job alone could take the pooler down for every request.
+    from app.database import release_connection
+    await release_connection(db)
+
     # Capped low (not 10) — this fan-out shares a 512MB dyno with scheduled
     # poll jobs; too much concurrency here was a contributor to OOM crashes.
     sem = asyncio.Semaphore(4)
