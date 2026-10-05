@@ -12,8 +12,11 @@ from app.models import User, TrackedDataset, VersionIndex  # noqa: F401
 
 config = context.config
 
+# Migrations run on the direct address, never through the transaction-mode
+# pooler: the search_path below is a session SET, and an autocommit_block runs
+# outside the migration's transaction.
 # Strip sslmode from URL — asyncpg doesn't support it as a query param
-raw_url = settings.database_url
+raw_url = settings.database_url_direct or settings.database_url
 if "sslmode=" in raw_url:
     parsed = urlparse(raw_url)
     params = parse_qs(parsed.query)

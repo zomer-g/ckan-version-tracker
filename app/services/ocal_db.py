@@ -100,7 +100,10 @@ async def get_pool() -> asyncpg.Pool:
                     ssl=ctx,
                     server_settings={"search_path": _SEARCH_PATH},
                     min_size=0,            # let Neon scale to zero between requests
-                    max_size=5,
+                    # Direct connection (xhostd-env.sh): 2 here, 2 for ocoi and
+                    # the pooler's 5 stay inside the role's limit of 15, even
+                    # while two containers overlap during a deploy.
+                    max_size=2,
                     command_timeout=60,
                     statement_cache_size=0,  # Neon pooler-safe
                     init=_init_conn,

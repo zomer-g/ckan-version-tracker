@@ -37,6 +37,10 @@ def parse_pg_target(dsn: str) -> tuple[str, int, str] | None:
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/ckan_tracker"
+    # The same database without xhostd's transaction-mode pooler, for what needs
+    # its session to last (alembic). Set by xhostd-env.sh. Empty means
+    # database_url is direct already.
+    database_url_direct: str = ""
 
     jwt_secret_key: str = ""
 

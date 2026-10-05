@@ -5,7 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from app.config import settings
+from app.config import parse_pg_target, settings
 
 # The application's own tables live in schema `app`; credentials in `auth`.
 # `public` is for published data only, because on xhostd the platform's read-only
@@ -44,11 +44,15 @@ APP_TABLES = frozenset({
 
 
 def _is_pgbouncer(url: str) -> bool:
-    # Neon's pooler endpoints carry "-pooler" in the host. In transaction mode
-    # PgBouncer hands a server connection to whichever client comes next, so a
-    # session SET would leak to others and be missing for us. There the search_path
-    # comes from the role default instead (ALTER ROLE ... IN DATABASE ... SET).
-    return "-pooler" in (urlsplit(url).hostname or "")
+    # Neon's pooler endpoints carry "-pooler" in the host. On xhostd, DATABASE_URL
+    # goes through a transaction-mode PgBouncer when it differs from
+    # DATABASE_URL_DIRECT. In transaction mode PgBouncer hands a server connection
+    # to whichever client comes next, so a session SET would leak to others and be
+    # missing for us.
+    if "-pooler" in (urlsplit(url).hostname or ""):
+        return True
+    direct = settings.database_url_direct
+    return bool(direct) and parse_pg_target(url) != parse_pg_target(direct)
 
 
 def app_db_connect_args(url: str) -> dict:
@@ -73,25 +77,33 @@ def app_search_path_applies(url: str) -> bool:
 
 
 def install_app_search_path(sync_engine, url: str) -> None:
-    """Pin `search_path = app, public` on every new connection of the APP engine.
+    """Pin `search_path = app, public` for the APP engine.
 
-    A SET inside the session, not a startup parameter. Measured on a Neon branch:
-    asyncpg's server_settings search_path did not take effect through Neon's
-    endpoint, while SET SESSION did. A SET holds on any direct connection, which
-    is what xhostd gives an app. Autocommit around it, because a SET issued inside
-    a transaction that is later rolled back is rolled back with it.
+    On a direct connection, a SET inside the session on every new connection, not
+    a startup parameter. Measured on a Neon branch: asyncpg's server_settings
+    search_path did not take effect through Neon's endpoint, while SET SESSION
+    did. Autocommit around it, because a SET issued inside a transaction that is
+    later rolled back is rolled back with it.
+
+    Behind a transaction-mode pooler (xhostd's DATABASE_URL), a SET LOCAL at the
+    start of every transaction instead. It ends with the transaction, so it never
+    reaches the next client of that server connection, and every transaction of
+    ours sets it again. xhostd's pooler also refuses search_path as a startup
+    parameter.
     """
-    if not app_search_path_applies(url):
-        return
-
-    @event.listens_for(sync_engine, "connect")
-    def _pin_app_search_path(dbapi_connection, _connection_record):
-        previous = dbapi_connection.autocommit
-        dbapi_connection.autocommit = True
-        cursor = dbapi_connection.cursor()
-        cursor.execute(f"SET SESSION search_path TO {APP_SEARCH_PATH}")
-        cursor.close()
-        dbapi_connection.autocommit = previous
+    if app_search_path_applies(url):
+        @event.listens_for(sync_engine, "connect")
+        def _pin_app_search_path(dbapi_connection, _connection_record):
+            previous = dbapi_connection.autocommit
+            dbapi_connection.autocommit = True
+            cursor = dbapi_connection.cursor()
+            cursor.execute(f"SET SESSION search_path TO {APP_SEARCH_PATH}")
+            cursor.close()
+            dbapi_connection.autocommit = previous
+    elif url.startswith("postgresql"):
+        @event.listens_for(sync_engine, "begin")
+        def _pin_app_search_path_per_transaction(conn):
+            conn.exec_driver_sql(f"SET LOCAL search_path TO {APP_SEARCH_PATH}")
 
 
 def _prepare_db_url_and_args() -> tuple[str, dict]:

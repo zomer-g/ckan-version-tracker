@@ -56,18 +56,37 @@ def test_no_model_names_a_schema_other_than_auth():
 
 # ── only the app engine gets the search_path ────────────────────────────────
 
-@pytest.mark.parametrize("url,pinned,ssl", [
-    ("postgresql+asyncpg://u:p@ep-x-123.eu-central-1.aws.neon.tech/neondb", True, True),
-    # PgBouncer transaction mode would hand a session SET to other clients.
-    ("postgresql+asyncpg://u:p@ep-x-123-pooler.eu-central-1.aws.neon.tech/neondb", False, True),
-    ("postgresql+asyncpg://u:p@10.200.2.2:5432/over", True, False),
-    ("sqlite+aiosqlite:///:memory:", False, False),
+_XHOSTD_DIRECT = "postgresql+asyncpg://u:p@10.200.2.2:5432/over"
+
+
+@pytest.mark.parametrize("url,direct,pinned,per_transaction,ssl", [
+    ("postgresql+asyncpg://u:p@ep-x-123.eu-central-1.aws.neon.tech/neondb", "", True, False, True),
+    # PgBouncer transaction mode would hand a session SET to other clients, so
+    # behind a pooler the pin is SET LOCAL in every transaction instead.
+    ("postgresql+asyncpg://u:p@ep-x-123-pooler.eu-central-1.aws.neon.tech/neondb", "", False, True, True),
+    ("postgresql+asyncpg://u:p@10.200.2.2:5432/over", "", True, False, False),
+    # xhostd: DATABASE_URL equals DATABASE_URL_DIRECT where there is no pooler.
+    ("postgresql+asyncpg://u:p@10.200.2.2:5432/over", _XHOSTD_DIRECT, True, False, False),
+    # xhostd's pooler: DATABASE_URL on 6432, DATABASE_URL_DIRECT on 5432.
+    ("postgresql+asyncpg://u:p@10.200.2.2:6432/over", _XHOSTD_DIRECT, False, True, False),
+    ("sqlite+aiosqlite:///:memory:", "", False, False, False),
 ])
-def test_app_search_path_is_pinned_only_on_direct_postgres(url, pinned, ssl):
+def test_app_search_path_is_pinned_only_on_direct_postgres(
+        monkeypatch, url, direct, pinned, per_transaction, ssl):
+    from sqlalchemy import create_engine
+
+    monkeypatch.setattr(D.settings, "database_url_direct", direct)
     assert D.app_search_path_applies(url) is pinned
     args = D.app_db_connect_args(url)
     assert "server_settings" not in args  # a startup parameter did not survive Neon's endpoint
     assert ("ssl" in args) is ssl
+
+    # The URL decides which listener goes in; any engine serves as the target.
+    target = create_engine("sqlite://")
+    connect_before = len(target.pool.dispatch.connect)
+    D.install_app_search_path(target, url)
+    assert (len(target.pool.dispatch.connect) > connect_before) is pinned
+    assert bool(target.dispatch.begin) is per_transaction
 
 
 # ── the console role cannot read an app table ───────────────────────────────
