@@ -341,16 +341,16 @@ function importSummary(r: OcalExpensesImport): string {
   const rows = r.files.reduce((n, f) => n + f.rows, 0);
   const parts = [`יובאו ${r.files.length} קבצים (${rows.toLocaleString()} שורות)`];
   if (r.linked) parts.push(`${r.linked.matched_to_diary_owner} מתוך ${r.linked.mk_names} שמות ח"כ קושרו לבעלי יומנים`);
-  if (r.errors.length) parts.push(`${r.errors.length} נכשלו: ${r.errors.map((e) => `${e.url || e.file} — ${e.error}`).join("; ")}`);
+  if (r.errors.length) parts.push(`${r.errors.length} נכשלו: ${r.errors.map((e) => `${e.file} — ${e.error}`).join("; ")}`);
   return parts.join(" · ");
 }
 
 function OwnersSection() {
   const { node, ok, fail } = useMsg();
   const [files, setFiles] = useState<OcalExpenseFile[]>([]);
-  const [url, setUrl] = useState("");
+  const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const load = useCallback(() => { ocalAdmin.expenseFiles().then((r) => setFiles(r.files)).catch(fail); }, []); // eslint-disable-line
+  const load = useCallback(() => { ocalAdmin.expenseFiles().then((r) => { setFiles(r.files); setEnabled(r.enabled); }).catch(fail); }, []); // eslint-disable-line
   useEffect(() => { load(); }, [load]);
 
   const run = async (label: string, fn: () => Promise<string>) => {
@@ -367,27 +367,26 @@ function OwnersSection() {
       </p>
       <button style={btn} disabled={!!busy} onClick={() => run("owners", async () => {
         const r = await ocalAdmin.rebuildOwners();
-        return `${r.sources} יומנים · ${r.distinct_owners} בעלי יומנים (${r.person_links} קישורי אנשים) · ` +
-          `${r.expenses.matched_to_diary_owner}/${r.expenses.mk_names} שמות ח"כ קושרו`;
+        return `${r.sources} יומנים · ${r.distinct_owners} בעלי יומנים (${r.person_links} קישורי אנשים)` +
+          (r.expenses ? ` · ${r.expenses.matched_to_diary_owner}/${r.expenses.mk_names} שמות בהוצאות קושרו` : "");
       })}>{busy === "owners" ? "מחלץ…" : "חלץ בעלי יומנים מחדש"}</button>
 
-      <h3 style={{ margin: "1.2rem 0 0.3rem", fontSize: "1rem" }}>הוצאות קשר עם הבוחר (אתר הכנסת)</h3>
+      <h3 style={{ margin: "1.2rem 0 0.3rem", fontSize: "1rem" }}>הוצאות קשר עם הבוחר</h3>
+      {!enabled ? (
+        <>
+          <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+            השכבה כבויה עד שייבחר מקור נתונים. ההפעלה: <code>OCAL_MK_EXPENSES_ENABLED=true</code>,
+            ואז העלאת קבצי האקסל כאן.
+          </p>
+          {node}
+        </>
+      ) : (<>
       <p className="text-sm text-muted" style={{ marginTop: 0 }}>
-        ייבוא חד-פעמי של קבצי האקסל שהכנסת מפרסמת על הוצאות חברי הכנסת מתקציב "קשר עם הציבור".
-        הדביקו את כתובת העמוד באתר הכנסת — כל קבצי ה-xls/xlsx שמקושרים ממנו ייובאו. ייבוא חוזר מחליף את אותם קבצים.
-        אם האתר חוסם את השרת, הורידו את הקבצים והעלו אותם כאן.
+        העלאת קבצי אקסל של הוצאות קשר עם הבוחר. השורות מקושרות לבעלי היומנים לפי שם; העלאה חוזרת של קובץ מחליפה אותו.
       </p>
-      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
-        <input style={{ ...inp, flex: "1 1 360px" }} dir="ltr" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://main.knesset.gov.il/…" aria-label="כתובת עמוד ההוצאות באתר הכנסת" />
-        <button style={btn} disabled={!!busy || !url.trim()} onClick={() => run("page", async () =>
-          importSummary(await ocalAdmin.expensesImportPage(url.trim())))}>
-          {busy === "page" ? "מייבא…" : "ייבא מהעמוד"}
-        </button>
-      </div>
       <div style={{ marginTop: "0.5rem" }}>
         <label className="text-sm">
-          או העלאת קבצים:{" "}
+          העלאת קבצים:{" "}
           <input type="file" multiple accept=".xls,.xlsx" disabled={!!busy} onChange={(e) => {
             const list = e.target.files;
             if (!list || list.length === 0) return;
@@ -434,6 +433,7 @@ function OwnersSection() {
           </tbody>
         </table>
       </div>
+      </>)}
     </div>
   );
 }

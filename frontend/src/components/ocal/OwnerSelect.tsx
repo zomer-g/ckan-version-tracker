@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { ocal, OcalOwner } from "../../api/client";
 
 // One fetch per page load: the list is ~300 rows and every Ocal tab uses it.
-let ownersPromise: Promise<OcalOwner[]> | null = null;
+type OwnersResponse = { data: OcalOwner[]; expenses_enabled: boolean };
+let ownersPromise: Promise<OwnersResponse> | null = null;
 
-export function loadOwners(): Promise<OcalOwner[]> {
+function loadOwnersResponse(): Promise<OwnersResponse> {
   if (!ownersPromise) {
-    ownersPromise = ocal.owners().then((r) => r.data).catch((e) => {
+    ownersPromise = ocal.owners().catch((e) => {
       ownersPromise = null;
       throw e;
     });
@@ -14,14 +15,25 @@ export function loadOwners(): Promise<OcalOwner[]> {
   return ownersPromise;
 }
 
-export function useOcalOwners(): OcalOwner[] {
-  const [owners, setOwners] = useState<OcalOwner[]>([]);
+export function loadOwners(): Promise<OcalOwner[]> {
+  return loadOwnersResponse().then((r) => r.data);
+}
+
+/** The owners, and whether the contact-with-the-voter expenses layer is on. */
+export function useOcalOwnersInfo(): { owners: OcalOwner[]; expensesEnabled: boolean } {
+  const [info, setInfo] = useState<{ owners: OcalOwner[]; expensesEnabled: boolean }>({ owners: [], expensesEnabled: false });
   useEffect(() => {
     let live = true;
-    loadOwners().then((o) => { if (live) setOwners(o); }).catch(() => {});
+    loadOwnersResponse()
+      .then((r) => { if (live) setInfo({ owners: r.data, expensesEnabled: r.expenses_enabled }); })
+      .catch(() => {});
     return () => { live = false; };
   }, []);
-  return owners;
+  return info;
+}
+
+export function useOcalOwners(): OcalOwner[] {
+  return useOcalOwnersInfo().owners;
 }
 
 const byLabel = (a: OcalOwner, b: OcalOwner) => a.label.localeCompare(b.label, "he");

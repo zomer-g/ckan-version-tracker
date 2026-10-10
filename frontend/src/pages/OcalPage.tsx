@@ -14,7 +14,7 @@ const TAB_LABELS: [OcalTab, string][] = [
   ["search", "🔍 חיפוש"],
   ["calendar", "📅 לוח שנה"],
   ["diaries", "📚 יומנים"],
-  ["owners", "👤 בעלי יומנים והוצאות"],
+  ["owners", "👤 בעלי יומנים"],
 ];
 
 /**
@@ -61,8 +61,8 @@ export default function OcalPage() {
           <h1 style={{ margin: 0 }}>יומן לעם</h1>
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             יומני הפגישות הרשמיים של נבחרי ציבור ובכירים בשירות הציבורי, מרוכזים, מנוקים ומקושרים
-            למקור. חיפוש חופשי, תצוגת לוח שנה, קטלוג היומנים להורדה, ולכל בעל יומן — כל היומנים שלו
-            והוצאות הקשר עם הבוחר שפרסמה הכנסת.
+            למקור. חיפוש חופשי, תצוגת לוח שנה, קטלוג היומנים להורדה, וכל היומנים של כל בעל
+            יומן.
             {stats && (
               <div style={{ marginTop: "0.4rem" }}>
                 {stats.total_events.toLocaleString()} אירועים · {stats.total_sources.toLocaleString()} יומנים ·{" "}

@@ -1,20 +1,16 @@
-"""Knesset "קשר עם הציבור" (contact with the public / the voter) expenses for
-יומן לעם (Ocal) — a one-time import of the Excel files the Knesset publishes,
+"""Contact-with-the-voter ("קשר עם הבוחר") expenses for יומן לעם (Ocal),
 linked to the diary owners of ocal_owners.py.
 
-Each Member of Knesset has an annual budget for contact with the public; the
-Knesset publishes what each MK spent from it as a set of Excel files (one or
-more per year) on a single page of knesset.gov.il. This module:
+The data source is not chosen yet, so the layer is OFF
+(``settings.ocal_mk_expenses_enabled``) and nothing fetches data on its own.
+Once a source is provided, its Excel files are loaded through the admin upload:
 
-  * ``discover_files(page_url)`` — fetches that page and lists the .xls/.xlsx
-    links on it (with the link text, which usually carries the year);
   * ``parse_workbook(data, filename)`` — reads one file into expense rows,
-    handling both layouts the Knesset has used: *wide* (one row per MK, one
-    column per expense category plus a total) and *long* (one row per expense
-    item, with a category / supplier column and an amount);
-  * ``import_file`` / ``import_page`` — stores the rows in the ocal DB
-    (``mk_expense_files`` + ``mk_expenses``), replacing an earlier import of the
-    same file, so re-running is safe;
+    handling two layouts: *wide* (one row per person, one column per expense
+    category plus a total) and *long* (one row per expense item, with a category
+    / supplier column and an amount);
+  * ``import_file`` — stores the rows in the ocal DB (``mk_expense_files`` +
+    ``mk_expenses``), replacing an earlier import of the same file;
   * ``link_expenses`` — sets each row's ``owner_key`` to the diary owner with the
     same name (order-insensitive, see ocal_owners.names_match), so a single owner
     can be shown with both their diaries and their expenses.
@@ -27,9 +23,7 @@ from __future__ import annotations
 import io
 import logging
 import re
-from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
-
+from app.config import settings
 from app.services import ocal_db
 from app.services.ocal_owners import (
     ensure_tables as ensure_owner_tables, name_key, name_tokens, names_match,
@@ -38,72 +32,7 @@ from app.services.ocal_owners import (
 
 logger = logging.getLogger(__name__)
 
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 MAX_FILE_BYTES = 30 * 1024 * 1024
-
-# ── page discovery ───────────────────────────────────────────────────────────
-
-_XLS_HREF_RE = re.compile(r"\.(xlsx?|xlsm)(?:$|[?#])", re.IGNORECASE)
-
-
-class _LinkParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.links: list[tuple[str, str]] = []
-        self._href: str | None = None
-        self._text: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "a":
-            self._href = dict(attrs).get("href")
-            self._text = []
-
-    def handle_data(self, data):
-        if self._href is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if tag == "a" and self._href is not None:
-            self.links.append((self._href, " ".join("".join(self._text).split())))
-            self._href = None
-
-
-def excel_links(html: str, base_url: str) -> list[dict]:
-    """``[{url, text}]`` for every Excel link in ``html``, de-duplicated."""
-    p = _LinkParser()
-    p.feed(html)
-    out, seen = [], set()
-    for href, text in p.links:
-        if not href or not _XLS_HREF_RE.search(href):
-            continue
-        url = urljoin(base_url, href.strip())
-        if url in seen:
-            continue
-        seen.add(url)
-        out.append({"url": url, "text": text})
-    return out
-
-
-async def _get(url: str):
-    import httpx
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60,
-                                 headers={"User-Agent": _UA, "Accept-Language": "he,en;q=0.8"}) as c:
-        r = await c.get(url)
-        r.raise_for_status()
-        return r
-
-
-async def discover_files(page_url: str) -> list[dict]:
-    if _XLS_HREF_RE.search(urlsplit(page_url).path):
-        return [{"url": page_url, "text": ""}]
-    r = await _get(page_url)
-    links = excel_links(r.text, str(r.url))
-    if not links:
-        raise ValueError(
-            "לא נמצאו קישורים לקבצי Excel בעמוד. ייתכן שהאתר חסם את הבקשה (עמוד אימות) — "
-            "אפשר להוריד את הקבצים ידנית ולהעלות אותם כאן.")
-    return links
 
 
 # ── workbook parsing ─────────────────────────────────────────────────────────
@@ -222,7 +151,7 @@ def _context_year(*texts: str) -> int | None:
 
 
 def parse_workbook(data: bytes, filename: str, link_text: str = "") -> dict:
-    """Expense rows from one Knesset workbook.
+    """Expense rows from one expenses workbook.
 
     Returns ``{"rows": [...], "sheets": [...], "layout": ..., "year": ...}``;
     each row is ``{mk_name, faction, year, category, description, amount,
@@ -389,32 +318,6 @@ async def import_file(data: bytes, *, source_url: str, file_name: str, title: st
             "mks": len({r["mk_name"] for r in rows}), "sheets": parsed["sheets"]}
 
 
-async def import_page(page_url: str, imported_by: str | None = None) -> dict:
-    """Discover every Excel file on the Knesset page and import each one."""
-    links = await discover_files(page_url)
-    results, errors = [], []
-    for ln in links:
-        url = ln["url"]
-        host = (urlsplit(url).hostname or "").lower()
-        if not (host == "knesset.gov.il" or host.endswith(".knesset.gov.il")):
-            errors.append({"url": url, "error": "not a knesset.gov.il file — skipped"})
-            continue
-        fname = urlsplit(url).path.rsplit("/", 1)[-1]
-        from urllib.parse import unquote
-        fname = unquote(fname)
-        try:
-            r = await _get(url)
-            if len(r.content) > MAX_FILE_BYTES:
-                raise ValueError("file too large")
-            results.append(await import_file(r.content, source_url=url, file_name=fname,
-                                             title=ln["text"], imported_by=imported_by))
-        except Exception as e:  # noqa: BLE001 — report per file, keep going
-            logger.warning("mk_expenses: %s failed: %s", url, e)
-            errors.append({"url": url, "error": str(e)[:300]})
-    link = await link_expenses()
-    return {"files": results, "errors": errors, "found": len(links), "linked": link}
-
-
 # ── linking to diary owners ──────────────────────────────────────────────────
 
 def match_owner(mk_name: str, owners: list[tuple[str, str]]) -> str | None:
@@ -467,6 +370,10 @@ async def link_expenses() -> dict:
             await conn.executemany(
                 "UPDATE mk_expenses SET owner_key = $1, person_id = $2 WHERE mk_name = $3", updates)
     return {"mk_names": len(names), "matched_to_diary_owner": matched}
+
+
+def is_enabled() -> bool:
+    return bool(settings.ocal_mk_expenses_enabled)
 
 
 def upload_url(file_name: str) -> str:

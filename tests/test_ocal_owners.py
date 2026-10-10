@@ -1,5 +1,5 @@
-"""Diary-owner extraction (app/services/ocal_owners.py) and the Knesset
-contact-with-the-public expenses parser (app/services/ocal_mk_expenses.py).
+"""Diary-owner extraction (app/services/ocal_owners.py) and the
+contact-with-the-voter expenses parser (app/services/ocal_mk_expenses.py).
 
 The titles below are real diary_sources titles from the migrated corpus.
 """
@@ -7,7 +7,7 @@ import io
 
 import openpyxl
 
-from app.services.ocal_mk_expenses import excel_links, match_owner, parse_workbook
+from app.services.ocal_mk_expenses import match_owner, parse_workbook
 from app.services.ocal_owners import (
     PeopleIndex, canonical_keys, extract_owners, learn_names, name_key, names_match,
     owner_key_for,
@@ -173,18 +173,6 @@ def test_long_layout_with_merged_mk_cells():
         ("מאי גולן", "פרסום", "חברה א", 500.0, 2024),
         ("מאי גולן", "ייעוץ משפטי", "משרד עו\"ד ב", 1200.0, 2024),
         ("יאיר גולן", "פרסום", "חברה ג", 300.0, 2024),
-    ]
-
-
-def test_excel_links_on_the_page():
-    html = """<a href="/Documents/mk%20expenses%202023.xlsx"> 2023 </a>
-              <a href="https://fs.knesset.gov.il/x/2022.xls?v=1">דוח 2022</a>
-              <a href="/about.aspx">about</a>
-              <a href="/Documents/mk%20expenses%202023.xlsx">dup</a>"""
-    links = excel_links(html, "https://main.knesset.gov.il/About/Pages/x.aspx")
-    assert links == [
-        {"url": "https://main.knesset.gov.il/Documents/mk%20expenses%202023.xlsx", "text": "2023"},
-        {"url": "https://fs.knesset.gov.il/x/2022.xls?v=1", "text": "דוח 2022"},
     ]
 
 

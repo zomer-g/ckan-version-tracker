@@ -2754,7 +2754,8 @@ export interface OcalSourceOwner {
   role: string | null;
   kind: "person" | "subject";
 }
-/** A diary owner (or an MK with contact-with-the-public expenses) — /ocal/owners. */
+/** A diary owner (or, when the expenses layer is on, a person with
+ *  contact-with-the-voter expenses) — /ocal/owners. */
 export interface OcalOwner {
   key: string;
   label: string;
@@ -2786,12 +2787,13 @@ export interface OcalOwnerDetail {
     role: string | null;
     co_owners: { key: string; label: string }[] | null;
   })[];
+  /** null while the expenses layer is off (no data source loaded yet). */
   expenses: {
     total: number | null;
     by_year: { year: number | null; amount: number; files: number }[];
     by_category: { category: string | null; amount: number; items: number; years: number[] | null }[];
     items: OcalExpenseItem[];
-  };
+  } | null;
 }
 export interface OcalStats {
   total_events: number;
@@ -2855,7 +2857,7 @@ export const ocal = {
     ),
   sources: () => request<{ data: OcalSource[] }>("/ocal/sources"),
   owners: (params: { q?: string; kind?: "person" | "subject"; has?: "diaries" | "expenses" | "both" } = {}) =>
-    request<{ data: OcalOwner[] }>(`/ocal/owners${ocalQS(params as Record<string, unknown>)}`),
+    request<{ data: OcalOwner[]; expenses_enabled: boolean }>(`/ocal/owners${ocalQS(params as Record<string, unknown>)}`),
   ownerDetail: (key: string) =>
     request<OcalOwnerDetail>(`/ocal/owners/detail${ocalQS({ key })}`),
   stats: () => request<OcalStats>("/ocal/stats"),
@@ -3042,11 +3044,9 @@ export const ocalAdmin = {
     request<OcalOwnersRebuild>(`/admin/ocal/owners/rebuild`, { method: "POST" }),
   ownerLinks: (q?: string) =>
     request<{ owners: OcalOwnerLink[]; count: number }>(`/admin/ocal/owners${aqs({ q })}`),
-  expensesImportPage: (url: string) =>
-    request<OcalExpensesImport>(`/admin/ocal/mk-expenses/import-page`, { method: "POST", body: JSON.stringify({ url }) }),
   expensesUpload: (fd: FormData) =>
     request<OcalExpensesImport>(`/admin/ocal/mk-expenses/upload`, { method: "POST", body: fd }),
-  expenseFiles: () => request<{ files: OcalExpenseFile[] }>(`/admin/ocal/mk-expenses/files`),
+  expenseFiles: () => request<{ files: OcalExpenseFile[]; enabled: boolean }>(`/admin/ocal/mk-expenses/files`),
   deleteExpenseFile: (id: string) => request<void>(`/admin/ocal/mk-expenses/files/${id}`, { method: "DELETE" }),
 };
 
@@ -3056,7 +3056,7 @@ export interface OcalOwnersRebuild {
   person_links: number;
   distinct_owners: number;
   learned_names: number;
-  expenses: { mk_names: number; matched_to_diary_owner: number };
+  expenses: { mk_names: number; matched_to_diary_owner: number } | null;
 }
 export interface OcalOwnerLink {
   source_id: string;
@@ -3070,8 +3070,7 @@ export interface OcalOwnerLink {
 }
 export interface OcalExpensesImport {
   files: { file_id: string; file_name: string; year: number | null; rows: number; mks: number }[];
-  errors: { url?: string; file?: string; error: string }[];
-  found?: number;
+  errors: { file?: string; error: string }[];
   linked: { mk_names: number; matched_to_diary_owner: number } | null;
 }
 export interface OcalExpenseFile {

@@ -18,16 +18,17 @@ Endpoints (all public, rate-limited):
     GET  /api/ocal/content                 site CMS key/values
     GET  /api/ocal/download/source/{id}    single-diary CSV/JSON export
     POST /api/ocal/download/bulk           multi-diary ZIP export
-    GET  /api/ocal/owners                  diary owners (+ MKs with expenses)
-    GET  /api/ocal/owners/detail?key=      one owner's diaries + contact expenses
+    GET  /api/ocal/owners                  diary owners
+    GET  /api/ocal/owners/detail?key=      one owner's diaries (+ expenses, when on)
 
 The Hebrew tsquery construction (geresh/gershayim stripping, prefix vs exact
 abbreviation matching, boolean AND/OR/NOT) mirrors Ocal's DiaryEvent model and
 must stay aligned with the ``search_vector`` trigger (Ocal migration 021).
 
 The owner layer (diary_source_owners, app/services/ocal_owners.py) and the
-Knesset contact-with-the-public expenses (mk_expenses,
-app/services/ocal_mk_expenses.py) are OVER additions; ``owner=`` on /events and
+contact-with-the-voter expenses (mk_expenses, app/services/ocal_mk_expenses.py,
+off until a data source is loaded — settings.ocal_mk_expenses_enabled) are OVER
+additions; ``owner=`` on /events and
 /calendar narrows to one owner's diaries. Admin: app/api/ocal_admin.py.
 """
 import csv
@@ -730,7 +731,7 @@ async def content(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Owners (diary owners + Knesset contact-with-the-public expenses)
+# Owners (diary owners + contact-with-the-voter expenses, when enabled)
 # ---------------------------------------------------------------------------
 
 # Per (owner, file): the category rows when there are any, else the file's own
@@ -752,6 +753,25 @@ def invalidate_owners_cache() -> None:
     _owners_cache = None
 
 
+def _expenses_on() -> bool:
+    from app.services import ocal_mk_expenses
+    return ocal_mk_expenses.is_enabled()
+
+
+def _expense_ctes() -> str:
+    """The owners query's expense side — empty while the layer is off."""
+    if not _expenses_on():
+        return ("x AS (SELECT NULL::text AS owner_key, NULL::numeric AS expense_total, "
+                "NULL::int[] AS expense_years, NULL::text AS mk_name WHERE false)")
+    return f"""f AS ({_EXPENSE_PER_FILE.format(where="")}),
+        x AS (
+            SELECT f.owner_key, sum(f.amount) AS expense_total,
+                   array_agg(DISTINCT f.year ORDER BY f.year)
+                     FILTER (WHERE f.year IS NOT NULL) AS expense_years,
+                   (SELECT min(m.mk_name) FROM mk_expenses m WHERE m.owner_key = f.owner_key) AS mk_name
+            FROM f GROUP BY f.owner_key)"""
+
+
 async def _owners_list() -> list[dict]:
     global _owners_cache
     if _owners_cache and time.time() < _owners_cache[1]:
@@ -768,13 +788,7 @@ async def _owners_list() -> list[dict]:
             FROM diary_source_owners o
             JOIN diary_sources s ON s.id = o.source_id AND s.is_enabled
             GROUP BY o.owner_key),
-        f AS ({_EXPENSE_PER_FILE.format(where="")}),
-        x AS (
-            SELECT f.owner_key, sum(f.amount) AS expense_total,
-                   array_agg(DISTINCT f.year ORDER BY f.year)
-                     FILTER (WHERE f.year IS NOT NULL) AS expense_years,
-                   (SELECT min(m.mk_name) FROM mk_expenses m WHERE m.owner_key = f.owner_key) AS mk_name
-            FROM f GROUP BY f.owner_key)
+        {_expense_ctes()}
         SELECT coalesce(d.owner_key, x.owner_key) AS key,
                coalesce(d.label, x.mk_name) AS label,
                coalesce(d.kind, 'person') AS kind,
@@ -802,10 +816,11 @@ async def list_owners(
     has: str | None = Query(None, description="diaries|expenses|both"),
 ):
     """Every diary owner — a person, or the office of a diary that names nobody —
-    plus each MK that has contact-with-the-public expenses, with counts."""
+    with counts; plus, when the expenses layer is on, each person with
+    contact-with-the-voter expenses."""
     _require_configured()
     if not await _owner_tables():
-        return {"data": []}
+        return {"data": [], "expenses_enabled": False}
     data = await _owners_list()
     if kind:
         data = [r for r in data if r["kind"] == kind]
@@ -821,13 +836,14 @@ async def list_owners(
         data = [r for r in data
                 if all(any(t2.startswith(t) for t2 in name_tokens(f"{r['label']} {r.get('mk_name') or ''} {r.get('role') or ''}"))
                        for t in qt)]
-    return {"data": data}
+    return {"data": data, "expenses_enabled": _expenses_on()}
 
 
 @router.get("/owners/detail")
 @limiter.limit("60/minute")
 async def owner_detail(request: Request, key: str = Query(..., min_length=3, max_length=300)):
-    """One owner: their diaries and their Knesset contact-with-the-public expenses."""
+    """One owner: their diaries, and (when the layer is on) their
+    contact-with-the-voter expenses."""
     _require_configured()
     if not await _owner_tables():
         raise HTTPException(404, "Owner not found")
@@ -843,6 +859,8 @@ async def owner_detail(request: Request, key: str = Query(..., min_length=3, max
         "FROM diary_source_owners o JOIN diary_sources s ON s.id = o.source_id "
         "WHERE o.owner_key = $1 AND s.is_enabled "
         "ORDER BY s.first_event_date DESC NULLS LAST, s.name", key)
+    if not _expenses_on():
+        return {"owner": owner, "sources": [dict(r) for r in sources], "expenses": None}
     by_year = await ocal_db.fetch(
         f"SELECT year, sum(amount) AS amount, count(DISTINCT file_id) AS files "
         f"FROM ({_EXPENSE_PER_FILE.format(where='WHERE owner_key = $1')}) f "

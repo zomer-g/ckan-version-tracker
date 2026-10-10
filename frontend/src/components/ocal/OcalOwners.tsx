@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ocal, OcalOwner, OcalOwnerDetail } from "../../api/client";
 import { fmtDateHe } from "./ocalUtils";
-import { useOcalOwners } from "./OwnerSelect";
+import { useOcalOwnersInfo } from "./OwnerSelect";
 
 type Has = "" | "both" | "expenses";
 
@@ -17,14 +17,15 @@ function matches(o: OcalOwner, q: string): boolean {
 
 /**
  * Diary owners — every person (or, for a diary that names nobody, the office)
- * the diary titles name, joined with the Knesset's contact-with-the-public
- * expenses of the same person. The owner lives in the URL (?tab=owners&owner=)
- * so a page like "all of מאי גולן's diaries and expenses" can be shared.
+ * the diary titles name. When the contact-with-the-voter expenses layer is on
+ * (it stays off until a data source is loaded), each owner also shows their
+ * expenses. The owner lives in the URL (?tab=owners&owner=) so a page like
+ * "all of מאי גולן's diaries" can be shared.
  */
 export default function OcalOwners() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selected = searchParams.get("owner") || "";
-  const owners = useOcalOwners();
+  const { owners, expensesEnabled } = useOcalOwnersInfo();
   const [q, setQ] = useState("");
   const [has, setHas] = useState<Has>("");
 
@@ -73,11 +74,15 @@ export default function OcalOwners() {
           aria-label="חיפוש בעל יומן"
           style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4, boxSizing: "border-box" }}
         />
-        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", margin: "0.5rem 0" }}>
-          {chip("", "הכל")}
-          {chip("both", "יומנים + הוצאות")}
-          {chip("expenses", "עם הוצאות קשר עם הבוחר")}
-        </div>
+        {expensesEnabled ? (
+          <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", margin: "0.5rem 0" }}>
+            {chip("", "הכל")}
+            {chip("both", "יומנים + הוצאות")}
+            {chip("expenses", "עם הוצאות קשר עם הבוחר")}
+          </div>
+        ) : (
+          <div className="text-sm text-muted" style={{ margin: "0.5rem 0" }}>{owners.length} בעלי יומנים</div>
+        )}
         <div role="listbox" aria-label="בעלי יומנים" className="scroll-region" tabIndex={0}
           style={{ maxHeight: 560, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
           {shown.map((o) => (
@@ -114,8 +119,8 @@ export default function OcalOwners() {
       <div style={{ flex: "3 1 420px", minWidth: 0 }}>
         {selected ? <OwnerDetail key={selected} ownerKey={selected} /> : (
           <div className="card text-muted" style={{ padding: "1rem" }}>
-            בחרו בעל יומן מהרשימה כדי לראות את כל היומנים שלו, ואם הוא חבר כנסת — גם את הוצאות
-            הקשר עם הבוחר (תקציב "קשר עם הציבור") שפרסמה הכנסת.
+            בחרו בעל יומן מהרשימה כדי לראות את כל היומנים שלו
+            {expensesEnabled && " ואת הוצאות הקשר עם הבוחר שלו"}.
           </div>
         )}
       </div>
@@ -146,14 +151,14 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
 
   const th: React.CSSProperties = { textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border)", fontSize: "0.8rem", background: "var(--surface-2)" };
   const td: React.CSSProperties = { padding: "0.38rem 0.55rem", fontSize: "0.85rem", verticalAlign: "top", borderBottom: "1px solid var(--border)" };
-  const maxYear = Math.max(1, ...expenses.by_year.map((y) => y.amount));
+  const maxYear = Math.max(1, ...(expenses?.by_year || []).map((y) => y.amount));
 
   return (
     <div>
       <h2 style={{ margin: "0 0 0.2rem" }}>{owner.label}</h2>
       <div className="text-sm text-muted" style={{ marginBottom: "0.6rem", lineHeight: 1.7 }}>
         {owner.role && <div>{owner.role}</div>}
-        {owner.mk_name && owner.mk_name !== owner.label && <div>בדיווחי הכנסת: {owner.mk_name}</div>}
+        {owner.mk_name && owner.mk_name !== owner.label && <div>בדיווחי ההוצאות: {owner.mk_name}</div>}
         {owner.diary_count > 0 && (
           <div>
             {owner.diary_count} יומנים · {owner.event_count.toLocaleString()} אירועים
@@ -218,16 +223,17 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
         )}
       </section>
 
+      {expenses && (
       <section aria-labelledby="owner-expenses">
         <h3 id="owner-expenses" style={{ fontSize: "1.05rem", margin: "0 0 0.3rem" }}>
           הוצאות קשר עם הבוחר{expenses.total != null && ` · סה"כ ${nis(expenses.total)}`}
         </h3>
         <div className="text-sm text-muted" style={{ marginBottom: "0.6rem" }}>
-          הוצאות חבר/ת הכנסת מתקציב "קשר עם הציבור", כפי שפורסמו בקבצי האקסל באתר הכנסת.
+          כפי שפורסמו בקבצי המקור.
         </div>
         {expenses.items.length === 0 ? (
           <div className="text-sm text-muted">
-            לא נמצאו הוצאות קשר עם הבוחר בשם זה. הכנסת מפרסמת הוצאות לחברי כנסת בלבד.
+            לא נמצאו הוצאות קשר עם הבוחר בשם זה.
           </div>
         ) : (
           <>
@@ -310,6 +316,7 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
           </>
         )}
       </section>
+      )}
     </div>
   );
 }

@@ -34,8 +34,8 @@ migrated Ocal database (a dedicated Neon Postgres; see
 | GET | `/api/ocal/content` | Site CMS key/value content |
 | GET | `/api/ocal/download/source/{id}` | Single-diary CSV/JSON export |
 | POST | `/api/ocal/download/bulk` | Multi-diary ZIP export |
-| GET | `/api/ocal/owners` | Diary owners, plus MKs with contact-with-the-public expenses |
-| GET | `/api/ocal/owners/detail?key=` | One owner's diaries and Knesset contact expenses |
+| GET | `/api/ocal/owners` | Diary owners (+ people with contact expenses, when that layer is on) |
+| GET | `/api/ocal/owners/detail?key=` | One owner's diaries (+ contact expenses, when on) |
 
 ---
 
@@ -107,15 +107,17 @@ with the role that precedes the name. A diary that names nobody gets its office
 as the owner (`kind: "subject"`, e.g. "ראש עיריית כפר סבא"). Spellings of one
 person share a `key` (`מאי גולן` = the Knesset's `בדרה גולן פלורה מאי`).
 
-The Knesset's Excel files of MK expenses from the "קשר עם הציבור" budget are
-imported once by an admin (admin → יומן לעם → בעלי יומנים והוצאות קשר) and
-linked to owners by name (`app/services/ocal_mk_expenses.py`).
+Contact-with-the-voter expenses (`app/services/ocal_mk_expenses.py`) are
+**off** until a data source is loaded (`OCAL_MK_EXPENSES_ENABLED`). When on, an
+admin uploads the Excel files (admin → יומן לעם → בעלי יומנים והוצאות קשר) and
+the rows are linked to owners by name; while off, every `expense_*` field is
+`null`, `expenses_enabled` is `false` and the detail's `expenses` is `null`.
 
 - `GET /api/ocal/owners?q=&kind=person|subject&has=diaries|expenses|both` —
-  `{ "data": [ {"key","label","kind","role","diary_count","event_count","first_event_date","last_event_date","expense_total","expense_years","mk_name"} ] }`.
+  `{ "data": [ {"key","label","kind","role","diary_count","event_count","first_event_date","last_event_date","expense_total","expense_years","mk_name"} ], "expenses_enabled": false }`.
   `expense_total` sums category rows; a file's own total column is used only
   when it has no category rows, so nothing is counted twice.
-- `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year", "by_category", "items"} }`.
+- `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year", "by_category", "items"} | null }`.
 
 ## `GET /api/ocal/content`
 

@@ -110,7 +110,7 @@ export default function OcalDiaries() {
               setSearchParams(sp);
             }}
           >
-            👤 יומנים והוצאות של בעל היומן
+            👤 עמוד בעל היומן
           </button>
         )}
         <span className="text-sm text-muted">

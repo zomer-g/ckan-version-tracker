@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     # more would reject legitimate minimal diaries. Others → auto_rejected.
     ocal_import_confidence: float = 0.25
     ocal_import_min_rows: int = 10
+    # Contact-with-the-voter expenses layer on the diary owners (mk_expenses,
+    # app/services/ocal_mk_expenses.py). OFF until a data source is chosen and
+    # loaded: while off, the public owner pages show diaries only and the admin
+    # upload is refused.
+    ocal_mk_expenses_enabled: bool = False
 
     # ── OCOI ("ניגוד עניינים לעם") data connection ──
     # Where the ocoi app reads/writes its DATA tables (documents, persons,
