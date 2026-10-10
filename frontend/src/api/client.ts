@@ -2800,6 +2800,20 @@ export interface OcalOwnerDetail {
     item_count: number;
   } | null;
 }
+/** One owner's meetings and expenses, day by day — /ocal/owners/timeline. */
+export interface OcalOwnerTimeline {
+  owner: OcalOwner;
+  from: string | null;
+  to: string | null;
+  expenses_enabled: boolean;
+  days: {
+    date: string;
+    events: (Pick<OcalEvent, "id" | "title" | "start_time" | "end_time" | "location" | "participants" | "dataset_link" | "source_name" | "source_color">)[];
+    expenses: { expense_date: string; category: string | null; supplier: string | null; description: string | null; amount: number; receipt_url: string | null }[];
+    expense_total: number;
+  }[];
+  totals?: { events: number; expenses: number; expense_amount: number; days_with_both: number };
+}
 export interface OcalStats {
   total_events: number;
   total_sources: number;
@@ -2865,6 +2879,8 @@ export const ocal = {
     request<{ data: OcalOwner[]; expenses_enabled: boolean }>(`/ocal/owners${ocalQS(params as Record<string, unknown>)}`),
   ownerDetail: (key: string) =>
     request<OcalOwnerDetail>(`/ocal/owners/detail${ocalQS({ key })}`),
+  ownerTimeline: (key: string, from?: string, to?: string) =>
+    request<OcalOwnerTimeline>(`/ocal/owners/timeline${ocalQS({ key, from, to })}`),
   stats: () => request<OcalStats>("/ocal/stats"),
   entities: (
     params: { source_ids?: string[]; type?: string; from_date?: string; to_date?: string } = {},

@@ -36,6 +36,7 @@ migrated Ocal database (a dedicated Neon Postgres; see
 | POST | `/api/ocal/download/bulk` | Multi-diary ZIP export |
 | GET | `/api/ocal/owners` | Diary owners (+ people with contact expenses, when that layer is on) |
 | GET | `/api/ocal/owners/detail?key=` | One owner's diaries (+ contact expenses, when on) |
+| GET | `/api/ocal/owners/timeline?key=&from=&to=` | One owner's meetings and expenses, day by day |
 
 ---
 
@@ -124,6 +125,10 @@ detail's `expenses` is `null`.
   `expense_total` sums category rows; a file's own total column is used only
   when it has no category rows, so nothing is counted twice.
 - `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year": [{"year","amount","files","partial"}], "by_category", "items": [{…, "supplier", "expense_date", "receipt_url"}], "item_count"} | null }`. Negative amounts are refunds; `partial` marks a year the Knesset has reported only part of.
+- `GET /api/ocal/owners/timeline?key=&from=YYYY-MM-DD&to=YYYY-MM-DD` — the owner's diary
+  events and expenses on one day axis (window ≤ 92 days; without `from`/`to`, the latest
+  month that has both): `{ "owner", "from", "to", "days": [ {"date","events","expenses","expense_total"} ], "totals": {"events","expenses","expense_amount","days_with_both"} }`.
+  The site shows it at `/projects/ocal?tab=owners&owner=<key>&view=timeline&from=…&to=…`.
 
 ## `GET /api/ocal/content`
 

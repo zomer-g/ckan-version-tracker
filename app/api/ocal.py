@@ -20,6 +20,7 @@ Endpoints (all public, rate-limited):
     POST /api/ocal/download/bulk           multi-diary ZIP export
     GET  /api/ocal/owners                  diary owners
     GET  /api/ocal/owners/detail?key=      one owner's diaries (+ expenses, when on)
+    GET  /api/ocal/owners/timeline?key=&from=&to=  meetings + expenses, day by day
 
 The Hebrew tsquery construction (geresh/gershayim stripping, prefix vs exact
 abbreviation matching, boolean AND/OR/NOT) mirrors Ocal's DiaryEvent model and
@@ -904,6 +905,94 @@ async def owner_detail(request: Request, key: str = Query(..., min_length=3, max
             "items": _f(items),
             "item_count": int(n_items or 0),
         },
+    }
+
+
+_TIMELINE_MAX_DAYS = 92
+
+
+@router.get("/owners/timeline")
+@limiter.limit("60/minute")
+async def owner_timeline(
+    request: Request,
+    key: str = Query(..., min_length=3, max_length=300),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+):
+    """One owner's diary meetings and contact-with-the-voter expenses, day by
+    day, over a window (up to 92 days) — so the two can be read side by side.
+    Without a window: the latest month that has both a meeting and an expense
+    (else the latest month with meetings)."""
+    from datetime import date, timedelta
+    _require_configured()
+    _check_date("from", from_date)
+    _check_date("to", to_date)
+    if not await _owner_tables():
+        raise HTTPException(404, "Owner not found")
+    owner = next((r for r in await _owners_list() if r["key"] == key), None)
+    if owner is None:
+        raise HTTPException(404, "Owner not found")
+    expenses_on = _expenses_on()
+    src_sql = "SELECT source_id FROM diary_source_owners WHERE owner_key = $1"
+
+    if not from_date or not to_date:
+        month = None
+        if expenses_on:
+            month = await ocal_db.fetchval(
+                "SELECT max(m) FROM ("
+                "  SELECT date_trunc('month', e.event_date) AS m FROM diary_events e "
+                f"  WHERE e.is_active AND e.source_id IN ({src_sql}) "
+                "  INTERSECT "
+                "  SELECT date_trunc('month', x.expense_date) FROM mk_expenses x "
+                "  WHERE x.owner_key = $1 AND x.expense_date IS NOT NULL) t", key)
+        if month is None:
+            month = await ocal_db.fetchval(
+                "SELECT date_trunc('month', max(e.event_date)) FROM diary_events e "
+                f"WHERE e.is_active AND e.source_id IN ({src_sql})", key)
+        if month is None:
+            return {"owner": owner, "from": None, "to": None, "days": [],
+                    "expenses_enabled": expenses_on}
+        start = month.date() if hasattr(month, "date") else month
+        nxt = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
+        from_d, to_d = start, nxt - timedelta(days=1)
+    else:
+        from_d, to_d = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        if to_d < from_d:
+            from_d, to_d = to_d, from_d
+        if (to_d - from_d).days >= _TIMELINE_MAX_DAYS:
+            to_d = from_d + timedelta(days=_TIMELINE_MAX_DAYS - 1)
+
+    events = await ocal_db.fetch(
+        "SELECT e.id, e.event_date, e.start_time, e.end_time, e.title, e.location, "
+        "e.participants, e.dataset_link, s.name AS source_name, s.color AS source_color "
+        "FROM diary_events e JOIN diary_sources s ON s.id = e.source_id "
+        f"WHERE e.is_active AND s.is_enabled AND e.source_id IN ({src_sql}) "
+        "AND e.event_date BETWEEN $2 AND $3 ORDER BY e.event_date, e.start_time",
+        key, from_d, to_d)
+    expenses = []
+    if expenses_on:
+        expenses = await ocal_db.fetch(
+            "SELECT expense_date, year, category, supplier, description, amount, receipt_url "
+            "FROM mk_expenses WHERE owner_key = $1 AND expense_date BETWEEN $2 AND $3 "
+            "ORDER BY expense_date, amount DESC", key, from_d, to_d)
+
+    days: dict = {}
+    for e in events:
+        d = e["event_date"]
+        d = d.date() if hasattr(d, "date") else d
+        days.setdefault(d.isoformat(), {"events": [], "expenses": []})["events"].append(dict(e))
+    for x in expenses:
+        row = dict(x)
+        row["amount"] = float(row["amount"])
+        days.setdefault(x["expense_date"].isoformat(), {"events": [], "expenses": []})["expenses"].append(row)
+    out = [{"date": d, **v, "expense_total": sum(x["amount"] for x in v["expenses"])}
+           for d, v in sorted(days.items())]
+    return {
+        "owner": owner, "from": from_d.isoformat(), "to": to_d.isoformat(),
+        "expenses_enabled": expenses_on, "days": out,
+        "totals": {"events": len(events), "expenses": len(expenses),
+                   "expense_amount": sum(float(x["amount"]) for x in expenses),
+                   "days_with_both": sum(1 for d in out if d["events"] and d["expenses"])},
     }
 
 

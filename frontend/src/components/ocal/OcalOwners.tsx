@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ocal, OcalOwner, OcalOwnerDetail } from "../../api/client";
-import { fmtDateHe } from "./ocalUtils";
+import { ocal, OcalOwner, OcalOwnerDetail, OcalOwnerTimeline } from "../../api/client";
+import { fmtDateHe, fmtTime, isoDate } from "./ocalUtils";
 import { useOcalOwnersInfo } from "./OwnerSelect";
 
 type Has = "" | "both" | "expenses";
@@ -132,7 +132,14 @@ export default function OcalOwners() {
 }
 
 function OwnerDetail({ ownerKey }: { ownerKey: string }) {
-  const [, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get("view") === "timeline" ? "timeline" : "overview";
+  const setView = (v: "overview" | "timeline") => {
+    const sp = new URLSearchParams(searchParams);
+    if (v === "timeline") sp.set("view", "timeline");
+    else { sp.delete("view"); sp.delete("from"); sp.delete("to"); }
+    setSearchParams(sp);
+  };
   const [d, setD] = useState<OcalOwnerDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,6 +183,18 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
         </div>
       )}
 
+      <div role="tablist" aria-label="תצוגה" style={{ display: "flex", gap: "0.3rem", borderBottom: "1px solid var(--border)", marginBottom: "0.9rem" }}>
+        {([["overview", "סקירה"], ["timeline", "ציר זמן: פגישות והוצאות"]] as const).map(([v, label]) => (
+          <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)}
+            style={{
+              padding: "0.35rem 0.8rem", border: "none", background: "none", cursor: "pointer", marginBottom: -1,
+              fontWeight: view === v ? 700 : 500, color: view === v ? "var(--primary)" : "var(--text-muted)",
+              borderBottom: view === v ? "2px solid var(--primary)" : "2px solid transparent",
+            }}>{label}</button>
+        ))}
+      </div>
+
+      {view === "timeline" ? <OwnerTimeline ownerKey={owner.key} /> : (<>
       <section aria-labelledby="owner-diaries" style={{ marginBottom: "1.4rem" }}>
         <h3 id="owner-diaries" style={{ fontSize: "1.05rem", margin: "0 0 0.5rem" }}>יומנים ({sources.length})</h3>
         {sources.length === 0 ? (
@@ -336,6 +355,148 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
         )}
       </section>
       )}
+      </>)}
+    </div>
+  );
+}
+
+/**
+ * One owner's meetings and contact-with-the-voter expenses on a shared day
+ * axis, for a window kept in the URL (?view=timeline&from=&to=) so a period
+ * can be linked to. Days that have both are marked; that is where a meeting
+ * and a payment may be related (a lawsuit filed one day, the court fee the
+ * next). Without from/to the server picks the latest month that has both.
+ */
+function OwnerTimeline({ ownerKey }: { ownerKey: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const from = searchParams.get("from") || "";
+  const to = searchParams.get("to") || "";
+  const [data, setData] = useState<OcalOwnerTimeline | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [onlyBoth, setOnlyBoth] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    setError(null);
+    ocal.ownerTimeline(ownerKey, from || undefined, to || undefined)
+      .then((r) => { if (live) setData(r); })
+      .catch((e) => { if (live) setError(e?.message || "שגיאה בטעינה"); });
+    return () => { live = false; };
+  }, [ownerKey, from, to]);
+
+  const setRange = (f: string, t: string) => {
+    const sp = new URLSearchParams(searchParams);
+    sp.set("view", "timeline");
+    if (f) sp.set("from", f); else sp.delete("from");
+    if (t) sp.set("to", t); else sp.delete("to");
+    setSearchParams(sp);
+  };
+  const shiftMonth = (delta: number) => {
+    const base = data?.from || from;
+    if (!base) return;
+    const d = new Date(Number(base.slice(0, 4)), Number(base.slice(5, 7)) - 1 + delta, 1);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    setRange(isoDate(d), isoDate(end));
+  };
+  const copyLink = async () => {
+    const sp = new URLSearchParams(searchParams);
+    if (data?.from) sp.set("from", data.from);
+    if (data?.to) sp.set("to", data.to);
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?${sp.toString()}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard blocked */ }
+  };
+
+  const inp: React.CSSProperties = { padding: "0.3rem 0.5rem", border: "1px solid var(--border)", borderRadius: 4, fontSize: "0.85rem" };
+  const ghost: React.CSSProperties = { ...inp, background: "none", cursor: "pointer", color: "var(--text-muted)" };
+  const days = (data?.days || []).filter((d) => !onlyBoth || (d.events.length > 0 && d.expenses.length > 0));
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.7rem" }}>
+        <button type="button" style={ghost} onClick={() => shiftMonth(-1)} disabled={!data?.from}>→ חודש קודם</button>
+        <label className="text-sm text-muted">
+          מ־{" "}
+          <input type="date" style={inp} value={data?.from || from} onChange={(e) => setRange(e.target.value, data?.to || to)} />
+        </label>
+        <label className="text-sm text-muted">
+          עד{" "}
+          <input type="date" style={inp} value={data?.to || to} onChange={(e) => setRange(data?.from || from, e.target.value)} />
+        </label>
+        <button type="button" style={ghost} onClick={() => shiftMonth(1)} disabled={!data?.from}>חודש הבא ←</button>
+        <label className="text-sm" style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center" }}>
+          <input type="checkbox" checked={onlyBoth} onChange={(e) => setOnlyBoth(e.target.checked)} />
+          רק ימים עם פגישה וגם הוצאה
+        </label>
+        <button type="button" style={ghost} onClick={copyLink}>{copied ? "הועתק ✓" : "🔗 קישור לתצוגה הזו"}</button>
+      </div>
+
+      {error && <div style={{ color: "var(--danger)" }}>{error}</div>}
+      {!data && !error && <div className="text-sm text-muted">טוען…</div>}
+      {data && data.totals && (
+        <div className="text-sm text-muted" style={{ marginBottom: "0.7rem" }} role="status">
+          {fmtDateHe(data.from)} – {fmtDateHe(data.to)} · {data.totals.events.toLocaleString()} אירועים ביומן
+          {data.expenses_enabled && ` · ${data.totals.expenses} הוצאות (${nis(data.totals.expense_amount)}) · ${data.totals.days_with_both} ימים עם שניהם`}
+        </div>
+      )}
+      {data && days.length === 0 && <div className="text-sm text-muted">אין פגישות או הוצאות בתקופה הזו.</div>}
+
+      <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {days.map((d) => {
+          const both = d.events.length > 0 && d.expenses.length > 0;
+          return (
+            <li key={d.date} style={{
+              border: "1px solid var(--border)", borderRadius: 6, marginBottom: "0.6rem", padding: "0.55rem 0.75rem",
+              borderInlineStart: both ? "4px solid var(--primary)" : "1px solid var(--border)",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: "0.35rem" }}>
+                {fmtDateHe(d.date)}
+                {both && <span className="text-sm" style={{ fontWeight: 500, color: "var(--primary)" }}> · פגישה והוצאה באותו יום</span>}
+              </div>
+              <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                <div style={{ flex: "2 1 280px", minWidth: 0 }}>
+                  <div className="text-sm text-muted" style={{ marginBottom: "0.2rem" }}>📅 ביומן ({d.events.length})</div>
+                  {d.events.length === 0 ? <div className="text-sm text-muted">—</div> : (
+                    <ul style={{ margin: 0, paddingInlineStart: "1.1rem" }}>
+                      {d.events.map((e) => (
+                        <li key={e.id} style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
+                          <span className="text-muted">{fmtTime(e.start_time) || "—"}</span>{" "}
+                          {e.title}
+                          {e.location && <span className="text-muted"> · 📍 {e.location}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                {data?.expenses_enabled && (
+                  <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                    <div className="text-sm text-muted" style={{ marginBottom: "0.2rem" }}>
+                      ₪ הוצאות קשר עם הבוחר ({d.expenses.length}){d.expenses.length > 0 && ` · ${nisExact(d.expense_total)}`}
+                    </div>
+                    {d.expenses.length === 0 ? <div className="text-sm text-muted">—</div> : (
+                      <ul style={{ margin: 0, paddingInlineStart: "1.1rem" }}>
+                        {d.expenses.map((x, i) => (
+                          <li key={i} style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>
+                            <strong style={{ color: x.amount < 0 ? "var(--success, #15803d)" : undefined }}>{nisExact(x.amount)}</strong>{" "}
+                            {x.supplier || x.category}
+                            {x.supplier && x.category && <span className="text-muted"> · {x.category}</span>}
+                            {x.description && <span className="text-muted"> · {x.description}</span>}
+                            {x.receipt_url && <> · <a href={x.receipt_url} target="_blank" rel="noopener noreferrer">קבלה<span className="sr-only"> (נפתח בחלון חדש)</span></a></>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
