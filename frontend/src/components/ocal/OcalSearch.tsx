@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ocal, OcalEvent, OcalSource } from "../../api/client";
 import { fmtDateHe, fmtTime, truncate } from "./ocalUtils";
 import { Highlight, fieldMatches, searchTerms, snippetAround } from "./ocalHighlight";
+import OwnerSelect from "./OwnerSelect";
 
 const PER_PAGE = 50;
 
@@ -151,6 +152,7 @@ export default function OcalSearch() {
       from: searchParams.get("from") || "",
       to: searchParams.get("to") || "",
       source: searchParams.get("source") || "",
+      owner: searchParams.get("owner") || "",
       // With no explicit sort, relevance is the only useful default for a
       // query and newest-first for a plain browse. Either way it is shown in
       // the dropdown, so the control never disagrees with what was requested.
@@ -189,7 +191,7 @@ export default function OcalSearch() {
     [searchParams, setSearchParams],
   );
 
-  const { q, from, to, source, sort, page } = applied;
+  const { q, from, to, source, owner, sort, page } = applied;
 
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +203,7 @@ export default function OcalSearch() {
         from_date: from || undefined,
         to_date: to || undefined,
         source_ids: source ? [source] : undefined,
+        owner: owner || undefined,
         sort,
         page,
         per_page: PER_PAGE,
@@ -218,16 +221,21 @@ export default function OcalSearch() {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [q, from, to, source, sort, page]);
+  }, [q, from, to, source, owner, sort, page]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     patch({ q: query.trim() });
   };
 
+  // With an owner picked, the diary list narrows to that owner's diaries.
+  const ownerSources = useMemo(
+    () => (owner ? sources.filter((s) => (s.owners || []).some((o) => o.key === owner)) : sources),
+    [sources, owner],
+  );
   const terms = useMemo(() => searchTerms(q), [q]);
   const dirty = query.trim() !== q;
-  const hasFilters = Boolean(q || from || to || source || searchParams.get("sort"));
+  const hasFilters = Boolean(q || from || to || source || owner || searchParams.get("sort"));
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
   const copyLink = async () => {
@@ -274,14 +282,15 @@ export default function OcalSearch() {
           עד{" "}
           <input type="date" value={to} onChange={(e) => patch({ to: e.target.value })} style={inputStyle} />
         </label>
+        <OwnerSelect value={owner} onChange={(key) => patch({ owner: key, source: "" })} />
         <select
           aria-label="סינון לפי יומן"
           value={source}
           onChange={(e) => patch({ source: e.target.value })}
           style={{ ...inputStyle, maxWidth: 280 }}
         >
-          <option value="">כל היומנים ({sources.length})</option>
-          {sources.map((s) => (
+          <option value="">כל היומנים ({ownerSources.length})</option>
+          {ownerSources.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>

@@ -5,14 +5,16 @@ import { ocal, OcalStats } from "../api/client";
 import OcalSearch from "../components/ocal/OcalSearch";
 import OcalCalendar from "../components/ocal/OcalCalendar";
 import OcalDiaries from "../components/ocal/OcalDiaries";
+import OcalOwners from "../components/ocal/OcalOwners";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-type OcalTab = "search" | "calendar" | "diaries";
-const TAB_IDS: OcalTab[] = ["search", "calendar", "diaries"];
+type OcalTab = "search" | "calendar" | "diaries" | "owners";
+const TAB_IDS: OcalTab[] = ["search", "calendar", "diaries", "owners"];
 const TAB_LABELS: [OcalTab, string][] = [
   ["search", "🔍 חיפוש"],
   ["calendar", "📅 לוח שנה"],
   ["diaries", "📚 יומנים"],
+  ["owners", "👤 בעלי יומנים והוצאות"],
 ];
 
 /**
@@ -59,7 +61,8 @@ export default function OcalPage() {
           <h1 style={{ margin: 0 }}>יומן לעם</h1>
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             יומני הפגישות הרשמיים של נבחרי ציבור ובכירים בשירות הציבורי, מרוכזים, מנוקים ומקושרים
-            למקור. חיפוש חופשי, תצוגת לוח שנה, וקטלוג היומנים להורדה.
+            למקור. חיפוש חופשי, תצוגת לוח שנה, קטלוג היומנים להורדה, ולכל בעל יומן — כל היומנים שלו
+            והוצאות הקשר עם הבוחר שפרסמה הכנסת.
             {stats && (
               <div style={{ marginTop: "0.4rem" }}>
                 {stats.total_events.toLocaleString()} אירועים · {stats.total_sources.toLocaleString()} יומנים ·{" "}
@@ -92,6 +95,7 @@ export default function OcalPage() {
         {tab === "search" && <OcalSearch />}
         {tab === "calendar" && <OcalCalendar />}
         {tab === "diaries" && <OcalDiaries />}
+        {tab === "owners" && <OcalOwners />}
 
         <div className="text-sm text-muted" style={{ margin: "1.5rem 0 0.5rem" }}>
           המידע מעובד (חילוץ ישויות והצלבות מבוססי-בינה) — לא מקור ממשלתי ראשוני. כל אירוע מקושר לדאטהסט המקורי.

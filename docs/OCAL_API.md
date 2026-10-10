@@ -34,6 +34,8 @@ migrated Ocal database (a dedicated Neon Postgres; see
 | GET | `/api/ocal/content` | Site CMS key/value content |
 | GET | `/api/ocal/download/source/{id}` | Single-diary CSV/JSON export |
 | POST | `/api/ocal/download/bulk` | Multi-diary ZIP export |
+| GET | `/api/ocal/owners` | Diary owners, plus MKs with contact-with-the-public expenses |
+| GET | `/api/ocal/owners/detail?key=` | One owner's diaries and Knesset contact expenses |
 
 ---
 
@@ -50,6 +52,7 @@ Main search. All query params optional.
 | `participants` | string | `ILIKE` substring. |
 | `entity_names` | string | `\|\|`-separated entity names (matched case-insensitively). |
 | `cross_ref_status` | `confirmed`\|`unconfirmed` | Only events with a cross-ref of this status. |
+| `owner` | string | An owner `key` from `/owners` — only that owner's diaries. |
 | `page` | int ≥ 1 | Default 1. |
 | `per_page` | int 1–500 | Default 50. |
 | `sort` | `date_asc`\|`date_desc`\|`relevance` | Default: `relevance` when `q` is set, else `date_desc`. |
@@ -80,12 +83,13 @@ Main search. All query params optional.
 | `source_ids` | string | Comma-separated UUIDs. |
 | `entity_names` | string | Comma-separated names. |
 | `max_date` | `YYYY-MM-DD` | Caps the window end (e.g. hide future events). |
+| `owner` | string | An owner `key` from `/owners`. |
 
 **Response:** `{ "events": [...], "date_range": {"from","to"}, "event_counts": {"2026-01-15": 4, ...} }`
 
 ## `GET /api/ocal/sources`
 
-`{ "data": [ { ...diary_source, "person_name": "…", "organization_name": "…" } ] }` — enabled sources, ordered by name.
+`{ "data": [ { ...diary_source, "person_name": "…", "organization_name": "…", "owners": [{"key","label","role","kind"}] } ] }` — enabled sources, ordered by name. `owners` are the diary's owners as extracted from its title (see below).
 
 ## `GET /api/ocal/stats`
 
@@ -94,6 +98,24 @@ Main search. All query params optional.
 ## `GET /api/ocal/entities`
 
 Top 200 entities by event count. Params: `source_ids`, `type` (`person`|`organization`|`place`), `from_date`, `to_date`. Unfiltered requests read the `mv_entity_counts` materialized view; filtered requests run live. `{ "data": [ {"entity_name","entity_type","entity_id","event_count"} ] }`.
+
+## Owners and contact-with-the-public expenses
+
+Each diary's owner(s) are extracted from its title (`app/services/ocal_owners.py`):
+"יומן השר לביטחון לאומי, איתמר בן גביר ומנכ"ל המשרד, …" gives two owners, each
+with the role that precedes the name. A diary that names nobody gets its office
+as the owner (`kind: "subject"`, e.g. "ראש עיריית כפר סבא"). Spellings of one
+person share a `key` (`מאי גולן` = the Knesset's `בדרה גולן פלורה מאי`).
+
+The Knesset's Excel files of MK expenses from the "קשר עם הציבור" budget are
+imported once by an admin (admin → יומן לעם → בעלי יומנים והוצאות קשר) and
+linked to owners by name (`app/services/ocal_mk_expenses.py`).
+
+- `GET /api/ocal/owners?q=&kind=person|subject&has=diaries|expenses|both` —
+  `{ "data": [ {"key","label","kind","role","diary_count","event_count","first_event_date","last_event_date","expense_total","expense_years","mk_name"} ] }`.
+  `expense_total` sums category rows; a file's own total column is used only
+  when it has no category rows, so nothing is counted twice.
+- `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year", "by_category", "items"} }`.
 
 ## `GET /api/ocal/content`
 

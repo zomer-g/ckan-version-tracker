@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ocal, OcalSource } from "../../api/client";
 import { fmtDateHe } from "./ocalUtils";
+import OwnerSelect from "./OwnerSelect";
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -20,6 +22,15 @@ export default function OcalDiaries() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bulking, setBulking] = useState(false);
+  // ?owner= — every diary of one owner (shared with the search/calendar tabs).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const owner = searchParams.get("owner") || "";
+  const setOwner = (key: string) => {
+    const sp = new URLSearchParams(searchParams);
+    if (key) sp.set("owner", key);
+    else sp.delete("owner");
+    setSearchParams(sp);
+  };
 
   useEffect(() => {
     ocal
@@ -31,14 +42,16 @@ export default function OcalDiaries() {
 
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    if (!f) return sources;
-    return sources.filter(
+    const byOwner = owner ? sources.filter((s) => (s.owners || []).some((o) => o.key === owner)) : sources;
+    if (!f) return byOwner;
+    return byOwner.filter(
       (s) =>
         s.name.toLowerCase().includes(f) ||
         (s.person_name || "").toLowerCase().includes(f) ||
-        (s.organization_name || "").toLowerCase().includes(f),
+        (s.organization_name || "").toLowerCase().includes(f) ||
+        (s.owners || []).some((o) => o.label.toLowerCase().includes(f)),
     );
-  }, [sources, filter]);
+  }, [sources, filter, owner]);
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -86,6 +99,20 @@ export default function OcalDiaries() {
           aria-label="סינון יומנים"
           style={{ flex: "1 1 280px", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4 }}
         />
+        <OwnerSelect value={owner} onChange={setOwner} />
+        {owner && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              const sp = new URLSearchParams(searchParams);
+              sp.set("tab", "owners");
+              setSearchParams(sp);
+            }}
+          >
+            👤 יומנים והוצאות של בעל היומן
+          </button>
+        )}
         <span className="text-sm text-muted">
           {loading ? "טוען…" : `${shown.length.toLocaleString()} יומנים`}
           {selected.size > 0 ? ` · ${selected.size} נבחרו` : ""}
@@ -120,7 +147,23 @@ export default function OcalDiaries() {
                     {s.name}
                   </span>
                 </td>
-                <td style={{ ...td, color: "var(--text-muted)" }}>{s.person_name || s.organization_name || "—"}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>
+                  {s.owners && s.owners.length > 0
+                    ? s.owners.map((o, i) => (
+                        <span key={o.key}>
+                          {i > 0 && ", "}
+                          <button
+                            type="button"
+                            onClick={() => setOwner(o.key)}
+                            title={o.role || undefined}
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--primary)", textDecoration: "underline", font: "inherit" }}
+                          >
+                            {o.label}
+                          </button>
+                        </span>
+                      ))
+                    : s.person_name || s.organization_name || "—"}
+                </td>
                 <td style={{ ...td, textAlign: "end" }}>{(s.total_events || 0).toLocaleString()}</td>
                 <td style={{ ...td, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                   {s.first_event_date ? `${fmtDateHe(s.first_event_date)} – ${fmtDateHe(s.last_event_date)}` : "—"}

@@ -2745,6 +2745,53 @@ export interface OcalSource {
   resource_url?: string | null;
   person_name?: string | null;
   organization_name?: string | null;
+  owners?: OcalSourceOwner[] | null;
+}
+/** One owner of a diary, derived from its title (app/services/ocal_owners.py). */
+export interface OcalSourceOwner {
+  key: string;
+  label: string;
+  role: string | null;
+  kind: "person" | "subject";
+}
+/** A diary owner (or an MK with contact-with-the-public expenses) — /ocal/owners. */
+export interface OcalOwner {
+  key: string;
+  label: string;
+  kind: "person" | "subject";
+  role: string | null;
+  diary_count: number;
+  event_count: number;
+  first_event_date: string | null;
+  last_event_date: string | null;
+  expense_total: number | null;
+  expense_years: number[] | null;
+  mk_name: string | null;
+}
+export interface OcalExpenseItem {
+  year: number | null;
+  mk_name: string;
+  faction: string | null;
+  category: string | null;
+  description: string | null;
+  amount: number;
+  is_total: boolean;
+  file_title: string | null;
+  file_name: string | null;
+  file_url: string | null;
+}
+export interface OcalOwnerDetail {
+  owner: OcalOwner;
+  sources: (Pick<OcalSource, "id" | "name" | "color" | "total_events" | "first_event_date" | "last_event_date" | "dataset_url"> & {
+    role: string | null;
+    co_owners: { key: string; label: string }[] | null;
+  })[];
+  expenses: {
+    total: number | null;
+    by_year: { year: number | null; amount: number; files: number }[];
+    by_category: { category: string | null; amount: number; items: number; years: number[] | null }[];
+    items: OcalExpenseItem[];
+  };
 }
 export interface OcalStats {
   total_events: number;
@@ -2771,6 +2818,7 @@ export interface OcalSearchParams {
   location?: string;
   participants?: string;
   cross_ref_status?: "confirmed" | "unconfirmed";
+  owner?: string;
   page?: number;
   per_page?: number;
   sort?: "date_asc" | "date_desc" | "relevance";
@@ -2800,11 +2848,16 @@ export const ocal = {
     source_ids?: string[];
     entity_names?: string[];
     max_date?: string;
+    owner?: string;
   }) =>
     request<OcalCalendarResponse>(
       `/ocal/calendar${ocalQS(params as Record<string, unknown>)}`,
     ),
   sources: () => request<{ data: OcalSource[] }>("/ocal/sources"),
+  owners: (params: { q?: string; kind?: "person" | "subject"; has?: "diaries" | "expenses" | "both" } = {}) =>
+    request<{ data: OcalOwner[] }>(`/ocal/owners${ocalQS(params as Record<string, unknown>)}`),
+  ownerDetail: (key: string) =>
+    request<OcalOwnerDetail>(`/ocal/owners/detail${ocalQS({ key })}`),
   stats: () => request<OcalStats>("/ocal/stats"),
   entities: (
     params: { source_ids?: string[]; type?: string; from_date?: string; to_date?: string } = {},
@@ -2984,7 +3037,55 @@ export const ocalAdmin = {
     request<{ renamed: boolean }>(`/admin/ocal/entities/rename`, { method: "POST", body: JSON.stringify({ old_name, new_name, entity_type }) }),
   mergeEntities: (names: string[], target_name: string, entity_type?: string) =>
     request<{ merged: number }>(`/admin/ocal/entities/merge`, { method: "POST", body: JSON.stringify({ names, target_name, entity_type }) }),
+  // diary owners + Knesset contact-with-the-public expenses
+  rebuildOwners: () =>
+    request<OcalOwnersRebuild>(`/admin/ocal/owners/rebuild`, { method: "POST" }),
+  ownerLinks: (q?: string) =>
+    request<{ owners: OcalOwnerLink[]; count: number }>(`/admin/ocal/owners${aqs({ q })}`),
+  expensesImportPage: (url: string) =>
+    request<OcalExpensesImport>(`/admin/ocal/mk-expenses/import-page`, { method: "POST", body: JSON.stringify({ url }) }),
+  expensesUpload: (fd: FormData) =>
+    request<OcalExpensesImport>(`/admin/ocal/mk-expenses/upload`, { method: "POST", body: fd }),
+  expenseFiles: () => request<{ files: OcalExpenseFile[] }>(`/admin/ocal/mk-expenses/files`),
+  deleteExpenseFile: (id: string) => request<void>(`/admin/ocal/mk-expenses/files/${id}`, { method: "DELETE" }),
 };
+
+export interface OcalOwnersRebuild {
+  sources: number;
+  owner_links: number;
+  person_links: number;
+  distinct_owners: number;
+  learned_names: number;
+  expenses: { mk_names: number; matched_to_diary_owner: number };
+}
+export interface OcalOwnerLink {
+  source_id: string;
+  source_name: string;
+  owner_key: string;
+  owner_label: string;
+  kind: "person" | "subject";
+  role: string | null;
+  method: string;
+  person_id: string | null;
+}
+export interface OcalExpensesImport {
+  files: { file_id: string; file_name: string; year: number | null; rows: number; mks: number }[];
+  errors: { url?: string; file?: string; error: string }[];
+  found?: number;
+  linked: { mk_names: number; matched_to_diary_owner: number } | null;
+}
+export interface OcalExpenseFile {
+  id: string;
+  source_url: string;
+  file_name: string | null;
+  title: string | null;
+  year: number | null;
+  row_count: number;
+  imported_at: string;
+  imported_by: string | null;
+  mks: number;
+  mks_with_diaries: number;
+}
 
 // ── נדל"ן לעם (nadlan) — the property-level spatial crosswalk ───────────────
 // One envelope for all four entry modes (see app/api/nadlan.py): whichever

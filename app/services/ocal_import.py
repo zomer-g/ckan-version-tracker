@@ -932,6 +932,13 @@ async def scan_once(max_import: int | None = None, *, trigger: str = "scheduler"
             await ocal_enrich.refresh_entity_matview()
         except Exception:  # noqa: BLE001 — matview refresh is best-effort
             logger.warning("ocal_import: end-of-scan matview refresh failed")
+        try:
+            # New diaries join the owner picker, and an owner's expenses follow.
+            from app.services import ocal_mk_expenses, ocal_owners
+            await ocal_owners.rebuild_owners()
+            await ocal_mk_expenses.link_expenses()
+        except Exception:  # noqa: BLE001 — owner index is best-effort
+            logger.warning("ocal_import: end-of-scan owner rebuild failed")
     result = {"candidates": len(cands), "imported": len(imported),
               "skipped": skipped, "errors": errors, "results": imported}
     if log_id is not None:

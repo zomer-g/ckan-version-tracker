@@ -1,0 +1,315 @@
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ocal, OcalOwner, OcalOwnerDetail } from "../../api/client";
+import { fmtDateHe } from "./ocalUtils";
+import { useOcalOwners } from "./OwnerSelect";
+
+type Has = "" | "both" | "expenses";
+
+const nis = (n: number | null | undefined) =>
+  n == null ? "—" : `₪${Math.round(n).toLocaleString("he-IL")}`;
+
+function matches(o: OcalOwner, q: string): boolean {
+  if (!q) return true;
+  const hay = `${o.label} ${o.mk_name || ""} ${o.role || ""}`.replace(/["'׳״-]/g, "");
+  return q.replace(/["'׳״-]/g, "").split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
+}
+
+/**
+ * Diary owners — every person (or, for a diary that names nobody, the office)
+ * the diary titles name, joined with the Knesset's contact-with-the-public
+ * expenses of the same person. The owner lives in the URL (?tab=owners&owner=)
+ * so a page like "all of מאי גולן's diaries and expenses" can be shared.
+ */
+export default function OcalOwners() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected = searchParams.get("owner") || "";
+  const owners = useOcalOwners();
+  const [q, setQ] = useState("");
+  const [has, setHas] = useState<Has>("");
+
+  const shown = useMemo(() => {
+    let list = owners.filter((o) => matches(o, q.trim()));
+    if (has === "both") list = list.filter((o) => o.diary_count > 0 && o.expense_total != null);
+    if (has === "expenses") list = list.filter((o) => o.expense_total != null);
+    return list;
+  }, [owners, q, has]);
+
+  const select = (key: string) => {
+    const sp = new URLSearchParams(searchParams);
+    sp.set("tab", "owners");
+    if (key) sp.set("owner", key);
+    else sp.delete("owner");
+    setSearchParams(sp);
+  };
+
+  const n = (k: Has) => k === "both"
+    ? owners.filter((o) => o.diary_count > 0 && o.expense_total != null).length
+    : k === "expenses" ? owners.filter((o) => o.expense_total != null).length : owners.length;
+  const chip = (k: Has, label: string) => (
+    <button
+      type="button"
+      onClick={() => setHas(k)}
+      aria-pressed={has === k}
+      style={{
+        fontSize: "0.8rem", padding: "0.2rem 0.6rem", borderRadius: 12, cursor: "pointer",
+        border: "1px solid var(--border)",
+        background: has === k ? "var(--primary)" : "none",
+        color: has === k ? "#fff" : "var(--text-muted)",
+      }}
+    >
+      {label} ({n(k)})
+    </button>
+  );
+
+  return (
+    <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div style={{ flex: "1 1 260px", maxWidth: 380, minWidth: 0 }}>
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="חיפוש בעל יומן (למשל: מאי גולן)…"
+          aria-label="חיפוש בעל יומן"
+          style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid var(--border)", borderRadius: 4, boxSizing: "border-box" }}
+        />
+        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", margin: "0.5rem 0" }}>
+          {chip("", "הכל")}
+          {chip("both", "יומנים + הוצאות")}
+          {chip("expenses", "עם הוצאות קשר עם הבוחר")}
+        </div>
+        <div role="listbox" aria-label="בעלי יומנים" className="scroll-region" tabIndex={0}
+          style={{ maxHeight: 560, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
+          {shown.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              role="option"
+              aria-selected={o.key === selected}
+              onClick={() => select(o.key)}
+              style={{
+                display: "block", width: "100%", textAlign: "start", padding: "0.45rem 0.65rem",
+                border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer",
+                background: o.key === selected ? "var(--surface-2)" : "none", color: "inherit",
+              }}
+            >
+              <div style={{ fontWeight: o.key === selected ? 700 : 500, fontSize: "0.9rem" }}>
+                {o.label}
+                {o.kind === "subject" && <span className="text-muted" style={{ fontWeight: 400 }}> · יומן תפקיד</span>}
+              </div>
+              <div className="text-sm text-muted">
+                {o.diary_count > 0 && `${o.diary_count} יומנים · ${o.event_count.toLocaleString()} אירועים`}
+                {o.diary_count > 0 && o.expense_total != null && " · "}
+                {o.expense_total != null && `הוצאות קשר: ${nis(o.expense_total)}`}
+              </div>
+            </button>
+          ))}
+          {owners.length > 0 && shown.length === 0 && (
+            <div className="text-sm text-muted" style={{ padding: "0.8rem" }}>לא נמצאו בעלי יומנים.</div>
+          )}
+          {owners.length === 0 && <div className="text-sm text-muted" style={{ padding: "0.8rem" }}>טוען…</div>}
+        </div>
+      </div>
+
+      <div style={{ flex: "3 1 420px", minWidth: 0 }}>
+        {selected ? <OwnerDetail key={selected} ownerKey={selected} /> : (
+          <div className="card text-muted" style={{ padding: "1rem" }}>
+            בחרו בעל יומן מהרשימה כדי לראות את כל היומנים שלו, ואם הוא חבר כנסת — גם את הוצאות
+            הקשר עם הבוחר (תקציב "קשר עם הציבור") שפרסמה הכנסת.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OwnerDetail({ ownerKey }: { ownerKey: string }) {
+  const [, setSearchParams] = useSearchParams();
+  const [d, setD] = useState<OcalOwnerDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setD(null);
+    setError(null);
+    ocal.ownerDetail(ownerKey)
+      .then((r) => { if (live) setD(r); })
+      .catch((e) => { if (live) setError(e?.message || "שגיאה בטעינה"); });
+    return () => { live = false; };
+  }, [ownerKey]);
+
+  if (error) return <div style={{ color: "var(--danger)" }}>{error}</div>;
+  if (!d) return <div className="text-sm text-muted">טוען…</div>;
+  const { owner, sources, expenses } = d;
+  const goto = (tab: "search" | "calendar") =>
+    setSearchParams(new URLSearchParams(tab === "search" ? { owner: owner.key } : { tab, owner: owner.key }));
+
+  const th: React.CSSProperties = { textAlign: "start", padding: "0.4rem 0.55rem", borderBottom: "2px solid var(--border)", fontSize: "0.8rem", background: "var(--surface-2)" };
+  const td: React.CSSProperties = { padding: "0.38rem 0.55rem", fontSize: "0.85rem", verticalAlign: "top", borderBottom: "1px solid var(--border)" };
+  const maxYear = Math.max(1, ...expenses.by_year.map((y) => y.amount));
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 0.2rem" }}>{owner.label}</h2>
+      <div className="text-sm text-muted" style={{ marginBottom: "0.6rem", lineHeight: 1.7 }}>
+        {owner.role && <div>{owner.role}</div>}
+        {owner.mk_name && owner.mk_name !== owner.label && <div>בדיווחי הכנסת: {owner.mk_name}</div>}
+        {owner.diary_count > 0 && (
+          <div>
+            {owner.diary_count} יומנים · {owner.event_count.toLocaleString()} אירועים
+            {owner.first_event_date && ` · ${fmtDateHe(owner.first_event_date)} – ${fmtDateHe(owner.last_event_date)}`}
+          </div>
+        )}
+      </div>
+      {owner.diary_count > 0 && (
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <button type="button" className="btn-primary" onClick={() => goto("search")}>🔍 כל האירועים ביומנים</button>
+          <button type="button" className="btn-secondary" onClick={() => goto("calendar")}>📅 בלוח השנה</button>
+        </div>
+      )}
+
+      <section aria-labelledby="owner-diaries" style={{ marginBottom: "1.4rem" }}>
+        <h3 id="owner-diaries" style={{ fontSize: "1.05rem", margin: "0 0 0.5rem" }}>יומנים ({sources.length})</h3>
+        {sources.length === 0 ? (
+          <div className="text-sm text-muted">אין יומנים לבעלים זה במאגר.</div>
+        ) : (
+          <div className="scroll-region" tabIndex={0} role="region" aria-label="היומנים" style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+              <thead>
+                <tr>
+                  <th scope="col" style={th}>יומן</th>
+                  <th scope="col" style={{ ...th, textAlign: "end" }}>אירועים</th>
+                  <th scope="col" style={th}>טווח</th>
+                  <th scope="col" style={th}>הורדה</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.id}>
+                    <td style={td}>
+                      <span style={{ display: "inline-flex", gap: "0.4rem", alignItems: "baseline" }}>
+                        <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: s.color || "#3B82F6", flex: "0 0 auto" }} />
+                        <span>
+                          {s.dataset_url
+                            ? <a href={s.dataset_url} target="_blank" rel="noopener noreferrer">{s.name}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
+                            : s.name}
+                          {(s.role || (s.co_owners && s.co_owners.length > 0)) && (
+                            <div className="text-sm text-muted">
+                              {s.role}
+                              {s.role && s.co_owners && s.co_owners.length > 0 && " · "}
+                              {s.co_owners && s.co_owners.length > 0 && `משותף עם ${s.co_owners.map((c) => c.label).join(", ")}`}
+                            </div>
+                          )}
+                        </span>
+                      </span>
+                    </td>
+                    <td style={{ ...td, textAlign: "end" }}>{(s.total_events || 0).toLocaleString()}</td>
+                    <td style={{ ...td, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                      {s.first_event_date ? `${fmtDateHe(s.first_event_date)} – ${fmtDateHe(s.last_event_date)}` : "—"}
+                    </td>
+                    <td style={td}>
+                      <a href={ocal.downloadSourceUrl(s.id, { format: "csv" })}>CSV</a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section aria-labelledby="owner-expenses">
+        <h3 id="owner-expenses" style={{ fontSize: "1.05rem", margin: "0 0 0.3rem" }}>
+          הוצאות קשר עם הבוחר{expenses.total != null && ` · סה"כ ${nis(expenses.total)}`}
+        </h3>
+        <div className="text-sm text-muted" style={{ marginBottom: "0.6rem" }}>
+          הוצאות חבר/ת הכנסת מתקציב "קשר עם הציבור", כפי שפורסמו בקבצי האקסל באתר הכנסת.
+        </div>
+        {expenses.items.length === 0 ? (
+          <div className="text-sm text-muted">
+            לא נמצאו הוצאות קשר עם הבוחר בשם זה. הכנסת מפרסמת הוצאות לחברי כנסת בלבד.
+          </div>
+        ) : (
+          <>
+            <table style={{ borderCollapse: "collapse", marginBottom: "1rem", width: "100%", maxWidth: 520 }}>
+              <caption className="sr-only">הוצאות לפי שנה</caption>
+              <thead>
+                <tr>
+                  <th scope="col" style={th}>שנה</th>
+                  <th scope="col" style={{ ...th, textAlign: "end" }}>סכום</th>
+                  <th scope="col" style={{ ...th, width: "45%" }}><span className="sr-only">יחס</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {expenses.by_year.map((y) => (
+                  <tr key={String(y.year)}>
+                    <th scope="row" style={{ ...td, fontWeight: 600 }}>{y.year ?? "—"}</th>
+                    <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap" }}>{nis(y.amount)}</td>
+                    <td style={td}>
+                      <div aria-hidden style={{ height: 10, borderRadius: 3, background: "var(--primary)", width: `${(100 * y.amount) / maxYear}%`, minWidth: 2 }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {expenses.by_category.length > 0 && (
+              <div className="scroll-region" tabIndex={0} role="region" aria-label="הוצאות לפי סוג" style={{ overflowX: "auto", marginBottom: "1rem" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 420 }}>
+                  <thead>
+                    <tr>
+                      <th scope="col" style={th}>סוג הוצאה</th>
+                      <th scope="col" style={{ ...th, textAlign: "end" }}>סכום</th>
+                      <th scope="col" style={th}>שנים</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenses.by_category.map((c) => (
+                      <tr key={c.category || "-"}>
+                        <td style={td}>{c.category || "ללא סיווג"}</td>
+                        <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap" }}>{nis(c.amount)}</td>
+                        <td style={{ ...td, color: "var(--text-muted)" }}>{(c.years || []).join(", ")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <details>
+              <summary style={{ cursor: "pointer" }} className="text-sm">כל השורות כפי שפורסמו ({expenses.items.length})</summary>
+              <div className="scroll-region" tabIndex={0} role="region" aria-label="שורות ההוצאות" style={{ overflowX: "auto", maxHeight: 420, marginTop: "0.5rem", border: "1px solid var(--border)", borderRadius: 6 }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+                  <thead>
+                    <tr>
+                      <th scope="col" style={th}>שנה</th>
+                      <th scope="col" style={th}>סוג</th>
+                      <th scope="col" style={th}>פירוט</th>
+                      <th scope="col" style={{ ...th, textAlign: "end" }}>סכום</th>
+                      <th scope="col" style={th}>קובץ מקור</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenses.items.map((it, i) => (
+                      <tr key={i} style={it.is_total ? { fontWeight: 600 } : undefined}>
+                        <td style={td}>{it.year ?? "—"}</td>
+                        <td style={td}>{it.category || "—"}{it.is_total && " (סיכום)"}</td>
+                        <td style={{ ...td, color: "var(--text-muted)" }}>{it.description || ""}</td>
+                        <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap" }}>{nis(it.amount)}</td>
+                        <td style={td}>
+                          {it.file_url
+                            ? <a href={it.file_url} target="_blank" rel="noopener noreferrer">{it.file_title || it.file_name}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
+                            : <span className="text-muted">{it.file_title || it.file_name}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}

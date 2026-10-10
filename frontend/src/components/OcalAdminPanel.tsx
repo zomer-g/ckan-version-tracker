@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ocalAdmin, OcalAdminSource, OcalAdminPerson, OcalAdminOrg,
   OcalCandidate, OcalException, OcalEntity, OcalAutoImportLog, OcalDashboard,
+  OcalExpenseFile, OcalExpensesImport,
 } from "../api/client";
 
-type Section = "dashboard" | "sources" | "candidates" | "automation" | "people" | "orgs" | "entities" | "content" | "exceptions";
+type Section = "dashboard" | "sources" | "candidates" | "automation" | "people" | "orgs" | "entities" | "content" | "exceptions" | "owners";
 const SECTIONS: [Section, string][] = [
   ["dashboard", "סקירה"],
   ["sources", "יומנים"],
@@ -13,6 +14,7 @@ const SECTIONS: [Section, string][] = [
   ["exceptions", "נדחו"],
   ["entities", "ישויות"],
   ["people", "אנשים"],
+  ["owners", "בעלי יומנים והוצאות קשר"],
   ["orgs", "ארגונים"],
   ["content", "טקסטים"],
 ];
@@ -327,6 +329,108 @@ function ExceptionsSection() {
               </tr>
             ))}
             {rows.length === 0 && <tr><td style={td} colSpan={4}>אין דחיות.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Diary owners + Knesset contact-with-the-public expenses ─────────────────
+function importSummary(r: OcalExpensesImport): string {
+  const rows = r.files.reduce((n, f) => n + f.rows, 0);
+  const parts = [`יובאו ${r.files.length} קבצים (${rows.toLocaleString()} שורות)`];
+  if (r.linked) parts.push(`${r.linked.matched_to_diary_owner} מתוך ${r.linked.mk_names} שמות ח"כ קושרו לבעלי יומנים`);
+  if (r.errors.length) parts.push(`${r.errors.length} נכשלו: ${r.errors.map((e) => `${e.url || e.file} — ${e.error}`).join("; ")}`);
+  return parts.join(" · ");
+}
+
+function OwnersSection() {
+  const { node, ok, fail } = useMsg();
+  const [files, setFiles] = useState<OcalExpenseFile[]>([]);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(() => { ocalAdmin.expenseFiles().then((r) => setFiles(r.files)).catch(fail); }, []); // eslint-disable-line
+  useEffect(() => { load(); }, [load]);
+
+  const run = async (label: string, fn: () => Promise<string>) => {
+    setBusy(label);
+    try { ok(await fn()); load(); } catch (e) { fail(e); } finally { setBusy(null); }
+  };
+
+  return (
+    <div>
+      <h3 style={{ margin: "0 0 0.3rem", fontSize: "1rem" }}>בעלי יומנים</h3>
+      <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+        בעל/י כל יומן מחולצים משם היומן (שר/ה, מנכ"ל/ית, וכו'), ונשמרים בטבלה <code>diary_source_owners</code>.
+        הם מתעדכנים אוטומטית בסוף כל סריקת ייבוא; כאן אפשר להריץ מחדש ידנית (למשל אחרי תיקון שמות באנשים).
+      </p>
+      <button style={btn} disabled={!!busy} onClick={() => run("owners", async () => {
+        const r = await ocalAdmin.rebuildOwners();
+        return `${r.sources} יומנים · ${r.distinct_owners} בעלי יומנים (${r.person_links} קישורי אנשים) · ` +
+          `${r.expenses.matched_to_diary_owner}/${r.expenses.mk_names} שמות ח"כ קושרו`;
+      })}>{busy === "owners" ? "מחלץ…" : "חלץ בעלי יומנים מחדש"}</button>
+
+      <h3 style={{ margin: "1.2rem 0 0.3rem", fontSize: "1rem" }}>הוצאות קשר עם הבוחר (אתר הכנסת)</h3>
+      <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+        ייבוא חד-פעמי של קבצי האקסל שהכנסת מפרסמת על הוצאות חברי הכנסת מתקציב "קשר עם הציבור".
+        הדביקו את כתובת העמוד באתר הכנסת — כל קבצי ה-xls/xlsx שמקושרים ממנו ייובאו. ייבוא חוזר מחליף את אותם קבצים.
+        אם האתר חוסם את השרת, הורידו את הקבצים והעלו אותם כאן.
+      </p>
+      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...inp, flex: "1 1 360px" }} dir="ltr" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://main.knesset.gov.il/…" aria-label="כתובת עמוד ההוצאות באתר הכנסת" />
+        <button style={btn} disabled={!!busy || !url.trim()} onClick={() => run("page", async () =>
+          importSummary(await ocalAdmin.expensesImportPage(url.trim())))}>
+          {busy === "page" ? "מייבא…" : "ייבא מהעמוד"}
+        </button>
+      </div>
+      <div style={{ marginTop: "0.5rem" }}>
+        <label className="text-sm">
+          או העלאת קבצים:{" "}
+          <input type="file" multiple accept=".xls,.xlsx" disabled={!!busy} onChange={(e) => {
+            const list = e.target.files;
+            if (!list || list.length === 0) return;
+            const fd = new FormData();
+            Array.from(list).forEach((f) => fd.append("files", f));
+            e.target.value = "";
+            run("upload", async () => importSummary(await ocalAdmin.expensesUpload(fd)));
+          }} />
+        </label>
+        {busy === "upload" && <span className="text-sm text-muted"> מעלה…</span>}
+      </div>
+      {node}
+      <div tabIndex={0} role="region" aria-label="קבצי הוצאות שיובאו" className="scroll-region" style={{ overflowX: "auto", maxHeight: 480, border: "1px solid var(--border)", borderRadius: 6, marginTop: "0.6rem" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <thead><tr>
+            <th scope="col" style={th}>קובץ</th><th scope="col" style={th}>שנה</th>
+            <th scope="col" style={{ ...th, textAlign: "end" }}>שורות</th>
+            <th scope="col" style={{ ...th, textAlign: "end" }}>חברי כנסת</th>
+            <th scope="col" style={{ ...th, textAlign: "end" }}>עם יומנים</th>
+            <th scope="col" style={th}>יובא</th><th scope="col" style={th}></th>
+          </tr></thead>
+          <tbody>
+            {files.map((f) => (
+              <tr key={f.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                <td style={td}>
+                  {f.source_url.startsWith("http")
+                    ? <a href={f.source_url} target="_blank" rel="noopener noreferrer">{f.title || f.file_name}</a>
+                    : (f.title || f.file_name)}
+                </td>
+                <td style={td}>{f.year ?? "—"}</td>
+                <td style={{ ...td, textAlign: "end" }}>{f.row_count.toLocaleString()}</td>
+                <td style={{ ...td, textAlign: "end" }}>{f.mks}</td>
+                <td style={{ ...td, textAlign: "end" }}>{f.mks_with_diaries}</td>
+                <td style={{ ...td, color: "var(--text-muted)" }}>{fmtDate(f.imported_at)}</td>
+                <td style={td}>
+                  <button style={btn} onClick={async () => {
+                    if (!window.confirm(`למחוק את ${f.file_name}?`)) return;
+                    try { await ocalAdmin.deleteExpenseFile(f.id); ok("נמחק"); load(); } catch (e) { fail(e); }
+                  }}>מחק</button>
+                </td>
+              </tr>
+            ))}
+            {files.length === 0 && <tr><td style={td} colSpan={7}>עדיין לא יובאו קבצים.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -731,6 +835,7 @@ export default function OcalAdminPanel() {
       {sec === "automation" && <AutomationSection />}
       {sec === "exceptions" && <ExceptionsSection />}
       {sec === "people" && <PeopleSection />}
+      {sec === "owners" && <OwnersSection />}
       {sec === "orgs" && <OrgsSection />}
       {sec === "entities" && <EntitiesSection />}
       {sec === "content" && <ContentSection />}
