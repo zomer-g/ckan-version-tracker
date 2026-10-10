@@ -862,9 +862,13 @@ async def owner_detail(request: Request, key: str = Query(..., min_length=3, max
     if not _expenses_on():
         return {"owner": owner, "sources": [dict(r) for r in sources], "expenses": None}
     by_year = await ocal_db.fetch(
-        f"SELECT year, sum(amount) AS amount, count(DISTINCT file_id) AS files "
+        f"SELECT f.year, sum(f.amount) AS amount, count(DISTINCT f.file_id) AS files, "
+        # A year the Knesset has reported only part of (its latest transaction,
+        # across all MKs, is before December) — e.g. the January–June file.
+        "(SELECT max(m.expense_date) < make_date(f.year, 12, 1) FROM mk_expenses m "
+        "  WHERE m.year = f.year AND m.expense_date IS NOT NULL) AS partial "
         f"FROM ({_EXPENSE_PER_FILE.format(where='WHERE owner_key = $1')}) f "
-        "GROUP BY year ORDER BY year", key)
+        "GROUP BY f.year ORDER BY f.year", key)
     by_category = await ocal_db.fetch(
         "SELECT category, sum(amount) AS amount, count(*) AS items, "
         "array_agg(DISTINCT year ORDER BY year) FILTER (WHERE year IS NOT NULL) AS years "
@@ -872,11 +876,16 @@ async def owner_detail(request: Request, key: str = Query(..., min_length=3, max
         "GROUP BY category ORDER BY sum(amount) DESC", key)
     items = await ocal_db.fetch(
         "SELECT m.year, m.mk_name, m.faction, m.category, m.description, m.amount, m.is_total, "
+        "m.supplier, m.expense_date, m.receipt_url, "
         "f.title AS file_title, f.file_name, "
-        "CASE WHEN f.source_url LIKE 'http%' THEN f.source_url END AS file_url "
+        "CASE WHEN f.source_url LIKE 'http%' THEN f.source_url "
+        "     WHEN f.source_url LIKE 'over:%' THEN 'https://www.over.org.il/versions/' "
+        "          || split_part(f.source_url, ':', 2) END AS file_url "
         "FROM mk_expenses m JOIN mk_expense_files f ON f.id = m.file_id "
-        "WHERE m.owner_key = $1 ORDER BY m.year DESC NULLS LAST, m.is_total, m.amount DESC "
+        "WHERE m.owner_key = $1 "
+        "ORDER BY m.year DESC NULLS LAST, m.expense_date DESC NULLS LAST, m.amount DESC "
         "LIMIT 3000", key)
+    n_items = await ocal_db.fetchval("SELECT count(*) FROM mk_expenses WHERE owner_key = $1", key)
 
     def _f(rows):
         out = [dict(r) for r in rows]
@@ -893,6 +902,7 @@ async def owner_detail(request: Request, key: str = Query(..., min_length=3, max
             "by_year": _f(by_year),
             "by_category": _f(by_category),
             "items": _f(items),
+            "item_count": int(n_items or 0),
         },
     }
 

@@ -182,3 +182,55 @@ def test_expense_names_link_to_diary_owners():
     assert match_owner("בדרה גולן פלורה מאי", owners) == "p:גולנ מאי"
     assert match_owner("בן גביר איתמר", owners) == "p:בנ גביר איתמר"
     assert match_owner("לפיד יאיר", owners) is None
+
+
+# ── the Knesset dataset as archived by OVER ──────────────────────────────────
+
+from app.services.ocal_mk_expenses import category_resolver, clean_category, rows_from_over  # noqa: E402
+
+
+def test_nicknames_and_spellings_of_one_mk_match():
+    assert names_match("אבי דיכטר", "דיכטר אברהם משה")
+    assert names_match("דבי ביטון", "ביטון דבורה")
+    assert names_match("טלי גוטליב", "גוטליב רויטל")
+    assert names_match("חילי טרופר", "טרופר יחיאל משה")
+    assert names_match("קטי קטרין שטרית", "שיטרית קטרין")
+    assert names_match("משה סולומון", "סלומון משה")
+    assert names_match("ואליד אלהואשלה", "אל הואשלה ואליד")
+    # ...without merging different people who share a surname.
+    assert not names_match("חיים ביטון", "ביטון מיכאל מרדכי")
+    assert not names_match("מאיר כהן", "מירב כהן")
+    assert not names_match("דוד ביטן", "דוד אמסלם")
+
+
+def test_clipped_and_numbered_headings_are_restored():
+    resolve = category_resolver(["צריכת מדיה כתובה ודיגיטלית", "הוצאות שירותי כבלים"])
+    assert resolve("צריכת מדיה כתובה ודי") == "צריכת מדיה כתובה ודיגיטלית"
+    assert resolve('"הוצאות שירותי כבלים') == "הוצאות שירותי כבלים"
+    assert resolve("ייעוץ  סקרים וחוות") == "ייעוץ סקרים וחוות"  # no full form known
+    assert clean_category("מחשב (2)") == "מחשב"
+    assert clean_category("טלפון נייד 2)") == "טלפון נייד"
+
+
+def test_rows_from_over_keeps_refunds_and_uses_summary_only_where_no_detail():
+    detail = [
+        {"שנת הדוח": "2024", "שם חבר הכנסת": "גולן מאי", "שם סעיף הוצאה": "צריכת מדיה כתובה ודיגיטלית",
+         "שם בית עסק/ ספק": "ספק א", "תאריך ביצוע/ תאריך חשבונית": "2024-03-01", 'סכום בש"ח': "1000",
+         "פרטים/ הערות": "", "אשראי": "X", "אסמכתאות לעסקה": "https://example.org/r/1"},
+        {"שנת הדוח": "2024", "שם חבר הכנסת": "גולן מאי", "שם סעיף הוצאה": "צריכת מדיה כתובה ודי",
+         "שם בית עסק/ ספק": "ספק א", "תאריך ביצוע/ תאריך חשבונית": "2024-03-05", 'סכום בש"ח': "-200",
+         "פרטים/ הערות": "זיכוי", "אשראי": "", "אסמכתאות לעסקה": ""},
+    ]
+    summary = [
+        {"שנת הדוח": "2024", "שם חבר הכנסת": "גולן מאי", "שם סעיף הוצאה": "כיבוד קל", 'סכום בש"ח': "50"},
+        {"שנת הדוח": "2023", "שם חבר הכנסת": "גולן מאי", "שם סעיף הוצאה": "מחשב (2)", 'סכום בש"ח': "300"},
+    ]
+    d, s = rows_from_over(detail, summary)
+    assert [(r["category"], r["amount"], str(r["expense_date"])) for r in d] == [
+        ("צריכת מדיה כתובה ודיגיטלית", 1000.0, "2024-03-01"),
+        ("צריכת מדיה כתובה ודיגיטלית", -200.0, "2024-03-05"),
+    ]
+    assert d[0]["receipt_url"] == "https://example.org/r/1" and d[0]["supplier"] == "ספק א"
+    assert d[1]["description"] == "זיכוי"
+    # 2024 has transactions → its summary row is dropped; 2023 has none → kept.
+    assert [(r["year"], r["category"], r["amount"]) for r in s] == [(2023, "מחשב", 300.0)]

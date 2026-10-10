@@ -63,9 +63,11 @@ def normalize_name(name: str | None) -> str:
 
 
 def name_tokens(name: str | None) -> list[str]:
-    """Comparable tokens: quotes dropped, hyphens split, final letters folded."""
+    """Comparable tokens: quotes dropped, hyphens split, final letters folded,
+    and the Arabic article joined to its word ("אל הואשלה" = "אלהואשלה")."""
     s = _QUOTES_RE.sub("", normalize_name(name))
     s = re.sub(r"[-־,;.]", " ", s)
+    s = re.sub(r"(?:^|(?<=\s))אל\s+(?=\S)", "אל", s)
     return [t.translate(_FINALS) for t in s.split() if t]
 
 
@@ -74,17 +76,64 @@ def name_key(name: str | None) -> str:
     return " ".join(sorted(name_tokens(name)))
 
 
+# Nicknames and the given names they stand for, as the Knesset's expense files
+# and the diary titles write the same person ("אבי דיכטר" / "דיכטר אברהם משה",
+# "טלי גוטליב" / "גוטליב רויטל"). Each group is one name.
+_NICKNAMES = [
+    ("אבי", "אברהם", "אביגדור"), ("אלי", "אליהו", "אליעזר"), ("מיקי", "מכלוף", "מיכאל"),
+    ("מירי", "מרים"), ("דבי", "דבורה"), ("טלי", "רויטל"), ("טניה", "טטיאנה"),
+    ("קטי", "קטרין"), ("דודי", "דוד"), ("צביקה", "צבי"), ("בני", "בנימין"),
+    ("שלומי", "שלמה"), ("קובי", "יעקב"), ("מוטי", "מרדכי"), ("רפי", "רפאל"),
+    ("גבי", "גבריאל"), ("איציק", "יצחק"), ("יוסי", "יוסף"), ("משה", "מושיק"),
+    ("גדי", "גד"), ("חילי", "יחיאל"),
+    # spelling variants the vowel-letter rule below does not cover
+    ("עמאר", "עמר"),
+]
+_NICK_GROUPS: dict[str, set[str]] = {}
+for _grp in _NICKNAMES:
+    _folded = {g.translate(_FINALS) for g in _grp}
+    for _g in _folded:
+        _NICK_GROUPS.setdefault(_g, set()).update(_folded)
+
+
+def _skeleton(t: str) -> str:
+    """The token without inner ו/י and doubled letters — "שיטרית"/"שטרית",
+    "סולומון"/"סלומון", "בועז"/"בעז" are spelling variants of one name."""
+    if len(t) < 3:
+        return t
+    body = re.sub("[וי]", "", t[1:-1])
+    return re.sub(r"(.)\1+", r"\1", t[0] + body + t[-1])
+
+
+def tokens_equivalent(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if b in _NICK_GROUPS.get(a, ()):
+        return True
+    return max(len(a), len(b)) >= 4 and _skeleton(a) == _skeleton(b)
+
+
 def names_match(a: str | None, b: str | None) -> bool:
-    """Same person under a different spelling? Equal token sets, or the shorter
-    name (≥2 tokens) wholly inside the longer one — the Knesset lists every given
-    name ("בדרה גולן פלורה מאי") where a diary says "מאי גולן"."""
-    ta, tb = set(name_tokens(a)), set(name_tokens(b))
+    """Same person under a different spelling? Every token of the shorter name
+    (≥2 tokens) has its own equivalent token in the longer one — the Knesset
+    lists every given name ("בדרה גולן פלורה מאי") where a diary says "מאי
+    גולן", and tokens may differ by nickname or spelling (see tokens_equivalent)."""
+    ta, tb = list(dict.fromkeys(name_tokens(a))), list(dict.fromkeys(name_tokens(b)))
     if not ta or not tb:
         return False
-    if ta == tb:
-        return True
     small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-    return len(small) >= 2 and small <= big
+    if len(small) < 2 and len(big) > 1:
+        return False
+    used: set[int] = set()
+    for t in small:
+        # Exact matches first, so a nickname never takes a token another word needs.
+        j = next((i for i, u in enumerate(big) if i not in used and u == t), None)
+        if j is None:
+            j = next((i for i, u in enumerate(big) if i not in used and tokens_equivalent(t, u)), None)
+        if j is None:
+            return False
+        used.add(j)
+    return True
 
 
 # ── title parsing ────────────────────────────────────────────────────────────

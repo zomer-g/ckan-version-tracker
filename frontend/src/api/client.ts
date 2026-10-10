@@ -2777,6 +2777,9 @@ export interface OcalExpenseItem {
   description: string | null;
   amount: number;
   is_total: boolean;
+  supplier: string | null;
+  expense_date: string | null;
+  receipt_url: string | null;
   file_title: string | null;
   file_name: string | null;
   file_url: string | null;
@@ -2790,9 +2793,11 @@ export interface OcalOwnerDetail {
   /** null while the expenses layer is off (no data source loaded yet). */
   expenses: {
     total: number | null;
-    by_year: { year: number | null; amount: number; files: number }[];
+    /** partial: the Knesset has reported only part of that year so far. */
+    by_year: { year: number | null; amount: number; files: number; partial: boolean | null }[];
     by_category: { category: string | null; amount: number; items: number; years: number[] | null }[];
     items: OcalExpenseItem[];
+    item_count: number;
   } | null;
 }
 export interface OcalStats {
@@ -3046,6 +3051,7 @@ export const ocalAdmin = {
     request<{ owners: OcalOwnerLink[]; count: number }>(`/admin/ocal/owners${aqs({ q })}`),
   expensesUpload: (fd: FormData) =>
     request<OcalExpensesImport>(`/admin/ocal/mk-expenses/upload`, { method: "POST", body: fd }),
+  expensesSync: () => request<OcalExpensesSync>(`/admin/ocal/mk-expenses/sync`, { method: "POST" }),
   expenseFiles: () => request<{ files: OcalExpenseFile[]; enabled: boolean }>(`/admin/ocal/mk-expenses/files`),
   deleteExpenseFile: (id: string) => request<void>(`/admin/ocal/mk-expenses/files/${id}`, { method: "DELETE" }),
 };
@@ -3072,6 +3078,11 @@ export interface OcalExpensesImport {
   files: { file_id: string; file_name: string; year: number | null; rows: number; mks: number }[];
   errors: { file?: string; error: string }[];
   linked: { mk_names: number; matched_to_diary_owner: number } | null;
+}
+export interface OcalExpensesSync {
+  skipped?: string;
+  resources?: { resource: string; rows: number; years: number[]; mks: number }[];
+  linked?: { mk_names: number; matched_to_diary_owner: number };
 }
 export interface OcalExpenseFile {
   id: string;

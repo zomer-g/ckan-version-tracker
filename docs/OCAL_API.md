@@ -107,17 +107,23 @@ with the role that precedes the name. A diary that names nobody gets its office
 as the owner (`kind: "subject"`, e.g. "ראש עיריית כפר סבא"). Spellings of one
 person share a `key` (`מאי גולן` = the Knesset's `בדרה גולן פלורה מאי`).
 
-Contact-with-the-voter expenses (`app/services/ocal_mk_expenses.py`) are
-**off** until a data source is loaded (`OCAL_MK_EXPENSES_ENABLED`). When on, an
-admin uploads the Excel files (admin → יומן לעם → בעלי יומנים והוצאות קשר) and
-the rows are linked to owners by name; while off, every `expense_*` field is
-`null`, `expenses_enabled` is `false` and the detail's `expenses` is `null`.
+Contact-with-the-voter expenses (`app/services/ocal_mk_expenses.py`) come from
+OVER's own archive of the Knesset dataset "הוצאות חברי הכנסת מתקציב קשר עם
+הציבור" ([6ee5fb22…](https://www.over.org.il/versions/6ee5fb22-749f-447b-b7b0-ccec5e258b6c)):
+its transaction table (2024 on) and its per-heading annual summary (2023). They
+are copied into `mk_expenses` after each Ocal scan when the dataset has changed
+(or from admin → יומן לעם → בעלי יומנים והוצאות קשר → "סנכרן"), cleaned
+(clipped heading names restored, "מחשב (2)" folded), and linked to owners by
+name, tolerating name order, extra given names, nicknames and spelling
+variants. `OCAL_MK_EXPENSES_ENABLED=false` turns the layer off: every
+`expense_*` field is then `null`, `expenses_enabled` is `false` and the
+detail's `expenses` is `null`.
 
 - `GET /api/ocal/owners?q=&kind=person|subject&has=diaries|expenses|both` —
   `{ "data": [ {"key","label","kind","role","diary_count","event_count","first_event_date","last_event_date","expense_total","expense_years","mk_name"} ], "expenses_enabled": false }`.
   `expense_total` sums category rows; a file's own total column is used only
   when it has no category rows, so nothing is counted twice.
-- `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year", "by_category", "items"} | null }`.
+- `GET /api/ocal/owners/detail?key=` — `{ "owner": {...}, "sources": [ {...source, "role", "co_owners"} ], "expenses": {"total", "by_year": [{"year","amount","files","partial"}], "by_category", "items": [{…, "supplier", "expense_date", "receipt_url"}], "item_count"} | null }`. Negative amounts are refunds; `partial` marks a year the Knesset has reported only part of.
 
 ## `GET /api/ocal/content`
 

@@ -375,18 +375,26 @@ function OwnersSection() {
       {!enabled ? (
         <>
           <p className="text-sm text-muted" style={{ marginTop: 0 }}>
-            השכבה כבויה עד שייבחר מקור נתונים. ההפעלה: <code>OCAL_MK_EXPENSES_ENABLED=true</code>,
-            ואז העלאת קבצי האקסל כאן.
+            השכבה כבויה (<code>OCAL_MK_EXPENSES_ENABLED=false</code>).
           </p>
           {node}
         </>
       ) : (<>
       <p className="text-sm text-muted" style={{ marginTop: 0 }}>
-        העלאת קבצי אקסל של הוצאות קשר עם הבוחר. השורות מקושרות לבעלי היומנים לפי שם; העלאה חוזרת של קובץ מחליפה אותו.
+        המקור: המאגר <a href="https://www.over.org.il/versions/6ee5fb22-749f-447b-b7b0-ccec5e258b6c" target="_blank" rel="noopener noreferrer">
+        הוצאות חברי הכנסת מתקציב קשר עם הציבור</a> בגרסאות לעם. הנתונים מסונכרנים אוטומטית בסוף כל סריקת ייבוא
+        כשיש בו גרסה חדשה, ומקושרים לבעלי היומנים לפי שם. כאן אפשר לסנכרן ידנית.
       </p>
+      <button style={btn} disabled={!!busy} onClick={() => run("sync", async () => {
+        const r = await ocalAdmin.expensesSync();
+        if (r.skipped) return "אין שינוי במקור";
+        const rows = (r.resources || []).reduce((n, x) => n + x.rows, 0);
+        return `סונכרנו ${rows.toLocaleString()} שורות` +
+          (r.linked ? ` · ${r.linked.matched_to_diary_owner} מתוך ${r.linked.mk_names} שמות קושרו לבעלי יומנים` : "");
+      })}>{busy === "sync" ? "מסנכרן…" : "סנכרן מגרסאות לעם"}</button>
       <div style={{ marginTop: "0.5rem" }}>
         <label className="text-sm">
-          העלאת קבצים:{" "}
+          או העלאת קובץ אקסל ידנית (נוסף על המקור):{" "}
           <input type="file" multiple accept=".xls,.xlsx" disabled={!!busy} onChange={(e) => {
             const list = e.target.files;
             if (!list || list.length === 0) return;

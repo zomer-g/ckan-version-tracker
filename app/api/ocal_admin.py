@@ -665,8 +665,23 @@ async def list_owner_links(request: Request, q: str | None = Query(None),
 def _require_expenses() -> None:
     from app.services import ocal_mk_expenses
     if not ocal_mk_expenses.is_enabled():
-        raise HTTPException(409, "שכבת הוצאות הקשר עם הבוחר כבויה עד שייבחר מקור נתונים "
-                                 "(OCAL_MK_EXPENSES_ENABLED).")
+        raise HTTPException(409, "שכבת הוצאות הקשר עם הבוחר כבויה (OCAL_MK_EXPENSES_ENABLED).")
+
+
+@router.post("/mk-expenses/sync")
+@limiter.limit("4/minute")
+async def sync_expenses(request: Request, force: bool = Query(True),
+                        user: User = Depends(get_admin_user)):
+    """Copy the Knesset contact expenses from OVER's archive of the dataset
+    (settings.ocal_mk_expenses_dataset_id) and link them to diary owners."""
+    _require_expenses()
+    from app.services import ocal_mk_expenses
+    try:
+        result = await ocal_mk_expenses.sync_from_over(force=force, imported_by=user.email)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _owners_changed()
+    return result
 
 
 @router.post("/mk-expenses/upload")

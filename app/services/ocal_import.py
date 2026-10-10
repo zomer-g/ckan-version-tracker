@@ -896,6 +896,10 @@ async def discover_candidates(limit: int | None = None) -> list[dict]:
     return cands
 
 
+def ocal_mk_expenses_on() -> bool:
+    return bool(settings.ocal_mk_expenses_enabled)
+
+
 async def scan_once(max_import: int | None = None, *, trigger: str = "scheduler") -> dict:
     """Discover new diary resources and import up to ``max_import`` that pass the
     gate; the rest of those evaluated are recorded as exceptions. Each run is
@@ -940,6 +944,14 @@ async def scan_once(max_import: int | None = None, *, trigger: str = "scheduler"
                 await ocal_mk_expenses.link_expenses()
         except Exception:  # noqa: BLE001 — owner index is best-effort
             logger.warning("ocal_import: end-of-scan owner rebuild failed")
+    if ocal_mk_expenses_on():
+        try:
+            # Picks up a new version of the Knesset expenses dataset; a no-op
+            # (one count query) when it has not changed.
+            from app.services import ocal_mk_expenses
+            await ocal_mk_expenses.sync_from_over()
+        except Exception:  # noqa: BLE001 — best-effort, retried next scan
+            logger.warning("ocal_import: expenses sync failed", exc_info=True)
     result = {"candidates": len(cands), "imported": len(imported),
               "skipped": skipped, "errors": errors, "results": imported}
     if log_id is not None:

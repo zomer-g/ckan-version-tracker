@@ -9,6 +9,9 @@ type Has = "" | "both" | "expenses";
 const nis = (n: number | null | undefined) =>
   n == null ? "—" : `₪${Math.round(n).toLocaleString("he-IL")}`;
 
+const nisExact = (n: number) =>
+  `₪${n.toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
 function matches(o: OcalOwner, q: string): boolean {
   if (!q) return true;
   const hay = `${o.label} ${o.mk_name || ""} ${o.role || ""}`.replace(/["'׳״-]/g, "");
@@ -228,8 +231,11 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
         <h3 id="owner-expenses" style={{ fontSize: "1.05rem", margin: "0 0 0.3rem" }}>
           הוצאות קשר עם הבוחר{expenses.total != null && ` · סה"כ ${nis(expenses.total)}`}
         </h3>
-        <div className="text-sm text-muted" style={{ marginBottom: "0.6rem" }}>
-          כפי שפורסמו בקבצי המקור.
+        <div className="text-sm text-muted" style={{ marginBottom: "0.6rem", lineHeight: 1.6 }}>
+          הוצאות חבר/ת הכנסת מתקציב "קשר עם הציבור", כפי שפרסמה הכנסת (מקור:{" "}
+          <a href="https://www.over.org.il/versions/6ee5fb22-749f-447b-b7b0-ccec5e258b6c" target="_blank" rel="noopener noreferrer">
+            הוצאות חברי הכנסת מתקציב קשר עם הציבור<span className="sr-only"> (נפתח בחלון חדש)</span>
+          </a>). סכומים שליליים הם זיכויים; ל-2023 פורסם רק סיכום לפי סעיף.
         </div>
         {expenses.items.length === 0 ? (
           <div className="text-sm text-muted">
@@ -249,7 +255,9 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
               <tbody>
                 {expenses.by_year.map((y) => (
                   <tr key={String(y.year)}>
-                    <th scope="row" style={{ ...td, fontWeight: 600 }}>{y.year ?? "—"}</th>
+                    <th scope="row" style={{ ...td, fontWeight: 600, whiteSpace: "nowrap" }}>
+                      {y.year ?? "—"}{y.partial && <span className="text-muted" style={{ fontWeight: 400 }}> (חלקית)</span>}
+                    </th>
                     <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap" }}>{nis(y.amount)}</td>
                     <td style={td}>
                       <div aria-hidden style={{ height: 10, borderRadius: 3, background: "var(--primary)", width: `${(100 * y.amount) / maxYear}%`, minWidth: 2 }} />
@@ -283,29 +291,40 @@ function OwnerDetail({ ownerKey }: { ownerKey: string }) {
             )}
 
             <details>
-              <summary style={{ cursor: "pointer" }} className="text-sm">כל השורות כפי שפורסמו ({expenses.items.length})</summary>
+              <summary style={{ cursor: "pointer" }} className="text-sm">
+                כל השורות כפי שפורסמו ({expenses.item_count.toLocaleString()}
+                {expenses.item_count > expenses.items.length && `, מוצגות ${expenses.items.length.toLocaleString()} האחרונות`})
+              </summary>
               <div className="scroll-region" tabIndex={0} role="region" aria-label="שורות ההוצאות" style={{ overflowX: "auto", maxHeight: 420, marginTop: "0.5rem", border: "1px solid var(--border)", borderRadius: 6 }}>
-                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 720 }}>
                   <thead>
                     <tr>
-                      <th scope="col" style={th}>שנה</th>
-                      <th scope="col" style={th}>סוג</th>
-                      <th scope="col" style={th}>פירוט</th>
+                      <th scope="col" style={th}>תאריך</th>
+                      <th scope="col" style={th}>סעיף</th>
+                      <th scope="col" style={th}>ספק / פירוט</th>
                       <th scope="col" style={{ ...th, textAlign: "end" }}>סכום</th>
-                      <th scope="col" style={th}>קובץ מקור</th>
+                      <th scope="col" style={th}>אסמכתא</th>
                     </tr>
                   </thead>
                   <tbody>
                     {expenses.items.map((it, i) => (
                       <tr key={i} style={it.is_total ? { fontWeight: 600 } : undefined}>
-                        <td style={td}>{it.year ?? "—"}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          {it.expense_date ? fmtDateHe(it.expense_date) : (it.year ?? "—")}
+                        </td>
                         <td style={td}>{it.category || "—"}{it.is_total && " (סיכום)"}</td>
-                        <td style={{ ...td, color: "var(--text-muted)" }}>{it.description || ""}</td>
-                        <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap" }}>{nis(it.amount)}</td>
                         <td style={td}>
-                          {it.file_url
-                            ? <a href={it.file_url} target="_blank" rel="noopener noreferrer">{it.file_title || it.file_name}<span className="sr-only"> (נפתח בחלון חדש)</span></a>
-                            : <span className="text-muted">{it.file_title || it.file_name}</span>}
+                          {it.supplier}
+                          {it.description && <div className="text-sm text-muted">{it.description}</div>}
+                          {!it.supplier && !it.description && <span className="text-muted">{it.file_title || ""}</span>}
+                        </td>
+                        <td style={{ ...td, textAlign: "end", whiteSpace: "nowrap", color: it.amount < 0 ? "var(--success, #15803d)" : undefined }}>
+                          {nisExact(it.amount)}
+                        </td>
+                        <td style={td}>
+                          {it.receipt_url
+                            ? <a href={it.receipt_url} target="_blank" rel="noopener noreferrer">קבלה<span className="sr-only"> (נפתח בחלון חדש)</span></a>
+                            : <span className="text-muted">—</span>}
                         </td>
                       </tr>
                     ))}

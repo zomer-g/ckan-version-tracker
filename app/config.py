@@ -168,10 +168,13 @@ class Settings(BaseSettings):
     ocal_import_confidence: float = 0.25
     ocal_import_min_rows: int = 10
     # Contact-with-the-voter expenses layer on the diary owners (mk_expenses,
-    # app/services/ocal_mk_expenses.py). OFF until a data source is chosen and
-    # loaded: while off, the public owner pages show diaries only and the admin
-    # upload is refused.
-    ocal_mk_expenses_enabled: bool = False
+    # app/services/ocal_mk_expenses.py). Its rows come from OVER's own archive
+    # of the Knesset's "הוצאות חברי הכנסת מתקציב קשר עם הציבור" dataset (the
+    # tracked dataset below; its tables are read from the append DB), re-synced
+    # after each Ocal scan when that dataset has changed. Off ⇒ the public owner
+    # pages show diaries only.
+    ocal_mk_expenses_enabled: bool = True
+    ocal_mk_expenses_dataset_id: str = "6ee5fb22-749f-447b-b7b0-ccec5e258b6c"
 
     # ── OCOI ("ניגוד עניינים לעם") data connection ──
     # Where the ocoi app reads/writes its DATA tables (documents, persons,
