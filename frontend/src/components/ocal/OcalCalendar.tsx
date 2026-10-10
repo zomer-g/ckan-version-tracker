@@ -155,7 +155,7 @@ export default function OcalCalendar() {
         <div className="card" style={{ marginTop: "1rem", padding: "0.9rem" }}>
           <strong>{selected.split("-").reverse().join(".")}</strong>{" "}
           <span className="text-sm text-muted">· {selectedEvents.length} אירועים</span>
-          <ul style={{ margin: "0.6rem 0 0", padding: 0, listStyle: "none" }}>
+          <ul style={{ margin: "0.6rem 0 0", padding: 0, listStyle: "none", overflowWrap: "anywhere" }}>
             {selectedEvents.map((ev) => (
               <li key={ev.id} style={{ padding: "0.4rem 0", borderTop: "1px solid var(--border)", display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
                 <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: ev.source_color || "#3B82F6", flex: "0 0 auto" }} />

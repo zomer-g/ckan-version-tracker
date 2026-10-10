@@ -74,7 +74,9 @@ function EventCard({ ev, terms }: { ev: OcalEvent; terms: string[] }) {
     fieldMatches(ev.dataset_name, terms) &&
     ev.dataset_name !== ev.source_name;
   return (
-    <li className="card" style={{ padding: "0.75rem 0.9rem", marginBottom: "0.6rem", listStyle: "none" }}>
+    // overflowWrap: some participant lists are one unbroken run of e-mails
+    // joined by ';' — without it a card stretches the page sideways on a phone.
+    <li className="card" style={{ padding: "0.75rem 0.9rem", marginBottom: "0.6rem", listStyle: "none", overflowWrap: "anywhere" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 600, lineHeight: 1.4 }}>
           {ev.dataset_link ? (

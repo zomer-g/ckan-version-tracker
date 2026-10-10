@@ -445,7 +445,7 @@ function OwnerTimeline({ ownerKey }: { ownerKey: string }) {
       )}
       {data && days.length === 0 && <div className="text-sm text-muted">אין פגישות או הוצאות בתקופה הזו.</div>}
 
-      <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+      <ol style={{ listStyle: "none", padding: 0, margin: 0, overflowWrap: "anywhere" }}>
         {days.map((d) => {
           const both = d.events.length > 0 && d.expenses.length > 0;
           return (

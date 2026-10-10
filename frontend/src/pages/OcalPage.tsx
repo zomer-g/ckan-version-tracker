@@ -45,7 +45,11 @@ export default function OcalPage() {
   }, []);
 
   return (
-    <div>
+    // overflowX clip: one over-wide row (a long diary name, an unbroken
+    // e-mail list) must not widen the page — on a phone that opens it
+    // scrolled sideways onto blank space. Wide tables scroll in their own
+    // .scroll-region, so nothing legitimate is cut off.
+    <div style={{ overflowX: "clip" }}>
       {/* Processed-data notice, shared with the other "לעם" projects. */}
       <div className="processed-banner" role="note">
         <div className="container">
