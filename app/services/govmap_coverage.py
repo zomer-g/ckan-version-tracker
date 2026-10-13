@@ -238,6 +238,14 @@ async def populate_from_catalog(db) -> dict:
         r = await client.get(CATALOG_URL, headers=_catalog_headers())
         r.raise_for_status()
         catalog = r.json()
+    # The layer index (/data, over_govmap_layers) is built from this same read.
+    # Its own failure must not stop the coverage inventory.
+    from app.services import govmap_layer_index
+    try:
+        layer_index = await govmap_layer_index.refresh(catalog)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("govmap_layer_index refresh failed")
+        layer_index = {"error": str(e)[:300]}
     layers = _extract_layers(catalog)
     if not layers:
         return {"error": "no layers found in catalog", "fetched": 0}
@@ -286,7 +294,7 @@ async def populate_from_catalog(db) -> dict:
             row.complexity = lay["complexity"]
     await db.commit()
     total = (await db.execute(select(func.count()).select_from(GovmapCoverage))).scalar() or 0
-    return {"fetched": len(layers), "inserted": inserted,
+    return {"fetched": len(layers), "inserted": inserted, "layer_index": layer_index,
             "updated": len(layers) - inserted, "retitled": retitled,
             "total": int(total),
             "new_layers": new_layers, "republished": republished}

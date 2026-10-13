@@ -217,6 +217,8 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
 # table not listed still surfaces under its own name.
 _OVER_TITLES = {
     "over_datasets": "גרסאות לעם — אינדקס המאגרים באתר (מה יש בכל מאגר)",
+    "over_govmap_layers": "גרסאות לעם — אינדקס שכבות GovMap (אודות כל שכבה)",
+    "over_govmap_layer_changes": "גרסאות לעם — יומן שינויים באינדקס שכבות GovMap",
     "over_dataset_files": "גרסאות לעם — הקבצים בגרסה האחרונה של כל מאגר",
     "over_settlements": "גרסאות לעם — יישובים (קובץ הלמ״ס)",
     "over_settlement_aliases": "גרסאות לעם — הטיות שמות יישובים",

@@ -87,6 +87,7 @@ _PUBLIC_PREFIX_PROJECT = (
     ("over_settlement", "reference"),
     ("over_authorit", "reference"),
     ("over_dataset", "site_index"),
+    ("over_govmap_layer", "site_index"),
     ("over_column", "site_index"),
     ("over_table", "site_index"),
     ("alembic_version", "system"),
