@@ -117,6 +117,9 @@ python -m pytest -p no:cacheprovider -q tests
 cd frontend && npx tsc --noEmit -p .
 ```
 
+**בסיס שנמדד 2026-10-15 על master 293103c:** `2279 passed, 6 skipped` ב-7:47 דקות;
+tsc נקי. כל ריצה אחרי השינוי חייבת להחזיר לפחות את אותם 2,279 ירוקים.
+
 אין Postgres מקומי ואין docker על המכונה הזו, ולכן כל בדיקת מסד היא
 יחידה טהורה (בוני SQL) או אימות על prod לפי פרוטוקול 4.3. לא להוסיף תלות
 ב-Postgres חי לסוויטה.
