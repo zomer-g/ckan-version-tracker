@@ -197,10 +197,12 @@ def test_close_sql_anti_joins_the_pass_table_not_a_value_list():
     assert t.pass_table == '"_loader"."pass_abc123"'
 
 
-def test_the_pass_table_is_unlogged_and_typed_like_the_identity():
+def test_the_pass_table_is_a_plain_table_typed_like_the_identity():
+    # Plain, not UNLOGGED: xhostd's Postgres refuses UNLOGGED tables.
     ddl = " ".join(_tracker().create_sql())
     assert 'CREATE SCHEMA IF NOT EXISTS "_loader"' in ddl
-    assert 'CREATE UNLOGGED TABLE "_loader"."pass_abc123" ("ident" uuid)' in ddl
+    assert 'CREATE TABLE "_loader"."pass_abc123" ("ident" uuid)' in ddl
+    assert "UNLOGGED" not in ddl
     keyed = " ".join(_tracker(ident_col="mispar", ident_type="text").create_sql())
     assert '("ident" text)' in keyed
     assert 'o."mispar"' in _tracker(ident_col="mispar", ident_type="text").close_sql()

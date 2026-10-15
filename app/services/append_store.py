@@ -966,9 +966,11 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict],
 #     UPDATE t SET last_seen = <the poll's start> WHERE last_seen IS NULL
 #       AND NOT EXISTS (SELECT 1 FROM <pass> p WHERE p.ident = t.<identity>)
 #
-# in batches. The pass table is a real (UNLOGGED) table, not a TEMP one: every
-# flush of a streaming load takes whichever pool connection is free, and a TEMP
-# table lives on one. A pass that dies with the process is swept at boot
+# in batches. The pass table is a real table, not a TEMP one: every flush of a
+# streaming load takes whichever pool connection is free, and a TEMP table
+# lives on one. Not UNLOGGED either: xhostd's Postgres refuses them ("UNLOGGED
+# tables and sequences are not supported on xhost", seen on the first prod
+# pass), and the WAL cost of one narrow column per row is negligible. A pass that dies with the process is swept at boot
 # (sweep_abandoned_passes). Closing is one timestamp for the whole pass, so
 # "valid at X" means the same thing for every row of a version.
 
@@ -1047,7 +1049,7 @@ class PassTracker:
     def create_sql(self) -> list[str]:
         return [
             f"CREATE SCHEMA IF NOT EXISTS {_qi(_PASS_SCHEMA)}",
-            f'CREATE UNLOGGED TABLE {self.pass_table} ("ident" {self.ident_type})',
+            f'CREATE TABLE {self.pass_table} ("ident" {self.ident_type})',
         ]
 
     def _missing(self) -> str:
