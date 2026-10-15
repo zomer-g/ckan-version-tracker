@@ -183,4 +183,97 @@ tsc נקי. כל ריצה אחרי השינוי חייבת להחזיר לפחו
 
 ## 6. תוצאות
 
-(הסשן המבצע ממלא: תאריך, SHA, פלט הבדיקות לפני/אחרי, תוצאות 4.3.)
+**2026-10-15, הסשן המבצע (worktree `claude/history-phase1-last-seen-5c71b1`).**
+
+### 6.1 קומיטים
+
+| ריפו | SHA | תוכן |
+|---|---|---|
+| OVER | `cd756e7` | כל סעיף 3 + `tests/test_append_validity.py` (51 בדיקות) |
+| GOVSCRAPER | `b334fed` (master מקומי, **לא נדחף**) | `append_closes_rows: False` במניפסט המחירים |
+
+לא בוצע deploy לשום ריפו. ב-GOVSCRAPER push ל-origin/master הוא deploy לצי (self-update), ולכן הוא ממתין לאישור.
+
+### 6.2 בסיס לפני השינוי
+
+הבסיס הראשון ב-worktree יצא `4 failed, 2256 passed, 11 skipped`. ארבעת הכישלונות סביבתיים:
+ל-worktree אין `frontend/dist` ואין `frontend/node_modules` (3 בדיקות SEO), ואין
+`../GOV scraper` לידו (בדיקת המניפסטים). חוברו שלושתם כ-junction מה-checkout הראשי
+(בלי לגעת בקוד), והבסיס נמדד מחדש:
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2262 passed, 9 skipped, 391 warnings in 473.84s (0:07:53)
+npx tsc --noEmit -p .   → נקי (exit 0)
+```
+
+**הפער מול 2,279 של סעיף 4.1 מוסבר ואינו רגרסיה:** הבסיס של התוכנית נמדד ב-checkout
+הראשי, שבו יש עריכות לא-מקומטות של סשן אחר (`tests/test_append_store.py`,
+`tests/test_deep_search.py`, 141 שורות, 9 פונקציות בדיקה חדשות). ה-worktree יושב על
+העץ המקומט `dc62c67`, שבו הבסיס הוא 2,262/9, כולו ירוק. זה המספר שההשוואה נעשית מולו.
+
+### 6.3 הבדיקות החדשות לפני הקוד
+
+`tests/test_append_validity.py` נכתב לפני כל שינוי קוד והורץ: `38 failed, 1 passed, 6 errors`
+(העובר היחיד הוא בדיקת הרגרסיה של `build_insert` הממופתח בלי `partial_open`, שאמור
+לעבור גם לפני). אחרי המימוש נוספו 6 בדיקות חיווט ל-loaders (סה"כ 51).
+
+### 6.4 אחרי השינוי
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2313 passed, 9 skipped, 437 warnings in 553.80s (0:09:13)
+npx tsc --noEmit -p .   → נקי (exit 0)
+```
+
+2,313 = 2,262 של הבסיס + 51 החדשות. אין רגרסיה. בדרך נמצאה ותוקנה דליפת state
+בבדיקה חדשה (monkeypatch על המופע של `storage_client` השאיר bound method שהסתיר את
+ה-patch ברמת המחלקה של `test_symbology_download.py`); התיקון בבדיקה, לא בקוד.
+
+GOVSCRAPER אחרי השורה במניפסט: `tests/scrapers` 1563 passed. הסוויטה המלאה: 8 כישלונות,
+כולם `tests/web/test_xhostd_deploy.py::TestDbCopy` (סקריפט העתקת DB), לא קשורים למניפסט.
+
+### 6.5 סטיות מהתוכנית ותוספות
+
+1. **NOT EXISTS במקום NOT IN** בסגירה (בדיקה 5). NOT IN על subquery גדול מ-work_mem
+   נופל לסריקה חוזרת לכל שורה (6.4M זהויות ברכב), ו-NULL אחד בטבלת המעבר הופך את
+   התנאי ל-NULL ולא נסגר כלום. הבדיקה מוודאת anti-join על טבלת המעבר ולא רשימת ערכים.
+2. **תנאי הסגירה בנתיב ה-worker רחב מ-`not partial_run`:** גם `more_batches`,
+   `consolidate_dedup_key` (כל אצווה של ריצה מרובת אצוות, כולל האחרונה, נושאת רק את
+   השורות שלה) ו-`skip_version` חוסמים. `should_close` חוסם גם `scraper_config.archive`
+   (ארכיון אינקרמנטלי כמו JDA וממ"מ שולח רק את החדש). טבלה שמוזנת מכמה משאבים באותו
+   push (`neon_single_table`) נסגרת רק אם כל המשאבים שלה נטענו inline בהצלחה.
+3. **אין סגירה בטבלה שעוד לא הומרה** (`begin_pass` מחזיר None): סגירה מול אינדקס מלא
+   הייתה חוסמת חזרה של אותו תוכן.
+4. **`last_seen` לא ב-`columns` של ברירת המחדל** (ולא ב-`iter_csv_open`, שה-worker
+   בונה ממנו cache ומגבב את העמודות שלו). מופיע בשורות רק כשמבקשים `as_of`/`current`.
+   לכן כל endpoint עונה אות באות כמו קודם בלי הפרמטרים.
+5. **מקור שעמודה שלו נקראת `last_seen`** נשאר עם האינדקס המלא ובלי תוקף.
+6. סף 50% (`APPEND_CLOSE_MAX_FRACTION`, עם `allow_shrink`) מומש כבר עכשיו, ולא רק
+   כפרוטוקול. שימו לב: במניפסט המחירים `allow_shrink: True`, אבל המחירים ממילא לא
+   סוגרים (`append_closes_rows: False`).
+7. שם האינדקס החלקי הוא `<t>_open_uq`, אבל טבלה עם שם ארוך מקבלת שם מגובב
+   (`_index_name`). לכן שאילתת האימות של 4.3 צריכה לחפש לפי ה-predicate:
+   `SELECT count(*) FROM pg_indexes WHERE indexdef LIKE '%WHERE (last_seen IS NULL)%'`.
+8. מיגרציית האינדקס נוגעת רק באינדקסים ש-append_store יצר (`<t>_uq`, `<t>_hash_uq`);
+   אינדקס `url` של מאגר ה-CBS נשאר כמו שהוא.
+
+### 6.6 מה נשאר למשתמש לאשר (פרוטוקול 4.3, לא בוצע)
+
+1. **deploy של OVER** (`cd756e7` אחרי merge ל-master) לפי over-xhostd-deploy-path:
+   push ל-git.xhostd.com ואז `deploy(sha=…)`. `APPEND_CLOSE_ROWS_ENABLED` לא מוגדר =
+   false. אחרי הבוט: עמודת `last_seen` נוספת לכל טבלה בפול הראשון שלה (catalog בלבד).
+2. **מיגרציית האינדקס** מטאב "נפח SQL" באדמין ("אינדקס חלקי לתוקף שורה", "המר עכשיו").
+   אימות: `SELECT count(*) FROM pg_indexes WHERE indexdef LIKE '%WHERE (last_seen IS NULL)%'`
+   גדל; על 3 טבלאות שהומרו `SELECT row_hash, count(*) FROM t WHERE last_seen IS NULL GROUP BY 1 HAVING count(*)>1`
+   מחזיר 0; ה-poll השוטף ממשיך להכניס שורות. סיום: 0 ממתינות בטאב.
+3. **push של GOVSCRAPER `b334fed`** (deploy לצי) לפני הדלקת הדגל הגלובלי, כדי שהמחירים
+   יקבלו את ה-opt-out דרך סנכרון המניפסט.
+4. הדלקת `APPEND_CLOSE_ROWS_ENABLED=true` ו-poll ידני על מאגר CKAN קטן ויציב; אימות
+   `count(*) FILTER (WHERE last_seen IS NULL)` מול `total` של ה-datastore, ו-`count(*)`
+   לא ירד. ה-version מקבל `rows_closed` / `close_skipped` ב-change_summary.
+5. פתיחה מחדש על bus_speed או flydata אחרי שני polls; `as_of` / `current` מול המספרים;
+   בלי פרמטרים אותו total כמו לפני (רגרסיה).
+6. 24 שעות מעקב בלוג xhostd על `append close:` (זמן, שורות שנסגרו, סירובי 50%).
+
+סעיף 4.4 ("המיגרציה הושלמה על כל הטבלאות", "פרוטוקול 4.3 בוצע") עדיין פתוח.
