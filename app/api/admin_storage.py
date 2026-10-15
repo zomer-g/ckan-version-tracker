@@ -7,6 +7,9 @@
   GET/POST /api/admin/storage/hash-compaction[/start|/stop]
                                     — convert the dedup hashes to uuid
                                       (app/services/hash_compaction.py)
+  GET  /api/admin/storage/orphans   — the append tables whose dataset is gone
+  POST /api/admin/storage/orphans/drop
+                                    — drop them (re-derived at call time)
 
 The breakdown itself (by project / source / schema / dataset) is done in the
 browser from the one table list, so every grouping and every drill-down adds
@@ -24,8 +27,9 @@ dataset no longer exists is reported as an orphan: it is space nothing reads.
 Everything that is not a dataset table belongs to a project by schema or by
 name prefix (``ocal``, ``over_re_*`` …), see :func:`project_of`.
 
-The report is read-only (catalog functions); the hash compaction writes.
-Every dataset stays queryable in SQL: nothing here moves rows out of it.
+The report is read-only (catalog functions); the hash compaction and the orphan
+drop write. Dropping an orphan removes nothing a dataset can reach: a table is
+an orphan only when NO tracked dataset, in any status, carries its id octet.
 """
 import logging
 import time
@@ -101,6 +105,30 @@ def dsid_of(table: str, known: set[str]) -> str | None:
         if len(seg) == 8 and seg in known:
             return seg
     return None
+
+
+def orphan_tables(tables: list[dict], known: set[str]) -> list[dict]:
+    """The ``public.append_*`` tables whose dataset no longer exists, largest
+    first. ``tables`` is :func:`_catalog`'s list, ``known`` the dsid8 set of
+    EVERY tracked dataset (any status, pending requests included).
+
+    Only the ``append_`` shape qualifies: an index-mirror table in ``idx`` is
+    rebuilt by its own job and a project table never carries a dataset octet,
+    so neither is anyone's to drop here."""
+    out = []
+    for t in tables:
+        if t["schema"] != "public" or not t["name"].startswith("append_"):
+            continue
+        if dsid_of(t["name"], known) is not None:
+            continue
+        est = t.get("est_rows")
+        out.append({
+            "table": t["name"],
+            "total": int(t.get("total") or 0),
+            "est_rows": int(est) if est is not None and est >= 0 else None,
+        })
+    out.sort(key=lambda r: -r["total"])
+    return out
 
 
 def project_of(schema: str, table: str, has_dataset: bool) -> str:
@@ -215,6 +243,56 @@ async def storage_report(
         raise HTTPException(status_code=502, detail=f"קריאת גדלי הטבלאות נכשלה: {e}")
     _cache.update(at=now, data=data)
     return {**data, "cached": False}
+
+
+# ── Shrinking: drop the orphans ──────────────────────────────────────────────
+
+async def _orphans(db: AsyncSession) -> tuple[list[dict], int]:
+    _, tables = await _catalog()
+    known = set(await _datasets(db))
+    rows = orphan_tables(tables, known)
+    return rows, sum(r["total"] for r in rows)
+
+
+@router.get("/orphans")
+async def orphans_report(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Every append table whose dataset is gone, with its size. Read-only."""
+    rows, total = await _orphans(db)
+    return {"tables": rows, "count": len(rows), "total_bytes": total}
+
+
+@router.post("/orphans/drop")
+async def orphans_drop(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_admin_user),
+):
+    """Drop the orphan tables. The list is derived again HERE, against the
+    datasets table as it is now, never taken from the client or a cache: a
+    dataset re-added between the report and the click keeps its table."""
+    from app.services import append_store
+    from app.services.data_catalog import invalidate_catalog_cache
+
+    rows, total = await _orphans(db)
+    dropped: list[str] = []
+    failed: list[str] = []
+    freed = 0
+    for r in rows:
+        try:
+            await append_store.drop_table(r["table"])
+            dropped.append(r["table"])
+            freed += r["total"]
+        except Exception as e:  # noqa: BLE001 — one failure must not strand the rest
+            failed.append(f"{r['table']}: {type(e).__name__}: {e}")
+            logger.warning("orphan drop: %s failed: %s", r["table"], e)
+    invalidate_catalog_cache()
+    _cache.update(at=0.0, data=None)
+    logger.info("Orphan tables dropped by %s: %d of %d, %d bytes", user.email,
+                len(dropped), len(rows), freed)
+    return {"dropped": dropped, "failed": failed, "count": len(rows),
+            "freed_bytes": freed, "total_bytes": total}
 
 
 # ── Shrinking: compact the dedup hashes ──────────────────────────────────────

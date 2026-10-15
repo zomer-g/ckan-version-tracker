@@ -5,6 +5,7 @@ from app.api.admin_storage import (
     PROJECT_LABELS,
     PROJECT_ORPHANS,
     dsid_of,
+    orphan_tables,
     project_of,
 )
 
@@ -49,3 +50,24 @@ def test_every_project_has_a_label():
         ("odata", "t", False), ("public", "over_column_x", False), ("x", "t", False),
     ]:
         assert project_of(schema, table, has) in PROJECT_LABELS
+
+
+def test_orphan_tables_only_public_append_without_a_dataset():
+    tables = [
+        {"schema": "public", "name": "append_x_f41fb496", "total": 10, "est_rows": 1},
+        {"schema": "public", "name": "append_x_deadbeef", "total": 30, "est_rows": 3},
+        {"schema": "public", "name": "append_y_deadbeef_0badf00d", "total": 50, "est_rows": -1},
+        # Not append tables, or not in public: never orphans.
+        {"schema": "idx", "name": "govmap_56_deadbeef_6adddf80", "total": 70, "est_rows": 7},
+        {"schema": "public", "name": "over_re_parcels", "total": 90, "est_rows": 9},
+        {"schema": "app", "name": "append_x_deadbeef", "total": 11, "est_rows": 1},
+    ]
+    out = orphan_tables(tables, KNOWN)
+    assert [r["table"] for r in out] == ["append_y_deadbeef_0badf00d", "append_x_deadbeef"]
+    assert out[0]["est_rows"] is None and out[1]["est_rows"] == 3
+    assert sum(r["total"] for r in out) == 80
+
+
+def test_orphan_tables_empty_when_every_dataset_exists():
+    tables = [{"schema": "public", "name": "append_x_f41fb496", "total": 10, "est_rows": 1}]
+    assert orphan_tables(tables, KNOWN) == []

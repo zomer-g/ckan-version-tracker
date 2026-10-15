@@ -187,6 +187,28 @@ export default function StorageUsagePanel() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const [dropping, setDropping] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
+  // The server re-derives the orphan list when the POST lands, so the tile's
+  // number is a preview; a dataset re-added meanwhile keeps its table.
+  const dropOrphans = async (bytes: number, count: number) => {
+    if (!window.confirm(
+      `למחוק ${count.toLocaleString("he-IL")} טבלאות יתומות (${(bytes / 1e6).toFixed(0)} MB)? ` +
+      "אלה טבלאות של מאגרים שנמחקו; שום מאגר לא קורא אותן. הפעולה בלתי הפיכה.")) return;
+    setDropping(true);
+    setDropNote(null);
+    try {
+      const r = await call<{ dropped: string[]; failed: string[]; count: number; freed_bytes: number }>("/orphans/drop", "POST");
+      setDropNote(`נמחקו ${r.dropped.length.toLocaleString("he-IL")} מתוך ${r.count.toLocaleString("he-IL")} טבלאות, ` +
+        `${(r.freed_bytes / 1e6).toFixed(0)} MB${r.failed.length ? `; נכשלו ${r.failed.length}: ${r.failed[0]}` : ""}`);
+      await load(true);
+    } catch (e) {
+      setDropNote(e instanceof Error ? e.message : "המחיקה נכשלה");
+    } finally {
+      setDropping(false);
+    }
+  };
+
   const keyOf = useCallback((r: Row, by: GroupBy): string => {
     const ds = r[8] ? data?.datasets[r[8]] : undefined;
     switch (by) {
@@ -222,6 +244,7 @@ export default function StorageUsagePanel() {
     () => (data ? data.tables.filter((r) => r[7] === "orphans").reduce((s, r) => s + r[2], 0) : 0),
     [data],
   );
+  const orphanCount = useMemo(() => (data ? data.tables.filter((r) => r[7] === "orphans").length : 0), [data]);
 
   const groups = useMemo(() => {
     const m = new Map<string, { key: string; total: number; heap: number; indexes: number; toast: number; tables: number; rows: number }>();
@@ -281,6 +304,16 @@ export default function StorageUsagePanel() {
             warn={orphanBytes > 0}
             onClick={orphanBytes > 0 ? () => { setFilters([{ by: "project", key: "orphans", label: data.projects.orphans }]); setGroupBy("dataset"); } : undefined}
           />
+        </div>
+      )}
+      {data && (orphanCount > 0 || dropNote) && (
+        <div className="flex text-sm" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.9rem" }}>
+          {orphanCount > 0 && (
+            <button type="button" className="text-sm" disabled={dropping} onClick={() => void dropOrphans(orphanBytes, orphanCount)}>
+              {dropping ? "מוחק…" : `מחק ${orphanCount.toLocaleString("he-IL")} טבלאות יתומות`}
+            </button>
+          )}
+          {dropNote && <span className="text-muted">{dropNote}</span>}
         </div>
       )}
 
