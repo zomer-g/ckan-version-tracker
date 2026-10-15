@@ -84,6 +84,8 @@ TOOLS: list[dict] = [
                 "table": {"type": "string", "description": "לאיזו טבלה של המאגר לפנות — שם הטבלה, מזהה המשאב או שם המשאב, כפי שמופיעים בשדה tables. ברירת המחדל היא הטבלה הראשונה."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "as_of": {"type": "string", "description": "המאגר כפי שהיה ברגע מסוים: תאריך ISO (2026-10-01, נקרא כסוף אותו יום UTC) או חותמת זמן. מחזיר רק שורות שהיו בתוקף אז (first_seen עד הרגע, ו-last_seen ריק או מאוחר ממנו). בלי הפרמטר: כל ההיסטוריה."},
+                "current": {"type": "boolean", "description": "true = רק השורות שבתוקף עכשיו (last_seen ריק). לא יחד עם as_of."},
             },
             "required": ["dataset_id"],
         },
@@ -221,9 +223,19 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
     else:
         chosen = tables[0]
     limit = min(int(a.get("limit") or 25), 200)
+    validity: dict = {}
+    if a.get("as_of") and a.get("current"):
+        raise ValueError("as_of ו-current לא יחד: בחר רגע בעבר או את המצב הנוכחי")
+    if a.get("as_of"):
+        try:
+            validity["as_of"] = append_store.parse_as_of(str(a["as_of"]))
+        except ValueError:
+            raise ValueError("as_of חייב להיות תאריך ISO (2026-10-01) או חותמת זמן")
+    elif a.get("current"):
+        validity["current"] = True
     res = await append_store.query(chosen["table"], limit=limit,
                                    offset=max(int(a.get("offset") or 0), 0),
-                                   q=a.get("q"), filters={})
+                                   q=a.get("q"), filters={}, **validity)
     rows = res.get("rows") if isinstance(res, dict) else res
     b = base_url(request)
     out = {

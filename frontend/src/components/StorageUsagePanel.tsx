@@ -154,6 +154,89 @@ function HashCompactionCard() {
   );
 }
 
+interface IndexMigration {
+  pending_tables: number;
+  pending_bytes: number;
+  running: boolean;
+  current: string | null;
+  done: number;
+  failed: { table: string; error: string }[];
+  skipped_busy: string[];
+  finished_at: string | null;
+}
+
+/** Row validity (last_seen): every append table's dedup index becomes partial,
+ *  UNIQUE … WHERE last_seen IS NULL, so a closed row that comes back opens a new
+ *  interval. Built CONCURRENTLY, smallest first (app/services/index_migration.py).
+ *  Until a table is converted, nothing closes rows in it. */
+function IndexMigrationCard() {
+  const [st, setSt] = useState<IndexMigration | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try { setSt(await call<IndexMigration>("/index-migration")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!st?.running) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [st?.running, load]);
+
+  const act = async (what: "start" | "stop") => {
+    if (what === "start" && !window.confirm(
+      `להמיר את אינדקס הכפילויות של ${st?.pending_tables.toLocaleString("he-IL")} טבלאות לאינדקס חלקי? ` +
+      "האינדקס החדש נבנה במקביל (CONCURRENTLY) בלי לנעול כתיבה, ואז הישן נמחק. אפשר לעצור בכל רגע.")) return;
+    try { await call(`/index-migration/${what}`, "POST"); await load(); }
+    catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.6rem 0.8rem", marginBottom: "0.9rem", background: "var(--bg-secondary)" }}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>אינדקס חלקי לתוקף שורה (last_seen)</strong>
+        <span className="text-sm text-muted">
+          כל עוד טבלה לא הומרה, שום poll לא סוגר בה שורות.
+        </span>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)" }}>{err}</div>}
+      {st && (
+        <div className="flex text-sm" style={{ gap: "0.8rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+          <span>ממתינות {st.pending_tables.toLocaleString("he-IL")} טבלאות (<Bytes n={st.pending_bytes} />)</span>
+          {(st.running || st.done > 0) && (
+            <span>
+              הומרו {st.done.toLocaleString("he-IL")}
+              {st.running && st.current ? <> · עכשיו: <bdi dir="ltr">{st.current}</bdi></> : null}
+            </span>
+          )}
+          {st.failed.length > 0 && (
+            <span style={{ color: "var(--danger)" }} title={st.failed.map((f) => `${f.table}: ${f.error}`).join("\n")}>
+              {st.failed.length} נכשלו
+            </span>
+          )}
+          {st.skipped_busy.length > 0 && (
+            <span className="text-muted" title={st.skipped_busy.join("\n")}>
+              {st.skipped_busy.length} היו תפוסות (הריצו שוב)
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          {st.running ? (
+            <button type="button" className="text-sm" onClick={() => void act("stop")}
+                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+              עצור
+            </button>
+          ) : st.pending_tables > 0 ? (
+            <button type="button" className="text-sm" onClick={() => void act("start")}
+                    style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: 4, padding: "0.25rem 0.8rem", cursor: "pointer", fontWeight: 600 }}>
+              המר עכשיו
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function pct(part: number, whole: number): string {
   if (!whole) return "0%";
   const p = (part / whole) * 100;
@@ -291,6 +374,7 @@ export default function StorageUsagePanel() {
       {error && <div className="text-sm" style={{ color: "var(--danger)", marginBottom: "0.5rem" }}>{error}</div>}
 
       <HashCompactionCard />
+      <IndexMigrationCard />
 
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.6rem", marginBottom: "0.9rem" }}>

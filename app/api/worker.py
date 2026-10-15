@@ -1205,10 +1205,15 @@ def _open_maybe_gzip(path: str):
 
 async def _neon_stream_load_file(
     table: str, path: str, *, delete_after: bool = False,
-    stamp_col: str | None = None,
+    stamp_col: str | None = None, close: dict | None = None,
 ) -> int:
     """Stream a CSV file on local disk into ``table``, batch by batch. Returns
     the number of rows appended.
+
+    ``close`` (``{run_ts, allow_shrink}``, set only for the FULL load of a
+    table, see push_version's _bg_close) records every row the file carried and,
+    once the whole file is in, closes the open rows it did not carry. A load
+    that raises closes nothing.
 
     Parsing a whole file into rows at once (parse_csv → N dicts) OOMs / times
     out the 512MB OVER dyno; csv-streaming it in fixed batches, inserting each
@@ -1238,6 +1243,19 @@ async def _neon_stream_load_file(
     #
     # Set after the header is read, since the column count is what sizes it.
     BATCH = 5000
+    tracker = None
+    track: dict = {}
+
+    async def _ensure() -> None:
+        nonlocal tracker, track
+        await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+        if close is not None:
+            try:
+                tracker = await append_store.begin_pass(table)
+            except Exception as e:  # noqa: BLE001 — the rows come first
+                logger.warning("append close: no pass on %s: %s", table, e)
+            track = {"tracker": tracker} if tracker is not None else {}
+
     try:
         cols: list[str] = []
         batch: list[dict] = []
@@ -1267,20 +1285,25 @@ async def _neon_stream_load_file(
                               for i in keep})
                 if len(batch) >= BATCH:
                     if not ensured:
-                        await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                        await _ensure()
                         ensured = True
                     total += await append_store.append_rows(
                         table, cols, batch, key_col=None, keyless=True,
-                        stamp_col=stamp_col,
+                        stamp_col=stamp_col, **track,
                     )
                     batch = []
         if batch:
             if not ensured:
-                await append_store.ensure_table(table, cols, key_col=None, keyless=True)
+                await _ensure()
             total += await append_store.append_rows(
                 table, cols, batch, key_col=None, keyless=True,
-                stamp_col=stamp_col,
+                stamp_col=stamp_col, **track,
             )
+        if tracker is not None:
+            res = await tracker.close_missing(
+                close["run_ts"], allow_shrink=bool(close.get("allow_shrink")))
+            tracker = None
+            logger.info("NEON stream-load close on %s: %s", table, res)
         # Once the whole file is down, not once per batch — see
         # append_store.fill_geometry. `cols` is set as soon as the header is
         # read, so a file that turned out to be header-only skips this too.
@@ -1296,6 +1319,8 @@ async def _neon_stream_load_file(
             await append_store.fill_geometry(table, cols)
         return total
     finally:
+        if tracker is not None:
+            await tracker.abandon()  # the load raised: close nothing
         if delete_after:
             try:
                 _os.remove(path)
@@ -1304,7 +1329,8 @@ async def _neon_stream_load_file(
 
 
 async def _neon_stream_load_r2(table: str, r2_key: str,
-                               ds_id=None, expected: int = 0) -> None:
+                               ds_id=None, expected: int = 0,
+                               close: dict | None = None) -> None:
     """Stream a version's R2 CSV into the dataset's NEON table.
 
     Used for the >50MB out-of-band CSV path (e.g. registries Cosmetics,
@@ -1329,7 +1355,8 @@ async def _neon_stream_load_r2(table: str, r2_key: str,
         if not await storage_client.download_to_file(r2_key, tmp):
             return
         total = await _neon_stream_load_file(
-            table, tmp, stamp_col=await _sample_column_for(ds_id))
+            table, tmp, stamp_col=await _sample_column_for(ds_id),
+            **({"close": close} if close else {}))
         logger.info("NEON stream-load: +%d rows into %s from %s", total, table, r2_key)
     except Exception as e:
         logger.warning("NEON stream-load failed for %s (non-fatal): %s", table, e)
@@ -1370,7 +1397,8 @@ def _neon_csv_path(value: str) -> str:
 
 
 async def _neon_only_load_csv(table: str, path: str, res_name: str,
-                              ds_id=None, expected: int = 0) -> None:
+                              ds_id=None, expected: int = 0,
+                              close: dict | None = None) -> None:
     """Load a NEON-only dataset's uploaded CSV into its append table.
 
     Unlike the R2 mirror above, this IS the archive: nothing else holds these
@@ -1389,7 +1417,8 @@ async def _neon_only_load_csv(table: str, path: str, res_name: str,
     try:
         total = await _neon_stream_load_file(
             table, path, delete_after=True,
-            stamp_col=await _sample_column_for(ds_id))
+            stamp_col=await _sample_column_for(ds_id),
+            **({"close": close} if close else {}))
         logger.info("NEON-only archive: +%d rows into %s for %s",
                     total, table, res_name)
     except Exception as e:  # noqa: BLE001 — recorded below, never re-raised
@@ -1889,6 +1918,16 @@ async def push_version(
     # Which NEON table each tabular resource's rows went into, in resource
     # order. Empty unless this dataset archives to NEON (see _record_neon_table).
     _neon_layout: list[dict] = []
+    # Row validity (append_store.should_close). Inline NEON loads of a FULL
+    # scrape record what they carried per table; the open rows a table's pass
+    # did not carry are closed once every resource bound for it has loaded
+    # (see _close_inline_passes below). Empty unless closing is on.
+    _close_ok = False
+    _run_ts = datetime.now(timezone.utc)
+    _table_resources: dict[str, int] = {}
+    _inline_passes: dict[str, Any] = {}
+    _inline_loaded: dict[str, int] = {}
+    _inline_failed: set[str] = set()
     odata_resource_ids = []
     # Of those, the ones this push did NOT upload: a resource the worker mapped
     # to an object an earlier version already holds (csv_resource_ids). That is
@@ -2016,6 +2055,26 @@ async def push_version(
                 _neon_layout.append({"resource": res_name, "table": table})
             return table
 
+        # Closing needs a pass that saw the whole source. A sampled run, one
+        # batch of a multi-batch run (or the last one, which carries only its
+        # own rows) and an incremental archive's delta all see a part.
+        _close_ok = _archive_neon and append_store.should_close(
+            ds, partial_run=body.partial_run,
+            completed=not (body.more_batches or body.consolidate_dedup_key
+                           or body.skip_version))
+        for _n in _tabular_names:
+            _t = _neon_table_for(_n)
+            _table_resources[_t] = _table_resources.get(_t, 0) + 1
+
+        def _bg_close(table: str) -> dict | None:
+            """The closing order for a background load: only when that load is
+            the table's ONLY source in this push (a partitioned table filled by
+            several resources is closed by none of them)."""
+            if not (_close_ok and _table_resources.get(table) == 1):
+                return None
+            return {"run_ts": _run_ts,
+                    "allow_shrink": bool((ds.scraper_config or {}).get("allow_shrink"))}
+
         # Rows that were scraped, published in the version's count, and are not
         # in the table anyone can query. Collected here and turned into the
         # dataset's import_warning after the version commits.
@@ -2089,13 +2148,29 @@ async def push_version(
                     ]
                 table = _neon_table_for(res_name)
                 await append_store.ensure_table(table, cols, key_col=None, keyless=True)
-                n = await append_store.append_rows(
-                    table, cols, n_records, key_col=None, keyless=True,
-                    # The scraper path. Every sampled source reaches NEON
-                    # through here, not through the streaming loaders — which
-                    # is why fixing only those left the duplication in place.
-                    stamp_col=sampling_runs.stamp_column(ds),
-                )
+                track = {}
+                if _close_ok and table not in _inline_failed:
+                    if table not in _inline_passes:
+                        try:
+                            _inline_passes[table] = await append_store.begin_pass(table)
+                        except Exception as e:  # noqa: BLE001 — rows first
+                            logger.warning("append close: no pass on %s: %s", table, e)
+                            _inline_passes[table] = None
+                    if _inline_passes[table] is not None:
+                        track = {"tracker": _inline_passes[table]}
+                try:
+                    n = await append_store.append_rows(
+                        table, cols, n_records, key_col=None, keyless=True,
+                        # The scraper path. Every sampled source reaches NEON
+                        # through here, not through the streaming loaders — which
+                        # is why fixing only those left the duplication in place.
+                        stamp_col=sampling_runs.stamp_column(ds),
+                        **track,
+                    )
+                except Exception:
+                    _inline_failed.add(table)
+                    raise
+                _inline_loaded[table] = _inline_loaded.get(table, 0) + 1
                 # Stamped only once the rows are actually in: a table key on a
                 # version whose load threw would point every reader at a table
                 # that holds nothing of this version.
@@ -2147,6 +2222,7 @@ async def push_version(
                         # number with it rather than read it back off a version
                         # that may not be committed yet.
                         ds_id=ds.id, expected=int(res.row_count or 0),
+                        close=_bg_close(_table),
                     )
                 )
                 _NEON_BG_TASKS.add(_t)
@@ -2207,6 +2283,7 @@ async def push_version(
                             # Carried in, not read back: this runs after the
                             # response, off a version that may not be committed.
                             ds_id=ds.id, expected=int(res.row_count or 0),
+                            close=_bg_close(_table),
                         )
                     )
                     _NEON_BG_TASKS.add(_t)
@@ -2541,6 +2618,26 @@ async def push_version(
             logger.error("Failed to upload ZIP: %s", e)
             push_errors.append(f"zip upload: {e}")
 
+    # Row validity: close what each inline-loaded table's full pass did not
+    # carry — only when every resource bound for that table loaded inline and
+    # none failed. A table also fed by a background load (or a failed one) is
+    # left as it is; the next full pass measures again.
+    _closed: dict[str, Any] = {}
+    for _t, _tr in _inline_passes.items():
+        if _tr is None:
+            continue
+        if _t in _inline_failed or _inline_loaded.get(_t, 0) != _table_resources.get(_t, 0):
+            await _tr.abandon()
+            continue
+        try:
+            _res = await _tr.close_missing(
+                _run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")))
+        except Exception as e:  # noqa: BLE001 — the rows are in; closing waits a poll
+            logger.warning("append close: %s failed: %s", _t, e)
+            _res = {"skipped": f"{type(e).__name__}: {e}"[:300]}
+        _closed[_t] = ({"close_skipped": _res["skipped"]} if "skipped" in _res
+                       else {"rows_closed": _res.get("closed", 0)})
+
     # Compute hash for change detection
     hash_data = json.dumps({
         "resources": [{"name": r.name, "row_count": r.row_count} for r in body.resources],
@@ -2652,6 +2749,8 @@ async def push_version(
             change_summary["run_mode"] = body.run_mode
         if body.run_group:
             change_summary["run_group"] = body.run_group
+    if _closed:
+        change_summary["closed"] = _closed
     version = VersionIndex(
         tracked_dataset_id=ds.id,
         version_number=next_version,

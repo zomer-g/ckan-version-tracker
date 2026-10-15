@@ -437,6 +437,85 @@ def compact_hash(hex_digest: str) -> _uuid.UUID:
     return _uuid.UUID(hex_digest[:32])
 
 
+# ── Row validity: last_seen and the partial dedup index ──────────────────────
+#
+# ``last_seen`` is NULL while a row is in force and set to the poll's start
+# time when a FULL pass of the source no longer returned it (see PassTracker).
+# The dedup index then covers only the open rows:
+#
+#     UNIQUE (row_hash) WHERE last_seen IS NULL
+#
+# so a closed state that comes back opens a NEW interval instead of being
+# swallowed by the old one. New tables get that index at creation; existing
+# ones are converted by app/services/index_migration.py. As with the hash type,
+# the two coexist, so every writer asks the TABLE which index it has
+# (open_index_ready) and builds the matching ON CONFLICT clause: the partial
+# clause against a full-only index is an error ("no unique or exclusion
+# constraint matching"), and nothing may close rows on a table that still
+# dedups closed content against open content.
+
+OPEN_PREDICATE = '"last_seen" IS NULL'
+_OPEN_INDEX_TABLES: set[tuple[str, str]] = set()
+_INDEXDEF_RE = re.compile(r"\bUSING\s+\w+\s+\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
+_PARTIAL_SUFFIX_RE = re.compile(r"\s+WHERE\s+\(\s*last_seen\s+IS\s+NULL\s*\)\s*$",
+                                re.IGNORECASE)
+
+
+def _unquote_ident(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1].replace('""', '"')
+    return s
+
+
+def classify_unique_indexes(rows: list[dict]) -> list[dict]:
+    """``[{name, column, partial}]`` for the UNIQUE indexes among pg_indexes rows.
+
+    Read from ``indexdef`` (the predicate), not from the index name: a long
+    table gets a hashed name (see _index_name), so "ends in open_uq" proves
+    nothing. ``column`` is None for a multi-column or expression index, which
+    no dedup clause here targets. Pure."""
+    out: list[dict] = []
+    for r in rows:
+        d = (r.get("indexdef") or "").strip()
+        if not d.upper().startswith("CREATE UNIQUE INDEX"):
+            continue
+        partial = bool(_PARTIAL_SUFFIX_RE.search(d))
+        body = _PARTIAL_SUFFIX_RE.sub("", d)
+        if not partial and re.search(r"\)\s+WHERE\s+", body, re.IGNORECASE):
+            continue  # some other predicate: not a dedup index of ours
+        m = _INDEXDEF_RE.search(body)
+        cols = m.group(1) if m else ""
+        column = None
+        if cols and "," not in cols and "(" not in cols:
+            column = _unquote_ident(cols)
+        out.append({"name": _unquote_ident(r.get("indexname") or ""),
+                    "column": column, "partial": partial})
+    return out
+
+
+async def open_index_ready(conn, table: str, column: str = "row_hash") -> bool:
+    """Whether ``table`` dedups ``column`` with the partial (open rows) index.
+
+    Only a yes is cached: a table never goes back, while a no may turn into a
+    yes at any moment (the migration job, or ensure_table on a new table)."""
+    if (table, column) in _OPEN_INDEX_TABLES:
+        return True
+    rows = await conn.fetch(
+        "SELECT indexname, indexdef FROM pg_indexes "
+        "WHERE schemaname='public' AND tablename=$1", table)
+    ready = any(u["partial"] and u["column"] == column
+                for u in classify_unique_indexes([dict(r) for r in rows]))
+    if ready:
+        _OPEN_INDEX_TABLES.add((table, column))
+    return ready
+
+
+def mark_open_index(table: str, column: str = "row_hash") -> None:
+    """Record that a table was just converted (the migration job calls this)."""
+    _OPEN_INDEX_TABLES.add((table, column))
+
+
 def row_hash(row: dict, cols: list[str], *, exclude: tuple[str, ...] = ()) -> str:
     """SHA-256 over the row's column values (str-coerced, None→''), used as the
     dedup identity for keyless datasets. Matches version_detector._row_identity
@@ -473,6 +552,8 @@ def build_insert(
     first_seen=None,  # datetime | None — explicit backfill timestamp, else now()
     stamp_col: str | None = None,
     hash_uuid: bool = False,
+    partial_open: bool = False,
+    idents_out: list | None = None,
 ) -> tuple[str, list]:
     """Build one multi-row ``INSERT … ON CONFLICT`` for a chunk.
 
@@ -499,7 +580,18 @@ def build_insert(
     reaching content would be rewriting history rather than dating it.
 
     ``hash_uuid`` binds the compact form (see hash_column_is_uuid) — pass what
-    the TABLE's column is, never a guess."""
+    the TABLE's column is, never a guess.
+
+    ``partial_open`` targets the partial dedup index (``WHERE last_seen IS
+    NULL``, see open_index_ready): only OPEN rows conflict, so content that was
+    closed by a full pass and comes back opens a new validity interval. Same
+    rule as hash_uuid: pass what the table has. Off, the statement is exactly
+    what it was before validity existed.
+
+    ``idents_out`` receives the identity of every row the statement carries
+    (the bound hash, or the key text), so a PassTracker records exactly what
+    was written and never a re-derivation of it. A NULL key is left out: it is
+    stored as NULL, matches nothing, and no pass can vouch for it."""
     insert_cols = list(cols) + ["first_seen"] + (["row_hash"] if keyless else [])
     conflict_target = "row_hash" if keyless else key_col
     # A stamp that isn't in this table's columns is a manifest declaring a column
@@ -535,9 +627,14 @@ def build_insert(
         else:
             placeholders.append("now()")
         if keyless:
-            params.append(compact_hash(ident) if hash_uuid else ident)
+            bound = compact_hash(ident) if hash_uuid else ident
+            params.append(bound)
             placeholders.append(f"${p}")
             p += 1
+            if idents_out is not None:
+                idents_out.append(bound)
+        elif idents_out is not None and r.get(key_col) is not None:
+            idents_out.append(ident)
         values_sql.append("(" + ",".join(placeholders) + ")")
     if not values_sql:
         return "", []
@@ -551,9 +648,10 @@ def build_insert(
         f"DO UPDATE SET {_qi(stamp)} = EXCLUDED.{_qi(stamp)}" if stamp
         else "DO NOTHING"
     )
+    where_open = f" WHERE {OPEN_PREDICATE}" if partial_open else ""
     sql = (
         f"INSERT INTO {_qi(table)} ({cols_sql}) VALUES {','.join(values_sql)} "
-        f"ON CONFLICT ({_qi(conflict_target)}) {on_conflict}"
+        f"ON CONFLICT ({_qi(conflict_target)}){where_open} {on_conflict}"
     )
     return sql, params
 
@@ -566,7 +664,16 @@ def chunk_size_for(num_cols: int, keyless: bool) -> int:
 
 async def ensure_table(table: str, source_cols: list[str], *, key_col: str | None, keyless: bool) -> None:
     """Create the dataset's table if absent; otherwise add any newly-appeared
-    source columns (schema drift). Then ensure the dedup UNIQUE index exists."""
+    source columns (schema drift). Then ensure the dedup UNIQUE index exists.
+
+    Validity: every table gets ``last_seen`` (a catalog-only ADD COLUMN on an
+    existing one). A table with NO dedup index yet gets the partial one
+    (``WHERE last_seen IS NULL``); one that already has the full index keeps it
+    until app/services/index_migration.py converts it CONCURRENTLY. Building it
+    here instead would rebuild the largest tables' indexes inside a poll, under
+    a write lock. A source that itself publishes a column called ``last_seen``
+    keeps the old full index: its column is data, not a validity stamp."""
+    validity = "last_seen" not in source_cols
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -578,10 +685,12 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
         if not existing:
             cols_sql = ", ".join(f"{_qi(c)} text" for c in source_cols)
             hashcol = ', "row_hash" uuid' if keyless else ""
+            seencol = ', "last_seen" timestamptz' if validity else ""
             try:
                 await conn.execute(
                     f'CREATE TABLE IF NOT EXISTS {_qi(table)} '
-                    f'({cols_sql}, "first_seen" timestamptz NOT NULL DEFAULT now(){hashcol})'
+                    f'({cols_sql}, "first_seen" timestamptz NOT NULL DEFAULT now()'
+                    f'{seencol}{hashcol})'
                 )
             except (asyncpg.DuplicateTableError, asyncpg.UniqueViolationError):
                 # CREATE TABLE IF NOT EXISTS isn't atomic against the pg_type
@@ -601,11 +710,37 @@ async def ensure_table(table: str, source_cols: list[str], *, key_col: str | Non
                 await conn.execute(
                     f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" uuid'
                 )
+            if validity and "last_seen" not in existing:
+                # Nullable, no default: Postgres records it in the catalog and
+                # rewrites nothing, and every existing row reads as open.
+                await conn.execute(
+                    f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "last_seen" timestamptz'
+                )
         target = "row_hash" if keyless else key_col
-        idx = _index_name(table, "uq")
-        await conn.execute(
-            f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(idx)} ON {_qi(table)} ({_qi(target)})'
-        )
+        if not validity:
+            idx = _index_name(table, "uq")
+            await conn.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(idx)} ON {_qi(table)} ({_qi(target)})'
+            )
+            return
+        ix_rows = await conn.fetch(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname='public' AND tablename=$1", table)
+        uniq = [u for u in classify_unique_indexes([dict(r) for r in ix_rows])
+                if u["column"] == target]
+        if any(u["partial"] for u in uniq):
+            mark_open_index(table, target)
+            return
+        if uniq:
+            return  # a full index: index_migration converts it, never a poll
+        try:
+            await conn.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(_index_name(table, "open_uq"))} '
+                f'ON {_qi(table)} ({_qi(target)}) WHERE {OPEN_PREDICATE}'
+            )
+        except asyncpg.UniqueViolationError:
+            pass  # a concurrent poll created it first (same race as the table)
+        mark_open_index(table, target)
 
 
 async def append_rows(
@@ -617,6 +752,7 @@ async def append_rows(
     keyless: bool,
     first_seen: str | None = None,
     stamp_col: str | None = None,
+    tracker: "PassTracker | None" = None,
 ) -> int:
     """Insert ``rows`` into ``table``, skipping ones already present (by key or
     row_hash). Returns the number actually inserted (parsed from the INSERT
@@ -628,20 +764,28 @@ async def append_rows(
     counts rows AFFECTED, and a DO UPDATE affects the row it refreshed. So this
     returns inserts+refreshes, not inserts. Callers that report "new rows" to a
     user should read the table, not this number — which is what the short-load
-    check already does."""
+    check already does.
+
+    ``tracker`` (a full pass in progress, see begin_pass) is fed the identity
+    of every row this call wrote or matched, once its INSERT has succeeded."""
     if not rows:
         return 0
     pool = await get_pool()
     size = chunk_size_for(len(source_cols), keyless)
     inserted = 0
+    target = "row_hash" if keyless else key_col
     async with pool.acquire() as conn:
         for i in range(0, len(rows), size):
             # Asked per chunk, not once: the compaction job may convert this
-            # table between two chunks of one long load.
+            # table between two chunks of one long load (and so may the
+            # index migration).
             hash_uuid = keyless and await hash_column_is_uuid(conn, table)
+            partial = await open_index_ready(conn, table, target)
+            idents: list | None = [] if tracker is not None else None
             sql, params = build_insert(
                 table, source_cols, rows[i:i + size], key_col=key_col, keyless=keyless,
                 first_seen=first_seen, stamp_col=stamp_col, hash_uuid=hash_uuid,
+                partial_open=partial, idents_out=idents,
             )
             if not sql:
                 continue
@@ -650,6 +794,8 @@ async def append_rows(
                 inserted += int(status.split()[-1])
             except (ValueError, IndexError):
                 pass
+            if tracker is not None and idents:
+                await tracker.add(idents, conn=conn)
     return inserted
 
 
@@ -709,11 +855,19 @@ async def ensure_content_diff(table: str, source_cols: list[str], key_col: str |
     content-diff mode: add a ``row_hash`` column, backfill it in committed
     batches (so a kill resumes), drop the old single-key unique index (which
     would block a changed row that reuses the same key), and add a UNIQUE index
-    on ``row_hash``. After the migration every call is a few cheap no-ops."""
+    on ``row_hash``. After the migration every call is a few cheap no-ops.
+
+    Validity, as in ensure_table: ``last_seen`` is added, a table getting its
+    hash index for the first time gets the partial one, and an existing full
+    ``hash_uq`` is left for app/services/index_migration.py."""
+    validity = "last_seen" not in source_cols
     pool = await get_pool()
     async with pool.acquire() as conn:
         # New column → compact; one that exists keeps its type (IF NOT EXISTS).
         await conn.execute(f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "row_hash" uuid')
+        if validity:
+            await conn.execute(
+                f'ALTER TABLE {_qi(table)} ADD COLUMN IF NOT EXISTS "last_seen" timestamptz')
         expr = _content_hash_expr(source_cols, as_uuid=await hash_column_is_uuid(conn, table))
     # Batched backfill — each batch is its own committed statement so an
     # interrupted migration resumes from WHERE row_hash IS NULL.
@@ -732,17 +886,42 @@ async def ensure_content_diff(table: str, source_cols: list[str], key_col: str |
             break
     async with pool.acquire() as conn:
         await conn.execute(f'DROP INDEX IF EXISTS {_qi(_index_name(table, "uq"))}')
-        await conn.execute(
-            f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(_index_name(table, "hash_uq"))} '
-            f'ON {_qi(table)} ("row_hash")'
-        )
+        if not validity:
+            await conn.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(_index_name(table, "hash_uq"))} '
+                f'ON {_qi(table)} ("row_hash")'
+            )
+            return
+        uniq = classify_unique_indexes([dict(r) for r in await conn.fetch(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname='public' AND tablename=$1", table)])
+        # A partial key index (a keyed table created after validity existed)
+        # would block a changed row that reuses its key, exactly like the full
+        # one dropped above.
+        for u in uniq:
+            if u["column"] != "row_hash" and u["name"] == _index_name(table, "open_uq"):
+                await conn.execute(f'DROP INDEX IF EXISTS {_qi(u["name"])}')
+        on_hash = [u for u in uniq if u["column"] == "row_hash"]
+        if any(u["partial"] for u in on_hash):
+            mark_open_index(table)
+        elif not on_hash:
+            await conn.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS {_qi(_index_name(table, "open_uq"))} '
+                f'ON {_qi(table)} ("row_hash") WHERE {OPEN_PREDICATE}'
+            )
+            mark_open_index(table)
 
 
-async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> int:
+async def append_diff(table: str, source_cols: list[str], rows: list[dict],
+                      *, tracker: "PassTracker | None" = None) -> int:
     """Insert only NEW or CHANGED rows (by full-row hash) via a COPY-staged,
     set-based diff — one COPY + one INSERT…SELECT…ON CONFLICT per batch instead
     of thousands of per-row probes. Returns the number inserted. Requires
-    ensure_content_diff to have run for this table."""
+    ensure_content_diff to have run for this table.
+
+    ``tracker`` takes this batch's hashes straight from the staging table, in
+    the same transaction: the hash is computed in SQL here, so that is the one
+    place it exists."""
     if not rows:
         return 0
     pool = await get_pool()
@@ -756,6 +935,7 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
     async with pool.acquire() as conn:
         expr_s = _content_hash_expr(
             source_cols, alias="s", as_uuid=await hash_column_is_uuid(conn, table))
+        where_open = f" WHERE {OPEN_PREDICATE}" if await open_index_ready(conn, table) else ""
         async with conn.transaction():
             # Staging holds ONLY the source columns (all text). Using LIKE the
             # target would inherit first_seen's NOT NULL without its DEFAULT, and
@@ -765,11 +945,269 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict]) -> i
             tag = await conn.execute(
                 f'INSERT INTO {_qi(table)} ({cols_q}, "first_seen", "row_hash") '
                 f'SELECT {sel_q}, now(), {expr_s} FROM _stg s '
-                f'ON CONFLICT ("row_hash") DO NOTHING'
+                f'ON CONFLICT ("row_hash"){where_open} DO NOTHING'
             )
+            if tracker is not None:
+                await tracker.add_from_staging(conn, expr_s, "_stg")
     try:
         return int(tag.split()[-1])
     except (ValueError, IndexError):
+        return 0
+
+
+# ── Closing rows: a full pass records what it saw, then closes the rest ──────
+#
+# Only a FULL pass of the source may close anything: a resumed scan, a sampled
+# subset, a batch of a multi-batch run or an incremental archive's delta did not
+# look at the rows it did not return (see should_close). During a full pass the
+# loader writes the identity of every row it carried to a pass table, and at
+# the end
+#
+#     UPDATE t SET last_seen = <the poll's start> WHERE last_seen IS NULL
+#       AND NOT EXISTS (SELECT 1 FROM <pass> p WHERE p.ident = t.<identity>)
+#
+# in batches. The pass table is a real (UNLOGGED) table, not a TEMP one: every
+# flush of a streaming load takes whichever pool connection is free, and a TEMP
+# table lives on one. A pass that dies with the process is swept at boot
+# (sweep_abandoned_passes). Closing is one timestamp for the whole pass, so
+# "valid at X" means the same thing for every row of a version.
+
+_PASS_SCHEMA = "_loader"
+_PASS_PREFIX = "pass_"
+CLOSE_BATCH = 50_000
+_CLOSE_TIMEOUT_S = 3600
+_PASS_TOKEN_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
+
+def should_close(ds, *, start_offset: int = 0, partial_run: bool = False,
+                 completed: bool = True) -> bool:
+    """Whether a load of ``ds`` may close the rows it did not see. Pure.
+
+    Every condition has to hold, because a wrong "yes" stamps rows that are
+    still in force as gone: closing is switched on (APPEND_CLOSE_ROWS_ENABLED),
+    the dataset has not opted out (``append_closes_rows: false``, for a source
+    that publishes only changes, like the price-transparency feeds), it is not
+    an incremental archive (each run sends only what is NEW), the pass ran to
+    the end, from the beginning, and was not a deliberate sample."""
+    if not settings.append_close_rows_enabled:
+        return False
+    cfg = getattr(ds, "scraper_config", None) or {}
+    if cfg.get("append_closes_rows", True) is False:
+        return False
+    if cfg.get("archive"):
+        return False
+    if not completed or partial_run:
+        return False
+    if int(start_offset or 0) > 0:
+        return False
+    return True
+
+
+def close_guard(*, open_rows: int, closing: int, max_fraction: float,
+                allow_shrink: bool = False) -> str | None:
+    """Why a close must NOT run, or None. Pure.
+
+    A pass that would close more than ``max_fraction`` of the open rows is far
+    more likely a broken source (a page gov.il did not return) than a purge, the
+    same reasoning as the push shrink guard; ``allow_shrink`` is the same
+    override. Refusing costs nothing: the rows stay open and the next full pass
+    measures again."""
+    if allow_shrink or open_rows <= 0 or closing <= 0:
+        return None
+    if closing / open_rows > max_fraction:
+        return (f"would close {closing:,} of {open_rows:,} open rows "
+                f"(> {max_fraction:.0%}); refused, set allow_shrink to override")
+    return None
+
+
+class PassTracker:
+    """The identities one full pass of a source carried into one table."""
+
+    def __init__(self, table: str, *, ident_col: str, ident_type: str = "text",
+                 token: str | None = None):
+        token = token or _uuid.uuid4().hex
+        if not _PASS_TOKEN_RE.match(token):
+            raise ValueError(f"bad pass token {token!r}")
+        if ident_type not in ("text", "uuid"):
+            raise ValueError(f"bad identity type {ident_type!r}")
+        self.table = table
+        self.ident_col = ident_col
+        self.ident_type = ident_type
+        self.token = token
+        self.added = 0
+
+    @property
+    def pass_name(self) -> str:
+        return f"{_PASS_PREFIX}{self.token}"
+
+    @property
+    def pass_table(self) -> str:
+        return f"{_qi(_PASS_SCHEMA)}.{_qi(self.pass_name)}"
+
+    def create_sql(self) -> list[str]:
+        return [
+            f"CREATE SCHEMA IF NOT EXISTS {_qi(_PASS_SCHEMA)}",
+            f'CREATE UNLOGGED TABLE {self.pass_table} ("ident" {self.ident_type})',
+        ]
+
+    def _missing(self) -> str:
+        # NOT EXISTS, not NOT IN: NOT IN over a subquery bigger than work_mem
+        # falls back to rescanning it per row, and a single NULL in it makes the
+        # whole predicate NULL, so it would close nothing at all.
+        return (f"FROM {_qi(self.table)} o WHERE o.{OPEN_PREDICATE} "
+                f"AND NOT EXISTS (SELECT 1 FROM {self.pass_table} p "
+                f'WHERE p."ident" = o.{_qi(self.ident_col)})')
+
+    def count_sql(self) -> str:
+        return (f"SELECT (SELECT count(*) FROM {_qi(self.table)} o "
+                f"WHERE o.{OPEN_PREDICATE}) AS open_rows, "
+                f"(SELECT count(*) {self._missing()}) AS closing")
+
+    def close_sql(self, batch: int = CLOSE_BATCH) -> str:
+        return (f'UPDATE {_qi(self.table)} SET "last_seen" = $1 WHERE ctid IN '
+                f"(SELECT o.ctid {self._missing()} LIMIT {int(batch)})")
+
+    def drop_sql(self) -> str:
+        return f"DROP TABLE IF EXISTS {self.pass_table}"
+
+    async def start(self, conn=None) -> "PassTracker":
+        async def _go(c):
+            for stmt in self.create_sql():
+                await c.execute(stmt)
+        if conn is not None:
+            await _go(conn)
+        else:
+            pool = await get_pool()
+            async with pool.acquire() as c:
+                await _go(c)
+        return self
+
+    def _records(self, idents: list) -> list[tuple]:
+        if self.ident_type == "uuid":
+            return [(v if isinstance(v, _uuid.UUID) else compact_hash(str(v)),)
+                    for v in idents]
+        return [(str(v),) for v in idents]
+
+    async def add(self, idents: list, *, conn=None) -> None:
+        """COPY one batch of identities in (after its INSERT succeeded)."""
+        if not idents:
+            return
+        records = self._records(idents)
+        if conn is not None:
+            await conn.copy_records_to_table(
+                self.pass_name, records=records, columns=["ident"], schema_name=_PASS_SCHEMA)
+        else:
+            pool = await get_pool()
+            async with pool.acquire() as c:
+                await c.copy_records_to_table(
+                    self.pass_name, records=records, columns=["ident"],
+                    schema_name=_PASS_SCHEMA)
+        self.added += len(records)
+
+    async def add_from_staging(self, conn, expr: str, staging: str) -> None:
+        """Identities computed in SQL (content-diff tables): copy them across."""
+        tag = await conn.execute(
+            f'INSERT INTO {self.pass_table} ("ident") SELECT {expr} FROM {staging} s')
+        try:
+            self.added += int(tag.split()[-1])
+        except (ValueError, IndexError):
+            pass
+
+    async def abandon(self) -> None:
+        """Drop the pass without closing anything. Never raises."""
+        try:
+            pool = await get_pool()
+            async with pool.acquire() as c:
+                await c.execute(self.drop_sql())
+        except Exception:  # noqa: BLE001 — the boot sweep is the backstop
+            logger.warning("append close: could not drop %s", self.pass_table, exc_info=True)
+
+    async def close_missing(self, run_ts, *, max_fraction: float | None = None,
+                            allow_shrink: bool = False) -> dict:
+        """Close every open row this pass did not carry; drop the pass table.
+
+        Returns ``{closed, open_rows, seconds}`` or ``{skipped: reason, …}``.
+        The pass table is dropped either way."""
+        import time as _time
+
+        t0 = _time.monotonic()
+        frac = settings.append_close_max_fraction if max_fraction is None else max_fraction
+        pool = await get_pool()
+        try:
+            async with pool.acquire() as conn:
+                if self.ident_col == "row_hash":
+                    # The compaction job may have converted the column mid-pass;
+                    # a text pass against a uuid column compares nothing sane.
+                    now_uuid = await hash_column_is_uuid(conn, self.table)
+                    if now_uuid != (self.ident_type == "uuid"):
+                        return {"skipped": "row_hash type changed during the pass"}
+                if self.added == 0:
+                    # An empty pass means the load wrote nothing: never "the
+                    # source is empty now" on its own say-so.
+                    return {"skipped": "empty pass"}
+                await conn.execute(f'CREATE INDEX ON {self.pass_table} ("ident")',
+                                   timeout=_CLOSE_TIMEOUT_S)
+                await conn.execute(f"ANALYZE {self.pass_table}", timeout=_CLOSE_TIMEOUT_S)
+                counts = await conn.fetchrow(self.count_sql(), timeout=_CLOSE_TIMEOUT_S)
+                open_rows, closing = int(counts["open_rows"]), int(counts["closing"])
+                reason = close_guard(open_rows=open_rows, closing=closing,
+                                     max_fraction=frac, allow_shrink=allow_shrink)
+                if reason:
+                    logger.warning("append close: %s: %s", self.table, reason)
+                    return {"skipped": reason, "open_rows": open_rows, "closing": closing}
+                closed = 0
+                sql = self.close_sql()
+                while closing:
+                    tag = await conn.execute(sql, run_ts, timeout=_CLOSE_TIMEOUT_S)
+                    try:
+                        n = int(tag.split()[-1])
+                    except (ValueError, IndexError):
+                        n = 0
+                    if n == 0:
+                        break
+                    closed += n
+            secs = round(_time.monotonic() - t0, 1)
+            logger.info("append close: %s closed %d of %d open rows in %.1fs (pass of %d)",
+                        self.table, closed, open_rows, secs, self.added)
+            return {"closed": closed, "open_rows": open_rows, "seconds": secs}
+        finally:
+            await self.abandon()
+
+
+async def begin_pass(table: str, *, ident_col: str = "row_hash") -> PassTracker | None:
+    """Open a pass for a FULL load of ``table``, or None when it cannot close.
+
+    None until the table dedups on the partial index (see open_index_ready):
+    closing a row that the full index still holds would make its content
+    unable to come back (the next identical row conflicts with the closed one
+    and is dropped), and the archive would say it is gone while it is not."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if not await open_index_ready(conn, table, ident_col):
+            logger.info("append close: %s has no partial index yet, not closing", table)
+            return None
+        ident_type = "text"
+        if ident_col == "row_hash" and await hash_column_is_uuid(conn, table):
+            ident_type = "uuid"
+        return await PassTracker(table, ident_col=ident_col, ident_type=ident_type).start(conn)
+
+
+async def sweep_abandoned_passes() -> int:
+    """Drop every pass table a dead process left behind (boot). Never raises."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            names = await conn.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE $2",
+                _PASS_SCHEMA, _PASS_PREFIX.replace("_", "\\_") + "%")
+            for r in names:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {_qi(_PASS_SCHEMA)}.{_qi(r['tablename'])}")
+        if names:
+            logger.info("append close: swept %d abandoned pass tables", len(names))
+        return len(names)
+    except Exception:  # noqa: BLE001 — housekeeping must never stop a boot
+        logger.warning("append close: pass sweep failed", exc_info=True)
         return 0
 
 
@@ -1583,6 +2021,14 @@ async def iter_sql_csv(sql: str, *, search_path: str | None = None,
 # Internal columns hidden from the UI (dedup bookkeeping, not data).
 _HIDDEN_COLS = {"row_hash"}
 
+# Bookkeeping that the default views leave out, so an endpoint answers exactly
+# as it did before validity existed unless a caller asks for it (as_of /
+# current). It matters most in iter_csv_open: a worker rebuilds its cache of
+# what it published from those columns and hashes them, and one extra column
+# would give every row a new identity. The /data console sees it like any
+# other column.
+VALIDITY_COL = "last_seen"
+
 # Columns whose values are bulk payloads, not something a 20-row preview should
 # ever pull. They are TOASTed, so touching them turns a sub-second scan into a
 # 46-second one on a large mirrored GovMap layer. Listed in the schema, skipped
@@ -1593,9 +2039,7 @@ _BULK_COLS = {"geometry_wkt", "geometry", "geom", "wkt"}
 MAX_PAGE = 500
 
 
-async def user_columns(table: str) -> list[str]:
-    """Ordered list of the table's user-facing columns (source columns +
-    first_seen, with internal bookkeeping hidden). Empty if the table is gone."""
+async def _all_columns(table: str) -> list[str]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -1606,8 +2050,77 @@ async def user_columns(table: str) -> list[str]:
     return [r["column_name"] for r in rows if r["column_name"] not in _HIDDEN_COLS]
 
 
+async def user_columns(table: str) -> list[str]:
+    """Ordered list of the table's user-facing columns (source columns +
+    first_seen, with internal bookkeeping hidden). Empty if the table is gone."""
+    return [c for c in await _all_columns(table) if c != VALIDITY_COL]
+
+
+async def _columns_for(table: str, validity: bool) -> tuple[list[str], bool]:
+    """``(columns, has_last_seen)`` in one catalog read: the default view, plus
+    ``last_seen`` when the caller asked a validity question."""
+    cols = await _all_columns(table)
+    has = VALIDITY_COL in cols
+    if not validity:
+        cols = [c for c in cols if c != VALIDITY_COL]
+    return cols, has
+
+
+def parse_as_of(value: str):
+    """``as_of`` as an aware UTC datetime, or ValueError.
+
+    A bare date means the END of that day (23:59:59.999 UTC): "the dataset on
+    1 October" includes what was seen during 1 October. A timestamp without a
+    zone is UTC; one with a zone is converted."""
+    from datetime import date as _date, datetime as _dt, time as _tm, timezone as _tz
+
+    s = (value or "").strip()
+    if not s:
+        raise ValueError("as_of is empty")
+    if len(s) == 10:
+        d = _date.fromisoformat(s)
+        return _dt.combine(d, _tm(23, 59, 59, 999000), tzinfo=_tz.utc)
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    ts = _dt.fromisoformat(s)
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=_tz.utc)
+    return ts.astimezone(_tz.utc)
+
+
+def validity_where(*, as_of=None, current: bool = False, start_param: int = 1,
+                   has_last_seen: bool = True) -> tuple[str, list]:
+    """The SQL condition for "rows in force at ``as_of``" / "rows in force now".
+
+    Returns ``(condition, params)``, ``("", [])`` when neither is asked. One
+    parameter for as_of, referenced twice. A table without ``last_seen`` (not
+    touched since this shipped) has only open rows, so as_of reduces to
+    first_seen and current to nothing. Both at once is a contradiction the
+    caller has to resolve: ValueError. Pure."""
+    if as_of is not None and current:
+        raise ValueError("as_of and current are mutually exclusive")
+    if current:
+        return (OPEN_PREDICATE if has_last_seen else ""), []
+    if as_of is None:
+        return "", []
+    ph = f"${start_param}"
+    if not has_last_seen:
+        return f'"first_seen" <= {ph}', [as_of]
+    return (f'"first_seen" <= {ph} AND ("last_seen" IS NULL OR "last_seen" > {ph})',
+            [as_of])
+
+
+def _validity_source(table: str, cond: str) -> str:
+    """The table narrowed to its valid rows, aliased back to the table name so
+    every caller's WHERE / ORDER BY / latest_source keeps working."""
+    if not cond:
+        return _qi(table)
+    return f"(SELECT * FROM {_qi(table)} WHERE {cond}) AS {_qi(table)}"
+
+
 def latest_source(
     table: str, cols: list[str], *, key_col: str | None, order_col: str | None,
+    where: str = "",
 ) -> str:
     """The FROM target for a query — the table itself, or one row per ITEM.
 
@@ -1627,12 +2140,16 @@ def latest_source(
     column isn't there (a renamed resource, an older table): serving the full
     history is a visible, honest answer, while erroring is not.
     """
+    # ``where`` (a validity_where condition) narrows the table BEFORE the
+    # collapse: the newest sample of each item among the rows in force at X,
+    # not the newest sample if it happens to have been in force. Empty, the
+    # statement is exactly what it was.
     if not key_col or key_col not in cols:
-        return _qi(table)
+        return _validity_source(table, where)
     order = order_col if (order_col and order_col in cols) else (
         "first_seen" if "first_seen" in cols else key_col)
     return (
-        f'(SELECT DISTINCT ON ({_qi(key_col)}) * FROM {_qi(table)} '
+        f'(SELECT DISTINCT ON ({_qi(key_col)}) * FROM {_validity_source(table, where)} '
         f'ORDER BY {_qi(key_col)}, {_qi(order)} DESC NULLS LAST) AS {_qi(table)}'
     )
 
@@ -1710,14 +2227,19 @@ async def query(
     filters: dict[str, str] | None = None,
     latest_key: str | None = None,
     latest_order: str | None = None,
+    as_of=None,
+    current: bool = False,
 ) -> dict:
     """Paginated, filtered read for the UI. Returns
     {columns, rows, total, limit, offset}. Validates sort/filter columns
     against the live schema; caps the page at MAX_PAGE.
 
     ``latest_key`` collapses the archive to the newest sample per item — see
-    latest_source."""
-    cols = await user_columns(table)
+    latest_source. ``as_of`` (an aware datetime) / ``current`` keep only the
+    rows in force then / now (see validity_where); either adds ``last_seen``
+    to the columns returned."""
+    validity = as_of is not None or bool(current)
+    cols, has_seen = await _columns_for(table, validity)
     if not cols:
         return {"columns": [], "rows": [], "total": 0, "limit": limit, "offset": offset}
     filters = {k: v for k, v in (filters or {}).items() if k in cols}
@@ -1726,9 +2248,12 @@ async def query(
     sort_col = sort if (sort in cols) else ("first_seen" if "first_seen" in cols else cols[0])
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
 
-    where, params = _build_where(cols, q, filters, start_param=1)
+    vcond, params = validity_where(as_of=as_of, current=current, has_last_seen=has_seen)
+    where, wparams = _build_where(cols, q, filters, start_param=len(params) + 1)
+    params = params + wparams
     select_cols = ", ".join(_qi(c) for c in cols)
-    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order)
+    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order,
+                           where=vcond)
     pool = await get_pool()
     async with pool.acquire() as conn:
         total = int(await conn.fetchval(f'SELECT count(*) FROM {source}{where}', *params))
@@ -1830,6 +2355,8 @@ async def datastore_search(
     include_total: bool = True,
     latest_key: str | None = None,
     latest_order: str | None = None,
+    as_of=None,
+    current: bool = False,
 ) -> dict | None:
     """CKAN ``datastore_search``-style query over an append table. ``filters``
     are exact-match per column (scalar or list → IN); ``q`` is a substring match
@@ -1837,8 +2364,9 @@ async def datastore_search(
     ``fields`` projects the output columns. Returns
     {fields:[{id,type}], records, total, limit, offset} or None if the table is
     gone. All column names are validated against the live schema; values are
-    parameterized."""
-    all_cols = await user_columns(table)
+    parameterized. ``as_of`` / ``current``: see query."""
+    validity = as_of is not None or bool(current)
+    all_cols, has_seen = await _columns_for(table, validity)
     if not all_cols:
         return None
     colset = set(all_cols)
@@ -1846,9 +2374,9 @@ async def datastore_search(
     limit = max(0, min(int(limit if limit is not None else 100), MAX_PAGE))
     offset = max(0, int(offset or 0))
 
+    vcond, params = validity_where(as_of=as_of, current=current, has_last_seen=has_seen)
     conds: list[str] = []
-    params: list = []
-    p = 1
+    p = 1 + len(params)
     # Same term split as _build_where, deliberately: CKAN's own ``q`` is a
     # full-text AND of words, so treating two words as one contiguous run was
     # both the less useful reading and the less compatible one.
@@ -1876,7 +2404,8 @@ async def datastore_search(
         ' ORDER BY "first_seen" DESC' if "first_seen" in colset else ""
     )
     select = ("SELECT DISTINCT " if distinct else "SELECT ") + ", ".join(_qi(c) for c in sel)
-    source = latest_source(table, all_cols, key_col=latest_key, order_col=latest_order)
+    source = latest_source(table, all_cols, key_col=latest_key, order_col=latest_order,
+                           where=vcond)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -1907,25 +2436,31 @@ async def iter_csv(
     filters: dict[str, str] | None = None,
     latest_key: str | None = None,
     latest_order: str | None = None,
+    as_of=None,
+    current: bool = False,
 ):
     """Async generator yielding the filtered table as CSV (utf-8-sig) chunks,
     server-side cursor so even multi-million-row exports stay memory-bounded.
 
     ``latest_key`` exports the newest sample per item instead of the whole
-    sampling history — see latest_source."""
+    sampling history — see latest_source. ``as_of`` / ``current``: see query."""
     import csv as _csv
     import io as _io
 
-    cols = await user_columns(table)
+    validity = as_of is not None or bool(current)
+    cols, has_seen = await _columns_for(table, validity)
     if not cols:
         yield "﻿".encode("utf-8")
         return
     filters = {k: v for k, v in (filters or {}).items() if k in cols}
     sort_col = sort if (sort in cols) else ("first_seen" if "first_seen" in cols else cols[0])
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
-    where, params = _build_where(cols, q, filters, start_param=1)
+    vcond, params = validity_where(as_of=as_of, current=current, has_last_seen=has_seen)
+    where, wparams = _build_where(cols, q, filters, start_param=len(params) + 1)
+    params = params + wparams
     select_cols = ", ".join(_qi(c) for c in cols)
-    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order)
+    source = latest_source(table, cols, key_col=latest_key, order_col=latest_order,
+                           where=vcond)
     sql = (
         f'SELECT {select_cols} FROM {source}{where} '
         f'ORDER BY {_qi(sort_col)} {direction} NULLS LAST'

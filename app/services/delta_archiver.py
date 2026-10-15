@@ -167,6 +167,38 @@ def _stamp_col(ds) -> str | None:
     from app.services import sampling_runs
     return sampling_runs.stamp_column(ds)
 
+
+async def _begin_pass_if_full(ds, table: str, *, start_offset: int,
+                              ident_col: str | None):
+    """A PassTracker when this load is a full pass that may close rows, else
+    None. Never raises: failing to open a pass costs only the closing, and the
+    rows themselves must still land."""
+    if not ident_col or not append_store.should_close(ds, start_offset=start_offset):
+        return None
+    try:
+        return await append_store.begin_pass(table, ident_col=ident_col)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("append close: could not open a pass on %s: %s", table, e)
+        return None
+
+
+async def _close_pass(ds, tracker, run_ts) -> dict:
+    """Close what a finished full pass did not see. Returns the keys to add to
+    the version's change_summary ({} when there was no pass, so a dataset that
+    does not close rows records exactly what it recorded before)."""
+    if tracker is None:
+        return {}
+    try:
+        res = await tracker.close_missing(
+            run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")))
+    except Exception as e:  # noqa: BLE001 — the rows are in; closing waits a poll
+        logger.warning("append close: %s failed: %s", tracker.table, e)
+        return {"close_skipped": f"{type(e).__name__}: {e}"[:300]}
+    if "skipped" in res:
+        return {"close_skipped": res["skipped"]}
+    return {"rows_closed": res.get("closed", 0)}
+
+
 async def _archive_streaming_to_db(
     *,
     ds: TrackedDataset,
@@ -227,6 +259,16 @@ async def _archive_streaming_to_db(
     last_offset = start_offset
     pending: list[dict] = []
 
+    # Row validity: a scan from offset 0 that runs to the end saw every row the
+    # source holds, so the open rows it did not see are closed at the end, all
+    # with the moment this poll started. A resumed scan saw only a tail and
+    # closes nothing. See append_store.should_close / begin_pass.
+    run_ts = datetime.now(timezone.utc)
+    tracker = await _begin_pass_if_full(
+        ds, table, start_offset=start_offset,
+        ident_col="row_hash" if (keyless or capture_changes) else append_key)
+    track = {"tracker": tracker} if tracker is not None else {}
+
     # Dual-write (r2+neon plan): in addition to the NEON row table, write a FULL
     # CSV snapshot of every current row to R2 and attach it to this version, so
     # the dataset has BOTH a queryable table and a downloadable per-version file.
@@ -260,11 +302,11 @@ async def _archive_streaming_to_db(
         if not pending:
             return
         if capture_changes:
-            n = await append_store.append_diff(table, source_cols, pending)
+            n = await append_store.append_diff(table, source_cols, pending, **track)
         else:
             n = await append_store.append_rows(
                 table, source_cols, pending, key_col=append_key, keyless=keyless,
-                stamp_col=_stamp_col(ds),
+                stamp_col=_stamp_col(ds), **track,
             )
         rows_inserted_total += n
         pending = []
@@ -298,6 +340,8 @@ async def _archive_streaming_to_db(
                 _os.unlink(snap_path)
             except OSError:
                 pass
+        if tracker is not None:
+            await tracker.abandon()  # an aborted pass closes nothing
         logger.error("append-db: streaming/insert aborted for %s at offset %d: %s",
                      ds.ckan_name, last_offset, e)
         ds.last_error = (
@@ -311,6 +355,7 @@ async def _archive_streaming_to_db(
     # next scheduled poll starts a fresh full re-scan (catches new rows anywhere
     # in the registry), and record the completed append_db version so the UI
     # recognizes this dataset as a NEON-backed append archive.
+    closed = await _close_pass(ds, tracker, run_ts)
     ds.scraper_config = {
         k: v for k, v in (ds.scraper_config or {}).items() if k != "seed_offset"
     } or None
@@ -376,6 +421,7 @@ async def _archive_streaming_to_db(
             "resources_added": [],
             "resources_removed": [],
             "resources_modified": [],
+            **closed,
         },
         resource_mappings=resource_mappings,
     )
@@ -434,6 +480,9 @@ async def archive_multi_via_datastore_streaming(
     names: dict[str, str] = {}
     counts: dict[str, int | None] = {}
     added_total = 0
+    # One moment for the whole poll, shared by every table it closes rows in.
+    run_ts = datetime.now(timezone.utc)
+    closed_by_rid: dict[str, dict] = {}
 
     async def _save_cp(_done, _cur, _off) -> None:
         ds.scraper_config = {
@@ -472,6 +521,10 @@ async def archive_multi_via_datastore_streaming(
         await _save_cp(done, rid, start)
         pending: list[dict] = []
         last_offset = start
+        # Per table: each resource's own scan from 0 decides for its own table.
+        tracker = await _begin_pass_if_full(ds, table, start_offset=start,
+                                            ident_col="row_hash")
+        track = {"tracker": tracker} if tracker is not None else {}
         try:
             async for next_offset, batch in _stream_datastore_pages(rid, start_offset=start):
                 last_offset = next_offset
@@ -479,16 +532,18 @@ async def archive_multi_via_datastore_streaming(
                 if len(pending) >= PENDING_FLUSH_THRESHOLD:
                     added_total += await append_store.append_rows(
                         table, source_cols, pending, key_col=None, keyless=True,
-                        stamp_col=_stamp_col(ds))
+                        stamp_col=_stamp_col(ds), **track)
                     pending = []
                     # Checkpoint ONLY after the rows are durably in NEON.
                     await _save_cp(done, rid, last_offset)
             if pending:
                 added_total += await append_store.append_rows(
                     table, source_cols, pending, key_col=None, keyless=True,
-                    stamp_col=_stamp_col(ds))
+                    stamp_col=_stamp_col(ds), **track)
                 pending = []
         except Exception as e:
+            if tracker is not None:
+                await tracker.abandon()  # an aborted pass closes nothing
             # scraper_config already holds the last durable checkpoint for this
             # resource; keep it so the resume driver continues from there.
             logger.error("multi-neon: streaming aborted for %s/%s at offset %d: %s",
@@ -499,6 +554,9 @@ async def archive_multi_via_datastore_streaming(
             await db.commit()
             return False
 
+        res = await _close_pass(ds, tracker, run_ts)
+        if res:
+            closed_by_rid[rid] = res
         done.add(rid)
         try:
             counts[rid] = await append_store.table_count(table)
@@ -528,6 +586,7 @@ async def archive_multi_via_datastore_streaming(
             "resources_added": [],
             "resources_removed": [],
             "resources_modified": [],
+            **({"closed": closed_by_rid} if closed_by_rid else {}),
         },
         resource_mappings=resource_mappings,
     )

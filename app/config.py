@@ -368,6 +368,18 @@ class Settings(BaseSettings):
     # Hence the order this was turned on in: smallest dataset first.
     append_postgis_enabled: bool = True
 
+    # Row validity (docs/history-phase1-plan.md). A FULL pass of a source that
+    # no longer returns an open archive row stamps its ``last_seen`` with the
+    # poll's start time. Off until the partial dedup indexes are migrated and the
+    # prod protocol (plan section 4.3) has been run; each dataset can still opt
+    # out with scraper_config.append_closes_rows = false.
+    append_close_rows_enabled: bool = False
+    # A pass that would close more than this share of a table's open rows is
+    # refused and logged (scraper_config.allow_shrink overrides), the same
+    # reasoning as the push shrink guard: half a source vanishing at once is
+    # far more often a broken read than a purge.
+    append_close_max_fraction: float = 0.5
+
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
     #

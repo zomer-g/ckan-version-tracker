@@ -7,6 +7,9 @@
   GET/POST /api/admin/storage/hash-compaction[/start|/stop]
                                     — convert the dedup hashes to uuid
                                       (app/services/hash_compaction.py)
+  GET/POST /api/admin/storage/index-migration[/start|/stop]
+                                      partial dedup indexes for row validity
+                                      (app/services/index_migration.py)
   GET  /api/admin/storage/orphans   — the append tables whose dataset is gone
   POST /api/admin/storage/orphans/drop
                                     — drop them (re-derived at call time)
@@ -318,4 +321,30 @@ async def hash_compaction_start(_: User = Depends(get_admin_user)):
 async def hash_compaction_stop(_: User = Depends(get_admin_user)):
     from app.services import hash_compaction
     hash_compaction.request_stop()
+    return {"stopping": True}
+
+
+# ── Row validity: make the dedup indexes partial (WHERE last_seen IS NULL) ───
+
+@router.get("/index-migration")
+async def index_migration_status(_: User = Depends(get_admin_user)):
+    """How many append tables still dedup with a full index, and the job's progress."""
+    from app.services import index_migration
+    return await index_migration.summary()
+
+
+@router.post("/index-migration/start")
+async def index_migration_start(_: User = Depends(get_admin_user)):
+    import asyncio
+    from app.services import index_migration
+    if index_migration.status()["running"]:
+        return {"started": False, "reason": "already running"}
+    asyncio.create_task(index_migration.run())
+    return {"started": True}
+
+
+@router.post("/index-migration/stop")
+async def index_migration_stop(_: User = Depends(get_admin_user)):
+    from app.services import index_migration
+    index_migration.request_stop()
     return {"stopping": True}

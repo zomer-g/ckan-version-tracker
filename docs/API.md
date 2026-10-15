@@ -32,6 +32,7 @@ If you find a bug or want a field added, open an issue on the
 | GET | `/api/v1/tags/{id}` | One tag + the datasets under it |
 | GET | `/api/v1/organizations` | All organizations + dataset counts |
 | GET | `/api/v1/organizations/{id}` | One organization |
+| GET | `/api/append/{id}/rows?as_of=…` | Archived rows, optionally as they stood at a moment (see [Row archive](#row-archive-apiappendid-and-row-validity)) |
 
 Every UUID returned by the API is a stable identifier you can store
 client-side. URLs returned in responses (`url`, `versions_url`,
@@ -398,6 +399,56 @@ datasets carried columns like `Data.file`, `Data.Document`, or
 `Data.attachments` whose value was a literal placeholder string
 (`"[1 קבצים]"`). Those columns are no longer produced. New consumers
 should rely solely on `attachment_filename` / `attachment_url`.
+
+---
+
+## Row archive: `/api/append/{id}/…` and row validity
+
+Datasets archived row by row (one SQL table per dataset) are read through
+`/api/append/{id}/schema`, `/rows`, `/datastore_search`, `/download.csv`,
+`/item` and the read-only SQL endpoints. Every row carries two timestamps:
+
+| Column | Meaning |
+|---|---|
+| `first_seen` | When OVER first stored this exact row state. |
+| `last_seen` | `null` while the row is in force. Set to the poll's start time when a **full** pass of the source no longer returned it. A row that comes back identical later is stored again as a new row with its own `first_seen`, so a gap stays visible. |
+
+A row is in force at moment X when `first_seen <= X AND (last_seen IS NULL OR last_seen > X)`.
+
+Only full passes close rows: a resumed scan, a sampled run, one batch of a
+multi-batch run, an incremental archive's delta and the historical backfill
+never do. A source that publishes only changes (the price-transparency feeds)
+opts out, and its rows stay open. A pass that would close more than half of a
+table's open rows is refused and logged.
+
+### Parameters (on `/rows`, `/datastore_search`, `/download.csv`)
+
+| Param | Meaning |
+|---|---|
+| `as_of` | ISO date (`2026-10-01`, read as the **end** of that day, UTC) or timestamp (`2026-10-01T08:30:00+03:00`; no zone = UTC). Returns the rows in force at that moment. |
+| `current=true` | Only the rows in force now (`last_seen IS NULL`). |
+
+Neither param: the whole history, exactly as before. Both at once, or an
+`as_of` that does not parse: `400`. With either param, `last_seen` is added to
+the returned columns; without, it is left out of `columns` (it is still a
+normal column in the SQL console). `as_of` / `current` combine with `latest`,
+`q`, the per-column filters and `table`; `latest=true&as_of=…` is "the newest
+sample of each item among the rows in force then".
+
+`/schema` advertises the feature: `"last_seen_column": "last_seen"` and
+`"supports_as_of": true`. The MCP tool `query_dataset_rows` takes the same
+`as_of` / `current` arguments.
+
+```bash
+# The register as it stood at the end of 1 October 2026
+curl "https://over.org.il/api/append/<id>/rows?as_of=2026-10-01&limit=50"
+# Only what is in force now, as CSV
+curl -o now.csv "https://over.org.il/api/append/<id>/download.csv?current=true"
+```
+
+A table OVER has not polled since this shipped has no `last_seen` yet: every
+row in it counts as in force, so `current=true` returns all of it and `as_of`
+filters on `first_seen` alone.
 
 ---
 

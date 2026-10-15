@@ -348,6 +348,11 @@ async def lifespan(app: FastAPI):
         # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
         from app.services import mmm_activate
         asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
+        # Row validity: a pass table left by a process that died mid-load
+        # (append_store.PassTracker). Nothing is mid-load at boot.
+        from app.services import append_store
+        if append_store.is_configured():
+            asyncio.create_task(append_store.sweep_abandoned_passes())
     else:
         logger.warning(
             "scheduler and boot writers NOT started "

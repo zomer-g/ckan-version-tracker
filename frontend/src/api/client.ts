@@ -467,6 +467,11 @@ export interface AppendSchema {
   item_key?: string | null;
   sample_column?: string | null;
   supports_latest?: boolean;
+  // Row validity: `last_seen` is null while a row is in force and set once a
+  // full pass of the source no longer returns it. `supports_as_of` means
+  // ?as_of= / ?current=true read the table at a moment / now.
+  last_seen_column?: string;
+  supports_as_of?: boolean;
 }
 
 export interface AppendRows {
@@ -493,6 +498,10 @@ function appendQuery(opts: {
   // One row per item (its newest sample) instead of the full sampling history.
   // Reserved server-side, like `table`.
   latest?: boolean;
+  // Row validity, reserved server-side too: the rows in force at a moment
+  // (ISO date = end of that day, UTC) or now. Absent = the whole history.
+  asOf?: string;
+  current?: boolean;
   filters?: Record<string, string>;
 }): string {
   const p = new URLSearchParams();
@@ -503,6 +512,8 @@ function appendQuery(opts: {
   if (opts.q) p.set("q", opts.q);
   if (opts.table) p.set("table", opts.table);
   if (opts.latest) p.set("latest", "true");
+  if (opts.asOf) p.set("as_of", opts.asOf);
+  else if (opts.current) p.set("current", "true");
   for (const [k, v] of Object.entries(opts.filters || {})) {
     if (v) p.set(k, v);
   }

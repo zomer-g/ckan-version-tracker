@@ -18,6 +18,12 @@ Endpoints (all under /api/append):
   GET /{dataset_id}/item?value=…     → every sample of ONE item, newest first
   GET /{dataset_id}/download.csv?…   → streaming CSV of the (filtered) table
 
+ROW VALIDITY. Every row carries ``first_seen`` (when OVER stored it) and
+``last_seen`` (NULL while it is in force; set when a full pass of the source no
+longer returned it). ``?as_of=<date|timestamp>`` on /rows, /datastore_search
+and /download.csv returns the rows in force at that moment; ``?current=true``
+the rows in force now. Without either, the whole history, as always.
+
 Filtering on rows/download: ``q`` does a free-text ILIKE across all columns;
 any query param whose name is a real column does a per-column ILIKE. Reserved
 params: limit, offset, sort, order, q, latest, table/resource/resource_id.
@@ -80,7 +86,29 @@ class SqlBody(BaseModel):
 # like limit/offset/sort/order/q so /rows and /download.csv never mistake the
 # selector for a per-column filter.
 _TABLE_PARAMS = ("table", "resource", "resource_id")
-_RESERVED = {"limit", "offset", "sort", "order", "q", "latest", *_TABLE_PARAMS}
+_RESERVED = {"limit", "offset", "sort", "order", "q", "latest", "as_of", "current",
+             *_TABLE_PARAMS}
+
+
+def _validity(as_of: str | None, current: bool):
+    """``(as_of datetime | None, current)`` from the query string, or 400.
+
+    ``as_of`` takes an ISO date (the END of that day, UTC) or timestamp; the
+    rows returned are those in force at that moment. ``current=true`` returns
+    only the rows still in force. Asking both is asking two different
+    questions at once, so it is refused rather than one silently winning."""
+    if as_of is not None and current:
+        raise HTTPException(status_code=400,
+                            detail="as_of and current are mutually exclusive")
+    if as_of is None:
+        return None, bool(current)
+    try:
+        return append_store.parse_as_of(as_of), False
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=("as_of must be an ISO date (2026-10-01, read as the end of that "
+                    "day, UTC) or timestamp (2026-10-01T08:30:00+03:00)"))
 
 
 def item_spec(ds) -> tuple[str | None, str | None]:
@@ -326,6 +354,12 @@ async def archive_schema(dataset_id: str, request: Request,
         "item_key": item_spec(ds)[0],
         "sample_column": item_spec(ds)[1] or "first_seen",
         "supports_latest": bool(item_spec(ds)[0]),
+        # Row validity: ``last_seen`` is NULL while a row is in force and set
+        # when a full pass of the source no longer returned it. ?as_of= and
+        # ?current=true read the table at a moment / now. Not in `columns`,
+        # which stays the default view; a validity query adds it to its rows.
+        "last_seen_column": append_store.VALIDITY_COL,
+        "supports_as_of": True,
     }
 
 
@@ -368,6 +402,8 @@ async def archive_rows(
     q: str | None = None,
     table: str | None = None,
     latest: bool = False,
+    as_of: str | None = None,
+    current: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """One page of the archive.
@@ -376,7 +412,11 @@ async def archive_rows(
     it stands now, one row per file — instead of every sample ever taken. Any
     filter then applies to that current state (``?latest=true&סטטוס=…`` is "the
     files at this status now", not "ever"). Without it you get the full sampling
-    history, which is what this archive is for."""
+    history, which is what this archive is for.
+
+    ``as_of=<date|timestamp>`` returns the rows that were in force at that
+    moment, ``current=true`` the rows in force now (see _validity)."""
+    at, cur = _validity(as_of, current)
     ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     latest_key, latest_order = _latest_key(ds, latest)
     return await append_store.query(
@@ -384,6 +424,7 @@ async def archive_rows(
         limit=limit, offset=offset, sort=sort, order=order, q=q,
         filters=_filters_from(request, exclude=set()),
         latest_key=latest_key, latest_order=latest_order,
+        **({"as_of": at, "current": cur} if (at is not None or cur) else {}),
     )
 
 
@@ -456,10 +497,14 @@ async def archive_download(
     q: str | None = None,
     table: str | None = None,
     latest: bool = False,
+    as_of: str | None = None,
+    current: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """The (filtered) archive as CSV. ``latest=true`` exports one row per item —
-    the newest sample of each — instead of the whole sampling history."""
+    the newest sample of each — instead of the whole sampling history.
+    ``as_of`` / ``current`` export the rows in force then / now (see /rows)."""
+    at, cur = _validity(as_of, current)
     ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
     latest_key, latest_order = _latest_key(ds, latest)
     filters = _filters_from(request, exclude=set())
@@ -474,8 +519,15 @@ async def archive_download(
         # The file says which of the two it is — a "latest" export and a full
         # history export of the same table are otherwise the same filename.
         safe = f"{safe}_latest"
-    stream = append_store.iter_csv(tbl, sort=sort, order=order, q=q, filters=filters,
-                                   latest_key=latest_key, latest_order=latest_order)
+    # Same reasoning: a dated or current export says so in its name.
+    if cur:
+        safe = f"{safe}_current"
+    elif at is not None:
+        safe = f"{safe}_asof_{at.strftime('%Y%m%dT%H%M')}"
+    stream = append_store.iter_csv(
+        tbl, sort=sort, order=order, q=q, filters=filters,
+        latest_key=latest_key, latest_order=latest_order,
+        **({"as_of": at, "current": cur} if (at is not None or cur) else {}))
     return StreamingResponse(
         stream,
         media_type="text/csv; charset=utf-8",
@@ -530,6 +582,8 @@ async def datastore_search(
     include_total: bool = True,
     table: str | None = None,
     latest: bool = False,
+    as_of: str | None = None,
+    current: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """CKAN ``datastore_search``-style query over the dataset's NEON content.
@@ -545,7 +599,9 @@ async def datastore_search(
     resource name); ``tables`` in the result says what else is there.
 
     OVER-specific: ``latest=true`` queries the newest sample per item instead of
-    every sample (see /rows)."""
+    every sample (see /rows); ``as_of`` / ``current`` the rows in force then /
+    now."""
+    at, cur = _validity(as_of, current)
     ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
     latest_key, latest_order = _latest_key(ds, latest)
     field_list = [c.strip() for c in fields.split(",") if c.strip()] if fields else None
@@ -561,6 +617,7 @@ async def datastore_search(
         tbl, fields=field_list, filters=filt, q=q, sort=sort,
         limit=limit, offset=offset, distinct=distinct, include_total=include_total,
         latest_key=latest_key, latest_order=latest_order,
+        **({"as_of": at, "current": cur} if (at is not None or cur) else {}),
     )
     if res is None:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")

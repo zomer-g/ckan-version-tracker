@@ -64,6 +64,12 @@ export default function AppendArchivePage() {
   // ON = the register as it stands now (newest sample of each item); OFF = the
   // full history. Only offered when the dataset declares an item key.
   const [latest, setLatest] = useState(false);
+  // Row validity: the whole history (default, as before), only the rows in
+  // force now, or the rows that were in force on a given date.
+  const [validity, setValidity] = useState<"all" | "current" | "asOf">("all");
+  const [asOfDate, setAsOfDate] = useState("");
+  const asOf = validity === "asOf" && asOfDate ? asOfDate : undefined;
+  const current = validity === "current";
 
   // SQL console
   const sqlEditorRef = useRef<SqlEditorHandle>(null);
@@ -111,20 +117,21 @@ export default function AppendArchivePage() {
     if (!datasetId) return;
     setLoading(true);
     appendArchive
-      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, table, latest, filters: debounced.filters })
+      .rows(datasetId, { limit, offset, sort, order, q: debounced.q, table, latest, asOf, current, filters: debounced.filters })
       .then((r) => {
         setData(r);
         setError(null);
       })
       .catch((e) => setError(e?.message || "rows error"))
       .finally(() => setLoading(false));
-  }, [datasetId, limit, offset, sort, order, debounced, table, latest]);
+  }, [datasetId, limit, offset, sort, order, debounced, table, latest, asOf, current]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const cols = schema?.columns || data?.columns || [];
+  // A validity view adds `last_seen` to its rows, so show what the rows carry.
+  const cols = (validity !== "all" ? data?.columns : undefined) || schema?.columns || data?.columns || [];
 
   // Autocomplete suggestions for the SQL editor: the table + each column.
   const sqlSuggestions = useMemo<SqlSuggestion[]>(() => {
@@ -161,9 +168,9 @@ export default function AppendArchivePage() {
   const downloadHref = useMemo(
     () =>
       datasetId
-        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, table, latest, filters: debounced.filters })
+        ? appendArchive.downloadUrl(datasetId, { sort, order, q: debounced.q, table, latest, asOf, current, filters: debounced.filters })
         : "#",
-    [datasetId, sort, order, debounced, table, latest],
+    [datasetId, sort, order, debounced, table, latest, asOf, current],
   );
   const downloadAllHref = useMemo(
     // "הכל" means all of the table on screen — for a multi-resource dataset the
@@ -171,8 +178,8 @@ export default function AppendArchivePage() {
     // It also follows the latest/history toggle: exporting the full sampling
     // history while the screen shows one row per item would be a different
     // dataset than the one being looked at.
-    () => (datasetId ? appendArchive.downloadUrl(datasetId, { table, latest }) : "#"),
-    [datasetId, table, latest],
+    () => (datasetId ? appendArchive.downloadUrl(datasetId, { table, latest, asOf, current }) : "#"),
+    [datasetId, table, latest, asOf, current],
   );
 
   if (error && !schema) {
@@ -216,6 +223,31 @@ export default function AppendArchivePage() {
               />
               רק הדגימה האחרונה
             </label>
+          )}
+          {/* Which rows: everything ever archived (the default, unchanged),
+              only the rows still in force, or the rows in force on a date. */}
+          {schema?.supports_as_of && (
+            <span className="text-sm" style={{ display: "flex", alignItems: "center", gap: "0.3rem", whiteSpace: "nowrap" }}>
+              <select
+                value={validity}
+                onChange={(e) => { setValidity(e.target.value as "all" | "current" | "asOf"); setOffset(0); }}
+                title="אילו שורות להציג: כל ההיסטוריה, רק מה שבתוקף עכשיו, או מה שהיה בתוקף בתאריך"
+                style={{ fontSize: "0.85rem" }}
+              >
+                <option value="all">כל ההיסטוריה</option>
+                <option value="current">מצב נוכחי</option>
+                <option value="asOf">בתאריך…</option>
+              </select>
+              {validity === "asOf" && (
+                <input
+                  type="date"
+                  value={asOfDate}
+                  onChange={(e) => { setAsOfDate(e.target.value); setOffset(0); }}
+                  title="השורות שהיו בתוקף בסוף היום הזה (UTC)"
+                  style={{ fontSize: "0.85rem" }}
+                />
+              )}
+            </span>
           )}
           <a
             href={downloadAllHref}
