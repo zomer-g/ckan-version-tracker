@@ -82,14 +82,26 @@ def _parse_health_url(url: str) -> tuple[str | None, str | None]:
 
 # Per-registry limits. The portal is a search-backed SPA where each
 # registry id holds anywhere from a few hundred (small specialties)
-# to tens of thousands (e.g. nurses, MDs) of practitioners. Start
-# generous — the worker logs a truncation marker if it hits the cap,
-# so we can tune after the first run rather than silently undercount.
+# to tens of thousands (e.g. nurses, MDs) of practitioners.
+#
+# This said 50,000 until 2026-09-25, and "we can tune after the first run
+# rather than silently undercount" is exactly what did not happen: רפואה
+# holds 57,530 practitioners, so version 6 of רופאים בעלי רשיון published
+# 87% of the licensed doctors in the country. It got past shrink_guard
+# because it had MORE rows than the version before it (100,007 against
+# 82,408 — the row count doubled when the registry moved hosts), and the
+# shortfall lived only in the worker's truncation warning.
+#
+# So: a cap well clear of any registry the portal holds. The worker now
+# refuses to publish a register that the cap cut short of its declared size
+# (govscraper health engine, allow_partial), which makes a cap that is too
+# low loud instead of quiet — a cap's job here is to stop a runaway walk,
+# not to decide how much of a public register gets published.
 #
 # max_depth is mostly nominal for this scraper — the engine doesn't
 # do BFS, it iterates the list endpoint and then fetches per-item
 # details. Kept in the config for forward-compat / parity with IDF.
-HEALTH_DEFAULT_LIMITS: tuple[int, int] = (3, 50000)
+HEALTH_DEFAULT_LIMITS: tuple[int, int] = (3, 200000)
 HEALTH_REGISTRY_LIMITS: dict[str, tuple[int, int]] = {
     # Override per registry once measured. Empty by default — the
     # generous default applies until we have real numbers.
