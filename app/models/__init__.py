@@ -18,6 +18,7 @@ from app.models.worker_node import WorkerNode
 from app.models.decision_analysis import DecisionAnalysis
 from app.models.sql_share import SqlShare
 from app.models.api_access_log import ApiAccessLog
+from app.models.history_part import HistoryPart
 
 __all__ = [
     "User",
@@ -41,4 +42,5 @@ __all__ = [
     "DecisionAnalysis",
     "SqlShare",
     "ApiAccessLog",
+    "HistoryPart",
 ]

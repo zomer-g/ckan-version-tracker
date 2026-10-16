@@ -237,6 +237,165 @@ function IndexMigrationCard() {
   );
 }
 
+interface HistoryDataset {
+  dataset_id: string;
+  title: string | null;
+  history_window_days: number | null;
+  parts: number;
+  rows_in_r2: number;
+  rows_deleted: number;
+  bytes: number;
+  tables: string[];
+}
+
+interface HistoryExport {
+  enabled: boolean;
+  available: boolean;
+  min_rows: number;
+  part_rows: number;
+  hour_utc: number;
+  job: {
+    running: boolean;
+    current: string | null;
+    planned: number;
+    done: number;
+    exported_parts: number;
+    exported_rows: number;
+    deleted_rows: number;
+    failed: { table: string | null; error: string }[];
+    finished_at: string | null;
+  };
+  audit: { ran_at: string | null; checked: number; missing_count: number };
+  totals: { parts: number; rows_in_r2: number; rows_only_in_r2: number; bytes: number };
+  datasets: HistoryDataset[];
+}
+
+/** Closed rows exported to Parquet on R2 by closing month, verified against SQL
+ *  (app/services/history_export.py). Rows are deleted from SQL only for a
+ *  dataset with a history window; without one, the files are a second copy. */
+function HistoryExportCard() {
+  const [st, setSt] = useState<HistoryExport | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const load = useCallback(async () => {
+    try { setSt(await call<HistoryExport>("/history")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!st?.job.running) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [st?.job.running, load]);
+
+  const act = async (what: "run" | "stop" | "audit") => {
+    if (what === "run" && !window.confirm(
+      "לייצא עכשיו שורות סגורות של חודשים שהסתיימו ל-Parquet ב-R2? " +
+      "שורות יימחקו מ-SQL רק במאגרים שהוגדר להם חלון שמירה, ורק אחרי אימות הקובץ.")) return;
+    try {
+      await call(what === "audit" ? "/history/audit" : `/history/${what}`, what === "audit" ? "GET" : "POST");
+      await load();
+    } catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  const n = (v: number) => v.toLocaleString("he-IL");
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.6rem 0.8rem", marginBottom: "0.9rem", background: "var(--bg-secondary)" }}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>היסטוריה ב-R2</strong>
+        <span className="text-sm text-muted">
+          שורות סגורות של חודשים שהסתיימו נכתבות ל-Parquet ב-R2 ומאומתות מול SQL.
+          מחיקה מ-SQL רק במאגר עם חלון שמירה.
+        </span>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)" }}>{err}</div>}
+      {st && (
+        <>
+          <div className="flex text-sm" style={{ gap: "0.8rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+            <span>
+              {st.enabled ? `ריצה יומית ב-${String(st.hour_utc).padStart(2, "0")}:30 UTC` : "הריצה היומית כבויה (HISTORY_EXPORT_ENABLED)"}
+            </span>
+            <span>
+              {n(st.totals.parts)} קבצים · {n(st.totals.rows_in_r2)} שורות (<Bytes n={st.totals.bytes} />)
+            </span>
+            <span style={{ color: st.totals.rows_only_in_r2 > 0 ? "var(--tint-info-fg)" : undefined }}>
+              {n(st.totals.rows_only_in_r2)} שורות רק ב-R2
+            </span>
+            {st.audit.ran_at && (
+              <span style={{ color: st.audit.missing_count > 0 ? "var(--danger)" : undefined }}>
+                בדיקה אחרונה: {n(st.audit.checked)} קבצים, {n(st.audit.missing_count)} חסרים
+              </span>
+            )}
+            {(st.job.running || st.job.done > 0) && (
+              <span>
+                {n(st.job.done)}/{n(st.job.planned)} עבודות · יוצאו {n(st.job.exported_rows)} · נמחקו {n(st.job.deleted_rows)}
+                {st.job.running && st.job.current ? <> · עכשיו: <bdi dir="ltr">{st.job.current}</bdi></> : null}
+              </span>
+            )}
+            {st.job.failed.length > 0 && (
+              <span style={{ color: "var(--danger)" }} title={st.job.failed.map((f) => `${f.table ?? ""}: ${f.error}`).join("\n")}>
+                {st.job.failed.length} נכשלו
+              </span>
+            )}
+            <span style={{ flex: 1 }} />
+            {st.datasets.length > 0 && (
+              <button type="button" className="text-sm" onClick={() => setOpen((o) => !o)}
+                      style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+                {open ? "הסתר מאגרים" : `לפי מאגר (${st.datasets.length})`}
+              </button>
+            )}
+            <button type="button" className="text-sm" onClick={() => void act("audit")}
+                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+              בדוק קבצים
+            </button>
+            {st.job.running ? (
+              <button type="button" className="text-sm" onClick={() => void act("stop")}
+                      style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+                עצור
+              </button>
+            ) : st.available ? (
+              <button type="button" className="text-sm" onClick={() => void act("run")}
+                      style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: 4, padding: "0.25rem 0.8rem", cursor: "pointer", fontWeight: 600 }}>
+                ייצא עכשיו
+              </button>
+            ) : (
+              <span className="text-muted">לא זמין (pyarrow או R2 חסרים)</span>
+            )}
+          </div>
+          {open && st.datasets.length > 0 && (
+            <table className="text-sm" style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.5rem" }}>
+              <thead>
+                <tr style={{ textAlign: "start", borderBottom: "1px solid var(--border)" }}>
+                  <th style={cell}>מאגר</th>
+                  <th style={num}>חלון</th>
+                  <th style={num}>קבצים</th>
+                  <th style={num}>שורות ב-R2</th>
+                  <th style={num}>רק ב-R2</th>
+                  <th style={num}>נפח</th>
+                </tr>
+              </thead>
+              <tbody>
+                {st.datasets.map((d) => (
+                  <tr key={d.dataset_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={cell}>
+                      <Link to={`/versions/${d.dataset_id}`}>{d.title || d.dataset_id.slice(0, 8)}</Link>
+                    </td>
+                    <td style={num}>{d.history_window_days ? `${d.history_window_days} ימים` : "ייצוא בלבד"}</td>
+                    <td style={num}>{n(d.parts)}</td>
+                    <td style={num}>{n(d.rows_in_r2)}</td>
+                    <td style={num}>{n(d.rows_deleted)}</td>
+                    <td style={num}><Bytes n={d.bytes} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function pct(part: number, whole: number): string {
   if (!whole) return "0%";
   const p = (part / whole) * 100;
@@ -375,6 +534,7 @@ export default function StorageUsagePanel() {
 
       <HashCompactionCard />
       <IndexMigrationCard />
+      <HistoryExportCard />
 
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.6rem", marginBottom: "0.9rem" }}>

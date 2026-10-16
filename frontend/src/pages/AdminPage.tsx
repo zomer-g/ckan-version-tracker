@@ -945,6 +945,25 @@ export default function AdminPage() {
     }
   };
 
+  // History window (docs/history-phase2-plan.md): closed rows older than this
+  // are deleted from SQL once their Parquet file on R2 is verified. null keeps
+  // everything in SQL (export only). The server refuses under 30 days.
+  const handleUpdateHistoryWindow = async (id: string, value: string) => {
+    const history_window_days = value === "" ? null : Number(value);
+    if (history_window_days !== null && !window.confirm(
+      `שורות שנסגרו לפני יותר מ-${history_window_days} ימים יימחקו מטבלת ה-SQL ` +
+      "אחרי שהקובץ שלהן ב-R2 אומת, ויישארו רק בקבצי ה-Parquet. להמשיך?")) return;
+    try {
+      const updated = await datasetsApi.update(id, { history_window_days });
+      setAllDatasets((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, history_window_days: updated.history_window_days } : d)),
+      );
+    } catch (e) {
+      console.error(e);
+      alert((e as Error)?.message || "שגיאה בעדכון חלון ההיסטוריה");
+    }
+  };
+
   const runCoverageScan = async () => {
     setCoverageBusy(true);
     setCoverageMsg(null);
@@ -2444,6 +2463,25 @@ export default function AdminPage() {
                           <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
                         ))}
                       </select>
+                      {ds.storage_target?.includes("neon") && (
+                        <>
+                          <div style={{ ...admSubLabel, marginTop: "0.2rem" }}>היסטוריה ב-SQL</div>
+                          <select
+                            value={ds.history_window_days != null ? String(ds.history_window_days) : ""}
+                            onChange={(e) => handleUpdateHistoryWindow(ds.id, e.target.value)}
+                            title="שורות סגורות של חודשים שהסתיימו מיוצאות ל-Parquet ב-R2. בלי חלון הן נשארות גם ב-SQL; עם חלון, שורות שנסגרו לפני יותר מהחלון נמחקות מ-SQL אחרי אימות הקובץ."
+                            style={{ width: "auto", padding: "0.2rem 0.4rem", fontSize: "0.8rem", border: "1px solid var(--border)", borderRadius: "4px", color: ds.history_window_days != null ? "var(--tint-info-fg)" : undefined }}
+                          >
+                            <option value="">הכול נשאר ב-SQL (ייצוא בלבד)</option>
+                            {[30, 60, 90, 180, 365].map((d) => (
+                              <option key={d} value={String(d)}>{d} ימים, הישן רק ב-R2</option>
+                            ))}
+                            {ds.history_window_days != null && ![30, 60, 90, 180, 365].includes(ds.history_window_days) && (
+                              <option value={String(ds.history_window_days)}>{ds.history_window_days} ימים</option>
+                            )}
+                          </select>
+                        </>
+                      )}
                     </div>
                     </div>
                     <div style={{ flex: "1 1 11rem", minWidth: "9rem" }} className="text-sm">

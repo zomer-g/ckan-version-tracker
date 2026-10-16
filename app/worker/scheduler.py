@@ -117,6 +117,29 @@ async def init_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
+    # Closed history to Parquet on R2 (docs/history-phase2-plan.md), daily, and
+    # a weekly HEAD of every catalog key. Crons, for the same reason as above.
+    # Off until HISTORY_EXPORT_ENABLED; the admin storage tab runs it by hand.
+    if settings.history_export_enabled:
+        from app.services import history_export
+        scheduler.add_job(
+            history_export.run,
+            trigger=CronTrigger(hour=settings.history_export_hour_utc, minute=30,
+                                timezone="UTC"),
+            id="history_export",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+        scheduler.add_job(
+            history_export.audit_history_parts,
+            trigger=CronTrigger(day_of_week="sun", hour=5, minute=0, timezone="UTC"),
+            id="history_audit",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
     # Periodic cleanup of stuck scrape tasks (every 5 min)
     scheduler.add_job(
         cleanup_stuck_scrape_tasks,
