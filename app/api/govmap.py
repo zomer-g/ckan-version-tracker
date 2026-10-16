@@ -11,6 +11,14 @@ layers that GovMap draws as one (``govmap:group_397``). A group is not a
 dataset — it has no features of its own — so validation expands it to its
 member layers from the catalog's ``userGroups`` and the request is made for
 those.
+
+A link can also point at a GovMap "sites" sub-site (``/sites/energy/index.html
+?map=solar_panels``): a themed map GovMap hosts for a ministry, whose layers
+are NOT in the public catalog and are served only with the sub-site's embed
+key. Like a group, the page expands to its layers (``GOVMAP_SITES``). Each
+layer is stored as the sub-site page plus ``&lay=<id>``, which is what tells
+the worker to fetch that site's key (GOVSCRAPER govmap/embed_auth.py). See
+docs/govmap-solar-source.md.
 """
 
 import logging
@@ -31,6 +39,28 @@ GOVMAP_HOST_RE = re.compile(r"^https?://(www\.)?govmap\.gov\.il/?\?", re.IGNOREC
 LAY_RE = re.compile(r"[?&]lay(?:er|ers)?=(\d+)", re.IGNORECASE)
 GROUP_RE = re.compile(r"[?&]g=(\d+)", re.IGNORECASE)
 CENTER_RE = re.compile(r"[?&]c=([-\d.]+),([-\d.]+)", re.IGNORECASE)
+SITE_RE = re.compile(
+    r"^https?://(?:www\.)?govmap\.gov\.il/sites/([A-Za-z0-9_-]+)/[^?#]*\?", re.IGNORECASE)
+MAP_RE = re.compile(r"[?&]map=([A-Za-z0-9_-]+)", re.IGNORECASE)
+
+MONTHLY = 30 * 24 * 3600
+
+# GovMap sub-sites, keyed by (site, map). Hand-listed rather than read from the
+# sub-site's bundle: validation must stay fast and work when GovMap is down,
+# and a new sub-site is rare enough to be a reviewed one-line change. Layer
+# captions are the ones the sub-site's keyed catalog gives (2026-10-16).
+GOVMAP_SITES: dict[tuple[str, str], dict] = {
+    ("energy", "solar_panels"): {
+        "title": "פוטנציאל ייצור אנרגיה סולארית בשטחים בנויים",
+        "url": "https://www.govmap.gov.il/sites/energy/index.html?map=solar_panels",
+        # A full snapshot of both layers every month (user request, 2026-10-16).
+        "poll_interval": MONTHLY,
+        "layers": [
+            ("225678", "מבנים בשטחים בנויים"),
+            ("225680", "פוטנציאל הצללה סולארית"),
+        ],
+    },
+}
 
 # The catalog is ~730 KB and a group's membership changes rarely, so one fetch
 # serves every group lookup for a while. Failures are never cached.
@@ -41,15 +71,18 @@ _catalog_cache: tuple[float, dict] | None = None
 class ParsedGovmap(BaseModel):
     layer_id: str
     center_itm: dict | None = None  # {"x": float, "y": float}
+    site: str | None = None         # "energy" for a sub-site layer link
 
 
 def parse_govmap_url(url: str) -> ParsedGovmap | None:
     """Parse a GovMap layer URL.
 
     Returns None if it isn't a recognised GovMap URL with a numeric ``lay`` id.
+    A sub-site link with ``lay=`` is a layer link too (``site`` is set).
     """
     s = (url or "").strip()
-    if not GOVMAP_HOST_RE.match(s):
+    site_m = SITE_RE.match(s)
+    if not GOVMAP_HOST_RE.match(s) and not site_m:
         return None
     lay_match = LAY_RE.search(s)
     if not lay_match:
@@ -63,7 +96,51 @@ def parse_govmap_url(url: str) -> ParsedGovmap | None:
         except ValueError:
             center = None
 
-    return ParsedGovmap(layer_id=lay_match.group(1), center_itm=center)
+    return ParsedGovmap(layer_id=lay_match.group(1), center_itm=center,
+                        site=site_m.group(1).lower() if site_m else None)
+
+
+def _site_key(url: str) -> tuple[str, str] | None:
+    s = (url or "").strip()
+    m = SITE_RE.match(s)
+    if not m:
+        return None
+    mm = MAP_RE.search(s)
+    return (m.group(1).lower(), mm.group(1).lower() if mm else "")
+
+
+def parse_govmap_site(url: str) -> tuple[str, str] | None:
+    """``(site, map)`` of a GovMap sub-site link that names no single layer."""
+    s = (url or "").strip()
+    if LAY_RE.search(s):
+        return None
+    return _site_key(s)
+
+
+def site_layers(site_key: tuple[str, str]) -> tuple[str, list[dict]] | None:
+    """``(title, layers)`` of a known sub-site map, each layer with the URL its
+    dataset is stored under (the page plus ``&lay=<id>``)."""
+    site = GOVMAP_SITES.get(site_key)
+    if site is None:
+        return None
+    return site["title"], [
+        {"layer_id": lid, "caption": caption, "url": f"{site['url']}&lay={lid}"}
+        for lid, caption in site["layers"]
+    ]
+
+
+def site_layer_defaults(url: str) -> tuple[str | None, int | None]:
+    """``(title, poll_interval)`` for a known sub-site LAYER link, else
+    ``(None, None)``. The interval is the site's cadence (monthly for the solar
+    site), applied whatever interval the request form asked for."""
+    key = _site_key(url)
+    site = GOVMAP_SITES.get(key) if key else None
+    parsed = parse_govmap_url(url) if site else None
+    if not parsed:
+        return None, None
+    caption = dict(site["layers"]).get(parsed.layer_id)
+    title = f"{caption} ({site['title']})" if caption else site["title"]
+    return title, site.get("poll_interval")
 
 
 def parse_govmap_group_id(url: str) -> str | None:
@@ -157,6 +234,9 @@ class ValidateResponse(BaseModel):
     # Set for a layer-group link: the group, and the layers to request instead.
     group_id: str | None = None
     layers: list[GroupLayer] = []
+    # Set for a GovMap sub-site link ("energy/solar_panels"); `layers` as above.
+    site_id: str | None = None
+    poll_interval: int | None = None
 
 
 @router.post("/validate", response_model=ValidateResponse)
@@ -165,6 +245,9 @@ async def validate_govmap_url(request: Request, body: ValidateRequest):
     """Validate a govmap.gov.il layer URL and return a normalised parse."""
     parsed = parse_govmap_url(body.url)
     if not parsed:
+        site_key = parse_govmap_site(body.url)
+        if site_key:
+            return _validate_site(body.url.strip(), site_key)
         group_id = parse_govmap_group_id(body.url)
         if group_id:
             return await _validate_group(body.url.strip(), group_id)
@@ -173,12 +256,35 @@ async def validate_govmap_url(request: Request, body: ValidateRequest):
             error="URL must be of the form "
                   "https://www.govmap.gov.il/?...&lay=<numeric layer id>",
         )
+    site_title, site_interval = site_layer_defaults(body.url)
     return ValidateResponse(
         valid=True,
         layer_id=parsed.layer_id,
         center_itm=parsed.center_itm,
         url=body.url.strip(),
-        title=build_govmap_title(parsed.layer_id),
+        title=site_title or build_govmap_title(parsed.layer_id),
+        poll_interval=site_interval,
+    )
+
+
+def _validate_site(url: str, site_key: tuple[str, str]) -> ValidateResponse:
+    site_id = "/".join(p for p in site_key if p)
+    found = site_layers(site_key)
+    if found is None:
+        known = ", ".join(s["url"] for s in GOVMAP_SITES.values())
+        return ValidateResponse(
+            valid=False, site_id=site_id,
+            error=f"אתר המשנה {site_id} של GovMap אינו מוכר למערכת. "
+                  f"אתרי משנה נתמכים: {known}",
+        )
+    title, layers = found
+    return ValidateResponse(
+        valid=True,
+        url=url,
+        title=title,
+        site_id=site_id,
+        layers=[GroupLayer(**layer) for layer in layers],
+        poll_interval=GOVMAP_SITES[site_key].get("poll_interval"),
     )
 
 
