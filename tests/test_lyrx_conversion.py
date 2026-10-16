@@ -458,3 +458,89 @@ def test_a_bundle_with_nothing_convertible_fails_loudly():
         lyrx.convert_bundle(empty.getvalue())
     with pytest.raises(lyrx.LyrxError):
         lyrx.convert_bundle(b"not a zip at all")
+
+
+# ── the renderer's field against the delivered data ───────────────────
+#
+# Layer 11 (רצף מגרשי תב"ע - רמ"י): every rule classifies on kvuz_yeud, which
+# GovMap documents and withholds, so the archived data never held it. ArcGIS Pro
+# opened the .lyrx with Field 1 empty and "Primary symbology relies on one or
+# more fields that are invalid", and nothing in the bundle said why. The bundle's
+# own field dictionary records what the version's data holds (is_served), so the
+# converter can say so up front.
+
+KVUZ_RULES = "".join(
+    f"""<Rule><Name>{t}</Name><Title>{t}</Title>
+  <ogc:Filter><ogc:PropertyIsEqualTo><ogc:PropertyName>
+        kvuz_yeud
+  </ogc:PropertyName><ogc:Literal>{v}</ogc:Literal></ogc:PropertyIsEqualTo></ogc:Filter>
+  <PolygonSymbolizer><Fill><CssParameter name="fill">#{c}</CssParameter></Fill>
+  </PolygonSymbolizer></Rule>"""
+    for v, t, c in (("0", "חסר יעוד", "ffffff"), ("3", "מסחר ומשרדים", "ff0000"),
+                    ("8", "שטח לדרכים", "999999")))
+
+_DICT_HEAD = "layer_id,machine_name,hebrew_alias,type,is_served\r\n"
+
+
+def _kvuz_bundle(dictionary: str | None) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("רצף_מגרשי_11.sld", _sld(KVUZ_RULES))
+        if dictionary is not None:
+            z.writestr("רצף_מגרשי_fields.csv", dictionary)
+    return buf.getvalue()
+
+
+def _open(bundle: bytes):
+    out = zipfile.ZipFile(io.BytesIO(lyrx.convert_bundle(bundle)))
+    doc = json.loads(out.read("רצף_מגרשי_11.lyrx"))
+    return doc, out.read("README_ArcGIS.txt").decode("utf-8")
+
+
+def test_the_renderer_field_name_is_trimmed():
+    doc, _ = _convert(KVUZ_RULES)
+    assert _layer(doc)["renderer"]["fields"] == ["kvuz_yeud"]
+
+
+def test_a_withheld_renderer_field_is_named_in_the_readme_and_the_layer():
+    doc, readme = _open(_kvuz_bundle(
+        _DICT_HEAD
+        + "11,kvuz_trg,יעוד,text,1\r\n11,targumyeud,תרגום יעוד,text,1\r\n"
+        + "11,kvuz_yeud,,number,0\r\n"))
+    # The renderer keeps the style's own field: a guessed substitute would
+    # colour rows by the wrong class (layer 11's label column disagrees with
+    # the code on ~5% of rows), and newer versions DO carry the field.
+    assert _layer(doc)["renderer"]["fields"] == ["kvuz_yeud"]
+    assert "kvuz_yeud" in readme and "אינה מוסרת" in readme
+    assert "kvuz_yeud" in _layer(doc)["description"]
+
+
+def test_a_delivered_renderer_field_raises_no_alarm():
+    doc, readme = _open(_kvuz_bundle(
+        _DICT_HEAD + "11,kvuz_trg,יעוד,text,1\r\n11,kvuz_yeud,,number,1\r\n"))
+    assert "kvuz_yeud" not in readme.split("הערות המרה")[-1] \
+        or "הערות המרה" not in readme
+    assert "kvuz_yeud" not in _layer(doc)["description"]
+
+
+def test_the_case_of_a_delivered_field_does_not_matter():
+    _, readme = _open(_kvuz_bundle(_DICT_HEAD + "11,KVUZ_YEUD,,number,1\r\n"))
+    assert "הערות המרה" not in readme
+
+
+def test_a_renderer_field_absent_from_the_dictionary_altogether():
+    _, readme = _open(_kvuz_bundle(_DICT_HEAD + "11,kvuz_trg,יעוד,text,1\r\n"))
+    assert "kvuz_yeud" in readme and "אינו קיים בנתונים" in readme
+
+
+def test_without_a_dictionary_nothing_is_claimed_about_the_data():
+    _, readme = _open(_kvuz_bundle(None))
+    assert "הערות המרה" not in readme
+
+
+def test_convert_sld_checks_the_columns_it_is_given():
+    _, warnings = _convert(KVUZ_RULES, columns=["kvuz_trg"],
+                           withheld=["kvuz_yeud"])
+    assert any("kvuz_yeud" in w for w in warnings)
+    _, warnings = _convert(KVUZ_RULES, columns=["kvuz_yeud"])
+    assert not warnings

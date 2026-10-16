@@ -42,6 +42,7 @@ it is unit-testable end to end (``tests/test_lyrx_conversion.py``).
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import json
 import logging
@@ -1205,11 +1206,52 @@ def _build_renderer(rules: list[_Rule], warnings: list[str]) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+def _missing_field_warnings(renderer: dict | None, columns, withheld) -> list[str]:
+    """Name each field the renderer classifies on that the data does not hold.
+
+    Layer 11 is the case that found this: its rules classify on ``kvuz_yeud``,
+    which GovMap documents and never serves, so ArcGIS Pro opened the ``.lyrx``
+    with Field 1 empty and "Primary symbology relies on one or more fields that
+    are invalid". The renderer keeps the style's own field on purpose: a label
+    column standing in for it would colour rows by the wrong class (layer 11's
+    label disagrees with the code on ~5% of rows), and the scraper restores the
+    field itself on versions archived after the fix.
+    """
+    if not renderer or columns is None:
+        return []
+    have = {str(c).casefold() for c in columns}
+    held = {str(w).casefold() for w in (withheld or [])}
+    fields = list(renderer.get("fields") or [])
+    if renderer.get("field"):
+        fields.append(renderer["field"])
+    out = []
+    for f in fields:
+        if f.casefold() in have:
+            continue
+        if f.casefold() in held:
+            out.append(
+                f"השדה \"{f}\" שלפיו מסווגת הסימבולוגיה אינו נמצא בנתוני הגרסה: "
+                "GovMap מתעדת אותו אך אינה מוסרת אותו. ArcGIS יציג "
+                "\"Primary symbology relies on one or more fields that are invalid\". "
+                "גרסאות חדשות של השכבה כוללות את השדה (גרסאות לעם משלימות אותו "
+                "מ-GovMap בנפרד); לגרסה זו אין שדה חלופי מדויק, ולכן הסיווג "
+                "נשאר על השדה המקורי")
+        else:
+            out.append(
+                f"השדה \"{f}\" שלפיו מסווגת הסימבולוגיה אינו קיים בנתונים "
+                "ואינו מתועד במילון השדות של השכבה")
+    return out
+
+
 def convert_sld(xml: str | bytes, *, name: str,
-                icons: dict[str, bytes] | None = None) -> tuple[dict, list[str]]:
+                icons: dict[str, bytes] | None = None,
+                columns=None, withheld=None) -> tuple[dict, list[str]]:
     """One SLD → one ``CIMLayerDocument`` dict + the warnings worth telling.
 
     ``icons`` maps a bundle entry name (``"icons/pin.png"``) to its bytes.
+    ``columns`` — the attribute columns the version's data actually holds, when
+    known — makes the converter check the renderer's field against them;
+    ``withheld`` names the fields GovMap documents and does not serve.
     """
     warnings: list[str] = []
     if isinstance(xml, bytes):
@@ -1226,6 +1268,8 @@ def convert_sld(xml: str | bytes, *, name: str,
         raise LyrxError("the SLD carries no <Rule>")
 
     renderer = _build_renderer(rules, warnings)
+    field_warnings = _missing_field_warnings(renderer, columns, withheld)
+    warnings.extend(field_warnings)
     geom = next((r.geometry for r in rules if r.geometry), "esriGeometryPolygon")
 
     label_classes: list[dict] = []
@@ -1282,6 +1326,10 @@ def convert_sld(xml: str | bytes, *, name: str,
     }
     if renderer:
         layer["renderer"] = renderer
+    if field_warnings:
+        # Pro shows the layer's description in its properties; a reader who
+        # never opens the README still learns why Field 1 is empty.
+        layer["description"] += ". " + "; ".join(field_warnings)
     if label_classes:
         layer["labelClasses"] = label_classes
         layer["labelVisibility"] = True
@@ -1367,6 +1415,32 @@ def _readme(entries: list[str], warnings: list[str], source: str) -> bytes:
     return body.encode("utf-8")
 
 
+def _dictionary_columns(src: zipfile.ZipFile, names: list[str]):
+    """``(delivered columns, withheld fields)`` from the bundle's field
+    dictionary (``<layer>_fields.csv``), or ``(None, None)`` when the bundle has
+    none — then nothing is claimed about the data.
+
+    The scraper writes the dictionary reconciled against the version's own
+    columns, so ``is_served`` = 1 means "in this version's file". A dictionary
+    without that column (older bundles) lists only delivered columns."""
+    dicts = [n for n in names if n.lower().endswith("_fields.csv")]
+    if not dicts:
+        return None, None
+    columns: list[str] = []
+    withheld: list[str] = []
+    for n in dicts:
+        text = src.read(n).decode("utf-8-sig", "replace")
+        for row in csv.DictReader(io.StringIO(text)):
+            name = (row.get("machine_name") or "").strip()
+            if not name:
+                continue
+            if (row.get("is_served") or "").strip() == "0":
+                withheld.append(name)
+            else:
+                columns.append(name)
+    return columns, withheld
+
+
 def convert_bundle(zip_bytes: bytes, *, source_url: str = "over.org.il") -> bytes:
     """A GovMap symbology bundle (SLD + icons + field dictionary) → an ArcGIS
     bundle (``.lyrx`` per style + the same documentation CSVs + a README).
@@ -1386,6 +1460,8 @@ def convert_bundle(zip_bytes: bytes, *, source_url: str = "over.org.il") -> byte
     if not slds:
         raise LyrxError("the bundle holds no .sld file")
 
+    columns, withheld = _dictionary_columns(src, names)
+
     warnings: list[str] = []
     out_buf = io.BytesIO()
     entries: list[str] = []
@@ -1393,7 +1469,8 @@ def convert_bundle(zip_bytes: bytes, *, source_url: str = "over.org.il") -> byte
         for sld_name in slds:
             stem = sld_name.rsplit("/", 1)[-1][:-4]
             try:
-                doc, warns = convert_sld(src.read(sld_name), name=stem, icons=icons)
+                doc, warns = convert_sld(src.read(sld_name), name=stem, icons=icons,
+                                         columns=columns, withheld=withheld)
             except LyrxError as e:
                 warnings.append(f"{stem}: ההמרה נכשלה ({e})")
                 logger.warning("lyrx conversion failed for %s: %s", sld_name, e)
