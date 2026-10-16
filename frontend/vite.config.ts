@@ -14,7 +14,11 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
-        "/api": { target, changeOrigin: true },
+        // followRedirects: version downloads 302 to R2, which sends no
+        // CORS header for localhost. In production the redirect is
+        // followed same-origin by the browser; in dev the proxy
+        // follows it server-side so GovMap layers render locally.
+        "/api": { target, changeOrigin: true, followRedirects: true },
       },
     },
   };

@@ -516,7 +516,10 @@
     "apply_filter_and_load_all": "טען את כל {{total}} הפוליגונים",
     "filter_loading_progress": "טוען פוליגונים תואמים...",
     "back_to_filter_choice": "שנה את הבחירה",
-    "estimating_filter_match": "מציג {{visible}} פוליגונים מתוך {{total}} שעוברים את הסינון הנוכחי"
+    "estimating_filter_match": "מציג {{visible}} פוליגונים מתוך {{total}} שעוברים את הסינון הנוכחי",
+    "active_filters": "סינון פעיל:",
+    "remove_filter": "הסר את הסינון {{field}}: {{value}}",
+    "value_empty_hint": "אין תוצאות עם הסינון הנוכחי"
   },
   "growth": {
     "title": "גידולים חקלאיים",

@@ -91,6 +91,8 @@ import {
   applyFilters,
   COLLAPSED_VISIBLE_VALUES,
   discoverCategoricalFields,
+  facetCounts,
+  truncateLabel,
   type MinimalFeature,
 } from "../utils/geoFilters";
 
@@ -119,6 +121,17 @@ interface FeatureCollection {
 // Empty Set = no constraint (vs. literally exclude everything — see
 // applyFilters semantics).
 type FilterState = Record<string, Set<string>>;
+
+/** Stable string for a filter state: drives the GeoJSON `key` and
+ *  the "was pass 2 run with this selection" comparison. */
+function serializeFilters(filters: FilterState): string {
+  const sorted = Object.entries(filters)
+    .filter(([, s]) => s.size > 0)
+    .map(([k, s]) => `${k}=${[...s].sort().join("|")}`)
+    .sort()
+    .join(";");
+  return sorted || "none";
+}
 
 const MAP_HEIGHT = 500;
 
@@ -406,6 +419,11 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // Pass 2 (filtered render) is async and we want a distinct
   // "loading polygons" spinner during that step.
   const [pass2Loading, setPass2Loading] = useState(false);
+  // The serialized filter state pass 2 was last run with. When the
+  // user changes the selection after loading, the "load filtered"
+  // button comes back so the map can be re-derived from the cached
+  // blob (the loaded subset cannot grow on its own).
+  const [loadedFilterKey, setLoadedFilterKey] = useState<string | null>(null);
 
   // Cached gzipped Blob from pass 1, replayed during pass 2 so we
   // never re-download. Held in a ref because nothing in the render
@@ -588,6 +606,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const simplified = simplifyFeatureCollection({ type: "FeatureCollection", features: features as any });
       setFc(simplified as unknown as FeatureCollection);
+      setLoadedFilterKey(serializeFilters(filters));
     } catch (e) {
       setLoadError(String((e as Error)?.message ?? e));
     } finally {
@@ -603,32 +622,55 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
     cachedBlobRef.current = null;
     setFc(null);
     setFilterIndex(null);
+    setLoadedFilterKey(null);
     setDownloadProgress(null);
     setParsing(false);
     setLoadError(null);
     setMobileChoice(null);
   };
 
-  // The full set of feature properties → distinct value counts.
-  // Drives the sidebar's checklist.
-  //
-  // Source of truth depends on the mode:
-  //   - "filter-first" before pass 2: we only have properties (no
-  //     geometry), so we shim them into MinimalFeature shells.
-  //   - "all" or "filter-first" after pass 2: read from fc.features
-  //     so the counts reflect the rendered set.
-  const fieldCounts = useMemo(() => {
-    if (mobileChoice === "filter-first" && !fc && filterIndex) {
-      const shells = filterIndex.map((p) => ({
-        type: "Feature" as const,
-        properties: p,
-      }));
-      return discoverCategoricalFields(shells, { blocklist: FILTER_BLOCKLIST });
+  // The WHOLE layer's features (properties only) — the source of the
+  // sidebar's checklist in every mode:
+  //   - "filter-first": the property index from pass 1, shimmed into
+  //     MinimalFeature shells. It stays the source after pass 2 too:
+  //     fc then holds only the loaded subset, and deriving the panel
+  //     from it used to drop every field ("no fields to filter") and
+  //     lock the user into their first pick.
+  //   - "all": fc.features.
+  const panelFeatures = useMemo<MinimalFeature[]>(() => {
+    if (filterIndex) {
+      return filterIndex.map((p) => ({ type: "Feature" as const, properties: p }));
     }
-    return fc
-      ? discoverCategoricalFields(fc.features, { blocklist: FILTER_BLOCKLIST })
-      : {};
-  }, [fc, filterIndex, mobileChoice]);
+    return fc ? fc.features : [];
+  }, [fc, filterIndex]);
+
+  // Per field → distinct value → count over the whole layer. Decides
+  // WHICH fields and values the sidebar offers.
+  const fieldCounts = useMemo(
+    () => discoverCategoricalFields(panelFeatures, { blocklist: FILTER_BLOCKLIST }),
+    [panelFeatures],
+  );
+
+  // The counts actually displayed: each field counted against the
+  // OTHER fields' current selection, so a value that would leave the
+  // map empty shows "(0)" in grey instead of a stale layer-wide count
+  // (the "clicking different points hides and reveals the same
+  // segment" report on the river-segments layer).
+  const facetedCounts = useMemo(
+    () => facetCounts(panelFeatures, fieldCounts, filters),
+    [panelFeatures, fieldCounts, filters],
+  );
+
+  // Flat list of the active (field, value) pairs for the chips strip
+  // at the top of the sidebar, so a ticked value scrolled out of view
+  // is still visible and removable.
+  const activeFilterChips = useMemo(
+    () =>
+      Object.entries(filters).flatMap(([field, set]) =>
+        [...set].map((value) => ({ field, value })),
+      ),
+    [filters],
+  );
 
   const filteredFeatures = useMemo(() => {
     if (!fc) return [];
@@ -639,27 +681,29 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
   // want to show them how many polygons their current selection
   // would match — so they don't tap "load filtered" expecting 20 K
   // and get 200 K. Computed from the lightweight property index.
+  // Also used AFTER pass 2 (the index outlives it): the loaded subset
+  // can only shrink under new toggles, so the number the user should
+  // see is what the whole layer would give.
   const filterFirstMatchCount = useMemo(() => {
-    if (mobileChoice !== "filter-first" || !filterIndex || fc) return 0;
-    const shells = filterIndex.map((p) => ({
-      type: "Feature" as const,
-      properties: p,
-    }));
-    return applyFilters(shells, filters).length;
-  }, [filterIndex, filters, fc, mobileChoice]);
+    if (mobileChoice !== "filter-first" || !filterIndex) return 0;
+    return applyFilters(panelFeatures, filters).length;
+  }, [panelFeatures, filters, filterIndex, mobileChoice]);
 
   // The serialized filter state drives the GeoJSON component's `key`:
   // changing the key forces Leaflet to drop the old layer and add a
   // new one with the filtered data. react-leaflet's GeoJSON doesn't
   // reactively re-filter on prop changes, so this is the standard
   // escape hatch.
-  const filterKey = useMemo(() => {
-    const sorted = Object.entries(filters)
-      .map(([k, s]) => `${k}=${[...s].sort().join("|")}`)
-      .sort()
-      .join(";");
-    return sorted || "none";
-  }, [filters]);
+  const filterKey = useMemo(() => serializeFilters(filters), [filters]);
+  // Filter-first after pass 2: the selection differs from what was
+  // loaded, so offer to re-load (the sidebar still lists the whole
+  // layer's values, see panelFeatures).
+  const filterFirstStale =
+    mobileChoice === "filter-first" &&
+    !!filterIndex &&
+    !!fc &&
+    loadedFilterKey !== null &&
+    filterKey !== loadedFilterKey;
 
   // Split by geometry: points go to the clustered PointLayer, everything
   // else stays on the canvas-rendered <GeoJSON>. Point layers otherwise
@@ -1094,7 +1138,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           </button>
         </div>
         <div className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
-          {mobileChoice === "filter-first" && !fc && filterIndex
+          {mobileChoice === "filter-first" && filterIndex
             ? t("map.estimating_filter_match", {
                 visible: filterFirstMatchCount.toLocaleString(),
                 total: filterIndex.length.toLocaleString(),
@@ -1108,7 +1152,7 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
         {/* "Apply filters and load" — only shown in filter-first mode
             before pass 2 has run. Streams from cache, applies the
             predicate, renders the matching subset. No cap. */}
-        {mobileChoice === "filter-first" && filterIndex && !fc && (
+        {mobileChoice === "filter-first" && filterIndex && (!fc || filterFirstStale) && (
           <button
             type="button"
             onClick={applyFiltersAndLoad}
@@ -1169,6 +1213,76 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           onReset={() => setLayerStyle(DEFAULT_LAYER_STYLE)}
         />
 
+        {/* Active filters: one chip per ticked (field, value) with a
+            remove button. A ticked value can be scrolled out of view
+            (or restored from the URL), and this strip is the one
+            place that always shows what is narrowing the map. */}
+        {activeFilterChips.length > 0 && (
+          <div
+            role="group"
+            aria-label={t("map.active_filters")}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.3rem",
+              alignItems: "center",
+              marginBottom: "0.5rem",
+            }}
+          >
+            <span
+              className="text-muted"
+              style={{ fontSize: "0.75rem", marginInlineEnd: "0.1rem" }}
+            >
+              {t("map.active_filters")}
+            </span>
+            {activeFilterChips.map(({ field, value }) => (
+              <span
+                key={`${field}=${value}`}
+                title={`${field}: ${value}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.25rem",
+                  maxWidth: "100%",
+                  fontSize: "0.75rem",
+                  lineHeight: 1.3,
+                  padding: "0.1rem 0.45rem",
+                  border: "1px solid var(--primary)",
+                  background: "var(--fill-brand)",
+                  color: "var(--on-fill-brand)",
+                  borderRadius: 999,
+                }}
+              >
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {field}: {truncateLabel(value)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleValue(field, value)}
+                  aria-label={t("map.remove_filter", { field, value })}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
+                    padding: 0,
+                    fontSize: "0.9rem",
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Sort-mode toggle — applies to every field below. Default
             is by feature frequency; alpha is useful when the user
             knows the name they're looking for and can't be bothered
@@ -1192,12 +1306,12 @@ export default function GovmapView({ geojsonDownloadUrl }: GovmapViewProps) {
           </div>
         )}
 
-        {fc && Object.keys(fieldCounts).length === 0 ? (
+        {(fc || filterIndex) && Object.keys(fieldCounts).length === 0 ? (
           <div className="text-sm text-muted">
             {t("map.no_filterable_fields")}
           </div>
         ) : (
-          Object.entries(fieldCounts).map(([field, vals]) => (
+          Object.entries(facetedCounts).map(([field, vals]) => (
             <FieldFilter
               key={field}
               field={field}
@@ -1283,6 +1397,10 @@ function FieldFilter(props: {
       >
         {visibleEntries.map(([v, n]) => {
           const checked = selected.has(v);
+          // 0 under the current selection of the OTHER fields: still
+          // tickable (the user may be about to change those), but
+          // greyed so it is clear the map would turn empty.
+          const empty = n === 0 && !checked;
           return (
             // Block layout intentionally — no flex on the row. Earlier
             // experiments with `display:flex + flex:1 + wordBreak:
@@ -1299,8 +1417,10 @@ function FieldFilter(props: {
                 fontWeight: checked ? 600 : 400,
                 lineHeight: 1.4,
                 marginBottom: "0.2rem",
+                color: empty ? "var(--text-muted)" : undefined,
+                opacity: empty ? 0.7 : 1,
               }}
-              title={v}
+              title={n === 0 ? `${v} (${t("map.value_empty_hint")})` : v}
             >
               <input
                 type="checkbox"
@@ -1312,7 +1432,7 @@ function FieldFilter(props: {
                 }}
               />
               <span style={{ verticalAlign: "middle" }}>
-                {v}{" "}
+                {truncateLabel(v)}{" "}
                 <span className="text-muted" style={{ fontSize: "0.75rem" }}>
                   ({n})
                 </span>
