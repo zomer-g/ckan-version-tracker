@@ -17,6 +17,14 @@ Endpoints (all under /api/append):
   GET /{dataset_id}/rows?…           → {columns, rows, total, limit, offset, sort, order}
   GET /{dataset_id}/item?value=…     → every sample of ONE item, newest first
   GET /{dataset_id}/download.csv?…   → streaming CSV of the (filtered) table
+  GET /{dataset_id}/history/files    → the Parquet files of closed rows on R2
+
+CLOSED HISTORY ON R2. Rows closed long ago are exported, one closing month at a
+time, to immutable Parquet files on R2 (app/services/history_export.py). Without
+a window on the dataset they stay in SQL too; with one, rows older than it are
+deleted from SQL after their file was verified. ``/schema`` carries a
+``history`` block (parts, rows in R2, rows ONLY in R2, the date range) and
+``/history/files`` lists every file with its public URL.
 
 ROW VALIDITY. Every row carries ``first_seen`` (when OVER stored it) and
 ``last_seen`` (NULL while it is in force; set when a full pass of the source no
@@ -321,6 +329,7 @@ async def archive_schema(dataset_id: str, request: Request,
     a multi-resource dataset has more than one at all — without it, the only
     honest reading of this response is "the dataset is this one table"."""
     ds, tbl, tables = await _resolve(dataset_id, db, _selector(request, table))
+    history = await _history_block(db, ds, tbl)
     cols = await append_store.user_columns(tbl)
     if not cols:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
@@ -360,6 +369,62 @@ async def archive_schema(dataset_id: str, request: Request,
         # which stays the default view; a validity query adds it to its rows.
         "last_seen_column": append_store.VALIDITY_COL,
         "supports_as_of": True,
+        # Closed rows exported to Parquet on R2. rows_only_in_r2 > 0 means the
+        # SQL table no longer holds all of the history: those rows are only in
+        # the files listed at files_url.
+        "history": history,
+    }
+
+
+async def _history_block(db, ds, tbl: str) -> dict | None:
+    """/schema's ``history``: the catalog summed for this table. One short
+    query on the app DB, whose connection goes straight back. None when the
+    catalog cannot be read: a schema read never fails on it."""
+    from app.services import history_export
+    try:
+        h = await history_export.summary_for(db, ds.id, tbl)
+        if db is not None:
+            await release_connection(db)
+    except Exception:  # noqa: BLE001
+        logger.debug("append: history summary failed", exc_info=True)
+        return None
+    return {**h, "files_url": f"/api/append/{ds.id}/history/files?table={quote(tbl)}"}
+
+
+@router.get("/{dataset_id}/history/files")
+@limiter.limit("60/minute")
+async def archive_history_files(dataset_id: str, request: Request,
+                                table: str | None = None,
+                                db: AsyncSession = Depends(get_db)):
+    """Every Parquet file of this dataset's closed rows on R2, from the catalog.
+
+    Each file is one closing month (``closed_month``) of one table, split into
+    numbered parts; the columns are the source's (all strings) plus
+    ``first_seen`` / ``last_seen`` and ``row_hash``. ``deleted_from_sql`` true
+    means those rows are no longer in the SQL table; ``missing`` true means the
+    weekly audit did not find the object in the bucket. ``?table=`` narrows to
+    one table of a multi-resource dataset."""
+    from app.services import history_export
+    from app.services.dataset_visibility import require_visible
+
+    uid = parse_uuid(dataset_id, "dataset_id")
+    ds = (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id == uid)
+    )).scalar_one_or_none()
+    if ds is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    require_visible(ds)
+    parts = await history_export.parts_for_dataset(db, ds.id, table)
+    await release_connection(db)
+    if not parts and not append_tables.is_append_archive(ds):
+        raise HTTPException(status_code=404, detail="Dataset has no row archive")
+    missing = history_export.missing_keys()
+    return {
+        "dataset_id": str(ds.id),
+        "dataset_title": ds.title,
+        "table": table,
+        **history_export.summarize(parts),
+        "files": [history_export.public_file(p, missing) for p in parts],
     }
 
 

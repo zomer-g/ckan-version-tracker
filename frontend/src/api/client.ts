@@ -208,7 +208,8 @@ export type StorageTarget =
 export interface ArchiveState {
   // full = files + queryable rows · rows = NEON only · files = objects only
   // sample = metadata stub, no data · none = nothing archived
-  fidelity: "full" | "rows" | "files" | "sample" | "none" | null;
+  // tiered = rows in SQL, older closed rows ONLY as Parquet on R2 (history export)
+  fidelity: "full" | "rows" | "files" | "sample" | "none" | "tiered" | null;
   // Where the files actually are, read off the mapping values.
   file_store: "r2" | "odata" | "mixed" | "none";
   row_store: "neon" | "none";
@@ -244,6 +245,9 @@ export interface TrackedDataset {
   append_key: string | null;
   upload_mode: "full" | "local_only";
   storage_target: StorageTarget;
+  // Days a closed row stays in SQL before only its Parquet copy on R2 remains;
+  // null = export only, nothing deleted (docs/history-phase2-plan.md).
+  history_window_days?: number | null;
   // Whether NEON (tabular-rows) plans are offered for this source (CKAN only).
   neon_eligible: boolean;
   // DIFF mode (append_only only): capture changes to existing rows via a
@@ -286,7 +290,7 @@ export const datasets = {
       method: "POST",
       body: JSON.stringify({ source_type: "govmap", source_url, title, poll_interval }),
     }),
-  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; storage_target?: StorageTarget; capture_changes?: boolean; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
+  update: (id: string, data: { poll_interval?: number; is_active?: boolean; title?: string; organization_id?: string | null; storage_mode?: "full_snapshot" | "append_only"; append_key?: string | null; upload_mode?: "full" | "local_only"; storage_target?: StorageTarget; history_window_days?: number | null; capture_changes?: boolean; resource_ids?: string[]; dismiss_new_resources?: boolean }) =>
     request<TrackedDataset>(`/datasets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -472,6 +476,17 @@ export interface AppendSchema {
   // ?as_of= / ?current=true read the table at a moment / now.
   last_seen_column?: string;
   supports_as_of?: boolean;
+  // Closed rows exported to Parquet on R2 (history export). rows_only_in_r2 > 0
+  // means the table no longer holds that part of the history; null when the
+  // catalog could not be read.
+  history?: {
+    parts: number;
+    rows_in_r2: number;
+    rows_only_in_r2: number;
+    from: string | null;
+    to: string | null;
+    files_url: string;
+  } | null;
 }
 
 export interface AppendRows {

@@ -2109,6 +2109,10 @@ async def admin_datasets(
     # is derived from. Bounded by `limit`, which is why the admin tab can afford
     # this and the unpaginated public catalog can't.
     latest_mappings = await latest_mappings_for(db, ds_ids)
+    # Which of them now hold part of their history only in R2 (fidelity
+    # "tiered"); one grouped query for the page, empty when nothing was deleted.
+    from app.services.history_export import datasets_with_deleted_parts
+    tiered = await datasets_with_deleted_parts(db, ds_ids)
 
     return AdminDatasetsPage(
         items=[
@@ -2117,6 +2121,7 @@ async def admin_datasets(
                 latest_mappings=latest_mappings.get(ds.id),
                 with_archive=True,
                 with_requester=True,
+                has_deleted_parts=str(ds.id) in tiered,
             )
             for ds, requester, org in rows
         ],

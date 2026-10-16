@@ -34,7 +34,7 @@ def _migration_066():
 # ── the lists agree ──────────────────────────────────────────────────────────
 
 # App tables born after 066, created in `app` by name by their own migration.
-CREATED_IN_APP_LATER = {"api_access_log"}  # 068
+CREATED_IN_APP_LATER = {"api_access_log", "history_parts"}  # 068, 072
 
 
 def test_migration_moves_exactly_the_runtime_app_tables():

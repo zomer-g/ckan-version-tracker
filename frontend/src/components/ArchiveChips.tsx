@@ -57,6 +57,11 @@ const FIDELITY: Record<string, { label: string; tone: Tone; hint: string }> = {
     tone: "warn",
     hint: "נשמרים ספירת שורות, שמות העמודות ושורות דגימה — לא הנתונים עצמם",
   },
+  tiered: {
+    label: "טבלה לתשאול + היסטוריה בקבצים",
+    tone: "good",
+    hint: "השורות העדכניות וההיסטוריה הקרובה בטבלה לתשאול; שורות שנסגרו מזמן נשמרות כקבצי Parquet להורדה",
+  },
   none: {
     label: "לא נשמרו נתונים",
     tone: "bad",

@@ -384,6 +384,19 @@ class Settings(BaseSettings):
     # far more often a broken read than a purge.
     append_close_max_fraction: float = 0.5
 
+    # History export (docs/history-phase2-plan.md): closed rows to Parquet on
+    # R2 by closing month, verified against SQL, recorded in app.history_parts.
+    # Off for the first deploy; the admin storage tab can still run it by hand.
+    # Rows are deleted from SQL only for a dataset with
+    # scraper_config.history_window_days, never by default.
+    history_export_enabled: bool = False
+    # A table with fewer closed rows than this is not exported at all.
+    history_min_rows: int = 100_000
+    # Rows per Parquet part (and per SQL hash, which is a string_agg in memory).
+    history_part_rows: int = 500_000
+    # When the daily job runs (minute 30, UTC). The audit runs weekly, Sunday.
+    history_export_hour_utc: int = 3
+
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
     #
