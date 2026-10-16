@@ -647,6 +647,10 @@ export interface GovMapValidation {
   // A layer-group link (?g=397): the group expands to these layers.
   group_id?: string | null;
   layers?: { layer_id: string; caption: string; url: string }[];
+  // A GovMap sub-site page ("energy/solar_panels"): expands to `layers` too,
+  // tracked at the sub-site's own cadence (seconds; monthly for solar).
+  site_id?: string | null;
+  poll_interval?: number | null;
 }
 
 export const govmap = {
