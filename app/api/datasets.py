@@ -66,6 +66,10 @@ class UpdateRequest(BaseModel):
     # Per-dataset storage destination: "odata" | "r2" | "local". Supersedes
     # upload_mode when given ("local" maps to upload_mode=local_only).
     storage_target: str | None = None
+    # History window (docs/history-phase2-plan.md): closed rows older than this
+    # many days are deleted from SQL once their Parquet part on R2 is verified.
+    # null removes it (export only, nothing deleted); absent leaves it. >= 30.
+    history_window_days: int | None = None
     # Whether the scraper downloads the actual document files (PDF/Word/…) and
     # archives them as a ZIP, vs catalog-only (index CSV only). Stored in
     # scraper_config; honored by mevaker/idf/health engines.
@@ -185,6 +189,34 @@ def storage_target_of(scraper_config: dict | None) -> str:
     if sc.get("archive_neon"):
         return f"{backend}+neon"
     return backend
+
+
+def apply_history_window(scraper_config: dict | None, days: int | None) -> dict | None:
+    """Write (or with None remove) ``history_window_days``; 400 under 30 days.
+    Pure, so the rule is testable without a request."""
+    from app.services.history_export import validate_window
+
+    try:
+        days = validate_window(days)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    sc = dict(scraper_config or {})
+    if days is None:
+        sc.pop("history_window_days", None)
+    else:
+        sc["history_window_days"] = days
+    return sc or None
+
+
+def history_window_of(scraper_config: dict | None) -> int | None:
+    """The window the export job will actually apply: a value that is not a
+    whole number >= 30 (only reachable through scraper_config_merge) reads as
+    none, exactly as history_export.window_days_of treats it."""
+    from types import SimpleNamespace
+
+    from app.services.history_export import window_days_of
+
+    return window_days_of(SimpleNamespace(scraper_config=scraper_config))
 
 
 def apply_storage_target(scraper_config: dict | None, target: str) -> dict | None:
@@ -418,7 +450,7 @@ class ArchiveState(BaseModel):
     payload that OOM-killed the 512MB dyno before). Null renders as nothing;
     ``"none"`` is the measured claim that nothing is archived.
     """
-    fidelity: str | None = None      # full | rows | files | sample | none
+    fidelity: str | None = None      # full | rows | files | sample | none | tiered
     file_store: str = "none"         # r2 | odata | mixed | none  (ACTUAL)
     row_store: str = "none"          # neon | none
     sample_of: int | None = None     # source row count behind a stub
@@ -460,9 +492,11 @@ async def latest_mappings_for(db: AsyncSession, ds_ids: list) -> dict:
     return {did: mappings for did, mappings in rows}
 
 
-def archive_state_for(ds, mappings: dict | None, *, has_versions: bool) -> ArchiveState:
+def archive_state_for(ds, mappings: dict | None, *, has_versions: bool,
+                      has_deleted_parts: bool = False) -> ArchiveState:
     """Derive one dataset's ArchiveState. ``mappings`` is its latest version's
-    (None when it has no versions)."""
+    (None when it has no versions); ``has_deleted_parts`` whether part of its
+    history now lives only in R2 (history_export.datasets_with_deleted_parts)."""
     from app.services.storage_client import dataset_archives_neon, dataset_stores_files
 
     return ArchiveState(**archive_state.describe(
@@ -471,6 +505,7 @@ def archive_state_for(ds, mappings: dict | None, *, has_versions: bool) -> Archi
         plan=storage_target_of(ds.scraper_config),
         archives_neon=dataset_archives_neon(ds),
         stores_files=dataset_stores_files(ds),
+        has_deleted_parts=has_deleted_parts,
     ))
 
 
@@ -506,6 +541,9 @@ class DatasetResponse(BaseModel):
     upload_mode: str = "full"  # "full" | "local_only"
     # Unified storage plan: local | odata | r2 | neon | r2+neon | odata+neon
     storage_target: str = "odata"
+    # Days a closed row stays in SQL before its verified Parquet copy on R2 is
+    # the only one (history_export). None = export only, nothing deleted.
+    history_window_days: int | None = None
     # Whether the NEON (tabular-rows) options are meaningful for this source
     # (CKAN only). The admin UI greys NEON out when false.
     neon_eligible: bool = True
@@ -555,7 +593,7 @@ def _build_source_url(ds: TrackedDataset) -> str:
 def build_dataset_response(
     ds, requester, org, version_count: int,
     *, latest_mappings: dict | None = None, with_archive: bool = False,
-    with_requester: bool = False,
+    with_requester: bool = False, has_deleted_parts: bool = False,
 ) -> DatasetResponse:
     """Serialize one tracked dataset row for the list endpoints.
 
@@ -573,7 +611,8 @@ def build_dataset_response(
     opens it in devtools must not learn who asked for each dataset.
     """
     archive = (
-        archive_state_for(ds, latest_mappings, has_versions=version_count > 0)
+        archive_state_for(ds, latest_mappings, has_versions=version_count > 0,
+                          has_deleted_parts=has_deleted_parts)
         if with_archive else None
     )
     return DatasetResponse(
@@ -605,6 +644,7 @@ def build_dataset_response(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -1166,6 +1206,7 @@ async def track_dataset(
             append_key=(ds.scraper_config or {}).get("append_key"),
             upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
@@ -1277,6 +1318,7 @@ async def track_dataset(
             storage_mode=ds.storage_mode or "full_snapshot",
             append_key=None,
             storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
             neon_eligible=dataset_is_neon_eligible(ds),
             capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
@@ -1448,6 +1490,7 @@ async def track_dataset(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -1589,6 +1632,10 @@ async def update_tracked(
             )
         ds.scraper_config = apply_storage_target(ds.scraper_config, body.storage_target)
 
+    if "history_window_days" in body.model_fields_set:
+        # Explicit null removes the window; an absent field leaves it alone.
+        ds.scraper_config = apply_history_window(ds.scraper_config, body.history_window_days)
+
     if body.download_files is not None:
         sc = dict(ds.scraper_config or {})
         sc["download_files"] = body.download_files
@@ -1686,6 +1733,7 @@ async def update_tracked(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -2917,9 +2965,12 @@ async def get_tracked_public(
     # is the endpoint the dataset page reads, where "what is actually archived
     # here" is the question a visitor has.
     latest = await latest_mappings_for(db, [ds.id])
+    from app.services.history_export import datasets_with_deleted_parts
+    tiered = await datasets_with_deleted_parts(db, [ds.id])
     return DatasetResponse(
         archive=archive_state_for(
             ds, latest.get(ds.id), has_versions=ds.id in latest,
+            has_deleted_parts=str(ds.id) in tiered,
         ),
         id=str(ds.id),
         ckan_id=ds.ckan_id,
@@ -2941,6 +2992,7 @@ async def get_tracked_public(
         append_key=(ds.scraper_config or {}).get("append_key"),
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
+        history_window_days=history_window_of(ds.scraper_config),
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,

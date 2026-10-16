@@ -204,6 +204,22 @@ export default function AppendArchivePage() {
             {schema?.supports_latest && (
               <> · ארכיון דגימות: <code>{schema.item_key}</code> = ישות, <code>{schema.sample_column}</code> = מועד הדגימה</>
             )}
+            {schema?.history && schema.history.parts > 0 && (
+              <>
+                {" · "}
+                <a
+                  href={schema.history.files_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="שורות שנסגרו בחודשים שהסתיימו, כקבצי Parquet ב-R2 (חודש סגירה לכל קובץ)"
+                >
+                  קבצי היסטוריה ({schema.history.parts.toLocaleString()})
+                </a>
+                {schema.history.rows_only_in_r2 > 0 && (
+                  <> · {schema.history.rows_only_in_r2.toLocaleString()} שורות ישנות נמצאות רק בקבצים</>
+                )}
+              </>
+            )}
           </div>
         </div>
         <div className="flex" style={{ alignItems: "center", gap: "0.6rem" }}>

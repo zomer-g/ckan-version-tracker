@@ -10,6 +10,10 @@
   GET/POST /api/admin/storage/index-migration[/start|/stop]
                                       partial dedup indexes for row validity
                                       (app/services/index_migration.py)
+  GET  /api/admin/storage/history   — closed rows exported to Parquet on R2:
+                                      the job, the audit, the catalog by dataset
+  POST /api/admin/storage/history/run|stop, GET /history/audit
+                                      (app/services/history_export.py)
   GET  /api/admin/storage/orphans   — the append tables whose dataset is gone
   POST /api/admin/storage/orphans/drop
                                     — drop them (re-derived at call time)
@@ -348,3 +352,44 @@ async def index_migration_stop(_: User = Depends(get_admin_user)):
     from app.services import index_migration
     index_migration.request_stop()
     return {"stopping": True}
+
+
+# ── History: closed rows to Parquet on R2 (docs/history-phase2-plan.md) ──────
+
+@router.get("/history")
+async def history_status(_: User = Depends(get_admin_user),
+                         db: AsyncSession = Depends(get_db)):
+    """The export job's state, the last audit, and the catalog per dataset
+    (parts, rows in R2, rows deleted from SQL, bytes, window)."""
+    from app.services import history_export
+    return await history_export.admin_summary(db)
+
+
+@router.post("/history/run")
+async def history_run(dataset_id: str | None = Query(None),
+                      _: User = Depends(get_admin_user)):
+    """Run the export now (all datasets, or one). Deletes only where a dataset
+    has history_window_days, exactly as the daily job would."""
+    import asyncio
+    from app.services import history_export
+    if history_export.status()["running"]:
+        return {"started": False, "reason": "already running"}
+    ok, why = history_export.is_available()
+    if not ok:
+        raise HTTPException(status_code=409, detail=why)
+    asyncio.create_task(history_export.run(only_dataset=dataset_id))
+    return {"started": True}
+
+
+@router.post("/history/stop")
+async def history_stop(_: User = Depends(get_admin_user)):
+    from app.services import history_export
+    history_export.request_stop()
+    return {"stopping": True}
+
+
+@router.get("/history/audit")
+async def history_audit(_: User = Depends(get_admin_user)):
+    """HEAD every catalog key in R2 now; lists the keys that are missing."""
+    from app.services import history_export
+    return await history_export.audit_history_parts()

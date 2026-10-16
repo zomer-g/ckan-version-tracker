@@ -33,6 +33,7 @@ If you find a bug or want a field added, open an issue on the
 | GET | `/api/v1/organizations` | All organizations + dataset counts |
 | GET | `/api/v1/organizations/{id}` | One organization |
 | GET | `/api/append/{id}/rows?as_of=…` | Archived rows, optionally as they stood at a moment (see [Row archive](#row-archive-apiappendid-and-row-validity)) |
+| GET | `/api/append/{id}/history/files` | Parquet files of the closed rows on R2 (see [Closed history](#closed-history-as-parquet-apiappendidhistoryfiles)) |
 
 Every UUID returned by the API is a stable identifier you can store
 client-side. URLs returned in responses (`url`, `versions_url`,
@@ -449,6 +450,59 @@ curl -o now.csv "https://over.org.il/api/append/<id>/download.csv?current=true"
 A table OVER has not polled since this shipped has no `last_seen` yet: every
 row in it counts as in force, so `current=true` returns all of it and `as_of`
 filters on `first_seen` alone.
+
+### Closed history as Parquet: `/api/append/{id}/history/files`
+
+Rows that were closed (`last_seen` set) in a month that has ended are exported
+to Parquet files on R2, one closing month per file, split into numbered parts of
+up to 500,000 rows:
+
+```
+history/<first 8 of the dataset id>/<table>/closed_month=YYYY-MM/part-NNNN.parquet
+```
+
+A file is never rewritten; rows closed in that month later arrive as a new part.
+Columns: every source column as a string, `first_seen` and `last_seen` as
+`timestamp[us, UTC]`, and `row_hash` (the row identity, hex). PostGIS `geom` is
+not included; `geometry_wkt`, where the source has it, is. Only tables with at
+least 100,000 closed rows are exported.
+
+By default the rows stay in the SQL table too. A dataset whose admin set a
+**history window** (`history_window_days`, at least 30) has its rows closed
+before that window deleted from SQL, only after the file was read back from R2
+and matched against the table. Those rows are then only in the files: until the
+query layer reads them (a later phase), `/rows`, `as_of` and `/sql` do not see
+them. Check `rows_only_in_r2`.
+
+```json
+{
+  "dataset_id": "…", "dataset_title": "…", "table": null,
+  "parts": 3, "rows_in_r2": 1012345, "rows_only_in_r2": 512345,
+  "from": "2026-07-01T00:12:00+00:00", "to": "2026-09-30T23:45:00+00:00",
+  "files": [
+    {"table": "append_…", "closed_month": "2026-07", "part": 1,
+     "public_url": "https://…/history/…/part-0001.parquet",
+     "rows": 500000, "bytes": 18234567, "content_hash": "…",
+     "first_seen_min": "…", "first_seen_max": "…",
+     "last_seen_min": "…", "last_seen_max": "…",
+     "deleted_from_sql": true, "missing": false}
+  ]
+}
+```
+
+`?table=` narrows to one table of a multi-resource dataset. `content_hash` is
+the md5 of the file's `row_hash` values sorted and joined with commas, so a
+download can be checked. `missing: true` means the weekly audit did not find
+the object in the bucket. `404` for a dataset with no row archive.
+
+`/schema` carries the same totals for its table as a `history` block:
+`{parts, rows_in_r2, rows_only_in_r2, from, to, files_url}` (`null` when the
+catalog cannot be read).
+
+```bash
+# Every closed row of one month, straight from the file, with DuckDB
+duckdb -c "SELECT count(*) FROM read_parquet('https://…/closed_month=2026-07/part-0001.parquet')"
+```
 
 ---
 
