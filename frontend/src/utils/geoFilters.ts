@@ -45,10 +45,41 @@ export const MAX_DISTINCT = 5000;
  *  not). */
 export const COLLAPSED_VISIBLE_VALUES = 10;
 /** Max length of an individual value to be considered "categorical".
- *  Above this a value looks like a timestamp / GUID / free-text rather
- *  than a domain code — checkboxes truncated to "2024-…" provide no
- *  selection signal to the user, so we drop the whole field. */
-export const MAX_VALUE_LENGTH = 30;
+ *  Above this a value is free text (a description paragraph), not a
+ *  domain value, and a checkbox for it carries no signal. Long but
+ *  sane values (a 60-char river-section name) stay in: the sidebar
+ *  truncates the LABEL via ``truncateLabel`` and keeps the full text
+ *  in the tooltip. Earlier this was 30 and silently dropped 9 of the
+ *  11 sections of the river-segments layer (ds 30c1da3c). */
+export const MAX_VALUE_LENGTH = 200;
+/** Max label length shown next to a checkbox before truncation. */
+export const LABEL_MAX_LENGTH = 40;
+/** On a layer with at most this many features, a field whose values
+ *  are all distinct is still a useful checklist (one row per feature,
+ *  e.g. the 11 named start-points of river segments), so the
+ *  "ID-like" rule below is applied only to identifier-looking values
+ *  (digits, GUIDs, timestamps). Above this size an all-distinct field
+ *  is always treated as an identifier column. */
+export const SMALL_LAYER_MAX_FEATURES = 200;
+
+/** Heuristic: does this value look like a machine identifier or a
+ *  timestamp rather than a human-readable name? Digits with optional
+ *  separators (objectid, dates, times), GUIDs, and hex hashes. */
+export function looksLikeIdentifier(value: string): boolean {
+  const v = value.trim();
+  if (!v) return true;
+  if (/^[\d\s\-:./TZ+]+$/.test(v)) return true;
+  if (/^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i.test(v)) return true;
+  if (/^[0-9a-f]{16,}$/i.test(v)) return true;
+  return false;
+}
+
+/** Cut a long value for display, keeping the full text for the title
+ *  attribute. Adds a single ellipsis character. */
+export function truncateLabel(value: string, max: number = LABEL_MAX_LENGTH): string {
+  if (value.length <= max) return value;
+  return value.slice(0, max - 1).trimEnd() + "…";
+}
 
 /**
  * Walks every feature's properties and returns, per qualifying field,
@@ -101,7 +132,13 @@ export function discoverCategoricalFields(
     // Drop ID-like fields: every feature has a different value (e.g.
     // globalid, objectid). These pass the cardinality check on small
     // datasets but produce a useless one-checkbox-per-row sidebar.
-    if (card === features.length) continue;
+    // On a SMALL layer, all-distinct human-readable names (the start
+    // point of each of 11 river segments) are exactly what the user
+    // wants to tick, so there we only drop identifier-looking values.
+    if (card === features.length) {
+      if (features.length > SMALL_LAYER_MAX_FEATURES) continue;
+      if (Object.keys(vals).every(looksLikeIdentifier)) continue;
+    }
     out[k] = vals;
   }
   return out;
@@ -138,4 +175,44 @@ export function applyFilters(
     }
     return true;
   });
+}
+
+/**
+ * Faceted counts: for every field in ``base`` (the output of
+ * ``discoverCategoricalFields``), count each value over the features
+ * that pass the filters of all the OTHER fields. The field's own
+ * selection is ignored, so the user can still switch to a sibling
+ * value within the same field (OR semantics). Every value present in
+ * ``base`` is kept in the output, with 0 when the current selection
+ * leaves no feature carrying it, so the sidebar can show "(0)" in
+ * grey instead of silently offering a value that hides everything.
+ *
+ * With no active filter the result equals ``base``.
+ */
+export function facetCounts(
+  features: MinimalFeature[],
+  base: Record<string, Record<string, number>>,
+  filters: Record<string, ReadonlySet<string>>,
+): Record<string, Record<string, number>> {
+  // A selected field that is not in ``base`` (e.g. restored from a
+  // URL for a field this layer no longer has) still narrows the map,
+  // so it narrows the counts too: the panel must agree with the map.
+  const active = Object.entries(filters).filter(([, s]) => s.size > 0);
+  if (active.length === 0) return base;
+  const out: Record<string, Record<string, number>> = {};
+  for (const [field, vals] of Object.entries(base)) {
+    const others: Record<string, ReadonlySet<string>> = {};
+    for (const [f, s] of active) if (f !== field) others[f] = s;
+    const pool = applyFilters(features, others);
+    const counts: Record<string, number> = {};
+    for (const v of Object.keys(vals)) counts[v] = 0;
+    for (const f of pool) {
+      const raw = (f.properties || {})[field];
+      if (typeof raw !== "string") continue;
+      const v = raw.trim();
+      if (v in counts) counts[v] += 1;
+    }
+    out[field] = counts;
+  }
+  return out;
 }

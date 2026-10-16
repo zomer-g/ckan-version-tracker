@@ -516,7 +516,10 @@
     "apply_filter_and_load_all": "Load all {{total}} polygons",
     "filter_loading_progress": "Loading matching polygons...",
     "back_to_filter_choice": "Change choice",
-    "estimating_filter_match": "Showing {{visible}} of {{total}} polygons matching the current filter"
+    "estimating_filter_match": "Showing {{visible}} of {{total}} polygons matching the current filter",
+    "active_filters": "Active filters:",
+    "remove_filter": "Remove filter {{field}}: {{value}}",
+    "value_empty_hint": "No results under the current filter"
   },
   "growth": {
     "title": "Agricultural Crops",
