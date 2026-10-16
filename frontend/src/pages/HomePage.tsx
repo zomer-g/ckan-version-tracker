@@ -63,8 +63,10 @@ const ODATA_BASE = "https://www.odata.org.il";
 /** Detect gov.il collector URLs */
 const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamiccollectors?|collectors?|pages)\/([^/?#]+)/i;
 /** Detect govmap.gov.il layer URLs (requires lay=<id>) */
-// A layer (lay=) or a layer GROUP (g=), which validation expands to its layers.
-const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?.*[?&](?:lay(?:er|ers)?|g)=\d+/i;
+// A layer (lay=) or a layer GROUP (g=), which validation expands to its layers,
+// or a GovMap "sites" sub-site page (/sites/energy/...?map=solar_panels), which
+// validation expands to the sub-site's layers the same way.
+const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il(?:\/?\?(?:.*&)?(?:lay(?:er|ers)?|g)=\d+|\/sites\/[\w-]+\/)/i;
 
 interface CkanResource {
   id: string;
@@ -1191,7 +1193,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
-                  <span>{govMapResult.group_id ? `g=${govMapResult.group_id}` : `lay=${govMapResult.layer_id}`}</span>
+                  <span>{govMapResult.site_id ? `sites/${govMapResult.site_id}` : govMapResult.group_id ? `g=${govMapResult.group_id}` : `lay=${govMapResult.layer_id}`}</span>
                   <span>govmap.gov.il</span>
                 </div>
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all", direction: "ltr" }}>
@@ -1204,7 +1206,7 @@ export default function HomePage() {
                 {govMapResult.layers && govMapResult.layers.length > 0 && (
                   <div className="text-sm mt-1">
                     <p className="text-muted" style={{ margin: "0 0 0.25rem" }}>
-                      {t("home.govmap_group_hint", { count: govMapResult.layers.length })}
+                      {t(govMapResult.site_id ? "home.govmap_site_hint" : "home.govmap_group_hint", { count: govMapResult.layers.length })}
                     </p>
                     <ul style={{ margin: 0, paddingInlineStart: "1.25rem" }}>
                       {govMapResult.layers.map((l) => (
@@ -1232,7 +1234,7 @@ export default function HomePage() {
                       onClick={() => setRequestFormFor("govmap")}
                       style={{ fontSize: "0.85rem" }}
                     >
-                      {govMapResult.group_id ? t("home.govmap_group_request_btn") : t("home.govmap_request_btn")}
+                      {govMapResult.group_id || govMapResult.site_id ? t("home.govmap_group_request_btn") : t("home.govmap_request_btn")}
                     </button>
                   )}
                 </div>

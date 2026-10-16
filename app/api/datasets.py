@@ -1179,7 +1179,7 @@ async def track_dataset(
         if not body.source_url:
             raise HTTPException(status_code=400, detail="source_url is required for govmap datasets")
 
-        from app.api.govmap import parse_govmap_url, build_govmap_title
+        from app.api.govmap import parse_govmap_url, build_govmap_title, site_layer_defaults
         parsed = parse_govmap_url(body.source_url)
         if not parsed:
             raise HTTPException(status_code=400, detail="Invalid govmap.gov.il layer URL (missing lay=<id>)")
@@ -1202,7 +1202,11 @@ async def track_dataset(
         unique_slug = scraper_url_slug(f"govmap-{layer_id}", body.source_url)
         ckan_id = f"govmap-{unique_slug}"
         ckan_name = unique_slug
-        title = body.title or build_govmap_title(layer_id)
+        # A GovMap sub-site layer (solar potential) has its own title and cadence.
+        site_title, site_interval = site_layer_defaults(body.source_url)
+        title = body.title or site_title or build_govmap_title(layer_id)
+        if site_interval:
+            interval = site_interval
 
         mirror_name = f"gov-versions-govmap-{unique_slug}"
         odata_dataset_id = None
@@ -2573,7 +2577,7 @@ async def submit_tracking_request(
 
     # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
     if body.source_type == "govmap":
-        from app.api.govmap import parse_govmap_url, build_govmap_title
+        from app.api.govmap import parse_govmap_url, build_govmap_title, site_layer_defaults
 
         urls = list(body.source_urls or [])
         if body.source_url and body.source_url not in urls:
@@ -2622,16 +2626,26 @@ async def submit_tracking_request(
             }
             if parsed.center_itm:
                 sc["center_itm"] = parsed.center_itm
+            # A GovMap sub-site layer (solar potential) has its own title and
+            # cadence. The form's title is one string for every URL in the
+            # bulk request, so a sub-site layer keeps its own caption.
+            site_title, site_interval = site_layer_defaults(url)
+            if site_title:
+                title = site_title
+            elif body.title and body.title.strip():
+                title = body.title.strip()
+            else:
+                title = build_govmap_title(layer_id)
 
             ds = TrackedDataset(
                 ckan_id=f"govmap-{unique_slug}",
                 ckan_name=unique_slug,
-                title=body.title.strip() if body.title and body.title.strip() else build_govmap_title(layer_id),
+                title=title,
                 organization="govmap.gov.il",
                 source_type="govmap",
                 source_url=url,
                 scraper_config=sc,
-                poll_interval=interval,
+                poll_interval=site_interval or interval,
                 status="pending",
                 created_by=None,
                 last_modified=None,
