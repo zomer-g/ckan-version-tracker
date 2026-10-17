@@ -26,7 +26,13 @@ DuckDB, in the app's own process, one fresh in-memory connection per query
    under the same name: for a table with deleted parts the UNION ALL of the hot
    table and ``read_parquet`` of those parts (``build_history_view``), for any
    other table a plain view of the hot one. Only ``deleted_from_sql=true`` parts:
-   a part still in SQL is in both places and would count twice.
+   a part still in SQL is in both places and would count twice. Before the
+   first view, ONE pass reads the footer of every part of every table
+   (``_warm_metadata``, METADATA_THREADS in parallel): the connection caches
+   Parquet and HTTP metadata, so the binds that follow (each DESCRIBE, the
+   views, the query) never go back to R2 for a footer. Without it a union
+   view over 180 parts read every footer about five times, one table at a
+   time, serially: past the timeout even for count(*) (phase 4, 6.8/6.9).
 4. ``_lock``: external access off except for the exact part URLs and the spill
    directory, configuration locked. Credentials live in TEMPORARY secrets, which
    DuckDB redacts, never in a setting or an ATTACH string a query could read.
@@ -86,6 +92,10 @@ FIRST_COL = "first_seen"
 LAST_COL = append_store.VALIDITY_COL
 HASH_COL = "row_hash"
 THREADS = 2
+# The footer pass is HTTP round trips (one HEAD + one GET per part), not CPU:
+# 180 parts took 26 s at 2 threads and 7 s at 8 (phase 4, 6.9). The query
+# itself runs at THREADS; memory_limit bounds both.
+METADATA_THREADS = 8
 _TS_COLS = {FIRST_COL, LAST_COL}
 # PostGIS geometry does not survive the trip and is not in the Parquet parts;
 # geometry_wkt, where a source has it, is ordinary text and stays.
@@ -198,6 +208,8 @@ def status() -> dict:
         "waiting": _gate.waiting,
         "queue": settings.history_query_queue,
         "memory_mb": settings.history_query_memory_mb,
+        "threads": THREADS,
+        "metadata_threads": METADATA_THREADS,
         "timeout_s": settings.history_query_timeout_s,
         "hot_max_rows": settings.history_query_hot_max_rows,
         "stats": dict(_stats),
@@ -712,6 +724,10 @@ def _open_connection(tmpdir: str | None = None):
         "autoload_known_extensions": False,
     })
     conn.execute("SET TimeZone = 'UTC'")
+    # A fresh connection per query, so a cache never outlives the parts it saw:
+    # a footer is read once per query, not once per bind of the same part.
+    conn.execute("SET parquet_metadata_cache = true")
+    conn.execute("SET enable_http_metadata_cache = true")
     return conn
 
 
@@ -723,6 +739,21 @@ def _setup_r2(conn) -> None:
         f"KEY_ID {_lit(settings.s3_access_key)}, SECRET {_lit(settings.s3_secret_key)}, "
         f"ENDPOINT {_lit(endpoint)}, REGION {_lit(settings.s3_region or 'auto')}, "
         "URL_STYLE 'path')")
+
+
+def _warm_metadata(conn, urls: list[str]) -> int:
+    """Read the footer of every part once, METADATA_THREADS at a time, into
+    the connection's caches; the query keeps THREADS. Returns the file count.
+    Must run before ``_lock`` (the thread count is configuration)."""
+    if not urls:
+        return 0
+    conn.execute(f"SET threads = {int(METADATA_THREADS)}")
+    try:
+        return int(conn.execute(
+            f"SELECT count(*) FROM parquet_file_metadata([{', '.join(_lit(u) for u in urls)}])"
+        ).fetchone()[0])
+    finally:
+        conn.execute(f"SET threads = {int(THREADS)}")
 
 
 def _lock(conn, allowed: list[str]) -> None:
@@ -747,6 +778,7 @@ def _prepare_views(conn, backend, specs: list[dict], *, as_of, current,
     columns ``{table: [(name, type)]}``. Leaves the connection unlocked."""
     if any(p["url"].startswith("s3://") for s in specs for p in s["parts"]):
         _setup_r2(conn)
+    _warm_metadata(conn, [p["url"] for s in specs for p in s["parts"]])
     backend.setup(conn)
     created: list[str] = []
     out: dict[str, list[tuple[str, str]]] = {}
