@@ -41,7 +41,7 @@ DuckDB סינכרוני, ולכן כל שאילתה רצה ב-`asyncio.to_thread
 | הגדרה | ערך | למה |
 |---|---|---|
 | `memory_limit` | `HISTORY_QUERY_MEMORY_MB` = 1536 | לאפליקציה 8 GB, p95 בשימוש 6 GB |
-| `threads` | 2 | לא לדחוק את ה-event loop |
+| `threads` | 2 (מעבר ה-footers לפני השאילתה: 8, phase 4 סעיף 6.9) | לא לדחוק את ה-event loop |
 | `temp_directory` | תיקייה זמנית בדיסק | spill במקום OOM |
 | timeout | `HISTORY_QUERY_TIMEOUT_S` = 30, אכיפה ב-`conn.interrupt()` מה-event loop | כמו הקונסולה |
 | מקביליות | semaphore 1, תור של עד 3 ממתינים, מעבר לזה 429 "המנוע עסוק" | שאילתה אחת בזיכרון בכל רגע |

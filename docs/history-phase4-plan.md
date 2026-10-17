@@ -351,3 +351,49 @@ npx vitest run          → 13 passed
 | 5. קונסולה | בלי המתג: 0 + `history_note` שמסביר שהטבלה בשכבה הקרה. עם המתג על **טבלה אחת** (3 חלקים): 1,037,142 שורות ב-2.3 שניות (`engine: duckdb`). עם המתג על ה-view המאוחד (180 קבצים): **timeout 30 שניות**, גם ל-`count(*)` וגם ל-`GROUP BY station`. ממצא לטיפול: איחוד של 180 קבצים ב-httpfs חורג מהתקציב; פתרון אפשרי: ספירות מקובצות מהקטלוג ל-`count(*)`, timeout גבוה יותר לאדמין, או איחוד החלקים של מאגר קר לקובץ אחד לטבלה. |
 | 6. rehydrate | מצפן השירותים הממשלתיים (4f92c758, 4,562 שורות): cold ב-שניות (חלק `full` אחד), rehydrate: 4,562 שורות חזרו, `history_tier: hot`, החלק נשאר בקטלוג עם `deleted_from_sql=false`, `rows_only_in_r2: 0`. |
 | 7. חלונות | `PATCH /history/windows`: 30 יום לשני מאגרי flydata (200). הייצוא הראשון ב-3.11. |
+
+### 6.9 פער הביצועים של ה-view המאוחד (2026-10-17, סשן נפרד)
+
+**המדידה** (DuckDB 1.5.1, 2 threads, מהמחשב המקומי מול החלקים האמיתיים ב-R2; ה-latency
+ל-R2 דומה לזו של prod: טבלה אחת של 3 חלקים ענתה שם ב-2.3 שניות, כאן ב-2.2):
+
+| מה | זמן |
+|---|---|
+| footer של קובץ אחד (HEAD + GET אחד לכל קובץ, `EXPLAIN ANALYZE`) | 0.2–0.35 שניות |
+| `DESCRIBE read_parquet` של 180 קבצים, `union_by_name` | 35 שניות |
+| `count(*)` של 180 קבצים בקריאה אחת, חיבור חדש | 26 שניות |
+| אותו דבר ב-8 threads | 6.6–8 שניות |
+| 60 קבצים (קובץ אחד לטבלה) ב-2 threads | 8.9 שניות |
+| `parquet_metadata_cache` לבד: מעבר שני על 180 | 14 שניות (ה-HEAD נשאר) |
+| `parquet_metadata_cache` + `enable_http_metadata_cache`: מעבר שני ואילך | 0.04–0.3 שניות |
+| ה-pipeline של המנוע כמו שהיה (`_execute` על 60 טבלאות + view), `count(*)` | **177 שניות** |
+| אותו pipeline אחרי התיקון, `count(*)` | **7.8 שניות** (מהן 7.0 מעבר ה-footers) |
+| אחרי התיקון, `GROUP BY station` | **9.7 שניות** |
+
+הזמן כולו הוא latency של HTTP לכל קובץ, ולא נתונים: `count(*)` ו-`GROUP BY station`
+(התווית היא ליטרל לכל ענף) לא קוראים אף עמודה. המנוע קרא את 180 ה-footers כחמש פעמים
+בכל שאילתה, סדרתית, טבלה-טבלה: `DESCRIBE read_parquet` לכל טבלה ב-`_prepare_views`,
+`DESCRIBE` של כל תצוגה, של ה-view המאוחד, של השאילתה העטופה, והשאילתה עצמה; בלי cache
+כל bind חוזר ל-R2. threads=2 הגביל גם את המקביליות של קריאת ה-footers בתוך קריאה אחת.
+ה-casts בתצוגה לא משתתפים (count בלי WHERE הוא מטא-דאטה בלבד).
+
+**התיקון** (`app/services/history_query.py`, הקטן ביותר מבין האפשרויות ב-6.8):
+1. `SET parquet_metadata_cache = true` ו-`SET enable_http_metadata_cache = true` על החיבור
+   (חיבור חדש לכל שאילתה, כך שה-cache לא שורד מעבר לחלקים שראה).
+2. `_warm_metadata`: לפני התצוגה הראשונה, מעבר אחד על כל חלק של כל טבלה שהשאילתה נוגעת בה
+   (`parquet_file_metadata([...])`) ב-`METADATA_THREADS` = 8; מיד אחריו `threads` חוזר ל-2,
+   לפני `_lock`. המעבר הוא המתנות HTTP ולא CPU, ו-`memory_limit` חל עליו כרגיל.
+   השאילתה עצמה רצה ב-2 threads כמו קודם; timeout ו-queue לא השתנו.
+3. `status()` מדווח `threads` ו-`metadata_threads`.
+
+לא שונה: גודל החלקים (`HISTORY_PART_ROWS`), הקטלוג, קבצי ה-Parquet, הפרונט. בדיקות:
+`test_parquet_and_http_metadata_are_cached_for_the_connection`,
+`test_warm_metadata_reads_every_part_then_restores_two_threads` (test_history_query.py),
+`test_the_union_view_warms_every_part_once_before_any_bind` (test_history_phase4.py).
+
+**מה נשאר**: (א) deploy ואימות בקונסולה עם המתג על `rain_forecast_stations`: `count(*)` ו-
+`GROUP BY station` צפויים ב-8 עד 10 שניות, ו-`cold_parts: 180`. (ב) שאילתה שקוראת עמודה
+על כל 62M השורות (למשל `WHERE pr <> ''`) עדיין מורידה את העמודה מ-R2: 84 שניות ב-2
+threads, מעבר לתקציב; מי שצריך אותה יסנן לפי station או שנה. (ג) אם 7 השניות של מעבר
+ה-footers יכבידו: חלקים גדולים יותר לייצוא `full` (קובץ אחד לטבלה = 60 במקום 180, כ-2.5
+שניות ב-8 threads) דורשים rehydrate וייצוא מחדש של הגשם, ולא בוצעו.
