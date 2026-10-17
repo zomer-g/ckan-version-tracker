@@ -1301,7 +1301,8 @@ async def _neon_stream_load_file(
             )
         if tracker is not None:
             res = await tracker.close_missing(
-                close["run_ts"], allow_shrink=bool(close.get("allow_shrink")))
+                close["run_ts"], allow_shrink=bool(close.get("allow_shrink")),
+                declared=bool(close.get("declared")))
             tracker = None
             logger.info("NEON stream-load close on %s: %s", table, res)
         # Once the whole file is down, not once per batch — see
@@ -2073,7 +2074,8 @@ async def push_version(
             if not (_close_ok and _table_resources.get(table) == 1):
                 return None
             return {"run_ts": _run_ts,
-                    "allow_shrink": bool((ds.scraper_config or {}).get("allow_shrink"))}
+                    "allow_shrink": bool((ds.scraper_config or {}).get("allow_shrink")),
+                    "declared": append_store.closes_rows_setting(ds) is True}
 
         # Rows that were scraped, published in the version's count, and are not
         # in the table anyone can query. Collected here and turned into the
@@ -2631,7 +2633,8 @@ async def push_version(
             continue
         try:
             _res = await _tr.close_missing(
-                _run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")))
+                _run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")),
+                declared=append_store.closes_rows_setting(ds) is True)
         except Exception as e:  # noqa: BLE001 — the rows are in; closing waits a poll
             logger.warning("append close: %s failed: %s", _t, e)
             _res = {"skipped": f"{type(e).__name__}: {e}"[:300]}
