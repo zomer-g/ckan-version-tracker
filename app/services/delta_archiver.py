@@ -190,7 +190,8 @@ async def _close_pass(ds, tracker, run_ts) -> dict:
         return {}
     try:
         res = await tracker.close_missing(
-            run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")))
+            run_ts, allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")),
+            declared=append_store.closes_rows_setting(ds) is True)
     except Exception as e:  # noqa: BLE001 — the rows are in; closing waits a poll
         logger.warning("append close: %s failed: %s", tracker.table, e)
         return {"close_skipped": f"{type(e).__name__}: {e}"[:300]}

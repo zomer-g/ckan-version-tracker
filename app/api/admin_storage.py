@@ -43,6 +43,7 @@ an orphan only when NO tracked dataset, in any status, carries its id octet.
 """
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -420,3 +421,130 @@ async def history_query_smoke(table: str = Query(..., description="an append tab
         raise HTTPException(status_code=429, detail=str(e))
     except history_query.HistoryQueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Wrong closures (docs/history-phase4-plan.md section 0) ───────────────────
+#
+# A source that does not close by its effective append_closes_rows (prices)
+# got closed rows anyway; this reopens them. One background job at a time, its
+# progress in memory like index_migration: a real run over 196 tables and ~20M
+# rows takes far longer than a request.
+
+_reopen: dict = {"running": False, "dry_run": None, "started_at": None,
+                 "finished_at": None, "current": None, "target": None,
+                 "tables": [], "refused": [], "failed": [], "totals": {}}
+
+
+def reopen_targets(datasets: list, *, source: str | None = None,
+                   dataset_id: str | None = None) -> tuple[list, list[dict]]:
+    """``(datasets to reopen, refused [{dataset_id, title, reason}])``. Pure but
+    for the registry cache: a dataset is a target only when it matches and its
+    effective append_closes_rows is False (append_store.reopen_refusal)."""
+    from app.services import append_store
+
+    ok, refused = [], []
+    for ds in datasets:
+        cfg = ds.scraper_config or {}
+        if dataset_id is not None and str(ds.id) != str(dataset_id):
+            continue
+        if source is not None and cfg.get("kind") != source:
+            continue
+        why = append_store.reopen_refusal(ds)
+        if why:
+            refused.append({"dataset_id": str(ds.id), "title": ds.title, "reason": why})
+        else:
+            ok.append(ds)
+    return ok, refused
+
+
+def _reopen_totals(tables: list[dict]) -> dict:
+    keys = ("closed", "duplicates", "deleted", "reopened")
+    return {k: sum(int(t.get(k) or 0) for t in tables) for k in keys} | {"tables": len(tables)}
+
+
+async def _reopen_run(ds_ids: list[str], dry_run: bool, actor: str | None) -> None:
+    from app.database import async_session
+    from app.services import (activity_log, append_store, append_tables, history_export,
+                              sampling_runs)
+
+    try:
+        async with async_session() as db:
+            datasets = (await db.execute(
+                select(TrackedDataset).where(TrackedDataset.id.in_(
+                    [uuid.UUID(i) for i in ds_ids])))).scalars().all()
+            plan = [(ds, await append_tables.resolve_tables(ds, db)) for ds in datasets]
+        pool = await append_store.get_pool()
+        for ds, tables in plan:
+            stamp = sampling_runs.stamp_column(ds)
+            done: list[dict] = []
+            for t in tables:
+                table = t["table"]
+                _reopen["current"] = table
+                try:
+                    async with pool.acquire() as conn:
+                        ident = await history_export._table_ident(conn, table)
+                    if ident is None:
+                        raise RuntimeError("no partial dedup index")
+                    cols = await append_store.user_columns(table)
+                    res = await append_store.reopen_closures(
+                        table, dry_run=dry_run, ident_col=ident[0],
+                        stamp_col=stamp if stamp and stamp in cols else None)
+                    res["dataset_id"] = str(ds.id)
+                    _reopen["tables"].append(res)
+                    done.append(res)
+                except Exception as e:  # noqa: BLE001 — one table must not stop the rest
+                    logger.warning("closures reopen: %s failed: %s", table, e)
+                    _reopen["failed"].append({"table": table, "dataset_id": str(ds.id),
+                                              "error": f"{type(e).__name__}: {e}"[:400]})
+                _reopen["totals"] = _reopen_totals(_reopen["tables"])
+            if not dry_run:
+                tot = _reopen_totals(done)
+                await activity_log.log_event(
+                    event="closures_reopened", dataset=ds, status="ok", actor=actor,
+                    message=(f"פתיחה מחדש של סגירות שגויות: {tot['reopened']:,} שורות נפתחו, "
+                             f"{tot['deleted']:,} עותקים כפולים נמחקו ב-{tot['tables']} טבלאות"))
+    except Exception:  # noqa: BLE001 — surface in status, never crash the app
+        logger.exception("closures reopen: run aborted")
+        _reopen["failed"].append({"table": _reopen["current"], "error": "aborted, see log"})
+    finally:
+        _reopen.update(running=False, current=None,
+                       finished_at=datetime.now(timezone.utc).isoformat())
+
+
+@router.get("/closures/reopen")
+async def closures_reopen_status(_: User = Depends(get_admin_user)):
+    """The last (or running) reopen job: per table closed / duplicates counted,
+    and for a real run deleted / reopened, plus refused datasets and failures."""
+    return {k: v for k, v in _reopen.items()}
+
+
+@router.post("/closures/reopen")
+async def closures_reopen(source: str | None = Query(None),
+                          dataset_id: str | None = Query(None),
+                          dry_run: bool = Query(True),
+                          user: User = Depends(get_admin_user),
+                          db: AsyncSession = Depends(get_db)):
+    """Reopen the rows a source closed although its effective
+    ``append_closes_rows`` is false: per identity keep the earliest row and
+    delete the later copies, set ``last_seen`` back to NULL in ctid batches,
+    VACUUM. ``dry_run`` (the default) only counts. Refused for a dataset whose
+    closing is in force. Runs in the background; GET shows the progress."""
+    import asyncio
+
+    if (source is None) == (dataset_id is None):
+        raise HTTPException(status_code=400, detail="pass exactly one of source / dataset_id")
+    if _reopen["running"]:
+        return {"started": False, "reason": "already running", **_reopen}
+    datasets = (await db.execute(select(TrackedDataset))).scalars().all()
+    ok, refused = reopen_targets(datasets, source=source, dataset_id=dataset_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail={
+            "error": "nothing to reopen", "refused": refused,
+            "message": "אין מאגרים מתאימים: רק מקור שה-append_closes_rows האפקטיבי שלו false"})
+    _reopen.update(running=True, dry_run=bool(dry_run),
+                   started_at=datetime.now(timezone.utc).isoformat(), finished_at=None,
+                   current=None, target={"source": source, "dataset_id": dataset_id},
+                   tables=[], refused=refused, failed=[], totals={})
+    asyncio.create_task(_reopen_run([str(d.id) for d in ok], bool(dry_run),
+                                    getattr(user, "email", None)))
+    return {"started": True, "datasets": len(ok), "refused": refused, "dry_run": bool(dry_run)}

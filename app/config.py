@@ -411,6 +411,12 @@ class Settings(BaseSettings):
     # One query runs at a time; this many may wait, the next gets a 429.
     history_query_queue: int = 3
 
+    # A "full" pass that carried fewer than this share of the open rows is
+    # refused even with allow_shrink, unless append_closes_rows is declared
+    # true (docs/history-phase4-plan.md 0.3): a fifth of a source is almost
+    # always a source that publishes only changes, not a mass deletion.
+    history_close_min_pass_fraction: float = 0.2
+
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
     #
