@@ -231,4 +231,124 @@ DuckDB בזיכרון במקום Postgres (ה-builder מקבל את שם המק�
 
 ## 6. תוצאות
 
-(הסשן המבצע ממלא: תאריך, SHA, פלט הבדיקות לפני/אחרי, סטיות, מה נשאר לאשר.)
+**2026-10-17, הסשן המבצע (worktree `claude/history-phase3-duckdb-1712a7`).**
+לא בוצע deploy, לא בוצע push, ולא הורץ פרוטוקול 4.3.
+
+### 6.1 קומיטים
+
+| ריפו | SHA | תוכן |
+|---|---|---|
+| OVER | `c79efcd` | כל סעיף 3 + `tests/test_history_query.py` (78 בדיקות) |
+| OVER | (הקומיט של הסעיף הזה) | סעיף 6 |
+
+### 6.2 בסיס לפני השינוי
+
+ב-worktree חובר `frontend/dist` כ-junction מה-checkout הראשי (`../GOV scraper` כבר קיים ליד
+ה-worktrees). `frontend/node_modules` של ה-checkout הראשי חסר את `vitest` (tsc נכשל שם על
+`geoFilters.test.ts`, סביבתי), ולכן ב-worktree הותקן `npm ci` משלו (לא בקומיט).
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2387 passed, 6 skipped, 392 warnings in 469.70s (0:07:49)
+npx tsc --noEmit -p .   → נקי (exit 0)
+npx vitest run          → 13 passed
+```
+
+2,387 ולא 2,371 כמו בסעיף 4.1: הקומיטים שאחרי `154300b` (govmap) הוסיפו בדיקות. בלי כישלונות.
+
+### 6.3 הבדיקות החדשות לפני הקוד
+
+`tests/test_history_query.py` נכתב לפני הקוד. מול מודול ריק (`app/services/history_query.py`
+עם docstring בלבד): `32 failed, 46 errors, 0 passed` (78 בדיקות). אחרי המימוש תוקנה בבדיקה
+עצמה ציפייה אחת (תנאי התוקף נבדק עם שם העמודה במרכאות, כמו שאר הבדיקה).
+
+### 6.4 אחרי השינוי
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2465 passed, 6 skipped, 399 warnings in 462.69s (0:07:42)
+npx tsc --noEmit -p .   → נקי (exit 0)
+npx vitest run          → 13 passed
+```
+
+### 6.5 סטיות מהתוכנית ותוספות
+
+1. **רשימת הסירוב המורחבת חלה רק על מסלול DuckDB** (`history_query.validate_sql`), לא על
+   `_SQL_DENY` הגלובלי. `"export"`/`"import"` הם שמות עמודה סבירים, והרחבת הרשימה הגלובלית
+   הייתה משנה את התנהגות הקונסולות הקיימות (בדיקה מוכיחה ש-`SELECT "export"` עדיין עובר
+   ב-Postgres). במסלול DuckDB: המילים attach/detach/install/load/export/import/pragma/set/
+   reset/checkpoint/use/copy (מחוץ למרכאות כפולות), וכל פונקציה שקוראת קובץ, URL, הגדרה או
+   סוד (`read_*`, `*_scan`, `parquet_*`, `postgres_*`, `glob`, `query`, `current_setting`,
+   `getenv`, `duckdb_*`, `pragma_*`...).
+2. **הגבלת הגישה החיצונית:** אחרי בניית ה-view-ים `allowed_paths` = מפתחות החלקים בדיוק,
+   `allowed_directories` = תיקיית ה-spill, `enable_external_access=false`,
+   `lock_configuration=true`. נבדק על DuckDB אמיתי שקריאת קובץ אחר נחסמת. פרטי R2 ו-Postgres
+   נכנסים כ-`TEMPORARY SECRET` (DuckDB מסתיר אותם), לא כ-`SET` ולא במחרוזת ה-ATTACH.
+3. **ה-DSN של הצד החם הוא `APPEND_READONLY_DATABASE_URL`** (השם האמיתי בקוד; התוכנית כתבה
+   `DATABASE_URL_READONLY`).
+4. **מצב הצד החם נקבע בבוט:** `ensure_extensions` מתקין httpfs ו-postgres ומריץ ATTACH +
+   נעילה + שאילתה אחת על `hot.information_schema`, בדיוק כמו שאילתת משתמש. הצליח →
+   `hot_mode=attach`; נכשל → `arrow` (asyncpg דרך ה-pool הקריאה בלבד, עם התנאי של as_of
+   כבר ב-Postgres, ותקרה HISTORY_QUERY_HOT_MAX_ROWS). כך גם השאלה הלא-בדוקה "האם סריקת
+   postgres עובדת אחרי `enable_external_access=false`" נענית בפרוד ולא שוברת את המנוע.
+5. **כלל הניתוב של as_of מחמיר מהנוסח:** עוברים ל-DuckDB רק כשקיים חלק מחוק שה-`last_seen_max`
+   שלו מאוחר מ-as_of (כלומר שורה שהייתה בתוקף אז נמצאת רק ב-R2). הנוסח "או כשיש שורות רק
+   ב-R2" היה מעביר כל as_of של טבלה עם חלק מחוק כלשהו, גם כשה-SQL לבדו מדויק. `current`
+   לעולם לא עובר. בדיקה 9 מקודדת את הכלל.
+6. **התור:** 1 רצה + עד 3 ממתינות (סעיף 2), החמישית מקבלת 429. נוסח בדיקה 4.2.6 ("הרביעית")
+   מתאים לתור 2, ולכן נבדקים שני המקרים.
+7. **תוקף בתוך ה-view:** as_of/current מצמצמים את ה-view עצמו (literal מוקלד, view לא מקבל
+   פרמטרים), ולכן גם SQL חופשי וגם /rows רואים רק את השורות שבתוקף.
+8. **TIMESTAMPTZ חוזר כטקסט** (המרה ל-Python דורשת pytz, שאינו ב-requirements; מסלול
+   Postgres ממילא מחזיר מחרוזת).
+9. **`duckdb` נטען בעצלות** (ב-import הראשון של שימוש), כדי שעם הדגל כבוי הספרייה לא נטענת
+   לזיכרון (צעד 4.3.1).
+10. **`dialect_note`:** ב-DuckDB `~` הוא התאמה מלאה ולא חלקית, הבדל שקט בלי שגיאה. שאילתה
+    עם `~` מקבלת הערה בתוצאה. רמזי שגיאה: `~*`/`!~`, PostGIS/geometry, uuid/INT128, `to_char`,
+    טבלה לא קיימת, עמודה לא קיימת.
+11. **`/api/append/{id}/sql` רואה רק את טבלאות המאגר**; טבלה של מאגר אחר מחזירה שגיאת DuckDB
+    עם רמז לקונסולה הכללית. הקונסולה (`/api/tables/sql` ו-`run_sql` ב-MCP) רואה כל טבלה
+    מהקטלוג שהשאילתה מזכירה (גם knesset/idx, כ-view ישיר על `hot`), והקטלוג נקרא רק כשביקשו
+    `include_history`.
+12. **`/rows` ו-`/datastore_search` על המנוע** (`rows_page` / `datastore_page`): אותם פילטרים,
+    q, sort, latest ועימוד, total ועמוד בשאילתה אחת. `/download.csv` נשאר על SQL בלבד (מתועד
+    ב-API.md). `/datastore_search_sql` ללא שינוי.
+13. **`query-smoke` מקבל `table` חובה** (הכרטיס באדמין ממלא מראש את
+    `append_taxes_nadlan_full_f41fb496_fd06f5ae`). במצב arrow הספירה החמה נעשית ב-pool הקריאה
+    בלבד (טעינת 3.84M שורות היא בדיוק מה שהתקרה אוסרת). מדווח RSS לפני/אחרי מ-`/proc`.
+14. **פער ידוע (משלב 2, 7.5.5):** part שנמחק חלקית (`deleted_from_sql` עדיין false) לא נכנס
+    ל-view, ולכן השורות שכבר נמחקו ממנו לא נראות במנוע עד שה-part מסומן, עד חודש. זה אותו
+    פער שבו `rows_only_in_r2` מציג פחות מהאמת. תיקון אפשרי בשלב הבא: anti-join על
+    `(ident, last_seen)` מול החם.
+15. **בדיקה קיימת תלוית סדר (לא מהשינוי):** `test_append_sql_service_token::test_step_three_*`
+    נכשלת כשהיא רצה אחרי `test_append_api_multi.py` או `test_append_validity.py` בלבד (500
+    במקום 401, `JWT_SECRET_KEY` נקבע ב-setdefault רק אם `app.config` עוד לא נטען). שוחזר על
+    HEAD נקי; בריצה המלאה היא עוברת.
+16. **frontend:** המתג בקונסולה /data מוצג תמיד עם הסבר; בעמוד הארכיון רק כש-`rows_only_in_r2 > 0`
+    וגם `queryable_via == "duckdb"`. התג: "DuckDB · N חלקים · X ms", וההערות מתחתיו. כרטיס
+    "מנוע ההיסטוריה (DuckDB)" ב-StorageUsagePanel עם המצב ובדיקת הקצה-לקצה. לא נבדק בדפדפן
+    (אין backend מקומי עם מסד); tsc ו-vitest נקיים.
+17. **לא נבדק מקומית** (כמתוכנן): httpfs, postgres extension, ה-secrets, ו-ATTACH אחרי נעילה.
+    כל אלה נבדקים ב-4.3 צעדים 2-3.
+
+### 6.6 מה נשאר למשתמש לאשר (פרוטוקול 4.3, לא בוצע)
+
+1. **deploy של OVER** לפי over-xhostd-deploy-path / three-lineage-masters (cherry-pick על master של
+   xhostd ושל origin ב-worktree זמני, `app/config.py` מתנגש ב-CRLF: `checkout --ours` והכנסת
+   הבלוק עם ה-newline של הקובץ), push ל-git.xhostd.com, `deploy(sha=…)`, עם
+   `HISTORY_QUERY_ENABLED` לא מוגדר. ה-build מתקין `duckdb==1.5.1`. אימות:
+   `GET /api/admin/storage/history/query-status` → `available: false`, `reason: "disabled"`;
+   זיכרון האפליקציה בטאב xhostd לא עלה.
+2. **`HISTORY_QUERY_ENABLED=true`** + פריסה חוזרת. `query-status`: `extensions.httpfs = "ok"`,
+   `extensions.postgres = "ok"`, `hot_mode = "attach"` (או `"arrow"`, ואז שאר הפרוטוקול תקף עם
+   התקרה), `available: true`. כשל ב-httpfs = המנוע לא זמין, האתר לא מושפע; הסיבה בשדה.
+3. **בדיקת קצה-לקצה:** בכרטיס "מנוע ההיסטוריה" או `POST /api/admin/storage/history/query-smoke?table=append_taxes_nadlan_full_f41fb496_fd06f5ae`:
+   `parquet_rows == hot_rows` (3.84M), `equal: true`; לרשום `parquet_ms`, `hot_ms`, RSS לפני/אחרי;
+   p95 זיכרון בטאב xhostd לא חוצה 7 GB.
+4. **רגרסיה בקונסולה:** ב-/data עם "כולל היסטוריה" על טבלה בלי חלקים מחוקים: `engine: "postgres"`
+   עם `history_note`, אותה תוצאה כמו בלי המתג.
+5. **אחרי 2026-11-03** (הייצוא הראשון) ואחרי חלון על flydata אחד (שלב 2 צעד 4):
+   `SELECT count(*) FROM append_flydata_31c812a6` עם המתג = שורות ב-SQL + שורות בחלקים
+   המחוקים; `/rows?as_of=2026-10-10` מחזיר `engine: "duckdb"` ואת מספר הטיסות שהיו על הלוח;
+   עם הדגל כבוי, אותו as_of מחזיר את מה שב-SQL עם `history_note`.
+6. **7 ימים:** `query-status.stats` בלי timeouts חוזרים, `busy` נדיר, זיכרון יציב.
