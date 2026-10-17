@@ -912,3 +912,147 @@ def test_status_shape():
         assert k in s
     assert "stop" not in s
 
+
+
+# ── 13. the simulated clock (an admin runs the export before a month is due) ──
+
+def test_plan_under_a_future_clock_exports_and_deletes_october():
+    """On 2026-11-20 October is a finished month (cutoff = Nov 1 after the
+    grace), and with a 30-day window the delete cutoff is Oct 21: the month
+    that closed entirely on Oct 15 is exported AND deleted in one job."""
+    future = _ts(2026, 11, 20)
+    stats = [_stat(date(2026, 10, 1), 336_000, _ts(2026, 10, 15, 12))]
+    jobs = hx.plan_table(dataset_id=DSID, table=TABLE, month_stats=stats, parts=[],
+                         now=future, window_days=30, min_rows=100_000)
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert (job.month, job.part, job.after) == (date(2026, 10, 1), 1, None)
+    assert job.export is True and job.delete is True and job.window_days == 30
+    assert hx.export_cutoff(future) == _ts(2026, 11, 1)
+    assert hx.delete_cutoff(future, 30) == _ts(2026, 10, 21)
+    # The same stats under the real clock plan nothing: October is still running.
+    assert hx.plan_table(dataset_id=DSID, table=TABLE, month_stats=stats, parts=[],
+                         now=NOW, window_days=30, min_rows=100_000) == []
+
+
+def test_run_forwards_the_clock_to_plan_and_delete(monkeypatch):
+    """run(now=...) is the only way the override reaches the planner and the
+    delete cutoff; export_month needs no clock (the job carries its month)."""
+    import app.database as database
+
+    future = _ts(2026, 11, 20)
+    seen = {}
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(database, "async_session", lambda: _Session())
+    monkeypatch.setattr(hx, "is_available", lambda: (True, None))
+
+    async def fake_plan(db, *, only_dataset=None, now=None):
+        seen["plan"] = (only_dataset, now)
+        return [hx.Job(dataset_id=DSID, table=TABLE, month=date(2026, 10, 1), part=0,
+                       after=None, rows=0, export=False, delete=True, window_days=30)]
+
+    class _Conn:
+        pass
+
+    class _Acq:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acq()
+
+    async def pool():
+        return _Pool()
+
+    async def ident(conn, table):
+        return ("row_hash", "uuid")
+
+    part = _part(date(2026, 10, 1), 1, last_seen_min=_ts(2026, 10, 15),
+                 last_seen_max=_ts(2026, 10, 15, 12))
+
+    async def parts_for(db, dataset_id, table=None):
+        return [part]
+
+    async def fake_delete(p, *, window_days, now=None, vacuum_after=True):
+        seen["delete"] = (window_days, now, vacuum_after)
+        return {"deleted": 7, "complete": True}
+
+    async def fake_vacuum(table):
+        seen["vacuum"] = table
+
+    monkeypatch.setattr(hx, "plan", fake_plan)
+    monkeypatch.setattr(hx.append_store, "get_pool", pool)
+    monkeypatch.setattr(hx, "_table_ident", ident)
+    monkeypatch.setattr(hx, "parts_for_dataset", parts_for)
+    monkeypatch.setattr(hx, "delete_exported", fake_delete)
+    monkeypatch.setattr(hx, "vacuum", fake_vacuum)
+    monkeypatch.setitem(hx._state, "running", False)
+
+    asyncio.run(hx.run(only_dataset=DSID, now=future))
+    assert seen["plan"] == (DSID, future)
+    assert seen["delete"] == (30, future, False)
+    assert seen["vacuum"] == TABLE
+    s = hx.status()
+    assert s["as_of"] == future.isoformat() and s["deleted_rows"] == 7 and s["failed"] == []
+
+    # Without an override nothing changes: plan and delete see None (= real clock).
+    asyncio.run(hx.run(only_dataset=DSID))
+    assert seen["plan"] == (DSID, None) and seen["delete"][1] is None
+    assert hx.status()["as_of"] is None
+
+
+def test_the_admin_run_accepts_only_a_future_as_of(monkeypatch):
+    """The override can move the clock forward, never back: a past as_of would
+    re-plan finished months with a shorter cutoff. 409 on the past, 422 on
+    garbage, and a future value is forwarded as ``now`` unchanged."""
+    from app.api import admin_storage
+
+    with pytest.raises(HTTPException) as e:
+        admin_storage.simulated_clock("2026-10-01")
+    assert e.value.status_code == 409
+    with pytest.raises(HTTPException) as e:
+        admin_storage.simulated_clock("not a date")
+    assert e.value.status_code == 422
+    assert admin_storage.simulated_clock(None) is None
+    assert admin_storage.simulated_clock("") is None
+    assert admin_storage.simulated_clock("2099-11-20") == datetime(2099, 11, 20, 23, 59, 59,
+                                                                  999000, tzinfo=UTC)
+    assert admin_storage.simulated_clock("2099-11-20T06:00:00Z") == _ts(2099, 11, 20, 6)
+
+    started = {}
+
+    async def fake_run(*, only_dataset=None, now=None):
+        started["args"] = (only_dataset, now)
+
+    monkeypatch.setattr(hx, "run", fake_run)
+    monkeypatch.setattr(hx, "is_available", lambda: (True, None))
+    monkeypatch.setitem(hx._state, "running", False)
+
+    async def go(as_of):
+        out = await admin_storage.history_run(dataset_id=DSID, as_of=as_of, _=None)
+        await asyncio.sleep(0)   # let the created task run
+        return out
+
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(go("2026-10-01"))
+    assert e.value.status_code == 409
+    assert "args" not in started, "a refused clock starts nothing"
+
+    out = asyncio.run(go("2099-11-20"))
+    assert out["started"] is True and out["as_of"] == "2099-11-20T23:59:59.999000+00:00"
+    assert started["args"] == (DSID, datetime(2099, 11, 20, 23, 59, 59, 999000, tzinfo=UTC))
+
+    out = asyncio.run(go(None))
+    assert out == {"started": True, "as_of": None}
+    assert started["args"] == (DSID, None)
