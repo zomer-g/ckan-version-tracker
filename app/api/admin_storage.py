@@ -376,20 +376,47 @@ async def history_status(_: User = Depends(get_admin_user),
     return await history_export.admin_summary(db)
 
 
+def simulated_clock(as_of: str | None):
+    """The ``as_of`` override of a manual export run as an aware UTC datetime,
+    or None. A bare date is the end of that UTC day (append_store.parse_as_of).
+    Only a FUTURE clock is accepted: the override exists to exercise a month
+    before it is due, never to re-plan the past with a shorter cutoff."""
+    from datetime import datetime, timezone
+
+    from app.services import append_store
+    if as_of is None or not str(as_of).strip():
+        return None
+    try:
+        now = append_store.parse_as_of(as_of)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"as_of: {e}") from e
+    if now < datetime.now(timezone.utc):
+        raise HTTPException(status_code=409,
+                            detail="as_of must be in the future: the simulated clock "
+                                   "only moves forward")
+    return now
+
+
 @router.post("/history/run")
 async def history_run(dataset_id: str | None = Query(None),
+                      as_of: str | None = Query(
+                          None, description="simulated clock (ISO date or datetime, UTC); "
+                                            "must be in the future"),
                       _: User = Depends(get_admin_user)):
     """Run the export now (all datasets, or one). Deletes only where a dataset
-    has history_window_days, exactly as the daily job would."""
+    has history_window_days, exactly as the daily job would. ``as_of`` runs the
+    same plan under a future clock, so a month can be exported and its rows
+    past the window deleted before the real job would get to it."""
     import asyncio
     from app.services import history_export
+    now = simulated_clock(as_of)
     if history_export.status()["running"]:
         return {"started": False, "reason": "already running"}
     ok, why = history_export.is_available()
     if not ok:
         raise HTTPException(status_code=409, detail=why)
-    asyncio.create_task(history_export.run(only_dataset=dataset_id))
-    return {"started": True}
+    asyncio.create_task(history_export.run(only_dataset=dataset_id, now=now))
+    return {"started": True, "as_of": now.isoformat() if now else None}
 
 
 @router.post("/history/stop")
