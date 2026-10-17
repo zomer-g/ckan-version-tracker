@@ -59,7 +59,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
   {
     id: "over",
     title: "OVER — מאגרי מידע ממשלתיים",
-    note: "מעקב גרסאות אחרי מאגרי data.gov.il ומקורות ממשלתיים נוספים. כתובת בסיס: /api/v1 (מטא-דאטה) ו-/api/append (תוכן השורות). · מאגרי דגימות: בחלק מהמאגרים כל ישות (תוכנית בנייה, תיק, רשומה) נדגמת שוב ושוב, ולכל דגימה שורה משלה עם חותמת זמן — כך שהטבלה היא ההיסטוריה של כל ישות ולא תמונת מצב. שתי השאלות שאפשר לשאול בה: \"מה המצב העדכני של כל הישויות\" (rows?latest=true) ו-\"מה ההיסטוריה של ישות אחת\" (item?value=…). מאגר כזה מזוהה לפי supports_latest ב-/schema.",
+    note: "מעקב גרסאות אחרי מאגרי data.gov.il ומקורות ממשלתיים נוספים. כתובת בסיס: /api/v1 (מטא-דאטה) ו-/api/append (תוכן השורות). · מאגרי דגימות: בחלק מהמאגרים כל ישות (תוכנית בנייה, תיק, רשומה) נדגמת שוב ושוב, ולכל דגימה שורה משלה עם חותמת זמן — כך שהטבלה היא ההיסטוריה של כל ישות ולא תמונת מצב. שתי השאלות שאפשר לשאול בה: \"מה המצב העדכני של כל הישויות\" (rows?latest=true) ו-\"מה ההיסטוריה של ישות אחת\" (item?value=…). מאגר כזה מזוהה לפי supports_latest ב-/schema. · תוקף שורה: בכל טבלה כל שורה היא מצב אחד, עם first_seen (מתי נראה לראשונה) ו-last_seen (מתי הפסיק להופיע; NULL = עדיין בתוקף). לכן אפשר לשאול \"מה היה בתוקף בנקודת זמן\" (as_of=) או \"רק מה שבתוקף עכשיו\" (current=true) בלי לדעת איך המאגר נשמר. · היסטוריה קרה: שורות שנסגרו מזמן עוברות מ-SQL לקובצי Parquet ציבוריים ב-R2 (היסטוריה/חודש סגירה). /schema מדווח כמה שורות נמצאות רק בקבצים (history.rows_only_in_r2), include_history: true ב-POST /sql מאחד את השניים באותה שאילתה, ו-as_of ישן מנותב לשם אוטומטית.",
     endpoints: [
       {
         path: "/api/v1/datasets",
@@ -129,6 +129,8 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
           { name: "limit / offset", desc: "עימוד (limit עד 500)" },
           { name: "distinct / include_total", desc: "boolean" },
           { name: "latest", desc: "במאגר דגימות: שורה אחת לכל ישות — הדגימה האחרונה שלה (ראו למטה)" },
+          { name: "as_of", desc: "תאריך או זמן ISO (UTC): השורות שהיו בתוקף באותה נקודה (first_seen ≤ as_of < last_seen). נקודה שחלק מהשורות שלה כבר בקבצים מנותבת למנוע ההיסטוריה" },
+          { name: "current", desc: "true = רק שורות בתוקף עכשיו (last_seen IS NULL)" },
         ],
         example:
           '/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/datastore_search?limit=5&filters={"tozeret_nm":"קיה קוריאה"}',
@@ -142,8 +144,10 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
           { name: "q / <עמודה>", desc: "חיפוש חופשי / סינון לפי עמודה" },
           { name: "limit / offset / sort / order", desc: "עימוד ומיון" },
           { name: "table", desc: "במאגר מרובה טבלאות: שם הטבלה או שם המשאב" },
+          { name: "as_of", desc: "המאגר כפי שעמד בנקודת זמן (ISO, UTC); דורש last_seen_column ב-/schema. התשובה מציינת engine: \"duckdb\" כשהשורות נקראו מקובצי ההיסטוריה" },
+          { name: "current", desc: "true = רק השורות שבתוקף עכשיו" },
         ],
-        example: "/api/append/76f0e069-f269-46fc-bcc8-f704ebbf17ff/rows?latest=true&limit=20",
+        example: "/api/append/31c812a6-9b0c-4f32-8317-e5f268c28f60/rows?as_of=2026-10-16T12:00:00Z&limit=20",
       },
       {
         path: "/api/append/{id}/item",
@@ -161,8 +165,29 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         path: "/api/append/{id}/download.csv",
         description:
           "כל הארכיון (או התוצאה המסוננת) כ-CSV בזרימה. latest=true מוריד שורה אחת לכל ישות במקום את היסטוריית הדגימות.",
-        params: [{ name: "latest / q / <עמודה> / table", desc: "כמו ב-/rows" }],
-        example: "/api/append/76f0e069-f269-46fc-bcc8-f704ebbf17ff/download.csv?latest=true",
+        params: [
+          { name: "latest / q / <עמודה> / table", desc: "כמו ב-/rows" },
+          { name: "as_of / current", desc: "כמו ב-/rows: המאגר כפי שעמד בנקודת זמן, או רק מה שבתוקף עכשיו" },
+        ],
+        example: "/api/append/31c812a6-9b0c-4f32-8317-e5f268c28f60/download.csv?current=true",
+      },
+      {
+        path: "/api/append/{id}/sql",
+        method: "POST",
+        description:
+          "שאילתת SQL (SELECT/WITH יחיד) על טבלאות המאגר, גוף JSON {sql}. ברירת המחדל רצה ב-Postgres על מה שנמצא ב-SQL. עם include_history: true השרת בונה תצוגה בשם הטבלה שמאחדת את הטבלה החמה עם קובצי ה-Parquet שכבר נמחקו מ-SQL, ומריץ את אותו SQL במנוע ההיסטוריה (DuckDB; התשובה מסמנת engine: \"duckdb\" ו-elapsed_ms). כל ההיסטוריה של המאגר בשאילתה אחת, בלי שינוי ב-SQL. עד 30 שניות, שאילתה אחת בכל רגע (429 כשהתור מלא).",
+        params: [
+          { name: "sql", desc: "משפט SELECT/WITH יחיד, ללא ; בסוף" },
+          { name: "include_history", desc: "true = כולל השורות שנמצאות רק בקבצי ההיסטוריה (ראו history ב-/schema)" },
+        ],
+        example: "/api/append/31c812a6-9b0c-4f32-8317-e5f268c28f60/sql",
+      },
+      {
+        path: "/api/append/{id}/history/files",
+        description:
+          "קובצי ה-Parquet של השורות שנסגרו ועברו ל-R2: קובץ בלתי משתנה לכל טבלה ולכל חודש סגירה (closed_month=YYYY-MM/part-N.parquet), עם public_url להורדה ישירה, מספר השורות, טווחי first_seen ו-last_seen, deleted_from_sql (האם השורות עדיין גם ב-SQL) ו-content_hash — md5 של ערכי row_hash ממוינים, כדי שכל אחד יוכל לאמת שהקובץ שלם. הקבצים נקראים ישירות ב-pandas, DuckDB או QGIS בלי לעבור דרך האתר.",
+        params: [{ name: "table", desc: "במאגר מרובה טבלאות: שם הטבלה" }],
+        example: "/api/append/31c812a6-9b0c-4f32-8317-e5f268c28f60/history/files",
       },
       {
         path: "/api/append/{id}/datastore_search_sql",
@@ -175,7 +200,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/append/{id}/schema",
         description:
-          "סכמת טבלת ה-SQL של המאגר: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות.",
+          "סכמת טבלת ה-SQL של המאגר: שם הטבלה, מספר השורות, רשימת העמודות, ועמודת first_seen (זמן הוספת כל שורה). במאגר דגימות מוחזרים גם item_key (העמודה שמזהה ישות), sample_column (מתי השורה נדגמה) ו-supports_latest — כך אפשר לגלות שיש כמה שורות לאותה ישות במקום להניח ששורה = ישות. בנוסף: last_seen_column ו-supports_as_of (המאגר תומך ב-as_of/current), history (parts, rows_in_r2, rows_only_in_r2, from/to, files_url: כמה מההיסטוריה כבר אינה ב-SQL) ו-history_tier (hot = ההווה ב-SQL; cold = כל המאגר בקבצים, הטבלה ב-SQL ריקה ו-include_history מובלע).",
         example: "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/schema",
       },
     ],
@@ -218,6 +243,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         params: [
           { name: "sql", desc: "משפט SELECT/WITH יחיד, ללא ; בסוף" },
           { name: "sql_b64", desc: "אותו משפט מקודד base64 (חלופה ל-sql)" },
+          { name: "include_history", desc: "true = טבלאות שחלק מההיסטוריה שלהן בקובצי Parquet (ראו history ב-/api/append/{id}/schema) נקראות דרך מנוע ההיסטוריה (DuckDB) יחד עם השורות החמות; חובה לטבלה בשכבה הקרה, שב-SQL היא ריקה" },
         ],
         example: "/api/tables/sql",
       },
