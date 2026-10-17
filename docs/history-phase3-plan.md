@@ -352,3 +352,15 @@ npx vitest run          → 13 passed
    המחוקים; `/rows?as_of=2026-10-10` מחזיר `engine: "duckdb"` ואת מספר הטיסות שהיו על הלוח;
    עם הדגל כבוי, אותו as_of מחזיר את מה שב-SQL עם `history_note`.
 6. **7 ימים:** `query-status.stats` בלי timeouts חוזרים, `busy` נדיר, זיכרון יציב.
+
+### 6.7 פרוטוקול 4.3 על prod (2026-10-17, הסשן המתכנן)
+
+| צעד | תוצאה |
+|---|---|
+| 1. deploy עם הדגל כבוי | xhostd `5c999a6` (GitHub `101c039`) עלה 07:45 UTC. `query-status`: `enabled:false`, `available:false`, `reason:"disabled"`. זיכרון האפליקציה 5.2 GB (p95 6.29), ללא שינוי. |
+| 2. הדגל דולק | `HISTORY_QUERY_ENABLED=true`, פריסה חוזרת 07:50 UTC. `query-status`: DuckDB 1.5.1, `httpfs: ok`, `postgres: ok`, `hot_mode: attach` (הרחבת postgres עובדת גם אחרי הנעילה), `available:true`. |
+| 3. בדיקת עשן | `query-smoke?table=append_taxes_nadlan_full_f41fb496_fd06f5ae`: Parquet 3,844,200 שורות ב-566 ms, חם (attach) 3,844,200 ב-537 ms, `equal:true`; RSS 887 → 837 MB. |
+| 4. רגרסיה בקונסולה | `/api/append/6fb0e203/sql` עם ובלי `include_history`: אותה תוצאה (1,174), עם המתג `engine: postgres` והערה שאין לטבלה שורות שרק בהיסטוריה. |
+| 5. הקר האמיתי | ממתין ל-2026-11-03 (ייצוא ראשון של שלב 2) ולחלון על flydata אחד. |
+
+הערה: הקריאות לאדמין בוצעו דרך תוסף הכרום בסשן של המשתמש (fetch עם הטוקן של ה-SPA), כי טוקן אדמין פג וקליקים ישירים של המשתמש בדפדפן שלו לא יצאו.
