@@ -270,6 +270,101 @@ interface HistoryExport {
   datasets: HistoryDataset[];
 }
 
+interface HistoryQueryStatus {
+  enabled: boolean;
+  available: boolean;
+  reason: string | null;
+  duckdb_version: string | null;
+  extensions: { httpfs: string | null; postgres: string | null; checked_at: string | null };
+  hot_mode: "attach" | "arrow" | null;
+  active: number;
+  waiting: number;
+  queue: number;
+  memory_mb: number;
+  timeout_s: number;
+  stats: { queries: number; ok: number; errors: number; timeouts: number; busy: number;
+           last_error: string | null; last_elapsed_ms: number | null };
+}
+
+interface SmokeResult {
+  table: string; parquet_rows?: number; hot_rows?: number; equal: boolean;
+  parquet_ms?: number; hot_ms?: number; rss_mb_before: number | null; rss_mb_after: number | null;
+}
+
+/** The DuckDB history engine (app/services/history_query.py): is it up, how
+ *  the hot tables are read, the gate and the counters, and an end-to-end smoke
+ *  test that counts an existing Parquet mirror against its SQL table. */
+function HistoryQueryCard() {
+  const [st, setSt] = useState<HistoryQueryStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [table, setTable] = useState("append_taxes_nadlan_full_f41fb496_fd06f5ae");
+  const [smoke, setSmoke] = useState<SmokeResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    try { setSt(await call<HistoryQueryStatus>("/history/query-status")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const runSmoke = async () => {
+    setBusy(true); setSmoke(null);
+    try {
+      setSmoke(await call<SmokeResult>(`/history/query-smoke?table=${encodeURIComponent(table)}`, "POST"));
+      setErr(null);
+    } catch (e) { setErr(e instanceof Error ? e.message : "הבדיקה נכשלה"); }
+    finally { setBusy(false); void load(); }
+  };
+
+  const n = (v: number) => v.toLocaleString("he-IL");
+  const hot = st?.hot_mode === "attach" ? "Postgres ישירות (postgres extension)"
+    : st?.hot_mode === "arrow" ? "hot via arrow (טעינה לזיכרון, עם תקרה)" : "לא זמין";
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.6rem 0.8rem", marginBottom: "0.9rem", background: "var(--bg-secondary)" }}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>מנוע ההיסטוריה (DuckDB)</strong>
+        <span className="text-sm text-muted">
+          המתג "כולל היסטוריה" ו-as_of ישן קוראים דרכו את טבלת ה-SQL יחד עם הקבצים שיש להם שורות רק ב-R2.
+        </span>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)", whiteSpace: "pre-wrap" }}>{err}</div>}
+      {st && (
+        <div className="flex text-sm" style={{ gap: "0.8rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+          <span style={{ color: st.available ? "var(--tint-info-fg)" : undefined }}>
+            {st.available ? "זמין" : `לא זמין: ${st.reason === "disabled" ? "כבוי (HISTORY_QUERY_ENABLED)" : st.reason}`}
+          </span>
+          {st.enabled && (
+            <>
+              <span>httpfs: {st.extensions.httpfs ?? "—"} · postgres: {st.extensions.postgres ?? "—"}</span>
+              <span>שורות חמות: {hot}</span>
+            </>
+          )}
+          <span>רץ {st.active} · ממתינות {st.waiting}/{st.queue}</span>
+          <span>
+            {n(st.stats.queries)} שאילתות · {n(st.stats.ok)} הצליחו · {n(st.stats.timeouts)} חרגו מ-{st.timeout_s} ש' · {n(st.stats.busy)} נדחו (429)
+          </span>
+          {st.stats.last_error && (
+            <span style={{ color: "var(--danger)" }} title={st.stats.last_error}>שגיאה אחרונה</span>
+          )}
+          <span style={{ flex: 1 }} />
+          <input value={table} onChange={(e) => setTable(e.target.value)} dir="ltr"
+                 aria-label="טבלה לבדיקת קצה-לקצה" style={{ fontSize: "0.8rem", width: 300 }} />
+          <button type="button" className="text-sm" onClick={() => void runSmoke()} disabled={busy || !st.available}
+                  style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" }}>
+            {busy ? "בודק…" : "בדיקת קצה-לקצה"}
+          </button>
+        </div>
+      )}
+      {smoke && (
+        <div className="text-sm" style={{ marginTop: "0.4rem", color: smoke.equal ? undefined : "var(--danger)" }}>
+          Parquet: {smoke.parquet_rows != null ? n(smoke.parquet_rows) : "—"} ({smoke.parquet_ms ?? "—"} ms) ·
+          SQL: {smoke.hot_rows != null ? n(smoke.hot_rows) : "—"} ({smoke.hot_ms ?? "—"} ms) ·
+          {smoke.equal ? " שווים" : " שונים"} · RSS {smoke.rss_mb_before ?? "—"} → {smoke.rss_mb_after ?? "—"} MB
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Closed rows exported to Parquet on R2 by closing month, verified against SQL
  *  (app/services/history_export.py). Rows are deleted from SQL only for a
  *  dataset with a history window; without one, the files are a second copy. */
@@ -535,6 +630,7 @@ export default function StorageUsagePanel() {
       <HashCompactionCard />
       <IndexMigrationCard />
       <HistoryExportCard />
+      <HistoryQueryCard />
 
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.6rem", marginBottom: "0.9rem" }}>

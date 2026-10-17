@@ -470,9 +470,8 @@ least 100,000 closed rows are exported.
 By default the rows stay in the SQL table too. A dataset whose admin set a
 **history window** (`history_window_days`, at least 30) has its rows closed
 before that window deleted from SQL, only after the file was read back from R2
-and matched against the table. Those rows are then only in the files: until the
-query layer reads them (a later phase), `/rows`, `as_of` and `/sql` do not see
-them. Check `rows_only_in_r2`.
+and matched against the table. Those rows are then only in the files, and
+`rows_only_in_r2` counts them; the history engine below reads them back.
 
 ```json
 {
@@ -496,13 +495,66 @@ download can be checked. `missing: true` means the weekly audit did not find
 the object in the bucket. `404` for a dataset with no row archive.
 
 `/schema` carries the same totals for its table as a `history` block:
-`{parts, rows_in_r2, rows_only_in_r2, from, to, files_url}` (`null` when the
-catalog cannot be read).
+`{parts, rows_in_r2, rows_only_in_r2, from, to, files_url, queryable_via}`
+(`null` when the catalog cannot be read). `queryable_via` is `"duckdb"` while
+the history engine is on, `null` while it is off.
 
 ```bash
 # Every closed row of one month, straight from the file, with DuckDB
 duckdb -c "SELECT count(*) FROM read_parquet('https://…/closed_month=2026-07/part-0001.parquet')"
 ```
+
+### Querying the closed history: `include_history` and `as_of`
+
+The same SQL can read the rows that are only in the files. With
+`"include_history": true` in the body of `POST /api/append/{id}/sql` or
+`POST /api/tables/sql` (the /data console), the statement runs on the **history
+engine**: DuckDB, inside OVER, over a view per table that unites the SQL table
+with its parts whose rows were deleted from SQL. Same table and column names,
+one SELECT/WITH, at most 1,000 rows, 30 seconds.
+
+```bash
+curl -X POST "https://over.org.il/api/append/<id>/sql" -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT count(*) FROM append_… ", "include_history": true}'
+```
+
+The answer has the usual shape (`columns`, `fields`, `rows`, `truncated`,
+`row_count`) plus:
+
+| Field | Meaning |
+|---|---|
+| `engine` | `"duckdb"` when the engine answered; `"postgres"` when none of the tables has rows only in the files (the answer is complete) or the engine is off |
+| `cold_parts` | how many Parquet parts the views read |
+| `elapsed_ms` | engine time |
+| `history_note` | with `engine: "postgres"`: why, and whether rows are missing |
+| `dialect_note` | a warning about a construct that means something else in DuckDB |
+
+Without `include_history` nothing changes. On the per-dataset endpoint the
+engine sees that dataset's tables; the /data console sees every table of the
+catalog the statement names.
+
+`as_of` on `/rows` and `/datastore_search` moves to the engine by itself when
+some row that was in force at that moment exists only in the files (a part
+deleted from SQL whose `last_seen_max` is later than `as_of`); otherwise it
+stays on Postgres. The response then carries `engine: "duckdb"`. While the
+engine is off such a read answers from SQL with a `history_note`.
+`current=true` never needs the files. `download.csv` always reads SQL only.
+
+**Dialect.** DuckDB is close to Postgres but not the same:
+
+- in the views every source column is text and `first_seen` / `last_seen` are
+  timestamps with zone; a column added later is `NULL` in older rows;
+- no PostGIS (`geom` is not in the views; `geometry_wkt` is, as text);
+- `~` is a **full** regex match; for a partial match use
+  `regexp_matches(col, 'pattern')`, and `~*` / `!~` do not exist;
+- `row_hash` is text: compare it as `row_hash = '…'`, not `::uuid`;
+- dates are formatted with `strftime` / `strptime`, not `to_char`;
+- functions that read files, URLs or settings (`read_*`, `*_scan`, `glob`,
+  `current_setting`, `duckdb_*`…) and `ATTACH` / `SET` / `PRAGMA` are refused.
+
+One query runs at a time and three may wait; beyond that `429` (try again in a
+moment). The MCP tools take the same switch: `run_sql` has `include_history`,
+and `query_dataset_rows` routes an old `as_of` the same way.
 
 ---
 

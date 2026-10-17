@@ -197,6 +197,16 @@ TOOLS: list[dict] = [
                 "sql": {"type": "string", "description": "שאילתת SELECT / WITH יחידה"},
                 "max_rows": {"type": "integer", "minimum": 1, "maximum": MAX_SQL_ROWS,
                              "default": 200, "description": f"תקרת שורות (עד {MAX_SQL_ROWS})"},
+                "include_history": {
+                    "type": "boolean", "default": False,
+                    "description": (
+                        "true = לכלול גם שורות היסטוריה ישנות שהועברו מ-SQL לקבצי Parquet "
+                        "(שדה history.rows_only_in_r2 ב-/schema של המאגר גדול מ-0). "
+                        "השאילתה רצה אז על מנוע ההיסטוריה (DuckDB), איטית יותר, "
+                        "והדיאלקט קרוב ל-Postgres אך לא זהה (ללא PostGIS; ~ היא התאמה "
+                        "מלאה, לחיפוש חלקי regexp_matches). כשאין לטבלאות שורות כאלה "
+                        "היא רצה על Postgres כרגיל (engine: postgres + history_note)."),
+                },
             },
             "required": ["sql"],
         },
@@ -416,9 +426,21 @@ async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
     _require_configured()
     sql = a.get("sql") or ""
     max_rows = min(int(a.get("max_rows") or 200), MAX_SQL_ROWS)
-    res = await append_store.run_readonly_sql(
-        sql, search_path=data_catalog.CONSOLE_SEARCH_PATH,
-        max_rows=max_rows, timeout_ms=SQL_TIMEOUT_MS)
+
+    def run_pg():
+        return append_store.run_readonly_sql(
+            sql, search_path=data_catalog.CONSOLE_SEARCH_PATH,
+            max_rows=max_rows, timeout_ms=SQL_TIMEOUT_MS)
+
+    if a.get("include_history"):
+        from app.services import history_query
+        res = await history_query.route_sql(
+            sql, tables=history_query.console_tables(
+                sql, await _catalog(db), data_catalog.CONSOLE_SEARCH_PATH),
+            run_pg=run_pg, search_path=data_catalog.CONSOLE_SEARCH_PATH,
+            max_rows=max_rows)
+    else:
+        res = await run_pg()
     notes: list[str] = []
     if res.get("truncated"):
         notes.append(f"התוצאה נקטעה ב-{max_rows} שורות. השתמשו ב-GROUP BY / "

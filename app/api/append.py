@@ -26,6 +26,13 @@ deleted from SQL after their file was verified. ``/schema`` carries a
 ``history`` block (parts, rows in R2, rows ONLY in R2, the date range) and
 ``/history/files`` lists every file with its public URL.
 
+QUERYING THE CLOSED HISTORY (docs/history-phase3-plan.md). ``include_history``
+on ``POST /sql`` runs the statement on the history engine (DuckDB over the SQL
+table plus the files whose rows are only in R2) when the dataset has such
+files; otherwise it runs on Postgres as always and says so (``engine``,
+``history_note``). ``as_of`` on /rows and /datastore_search moves to the engine
+by itself when rows that were in force at that moment are only in R2.
+
 ROW VALIDITY. Every row carries ``first_seen`` (when OVER stored it) and
 ``last_seen`` (NULL while it is in force; set when a full pass of the source no
 longer returned it). ``?as_of=<date|timestamp>`` on /rows, /datastore_search
@@ -76,11 +83,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.sql_access import SqlCaller, admit, sql_caller
 
 from app.api.utils import MAX_API_OFFSET, parse_uuid
+from app.config import settings
 from app.database import get_db, release_connection
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
-from app.services import append_store, append_tables
+from app.services import append_store, append_tables, history_query
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +97,9 @@ router = APIRouter(prefix="/api/append", tags=["append"])
 
 class SqlBody(BaseModel):
     sql: str
+    # Run on the history engine, so rows that exist only in R2 count too (see
+    # history_query.route_sql). Absent or false: exactly the old behaviour.
+    include_history: bool = False
 
 # `table` and its aliases select ONE table of a multi-resource dataset. Reserved
 # like limit/offset/sort/order/q so /rows and /download.csv never mistake the
@@ -388,7 +399,32 @@ async def _history_block(db, ds, tbl: str) -> dict | None:
     except Exception:  # noqa: BLE001
         logger.debug("append: history summary failed", exc_info=True)
         return None
-    return {**h, "files_url": f"/api/append/{ds.id}/history/files?table={quote(tbl)}"}
+    return {**h, "files_url": f"/api/append/{ds.id}/history/files?table={quote(tbl)}",
+            # How to read those rows with SQL: include_history on /sql (an old
+            # as_of on /rows routes by itself). None while the engine is off.
+            "queryable_via": "duckdb" if settings.history_query_enabled else None}
+
+
+def _engine_http_error(e: history_query.HistoryQueryError) -> HTTPException:
+    """429 when the engine is busy, 400 for everything else it refuses."""
+    if isinstance(e, history_query.EngineBusy):
+        return HTTPException(status_code=429, detail=str(e))
+    return HTTPException(status_code=400, detail=str(e))
+
+
+async def _cold_route(tbl: str, at) -> tuple[list[dict] | None, str | None]:
+    """For an as_of read: ``(parts, None)`` when it must run on the engine,
+    ``(None, note)`` when it stays on Postgres although SQL alone misses rows,
+    ``(None, None)`` when Postgres is the whole answer. Only an as_of read looks
+    at the catalog; every other read is untouched."""
+    if at is None:
+        return None, None
+    parts = await history_query.cold_parts_for(tbl)
+    if history_query.should_use_history(at, parts) and history_query.engine_ready():
+        return parts, None
+    if history_query.should_use_history(at, parts, enabled=True):
+        return None, history_query.NOTE_AS_OF
+    return None, None
 
 
 @router.get("/{dataset_id}/history/files")
@@ -484,13 +520,25 @@ async def archive_rows(
     at, cur = _validity(as_of, current)
     ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     latest_key, latest_order = _latest_key(ds, latest)
-    return await append_store.query(
+    parts, note = await _cold_route(tbl, at)
+    if parts is not None:
+        try:
+            return await history_query.rows_page(
+                tbl, parts=parts, as_of=at, limit=limit, offset=offset, sort=sort,
+                order=order, q=q, filters=_filters_from(request, exclude=set()),
+                latest_key=latest_key, latest_order=latest_order)
+        except history_query.HistoryQueryError as e:
+            raise _engine_http_error(e)
+    res = await append_store.query(
         tbl,
         limit=limit, offset=offset, sort=sort, order=order, q=q,
         filters=_filters_from(request, exclude=set()),
         latest_key=latest_key, latest_order=latest_order,
         **({"as_of": at, "current": cur} if (at is not None or cur) else {}),
     )
+    if note:
+        res["history_note"] = note
+    return res
 
 
 @router.get("/{dataset_id}/item")
@@ -620,7 +668,16 @@ async def archive_sql(
     # 404/409 if not an append dataset
     _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
+        if body.include_history:
+            # The dataset's own tables the statement names; widening to other
+            # datasets' tables is the /data console's job, not this endpoint's.
+            refs = history_query.extract_table_refs(body.sql, [t["table"] for t in _tables])
+            return await history_query.route_sql(
+                body.sql, tables=refs,
+                run_pg=lambda: append_store.run_readonly_sql(body.sql, table=tbl))
         return await append_store.run_readonly_sql(body.sql, table=tbl)
+    except history_query.HistoryQueryError as e:
+        raise _engine_http_error(e)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
@@ -678,12 +735,24 @@ async def datastore_search(
             raise HTTPException(status_code=400, detail="filters must be valid JSON")
         if not isinstance(filt, dict):
             raise HTTPException(status_code=400, detail="filters must be a JSON object")
-    res = await append_store.datastore_search(
-        tbl, fields=field_list, filters=filt, q=q, sort=sort,
-        limit=limit, offset=offset, distinct=distinct, include_total=include_total,
-        latest_key=latest_key, latest_order=latest_order,
-        **({"as_of": at, "current": cur} if (at is not None or cur) else {}),
-    )
+    parts, note = await _cold_route(tbl, at)
+    if parts is not None:
+        try:
+            res = await history_query.datastore_page(
+                tbl, parts=parts, as_of=at, fields=field_list, filters=filt, q=q, sort=sort,
+                limit=limit, offset=offset, distinct=distinct, include_total=include_total,
+                latest_key=latest_key, latest_order=latest_order)
+        except history_query.HistoryQueryError as e:
+            raise _engine_http_error(e)
+    else:
+        res = await append_store.datastore_search(
+            tbl, fields=field_list, filters=filt, q=q, sort=sort,
+            limit=limit, offset=offset, distinct=distinct, include_total=include_total,
+            latest_key=latest_key, latest_order=latest_order,
+            **({"as_of": at, "current": cur} if (at is not None or cur) else {}),
+        )
+        if res is not None and note:
+            res["history_note"] = note
     if res is None:
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
     res["resource_id"] = str(ds.id)

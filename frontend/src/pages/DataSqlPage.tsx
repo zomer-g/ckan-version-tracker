@@ -6,9 +6,11 @@ import {
   CatalogTable,
   CatalogTableDetail,
   KnessetDbSqlResult,
+  HistoryEngineInfo,
   utf8ToBase64,
   base64ToUtf8,
 } from "../api/client";
+import { EngineBadge, HistoryToggle } from "../components/HistoryEngine";
 import { sourceBadgeFor } from "../utils/sourceBadge";
 import SourceChip from "../components/SourceChip";
 import SqlChartPanel, { CHART_PARAM_KEYS } from "../components/SqlChartPanel";
@@ -1019,7 +1021,11 @@ export default function DataSqlPage() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   const [sqlText, setSqlText] = useState(() => sqlFromUrl(searchParams) || PLACEHOLDER_SQL);
-  const [sqlResult, setSqlResult] = useState<KnessetDbSqlResult | null>(null);
+  const [sqlResult, setSqlResult] = useState<(KnessetDbSqlResult & HistoryEngineInfo) | null>(null);
+  // "כולל היסטוריה": read through a ref so runFetch keeps its stable identity.
+  const [includeHistory, setIncludeHistory] = useState(false);
+  const includeHistoryRef = useRef(false);
+  includeHistoryRef.current = includeHistory;
   const [sqlError, setSqlError] = useState<string | null>(null);
   // The server-side export is a fetch now (it has to carry the bearer token),
   // so it has the two things a link never had: a pending state and an error
@@ -1250,7 +1256,7 @@ export default function DataSqlPage() {
     setSqlRunning(true);
     setSqlError(null);
     dataCatalog
-      .sql(sql)
+      .sql(sql, includeHistoryRef.current)
       .then((r) => { setSqlResult(r); setSqlError(null); setRunId((n) => n + 1); setExecutedSql(sql); })
       .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); setExecutedSql(""); })
       .finally(() => {
@@ -1508,6 +1514,7 @@ export default function DataSqlPage() {
             {sqlRunning ? "מריץ…" : sqlCooldown ? "רגע…" : "▶ הרץ"}
           </button>
           <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
+          <HistoryToggle checked={includeHistory} onChange={setIncludeHistory} general />
           {(sqlText.trim() || sqlResult || sqlError) && (
             <button
               type="button"
@@ -1633,6 +1640,7 @@ export default function DataSqlPage() {
                 {sqlError}
               </div>
         )}
+        {sqlResult && !sqlError && <EngineBadge result={sqlResult} />}
         {sqlResult && !sqlError && (
           <>
           <h2 className="sr-only">
