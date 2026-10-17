@@ -14,6 +14,9 @@
                                       the job, the audit, the catalog by dataset
   POST /api/admin/storage/history/run|stop, GET /history/audit
                                       (app/services/history_export.py)
+  GET  /api/admin/storage/history/query-status, POST /history/query-smoke
+                                    — the DuckDB history engine
+                                      (app/services/history_query.py)
   GET  /api/admin/storage/orphans   — the append tables whose dataset is gone
   POST /api/admin/storage/orphans/drop
                                     — drop them (re-derived at call time)
@@ -393,3 +396,27 @@ async def history_audit(_: User = Depends(get_admin_user)):
     """HEAD every catalog key in R2 now; lists the keys that are missing."""
     from app.services import history_export
     return await history_export.audit_history_parts()
+
+
+# ── History query engine (docs/history-phase3-plan.md) ───────────────────────
+
+@router.get("/history/query-status")
+async def history_query_status(_: User = Depends(get_admin_user)):
+    """The DuckDB engine: available or why not, the extensions, how the hot
+    tables are read, the gate (running / waiting) and counters since boot."""
+    from app.services import history_query
+    return history_query.status()
+
+
+@router.post("/history/query-smoke")
+async def history_query_smoke(table: str = Query(..., description="an append table with a Parquet mirror"),
+                              _: User = Depends(get_admin_user)):
+    """End to end without any history part: count(*) of the table's existing
+    Parquet mirror on R2 and of the hot table, both through the engine."""
+    from app.services import history_query
+    try:
+        return await history_query.smoke(table)
+    except history_query.EngineBusy as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except history_query.HistoryQueryError as e:
+        raise HTTPException(status_code=400, detail=str(e))

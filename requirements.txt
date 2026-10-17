@@ -50,3 +50,7 @@ rapidfuzz==3.14.3
 # Optional at runtime: the service reports "not available" and the rest of the
 # app is unaffected if the wheel is absent, so a slim deploy can drop it.
 pyarrow==23.0.1
+
+# The history query engine (app/services/history_query.py): reads the Parquet
+# parts on R2 together with the hot tables. Off unless HISTORY_QUERY_ENABLED.
+duckdb==1.5.1
