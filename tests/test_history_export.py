@@ -870,7 +870,7 @@ def test_the_model_matches_the_plan():
     assert cols == {"id", "dataset_id", "table_name", "closed_month", "part", "r2_key",
                     "rows", "bytes", "content_hash", "first_seen_min", "first_seen_max",
                     "last_seen_min", "last_seen_max", "deleted_from_sql", "deleted_at",
-                    "created_at"}
+                    "created_at", "kind"}  # kind: alembic 073 (phase 4)
     assert HistoryPart.__tablename__ == "history_parts"
 
 

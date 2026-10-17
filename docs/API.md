@@ -556,6 +556,31 @@ One query runs at a time and three may wait; beyond that `429` (try again in a
 moment). The MCP tools take the same switch: `run_sql` has `include_history`,
 and `query_dataset_rows` routes an old `as_of` the same way.
 
+### Cold datasets: `history_tier`
+
+A dataset that nothing updates and nobody reads can be moved whole to the cold
+tier: every row, open ones included, goes to Parquet parts on R2 (verified by
+count and content hash before anything is deleted) and the SQL table stays
+**empty with the same columns**. `/schema` says so with
+`"history_tier": "cold"` (`"hot"` otherwise), and `history.rows_only_in_r2` is
+then every row of the table.
+
+For a cold dataset `/rows`, `/datastore_search` and `POST /api/append/{id}/sql`
+read through the history engine on their own, without `include_history`;
+`as_of` and `current=true` work there as usual. While the engine is off they
+answer from the empty SQL table with a `history_note`. `download.csv` reads SQL
+only and is therefore empty; the files are at `history/files`.
+
+On the `/data` console (`POST /api/tables/sql`) a cold table still needs the
+`include_history` switch; without it the query runs on SQL (zero rows) and the
+answer carries a `history_note` naming the cold table. The rain forecast's
+union view `rain_forecast_stations` is rebuilt inside the engine over the
+parts of its 60 station tables, with the same `station` column.
+
+Files of a cold table are listed by `history/files` like closed parts; their
+key has `full_month=YYYY-MM` (the month of the move) instead of
+`closed_month=`, and they contain rows whose `last_seen` is null.
+
 ---
 
 ## Recipes

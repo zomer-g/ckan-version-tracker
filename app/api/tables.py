@@ -260,9 +260,19 @@ async def run_sql(
                 sql, tables=tables, search_path=data_catalog.CONSOLE_SEARCH_PATH,
                 run_pg=lambda: append_store.run_readonly_sql(
                     sql, search_path=data_catalog.CONSOLE_SEARCH_PATH))
-        return await append_store.run_readonly_sql(
+        res = await append_store.run_readonly_sql(
             sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
         )
+        # A table moved to the cold tier is empty in SQL: say so, and how to
+        # read it. Checked against an in-memory set, so a plain query still
+        # never touches the catalog.
+        cold = history_query.cold_tables()
+        if cold:
+            named = history_query.extract_table_refs(sql, cold)
+            if named:
+                res["history_note"] = history_query.NOTE_COLD_CONSOLE.format(
+                    tables=", ".join(named))
+        return res
     except history_query.EngineBusy as e:
         raise HTTPException(status_code=429, detail=str(e))
     except ValueError as e:

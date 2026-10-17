@@ -497,6 +497,7 @@ def archive_state_for(ds, mappings: dict | None, *, has_versions: bool,
     """Derive one dataset's ArchiveState. ``mappings`` is its latest version's
     (None when it has no versions); ``has_deleted_parts`` whether part of its
     history now lives only in R2 (history_export.datasets_with_deleted_parts)."""
+    from app.services.history_export import history_tier_of
     from app.services.storage_client import dataset_archives_neon, dataset_stores_files
 
     return ArchiveState(**archive_state.describe(
@@ -506,6 +507,7 @@ def archive_state_for(ds, mappings: dict | None, *, has_versions: bool,
         archives_neon=dataset_archives_neon(ds),
         stores_files=dataset_stores_files(ds),
         has_deleted_parts=has_deleted_parts,
+        cold=history_tier_of(ds) == "cold",
     ))
 
 
@@ -544,6 +546,8 @@ class DatasetResponse(BaseModel):
     # Days a closed row stays in SQL before its verified Parquet copy on R2 is
     # the only one (history_export). None = export only, nothing deleted.
     history_window_days: int | None = None
+    # "cold" when the dataset was moved whole to Parquet on R2 (phase 4).
+    history_tier: str = "hot"
     # Whether the NEON (tabular-rows) options are meaningful for this source
     # (CKAN only). The admin UI greys NEON out when false.
     neon_eligible: bool = True
@@ -645,6 +649,7 @@ def build_dataset_response(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -1207,6 +1212,7 @@ async def track_dataset(
             upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
@@ -1323,6 +1329,7 @@ async def track_dataset(
             append_key=None,
             storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
             neon_eligible=dataset_is_neon_eligible(ds),
             capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
             last_error=ds.last_error,
@@ -1495,6 +1502,7 @@ async def track_dataset(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -1738,6 +1746,7 @@ async def update_tracked(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,
@@ -3007,6 +3016,7 @@ async def get_tracked_public(
         upload_mode=(ds.scraper_config or {}).get("upload_mode", "full"),
         storage_target=storage_target_of(ds.scraper_config),
         history_window_days=history_window_of(ds.scraper_config),
+        history_tier="cold" if (ds.scraper_config or {}).get("history_tier") == "cold" else "hot",
         neon_eligible=dataset_is_neon_eligible(ds),
         capture_changes=bool((ds.scraper_config or {}).get("capture_changes")),
         last_error=ds.last_error,

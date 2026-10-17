@@ -367,6 +367,10 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(source_registry.warm_cache(async_session))
     from app.services import union_views
     asyncio.create_task(union_views.ensure_views_safely())
+    # Tables moved to the cold tier (docs/history-phase4-plan.md), held in
+    # memory for the /data console's note. One catalog query; never raises.
+    from app.services import history_query as _hq_cold
+    asyncio.create_task(_hq_cold.refresh_cold_tables())
     # History query engine (docs/history-phase3-plan.md): install DuckDB's httpfs
     # and postgres extensions and probe the hot side once, on a thread, without
     # holding up boot. Off by default; the engine reports "disabled" then.
