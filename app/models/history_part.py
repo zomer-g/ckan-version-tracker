@@ -37,6 +37,11 @@ class HistoryPart(Base):
     first_seen_max: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_min: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_max: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 'closed' (phase 2: rows closed in closed_month) or 'full' (phase 4: every
+    # row of a table moved to the cold tier, open ones too; closed_month is the
+    # month of the move).
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="closed",
+                                      server_default="closed")
     deleted_from_sql: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

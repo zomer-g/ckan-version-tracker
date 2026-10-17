@@ -89,6 +89,14 @@ _INTERNAL_COLS = {FIRST_COL, LAST_COL, HASH_COL}
 _GEOMETRY_UDTS = {"geometry", "geography"}
 
 
+KIND_CLOSED = "closed"
+KIND_FULL = "full"
+TIER_COLD = "cold"
+TIER_HOT = "hot"
+# A dataset may go cold on its own when it is paused or polled this rarely.
+COLD_MIN_POLL_S = 30 * 86400
+
+
 class DeleteRefused(RuntimeError):
     """A delete that must not run: no verified catalog row, no window, a part
     already deleted, or a file in R2 that no longer matches its catalog row."""
@@ -371,7 +379,7 @@ class PartWriter:
         fs = rec[FIRST_COL]
         ls = rec[LAST_COL]
         fs = None if fs is None else _utc(fs)
-        ls = _utc(ls)
+        ls = None if ls is None else _utc(ls)  # NULL only in a full part
         for i, c in enumerate(self.cols):
             v = rec[c]
             self._buf[i].append(None if v is None else str(v))
@@ -387,8 +395,9 @@ class PartWriter:
         if fs is not None:
             self._fs_min = fs if self._fs_min is None else min(self._fs_min, fs)
             self._fs_max = fs if self._fs_max is None else max(self._fs_max, fs)
-        self._ls_min = ls if self._ls_min is None else min(self._ls_min, ls)
-        self._ls_max = ls if self._ls_max is None else max(self._ls_max, ls)
+        if ls is not None:
+            self._ls_min = ls if self._ls_min is None else min(self._ls_min, ls)
+            self._ls_max = ls if self._ls_max is None else max(self._ls_max, ls)
         self._n += 1
         if len(self._buf[0]) >= ROW_GROUP:
             self._flush()
@@ -559,13 +568,14 @@ async def _stream_rows(job: Job, cols: list[str], ident_col: str, writer: PartWr
 _PART_FIELDS = ("id", "dataset_id", "table_name", "closed_month", "part", "r2_key",
                 "rows", "bytes", "content_hash", "first_seen_min", "first_seen_max",
                 "last_seen_min", "last_seen_max", "deleted_from_sql", "deleted_at",
-                "created_at")
+                "created_at", "kind")
 
 
 def _part_dict(p) -> dict:
     d = {k: getattr(p, k, None) for k in _PART_FIELDS}
     d["id"] = str(d["id"]) if d["id"] is not None else None
     d["dataset_id"] = str(d["dataset_id"]) if d["dataset_id"] is not None else None
+    d["kind"] = d.get("kind") or KIND_CLOSED
     return d
 
 
@@ -695,10 +705,12 @@ async def admin_summary(db) -> dict:
         if p.get("deleted_from_sql"):
             d["rows_deleted"] += int(p["rows"])
     titles = {}
+    tiers = {}
     for ds_id, title, cfg in (await db.execute(
             select(TrackedDataset.id, TrackedDataset.title, TrackedDataset.scraper_config)
     )).all():
         w = window_days_of(types.SimpleNamespace(scraper_config=cfg))
+        tiers[str(ds_id)] = history_tier_of(types.SimpleNamespace(scraper_config=cfg))
         if w is not None or str(ds_id) in by_ds:
             titles[str(ds_id)] = (title, w)
             by_ds.setdefault(str(ds_id), {"dataset_id": str(ds_id), "parts": 0,
@@ -708,7 +720,7 @@ async def admin_summary(db) -> dict:
     for k, d in by_ds.items():
         title, w = titles.get(k, (None, None))
         datasets.append({**d, "tables": sorted(d["tables"]), "title": title,
-                         "history_window_days": w})
+                         "history_window_days": w, "history_tier": tiers.get(k, TIER_HOT)})
     datasets.sort(key=lambda d: (-d["rows_in_r2"], d["title"] or ""))
     return {
         "enabled": settings.history_export_enabled,
@@ -720,6 +732,7 @@ async def admin_summary(db) -> dict:
         "audit": {**audit_status(), "missing_count": len(_audit.get("missing") or [])},
         "totals": summarize(parts) | {"bytes": sum(int(p["bytes"]) for p in parts)},
         "datasets": datasets,
+        "tier_job": tier_status(),
     }
 
 
@@ -750,6 +763,9 @@ async def plan(db, *, only_dataset: str | None = None, now: datetime | None = No
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         for ds in datasets:
+            if history_tier_of(ds) == TIER_COLD:
+                # Every row is already in R2 (a full part); the table is empty.
+                continue
             window = window_days_of(ds)
             for entry in append_store.tables_from_mappings(ds, latest.get(ds.id)):
                 table = entry.get("table")
@@ -843,7 +859,7 @@ async def export_month(job: Job, *, rows: Iterable | None = None, cols: list[str
                 "content_hash": back["content_hash"],
                 "first_seen_min": lp.first_seen_min, "first_seen_max": lp.first_seen_max,
                 "last_seen_min": lp.last_seen_min, "last_seen_max": lp.last_seen_max,
-                "deleted_from_sql": False, "deleted_at": None,
+                "deleted_from_sql": False, "deleted_at": None, "kind": KIND_CLOSED,
             })
         if records:
             await _record_parts(records)
@@ -1020,3 +1036,737 @@ async def audit_history_parts() -> dict:
         logger.warning("history export: audit found %d of %d parts missing in R2",
                        len(missing), len(parts))
     return audit_status()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Phase 4: the cold tier (docs/history-phase4-plan.md)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# A dataset nobody reads and nothing updates (the rain forecast: 60 tables, 62M
+# OPEN rows) gains nothing from phase 2, which only moves closed rows. Moving it
+# "cold" writes EVERY row of each table, open ones included, to ``full`` parts,
+# verifies them the phase-2 way (read back from R2, count and md5 of the sorted
+# idents against SQL), records them, deletes the rows by their ``(ident,
+# last_seen)`` pairs NULL-safely, and leaves the table EMPTY with its schema, so
+# the catalog, autocomplete and /schema keep working. Reads route to the
+# DuckDB engine (history_query), which reads a cold table from its parts alone.
+#
+# The whole table step runs in ONE transaction holding SHARE ROW EXCLUSIVE on
+# the table: nothing can write to it between the export and the delete, and a
+# failure anywhere rolls the delete back. The catalog rows are written before
+# the delete inside that transaction and marked deleted after the commit; a
+# crash in between is repaired by the next call (recorded parts + empty table).
+#
+# ``rehydrate`` is the reverse: COPY the parts back, verify count and hash
+# against the catalog in the same transaction, commit, and only then mark the
+# parts ``deleted_from_sql=false`` and drop ``history_tier`` from the config. A
+# poll of a cold dataset rehydrates first or is refused (api/worker._cold_guard,
+# poll_job), because the loader would otherwise re-insert every open row.
+
+
+class ColdRefused(RuntimeError):
+    """A table or dataset that must not move between tiers (the reason says why)."""
+
+
+def history_tier_of(ds) -> str:
+    v = (getattr(ds, "scraper_config", None) or {}).get("history_tier")
+    return TIER_COLD if v == TIER_COLD else TIER_HOT
+
+
+def rehydrate_promised(ds) -> bool:
+    """The admin said, when moving it, that the next poll may bring it back."""
+    return (getattr(ds, "scraper_config", None) or {}).get("history_rehydrate_on_poll") is True
+
+
+def cold_move_refusal(ds, *, confirm_rehydrate: bool) -> str | None:
+    """Why ``ds`` may not move to the cold tier now, or None (plan section 2):
+    it must be paused or polled more rarely than every 30 days, unless the
+    admin promises that the next poll rehydrates it first."""
+    if history_tier_of(ds) == TIER_COLD:
+        return "המאגר כבר בשכבה הקרה"
+    if confirm_rehydrate:
+        return None
+    if getattr(ds, "status", None) == "paused":
+        return None
+    if int(getattr(ds, "poll_interval", 0) or 0) > COLD_MIN_POLL_S:
+        return None
+    return ("המאגר פעיל ונדגם לפחות פעם בחודש: השהו אותו, או אשרו במפורש שה-poll "
+            "הבא יחזיר אותו ל-SQL לפני הטעינה")
+
+
+def config_after_rehydrate(cfg: dict | None) -> dict:
+    return {k: v for k, v in (cfg or {}).items()
+            if k not in ("history_tier", "history_rehydrate_on_poll")}
+
+
+def full_part_key(dataset_id, table: str, month: date, part: int) -> str:
+    return (f"{HISTORY_PREFIX}/{str(dataset_id)[:8]}/{table}/"
+            f"full_month={month:%Y-%m}/part-{int(part):04d}.parquet")
+
+
+def full_select_sql(table: str, cols: list[str], *, ident_col: str) -> str:
+    """Every row of the table, open and closed, in a stable order."""
+    sel = [_qi(c) for c in cols] + [_qi(FIRST_COL), _qi(LAST_COL)]
+    if ident_col == HASH_COL:
+        sel.append(_qi(HASH_COL))
+    return (f"SELECT {', '.join(sel)} FROM {_ref(table)} "
+            f'ORDER BY {_qi(ident_col)}, "last_seen" NULLS LAST')
+
+
+def full_hash_sql(table: str, *, ident_col: str = HASH_COL) -> str:
+    """Count and md5 of every ident of the table (COLLATE "C" = Python's sort)."""
+    i = _qi(ident_col)
+    return (f"SELECT count(*) AS rows, "
+            f"md5(coalesce(string_agg({i}::text, ',' ORDER BY {i}::text COLLATE \"C\"), '')) "
+            f"AS content_hash FROM {_ref(table)}")
+
+
+def full_delete_sql(table: str, *, ident_col: str = HASH_COL, ident_type: str = "uuid") -> str:
+    """Delete exactly the rows of verified full parts: by ``(ident, last_seen)``
+    pairs, NULL-safe, since an open row's ``last_seen`` is NULL and ``NULL =
+    NULL`` is never true."""
+    t = "uuid" if ident_type == "uuid" else "text"
+    return (f"DELETE FROM {_ref(table)} d "
+            f"USING (SELECT * FROM unnest($1::{t}[], $2::timestamptz[])) AS p(i, l) "
+            f'WHERE d.{_qi(ident_col)} = p.i AND d."last_seen" IS NOT DISTINCT FROM p.l')
+
+
+class PgTable:
+    """One append table inside one transaction holding SHARE ROW EXCLUSIVE:
+    reads go on, nothing writes until commit. The interface export_full and
+    rehydrate use (tests pass a fake with the same methods)."""
+
+    def __init__(self, table: str):
+        self.table = table
+        self._types: dict[str, str] = {}
+
+    async def __aenter__(self) -> "PgTable":
+        pool = await append_store.get_pool()
+        self._acq = pool.acquire()
+        self.conn = await self._acq.__aenter__()
+        self._tx = self.conn.transaction()
+        await self._tx.start()
+        await self.conn.execute(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_S}s'")
+        await self.conn.execute(f"LOCK TABLE {_ref(self.table)} IN SHARE ROW EXCLUSIVE MODE")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        try:
+            if exc_type is None:
+                await self._tx.commit()
+            else:
+                await self._tx.rollback()
+        finally:
+            await self._acq.__aexit__(exc_type, exc, tb)
+        return False
+
+    async def describe(self) -> tuple[list[str], str, str]:
+        rows = [dict(r) for r in await self.conn.fetch(
+            "SELECT column_name, udt_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position",
+            self.table)]
+        self._types = {r["column_name"]: r["udt_name"] for r in rows}
+        geo = [r["column_name"] for r in rows if r["udt_name"] in _GEOMETRY_UDTS]
+        if geo:
+            raise ColdRefused(f"{self.table} has PostGIS columns ({', '.join(geo)}), which "
+                              "the Parquet parts do not carry: it cannot go cold")
+        typed = [r["column_name"] for r in rows if r["column_name"] not in _INTERNAL_COLS
+                 and r["udt_name"] not in ("text", "varchar")]
+        if typed:
+            raise ColdRefused(f"{self.table} has non-text source columns ({', '.join(typed)}): "
+                              "the parts store strings and could not restore them")
+        ident = await _table_ident(self.conn, self.table)
+        if ident is None:
+            raise ColdRefused(f"{self.table} has no partial dedup index")
+        return export_columns(rows), ident[0], ident[1]
+
+    async def count(self) -> int:
+        return int(await self.conn.fetchval(f"SELECT count(*) FROM {_ref(self.table)}"))
+
+    async def stream(self, cols: list[str], ident_col: str):
+        async for rec in self.conn.cursor(full_select_sql(self.table, cols, ident_col=ident_col),
+                                          prefetch=FETCH_BATCH):
+            yield rec
+
+    async def table_hash(self, ident_col: str, ident_type: str) -> dict:
+        r = await self.conn.fetchrow(full_hash_sql(self.table, ident_col=ident_col))
+        return {"rows": int(r["rows"]), "content_hash": r["content_hash"]}
+
+    async def delete_pairs(self, ident_col: str, ident_type: str, pairs: list) -> int:
+        sql = full_delete_sql(self.table, ident_col=ident_col, ident_type=ident_type)
+        n = 0
+        for s in range(0, len(pairs), HASH_BATCH):
+            batch = pairs[s:s + HASH_BATCH]
+            n += _rowcount(await self.conn.execute(sql, [b[0] for b in batch],
+                                                   [b[1] for b in batch]))
+        return n
+
+    async def copy(self, cols: list[str], records: list[tuple]) -> None:
+        conv = [(lambda v: v if v is None or isinstance(v, _uuid.UUID) else _uuid.UUID(str(v)))
+                if self._types.get(c) == "uuid" else None for c in cols]
+        if any(conv):
+            records = [tuple(f(v) if f else v for f, v in zip(conv, r)) for r in records]
+        await self.conn.copy_records_to_table(self.table, records=records, columns=cols,
+                                              schema_name="public")
+
+
+# ── the catalog side of the tiers ────────────────────────────────────────────
+
+async def _table_parts(table: str) -> list[dict]:
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.history_part import HistoryPart
+
+    async with async_session() as db:
+        rows = (await db.execute(select(HistoryPart).where(HistoryPart.table_name == table)
+                                 .order_by(HistoryPart.closed_month, HistoryPart.part))
+                ).scalars().all()
+        return [_part_dict(p) for p in rows]
+
+
+async def _set_deleted(part_ids: list, value: bool) -> None:
+    from sqlalchemy import update
+
+    from app.database import async_session
+    from app.models.history_part import HistoryPart
+
+    if not part_ids:
+        return
+    async with async_session() as db:
+        await db.execute(update(HistoryPart)
+                         .where(HistoryPart.id.in_([_uuid.UUID(str(i)) for i in part_ids]))
+                         .values(deleted_from_sql=value,
+                                 deleted_at=datetime.now(UTC) if value else None))
+        await db.commit()
+
+
+def rehydrate_parts(parts: list[dict]) -> list[dict]:
+    """The parts whose rows are ONLY in R2 (full or closed), in file order."""
+    return sorted((p for p in parts if p.get("deleted_from_sql")),
+                  key=lambda p: (_as_date(p["closed_month"]), int(p["part"]),
+                                 p.get("kind") == KIND_FULL))
+
+
+# ── export_full / rehydrate ───────────────────────────────────────────────────
+
+async def _read_back(key: str, tmpdir: str, ident_col: str) -> tuple[list, list]:
+    dest = os.path.join(tmpdir, "back-" + _uuid.uuid4().hex + ".parquet")
+    try:
+        if not await storage_client.download_to_file(key, dest):
+            raise RuntimeError(f"could not read {key} back from R2")
+        return _read_idents(dest, ident_col)
+    finally:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+
+
+async def export_full(dataset_id, table: str, *, table_side=None, now: datetime | None = None,
+                      part_rows: int | None = None) -> dict:
+    """Move every row of ``table`` to ``full`` parts on R2 and empty the table.
+
+    Returns ``{ok, parts, rows, deleted}`` or ``{ok: False, error}``. On a
+    failure before the catalog write every uploaded object is deleted; the
+    table is untouched either way (the transaction rolls back)."""
+    now = now or datetime.now(UTC)
+    month = date(now.year, now.month, 1)
+    part_rows = part_rows or settings.history_part_rows
+    side = table_side if table_side is not None else PgTable(table)
+    tmpdir = tempfile.mkdtemp(prefix="hxf_")
+    uploaded: list[str] = []
+    records: list[dict] = []
+    recorded = False
+    deleted = 0
+    try:
+        async with side:
+            cols, ident_col, ident_type = await side.describe()
+            existing = await _table_parts(table)
+            pending = [p for p in existing
+                       if p.get("kind") == KIND_FULL and not p.get("deleted_from_sql")]
+            if pending and await side.count() == 0:
+                # A previous run committed its delete and died before the mark.
+                records = pending
+                recorded = True
+            else:
+                writer = PartWriter(cols, ident_col=ident_col, part_rows=part_rows, dirpath=tmpdir)
+                try:
+                    async for rec in side.stream(cols, ident_col):
+                        writer.add(rec)
+                except BaseException:
+                    writer.abort()
+                    raise
+                local = writer.close()
+                start = max((int(p["part"]) for p in existing
+                             if _as_date(p["closed_month"]) == month), default=0) + 1
+                all_ids: list[str] = []
+                pairs: list[tuple] = []
+                for i, lp in enumerate(local):
+                    n = start + i
+                    key = full_part_key(dataset_id, table, month, n)
+                    uploaded.append(key)
+                    await storage_client.upload_object(key, file_path=lp.path,
+                                                       content_type=PARQUET_TYPE)
+                    ids, lss = await _read_back(key, tmpdir, ident_col)
+                    if len(ids) != lp.rows or not ids:
+                        raise RuntimeError(f"part {n}: rows differ (written {lp.rows}, "
+                                           f"in R2 {len(ids)})")
+                    all_ids.extend(ids)
+                    pairs.extend(zip(ids, lss))
+                    records.append({
+                        "id": str(_uuid.uuid4()), "dataset_id": str(dataset_id),
+                        "table_name": table, "closed_month": month, "part": n,
+                        "r2_key": key, "rows": lp.rows, "bytes": lp.bytes,
+                        "content_hash": content_hash(ids),
+                        "first_seen_min": lp.first_seen_min, "first_seen_max": lp.first_seen_max,
+                        "last_seen_min": lp.last_seen_min, "last_seen_max": lp.last_seen_max,
+                        "deleted_from_sql": False, "deleted_at": None, "kind": KIND_FULL,
+                    })
+                sql = await side.table_hash(ident_col, ident_type)
+                if sql["rows"] != len(all_ids):
+                    raise RuntimeError(f"rows differ (SQL {sql['rows']}, R2 {len(all_ids)})")
+                if sql["content_hash"] != content_hash(all_ids):
+                    raise RuntimeError(f"content hash differs (SQL {sql['content_hash']}, "
+                                       f"R2 {content_hash(all_ids)})")
+                if records:
+                    await _record_parts(records)
+                    recorded = True
+                    deleted = await side.delete_pairs(ident_col, ident_type, pairs)
+                    if deleted != len(pairs):
+                        # Rolled back: the rows stay, the parts stay recorded as
+                        # not deleted (in both places, as after a phase-2 export).
+                        raise RuntimeError(f"deleted {deleted} of {len(pairs)} rows; rolled back")
+        await _set_deleted([r["id"] for r in records], True)
+        for r in records:
+            r["deleted_from_sql"] = True
+        rows = sum(int(r["rows"]) for r in records)
+        if table_side is None and deleted:
+            await vacuum(table)
+        logger.info("history cold: %s → %d full parts, %d rows", table, len(records), rows)
+        return {"ok": True, "parts": records, "rows": rows, "deleted": deleted}
+    except Exception as e:  # noqa: BLE001 — a failed table stays hot
+        if not recorded:
+            for key in uploaded:
+                try:
+                    await storage_client.delete_object(key)
+                except Exception:  # noqa: BLE001
+                    logger.warning("history cold: could not delete %s", key, exc_info=True)
+        err = f"{type(e).__name__}: {e}"[:400]
+        logger.warning("history cold: %s failed: %s", table, err)
+        return {"ok": False, "error": err, "parts": []}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
+    """COPY the rows that are only in R2 back into the (empty) table, verify
+    count and hash against the catalog in the same transaction, and only after
+    the commit mark the parts ``deleted_from_sql=false``."""
+    parts = rehydrate_parts(await _table_parts(table))
+    if not parts:
+        return {"ok": True, "rows": 0, "parts": 0}
+    side = table_side if table_side is not None else PgTable(table)
+    tmpdir = tempfile.mkdtemp(prefix="hxr_")
+    try:
+        import pyarrow.parquet as pq
+
+        async with side:
+            cols, ident_col, ident_type = await side.describe()
+            if await side.count():
+                raise ColdRefused(f"{table} is not empty: rehydrating would duplicate rows")
+            known = set(cols) | {FIRST_COL, LAST_COL} | (
+                {HASH_COL} if ident_col == HASH_COL else set())
+            expected: list[str] = []
+            for p in parts:
+                path = os.path.join(tmpdir, "part.parquet")
+                if not await storage_client.download_to_file(p["r2_key"], path):
+                    raise RuntimeError(f"could not read {p['r2_key']} from R2")
+                back = content_hash_of_parquet(path, ident_col)
+                if back["rows"] != int(p["rows"]) or back["content_hash"] != p["content_hash"]:
+                    raise RuntimeError(f"{p['r2_key']} no longer matches its catalog row")
+                t = pq.read_table(path)
+                extra = [c for c in t.column_names if c not in known]
+                if extra:
+                    raise ColdRefused(f"{p['r2_key']} has columns the table lacks: {extra}")
+                names = list(t.column_names)
+                for batch in t.to_batches(max_chunksize=FETCH_BATCH):
+                    data = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
+                    await side.copy(names, list(zip(*data)))
+                ids, _l = _read_idents(path, ident_col)
+                expected.extend(ids)
+                os.remove(path)
+            sql = await side.table_hash(ident_col, ident_type)
+            if sql["rows"] != len(expected):
+                raise RuntimeError(f"rows differ (loaded {sql['rows']}, catalog {len(expected)})")
+            if sql["content_hash"] != content_hash(expected):
+                raise RuntimeError("content hash differs after the load")
+        await _set_deleted([p["id"] for p in parts], False)
+        logger.info("history rehydrate: %s ← %d parts, %d rows", table, len(parts), len(expected))
+        return {"ok": True, "rows": len(expected), "parts": len(parts)}
+    except Exception as e:  # noqa: BLE001 — the transaction rolled back, catalog untouched
+        err = f"{type(e).__name__}: {e}"[:400]
+        logger.warning("history rehydrate: %s failed: %s", table, err)
+        return {"ok": False, "error": err}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── dataset-level moves (in-process job, one at a time) ──────────────────────
+
+_tier: dict = {"running": False, "op": None, "dataset_id": None, "started_at": None,
+               "finished_at": None, "current": None, "planned": 0, "done": 0,
+               "rows": 0, "failed": [], "stop": False}
+
+
+def tier_status() -> dict:
+    return {k: v for k, v in _tier.items() if k != "stop"}
+
+
+def request_tier_stop() -> None:
+    _tier["stop"] = True
+
+
+def _tier_start(op: str, dataset_id) -> None:
+    if _tier["running"]:
+        raise ColdRefused("another tier move is running")
+    _tier.update(running=True, op=op, dataset_id=str(dataset_id), stop=False,
+                 started_at=datetime.now(UTC).isoformat(), finished_at=None, current=None,
+                 planned=0, done=0, rows=0, failed=[])
+
+
+async def _refresh_cold_cache() -> None:
+    try:
+        from app.services import history_query
+
+        await history_query.refresh_cold_tables()
+    except Exception:  # noqa: BLE001
+        logger.debug("history cold: cold-table cache refresh failed", exc_info=True)
+
+
+async def _log(ds, message: str, status: str = "ok", actor: str | None = None) -> None:
+    try:
+        from app.services import activity_log
+
+        await activity_log.log_event(event="history_tier", dataset=ds, status=status,
+                                     message=message, actor=actor or "system")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def check_cold_move(dataset_id, *, confirm_rehydrate: bool) -> None:
+    """Raise ColdRefused before a move is started (the endpoint's 409)."""
+    from app.database import async_session
+    from app.models.tracked_dataset import TrackedDataset
+
+    async with async_session() as db:
+        ds = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
+    if ds is None:
+        raise ColdRefused("dataset not found")
+    why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate)
+    if why:
+        raise ColdRefused(why)
+
+
+async def move_to_cold(dataset_id, *, confirm_rehydrate: bool = False,
+                       actor: str | None = None) -> dict:
+    """Every NEON table of the dataset to full parts. The tier is set FIRST, so
+    no poll loads into a table being emptied; a table that fails stays hot and
+    is read as one (the engine decides per table from the catalog)."""
+    from app.database import async_session
+    from app.models.tracked_dataset import TrackedDataset
+    from app.services import append_tables
+
+    _tier_start("cold", dataset_id)
+    ds = None
+    try:
+        async with async_session() as db:
+            ds = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
+            if ds is None:
+                raise ColdRefused("dataset not found")
+            why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate)
+            if why:
+                raise ColdRefused(why)
+            tables = [t["table"] for t in await append_tables.resolve_tables(ds, db)]
+            cfg = dict(ds.scraper_config or {})
+            cfg["history_tier"] = TIER_COLD
+            if confirm_rehydrate:
+                cfg["history_rehydrate_on_poll"] = True
+            ds.scraper_config = cfg
+            await db.commit()
+        _tier["planned"] = len(tables)
+        for table in tables:
+            if _tier["stop"]:
+                break
+            _tier["current"] = table
+            out = await export_full(dataset_id, table)
+            if out["ok"]:
+                _tier["done"] += 1
+                _tier["rows"] += out["rows"]
+            else:
+                _tier["failed"].append({"table": table, "error": out["error"]})
+            await _refresh_cold_cache()
+        await _log(ds, f"הועבר לשכבה הקרה (R2): {_tier['done']}/{_tier['planned']} טבלאות, "
+                       f"{_tier['rows']:,} שורות", "error" if _tier["failed"] else "ok", actor)
+        return tier_status()
+    except ColdRefused as e:
+        _tier["failed"].append({"table": None, "error": str(e)})
+        return tier_status()
+    except Exception as e:  # noqa: BLE001 — surface in status, never crash the app
+        logger.exception("history cold: move aborted")
+        _tier["failed"].append({"table": _tier["current"], "error": f"{type(e).__name__}: {e}"[:400]})
+        return tier_status()
+    finally:
+        _tier.update(running=False, current=None, finished_at=datetime.now(UTC).isoformat())
+
+
+async def rehydrate_dataset(dataset_id, *, actor: str | None = None) -> dict:
+    """Every cold table of the dataset back to SQL; the tier is cleared only
+    when every table came back verified. ``{ok, tables, error?}``."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.history_part import HistoryPart
+    from app.models.tracked_dataset import TrackedDataset
+
+    async with async_session() as db:
+        ds = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
+        if ds is None:
+            return {"ok": False, "error": "dataset not found", "tables": []}
+        tables = sorted({r[0] for r in (await db.execute(
+            select(HistoryPart.table_name).where(
+                HistoryPart.dataset_id == ds.id,
+                HistoryPart.deleted_from_sql.is_(True)))).all()})
+    results = []
+    for table in tables:
+        _tier["current"] = table
+        results.append({"table": table, **await rehydrate(dataset_id, table)})
+    ok = all(r["ok"] for r in results)
+    if ok:
+        async with async_session() as db:
+            row = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
+            row.scraper_config = config_after_rehydrate(row.scraper_config)
+            await db.commit()
+    await _refresh_cold_cache()
+    await _log(ds, f"הוחזר ל-SQL: {sum(int(r.get('rows') or 0) for r in results):,} שורות ב-"
+                   f"{len(results)} טבלאות" + ("" if ok else " (נכשל חלקית)"),
+               "ok" if ok else "error", actor)
+    out = {"ok": ok, "tables": results}
+    if not ok:
+        out["error"] = "; ".join(f"{r['table']}: {r.get('error')}" for r in results if not r["ok"])
+    return out
+
+
+async def run_rehydrate(dataset_id, *, actor: str | None = None) -> dict:
+    """``rehydrate_dataset`` under the tier job's state (the admin button)."""
+    _tier_start("rehydrate", dataset_id)
+    try:
+        out = await rehydrate_dataset(dataset_id, actor=actor)
+        _tier["planned"] = len(out["tables"])
+        _tier["done"] = sum(1 for r in out["tables"] if r["ok"])
+        _tier["rows"] = sum(int(r.get("rows") or 0) for r in out["tables"])
+        _tier["failed"] = [{"table": r["table"], "error": r.get("error")}
+                           for r in out["tables"] if not r["ok"]]
+        if not out["tables"] and not out["ok"]:
+            _tier["failed"] = [{"table": None, "error": out.get("error")}]
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.exception("history rehydrate: aborted")
+        _tier["failed"].append({"table": _tier["current"], "error": f"{type(e).__name__}: {e}"[:400]})
+        return {"ok": False, "error": str(e), "tables": []}
+    finally:
+        _tier.update(running=False, current=None, finished_at=datetime.now(UTC).isoformat())
+
+
+async def cold_poll_gate(ds) -> str | None:
+    """Before any load into ``ds``: None when it may load (hot, or rehydrated
+    just now because the admin promised it), else the refusal message."""
+    if history_tier_of(ds) != TIER_COLD:
+        return None
+    if not rehydrate_promised(ds):
+        return ("המאגר הועבר לשכבה הקרה (R2) והטבלאות שלו ריקות ב-SQL; טעינה הייתה מכפילה "
+                "שורות. החזירו אותו ל-SQL מכרטיס המאגר באדמין ('החזר ל-SQL') לפני הדגימה.")
+    out = await rehydrate_dataset(ds.id)
+    if not out.get("ok"):
+        return f"ההחזרה ל-SQL לפני הדגימה נכשלה: {out.get('error')}"
+    try:
+        ds.scraper_config = config_after_rehydrate(getattr(ds, "scraper_config", None))
+    except Exception:  # noqa: BLE001 — a detached row; the DB already has it
+        pass
+    return None
+
+
+# ── recommendations: cold candidates and windows ─────────────────────────────
+
+STALE_DAYS = 180
+QUIET_DAYS = 90
+WINDOW_HINT_DAYS = 90
+_CLOSED_SCAN_MIN = 10_000
+
+
+def cold_candidates(rows: list[dict], *, now: datetime, stale_days: int = STALE_DAYS,
+                    quiet_days: int = QUIET_DAYS) -> list[dict]:
+    """Datasets nothing updated for ``stale_days`` and nobody read through the
+    API for ``quiet_days``, biggest first. Pure."""
+    now = _utc(now)
+    out = []
+    for r in rows:
+        if r.get("tier") == TIER_COLD:
+            continue
+        lv, la = r.get("last_version_at"), r.get("last_access_at")
+        if lv is not None and _utc(lv) > now - timedelta(days=stale_days):
+            continue
+        if la is not None and _utc(la) > now - timedelta(days=quiet_days):
+            continue
+        out.append({**r, "days_since_version": None if lv is None else (now - _utc(lv)).days,
+                    "days_since_access": None if la is None else (now - _utc(la)).days})
+    out.sort(key=lambda r: (-int(r.get("bytes") or 0), r.get("title") or ""))
+    return out
+
+
+def window_recommendation(*, table_rows: int, table_bytes: int, closed_old: int) -> dict:
+    """What a window would free: the closed rows older than 90 days and their
+    share of the table's bytes (a linear estimate). Pure."""
+    per_row = (table_bytes / table_rows) if table_rows else 0
+    return {"closed_over_90_days": int(closed_old), "est_bytes": int(closed_old * per_row)}
+
+
+def validate_window_items(items: list[dict]) -> list[tuple]:
+    """``[(dataset uuid, days | None)]`` or ValueError naming EVERY bad item, so
+    a batch is applied whole or not at all."""
+    out, errors, seen = [], [], set()
+    for it in items or []:
+        raw = (it or {}).get("dataset_id")
+        try:
+            uid = _uuid.UUID(str(raw))
+        except (TypeError, ValueError):
+            errors.append(f"{raw}: not a dataset id")
+            continue
+        if uid in seen:
+            errors.append(f"{raw}: appears twice")
+            continue
+        seen.add(uid)
+        try:
+            out.append((uid, validate_window(it.get("days"))))
+        except (TypeError, ValueError) as e:
+            errors.append(f"{raw}: {e}")
+    if errors:
+        raise ValueError("; ".join(errors))
+    if not out:
+        raise ValueError("no items")
+    return out
+
+
+async def apply_windows(db, pairs: list[tuple]) -> list[dict]:
+    """Write ``history_window_days`` for every pair in ONE commit, or raise
+    before changing anything (an unknown dataset)."""
+    from sqlalchemy import select
+
+    from app.models.tracked_dataset import TrackedDataset
+
+    ids = [p[0] for p in pairs]
+    found = {d.id: d for d in (await db.execute(
+        select(TrackedDataset).where(TrackedDataset.id.in_(ids)))).scalars().all()}
+    missing = [str(i) for i in ids if i not in found]
+    if missing:
+        raise ValueError(f"unknown datasets: {', '.join(missing)}")
+    out = []
+    for uid, days in pairs:
+        ds = found[uid]
+        cfg = dict(ds.scraper_config or {})
+        if days is None:
+            cfg.pop("history_window_days", None)
+        else:
+            cfg["history_window_days"] = days
+        ds.scraper_config = cfg
+        out.append({"dataset_id": str(uid), "history_window_days": days})
+    await db.commit()
+    return out
+
+
+async def candidates(db, *, now: datetime | None = None) -> dict:
+    """The admin card: cold candidates and per-dataset window recommendations."""
+    from sqlalchemy import func, select
+
+    from app.models.api_access_log import ApiAccessLog
+    from app.models.tracked_dataset import TrackedDataset
+    from app.models.version_index import VersionIndex
+    from app.services.parquet_export import _latest_mappings
+
+    now = now or datetime.now(UTC)
+    datasets = (await db.execute(select(TrackedDataset).where(
+        TrackedDataset.status.in_(["active", "paused"])))).scalars().all()
+    latest = await _latest_mappings(db, [d.id for d in datasets])
+    tables_of: dict[str, list[str]] = {}
+    for ds in datasets:
+        ts = [e["table"] for e in append_store.tables_from_mappings(ds, latest.get(ds.id))
+              if e.get("table")]
+        if ts:
+            tables_of[str(ds.id)] = ts
+    ds_ids = [d.id for d in datasets if str(d.id) in tables_of]
+    last_version = {str(k): v for k, v in (await db.execute(
+        select(VersionIndex.tracked_dataset_id, func.max(VersionIndex.detected_at))
+        .where(VersionIndex.tracked_dataset_id.in_(ds_ids))
+        .group_by(VersionIndex.tracked_dataset_id))).all()}
+    last_access: dict[str, datetime] = {}
+    try:
+        last_access = {str(k): v for k, v in (await db.execute(
+            select(ApiAccessLog.target, func.max(ApiAccessLog.ts))
+            .where(ApiAccessLog.target.in_([str(i) for i in ds_ids]))
+            .group_by(ApiAccessLog.target))).all()}
+    except Exception:  # noqa: BLE001 — no access log reads as "never read", stated in the card
+        logger.debug("history candidates: access log unreadable", exc_info=True)
+    all_tables = sorted({t for ts in tables_of.values() for t in ts})
+    sizes: dict[str, tuple[int, int]] = {}
+    closed_old: dict[str, int] = {}
+    pool = await append_store.get_pool()
+    hint_cut = _utc(now) - timedelta(days=WINDOW_HINT_DAYS)
+    async with pool.acquire() as conn:
+        for r in await conn.fetch(
+                "SELECT c.relname, greatest(c.reltuples, 0)::bigint AS n, "
+                "pg_total_relation_size(c.oid) AS b FROM pg_class c "
+                "JOIN pg_namespace ns ON ns.oid = c.relnamespace "
+                "WHERE ns.nspname = 'public' AND c.relkind = 'r' AND c.relname = ANY($1::text[])",
+                all_tables):
+            sizes[r["relname"]] = (int(r["n"]), int(r["b"]))
+        for t in all_tables:
+            try:
+                est = await _closed_estimate(conn, t)
+                if est is not None and est < _CLOSED_SCAN_MIN:
+                    continue
+                closed_old[t] = int(await conn.fetchval(
+                    f'SELECT count(*) FROM {_ref(t)} WHERE "last_seen" < $1', hint_cut,
+                    timeout=STATEMENT_TIMEOUT_S))
+            except Exception:  # noqa: BLE001 — one table must not hide the rest
+                logger.debug("history candidates: %s skipped", t, exc_info=True)
+    rows, windows = [], []
+    for ds in datasets:
+        ts = tables_of.get(str(ds.id))
+        if not ts:
+            continue
+        rows.append({"dataset_id": str(ds.id), "title": ds.title, "status": ds.status,
+                     "poll_interval": ds.poll_interval, "tier": history_tier_of(ds),
+                     "tables": len(ts),
+                     "rows": sum(sizes.get(t, (0, 0))[0] for t in ts),
+                     "bytes": sum(sizes.get(t, (0, 0))[1] for t in ts),
+                     "last_version_at": last_version.get(str(ds.id)),
+                     "last_access_at": last_access.get(str(ds.id)),
+                     "may_move_now": cold_move_refusal(ds, confirm_rehydrate=False) is None})
+        old = sum(closed_old.get(t, 0) for t in ts)
+        if old and history_tier_of(ds) != TIER_COLD:
+            rec = {"closed_over_90_days": 0, "est_bytes": 0}
+            for t in ts:
+                tr, tb = sizes.get(t, (0, 0))
+                one = window_recommendation(table_rows=tr, table_bytes=tb,
+                                            closed_old=closed_old.get(t, 0))
+                rec = {k: rec[k] + one[k] for k in rec}
+            windows.append({"dataset_id": str(ds.id), "title": ds.title,
+                            "history_window_days": window_days_of(ds), **rec})
+    windows.sort(key=lambda w: -w["est_bytes"])
+    cands = cold_candidates(rows, now=now)
+    for c in cands:
+        for k in ("last_version_at", "last_access_at"):
+            c[k] = _iso(c.get(k))
+    return {"stale_days": STALE_DAYS, "quiet_days": QUIET_DAYS,
+            "window_hint_days": WINDOW_HINT_DAYS, "candidates": cands, "windows": windows,
+            "job": tier_status()}

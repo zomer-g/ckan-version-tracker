@@ -222,7 +222,15 @@ export default function AppendArchivePage() {
                 >
                   קבצי היסטוריה ({schema.history.parts.toLocaleString()})
                 </a>
-                {schema.history.rows_only_in_r2 > 0 && (
+                {schema.history_tier === "cold" ? (
+                  <>
+                    {" · "}
+                    <span className="badge" title="המאגר הועבר כולו לקבצי Parquet ב-R2. הטבלה ב-SQL ריקה, והתצוגה, החיפוש וה-SQL כאן רצים דרך מנוע ההיסטוריה (DuckDB), לאט יותר.">
+                      קר (R2)
+                    </span>
+                    {" "}{schema.history.rows_only_in_r2.toLocaleString()} שורות בקבצים
+                  </>
+                ) : schema.history.rows_only_in_r2 > 0 && (
                   <> · {schema.history.rows_only_in_r2.toLocaleString()} שורות ישנות נמצאות רק בקבצים</>
                 )}
               </>

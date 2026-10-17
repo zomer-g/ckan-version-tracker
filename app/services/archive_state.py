@@ -97,6 +97,8 @@ SAMPLE = "sample"      # a metadata stub — counts + field names + sample rows
 NONE = "none"          # nothing archived (no versions, or an empty version)
 TIERED = "tiered"      # queryable rows in SQL, older closed rows ONLY as Parquet
                        # on R2 (app.history_parts, deleted_from_sql=true)
+COLD = "cold"          # every row moved to Parquet on R2 (history_tier "cold"),
+                       # the SQL tables are empty; read through the history engine
 
 # ── mismatch codes: plan-vs-reality flags, for the admin only ────────────────
 # Each is independently actionable; nothing is flagged that a human can't act on.
@@ -188,6 +190,7 @@ def describe(
     archives_neon: bool,
     stores_files: bool,
     has_deleted_parts: bool = False,
+    cold: bool = False,
 ) -> dict:
     """Classify one dataset's archive from its LATEST version's mappings.
 
@@ -200,6 +203,10 @@ def describe(
     ``has_deleted_parts``: whether the history catalog holds a part whose rows
     were deleted from SQL (history_export). Then part of the archive is no
     longer in SQL at all, and the fidelity says so: ``tiered``.
+
+    ``cold``: the dataset was moved whole to the cold tier (history_export,
+    phase 4). Its SQL tables are empty and every row is in R2: ``cold``, which
+    wins over ``tiered``.
 
     Returns a dict shaped for ``ArchiveState`` (see app/api/datasets.py).
     """
@@ -232,6 +239,8 @@ def describe(
         fidelity = NONE
     if has_versions and has_deleted_parts:
         fidelity = TIERED
+    if has_versions and cold:
+        fidelity = COLD
 
     sample_of = None
     if is_stub:

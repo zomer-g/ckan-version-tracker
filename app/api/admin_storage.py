@@ -17,6 +17,13 @@
   GET  /api/admin/storage/history/query-status, POST /history/query-smoke
                                     — the DuckDB history engine
                                       (app/services/history_query.py)
+  POST/GET /api/admin/storage/closures/reopen
+                                    — reopen rows a non-closing source closed
+                                      (append_store.reopen_closures)
+  GET  /api/admin/storage/history/candidates, PATCH /history/windows,
+  POST /history/cold/{id}, POST /history/rehydrate/{id}
+                                    — the cold tier and window recommendations
+                                      (history_export, phase 4)
   GET  /api/admin/storage/orphans   — the append tables whose dataset is gone
   POST /api/admin/storage/orphans/drop
                                     — drop them (re-derived at call time)
@@ -548,3 +555,67 @@ async def closures_reopen(source: str | None = Query(None),
     asyncio.create_task(_reopen_run([str(d.id) for d in ok], bool(dry_run),
                                     getattr(user, "email", None)))
     return {"started": True, "datasets": len(ok), "refused": refused, "dry_run": bool(dry_run)}
+
+
+# ── The cold tier and window recommendations (docs/history-phase4-plan.md) ───
+
+@router.get("/history/candidates")
+async def history_candidates(_: User = Depends(get_admin_user),
+                             db: AsyncSession = Depends(get_db)):
+    """Datasets nothing updated for 180 days and nobody read through the API
+    for 90 (candidates for the cold tier), and per dataset the closed rows
+    older than 90 days a window would move, with the bytes it would free.
+    Shows, never decides; also carries the tier job's state."""
+    from app.services import history_export
+    return await history_export.candidates(db)
+
+
+@router.patch("/history/windows")
+async def history_windows(body: dict, _: User = Depends(get_admin_user),
+                          db: AsyncSession = Depends(get_db)):
+    """``{"items": [{"dataset_id", "days"}]}``: set (days >= 30) or clear
+    (null) ``history_window_days`` on many datasets at once. Validated whole
+    and written in one commit: one bad item and nothing changes (400)."""
+    from app.services import history_export
+    try:
+        pairs = history_export.validate_window_items((body or {}).get("items") or [])
+        return {"updated": await history_export.apply_windows(db, pairs)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/history/cold/{dataset_id}")
+async def history_cold(dataset_id: str, confirm_rehydrate: bool = Query(False),
+                       user: User = Depends(get_admin_user)):
+    """Move every table of the dataset to ``full`` Parquet parts on R2 and empty
+    it in SQL (verified first). Allowed for a paused dataset or one polled less
+    than monthly; otherwise only with ``confirm_rehydrate=true``, which makes
+    the next poll bring it back to SQL before loading. Background job; GET
+    /history (``tier_job``) or /history/candidates show its progress."""
+    import asyncio
+    from app.services import history_export
+    ok, why = history_export.is_available()
+    if not ok:
+        raise HTTPException(status_code=409, detail=why)
+    if history_export.tier_status()["running"]:
+        raise HTTPException(status_code=409, detail="another tier move is running")
+    try:
+        await history_export.check_cold_move(dataset_id, confirm_rehydrate=confirm_rehydrate)
+    except history_export.ColdRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    asyncio.create_task(history_export.move_to_cold(
+        dataset_id, confirm_rehydrate=confirm_rehydrate, actor=getattr(user, "email", None)))
+    return {"started": True, "dataset_id": dataset_id, "confirm_rehydrate": confirm_rehydrate}
+
+
+@router.post("/history/rehydrate/{dataset_id}")
+async def history_rehydrate(dataset_id: str, user: User = Depends(get_admin_user)):
+    """Bring a cold dataset back to SQL: COPY its parts, verify count and hash
+    against the catalog, and only then clear ``history_tier``. Background job."""
+    import asyncio
+    from app.services import history_export
+    if history_export.tier_status()["running"]:
+        raise HTTPException(status_code=409, detail="another tier move is running")
+    asyncio.create_task(history_export.run_rehydrate(dataset_id,
+                                                     actor=getattr(user, "email", None)))
+    return {"started": True, "dataset_id": dataset_id}

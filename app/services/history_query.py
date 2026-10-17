@@ -51,7 +51,8 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+import types
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterable
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -275,31 +276,49 @@ def _cast(col: str) -> str:
 def build_history_view(table: str, parts: list[dict], hot_cols: list[str],
                        parquet_cols: list[str] | None = None, *, schema: str = "public",
                        url_of: Callable[[str], str] | None = None,
-                       validity: str = "") -> str | None:
+                       validity: str = "", cold: bool = False,
+                       ident_col: str | None = None) -> str | None:
     """``CREATE VIEW`` uniting the hot table with its deleted parts, or None.
 
     Columns: the hot table's, then any only the parts have; a column one side
     lacks is a typed NULL there. Every source column is VARCHAR (that is how the
     parts store them), ``first_seen``/``last_seen`` TIMESTAMPTZ. ``geom`` is
-    left out. ``validity`` (see validity_sql) narrows the whole union."""
+    left out. ``validity`` (see validity_sql) narrows the whole union.
+
+    Phase 4: ``cold`` (a table moved whole to ``full`` parts, empty in SQL)
+    reads the parts alone, no hot side. A part flagged ``partial`` (a closed
+    part whose rows the window is deleting, still ``deleted_from_sql=false``)
+    joins as its own branch WITHOUT the rows still in SQL: an anti-join on
+    ``(ident_col, last_seen)`` against the hot table, so each row shows once."""
     if not parts:
         return None
     url_of = url_of or _part_url
     ordered = sorted(parts, key=lambda p: (_as_date(p["closed_month"]), int(p["part"])))
-    keys = [url_of(p["r2_key"]) for p in ordered]
-    hot = [c for c in hot_cols if c not in _EXCLUDE]
-    cold = [c for c in (parquet_cols if parquet_cols is not None else hot) if c not in _EXCLUDE]
-    cols = hot + [c for c in cold if c not in hot]
+    whole = [url_of(p["r2_key"]) for p in ordered if not p.get("partial")]
+    partial = [url_of(p["r2_key"]) for p in ordered if p.get("partial")]
+    hot = [] if cold else [c for c in hot_cols if c not in _EXCLUDE]
+    pq_cols = [c for c in (parquet_cols if parquet_cols is not None else hot) if c not in _EXCLUDE]
+    cols = hot + [c for c in pq_cols if c not in hot]
 
     def side(have: list[str]) -> str:
         return ", ".join(
             f"CAST({_qi(c)} AS {_cast(c)}) AS {_qi(c)}" if c in have
             else f"NULL::{_cast(c)} AS {_qi(c)}" for c in cols)
 
-    body = (f"SELECT {side(hot)} FROM {HOT}.{_qi(schema)}.{_qi(table)}\n"
-            f"UNION ALL\n"
-            f"SELECT {side(cold)} FROM read_parquet([{', '.join(_lit(k) for k in keys)}], "
-            f"union_by_name=true)")
+    def files(keys: list[str]) -> str:
+        return f"read_parquet([{', '.join(_lit(k) for k in keys)}], union_by_name=true)"
+
+    hot_ref = f"{HOT}.{_qi(schema)}.{_qi(table)}"
+    branches = [] if cold else [f"SELECT {side(hot)} FROM {hot_ref}"]
+    if whole:
+        branches.append(f"SELECT {side(pq_cols)} FROM {files(whole)}")
+    if partial:
+        i = _qi(ident_col or HASH_COL)
+        branches.append(
+            f"SELECT {side(pq_cols)} FROM {files(partial)} c WHERE NOT EXISTS "
+            f"(SELECT 1 FROM {hot_ref} h WHERE CAST(h.{i} AS VARCHAR) = CAST(c.{i} AS VARCHAR) "
+            f'AND h."last_seen" = c."last_seen")')
+    body = "\nUNION ALL\n".join(branches)
     if validity:
         body = f"SELECT * FROM (\n{body}\n) _h WHERE {validity}"
     return f"CREATE OR REPLACE VIEW {_qi(schema)}.{_qi(table)} AS\n{body}"
@@ -338,7 +357,7 @@ def should_use_history(as_of: datetime | None, parts: list[dict], *, current: bo
     on = settings.history_query_enabled if enabled is None else enabled
     if not on or current:
         return False
-    deleted = [p for p in parts if p.get("deleted_from_sql")]
+    deleted = [p for p in parts if p.get("deleted_from_sql") or p.get("partial")]
     if not deleted:
         return False
     if as_of is None:
@@ -412,28 +431,145 @@ def _part_url(key: str) -> str:
 
 
 async def _catalog_parts(table: str) -> list[dict]:
+    """Every catalog row of ``table``, each with its dataset's ``window_days``."""
     from sqlalchemy import select
 
     from app.database import async_session
     from app.models.history_part import HistoryPart
+    from app.models.tracked_dataset import TrackedDataset
     from app.services import history_export
 
     async with async_session() as db:
         rows = (await db.execute(
-            select(HistoryPart).where(HistoryPart.table_name == table))).scalars().all()
-        return [history_export._part_dict(p) for p in rows]
+            select(HistoryPart, TrackedDataset.scraper_config)
+            .join(TrackedDataset, TrackedDataset.id == HistoryPart.dataset_id, isouter=True)
+            .where(HistoryPart.table_name == table))).all()
+        return [{**history_export._part_dict(p),
+                 "window_days": history_export.window_days_of(
+                     types.SimpleNamespace(scraper_config=cfg))} for p, cfg in rows]
+
+
+def _is_partial(p: dict, now: datetime) -> bool:
+    """A closed part the window has begun deleting but that is not marked yet:
+    its dataset has a window and its oldest row is past it (history_export.
+    delete_exported deletes those rows and marks the part only when ALL are).
+    The anti-join is exact either way; this only decides when to pay for it."""
+    w = p.get("window_days")
+    lmin = p.get("last_seen_min")
+    return (not p.get("deleted_from_sql") and (p.get("kind") or "closed") == "closed"
+            and bool(w) and lmin is not None and lmin < now - timedelta(days=int(w)))
 
 
 async def cold_parts_for(table: str) -> list[dict]:
-    """The parts of ``table`` whose rows are ONLY in R2, in (month, part) order.
+    """The parts of ``table`` with rows that are ONLY in R2, in (month, part)
+    order: the deleted ones (closed or full), and the partially deleted closed
+    ones flagged ``partial`` (read with an anti-join, build_history_view). A
+    table moved to the cold tier has no partial parts: its SQL side is empty,
+    and the full parts already hold those rows.
     Never raises: an unreadable catalog answers "none", i.e. "SQL is all"."""
     try:
         parts = await _catalog_parts(table)
     except Exception:  # noqa: BLE001
         logger.debug("history query: catalog read failed for %s", table, exc_info=True)
         return []
-    return sorted((p for p in parts if p.get("deleted_from_sql")),
-                  key=lambda p: (_as_date(p["closed_month"]), int(p["part"])))
+    now = datetime.now(UTC)
+    cold = is_cold_spec(parts)
+    out = []
+    for p in parts:
+        if p.get("deleted_from_sql"):
+            out.append(p)
+        elif not cold and _is_partial(p, now):
+            out.append({**p, "partial": True})
+    return sorted(out, key=lambda p: (_as_date(p["closed_month"]), int(p["part"])))
+
+
+def is_cold_spec(parts: list[dict]) -> bool:
+    """A table whose rows all live in full parts: read without a hot side."""
+    return any(p.get("kind") == "full" and p.get("deleted_from_sql") for p in parts)
+
+
+async def union_branches(view: str) -> list[tuple[str, str]] | None:
+    """``[(table, label)]`` of a union view (union_views.py), or None."""
+    from app.services import union_views
+
+    found = union_views.spec_for_view(view)
+    if not found:
+        return None
+    ds_id, spec = found
+    from app.database import async_session
+
+    async with async_session() as db:
+        return await union_views._branches(db, ds_id, spec)
+
+
+async def _ident_for(table: str) -> str:
+    """The column a table dedups its open rows on (anti-join of partial parts)."""
+    from app.services import history_export
+
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        found = await history_export._table_ident(conn, table)
+    return found[0] if found else HASH_COL
+
+
+# Tables (and union views over them) moved to the cold tier: empty in SQL. Held
+# in memory so the /data console can warn about one without a catalog read on
+# every query; refreshed at boot and after every tier move.
+_cold_tables: set = set()
+
+
+def cold_tables() -> set:
+    return set(_cold_tables)
+
+
+async def refresh_cold_tables() -> set:
+    """Reload ``_cold_tables`` from the catalog. Never raises."""
+    global _cold_tables
+    try:
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.history_part import HistoryPart
+        from app.services import union_views
+
+        async with async_session() as db:
+            names = {r[0] for r in (await db.execute(
+                select(HistoryPart.table_name).distinct().where(
+                    HistoryPart.kind == "full", HistoryPart.deleted_from_sql.is_(True)))).all()}
+        for spec in union_views.UNION_VIEWS.values():
+            branches = await union_branches(spec["view"]) or []
+            if names & {t for t, _l in branches}:
+                names.add(spec["view"])
+        _cold_tables = names
+    except Exception:  # noqa: BLE001
+        logger.debug("history query: cold-table refresh failed", exc_info=True)
+    return set(_cold_tables)
+
+
+def build_union_view(view: str, label_column: str, branches: list,
+                     columns: dict, *, schema: str = "public") -> str | None:
+    """DuckDB twin of union_views.view_sql over the engine's own table views:
+    UNION ALL of the branches with the label as a column. Pure."""
+    skip = {"row_hash", "_row_hash", "geom"}
+    order: list[str] = []
+    for t, _l in branches:
+        for c, _ty in columns.get(t, []):
+            if c not in skip and c not in order:
+                order.append(c)
+    if not order:
+        return None
+    parts = []
+    for t, label in branches:
+        have = {c for c, _ty in columns.get(t, [])}
+        if not have:
+            continue
+        cols = ", ".join(_qi(c) if c in have else f"NULL::{_cast(c)} AS {_qi(c)}" for c in order)
+        parts.append(f"SELECT {_lit(label)}::VARCHAR AS {_qi(label_column)}, {cols} "
+                     f"FROM {_qi(schema)}.{_qi(t)}")
+    if not parts:
+        return None
+    return (f"CREATE OR REPLACE VIEW {_qi(schema)}.{_qi(view)} AS\n"
+            + "\nUNION ALL\n".join(parts))
 
 
 # ── the hot side ─────────────────────────────────────────────────────────────
@@ -508,6 +644,8 @@ class ArrowHot:
         cap = settings.history_query_hot_max_rows
         async with pool.acquire() as conn:
             for spec in specs:
+                if spec.get("cold") or spec.get("union"):
+                    continue  # no hot side: its rows are all in R2 / a view of views
                 schema, table = spec["schema"], spec["table"]
                 cols = [r["column_name"] for r in await conn.fetch(
                     "SELECT column_name FROM information_schema.columns "
@@ -613,30 +751,43 @@ def _prepare_views(conn, backend, specs: list[dict], *, as_of, current,
     created: list[str] = []
     out: dict[str, list[tuple[str, str]]] = {}
     for spec in specs:
+        if spec.get("union"):
+            continue
         schema, table, parts = spec["schema"], spec["table"], spec["parts"]
+        cold = bool(spec.get("cold"))
         hot_ref = f"{HOT}.{_qi(schema)}.{_qi(table)}"
-        hot_cols = [c for c, _t in _describe(conn, hot_ref)]
+        hot_cols = [] if cold else [c for c, _t in _describe(conn, hot_ref)]
         if schema not in created:
             conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_qi(schema)}")
             created.append(schema)
-        cond = ""
-        if schema == "public" and FIRST_COL in hot_cols:
-            cond = validity_sql(as_of=as_of, current=current,
-                                has_last_seen=bool(parts) or LAST_COL in hot_cols)
+        pq_cols: list[str] = []
         if parts:
             urls = [p["url"] for p in parts]
             pq_cols = [c for c, _t in _describe(
                 conn, f"SELECT * FROM read_parquet([{', '.join(_lit(u) for u in urls)}], "
                       "union_by_name=true)")]
+        cond = ""
+        if schema == "public" and FIRST_COL in (hot_cols or pq_cols):
+            cond = validity_sql(as_of=as_of, current=current,
+                                has_last_seen=bool(parts) or LAST_COL in hot_cols)
+        if parts:
             by_key = {p["r2_key"]: p["url"] for p in parts}
             conn.execute(build_history_view(table, parts, hot_cols, pq_cols, schema=schema,
-                                            url_of=by_key.__getitem__, validity=cond))
+                                            url_of=by_key.__getitem__, validity=cond,
+                                            cold=cold, ident_col=spec.get("ident")))
         else:
             sel = "*" if not (_EXCLUDE & set(hot_cols)) else (
                 f"* EXCLUDE ({', '.join(_qi(c) for c in hot_cols if c in _EXCLUDE)})")
             conn.execute(f"CREATE OR REPLACE VIEW {_qi(schema)}.{_qi(table)} AS "
                          f"SELECT {sel} FROM {hot_ref}" + (f" WHERE {cond}" if cond else ""))
         out[table] = _describe(conn, f"{_qi(schema)}.{_qi(table)}")
+    for spec in specs:
+        if spec.get("union"):
+            sql = build_union_view(spec["table"], spec["label_column"], spec["branches"], out,
+                                   schema=spec["schema"])
+            if sql:
+                conn.execute(sql)
+                out[spec["table"]] = _describe(conn, f"{_qi(spec['schema'])}.{_qi(spec['table'])}")
     order = [s.strip() for s in (search_path or "public").split(",") if s.strip()]
     path = [s for s in order if s in created] + [s for s in created if s not in order]
     conn.execute(f"SET search_path = {_lit(','.join(path + ['main']))}")
@@ -677,14 +828,37 @@ def _execute(conn, backend, specs: list[dict], sql, params: list, max_rows: int,
 
 # ── running ──────────────────────────────────────────────────────────────────
 
+async def _table_spec(schema: str, name: str) -> dict:
+    parts = await cold_parts_for(name) if schema == "public" else []
+    ident = await _ident_for(name) if any(p.get("partial") for p in parts) else None
+    return {"schema": schema, "table": name, "cold": is_cold_spec(parts), "ident": ident,
+            "parts": [{**p, "url": _part_url(p["r2_key"])} for p in parts]}
+
+
 async def _specs(tables: Iterable) -> list[dict]:
-    specs = []
+    """One spec per table; a union view (union_views.py) expands into a spec
+    per branch table plus a ``union`` spec built over them."""
+    specs, seen, unions = [], set(), []
     for t in tables:
         schema, name = (t[0], t[1]) if isinstance(t, (tuple, list)) else ("public", t)
-        parts = await cold_parts_for(name) if schema == "public" else []
-        specs.append({"schema": schema, "table": name,
-                      "parts": [{**p, "url": _part_url(p["r2_key"])} for p in parts]})
-    return specs
+        branches = await union_branches(name) if schema == "public" else None
+        if branches:
+            from app.services import union_views
+
+            found = union_views.spec_for_view(name)
+            label = found[1]["label_column"] if found else "label"
+            for bt, _label in branches:
+                if ("public", bt) not in seen:
+                    seen.add(("public", bt))
+                    specs.append(await _table_spec("public", bt))
+            unions.append({"schema": "public", "table": name, "union": True, "parts": [],
+                           "branches": list(branches), "label_column": label})
+            continue
+        if (schema, name) in seen:
+            continue
+        seen.add((schema, name))
+        specs.append(await _table_spec(schema, name))
+    return specs + unions
 
 
 async def _run_internal(sql, *, tables: Iterable, as_of=None, current: bool = False,
@@ -915,6 +1089,13 @@ NOTE_AS_OF = ("חלק מהשורות שהיו בתוקף ברגע הזה נמצ�
               "ומנוע ההיסטוריה כבוי, ולכן הן לא נכללו בתשובה.")
 
 
+NOTE_COLD = ("המאגר הועבר לשכבה הקרה (R2) והטבלה ב-SQL ריקה, אבל מנוע ההיסטוריה אינו "
+             "זמין כרגע ({reason}), ולכן התשובה ריקה. השורות נמצאות בקבצי ההיסטוריה "
+             "(history/files).")
+NOTE_COLD_CONSOLE = ("הטבלה {tables} הועברה לשכבה הקרה (R2) וב-SQL היא ריקה: סמנו 'כולל "
+                     "היסטוריה' כדי לקרוא את השורות שלה דרך מנוע ההיסטוריה.")
+
+
 def engine_ready() -> bool:
     return settings.history_query_enabled and is_available()[0]
 
@@ -937,8 +1118,14 @@ async def route_sql(sql: str, *, tables: list, run_pg: Callable, search_path: st
     cold = False
     for t in tables:
         schema, name = (t[0], t[1]) if isinstance(t, (tuple, list)) else ("public", t)
-        if schema == "public" and await cold_parts_for(name):
-            cold = True
+        if schema != "public":
+            continue
+        names = [b for b, _l in (await union_branches(name) or [])] or [name]
+        for n in names:
+            if await cold_parts_for(n):
+                cold = True
+                break
+        if cold:
             break
     if cold and engine_ready():
         return await run(sql, tables=tables, search_path=search_path, max_rows=max_rows,

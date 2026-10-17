@@ -229,6 +229,15 @@ async def _poll_dataset(
             logger.info("Dataset %s not found or inactive, skipping", dataset_id)
             return
 
+        # A dataset in the cold tier (docs/history-phase4-plan.md) loads nothing
+        # until it is back in SQL: rehydrated here when the admin promised it,
+        # otherwise the poll is skipped (a scrape task would only end in a 409).
+        from app.services.history_export import cold_poll_gate
+        why = await cold_poll_gate(ds)
+        if why:
+            logger.warning("Poll of %s skipped: %s", dataset_id, why)
+            return
+
         # For scraper-type datasets (gov.il collectors, govmap layers, etc.),
         # create a task instead of polling CKAN. The external GOV SCRAPER
         # worker dispatches to the right per-domain scraper based on the

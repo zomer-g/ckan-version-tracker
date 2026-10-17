@@ -1692,6 +1692,18 @@ async def _push_task_outcome(db: AsyncSession, ds, task_id: str, request: Reques
     raise HTTPException(status_code=409, detail={"error": "not_reclaimable", "status": task.status})
 
 
+async def _cold_guard(ds) -> None:
+    """A dataset moved to the cold tier (docs/history-phase4-plan.md) has empty
+    tables in SQL and its rows in R2; loading into it would re-insert every
+    open row beside the copy in R2. Rehydrate first when the admin promised
+    it (``history_rehydrate_on_poll``), else refuse with 409 and the reason."""
+    from app.services import history_export
+
+    why = await history_export.cold_poll_gate(ds)
+    if why:
+        raise HTTPException(status_code=409, detail=why)
+
+
 @router.post("/push-version")
 @limiter.limit("30/minute")
 async def push_version(
@@ -1714,6 +1726,9 @@ async def push_version(
     ds = result.scalar_one_or_none()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Before anything is written: a cold dataset is rehydrated or refused.
+    await _cold_guard(ds)
 
     # A push that names its task is checked against that task (see
     # _push_task_outcome); every later step then finds it running, as before.

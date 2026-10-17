@@ -384,6 +384,10 @@ async def archive_schema(dataset_id: str, request: Request,
         # SQL table no longer holds all of the history: those rows are only in
         # the files listed at files_url.
         "history": history,
+        # "cold": the whole table was moved to Parquet on R2 (phase 4) and is
+        # empty in SQL; /rows, /datastore_search and /sql read it through the
+        # history engine on their own. "hot": everything else.
+        "history_tier": _tier(ds),
     }
 
 
@@ -403,6 +407,25 @@ async def _history_block(db, ds, tbl: str) -> dict | None:
             # How to read those rows with SQL: include_history on /sql (an old
             # as_of on /rows routes by itself). None while the engine is off.
             "queryable_via": "duckdb" if settings.history_query_enabled else None}
+
+
+def _tier(ds) -> str:
+    from app.services import history_export
+
+    return history_export.history_tier_of(ds)
+
+
+def _is_cold(ds) -> bool:
+    return _tier(ds) == "cold"
+
+
+async def _cold_dataset_route(ds, tbl: str) -> tuple[list[dict] | None, str | None]:
+    """A cold dataset: ``(parts, None)`` to read on the engine, or ``(None,
+    note)`` when the engine is down and Postgres (empty) is all there is."""
+    if history_query.engine_ready():
+        return await history_query.cold_parts_for(tbl), None
+    return None, history_query.NOTE_COLD.format(
+        reason=history_query.is_available()[1] or "disabled")
 
 
 def _engine_http_error(e: history_query.HistoryQueryError) -> HTTPException:
@@ -520,11 +543,14 @@ async def archive_rows(
     at, cur = _validity(as_of, current)
     ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     latest_key, latest_order = _latest_key(ds, latest)
-    parts, note = await _cold_route(tbl, at)
+    if _is_cold(ds):
+        parts, note = await _cold_dataset_route(ds, tbl)
+    else:
+        parts, note = await _cold_route(tbl, at)
     if parts is not None:
         try:
             return await history_query.rows_page(
-                tbl, parts=parts, as_of=at, limit=limit, offset=offset, sort=sort,
+                tbl, parts=parts, as_of=at, current=cur, limit=limit, offset=offset, sort=sort,
                 order=order, q=q, filters=_filters_from(request, exclude=set()),
                 latest_key=latest_key, latest_order=latest_order)
         except history_query.HistoryQueryError as e:
@@ -666,9 +692,10 @@ async def archive_sql(
     (validation, SQL syntax, timeout) come back as 400 with the message."""
     admit(caller, dataset_id=dataset_id, sql=body.sql)
     # 404/409 if not an append dataset
-    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
+    ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
-        if body.include_history:
+        # A cold dataset's tables are empty in SQL: include_history is implied.
+        if body.include_history or _is_cold(ds):
             # The dataset's own tables the statement names; widening to other
             # datasets' tables is the /data console's job, not this endpoint's.
             refs = history_query.extract_table_refs(body.sql, [t["table"] for t in _tables])
@@ -735,11 +762,14 @@ async def datastore_search(
             raise HTTPException(status_code=400, detail="filters must be valid JSON")
         if not isinstance(filt, dict):
             raise HTTPException(status_code=400, detail="filters must be a JSON object")
-    parts, note = await _cold_route(tbl, at)
+    if _is_cold(ds):
+        parts, note = await _cold_dataset_route(ds, tbl)
+    else:
+        parts, note = await _cold_route(tbl, at)
     if parts is not None:
         try:
             res = await history_query.datastore_page(
-                tbl, parts=parts, as_of=at, fields=field_list, filters=filt, q=q, sort=sort,
+                tbl, parts=parts, as_of=at, current=cur, fields=field_list, filters=filt, q=q, sort=sort,
                 limit=limit, offset=offset, distinct=distinct, include_total=include_total,
                 latest_key=latest_key, latest_order=latest_order)
         except history_query.HistoryQueryError as e:
