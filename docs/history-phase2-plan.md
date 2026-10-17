@@ -257,6 +257,75 @@ cd frontend && npx tsc --noEmit -p .
 - **קובץ Parquet פגום שעבר אימות**: האימות קורא את הקובץ מ-R2 חזרה, לא את
   הזמני, ולכן מה שאומת הוא מה שיש.
 
+### 6.1 בדיקת שעון מדומה (`as_of` על הריצה הידנית)
+
+**למה.** הסגירות התחילו רק ב-2026-10-15, ולכן כל שורה סגורה ב-prod היא
+`closed_month=2026-10`; עם השעון האמיתי שום דבר לא מיוצא לפני 2026-11-03
+(ה-cutoff + 3 ימי חסד). כדי להריץ את הצינור כולו היום על נתוני אמת,
+`POST /api/admin/storage/history/run` מקבל `as_of` (תאריך או timestamp ISO,
+UTC): התכנון (`plan`) וסף המחיקה (`delete_exported`) רואים את השעון המדומה,
+`export_month` לא זקוק לשעון (ה-job נושא את החודש). ערך בעבר נדחה ב-409 (השעון
+זז רק קדימה), ערך לא תקין ב-422; השעון המדומה מוצג ב-`GET /history` תחת
+`job.as_of`. הריצה האמיתית ב-3 בנובמבר משלימה את אוקטובר עם part N+1
+(`after=covered`), כך שייצוא מוקדם אינו פוגע בשלמות החודש.
+
+**מה קורה ב-flydata 31c812a6 עם `as_of=2026-11-20`:** export_cutoff = 2026-11-01,
+delete_cutoff (חלון 30 יום) = 2026-10-21. ~336k שורות שנסגרו ב-2026-10-15 מיוצאות
+ל-part אחד (מתחת ל-500k), מאומתות ב-hash, ואז נמחקות מ-SQL (last_seen < 10-21);
+~2.2k השורות הפתוחות לא נוגעות. שורות שייסגרו בין הריצה ל-3.11 יישארו ב-SQL
+וייצאו ב-part 2 בריצה האמיתית.
+
+**פרוטוקול (על prod, רק אחרי אישור המשתמש ו-deploy של הקומיט; אין להריץ מסשן
+שלא קיבל אישור).** `$ID` = המזהה המלא של 31c812a6 מהקטלוג
+(`GET /api/admin/storage/history` → `datasets[].dataset_id`, או טבלת המאגרים באדמין).
+
+1. **בסיס.** `GET /api/admin/storage/history`: לשמור את `job`, `totals`, ואת שורת
+   המאגר (`parts`, `rows_in_r2`, `rows_only_in_r2`). ב-SQL (קונסולת /data, או
+   `POST /api/append/$ID/sql`), לכל טבלת append של המאגר:
+   ```sql
+   SELECT count(*) AS total,
+          count(*) FILTER (WHERE last_seen IS NULL) AS open_rows,
+          count(*) FILTER (WHERE last_seen < '2026-10-21') AS closed_before_cutoff,
+          count(*) FILTER (WHERE last_seen >= '2026-10-21') AS closed_inside_window
+   FROM "<table>";
+   ```
+   לשמור גם `pg_total_relation_size('<table>')` ו-`n_dead_tup` מ-`pg_stat_user_tables`.
+2. **ריצה.** `POST /api/admin/storage/history/run?dataset_id=$ID&as_of=2026-11-20`.
+   תשובה צפויה: `{"started": true, "as_of": "2026-11-20T23:59:59.999000+00:00"}`.
+   (409 עם "as_of must be in the future" = התאריך כבר עבר; לבחור תאריך עתידי אחר,
+   הכלל היחיד הוא שהוא אחרי 2026-11-03 כדי שאוקטובר ייחשב סגור.)
+3. **מעקב.** `GET /api/admin/storage/history` עד `job.running = false`. צפוי:
+   `planned` = מספר טבלאות ה-append של המאגר, `done = planned`, `failed = []`,
+   `exported_parts = planned`, `exported_rows` ≈ 336k לטבלה, `deleted_rows =
+   exported_rows` (כל השורות הסגורות ישנות מה-cutoff), `as_of` כמו בצעד 2.
+   בלוג xhostd: `history export: <table> 2026-10 part 1 ...` ואז `... deleted N rows (complete)`.
+4. **קטלוג.** באותה תשובה, שורת המאגר: `parts = planned`, `rows_in_r2 = exported_rows`,
+   `rows_only_in_r2 = deleted_rows`, כל part עם `closed_month = 2026-10-01`,
+   `part = 1`, `deleted_from_sql = true`, `last_seen_min` ≥ 2026-10-15,
+   `last_seen_max` < 2026-10-21.
+5. **R2.** `GET /api/admin/storage/history/audit` → `missing = []`, `checked` ≥ מספר
+   ה-parts. המפתחות: `history/31c812a6/<table>/closed_month=2026-10/part-0001.parquet`.
+6. **SQL אחרי.** השאילתה מצעד 1 שוב: `closed_before_cutoff = 0`, `open_rows` ו-
+   `closed_inside_window` ללא שינוי, `total` ירד בדיוק ב-`deleted_rows`;
+   `pg_total_relation_size` לא גדל, `n_dead_tup` קטן (VACUUM רץ אחרי המחיקה).
+   `GET /api/append/$ID/rows?current=true&limit=1` מחזיר את אותו `total` כמו לפני.
+7. **קבצים ציבוריים.** `GET /api/append/$ID/history/files` מונה את ה-parts עם
+   `public_url`; הורדת part אחד: `rows` כמו בקטלוג, ו-md5 של ערכי `row_hash`
+   ממוינים ומופרדים בפסיק שווה ל-`content_hash`.
+8. **קריאה חמה+קרה.** `POST /api/append/$ID/sql` עם
+   `{"sql": "SELECT count(*) FROM \"<table>\"", "include_history": true}` מחזיר
+   `engine: "duckdb"` ואת ה-`total` של צעד 1 (לפני המחיקה); בלי `include_history`
+   את ה-`total` של צעד 6.
+9. **as_of.** `GET /api/append/$ID/rows?as_of=2026-10-16&limit=5` מנותב ל-DuckDB
+   (`engine: "duckdb"` בתשובה, או `history_note`) ומחזיר שורות שהיו בתוקף ב-16.10,
+   כולל כאלה שכבר אינן ב-SQL; `as_of=2026-10-17` (אחרי המחיקה, בתוך החלון) נשאר
+   ב-Postgres.
+10. **רישום.** לכתוב את התוצאות בסעיף 7 (זמני ריצה, גדלים, סטיות), ולהשאיר את
+    `HISTORY_EXPORT_ENABLED` כפי שהיה; הריצה האמיתית ב-3.11 תוסיף part 2 לאותו חודש.
+
+**ביטול.** אם משהו בצעדים 4 עד 9 לא תואם: `POST /api/admin/storage/history/rehydrate/$ID`
+(שלב 4) מחזיר את השורות המחוקות מ-R2 ל-SQL; את הקטלוג ואת הקבצים לא מוחקים ידנית.
+
 ## 7. תוצאות
 
 **2026-10-16, הסשן המבצע (worktree `claude/history-phase2-parquet-3dcb16`).**

@@ -464,6 +464,7 @@ _state: dict = {
     "exported_rows": 0,
     "deleted_rows": 0,
     "failed": [],
+    "as_of": None,
     "stop": False,
 }
 _audit: dict = {"ran_at": None, "checked": 0, "missing": []}
@@ -955,22 +956,27 @@ async def delete_exported(part: dict | None, *, window_days: int | None,
     return {"deleted": deleted, "complete": complete}
 
 
-async def run(*, only_dataset: str | None = None) -> None:
-    """Plan and execute every job. Safe to re-run: done months are skipped."""
+async def run(*, only_dataset: str | None = None, now: datetime | None = None) -> None:
+    """Plan and execute every job. Safe to re-run: done months are skipped.
+
+    ``now`` is the clock the plan and the delete cutoff see (None = the real
+    one). An admin passes a future instant to exercise the pipeline before a
+    month is due; the planner later completes such a month with part N+1."""
     from app.database import async_session
 
     if _state["running"]:
         return
     _state.update(running=True, stop=False, started_at=datetime.now(UTC).isoformat(),
                   finished_at=None, current=None, planned=0, done=0, exported_parts=0,
-                  exported_rows=0, deleted_rows=0, failed=[])
+                  exported_rows=0, deleted_rows=0, failed=[],
+                  as_of=now.isoformat() if now else None)
     try:
         ok, why = is_available()
         if not ok:
             _state["failed"].append({"table": None, "error": why})
             return
         async with async_session() as db:
-            jobs = await plan(db, only_dataset=only_dataset)
+            jobs = await plan(db, only_dataset=only_dataset, now=now)
         _state["planned"] = len(jobs)
         pool = await append_store.get_pool()
         for job in jobs:
@@ -1001,7 +1007,7 @@ async def run(*, only_dataset: str | None = None) -> None:
                     for p in parts:
                         res = await delete_exported(
                             {**p, "ident_col": ident[0], "ident_type": ident[1]},
-                            window_days=job.window_days, vacuum_after=False)
+                            window_days=job.window_days, now=now, vacuum_after=False)
                         deleted += res["deleted"]
                     if deleted:
                         await vacuum(job.table)
