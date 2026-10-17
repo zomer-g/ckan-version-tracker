@@ -994,7 +994,7 @@ def should_close(ds, *, start_offset: int = 0, partial_run: bool = False,
     if not settings.append_close_rows_enabled:
         return False
     cfg = getattr(ds, "scraper_config", None) or {}
-    if cfg.get("append_closes_rows", True) is False:
+    if closes_rows_setting(ds) is False:
         return False
     if cfg.get("archive"):
         return False
@@ -1005,15 +1005,63 @@ def should_close(ds, *, start_offset: int = 0, partial_run: bool = False,
     return True
 
 
+def closes_rows_setting(ds) -> bool | None:
+    """``append_closes_rows`` as it applies to ``ds``: the dataset's own value
+    when its scraper_config has the key, else the value its source manifest
+    declares in ``default_config``, else None (nothing said: close by default).
+
+    The manifest is consulted because ``default_config`` reaches a dataset's
+    scraper_config only when the dataset is CREATED (source_registry.
+    match_manifests). The prices opt-out (GOVSCRAPER b334fed) was added after
+    its 33 datasets existed, so it never reached them, and from 2026-10-15 their
+    every push closed nearly every row (docs/history-phase4-plan.md section 0).
+    Same precedence idea as sampling_runs.sampling_spec, with one difference:
+    here a value the dataset itself holds wins, because an admin may set it on
+    purpose. Pure lookup on the warmed registry cache, never raises."""
+    cfg = getattr(ds, "scraper_config", None) or {}
+    if "append_closes_rows" in cfg:
+        return cfg["append_closes_rows"] is not False
+    url = getattr(ds, "source_url", None)
+    if not url or getattr(ds, "source_type", None) != "scraper":
+        return None
+    try:
+        from app.services import source_registry
+
+        match = source_registry.match_manifests(url, source_registry.cached_manifests())
+    except Exception as e:  # noqa: BLE001 — a lookup must never break a load
+        logger.debug("append close: manifest lookup failed for %s: %s", url, e)
+        return None
+    if match is None:
+        return None
+    value = (match.scraper_config or {}).get("append_closes_rows")
+    return None if value is None else value is not False
+
+
 def close_guard(*, open_rows: int, closing: int, max_fraction: float,
-                allow_shrink: bool = False) -> str | None:
+                allow_shrink: bool = False, min_pass_fraction: float | None = None,
+                declared: bool = False) -> str | None:
     """Why a close must NOT run, or None. Pure.
 
     A pass that would close more than ``max_fraction`` of the open rows is far
     more likely a broken source (a page gov.il did not return) than a purge, the
     same reasoning as the push shrink guard; ``allow_shrink`` is the same
     override. Refusing costs nothing: the rows stay open and the next full pass
-    measures again."""
+    measures again.
+
+    ``min_pass_fraction`` is the third guard (docs/history-phase4-plan.md 0.3):
+    a pass that carried fewer than that share of the open rows is refused EVEN
+    with ``allow_shrink``, because a "full" pass of a fifth of a table is almost
+    always a source that publishes only changes (the prices feeds closed 4.4M
+    of 4.46M rows this way). Only a source that DECLARES it closes
+    (``append_closes_rows: true`` in its config or manifest, as the flight board
+    does, whose live board is 0.7% of its archive) is exempt."""
+    if open_rows > 0 and closing > 0 and min_pass_fraction is not None and not declared:
+        kept = open_rows - closing
+        if kept / open_rows < min_pass_fraction:
+            return (f"the pass carried {kept:,} of {open_rows:,} open rows "
+                    f"(< {min_pass_fraction:.0%}): a source that publishes only changes, "
+                    "not a purge; refused even with allow_shrink, declare "
+                    "append_closes_rows: true to override")
     if allow_shrink or open_rows <= 0 or closing <= 0:
         return None
     if closing / open_rows > max_fraction:
@@ -1125,8 +1173,12 @@ class PassTracker:
             logger.warning("append close: could not drop %s", self.pass_table, exc_info=True)
 
     async def close_missing(self, run_ts, *, max_fraction: float | None = None,
-                            allow_shrink: bool = False) -> dict:
+                            allow_shrink: bool = False, declared: bool = False) -> dict:
         """Close every open row this pass did not carry; drop the pass table.
+
+        ``declared``: the source says explicitly that it closes rows
+        (``closes_rows_setting(ds) is True``), which exempts it from the
+        minimum-pass-fraction guard (see close_guard).
 
         Returns ``{closed, open_rows, seconds}`` or ``{skipped: reason, …}``.
         The pass table is dropped either way."""
@@ -1153,7 +1205,9 @@ class PassTracker:
                 counts = await conn.fetchrow(self.count_sql(), timeout=_CLOSE_TIMEOUT_S)
                 open_rows, closing = int(counts["open_rows"]), int(counts["closing"])
                 reason = close_guard(open_rows=open_rows, closing=closing,
-                                     max_fraction=frac, allow_shrink=allow_shrink)
+                                     max_fraction=frac, allow_shrink=allow_shrink,
+                                     min_pass_fraction=settings.history_close_min_pass_fraction,
+                                     declared=declared)
                 if reason:
                     logger.warning("append close: %s: %s", self.table, reason)
                     return {"skipped": reason, "open_rows": open_rows, "closing": closing}
@@ -1211,6 +1265,134 @@ async def sweep_abandoned_passes() -> int:
     except Exception:  # noqa: BLE001 — housekeeping must never stop a boot
         logger.warning("append close: pass sweep failed", exc_info=True)
         return 0
+
+
+# ── Reopening wrong closures (docs/history-phase4-plan.md section 0) ─────────
+#
+# A source whose effective append_closes_rows is False must have no closed rows
+# at all. The prices feeds got them anyway (their opt-out never reached the
+# datasets), and the next push of the same state then opened a NEW row beside
+# the closed one, since the partial index only guards open rows. The repair:
+#
+# 1. per identity that has a closed row, keep the row with the EARLIEST
+#    first_seen (the original opening) and delete the later copies, carrying
+#    the newest non-empty stamp (prices' last_seen_date) onto the kept row;
+# 2. NULL ``last_seen`` in ctid batches, never for an identity that is open
+#    already (a poll that landed meanwhile would collide on the partial index;
+#    the next round removes that copy first);
+# 3. VACUUM (ANALYZE).
+#
+# Nothing else is lost: a deleted copy carries the same content hash as the row
+# kept. Every step is idempotent, so a crash is resumed by running it again.
+
+_REOPEN_ROUNDS = 3
+
+
+def _has_closed(table: str, ident_col: str) -> str:
+    i = _qi(ident_col)
+    return f'{i} IN (SELECT {i} FROM {_qi(table)} WHERE "last_seen" IS NOT NULL)'
+
+
+def _ranked(table: str, ident_col: str, stamp_col: str | None = None) -> str:
+    i = _qi(ident_col)
+    cols = f"ctid AS rid, {i} AS ident, "
+    if stamp_col:
+        s = _qi(stamp_col)
+        cols += (f"{s} AS stamp, row_number() OVER (PARTITION BY {i} ORDER BY "
+                 f"(coalesce({s}, '') <> '') DESC, \"first_seen\" DESC, ctid DESC) AS sn, ")
+    cols += f'row_number() OVER (PARTITION BY {i} ORDER BY "first_seen", ctid) AS rn'
+    return f"(SELECT {cols} FROM {_qi(table)} WHERE {_has_closed(table, ident_col)})"
+
+
+def reopen_counts_sql(table: str, ident_col: str = "row_hash") -> str:
+    """``closed`` rows, and ``duplicates``: rows that are a later copy of an
+    identity that has a closed row (what step 1 deletes)."""
+    i = _qi(ident_col)
+    return (f'SELECT count(*) FILTER (WHERE "last_seen" IS NOT NULL) AS closed, '
+            f"(SELECT count(*) - count(DISTINCT {i}) FROM {_qi(table)} "
+            f"WHERE {_has_closed(table, ident_col)}) AS duplicates "
+            f"FROM {_qi(table)}")
+
+
+def reopen_stamp_sql(table: str, ident_col: str, stamp_col: str) -> str:
+    """Give each kept row the newest non-empty stamp of its group."""
+    t = _qi(table)
+    return (f"UPDATE {t} SET {_qi(stamp_col)} = x.stamp FROM ("
+            f"SELECT k.rid, s.stamp FROM {_ranked(table, ident_col, stamp_col)} k "
+            f"JOIN {_ranked(table, ident_col, stamp_col)} s ON s.ident = k.ident "
+            f"WHERE k.rn = 1 AND s.sn = 1 AND s.rid <> k.rid AND coalesce(s.stamp, '') <> '' "
+            f"AND coalesce(k.stamp, '') <> s.stamp) x WHERE {t}.ctid = x.rid")
+
+
+def reopen_dedup_sql(table: str, ident_col: str = "row_hash", *, batch: int = CLOSE_BATCH) -> str:
+    """Delete, per identity with a closed row, every row but the earliest."""
+    return (f"DELETE FROM {_qi(table)} WHERE ctid IN (SELECT rid FROM "
+            f"{_ranked(table, ident_col)} d WHERE rn > 1 LIMIT {int(batch)})")
+
+
+def reopen_open_sql(table: str, ident_col: str = "row_hash", *, batch: int = CLOSE_BATCH) -> str:
+    """One batch of closed rows back to open, skipping an identity open already."""
+    t, i = _qi(table), _qi(ident_col)
+    return (f'UPDATE {t} SET "last_seen" = NULL WHERE ctid IN (SELECT c.ctid FROM {t} c '
+            f'WHERE c."last_seen" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM {t} o '
+            f'WHERE o."last_seen" IS NULL AND o.{i} = c.{i}) LIMIT {int(batch)})')
+
+
+def reopen_refusal(ds) -> str | None:
+    """Why ``ds`` must not be reopened, or None: only a source that does NOT
+    close by its effective setting can have closures that are wrong."""
+    if closes_rows_setting(ds) is False:
+        return None
+    return ("append_closes_rows is in force for this dataset (its config or its "
+            "manifest does not say false): its closures are by design")
+
+
+def _count_of(tag) -> int:
+    try:
+        return int(str(tag).split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def reopen_closures(table: str, *, dry_run: bool, ident_col: str = "row_hash",
+                          stamp_col: str | None = None, batch: int = CLOSE_BATCH) -> dict:
+    """Undo wrong closures on one table (see above). ``dry_run`` only counts."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        counts = await conn.fetchrow(reopen_counts_sql(table, ident_col),
+                                     timeout=_CLOSE_TIMEOUT_S)
+        out = {"table": table, "closed": int(counts["closed"] or 0),
+               "duplicates": int(counts["duplicates"] or 0), "dry_run": bool(dry_run),
+               "deleted": 0, "reopened": 0, "remaining": None}
+        if dry_run or not (out["closed"] or out["duplicates"]):
+            return out
+        remaining = out["closed"]
+        for _round in range(_REOPEN_ROUNDS):
+            if stamp_col:
+                await conn.execute(reopen_stamp_sql(table, ident_col, stamp_col),
+                                   timeout=_CLOSE_TIMEOUT_S)
+            while True:
+                n = _count_of(await conn.execute(reopen_dedup_sql(table, ident_col, batch=batch),
+                                                 timeout=_CLOSE_TIMEOUT_S))
+                out["deleted"] += n
+                if n == 0:
+                    break
+            while True:
+                n = _count_of(await conn.execute(reopen_open_sql(table, ident_col, batch=batch),
+                                                 timeout=_CLOSE_TIMEOUT_S))
+                out["reopened"] += n
+                if n == 0:
+                    break
+            remaining = int(await conn.fetchval(
+                f'SELECT count(*) FROM {_qi(table)} WHERE "last_seen" IS NOT NULL',
+                timeout=_CLOSE_TIMEOUT_S) or 0)
+            if not remaining:
+                break
+        out["remaining"] = remaining
+        await conn.execute(f'VACUUM (ANALYZE) "public".{_qi(table)}', timeout=_CLOSE_TIMEOUT_S)
+    logger.info("append reopen: %s deleted %d copies, reopened %d rows, %s still closed",
+                table, out["deleted"], out["reopened"], out["remaining"])
+    return out
 
 
 import difflib as _difflib

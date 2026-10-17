@@ -379,6 +379,11 @@ class Settings(BaseSettings):
     # reasoning as the push shrink guard: half a source vanishing at once is
     # far more often a broken read than a purge.
     append_close_max_fraction: float = 0.5
+    # A "full" pass that carried fewer than this share of the open rows is
+    # refused even with allow_shrink, unless append_closes_rows is declared
+    # true (docs/history-phase4-plan.md 0.3): a fifth of a source is almost
+    # always a source that publishes only changes, not a mass deletion.
+    history_close_min_pass_fraction: float = 0.2
 
     # History export (docs/history-phase2-plan.md): closed rows to Parquet on
     # R2 by closing month, verified against SQL, recorded in app.history_parts.
