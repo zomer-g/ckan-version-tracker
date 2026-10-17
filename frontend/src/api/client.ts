@@ -486,6 +486,9 @@ export interface AppendSchema {
     from: string | null;
     to: string | null;
     files_url: string;
+    // "duckdb" when include_history on /sql can read those rows; null while
+    // the history engine is off.
+    queryable_via?: "duckdb" | null;
   } | null;
 }
 
@@ -549,7 +552,17 @@ export interface AppendItemHistory {
   offset: number;
 }
 
-export interface AppendSqlResult {
+// What a SQL run with include_history adds: which engine answered, and why
+// it was Postgres when it was (history_note). Absent on a plain run.
+export interface HistoryEngineInfo {
+  engine?: "duckdb" | "postgres";
+  cold_parts?: number;
+  elapsed_ms?: number;
+  history_note?: string;
+  dialect_note?: string;
+}
+
+export interface AppendSqlResult extends HistoryEngineInfo {
   columns: string[];
   rows: Array<Record<string, string | number | boolean | null>>;
   truncated: boolean;
@@ -574,10 +587,10 @@ export const appendArchive = {
   downloadUrl: (datasetId: string, opts: Parameters<typeof appendQuery>[0] = {}) =>
     `/api/append/${datasetId}/download.csv${appendQuery({ ...opts, limit: undefined, offset: undefined })}`,
   // Read-only SQL (single SELECT/WITH); server runs it in a READ ONLY tx.
-  sql: (datasetId: string, sql: string) =>
+  sql: (datasetId: string, sql: string, includeHistory = false) =>
     request<AppendSqlResult>(`/append/${datasetId}/sql`, {
       method: "POST",
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify(includeHistory ? { sql, include_history: true } : { sql }),
     }),
 };
 
@@ -1450,10 +1463,12 @@ export const dataCatalog = {
   // Read-only SQL over public + knesset (single SELECT/WITH, READ ONLY tx).
   // Sent base64-encoded so a Cloudflare/WAF managed rule doesn't false-positive
   // the SQL keywords in the body as an injection attack (→ 403 block page).
-  sql: (sql: string) =>
-    request<KnessetDbSqlResult>("/tables/sql", {
+  sql: (sql: string, includeHistory = false) =>
+    request<KnessetDbSqlResult & HistoryEngineInfo>("/tables/sql", {
       method: "POST",
-      body: JSON.stringify({ sql_b64: utf8ToBase64(sql) }),
+      body: JSON.stringify(includeHistory
+        ? { sql_b64: utf8ToBase64(sql), include_history: true }
+        : { sql_b64: utf8ToBase64(sql) }),
     }),
   // A fetch, not a link — see knessetDb.exportCsv. base64 for the same WAF
   // reason as `sql` above: the query would otherwise sit in the URL as plain

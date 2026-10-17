@@ -53,6 +53,17 @@ def _decode_sql(sql: str | None, sql_b64: str | None) -> str:
 class SqlBody(BaseModel):
     sql: str | None = None
     sql_b64: str | None = None
+    # The history engine (app/services/history_query.py): rows only in R2 too.
+    include_history: bool = False
+
+
+async def _console_catalog() -> list[dict]:
+    """The table catalog on a session of its own, read only for include_history,
+    so a plain console query never touches the app DB."""
+    from app.database import async_session
+
+    async with async_session() as db:
+        return await data_catalog.build_catalog(db)
 
 
 def _require_enabled() -> None:
@@ -239,11 +250,21 @@ async def run_sql(
     servers) keep their own credentials and are NOT affected.
     """
     _require_enabled()
+    from app.services import history_query
     try:
         sql = _decode_sql(body.sql, body.sql_b64)
+        if body.include_history:
+            tables = history_query.console_tables(
+                sql, await _console_catalog(), data_catalog.CONSOLE_SEARCH_PATH)
+            return await history_query.route_sql(
+                sql, tables=tables, search_path=data_catalog.CONSOLE_SEARCH_PATH,
+                run_pg=lambda: append_store.run_readonly_sql(
+                    sql, search_path=data_catalog.CONSOLE_SEARCH_PATH))
         return await append_store.run_readonly_sql(
             sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
         )
+    except history_query.EngineBusy as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — SQL/timeout errors go to the user

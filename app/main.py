@@ -369,6 +369,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(source_registry.warm_cache(async_session))
     from app.services import union_views
     asyncio.create_task(union_views.ensure_views_safely())
+    # History query engine (docs/history-phase3-plan.md): install DuckDB's httpfs
+    # and postgres extensions and probe the hot side once, on a thread, without
+    # holding up boot. Off by default; the engine reports "disabled" then.
+    if settings.history_query_enabled:
+        from app.services import history_query
+        asyncio.create_task(asyncio.to_thread(history_query.ensure_extensions))
     yield
     from app.services import api_access_log
     await api_access_log.flush()

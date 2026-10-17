@@ -84,7 +84,7 @@ TOOLS: list[dict] = [
                 "table": {"type": "string", "description": "לאיזו טבלה של המאגר לפנות — שם הטבלה, מזהה המשאב או שם המשאב, כפי שמופיעים בשדה tables. ברירת המחדל היא הטבלה הראשונה."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
-                "as_of": {"type": "string", "description": "המאגר כפי שהיה ברגע מסוים: תאריך ISO (2026-10-01, נקרא כסוף אותו יום UTC) או חותמת זמן. מחזיר רק שורות שהיו בתוקף אז (first_seen עד הרגע, ו-last_seen ריק או מאוחר ממנו). בלי הפרמטר: כל ההיסטוריה."},
+                "as_of": {"type": "string", "description": "המאגר כפי שהיה ברגע מסוים: תאריך ISO (2026-10-01, נקרא כסוף אותו יום UTC) או חותמת זמן. מחזיר רק שורות שהיו בתוקף אז (first_seen עד הרגע, ו-last_seen ריק או מאוחר ממנו). בלי הפרמטר: כל ההיסטוריה. כשחלק מהשורות של אותו רגע הועברו לקבצי היסטוריה (Parquet), השאילתה עוברת לבד למנוע ההיסטוריה (engine: duckdb, איטי יותר); אם המנוע כבוי, מוחזר מה שב-SQL עם history_note."},
                 "current": {"type": "boolean", "description": "true = רק השורות שבתוקף עכשיו (last_seen ריק). לא יחד עם as_of."},
             },
             "required": ["dataset_id"],
@@ -233,9 +233,20 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
             raise ValueError("as_of חייב להיות תאריך ISO (2026-10-01) או חותמת זמן")
     elif a.get("current"):
         validity["current"] = True
-    res = await append_store.query(chosen["table"], limit=limit,
-                                   offset=max(int(a.get("offset") or 0), 0),
-                                   q=a.get("q"), filters={}, **validity)
+    from app.services import history_query
+    offset = max(int(a.get("offset") or 0), 0)
+    at = validity.get("as_of")
+    parts = await history_query.cold_parts_for(chosen["table"]) if at is not None else []
+    history_note = None
+    if history_query.should_use_history(at, parts) and history_query.engine_ready():
+        res = await history_query.rows_page(chosen["table"], parts=parts, as_of=at,
+                                            limit=limit, offset=offset, q=a.get("q"),
+                                            filters={})
+    else:
+        if at is not None and history_query.should_use_history(at, parts, enabled=True):
+            history_note = history_query.NOTE_AS_OF
+        res = await append_store.query(chosen["table"], limit=limit, offset=offset,
+                                       q=a.get("q"), filters={}, **validity)
     rows = res.get("rows") if isinstance(res, dict) else res
     b = base_url(request)
     out = {
@@ -245,6 +256,10 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
         "query_url": f"{b}/api/append/{d.id}/datastore_search",
         "page_url": f"{b}/versions/{d.id}",
     }
+    if isinstance(res, dict) and res.get("engine"):
+        out["engine"] = res["engine"]
+    if history_note:
+        out["history_note"] = history_note
     if len(tables) > 1:
         # Without this the caller cannot tell it is holding one table out of
         # several, and will present a partial answer as the whole dataset.

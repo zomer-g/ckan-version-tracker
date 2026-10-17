@@ -397,6 +397,20 @@ class Settings(BaseSettings):
     # When the daily job runs (minute 30, UTC). The audit runs weekly, Sunday.
     history_export_hour_utc: int = 3
 
+    # History query engine (docs/history-phase3-plan.md): DuckDB in-process,
+    # reading the hot tables (as the read-only console role) together with the
+    # parts that exist only in R2. Off for the first deploy: include_history and
+    # old as_of then answer from SQL alone, with a note saying so.
+    history_query_enabled: bool = False
+    # DuckDB memory_limit per query (it spills to a temp directory beyond it).
+    history_query_memory_mb: int = 1536
+    # Interrupted after this many seconds.
+    history_query_timeout_s: int = 30
+    # Cap on hot rows pulled into memory when the postgres extension is unavailable.
+    history_query_hot_max_rows: int = 2_000_000
+    # One query runs at a time; this many may wait, the next gets a 429.
+    history_query_queue: int = 3
+
     # Hand data.gov.il's blocked FILES to the worker fleet, which can run a
     # headful browser and get past the wall (see poll_job._queue_blocked_files_task).
     #

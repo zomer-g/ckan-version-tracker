@@ -6,6 +6,7 @@ import SqlEditor, { SqlEditorHandle, SqlHelpNote, SqlSuggestion, SchemaReference
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { Breadcrumbs } from "../components/a11y";
 import { SqlSignInNotice, isSignInRequired } from "../components/SqlSignInNotice";
+import { EngineBadge, HistoryToggle } from "../components/HistoryEngine";
 // DD.MM.YYYY HH:MM for the first_seen timestamps (Israel-style, like VersionsPage).
 function fmtDate(value: string | null): string {
   if (!value) return "";
@@ -78,6 +79,7 @@ export default function AppendArchivePage() {
   const [sqlResult, setSqlResult] = useState<AppendSqlResult | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
   const [sqlRunning, setSqlRunning] = useState(false);
+  const [includeHistory, setIncludeHistory] = useState(false);
 
   // Debounce text inputs so each keystroke doesn't fire a query.
   const [debounced, setDebounced] = useState({ q: "", filters: {} as Record<string, string> });
@@ -102,16 +104,21 @@ export default function AppendArchivePage() {
       .catch((e) => setError(e?.message || "schema error"));
   }, [datasetId, table]);
 
+  // The switch is offered only when the table really has rows outside SQL and
+  // the engine is on; otherwise it could not change the answer.
+  const historyAvailable = !!(schema?.history && schema.history.rows_only_in_r2 > 0
+    && schema.history.queryable_via === "duckdb");
+
   const runSql = useCallback(() => {
     if (!datasetId || !sqlText.trim()) return;
     setSqlRunning(true);
     setSqlError(null);
     appendArchive
-      .sql(datasetId, sqlText)
+      .sql(datasetId, sqlText, historyAvailable && includeHistory)
       .then((r) => { setSqlResult(r); setSqlError(null); })
       .catch((e) => { setSqlResult(null); setSqlError(e?.message || "שגיאה"); })
       .finally(() => setSqlRunning(false));
-  }, [datasetId, sqlText]);
+  }, [datasetId, sqlText, historyAvailable, includeHistory]);
 
   const load = useCallback(() => {
     if (!datasetId) return;
@@ -401,6 +408,10 @@ export default function AppendArchivePage() {
               {sqlRunning ? "מריץ…" : "▶ הרץ"}
             </button>
             <span className="text-sm text-muted">Ctrl/⌘+Enter</span>
+            {historyAvailable && (
+              <HistoryToggle checked={includeHistory} onChange={setIncludeHistory}
+                rowsOnlyInR2={schema?.history?.rows_only_in_r2} />
+            )}
             {sqlResult && (
               <>
                 <span className="text-sm text-muted">
@@ -429,6 +440,7 @@ export default function AppendArchivePage() {
               {sqlError}
             </div>
           )}
+          {sqlResult && !sqlError && <EngineBadge result={sqlResult} />}
           {sqlResult && !sqlError && (
             <div tabIndex={0} role="region" aria-label="תוצאות השאילתה" className="scroll-region" style={{ marginTop: "0.6rem", overflowX: "auto", maxHeight: 360 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
