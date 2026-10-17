@@ -54,7 +54,8 @@
 ## מה מתבצע כרגע
 
 **שלב 3, מנוע לקר (בביצוע, סשן Opus)**
-- DuckDB בתוך האפליקציה: `memory_limit` 1.5 GB, 2 threads, spill לדיסק, timeout 30
+- DuckDB בתוך האפליקציה: `memory_limit` 1.5 GB, 2 threads (8 במעבר ה-footers שלפני
+  השאילתה, עם cache של מטא-דאטה לחיבור: phase 4 סעיף 6.9), spill לדיסק, timeout 30
   שניות, שאילתה אחת בכל רגע. קורא Parquet מ-R2 ושורות חמות מ-Postgres דרך ה-role
   הקריאה-בלבד.
 - תצוגה לכל טבלה: `UNION ALL` של הטבלה החמה עם החלקים שכבר נמחקו מ-SQL בלבד.

@@ -661,6 +661,30 @@ def test_rain_forecast_stations_is_one_view_over_sixty_parts(engine):
     assert one["rows"] == [{"n": 2}]
 
 
+def test_the_union_view_warms_every_part_once_before_any_bind(engine, monkeypatch):
+    """Plan 6.9: on prod the 180 footers of the rain forecast were read over
+    httpfs about five times per query, one table at a time, serially (every
+    DESCRIBE binds read_parquet again): past 30 s even for count(*). Now one
+    parallel pass over every part of every spec, cached for the connection."""
+    calls = []
+    real = hq._warm_metadata
+
+    def spy(conn, urls):
+        calls.append(list(urls))
+        return real(conn, urls)
+
+    monkeypatch.setattr(hq, "_warm_metadata", spy)
+    out = _run("SELECT station, count(*) AS n FROM rain_forecast_stations GROUP BY 1 ORDER BY 1",
+               ["rain_forecast_stations"])
+    assert out["row_count"] == 60 and out["rows"][0] == {"station": "S00", "n": 2}
+    assert len(calls) == 1
+    assert sorted(calls[0]) == sorted(hq._part_url(p["r2_key"]) for t in RAIN_TABLES
+                                      for p in engine[t])
+    calls.clear()
+    assert _run("SELECT 1 AS one", [])["rows"] == [{"one": 1}]
+    assert all(not urls for urls in calls)  # nothing cold, nothing to warm
+
+
 def test_union_view_sql_is_pure():
     sql = hq.build_union_view("rain_forecast_stations", "station",
                               [("t1", "ELON"), ("t2", "O'K")],

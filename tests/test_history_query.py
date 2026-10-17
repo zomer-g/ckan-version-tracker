@@ -416,6 +416,39 @@ def test_memory_limit_threads_and_temp_dir_are_set(engine):
     assert tmp
 
 
+def test_parquet_and_http_metadata_are_cached_for_the_connection(engine):
+    """One footer (and one HEAD) per part per query, however many binds follow:
+    the per-table DESCRIBEs, the view, the DESCRIBE of the query, the query."""
+    conn = hq._open_connection()
+    try:
+        pq_cache, http_cache = conn.execute(
+            "SELECT current_setting('parquet_metadata_cache'), "
+            "current_setting('enable_http_metadata_cache')").fetchone()
+    finally:
+        conn.close()
+    assert str(pq_cache).lower() == "true" and str(http_cache).lower() == "true"
+
+
+def test_warm_metadata_reads_every_part_then_restores_two_threads(engine, tmp_path):
+    """The footers are read once, up front, with more threads than the query
+    gets (the pass is HTTP waits, not CPU); the query itself keeps THREADS."""
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"w{i}.parquet"
+        _write_parquet(p, P1, ["שם"])
+        paths.append(p.as_posix())
+    assert hq.METADATA_THREADS > hq.THREADS
+    conn = hq._open_connection()
+    try:
+        assert hq._warm_metadata(conn, paths) == 3
+        assert int(conn.execute("SELECT current_setting('threads')").fetchone()[0]) == hq.THREADS
+        assert hq._warm_metadata(conn, []) == 0
+        hq._lock(conn, allowed=paths)  # still lockable afterwards
+        assert conn.execute(f"SELECT count(*) FROM read_parquet('{paths[0]}')").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
 # ── 8. duckdb_error_hint ──────────────────────────────────────────────────────
 
 def test_hint_for_a_postgres_regex():
