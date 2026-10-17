@@ -964,6 +964,32 @@ export default function AdminPage() {
     }
   };
 
+  // The cold tier (docs/history-phase4-plan.md): move every row of a dataset to
+  // Parquet on R2 and empty it in SQL, or bring it back. Both run in the
+  // background; the storage tab shows the progress.
+  const handleHistoryTier = async (ds: { id: string; title: string; status?: string }, op: "cold" | "rehydrate") => {
+    let path = `/api/admin/storage/history/${op}/${ds.id}`;
+    if (op === "cold") {
+      if (!window.confirm(`להעביר את "${ds.title}" לשכבה הקרה? כל השורות ייכתבו ל-Parquet ב-R2, יאומתו ויימחקו מ-SQL; הקריאה תעבור דרך מנוע ההיסטוריה.`)) return;
+      if (ds.status !== "paused" && window.confirm(
+        "המאגר אינו מושהה. אם הוא נדגם לפחות פעם בחודש, ההעברה דורשת אישור שה-poll הבא יחזיר אותו ל-SQL לפני הטעינה. לאשר?")) {
+        path += "?confirm_rehydrate=true";
+      }
+    } else if (!window.confirm(`להחזיר את "${ds.title}" ל-SQL? הקבצים ייטענו לטבלה ויאומתו מול הקטלוג.`)) return;
+    try {
+      const token = localStorage.getItem("token");
+      const resp = await fetch(path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!resp.ok) {
+        let detail = `שגיאת שרת (${resp.status})`;
+        try { const d = (await resp.json())?.detail; detail = typeof d === "string" ? d : JSON.stringify(d); } catch { /* not JSON */ }
+        throw new Error(detail);
+      }
+      alert(op === "cold" ? "ההעברה לקר התחילה; ההתקדמות בטאב נפח SQL." : "ההחזרה ל-SQL התחילה; ההתקדמות בטאב נפח SQL.");
+    } catch (e) {
+      alert((e as Error)?.message || "הפעולה נכשלה");
+    }
+  };
+
   const runCoverageScan = async () => {
     setCoverageBusy(true);
     setCoverageMsg(null);
@@ -2480,6 +2506,21 @@ export default function AdminPage() {
                               <option value={String(ds.history_window_days)}>{ds.history_window_days} ימים</option>
                             )}
                           </select>
+                          <div style={{ marginTop: "0.25rem" }}>
+                            {ds.history_tier === "cold" ? (
+                              <button type="button" className="text-sm" onClick={() => void handleHistoryTier(ds, "rehydrate")}
+                                      title="המאגר בשכבה הקרה (R2): הטבלאות ריקות ב-SQL. החזרה טוענת את הקבצים ומאמתת אותם."
+                                      style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.1rem 0.5rem", cursor: "pointer" }}>
+                                קר (R2) · החזר ל-SQL
+                              </button>
+                            ) : (
+                              <button type="button" className="text-sm" onClick={() => void handleHistoryTier(ds, "cold")}
+                                      title="מעביר את כל השורות ל-Parquet ב-R2 אחרי אימות, ומשאיר טבלה ריקה ב-SQL. מיועד למאגר שלא מתעדכן ולא נשאל."
+                                      style={{ background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.1rem 0.5rem", cursor: "pointer" }}>
+                                העבר לקר
+                              </button>
+                            )}
+                          </div>
                         </>
                       )}
                     </div>

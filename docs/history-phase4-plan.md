@@ -223,7 +223,113 @@ cd frontend && npx tsc --noEmit -p . && npx vitest run
 
 ## 6. תוצאות
 
-(הסשן המבצע ממלא: תאריך, SHA, פלט הבדיקות לפני/אחרי, סטיות, מה נשאר לאשר.)
+**2026-10-17, הסשן המבצע (worktree `claude/history-phase4-cold-8bfd8f`).**
+לא בוצע deploy, לא בוצע push, ולא הורץ פרוטוקול 4.3.
+
+### 6.1 קומיטים
+
+| ריפו | SHA | תוכן |
+|---|---|---|
+| OVER | `8d5c599` | סעיף 0 בלבד: `closes_rows_setting` / `should_close` מהמניפסט, `close_guard` עם `min_pass_fraction`, SQL ופונקציית `reopen_closures`, `POST/GET /closures/reopen`, `declared=` בשלושת נתיבי הסגירה |
+| OVER | (הקומיט שאחריו) | שאר סעיף 3 + `tests/test_history_phase4.py` (60 בדיקות) + סעיף 6 |
+
+סעיף 0 קומט בנפרד כדי שהסשן המתכנן יוכל לפרוס אותו לבד (הוא דחוף); שאר השלב בקומיט נפרד על אותו ענף.
+
+### 6.2 בסיס לפני השינוי
+
+`frontend/dist` חובר כ-junction מה-checkout הראשי ו-`frontend/node_modules` מה-worktree של שלב 3 (שבו `vitest` מותקן).
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2465 passed, 6 skipped, 400 warnings in 449.92s (0:07:29)
+npx tsc --noEmit -p .   → נקי
+npx vitest run          → 13 passed
+```
+
+זהה לבסיס של סעיף 4.1.
+
+### 6.3 הבדיקות החדשות לפני הקוד
+
+`tests/test_history_phase4.py` נכתב לפני כל שינוי קוד: `45 failed, 13 errors, 2 passed` (60 בדיקות). שתי העוברות
+הן בדיקות רגרסיה שאמורות לעבור גם לפני (קונפיג המאגר מנצח; חלק שלא נמחק לא נכנס לתצוגה). תיקונים בבדיקה
+עצמה אחרי שנכתבה: (א) ה-fake connection זיהה UPDATE של פתיחה לפי המילה `NULL`, שמופיעה גם ב-SQL של העברת
+ה-stamp (`IS NOT NULL`), ולכן זוהה לפי `SET "last_seen" = NULL`; (ב) "חלק שנמחק חלקית" מוגדר לפי חלון (6.5.5), ולכן
+ה-fixture מקבל `window_days` במקום `deleted_at`.
+
+### 6.4 אחרי השינוי
+
+```
+python -m pytest -p no:cacheprovider -q tests
+2525 passed, 6 skipped, 392 warnings in 630.97s (0:10:30)
+npx tsc --noEmit -p .   → נקי
+npx vitest run          → 13 passed
+```
+
+2,525 = 2,465 של הבסיס + 60 החדשות. ריצה חוזרת על העץ הסופי (אחרי ה-endpoints של האדמין וה-boot hook) החזירה
+`2522 passed, 3 failed`: שלוש בדיקות SEO, כי `frontend/dist` של ה-checkout הראשי (שה-junction הצביע אליו) התרוקן
+ב-14:26 מחוץ לסשן הזה. אחרי `npx vite build` מקומי ב-worktree (בלי junction): `tests/test_seo.py` 30 passed, כלומר
+2,525 עוברות על העץ הסופי, וה-build עצמו עובר עם קוד הפרונט החדש. שינוי אחד בבדיקה קיימת: `test_history_export::test_the_model_matches_the_plan`
+מונה את עמודות המודל, ו-`kind` (alembic 073) נוספה לרשימה. זה הרחבה של רשימה, כמו `APP_TABLES` בשלב 2.
+
+### 6.5 סטיות מהתוכנית ותוספות
+
+1. **כלי הפתיחה מחדש רץ כ-job ברקע** (גם `dry_run`): 196 טבלאות ו-20M שורות לא נכנסים לבקשת HTTP. `POST` מחזיר
+   `started`, ו-`GET /closures/reopen` מחזיר את הספירות לכל טבלה (`closed`, `duplicates`, ואחרי ריצה אמיתית
+   `deleted`, `reopened`, `remaining`) ו-`totals`. `dry_run` הוא ברירת המחדל.
+2. **הכפילות מוגדרת לכל זהות שיש לה שורה סגורה**, לא רק לזוג סגורה+פתוחה: נשמרת השורה עם `first_seen` המוקדם
+   ונמחקות שאר השורות של אותה זהות. אחרת זהות שנסגרה פעמיים (סגורה, חזרה, נסגרה) הייתה מתנגשת באינדקס החלקי
+   כששתיהן נפתחות. בדיקה על DuckDB אמיתי מוכיחה את שני המקרים.
+3. **ה-stamp עובר לשורה שנשארת**: אם לעותק החדש יש `last_seen_date` (המצב הסתיים), השורה המקורית מקבלת את ה-stamp
+   הלא-ריק החדש ביותר של הקבוצה, כדי שהמחיקה לא תאבד את תאריך הסיום.
+4. **ה-UPDATE של הפתיחה מדלג על זהות שכבר פתוחה** (push שנחת בזמן הריצה), ועד 3 סבבים של ניקוי+פתיחה. מה שנשאר
+   סגור מדווח ב-`remaining`.
+5. **"חלק שנמחק חלקית" נגזר מהחלון ולא מעמודה חדשה**: חלק `closed` שלא סומן, למאגר עם חלון, שה-`last_seen_min`
+   שלו ישן מהחלון. ה-anti-join נכון תמיד (מוסיף רק שורות שחסרות ב-SQL), כך שהתנאי רק מחליט מתי לשלם עליו. אין
+   צורך לשנות את `delete_exported` ואין עמודה נוספת מעבר ל-`kind`.
+6. **הקונסולה ב-/data לא מנתבת מאגר קר בלי המתג**, לפי 4.3 צעד 5 ("בלי: 0 והערה"); הנוסח של 3.6 ("מנותב למנוע
+   בלי המתג") מומש ב-`/api/append/{id}/rows|datastore_search|sql`. ההערה בקונסולה נשענת על סט בזיכרון
+   (`history_query.cold_tables()`, נטען בבוט ואחרי כל העברה), כך ששאילתה רגילה עדיין לא קוראת את הקטלוג.
+7. **מאגר קר מסומן `history_tier=cold` לפני הייצוא**, כך ששום poll לא טוען לטבלה שמתרוקנת. טבלה שנכשלה נשארת חמה
+   ונקראת כחמה: המנוע מחליט לכל טבלה לפי הקטלוג (חלק `full` מחוק = בלי צד חם), לא לפי הדגל של המאגר.
+8. **כל טבלה מועברת בטרנזקציה אחת עם `LOCK ... SHARE ROW EXCLUSIVE`**: קריאה, כתיבה ל-R2, קריאה חוזרת, אימות
+   מול SQL, רישום בקטלוג ומחיקה לפי זוגות, ורק אחרי commit סימון `deleted_from_sql=true`. קריסה בין ה-commit לסימון
+   מתוקנת בהרצה הבאה (חלקים רשומים + טבלה ריקה = סימון בלבד). האימות לטבלה שלמה (ספירה ו-md5 של כל הזהויות),
+   לא לכל part, כי מיון `(last_seen, ident)` של שלב 2 לא מתאים לשורות עם `last_seen` NULL.
+9. **טבלה עם PostGIS או עמודת מקור לא-טקסט מסורבת לקר**: הקבצים לא נושאים גאומטריה ושומרים מחרוזות, וההחזרה
+   ל-SQL לא הייתה משחזרת אותן.
+10. **מפתח קובץ `full_month=YYYY-MM`** במקום `closed_month=`, כדי שלא יתנגש בחלק סגור של אותו חודש.
+11. **שער ה-poll**: `history_export.cold_poll_gate` רץ ב-`poll_job._poll_dataset` (מדלג עם לוג, כדי לא ליצור משימה
+    שתיגמר ב-409) וב-`worker.push_version` (409 עם הסבר בעברית), שניהם לפני כל טעינה. עם אישור מפורש
+    (`history_rehydrate_on_poll`) ההחזרה ל-SQL רצה שם ומחכים לה.
+12. **מועמדים לקר**: גישה נמדדת ב-`api_access_log.target` (מזהה המאגר בנתיבי `/api/append/{id}/…`); שאילתות
+    בקונסולה הכללית לא נספרות כגישה. "שורות סגורות מעל 90 יום" נספרות רק לטבלה שהערכת `pg_stats` שלה מעל 10k.
+13. **`DatasetResponse.history_tier`** נוסף (לכפתור "העבר לקר" / "החזר ל-SQL" בכרטיס המאגר), ו-`fidelity="cold"`
+    גובר על `tiered`. צ'יפ חדש "קר (R2)".
+14. **לא נבדק מקומית** (אין Postgres): `PgTable` (LOCK, cursor, COPY עם המרת uuid, DELETE ... USING unnest),
+    `candidates` מול pg_class, ו-`union_branches` מול מסד האפליקציה. כל אלה נבדקים בצעדים 4-6 של 4.3. הפרונט
+    לא נבדק בדפדפן (אין backend מקומי); tsc ו-vitest נקיים.
+15. **MCP `run_sql`** לא קיבל את ההערה על טבלה קרה (לא ברשימה הסגורה של סעיף 3); `include_history` שם ממשיך לעבוד
+    כמו בשלב 3 ומנתב גם טבלה קרה.
+
+### 6.6 מה נשאר לאשר (פרוטוקול 4.3, לא בוצע)
+
+**צעד 0 (קומיט `8d5c599` לבד אפשרי):**
+1. deploy. `POST /api/admin/storage/closures/reopen?source=prices&dry_run=1`, ואז `GET` על אותו נתיב עד
+   `running:false`: `totals.closed` (צפוי כ-20M+), `totals.duplicates` (קרפור כ-7.4k), `refused` ריק או מוסבר.
+2. באישור מפורש: `POST ...?source=prices&dry_run=0` (או "פתח מחדש" בכרטיס "סגירות שגויות"). אימות SQL: 0 סגורות
+   ב-196 הטבלאות, 0 `row_hash` כפול פתוח, `count(*)` ירד בדיוק ב-`totals.deleted`, `remaining` 0 בכל טבלה.
+3. ה-push הבא של קרפור: `change_summary` בלי `closed`, או `close_skipped`; הסגורות נשארות 0.
+
+**שאר השלב (אחרי deploy של הקומיט השני; alembic 073 רץ בבוט):**
+4. `GET /history/candidates` (כרטיס "מועמדים לקר", "חשב"): תחזית הגשם ברשימה. השהיית המאגר, ואז
+   `POST /history/cold/d3d20a89-5c41-4b49-a7a8-cc1c73e070f3`. מעקב ב-`GET /history` (`tier_job`): 60 טבלאות,
+   כ-62.2M שורות, 0 כשלונות; הטבלאות ריקות; `pg_database_size` אחרי VACUUM.
+5. `/data`: `SELECT count(*) FROM rain_forecast_stations` בלי המתג (0 + `history_note`) ועם המתג (62.2M, `engine: duckdb`),
+   ושאילתת תחנה אחת.
+6. `rehydrate` על מאגר קטן שהועבר לקר לבדיקה: `POST /history/rehydrate/{id}`; ספירה ו-hash זהים, `history_tier` נמחק,
+   poll אחר כך עובד.
+7. חלון 30 יום לשני מאגרי flydata דרך `PATCH /history/windows` (`{"items":[{"dataset_id":…,"days":30},…]}`).
+
 
 ### 6.7 צעד 0 על prod (2026-10-17, הסשן המתכנן)
 

@@ -62,6 +62,11 @@ const FIDELITY: Record<string, { label: string; tone: Tone; hint: string }> = {
     tone: "good",
     hint: "השורות העדכניות וההיסטוריה הקרובה בטבלה לתשאול; שורות שנסגרו מזמן נשמרות כקבצי Parquet להורדה",
   },
+  cold: {
+    label: "קר (R2)",
+    tone: "good",
+    hint: "כל השורות הועברו לקבצי Parquet ב-R2; הטבלה ב-SQL ריקה והשאילתות רצות דרך מנוע ההיסטוריה",
+  },
   none: {
     label: "לא נשמרו נתונים",
     tone: "bad",

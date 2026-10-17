@@ -54,15 +54,22 @@ const STATUS_LABELS: Record<string, string> = {
 
 const NO_DATASET = "__none__";
 
-async function call<T>(path: string, method: "GET" | "POST" = "GET"): Promise<T> {
+async function call<T>(path: string, method: "GET" | "POST" | "PATCH" = "GET", body?: unknown): Promise<T> {
   const token = localStorage.getItem("token");
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
   const resp = await fetch(`/api/admin/storage${path}`, {
     method,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!resp.ok) {
     let detail = `שגיאת שרת (${resp.status})`;
-    try { detail = (await resp.json())?.detail || detail; } catch { /* not JSON */ }
+    try {
+      const d = (await resp.json())?.detail;
+      if (typeof d === "string") detail = d;
+      else if (d) detail = d.message || JSON.stringify(d);
+    } catch { /* not JSON */ }
     throw new Error(detail);
   }
   return resp.json();
@@ -241,6 +248,7 @@ interface HistoryDataset {
   dataset_id: string;
   title: string | null;
   history_window_days: number | null;
+  history_tier?: "hot" | "cold";
   parts: number;
   rows_in_r2: number;
   rows_deleted: number;
@@ -475,11 +483,261 @@ function HistoryExportCard() {
                     <td style={cell}>
                       <Link to={`/versions/${d.dataset_id}`}>{d.title || d.dataset_id.slice(0, 8)}</Link>
                     </td>
-                    <td style={num}>{d.history_window_days ? `${d.history_window_days} ימים` : "ייצוא בלבד"}</td>
+                    <td style={num}>
+                      {d.history_tier === "cold" ? "קר (R2)" : d.history_window_days ? `${d.history_window_days} ימים` : "ייצוא בלבד"}
+                    </td>
                     <td style={num}>{n(d.parts)}</td>
                     <td style={num}>{n(d.rows_in_r2)}</td>
                     <td style={num}>{n(d.rows_deleted)}</td>
                     <td style={num}><Bytes n={d.bytes} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+interface ReopenTable {
+  table: string; dataset_id: string; closed: number; duplicates: number;
+  deleted: number; reopened: number; remaining: number | null; dry_run: boolean;
+}
+
+interface ReopenState {
+  running: boolean;
+  dry_run: boolean | null;
+  started_at: string | null;
+  finished_at: string | null;
+  current: string | null;
+  target: { source: string | null; dataset_id: string | null } | null;
+  tables: ReopenTable[];
+  refused: { dataset_id: string; title: string | null; reason: string }[];
+  failed: { table: string | null; error: string }[];
+  totals: { closed?: number; duplicates?: number; deleted?: number; reopened?: number; tables?: number };
+}
+
+const btn: React.CSSProperties = { background: "none", border: "1px solid var(--border)", borderRadius: 4, padding: "0.2rem 0.7rem", cursor: "pointer" };
+const primaryBtn: React.CSSProperties = { background: "var(--primary)", color: "#fff", border: "none", borderRadius: 4, padding: "0.25rem 0.8rem", cursor: "pointer", fontWeight: 600 };
+const box: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 6, padding: "0.6rem 0.8rem", marginBottom: "0.9rem", background: "var(--bg-secondary)" };
+
+/** Wrong closures (docs/history-phase4-plan.md section 0): a source that does
+ *  not close rows by its effective append_closes_rows (the prices feeds) got
+ *  closed rows anyway. A dry run counts; a real run reopens them. */
+function ClosuresReopenCard() {
+  const [st, setSt] = useState<ReopenState | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [source, setSource] = useState("prices");
+  const load = useCallback(async () => {
+    try { setSt(await call<ReopenState>("/closures/reopen")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!st?.running) return;
+    const t = setInterval(() => void load(), 4000);
+    return () => clearInterval(t);
+  }, [st?.running, load]);
+
+  const run = async (dry: boolean) => {
+    if (!dry && !window.confirm(
+      `לפתוח מחדש את כל השורות הסגורות של המקור "${source}"? עותקים כפולים (אותו row_hash) ` +
+      "יימחקו, והשורה עם first_seen המוקדם תישאר. הריצו קודם בדיקה יבשה.")) return;
+    try {
+      await call(`/closures/reopen?source=${encodeURIComponent(source)}&dry_run=${dry ? 1 : 0}`, "POST");
+      await load();
+    } catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  const n = (v: number | undefined | null) => (v ?? 0).toLocaleString("he-IL");
+  const t = st?.totals ?? {};
+  return (
+    <div style={box}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>סגירות שגויות</strong>
+        <span className="text-sm text-muted">
+          מקור שמפרסם רק שינויים (append_closes_rows: false) לא אמור לסגור שורות. כאן סופרים ופותחים מחדש.
+        </span>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)", whiteSpace: "pre-wrap" }}>{err}</div>}
+      <div className="flex text-sm" style={{ gap: "0.8rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+        <label>מקור: <input value={source} onChange={(e) => setSource(e.target.value)} dir="ltr" style={{ width: 120 }} /></label>
+        <button type="button" className="text-sm" style={btn} disabled={st?.running} onClick={() => void run(true)}>בדיקה יבשה</button>
+        <button type="button" className="text-sm" style={primaryBtn} disabled={st?.running} onClick={() => void run(false)}>פתח מחדש</button>
+        {st && st.started_at && (
+          <span>
+            {st.running ? "רץ" : "הסתיים"} ({st.dry_run ? "יבשה" : "אמיתית"}) · {n(t.tables)} טבלאות ·
+            {" "}{n(t.closed)} סגורות · {n(t.duplicates)} כפולות
+            {!st.dry_run && <> · נפתחו {n(t.reopened)} · נמחקו {n(t.deleted)}</>}
+            {st.running && st.current ? <> · עכשיו: <bdi dir="ltr">{st.current}</bdi></> : null}
+          </span>
+        )}
+        {st && st.refused.length > 0 && (
+          <span className="text-muted" title={st.refused.map((r) => `${r.title ?? r.dataset_id}: ${r.reason}`).join("\n")}>
+            {st.refused.length} מאגרים סורבו
+          </span>
+        )}
+        {st && st.failed.length > 0 && (
+          <span style={{ color: "var(--danger)" }} title={st.failed.map((f) => `${f.table ?? ""}: ${f.error}`).join("\n")}>
+            {st.failed.length} נכשלו
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ColdCandidate {
+  dataset_id: string; title: string; status: string; tables: number; rows: number; bytes: number;
+  days_since_version: number | null; days_since_access: number | null; may_move_now: boolean;
+}
+
+interface WindowRec {
+  dataset_id: string; title: string; history_window_days: number | null;
+  closed_over_90_days: number; est_bytes: number;
+}
+
+interface TierJob {
+  running: boolean; op: string | null; dataset_id: string | null; current: string | null;
+  planned: number; done: number; rows: number; failed: { table: string | null; error: string }[];
+}
+
+interface Candidates {
+  stale_days: number; quiet_days: number; window_hint_days: number;
+  candidates: ColdCandidate[]; windows: WindowRec[]; job: TierJob;
+}
+
+/** Cold-tier candidates and window recommendations (phase 4). Shows and
+ *  applies on a click; never decides on its own. */
+function ColdTierCard() {
+  const [st, setSt] = useState<Candidates | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [days, setDays] = useState(30);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setSt(await call<Candidates>("/history/candidates")); setErr(null); }
+    catch (e) { setErr(e instanceof Error ? e.message : "טעינה נכשלה"); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => {
+    if (!st?.job.running) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [st?.job.running, load]);
+
+  const moveCold = async (c: ColdCandidate) => {
+    let confirmRehydrate = false;
+    if (!c.may_move_now) {
+      if (!window.confirm(`"${c.title}" פעיל ונדגם לפחות פעם בחודש. להעביר לקר ולהחזיר ל-SQL אוטומטית לפני ה-poll הבא?`)) return;
+      confirmRehydrate = true;
+    } else if (!window.confirm(`להעביר את "${c.title}" לשכבה הקרה? כל השורות ייכתבו ל-Parquet ב-R2, יאומתו, וייִמחקו מ-SQL.`)) return;
+    try {
+      await call(`/history/cold/${c.dataset_id}${confirmRehydrate ? "?confirm_rehydrate=true" : ""}`, "POST");
+      await load();
+    } catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  const applyWindows = async (ids: string[]) => {
+    if (!ids.length) return;
+    if (!window.confirm(`להחיל חלון של ${days} ימים על ${ids.length} מאגרים?`)) return;
+    try {
+      await call("/history/windows", "PATCH", { items: ids.map((id) => ({ dataset_id: id, days })) });
+      setPicked({});
+      await load();
+    } catch (e) { setErr(e instanceof Error ? e.message : "הפעולה נכשלה"); }
+  };
+
+  const n = (v: number) => v.toLocaleString("he-IL");
+  const chosen = Object.keys(picked).filter((k) => picked[k]);
+  return (
+    <div style={box}>
+      <div className="flex" style={{ gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>מועמדים לקר והמלצות חלון</strong>
+        <span className="text-sm text-muted">
+          מאגר קר עובר כולו ל-Parquet ב-R2 ונקרא דרך מנוע ההיסטוריה; חלון מוציא שורות סגורות ישנות.
+        </span>
+        <span style={{ flex: 1 }} />
+        <button type="button" className="text-sm" style={btn} onClick={() => void load()} disabled={loading}>
+          {loading ? "מחשב…" : st ? "רענן" : "חשב"}
+        </button>
+      </div>
+      {err && <div className="text-sm" style={{ color: "var(--danger)", whiteSpace: "pre-wrap" }}>{err}</div>}
+      {st && (st.job.running || st.job.done > 0 || st.job.failed.length > 0) && (
+        <div className="text-sm" style={{ marginTop: "0.4rem" }}>
+          {st.job.op === "rehydrate" ? "החזרה ל-SQL" : "העברה לקר"}: {n(st.job.done)}/{n(st.job.planned)} טבלאות · {n(st.job.rows)} שורות
+          {st.job.running && st.job.current ? <> · עכשיו: <bdi dir="ltr">{st.job.current}</bdi></> : null}
+          {st.job.failed.length > 0 && (
+            <span style={{ color: "var(--danger)" }} title={st.job.failed.map((f) => `${f.table ?? ""}: ${f.error}`).join("\n")}>
+              {" "}· {st.job.failed.length} נכשלו
+            </span>
+          )}
+        </div>
+      )}
+      {st && (
+        <>
+          <div className="text-sm" style={{ marginTop: "0.5rem", fontWeight: 600 }}>
+            מועמדים לקר (לא התעדכנו {st.stale_days} יום ולא נשאלו ב-API {st.quiet_days} יום): {st.candidates.length}
+          </div>
+          {st.candidates.length > 0 && (
+            <table className="text-sm" style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.3rem" }}>
+              <thead>
+                <tr style={{ textAlign: "start", borderBottom: "1px solid var(--border)" }}>
+                  <th style={cell}>מאגר</th><th style={num}>טבלאות</th><th style={num}>שורות</th>
+                  <th style={num}>נפח</th><th style={num}>גרסה אחרונה</th><th style={num}>גישה אחרונה</th><th style={cell} />
+                </tr>
+              </thead>
+              <tbody>
+                {st.candidates.map((c) => (
+                  <tr key={c.dataset_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={cell}><Link to={`/versions/${c.dataset_id}`}>{c.title}</Link> <span className="text-muted">({c.status})</span></td>
+                    <td style={num}>{n(c.tables)}</td>
+                    <td style={num}>{n(c.rows)}</td>
+                    <td style={num}><Bytes n={c.bytes} /></td>
+                    <td style={num}>{c.days_since_version == null ? "—" : `לפני ${n(c.days_since_version)} ימים`}</td>
+                    <td style={num}>{c.days_since_access == null ? "אף פעם" : `לפני ${n(c.days_since_access)} ימים`}</td>
+                    <td style={cell}>
+                      <button type="button" className="text-sm" style={btn} disabled={st.job.running} onClick={() => void moveCold(c)}>
+                        העבר לקר
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="flex text-sm" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.7rem" }}>
+            <strong>המלצות חלון (שורות סגורות מעל {st.window_hint_days} יום)</strong>
+            <label>חלון: <input type="number" min={30} value={days} onChange={(e) => setDays(Number(e.target.value) || 30)} style={{ width: 70 }} /> ימים</label>
+            <button type="button" className="text-sm" style={primaryBtn} disabled={!chosen.length || days < 30} onClick={() => void applyWindows(chosen)}>
+              החל על המסומנים ({chosen.length})
+            </button>
+          </div>
+          {st.windows.length > 0 && (
+            <table className="text-sm" style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.3rem" }}>
+              <thead>
+                <tr style={{ textAlign: "start", borderBottom: "1px solid var(--border)" }}>
+                  <th style={cell} /><th style={cell}>מאגר</th><th style={num}>חלון היום</th>
+                  <th style={num}>סגורות מעל {st.window_hint_days} יום</th><th style={num}>חיסכון משוער</th><th style={cell} />
+                </tr>
+              </thead>
+              <tbody>
+                {st.windows.map((w) => (
+                  <tr key={w.dataset_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={cell}>
+                      <input type="checkbox" checked={!!picked[w.dataset_id]} aria-label="סמן"
+                             onChange={(e) => setPicked((p) => ({ ...p, [w.dataset_id]: e.target.checked }))} />
+                    </td>
+                    <td style={cell}><Link to={`/versions/${w.dataset_id}`}>{w.title}</Link></td>
+                    <td style={num}>{w.history_window_days ? `${w.history_window_days} ימים` : "ללא"}</td>
+                    <td style={num}>{n(w.closed_over_90_days)}</td>
+                    <td style={num}><Bytes n={w.est_bytes} /></td>
+                    <td style={cell}>
+                      <button type="button" className="text-sm" style={btn} onClick={() => void applyWindows([w.dataset_id])}>החל</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -629,7 +887,9 @@ export default function StorageUsagePanel() {
 
       <HashCompactionCard />
       <IndexMigrationCard />
+      <ClosuresReopenCard />
       <HistoryExportCard />
+      <ColdTierCard />
       <HistoryQueryCard />
 
       {data && (

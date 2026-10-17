@@ -209,7 +209,8 @@ export interface ArchiveState {
   // full = files + queryable rows · rows = NEON only · files = objects only
   // sample = metadata stub, no data · none = nothing archived
   // tiered = rows in SQL, older closed rows ONLY as Parquet on R2 (history export)
-  fidelity: "full" | "rows" | "files" | "sample" | "none" | "tiered" | null;
+  // cold = every row moved to Parquet on R2, the SQL tables empty (phase 4)
+  fidelity: "full" | "rows" | "files" | "sample" | "none" | "tiered" | "cold" | null;
   // Where the files actually are, read off the mapping values.
   file_store: "r2" | "odata" | "mixed" | "none";
   row_store: "neon" | "none";
@@ -248,6 +249,8 @@ export interface TrackedDataset {
   // Days a closed row stays in SQL before only its Parquet copy on R2 remains;
   // null = export only, nothing deleted (docs/history-phase2-plan.md).
   history_window_days?: number | null;
+  // "cold": moved whole to Parquet on R2 (docs/history-phase4-plan.md).
+  history_tier?: "hot" | "cold";
   // Whether NEON (tabular-rows) plans are offered for this source (CKAN only).
   neon_eligible: boolean;
   // DIFF mode (append_only only): capture changes to existing rows via a
@@ -490,6 +493,9 @@ export interface AppendSchema {
     // the history engine is off.
     queryable_via?: "duckdb" | null;
   } | null;
+  // "cold": the table is empty in SQL and every row is in R2; /rows and /sql
+  // read it through the history engine on their own.
+  history_tier?: "hot" | "cold";
 }
 
 export interface AppendRows {
