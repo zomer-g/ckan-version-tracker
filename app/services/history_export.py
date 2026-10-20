@@ -896,6 +896,87 @@ async def vacuum(table: str) -> None:
         await conn.execute(vacuum_sql(table), timeout=STATEMENT_TIMEOUT_S)
 
 
+def truncate_sql(table: str) -> str:
+    return f"TRUNCATE TABLE {_ref(table)}"
+
+
+def compaction_for(rows_left: int) -> str:
+    """What gives the space of an emptied table back: a plain VACUUM returns
+    the heap's trailing pages but never an index page, so a table whose every
+    row went to R2 kept its whole index (the rain forecast: 60 empty tables,
+    1.96 GB of indexes, phase 4 follow-up). TRUNCATE releases heap, TOAST and
+    indexes at once; with rows left, VACUUM as before."""
+    return "truncate" if int(rows_left) == 0 else "vacuum"
+
+
+RELATION_SIZE_SQL = "SELECT pg_total_relation_size($1::regclass)"
+
+
+def relation_ref(table: str) -> str:
+    """The ``regclass`` text of an append table, for RELATION_SIZE_SQL."""
+    return _ref(table)
+
+
+async def compact_table(table: str) -> dict:
+    """Give an emptied table's files back (TRUNCATE when it has no rows,
+    VACUUM otherwise). ``{table, rows, action, before, after}`` in bytes."""
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        before = int(await conn.fetchval(RELATION_SIZE_SQL, relation_ref(table)))
+        rows = int(await conn.fetchval(f"SELECT count(*) FROM {_ref(table)}"))
+        action = compaction_for(rows)
+        if action == "truncate":
+            await conn.execute(truncate_sql(table), timeout=STATEMENT_TIMEOUT_S)
+        else:
+            await conn.execute(vacuum_sql(table), timeout=STATEMENT_TIMEOUT_S)
+        after = int(await conn.fetchval(RELATION_SIZE_SQL, relation_ref(table)))
+    logger.info("history compact: %s %s, %d rows, %d -> %d bytes",
+                table, action, rows, before, after)
+    return {"table": table, "rows": rows, "action": action, "before": before, "after": after}
+
+
+async def cold_empty_tables() -> list[str]:
+    """The tables of cold-tier datasets whose full parts are deleted from
+    SQL: the ones that should be empty."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.history_part import HistoryPart
+    from app.models.tracked_dataset import TrackedDataset
+
+    async with async_session() as db:
+        cold_ids = [d.id for d in (await db.execute(select(TrackedDataset))).scalars().all()
+                    if history_tier_of(d) == TIER_COLD]
+        if not cold_ids:
+            return []
+        return sorted({r[0] for r in (await db.execute(
+            select(HistoryPart.table_name).where(
+                HistoryPart.dataset_id.in_(cold_ids), HistoryPart.kind == KIND_FULL,
+                HistoryPart.deleted_from_sql.is_(True)))).all()})
+
+
+async def compact_cold_tables(tables: list[str] | None = None) -> dict:
+    """Every table of a cold dataset that is empty in SQL gets TRUNCATEd so its
+    index files go too. A table that still has rows is left alone and listed
+    as skipped: being empty is the only thing that makes TRUNCATE safe."""
+    tables = await cold_empty_tables() if tables is None else list(tables)
+    done, skipped, failed = [], [], []
+    for table in tables:
+        try:
+            pool = await append_store.get_pool()
+            async with pool.acquire() as conn:
+                rows = int(await conn.fetchval(f"SELECT count(*) FROM {_ref(table)}"))
+            if rows:
+                skipped.append({"table": table, "rows": rows})
+                continue
+            done.append(await compact_table(table))
+        except Exception as e:  # noqa: BLE001 — one table must not stop the rest
+            failed.append({"table": table, "error": f"{type(e).__name__}: {e}"[:300]})
+    freed = sum(d["before"] - d["after"] for d in done)
+    return {"tables": len(tables), "compacted": done, "skipped": skipped, "failed": failed,
+            "freed_bytes": freed}
+
+
 async def delete_exported(part: dict | None, *, window_days: int | None,
                           now: datetime | None = None, vacuum_after: bool = True) -> dict:
     """Delete from SQL the rows of one verified part that are past the window."""
@@ -1348,7 +1429,8 @@ async def export_full(dataset_id, table: str, *, table_side=None, now: datetime 
             r["deleted_from_sql"] = True
         rows = sum(int(r["rows"]) for r in records)
         if table_side is None and deleted:
-            await vacuum(table)
+            # Empty now: TRUNCATE gives the index files back too (compaction_for).
+            await compact_table(table)
         logger.info("history cold: %s → %d full parts, %d rows", table, len(records), rows)
         return {"ok": True, "parts": records, "rows": rows, "deleted": deleted}
     except Exception as e:  # noqa: BLE001 — a failed table stays hot
