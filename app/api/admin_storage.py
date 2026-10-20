@@ -635,6 +635,66 @@ async def history_cold(dataset_id: str, confirm_rehydrate: bool = Query(False),
     return {"started": True, "dataset_id": dataset_id, "confirm_rehydrate": confirm_rehydrate}
 
 
+@router.post("/history/compact")
+async def history_compact(_: User = Depends(get_admin_user)):
+    """TRUNCATE every cold-tier table that is already empty in SQL, so the
+    space its indexes still hold is given back (a plain VACUUM never shrinks
+    an index). Lists what was compacted, skipped (rows left) and failed."""
+    from app.services import history_export
+    if history_export.tier_status()["running"]:
+        raise HTTPException(status_code=409, detail="another tier move is running")
+    return await history_export.compact_cold_tables()
+
+
+_access_log_job: dict = {"running": False, "started_at": None, "finished_at": None,
+                         "purged": None, "before": None, "after": None, "error": None}
+
+
+async def _compact_access_log() -> None:
+    """Purge past the retention, then ``VACUUM FULL`` the log so the space
+    leaves the database (a DELETE alone only frees it for reuse). The writer
+    drops a batch it cannot insert during the lock, which is acceptable for a
+    log; no request reads this table."""
+    from sqlalchemy import text
+
+    from app.database import engine
+    from app.services import api_access_log
+    _access_log_job.update(running=True, started_at=datetime.now(timezone.utc).isoformat(),
+                           finished_at=None, purged=None, before=None, after=None, error=None)
+    try:
+        async with engine.connect() as c:
+            _access_log_job["before"] = int((await c.execute(
+                text("SELECT pg_total_relation_size('app.api_access_log')"))).scalar())
+        _access_log_job["purged"] = await api_access_log.purge_old()
+        async with engine.connect() as c:
+            c2 = await c.execution_options(isolation_level="AUTOCOMMIT")
+            await c2.execute(text("VACUUM FULL app.api_access_log"))
+            _access_log_job["after"] = int((await c2.execute(
+                text("SELECT pg_total_relation_size('app.api_access_log')"))).scalar())
+    except Exception as e:  # noqa: BLE001 — surface in status
+        logger.exception("access log compact failed")
+        _access_log_job["error"] = f"{type(e).__name__}: {e}"[:400]
+    finally:
+        _access_log_job.update(running=False,
+                               finished_at=datetime.now(timezone.utc).isoformat())
+
+
+@router.get("/access-log/compact")
+async def access_log_compact_status(_: User = Depends(get_admin_user)):
+    return dict(_access_log_job)
+
+
+@router.post("/access-log/compact")
+async def access_log_compact(_: User = Depends(get_admin_user)):
+    """Background: purge the API access log past API_ACCESS_LOG_RETENTION_DAYS
+    and VACUUM FULL it. GET for the result (bytes before and after)."""
+    import asyncio
+    if _access_log_job["running"]:
+        return {"started": False, "reason": "already running"}
+    asyncio.create_task(_compact_access_log())
+    return {"started": True}
+
+
 @router.post("/history/rehydrate/{dataset_id}")
 async def history_rehydrate(dataset_id: str, user: User = Depends(get_admin_user)):
     """Bring a cold dataset back to SQL: COPY its parts, verify count and hash
