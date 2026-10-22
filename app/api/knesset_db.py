@@ -59,7 +59,7 @@ async def tables(request: Request):
         return {"tables": await knesset_db.list_tables()}
     except Exception as e:  # noqa: BLE001 — surface init errors readably
         logger.exception("knesset-db /tables failed")
-        raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
+        raise HTTPException(status_code=503, detail=f"מסד הנתונים של הכנסת אינו זמין כרגע ({type(e).__name__})")
 
 
 @router.get("/schema.txt", response_class=PlainTextResponse)
@@ -72,7 +72,7 @@ async def schema_txt(request: Request, group: str | None = None):
         return await knesset_db.schema_text(group)
     except Exception as e:  # noqa: BLE001
         logger.exception("knesset-db /schema.txt failed")
-        raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
+        raise HTTPException(status_code=503, detail=f"מסד הנתונים של הכנסת אינו זמין כרגע ({type(e).__name__})")
 
 
 @router.post("/sql")

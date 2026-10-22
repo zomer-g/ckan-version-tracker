@@ -31,7 +31,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Same connection setup as the app engine: SSL for Neon here, and below the same
+# Same connection setup as the app engine: TLS decided by the host here, and below the same
 # search_path = app, public, so a table a migration creates without naming a
 # schema lands in `app`.
 connect_args: dict = app_db_connect_args(raw_url)

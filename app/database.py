@@ -1,4 +1,3 @@
-import ssl as _ssl
 from urllib.parse import urlsplit
 
 from sqlalchemy import event
@@ -6,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import parse_pg_target, settings
+from app.pg_ssl import asyncpg_ssl_for
 
 # The application's own tables live in schema `app`; credentials in `auth`.
 # `public` is for published data only, because on xhostd the platform's read-only
@@ -62,14 +62,13 @@ def app_db_connect_args(url: str) -> dict:
     Not for the archive pools: they must keep the default search_path so that
     append tables are created in `public`, where the console can read them.
     """
-    connect_args: dict = {}
-    # Neon requires SSL
-    if "neon" in url:
-        ssl_context = _ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = _ssl.CERT_NONE
-        connect_args = {"ssl": ssl_context, "statement_cache_size": 0}
-    return connect_args
+    # The same rule as every asyncpg pool (see pg_ssl): no TLS for the
+    # platform's private network, a VERIFYING context for any public host. The
+    # old Neon branch here disabled certificate verification, which would have
+    # let anyone on the path impersonate the database; Neon is retired and
+    # _refuse_neon() in app/main.py keeps it that way.
+    ssl_context = asyncpg_ssl_for(url)
+    return {"ssl": ssl_context} if ssl_context else {}
 
 
 def app_search_path_applies(url: str) -> bool:

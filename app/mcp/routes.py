@@ -11,8 +11,9 @@ permissive CORS headers and OPTIONS preflight is answered 204 — independent of
 the app's global CORS policy. Safe because /mcp is Bearer-gated and the OAuth
 flow requires Google login + the api_users allow-list.
 """
-from __future__ import annotations
-
+# No `from __future__ import annotations`: slowapi's limiter wraps the endpoint
+# with its own __globals__, and FastAPI then cannot resolve a postponed
+# annotation such as AsyncSession (tests/test_route_annotations.py).
 import json
 
 from fastapi import APIRouter, Depends
@@ -25,6 +26,7 @@ from app.database import get_db
 from app.mcp import config, oauth
 from app.mcp.auth import McpUser, authenticate
 from app.mcp.server import handle_message
+from app.rate_limit import limiter
 
 mcp_router = APIRouter(prefix="/mcp", tags=["mcp"])
 mcp_wellknown_router = APIRouter(tags=["mcp"])
@@ -74,7 +76,12 @@ async def authorization_server(request: Request):
 
 # ── OAuth endpoints ─────────────────────────────────────────────────────────
 
+# RFC 7591 registration is open to anyone by design (clients self-register
+# before the user ever signs in), so it is the one MCP endpoint an anonymous
+# caller can make write a row. The limit keeps a script from filling
+# mcp_oauth_clients; a real client registers once.
 @mcp_router.post("/oauth/register")
+@limiter.limit("10/minute")
 async def oauth_register(request: Request, db: AsyncSession = Depends(get_db)):
     return _cors(await oauth.register_client(request, db))
 

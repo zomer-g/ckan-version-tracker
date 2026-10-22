@@ -105,7 +105,7 @@ async def tables(request: Request, db: AsyncSession = Depends(get_db)):
         records = await data_catalog.build_catalog(db)
     except Exception as e:  # noqa: BLE001 — surface init errors readably
         logger.exception("/api/connector/tables catalog failed")
-        raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
+        raise HTTPException(status_code=503, detail=f"catalog unavailable ({type(e).__name__})")
     return {
         "tables": [
             {k: r.get(k) for k in ("table", "schema", "title", "kind", "est_rows")}

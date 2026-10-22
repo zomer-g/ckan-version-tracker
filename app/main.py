@@ -439,10 +439,19 @@ app.add_middleware(ApiAccessLogMiddleware)
 # `strict-origin` sends only "https://www.over.org.il/" — enough for any
 # same-origin check, nothing for a WAF to match on, and it repairs every link
 # already shared, since the policy applies when the browser SENDS.
+#
+# Two more headers ride along. `X-Content-Type-Options: nosniff` stops a browser
+# from running a CSV or a user-uploaded file as a script because it guessed the
+# type. `X-Frame-Options: SAMEORIGIN` keeps the site out of other sites' frames
+# (clickjacking) while leaving our own embeds working: /about frames the story
+# decks and the OCOI pages frame /api/ocoi/documents/{id}/file, both same-origin.
+# setdefault, so a route that needs something else can say so itself.
 @app.middleware("http")
-async def _referrer_policy(request, call_next):
+async def _security_headers(request, call_next):
     response = await call_next(request)
     response.headers.setdefault("Referrer-Policy", "strict-origin")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     return response
 
 # Maintenance mode (MAINTENANCE_MODE), for the minutes a database is being copied.

@@ -1,5 +1,12 @@
-# Web framework
-fastapi==0.115.6
+# Web framework. fastapi is held at 0.135.0 on purpose: 0.140 stopped flattening
+# included routers into app.routes (they stay as _IncludedRouter), and
+# app/main.py::_admin_write_patterns walks app.routes to find the admin writes
+# that maintenance mode refuses — on 0.140+ it finds none and the freeze is
+# silently empty (tests/test_version_freeze.py catches it). Starlette is pinned
+# separately so it can carry security fixes (Range-header DoS in FileResponse,
+# unenforced max_fields on urlencoded forms) without waiting on fastapi.
+fastapi==0.135.0
+starlette==1.9.0
 uvicorn[standard]==0.34.0
 
 # Database
@@ -8,7 +15,7 @@ asyncpg==0.30.0
 alembic==1.14.0
 
 # Auth
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.15.0
 
 # HTTP client
 httpx==0.28.1
@@ -31,7 +38,7 @@ dictdiffer==0.9.0
 slowapi==0.1.9
 
 # Utilities
-python-multipart==0.0.20
+python-multipart==0.0.31
 
 # File parsing for admin-curated odata imports (app/services/odata_import.py):
 # XLSX via openpyxl, legacy XLS via xlrd, ICS/ICAL via icalendar. CSV uses the
