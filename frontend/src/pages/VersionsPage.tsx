@@ -635,6 +635,7 @@ export default function VersionsPage() {
             <ImportWarningNotice
               warning={dataset.import_warning}
               at={dataset.import_warning_at}
+              showDetails={isAdmin}
             />
           )}
         </div>

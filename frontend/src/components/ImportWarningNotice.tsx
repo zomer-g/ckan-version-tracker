@@ -28,10 +28,15 @@ export default function ImportWarningNotice({
   warning,
   at,
   variant = "banner",
+  showDetails = false,
 }: {
   warning: string | null | undefined;
   at?: string | null;
   variant?: "banner" | "chip";
+  /** The worker's own diagnosis (points, polygon ids, counts) is for whoever
+   *  fixes the import. A reader needs only to know the version is suspect —
+   *  the layer-16 note ran to 27 places and their ids. Admins only. */
+  showDetails?: boolean;
 }) {
   if (!warning) return null;
   const since = formatDate(at);
@@ -76,7 +81,7 @@ export default function ImportWarningNotice({
       <strong style={{ display: "block", marginBottom: "0.15rem" }}>
         <span aria-hidden="true">⚠</span> יש חשש שהגרסה האחרונה לא יובאה כראוי{since ? ` — נבדק ב-${since}` : ""}
       </strong>
-      {warning}
+      {showDetails && warning}
       <div style={{ marginTop: "0.35rem", opacity: 0.9 }}>
         הקבצים נשארים זמינים להורדה — כדאי לבדוק אותם לפני הסתמכות, ולהשוות
         לגרסה קודמת אם יש.
