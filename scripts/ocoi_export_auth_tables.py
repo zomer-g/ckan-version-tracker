@@ -70,11 +70,33 @@ def _sql_literal(v) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
+def _dsn() -> str:
+    """The Render source DSN, from the environment or the repo's .env.
+
+    `OCOI_RENDER_SRC_URL` is the same value the Phase 0 migration read, so on a
+    machine that ran the migration this needs no new secret at all.
+    """
+    for name in ("OCOI_RENDER_DATABASE_URL", "OCOI_RENDER_SRC_URL"):
+        v = os.environ.get(name, "").strip()
+        if v:
+            return v
+    env = Path(__file__).resolve().parents[1] / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            for name in ("OCOI_RENDER_DATABASE_URL", "OCOI_RENDER_SRC_URL"):
+                if line.startswith(name + "="):
+                    v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if v:
+                        return v
+    return ""
+
+
 async def main(out_dir: Path) -> int:
-    dsn = os.environ.get("OCOI_RENDER_DATABASE_URL", "").strip()
+    dsn = _dsn()
     if not dsn:
-        print("Set OCOI_RENDER_DATABASE_URL to ocoi-db's External Connection "
-              "String (Render dashboard) and re-run.", file=sys.stderr)
+        print("No OCOI Render DSN found. Set OCOI_RENDER_DATABASE_URL (or put "
+              "OCOI_RENDER_SRC_URL in .env) to ocoi-db's External Connection "
+              "String from the Render dashboard, then re-run.", file=sys.stderr)
         return 2
 
     import asyncpg

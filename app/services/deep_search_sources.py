@@ -28,7 +28,7 @@ they would look like "no results" rather than like a bug.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable
 
 # ── shared helpers ──────────────────────────────────────────────────────────
@@ -72,6 +72,46 @@ def first_of(row: dict, *keys: str) -> Any:
         if v is not None and str(v).strip() != "":
             return v
     return None
+
+
+# Bookkeeping columns every append_ table carries. They can hold the query text
+# by coincidence (a timestamp contains digits), and naming one as the reason a
+# row matched explains nothing.
+_MATCH_NOTE_SKIP = frozenset({"first_seen", "last_seen", "_id", "id"})
+
+
+def match_note(row: dict, pq, shown: str, *, limit: int = 2) -> str | None:
+    """Why did this row match, when the card does not already show it?
+
+    A free-text search over a table runs ILIKE across EVERY column, so a row can
+    answer the query on a field the card has no room for: searching שומרים
+    returns "רף, ריהוט משרדי בע״מ" because its street is רחוב השומרים. The match
+    is real and the row is not a bug — but a card showing only name, number and
+    city reads as a wrong result, which is how the search itself came to be
+    doubted. Naming the column turns the same row into an answer.
+
+    Returns None when everything the user asked for is already visible.
+    """
+    if pq is None or not getattr(pq, "positives", ()):
+        return None
+    low = (shown or "").lower()
+    missing = [n for n in pq.positives if n.lower() not in low]
+    if not missing:
+        return None
+    hits: list[str] = []
+    for col, val in (row or {}).items():
+        if col in _MATCH_NOTE_SKIP or val is None or str(val).strip() == "":
+            continue
+        text = str(val)
+        low_v = text.lower()
+        if any(n.lower() in low_v for n in missing):
+            hits.append(f"{col} ({truncate(text, 40)})")
+            if len(hits) >= limit:
+                break
+    # "התאמה: " and not "התאמה ב" — half these column names are English
+    # (entity_id, receiver_entity_name) and a Hebrew preposition glued to a
+    # Latin word renders as neither language in a bidi line.
+    return ("התאמה: " + ", ".join(hits)) if hits else None
 
 
 def iso_date(v: Any) -> str | None:
@@ -225,12 +265,28 @@ class Source:
     # Held by someone else. Surfaced in the UI as a "מקור חיצוני" marker so a
     # reader is never left thinking OVER produced the row.
     external: bool = False
-    # The backend parses "phrases", -exclusions and OR itself (TAG-IT does —
-    # measured, see deep_search_query). Such a source gets the user's query
-    # verbatim and its results are NOT re-filtered here: it searched full
-    # document bodies, so a match may legitimately sit outside the snippet we
-    # can see, and filtering on what we can see would drop real hits.
-    native_operators: bool = False
+    # What this backend does with the query STRING, which decides BOTH what we
+    # send it and what has to be re-checked on the way back. Getting this wrong
+    # is not cosmetic: every source was "substring" until 2026-09-01, so a plain
+    # two-word search reached ten of thirteen columns as ONE word and nothing
+    # re-checked the other — `בנימין נתניהו` filled the page with מטה בנימין.
+    #
+    #   "substring" — one contiguous ILIKE (`%q%`). Extra words return zero, so
+    #                 it gets a single ANCHOR word and we enforce the rest here.
+    #   "tokens"    — splits the query into words and ranks, but does not AND
+    #                 them (מפתח התקציב, הלמ״ס). Safe — and better — to send the
+    #                 whole thing, because an anchor can never surface a row the
+    #                 other words would have found. We still enforce the AND.
+    #   "and"       — ANDs every phrase and term across its own columns
+    #                 (append_store.search_terms). Only exclusions are left to
+    #                 us; re-checking the positives on the little text a card
+    #                 shows would undo a search that ran over every column.
+    #   "operators" — parses quotes, -exclusion and OR itself (TAG-IT does —
+    #                 measured, see deep_search_query). Gets the query verbatim
+    #                 and is never re-filtered: it searched full document
+    #                 bodies, so a match may legitimately sit outside the
+    #                 snippet we can see.
+    query_support: str = "substring"
     # Per-source ceiling, overriding settings.deep_search_source_timeout.
     #
     # The global 25s was set for OUR in-process servers, which answer in ~1-2s.
@@ -266,6 +322,16 @@ class Source:
     filters: tuple[Filter, ...] = ()
     active: bool = True
     hint: str = ""                           # one line under the column head
+
+    @property
+    def native_operators(self) -> bool:
+        """Does the backend parse the operator syntax itself?"""
+        return self.query_support == "operators"
+
+    @property
+    def enforces_positives(self) -> bool:
+        """Did the backend itself guarantee every phrase and term is present?"""
+        return self.query_support in ("and", "operators")
 
     @property
     def server(self) -> str:
@@ -392,7 +458,12 @@ def _n_protocol(r: dict) -> Card | None:
         badges.append(str(r["file_format"]))
     return Card(
         title=truncate(title, 160),
-        snippet=join_parts("פרוטוקול ועדה", r.get("startdate")),
+        # The search runs over the sitting's TOPICS, not over the committee
+        # name, so a card carrying only the committee and the date left the
+        # reader with no idea why the row was returned — and no way to tell a
+        # real hit from a wrong one. matched_topic is the line that matched.
+        snippet=join_parts("פרוטוקול ועדה", r.get("startdate"),
+                           truncate(r.get("matched_topic"), 120)),
         # file_url is the protocol itself on the Knesset server; session_url is
         # the sitting's page. Prefer the document.
         url=r.get("file_url") or r.get("session_url") or r.get("over_url"),
@@ -453,7 +524,7 @@ CORPORATE_FILTER = Filter("dataset", "מרשם", "select", tuple(
 ))
 
 
-def _corporate_row(row: dict, spec: dict, page_url: str | None) -> Card | None:
+def _corporate_row(row: dict, spec: dict, page_url: str | None, pq=None) -> Card | None:
     name = first_of(row, *spec["name"])
     if not name:
         return None
@@ -463,12 +534,12 @@ def _corporate_row(row: dict, spec: dict, page_url: str | None) -> Card | None:
         v = first_of(row, *spec[key])
         if v:
             badges.append(str(v))
+    title = truncate(name, 160)
+    place = first_of(row, *spec["place"])
+    body = join_parts((f"מספר תאגיד {number}" if number else None), place)
     return Card(
-        title=truncate(name, 160),
-        snippet=join_parts(
-            (f"מספר תאגיד {number}" if number else None),
-            first_of(row, *spec["place"]),
-        ),
+        title=title,
+        snippet=join_parts(body, match_note(row, pq, f"{title} {body}")),
         # Every row links to the dataset's page on OVER rather than to an
         # invented per-entity URL: these registries publish no stable public
         # entity page, and a fabricated link is worse than a correct general one.
@@ -486,11 +557,17 @@ async def _run_corporate(call, q: str, limit: int, filters: dict) -> dict:
     """
     import asyncio
 
+    from app.services import deep_search_query as dsq
+
     wanted = (filters or {}).get("dataset") or ""
     specs = [d for d in CORPORATE_REGISTRIES if not wanted or d["dataset_id"] == wanted]
     if not specs:
         specs = list(CORPORATE_REGISTRIES)
     per = max(3, -(-limit // len(specs)))
+    # ``q`` arrives as the positive query (this source is "and"), so parsing it
+    # back gives the terms the store just enforced — which is what match_note
+    # needs to say WHICH column carried them.
+    pq = dsq.parse(q)
 
     async def one(spec: dict) -> list[Card]:
         payload = await call("query_dataset_rows",
@@ -500,7 +577,7 @@ async def _run_corporate(call, q: str, limit: int, filters: dict) -> dict:
         out = []
         for r in rows[:per]:
             try:
-                c = _corporate_row(r, spec, page_url)
+                c = _corporate_row(r, spec, page_url, pq)
             except Exception:  # noqa: BLE001 — one bad row must not empty the column
                 c = None
             if c:
@@ -797,11 +874,25 @@ async def _run_obudget(call, q: str, limit: int, filters: dict) -> dict:
     session: firing the four concurrently makes the whole column hang until the
     timeout, while one after another costs ~3s in total. Do not "optimise" this
     into a gather without re-measuring against the live endpoint.
+
+    EVERY ROW IS RE-CHECKED against the query, whether or not operators were
+    used — the only source where that is unconditional. ``DatasetFullTextSearch``
+    is not selective, and not marginally so: measured on 2026-09-01, the company
+    number 516112034 returned 11 rows from entities_data of which ONE carried
+    the number, and ten unrelated rows from each of the other three datasets;
+    even the single word נתניהו came back with "לגדול נכון בע״מ". Taking the top
+    rows on trust is what put budget lines and מ. מ. שגב-שלום on the page under
+    a search for a company number. The check runs over the WHOLE record, not the
+    card, so a support whose only link to the query is recipient_entity_id is
+    kept — that row is the answer, not noise.
     """
+    from app.services import deep_search_query as dsq
+
     wanted = (filters or {}).get("dataset") or ""
     specs = [d for d in OBUDGET_DATASETS if not wanted or d["id"] == wanted] \
         or list(OBUDGET_DATASETS)
     per = max(2, -(-limit // len(specs)))
+    pq = dsq.parse(q)
 
     results: list[Card] = []
     failures: list[BaseException] = []
@@ -811,13 +902,25 @@ async def _run_obudget(call, q: str, limit: int, filters: dict) -> dict:
         except Exception as e:  # noqa: BLE001 — one dead dataset ≠ a dead column
             failures.append(e)
             continue
-        for r in (payload.get("search_results") or [])[:per]:
+        kept = 0
+        for r in payload.get("search_results") or []:
+            if kept >= per:
+                break
+            if not dsq.matches(pq, *(str(v) for v in r.values() if v not in (None, ""))):
+                continue
             try:
                 c = spec["norm"](r)
             except Exception:  # noqa: BLE001
                 c = None
             if c:
+                # Say which field carried the query when the card does not show
+                # it, so a row kept on recipient_entity_id does not read as the
+                # very noise this filter exists to remove.
+                note = match_note(r, pq, f"{c.title} {c.snippet}")
+                if note:
+                    c = replace(c, snippet=join_parts(c.snippet, note))
                 results.append(c)
+                kept += 1
     if failures and len(failures) == len(specs):
         # Everything failed — surface it as an error rather than as "no results".
         raise failures[0]
@@ -861,6 +964,9 @@ SOURCES: tuple[Source, ...] = (
         attribution={"text": "אינדקס תוכן מעובד של אתר הלמ״ס (cbs.gov.il) — מטא-דאטה בלבד.",
                      "href": "https://www.over.org.il/cbs"},
         local="cbs", tool="search", results_path="items",
+        # build_search compiles an OR-of-words tsquery and ranks — it tokenizes,
+        # so the whole query is safe to send; the AND is enforced on the way back.
+        query_support="tokens",
         hint="פרסומים ולוחות של הלשכה המרכזית לסטטיסטיקה",
         filters=YEAR_RANGE + (Filter("file_type", "סוג קובץ"),),
         build_args=lambda q, limit, f: {
@@ -874,6 +980,9 @@ SOURCES: tuple[Source, ...] = (
         attribution={"text": "מראה מעובדת של נתוני ODATA של הכנסת; תוכן הפרוטוקול נשאר בשרת הכנסת.",
                      "href": "https://www.over.org.il/knesset"},
         local="knesset", tool="search_protocols", results_path="items",
+        # _session_filters ANDs each word over the sitting's topics + the
+        # committee name (app/mcp/knesset_server.py).
+        query_support="and",
         hint="ישיבות ועדה — מטא-דאטה וקישור לקובץ",
         filters=(Filter("knesset_num", "מספר כנסת", "number"),) + DATE_RANGE,
         build_args=lambda q, limit, f: {
@@ -887,6 +996,8 @@ SOURCES: tuple[Source, ...] = (
         attribution={"text": "קטלוג מעובד של מרכז המחקר והמידע של הכנסת; המסמך המלא בשרת הכנסת.",
                      "href": "https://www.over.org.il/knesset?tab=mmm"},
         local="knesset", tool="search_mmm", results_path="items",
+        # knesset_mmm_db.search ANDs each word over title + keywords + abstract.
+        query_support="and",
         hint="מחקרי מרכז המחקר והמידע של הכנסת",
         filters=YEAR_RANGE + (Filter("author", "מחבר"), Filter("doc_type", "סוג מסמך")),
         build_args=lambda q, limit, f: {
@@ -940,7 +1051,7 @@ SOURCES: tuple[Source, ...] = (
                              "ונקרא מהשירות עצמו.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
+        query_support="operators", timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בגוף המסמך",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
@@ -953,7 +1064,7 @@ SOURCES: tuple[Source, ...] = (
                              "הפרוטוקול המלא בשרת הכנסת. הכיסוי חלקי ואינו כולל את כל הכנסות.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
+        query_support="operators", timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך דברי הדיון",
         # Withheld while TAG-IT's date backfill ran (a 2010–2026 range then
         # accounted for ~2,353 of 22,034 documents). Restored 14.08.2026 after
@@ -971,7 +1082,7 @@ SOURCES: tuple[Source, ...] = (
                              "ונותחו ב-TAG-IT; המסמך המלא בשרת הכנסת.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
+        query_support="operators", timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך גוף המחקר",
         # Restored 2026-08-12. It was withheld while 59 of 60 hits came back
         # undated; TAG-IT has since populated the field (the values were there
@@ -990,7 +1101,7 @@ SOURCES: tuple[Source, ...] = (
                              "ההחלטה המלאה באתר gov.il.",
                      "href": "https://tag-it.biz"},
         mcp_url="https://tag-it.biz/mcp", token_env="TAGIT_MCP_TOKEN", external=True,
-        native_operators=True, timeout_s=60.0, upstream_timeout_s=25.0,
+        query_support="operators", timeout_s=60.0, upstream_timeout_s=25.0,
         hint="חיפוש בתוך גוף ההחלטות",
         filters=DATE_RANGE,
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
@@ -1006,6 +1117,11 @@ SOURCES: tuple[Source, ...] = (
             "href": "https://next.obudget.org",
         },
         mcp_url="https://next.obudget.org/mcp", public=True, handshake=True,
+        # Tokenizes and ranks, but does not AND — and ranks loosely enough that
+        # _run_obudget re-checks every row against the whole record. Sending the
+        # full query still beats an anchor: an anchor can never surface a row
+        # that only the other words would have reached.
+        query_support="tokens",
         external=True,
         hint="ישויות · סעיפי תקציב · תמיכות · התקשרויות",
         filters=(OBUDGET_FILTER,),
@@ -1038,6 +1154,10 @@ SOURCES: tuple[Source, ...] = (
         attribution={"text": "שורות מתוך מרשמי התאגידים הרשמיים כפי שנשמרו בגרסאות לעם.",
                      "href": "https://www.over.org.il/data"},
         local="over", hint="רשם החברות · עמותות · אגודות שיתופיות",
+        # query_dataset_rows lands in append_store, which ANDs every term across
+        # every column of the table — a far wider net than the three fields a
+        # card shows, so its positives must not be second-guessed here.
+        query_support="and",
         filters=(CORPORATE_FILTER,),
         build_args=lambda q, limit, f: {},   # unused — run() drives this source
         run=_run_corporate,

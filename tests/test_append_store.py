@@ -216,3 +216,37 @@ def test_strip_sql_comments_blank_literals_skeleton():
     assert A._strip_sql_comments("WHERE x = 'it''s'", blank_literals=True) == "WHERE x = ''"
     # without the flag, literals are preserved verbatim (comment stripping only)
     assert A._strip_sql_comments("SELECT 'a;b' -- d").strip() == "SELECT 'a;b'"
+
+
+# ── free-text search: every word must appear, not the whole string in a row ──
+# Until 2026-09-01 a q of two words was ONE contiguous ILIKE, so it matched only
+# rows carrying them adjacent and in that order. The cross-source search page,
+# which has no operator to send here, worked around it by sending a single word
+# — and filled its תאגידים column with rows that matched that word alone.
+
+
+def test_search_terms_splits_words_and_keeps_quoted_runs_whole():
+    assert A.search_terms("בנימין נתניהו") == ["בנימין", "נתניהו"]
+    assert A.search_terms('"מטה בנימין" תקציב') == ["מטה בנימין", "תקציב"]
+    # A single token is byte-for-byte the old behaviour.
+    assert A.search_terms("נתניהו") == ["נתניהו"]
+    assert A.search_terms("  ") == []
+    assert A.search_terms(None) == []
+    # A wide table times a long query is how a search box meets the statement
+    # timeout; the tail is dropped, which widens rather than empties.
+    assert len(A.search_terms(" ".join(f"w{i}" for i in range(20)))) == A._MAX_SEARCH_TERMS
+
+
+def test_build_where_ands_the_terms_across_every_column():
+    cols = ["name", "city"]
+    where, params = A._build_where(cols, "בנימין נתניהו", {}, start_param=1)
+    assert params == ["%בנימין%", "%נתניהו%"]
+    # One OR-group per term, the groups ANDed: each word may land in a
+    # different column, but every word has to land somewhere.
+    assert where.count(" OR ") == 2 and where.count(" AND ") == 1
+    assert "$1" in where and "$2" in where
+    # Filters keep numbering after the search terms.
+    where, params = A._build_where(cols, "א ב", {"city": "רחובות"}, start_param=1)
+    assert params == ["%א%", "%ב%", "%רחובות%"] and "$3" in where
+    # No q at all is still no clause.
+    assert A._build_where(cols, None, {}, start_param=1) == ("", [])

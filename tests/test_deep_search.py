@@ -1040,3 +1040,110 @@ async def _timed(call):
     except deep_search.SourceError:
         pass
     return time.monotonic() - t0
+
+
+# ── the plain multi-word search (the bug that made the page look broken) ────
+# Reported 2026-09-01: `בנימין נתניהו` opened with מטה בנימין everywhere, and a
+# company number returned budget lines the number never appears in. Both came
+# from the same hole — a query with no quotes and no minus was treated as
+# operator-free, so a substring backend got ONE word and nothing re-checked the
+# rest. These lock the hole shut from both ends: the parse says the query needs
+# enforcing, and the gateway both sends more and keeps less.
+
+
+def test_plain_multi_word_query_is_still_a_query_to_enforce():
+    from app.services import deep_search_query as dsq
+    p = dsq.parse("בנימין נתניהו")
+    assert not p.has_operators, "no quotes, no minus — no operator syntax"
+    assert p.needs_local_filtering, "but two words still mean two words"
+    # The anchor carries ONE of them, which is exactly why the rest must be
+    # re-checked: מטה בנימין satisfies the anchor and not the query.
+    assert p.anchor() in ("בנימין", "נתניהו")
+    assert dsq.matches(p, "מ. א. מטה בנימין") is False
+    assert dsq.matches(p, "ראש הממשלה בנימין נתניהו") is True
+    # One word is unchanged — a single-term search must not start filtering.
+    assert not dsq.parse("נתניהו").needs_local_filtering
+
+
+def test_tokenizing_backends_get_every_word_and_substring_ones_get_one():
+    """An anchor can never surface a row only the OTHER word would have found,
+    so it is reserved for the backends that would return zero on two words."""
+    from app.services import deep_search_query as dsq
+    p = dsq.parse('נתניהו "משרד ראש הממשלה" -בנט')
+    assert dsq.positive_query(p) == '"משרד ראש הממשלה" נתניהו'
+    assert "בנט" not in dsq.positive_query(p), "an exclusion is not a search term"
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    assert by_id["obudget"].query_support == "tokens"
+    assert by_id["cbs"].query_support == "tokens"
+    for sid in ("entities", "protocols", "mmm"):
+        assert by_id[sid].query_support == "and", sid
+    for sid in ("datasets", "tables", "ocal", "mevaker_reports", "odata"):
+        assert by_id[sid].query_support == "substring", sid
+
+
+def test_every_source_declares_a_known_query_contract():
+    for s in deep_search_sources.SOURCES:
+        assert s.query_support in ("substring", "tokens", "and", "operators"), s.id
+
+
+def test_who_still_has_to_enforce_the_query():
+    from app.services import deep_search_query as dsq
+    by_id = {s.id: s for s in deep_search_sources.SOURCES}
+    plain = dsq.parse("בנימין נתניהו")
+    # A substring backend saw one word; everything else is ours.
+    assert deep_search._enforcement(by_id["ocal"], plain) == "all"
+    # A tokenizing one saw both but did not AND them — still ours.
+    assert deep_search._enforcement(by_id["obudget"], plain) == "all"
+    # append_store ANDed both across EVERY column; re-checking on the three
+    # fields a card shows would throw away the wider search.
+    assert deep_search._enforcement(by_id["entities"], plain) == "none"
+    assert deep_search._enforcement(by_id["mevaker"], plain) == "none"
+    # ...but the exclusion append_store cannot express stays with us.
+    with_ex = dsq.parse("נתניהו -בנט")
+    assert deep_search._enforcement(by_id["entities"], with_ex) == "excludes"
+    assert deep_search._enforcement(by_id["mevaker"], with_ex) == "none"
+
+
+def test_a_substring_source_drops_the_rows_that_only_match_the_anchor():
+    from app.services import deep_search_query as dsq
+    src = next(s for s in deep_search_sources.SOURCES if s.id == "ocal")
+    pq = dsq.parse("בנימין נתניהו")
+    cards = [Card(title="מ. א. מטה בנימין", snippet="מועצה אזורית"),
+             Card(title="ועדת הכספים", snippet="דיון עם בנימין נתניהו")]
+    kept = deep_search._apply_operators(src, pq, cards, 10)
+    assert [c.title for c in kept] == ["ועדת הכספים"]
+    # Each term is marked in its own right — the query was two words, not a phrase.
+    assert "«בנימין»" in kept[0].snippet and "«נתניהו»" in kept[0].snippet
+    # A count that still claimed the backend's total would advertise the noise.
+    assert deep_search._truthful_total(src, pq, 1850, kept) == 1
+
+
+def test_an_and_source_keeps_a_row_whose_match_is_off_the_card():
+    """entities searches every column; the card shows three. Filtering it here
+    would delete the rows that made the wider search worth running."""
+    from app.services import deep_search_query as dsq
+    src = next(s for s in deep_search_sources.SOURCES if s.id == "entities")
+    pq = dsq.parse("שומרים רחובות")
+    card = Card(title="רף, ריהוט משרדי בע\"מ", snippet="מספר תאגיד 512169608 · רחובות")
+    kept = deep_search._apply_operators(src, pq, [card], 10)
+    # Kept (only highlighted), even though "שומרים" appears nowhere on the card:
+    # append_store found it in שם רחוב, and match_note is what says so.
+    assert [c.title for c in kept] == [card.title]
+
+
+def test_a_row_says_which_column_carried_the_query():
+    """The complaint that started this: a search for שומרים returns "רף, ריהוט
+    משרדי" because its street is רחוב השומרים. The row is right; a card that
+    cannot say so reads as a wrong result."""
+    from app.services import deep_search_query as dsq
+    row = {"שם חברה": "רף, ריהוט משרדי", "שם רחוב": "השומרים", "שם עיר": "רחובות",
+           "first_seen": "2026-08-07T07:45:58"}
+    note = deep_search_sources.match_note(row, dsq.parse("שומרים"),
+                                          "רף, ריהוט משרדי · רחובות")
+    assert note and note.startswith("התאמה: ") and "שם רחוב" in note and "השומרים" in note
+    # Nothing to explain when the match is already on the card.
+    assert deep_search_sources.match_note(row, dsq.parse("רחובות"),
+                                          "רף, ריהוט משרדי · רחובות") is None
+    # Bookkeeping columns are never named as the reason.
+    assert deep_search_sources.match_note(row, dsq.parse("2026"),
+                                          "רף, ריהוט משרדי") is None

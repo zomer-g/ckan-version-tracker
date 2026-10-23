@@ -1,0 +1,20 @@
+schemas checked : public
+tables in neon   : 10
+tables in xhostd : 10
+
+comparing 10 common tables ...
+
+ok       public.app_settings                                                 1 rows
+ok       public.feed_items                                               21009 rows
+ok       public.feed_sources                                                 4 rows
+ok       public.ingest_runs                                               2481 rows
+ok       public.mcp_oauth_clients                                            0 rows
+ok       public.mcp_oauth_tokens                                             0 rows
+ok       public.user_hidden_sources                                          0 rows
+ok       public.user_keywords                                               20 rows
+ok       public.user_sessions                                               15 rows
+ok       public.users                                                       11 rows
+
+------------------------------------------------------------------------
+elapsed 1.8s
+RESULT: IDENTICAL across 10 tables — safe to delete neon

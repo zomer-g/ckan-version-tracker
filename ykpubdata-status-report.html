@@ -1,0 +1,520 @@
+<title>רישוי ובנייה ירושלים — מפת הסטטוסים ותדירות העדכון</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+:root{
+  --paper:#f6f4ee;      /* aged ledger stock, warm */
+  --card:#fffdf8;
+  --ink:#22262a;        /* graphite — cool against warm paper */
+  --ink-soft:#5b6169;
+  --muted:#8b8f88;
+  --rule:#d3d7cb;       /* sage ruling */
+  --rule-soft:#e6e8de;
+  --accent:#8c2f2a;     /* oxblood, municipal stamp */
+  --flow:#2e6a52;       /* ledger green */
+  --amber:#96631a;
+  --slate:#5a6472;
+  --shadow:0 1px 0 rgba(34,38,42,.05), 0 2px 14px -8px rgba(34,38,42,.28);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#171917; --card:#1e211e; --ink:#e9e7e0; --ink-soft:#a8ada4;
+    --muted:#7e847c; --rule:#333a34; --rule-soft:#262b27;
+    --accent:#d9776e; --flow:#74bd99; --amber:#d1a250; --slate:#9aa6b6;
+    --shadow:0 1px 0 rgba(0,0,0,.3), 0 2px 16px -8px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#171917; --card:#1e211e; --ink:#e9e7e0; --ink-soft:#a8ada4;
+  --muted:#7e847c; --rule:#333a34; --rule-soft:#262b27;
+  --accent:#d9776e; --flow:#74bd99; --amber:#d1a250; --slate:#9aa6b6;
+  --shadow:0 1px 0 rgba(0,0,0,.3), 0 2px 16px -8px rgba(0,0,0,.7);
+}
+:root[data-theme="light"]{
+  --paper:#f6f4ee; --card:#fffdf8; --ink:#22262a; --ink-soft:#5b6169;
+  --muted:#8b8f88; --rule:#d3d7cb; --rule-soft:#e6e8de;
+  --accent:#8c2f2a; --flow:#2e6a52; --amber:#96631a; --slate:#5a6472;
+  --shadow:0 1px 0 rgba(34,38,42,.05), 0 2px 14px -8px rgba(34,38,42,.28);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Segoe UI","Noto Sans Hebrew","Arial Hebrew",system-ui,sans-serif;
+  font-size:16px; line-height:1.6; direction:rtl;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1140px; margin:0 auto; padding:2.5rem 1.25rem 5rem}
+h1,h2,h3{font-family:"Frank Ruehl CLM","David Libre",Narkisim,Georgia,serif;
+  text-wrap:balance; margin:0; font-weight:700; letter-spacing:-.01em}
+h1{font-size:clamp(1.75rem,4vw,2.6rem); line-height:1.18}
+h2{font-size:clamp(1.25rem,2.6vw,1.6rem); line-height:1.25}
+h3{font-size:1.02rem; line-height:1.3}
+p{margin:0}
+.eyebrow{font-size:.7rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--muted); font-weight:600}
+.lede{color:var(--ink-soft); max-width:62ch; font-size:1.02rem}
+.num{font-family:"Cascadia Mono",Consolas,"SF Mono",ui-monospace,monospace;
+  font-variant-numeric:tabular-nums}
+
+/* ── masthead ─────────────────────────────────────────── */
+header.mast{border-bottom:2px solid var(--ink); padding-bottom:1.1rem; margin-bottom:1.75rem}
+.mast-row{display:flex; flex-wrap:wrap; gap:.75rem 1.5rem; align-items:baseline;
+  justify-content:space-between; margin-top:.6rem}
+.stamp{display:inline-block; border:1.5px solid var(--accent); color:var(--accent);
+  font-size:.68rem; font-weight:700; letter-spacing:.1em; padding:.2rem .55rem;
+  border-radius:2px; transform:rotate(-1.2deg)}
+
+/* ── the decision band ────────────────────────────────── */
+.verdict{background:var(--card); border:1px solid var(--rule);
+  border-radius:3px; box-shadow:var(--shadow); padding:1.4rem 1.5rem; margin-bottom:2.5rem}
+.verdict h2{margin-bottom:.5rem}
+.figs{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:1px; background:var(--rule); border:1px solid var(--rule);
+  border-radius:3px; margin-top:1.25rem; overflow:hidden}
+.fig{background:var(--card); padding:.85rem 1rem}
+.fig .v{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;
+  font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; line-height:1.1;
+  display:block}
+.fig .k{font-size:.74rem; color:var(--ink-soft); margin-top:.25rem; display:block}
+
+/* ── tier blocks ──────────────────────────────────────── */
+.tier{background:var(--card); border:1px solid var(--rule); border-radius:3px;
+  box-shadow:var(--shadow); margin-bottom:1.5rem; overflow:hidden;
+  border-right:5px solid var(--tc,var(--rule))}
+.tier-head{padding:1.05rem 1.25rem; display:flex; flex-wrap:wrap;
+  gap:.5rem 1.25rem; align-items:baseline; justify-content:space-between;
+  border-bottom:1px solid var(--rule-soft)}
+.tier-head .who{display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap}
+.tier-tag{font-size:.7rem; font-weight:700; letter-spacing:.1em; color:var(--tc);
+  border:1px solid var(--tc); padding:.12rem .45rem; border-radius:2px}
+.cadence{font-size:.82rem; font-weight:600; color:var(--tc);
+  font-family:"Cascadia Mono",Consolas,ui-monospace,monospace}
+.tier-why{padding:.85rem 1.25rem; font-size:.88rem; color:var(--ink-soft);
+  border-bottom:1px solid var(--rule-soft); max-width:78ch}
+
+/* ── tables ───────────────────────────────────────────── */
+.scroll{overflow-x:auto}
+table{border-collapse:collapse; width:100%; font-size:.85rem}
+th,td{padding:.44rem .7rem; text-align:right; white-space:nowrap;
+  border-bottom:1px solid var(--rule-soft)}
+thead th{font-size:.7rem; letter-spacing:.05em; color:var(--muted); font-weight:600;
+  border-bottom:1px solid var(--rule); position:sticky; top:0; background:var(--card)}
+tbody tr:last-child td{border-bottom:none}
+td.n,th.n{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;
+  font-variant-numeric:tabular-nums}
+td.name{white-space:normal; min-width:15rem; font-weight:500}
+tfoot td{font-weight:700; border-top:1px solid var(--rule); background:var(--rule-soft)}
+.dim{color:var(--muted)}
+
+/* heat cells for the yearly matrix */
+.heat{position:relative; text-align:center}
+.heat span{position:relative; z-index:1}
+.heat::before{content:""; position:absolute; inset:2px; border-radius:2px;
+  background:var(--flow); opacity:var(--h,0)}
+
+.bar{display:inline-block; height:.5rem; border-radius:1px; background:var(--tc,var(--flow));
+  vertical-align:middle; min-width:1px}
+
+section{margin-bottom:2.75rem}
+.sec-head{margin-bottom:1rem; padding-bottom:.5rem; border-bottom:1px solid var(--rule)}
+.sec-head p{margin-top:.4rem}
+.note{font-size:.84rem; color:var(--ink-soft); background:var(--rule-soft);
+  border-right:3px solid var(--slate); padding:.8rem 1rem; border-radius:2px;
+  max-width:80ch}
+.note strong{color:var(--ink)}
+ul{margin:.5rem 0 0; padding-inline-start:1.15rem}
+li{margin-bottom:.3rem; color:var(--ink-soft)}
+li strong{color:var(--ink)}
+a{color:var(--accent)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <span class="eyebrow">גרסאות לעם · דוח תפעולי</span>
+  <h1>רישוי ובנייה ירושלים — מפת הסטטוסים<br>ותדירות העדכון הנגזרת ממנה</h1>
+  <div class="mast-row">
+    <p class="lede">כל 25 הסטטוסים במרשם, כמה תיקים בכל אחד, מתי הם זזו לאחרונה, וכמה תנועה היתה בכל סטטוס בשש השנים האחרונות — כדי לקבוע מה נקרא מחדש ובאיזו תדירות. <strong>עודכן עם תוצאות שבועיים של הרצה בפועל.</strong></p>
+    <span class="stamp">21 באוגוסט 2026</span>
+  </div>
+</header>
+
+<!-- ══════════════ TWO WEEKS LIVE ══════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">חלק א׳ · תוצאות</span>
+    <h2>שבועיים של הרצה בפועל</h2>
+    <p class="lede">התכנון להלן נבנה על מדידה מ-7 באוגוסט. מאז שלושת המחזורים רצו בייצור, וזו התוצאה — לא הערכה אלא כל תיק שנקרא.</p>
+  </div>
+
+  <div class="figs" style="margin-top:0">
+    <div class="fig"><span class="v" style="color:var(--accent)">361</span><span class="k">שינויי סטטוס שנתפסו</span></div>
+    <div class="fig"><span class="v" style="color:var(--flow)">34</span><span class="k">היתרי בנייה שהופקו</span></div>
+    <div class="fig"><span class="v">38</span><span class="k">בקשות שנסגרו</span></div>
+    <div class="fig"><span class="v">16</span><span class="k">תיקים חדשים שנקלטו</span></div>
+  </div>
+
+  <h3 style="margin-top:1.9rem">כל אחת מ-11 הריצות</h3>
+  <div class="scroll" style="margin-top:.6rem"><table>
+    <thead><tr><th class="n">גרסה</th><th class="name">ריצה</th><th class="n">תיקים</th><th class="n">משך</th><th class="n">השתנו</th><th class="n">שיעור</th></tr></thead>
+    <tbody>
+      <tr><td class="n">v1</td><td class="name">סריקה מלאה · 02-08</td><td class="n">100,072</td><td class="n">48ש׳ 32ד׳</td><td class="n dim">בסיס</td><td class="n dim">—</td></tr>
+      <tr><td class="n">v2</td><td class="name">תיקים חדשים · 07-08</td><td class="n">10</td><td class="n">67 שנ׳</td><td class="n">10 חדשים</td><td class="n dim">—</td></tr>
+      <tr><td class="n">v3+v4</td><td class="name" style="color:var(--flow)">שזזו בשנה + שעוני פרסום · 08-08</td><td class="n">5,138</td><td class="n">2ש׳ 09ד׳</td><td class="n" style="font-weight:700">128</td><td class="n">2.49%</td></tr>
+      <tr><td class="n">v5</td><td class="name" style="color:var(--accent)">שעוני פרסום · 11-08</td><td class="n">569</td><td class="n">14 דק׳</td><td class="n" style="font-weight:700">50</td><td class="n" style="color:var(--accent);font-weight:700">8.79%</td></tr>
+      <tr><td class="n">v6</td><td class="name">תיקים חדשים · 14-08</td><td class="n">1</td><td class="n">55 שנ׳</td><td class="n">1 חדש</td><td class="n dim">—</td></tr>
+      <tr><td class="n">v7</td><td class="name" style="color:var(--accent)">שעוני פרסום · 14-08</td><td class="n">559</td><td class="n">14 דק׳</td><td class="n" style="font-weight:700">23</td><td class="n" style="color:var(--accent);font-weight:700">4.12%</td></tr>
+      <tr><td class="n">v8</td><td class="name" style="color:var(--flow)">שזזו בשנה · 15-08</td><td class="n">4,613</td><td class="n">1ש׳ 56ד׳</td><td class="n" style="font-weight:700">70</td><td class="n">1.52%</td></tr>
+      <tr><td class="n">v9</td><td class="name" style="color:var(--accent)">שעוני פרסום · 17-08</td><td class="n">564</td><td class="n">14 דק׳</td><td class="n" style="font-weight:700">24</td><td class="n" style="color:var(--accent);font-weight:700">4.26%</td></tr>
+      <tr><td class="n">v10</td><td class="name" style="color:var(--accent)">שעוני פרסום · 20-08</td><td class="n">559</td><td class="n">14 דק׳</td><td class="n" style="font-weight:700">66</td><td class="n" style="color:var(--accent);font-weight:700">11.81%</td></tr>
+      <tr><td class="n">v11</td><td class="name">תיקים חדשים · 21-08</td><td class="n">5</td><td class="n">60 שנ׳</td><td class="n">5 חדשים</td><td class="n dim">—</td></tr>
+    </tbody>
+    <tfoot><tr><td class="n">סה״כ</td><td class="name">6 ריצות עדכון + 3 ריצות קליטה</td><td class="n">12,017</td><td class="n">5ש׳ 05ד׳</td><td class="n">361</td><td class="n">—</td></tr></tfoot>
+  </table></div>
+
+  <p class="note" style="margin-top:1rem">
+    <strong>שלושת המחזורים עמדו בקצב בדיוק.</strong> שעוני הפרסום: 11 ← 14 ← 17 ← 20 באוגוסט,
+    כל שלושה ימים. תיקים חדשים: 7 ← 14 ← 21, כל שבעה. שזזו בשנה: 8 ← 15, כל שבעה.
+    אף מחזור לא החמיץ תור.
+  </p>
+
+  <h3 style="margin-top:1.9rem">החלוקה לקבוצות — מה שהיא חסכה</h3>
+  <div class="scroll" style="margin-top:.6rem"><table>
+    <thead><tr><th class="name">קבוצה</th><th class="n">מחזור</th><th class="n">טווח השיעורים</th><th class="n">ממוצע</th><th class="name">מה זה אומר</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="name" style="color:var(--accent);font-weight:700">שעוני פרסום</td>
+        <td class="n">3 ימים</td><td class="n">4.1% – 11.8%</td><td class="n" style="font-weight:700">7.2%</td>
+        <td class="name">ארבע ריצות, כל אחת על כ-560 תיקים — 163 מעברים.</td>
+      </tr>
+      <tr>
+        <td class="name" style="color:var(--flow);font-weight:700">שזזו בשנה האחרונה</td>
+        <td class="n">7 ימים</td><td class="n">1.5% – 2.5%</td><td class="n" style="font-weight:700">2.0%</td>
+        <td class="name">שתי ריצות, כל אחת על כ-4,700 תיקים — 198 מעברים.</td>
+      </tr>
+    </tbody>
+  </table></div>
+  <p class="note" style="margin-top:1rem">
+    ליחידת זמן שעוני הפרסום נעים <strong>פי 3–5 מהר יותר</strong>. זו ההצדקה למחזור הנפרד,
+    והיא נמדדה שוב בכל אחת מארבע הריצות ולא פעם אחת. החלופה — ריצה שבועית אחת על
+    79,943 התיקים שאינם סגורים — הייתה עולה <strong>66 שעות</strong> באותה תקופה.
+    בפועל נדרשו <strong>5 שעות ו-5 דקות</strong>, כ-71 ממצאים לשעת גרידה.
+  </p>
+
+  <h3 style="margin-top:1.9rem">מה באמת קרה בירושלים</h3>
+  <div class="scroll" style="margin-top:.6rem"><table>
+    <thead><tr><th class="name">מ־</th><th class="name">אל</th><th class="n">תיקים</th></tr></thead>
+    <tbody>
+      <tr><td class="name">הוכנה טיוטת היתר בניה</td><td class="name" style="color:var(--flow);font-weight:600">הופק-הוצא היתר בניה</td><td class="n">34</td></tr>
+      <tr><td class="name">תחילת פרסום הבקשה להקלה</td><td class="name">תום תקופת פרסום</td><td class="n">32</td></tr>
+      <tr><td class="name">תום תקופת פרסום</td><td class="name">נפתח תיק רישוי</td><td class="n">31</td></tr>
+      <tr><td class="name">נוסח פרסום אושר</td><td class="name">תחילת פרסום הבקשה להקלה</td><td class="n">27</td></tr>
+      <tr><td class="name">הגשה מקוונת הושלמה</td><td class="name">שולמה מקדמה</td><td class="n">25</td></tr>
+      <tr><td class="name">תחילת הודעות לפני תקנה 36</td><td class="name">השלמת הודעות לפני תקנה 36</td><td class="n">22</td></tr>
+      <tr><td class="name">פורסמה בקשה להקלה</td><td class="name">תום תקופת פרסום</td><td class="n">21</td></tr>
+      <tr><td class="name">השלמת הודעות לפני תקנה 36</td><td class="name">תום תקופת פרסום</td><td class="n">19</td></tr>
+      <tr><td class="name">נדונה בוועדת המשנה</td><td class="name">הוכנה טיוטת היתר בניה</td><td class="n">15</td></tr>
+      <tr><td class="name">חידוש טיפול / רשות הרישוי / תום פרסום</td><td class="name">הבקשה נסגרה</td><td class="n">30</td></tr>
+      <tr><td class="name">נדונה בוועדת המשנה</td><td class="name">התקבל ערר</td><td class="n">8</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note" style="margin-top:1rem">
+    <strong>16 תיקים חדשים נקלטו</strong> במספור רציף ובלי פערים — 2026/0373–0382 ב-7.8,
+    2026/0383 ב-14.8, ו-2026/0384–0388 ב-21.8. הרציפות היא הראיה שההליכה קדימה במספור
+    אינה מפספסת תיקים.
+  </p>
+
+  <h3 style="margin-top:1.9rem">שני ליקויים שהמדידה חשפה — ותוקנו</h3>
+  <div class="scroll" style="margin-top:.6rem"><table>
+    <thead><tr><th class="name">מה קרה</th><th class="n">היקף</th><th class="name">התיקון והאימות</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="name"><strong>סחיפת רווחים.</strong> המקור הפסיק להוסיף רווח מוביל לשלושה סטטוסים, ואותו סטטוס בדיוק נראה כשינוי.</td>
+        <td class="n" style="color:var(--accent);font-weight:700">115<br><span class="dim" style="font-weight:400">47.7% ממה<br>שסומן כשינוי</span></td>
+        <td class="name">כל השוואת סטטוס מבוצעת עם <span class="num">btrim</span> בשני הצדדים. 361 המעברים שבדוח הם אחרי הניקוי.</td>
+      </tr>
+      <tr>
+        <td class="name"><strong>הקבוצה התכווצה.</strong> שעוני הפרסום מוגדרים עם הרווח, אז 123 תיקים נשרו — וכל ריצה הייתה מנקה עוד. הריצה הפגומה קראה 448 תיקים איטיים ואפס מהירים.</td>
+        <td class="n" style="color:var(--accent);font-weight:700">569→448</td>
+        <td class="name"><strong>v5 חזרה ל-569</strong>, ומאז הקבוצה נעה 569 → 558 → 564 → 559 — תנודה אמיתית של תיקים שנכנסים ויוצאים משלבי הפרסום, לא דעיכה.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</section>
+
+<div class="verdict">
+  <span class="eyebrow">המלצת התדירות</span>
+  <h2>לא לפי "נסגר / לא נסגר" — לפי מהירות המעבר</h2>
+  <p class="lede" style="margin-top:.6rem">
+    79,943 תיקים אינם בסטטוס סגור, אבל <strong>61,334 מהם (77%) לא זזו מעל עשור</strong>.
+    החלוקה שקובעת תדירות היא בין סטטוס שתיקים <em>עוברים דרכו</em> לבין סטטוס שתיקים
+    <em>נחים בו</em>. שלוש קבוצות דורשות קצב שונה לחלוטין, ואחת לא דורשת כלום —
+    ושבועיים של הרצה אישרו את החלוקה בכל אחת מששת מחזורי העדכון.
+  </p>
+  <div class="figs">
+    <div class="fig"><span class="v">112,089</span><span class="k">שורות בארכיון · 100,088 תיקים</span></div>
+    <div class="fig"><span class="v" style="color:var(--accent)">361</span><span class="k">שינויי סטטוס שנתפסו בשבועיים</span></div>
+    <div class="fig"><span class="v" style="color:var(--flow)">34</span><span class="k">היתרי בנייה שהופקו · 38 נסגרו</span></div>
+    <div class="fig"><span class="v">5ש׳ 05ד׳</span><span class="k">סך זמן הגרידה בשבועיים</span></div>
+  </div>
+</div>
+
+<!-- ══════════════ TIERS ══════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">חלק ב׳</span>
+    <h2>ארבע קבוצות, ארבעה קצבים</h2>
+    <p class="lede">הסיווג נגזר ממדד אחד: איזה חלק מהתיקים בסטטוס זזו לאחרונה. סטטוס שכל המלאי בו טרי הוא תחנת מעבר; סטטוס שהמלאי בו בן עשורים הוא תחנה סופית בפועל.</p>
+  </div>
+
+  <!-- TIER A -->
+  <article class="tier" style="--tc:var(--accent)">
+    <div class="tier-head">
+      <div class="who"><span class="tier-tag">קבוצה א׳</span><h3>שעוני פרסום — תיקים עוברים תוך ימים</h3></div>
+      <span class="cadence">כל 3 ימים · 569 תיקים · 14 דק׳</span>
+    </div>
+    <p class="tier-why">
+      אלה לא החלטות אנוש אלא <strong>שעונים קלנדריים</strong>: תקופת פרסום, הודעות לפני תקנה 36, אישור נוסח.
+      התיק עובר כשהמועד חולף. קראתי מחדש את <strong>כל 569 התיקים בקבוצה</strong> מול האתר —
+      לא מדגם — ו-41 מהם השתנו בתוך 5 ימים. השלושה המהירים
+      (<span class="num">100% · 31% · 10%</span>) מחזיקים 139 תיקים בלבד אבל מייצרים כשליש מכל
+      התנועה השבועית במרשם. הראיה המבנית מצביעה לאותו כיוון: בשני הסטטוסים של תקנה 36 אין ולו
+      תיק אחד שסטטוסו נקבע לפני 2026 — אין מלאי ישן כי אף תיק לא נשאר.
+      <strong>קריאה שבועית מפספסת כאן מעברים שלמים.</strong>
+    </p>
+    <div class="scroll"><table>
+      <thead><tr><th class="name">סטטוס</th><th class="n">תיקים</th><th class="n">זזו ב-90 יום</th><th class="n">ישנים מ-10ש׳</th><th class="n">נמדד: השתנו ב-5 ימים</th><th class="n">מדגם</th><th class="n">שינויים/שבוע</th></tr></thead>
+      <tbody>
+        <tr><td class="name">השלמת הודעות לפני תקנה 36</td><td class="n">8</td><td class="n">8</td><td class="n">0</td><td class="n" style="color:var(--accent);font-weight:700">100%</td><td class="n dim">8/8 מלא</td><td class="n">~8</td></tr>
+        <tr><td class="name">תחילת הודעות לפני תקנה 36</td><td class="n">42</td><td class="n">41</td><td class="n">0</td><td class="n" style="color:var(--accent);font-weight:700">31.0%</td><td class="n dim">42/42 מלא</td><td class="n">~18</td></tr>
+        <tr><td class="name">תחילת פרסום הבקשה להקלה</td><td class="n">89</td><td class="n">86</td><td class="n">0</td><td class="n" style="color:var(--accent);font-weight:700">10.1%</td><td class="n dim">89/89 מלא</td><td class="n">~13</td></tr>
+        <tr><td class="name">פורסמה בקשה להקלה</td><td class="n">30</td><td class="n">3</td><td class="n">26</td><td class="n">6.7%</td><td class="n dim">30/30 מלא</td><td class="n">~3</td></tr>
+        <tr><td class="name">נוסח פרסום אושר</td><td class="n">139</td><td class="n">42</td><td class="n">27</td><td class="n">2.9%</td><td class="n dim">139/139 מלא</td><td class="n">~6</td></tr>
+        <tr><td class="name">תום תקופת פרסום</td><td class="n">261</td><td class="n">85</td><td class="n">39</td><td class="n">1.9%</td><td class="n dim">261/261 מלא</td><td class="n">~7</td></tr>
+      </tbody>
+      <tfoot><tr><td class="name">סה״כ קבוצה א׳</td><td class="n">569</td><td class="n">265</td><td class="n">92</td><td class="n">7.2%</td><td class="n">569 — הכל</td><td class="n">~57</td></tr></tfoot>
+    </table></div>
+  </article>
+
+  <!-- TIER B -->
+  <article class="tier" style="--tc:var(--flow)">
+    <div class="tier-head">
+      <div class="who"><span class="tier-tag">קבוצה ב׳</span><h3>טיפול פעיל — התיק החי של העירייה</h3></div>
+      <span class="cadence">שבועי · 3,181 תיקים · 80 דק׳</span>
+    </div>
+    <p class="tier-why">
+      ועדות, תשלומים, עררים — כאן זורם רוב התיק הפעיל. המלאי מעורב: חלק זז החודש וחלק תקוע שנים,
+      ולכן <strong>הקריאה השבועית צריכה לכסות רק את מי שזז ב-12 החודשים האחרונים</strong> (העמודה המסומנת),
+      ולא את כל המלאי — 3,181 במקום 10,544, כלומר 80 דקות במקום 4 שעות ו-24 דקות.
+    </p>
+    <div class="scroll"><table>
+      <thead><tr><th class="name">סטטוס</th><th class="n">תיקים</th><th class="n">זזו ב-90 יום</th><th class="n">זזו בשנה ⟵ היעד</th><th class="n">ישנים מ-10ש׳</th><th class="n">נמדד: השתנו ב-5 ימים</th><th class="n">מדגם</th></tr></thead>
+      <tbody>
+        <tr><td class="name">נדונה בוועדת המשנה</td><td class="n">3,178</td><td class="n">517</td><td class="n">1,020</td><td class="n">1,484</td><td class="n">0%</td><td class="n dim">70</td></tr>
+        <tr><td class="name">נדונה ברשות הרישוי</td><td class="n">1,735</td><td class="n">129</td><td class="n">371</td><td class="n">1,099</td><td class="n">0%</td><td class="n dim">19</td></tr>
+        <tr><td class="name">שולמה מקדמה</td><td class="n">1,550</td><td class="n">253</td><td class="n">479</td><td class="n">609</td><td class="n">2.7%</td><td class="n dim">37</td></tr>
+        <tr><td class="name">נפתח תיק רישוי</td><td class="n">1,439</td><td class="n">332</td><td class="n">723</td><td class="n">234</td><td class="n">0%</td><td class="n dim">38</td></tr>
+        <tr><td class="name">הגשה מקוונת הושלמה</td><td class="n">869</td><td class="n">157</td><td class="n">262</td><td class="n">26</td><td class="n" style="color:var(--flow);font-weight:700">12.5%</td><td class="n dim">16</td></tr>
+        <tr><td class="name">נדונה בועדת ערר</td><td class="n">709</td><td class="n">24</td><td class="n">58</td><td class="n">505</td><td class="n dim">—</td><td class="n dim">1</td></tr>
+        <tr><td class="name">אושר ע״י מהנדס העיר</td><td class="n">692</td><td class="n">4</td><td class="n">36</td><td class="n">387</td><td class="n dim">—</td><td class="n dim">2</td></tr>
+        <tr><td class="name">חידוש טיפול בבקשה</td><td class="n">260</td><td class="n">125</td><td class="n">158</td><td class="n">46</td><td class="n">3.1%</td><td class="n dim">260 מלא</td></tr>
+        <tr><td class="name">התקבל ערר</td><td class="n">111</td><td class="n">37</td><td class="n">73</td><td class="n">13</td><td class="n">2.7%</td><td class="n dim">111 מלא</td></tr>
+        <tr><td class="name">התקבלה בקשה לדיון המועצה</td><td class="n">1</td><td class="n">0</td><td class="n">1</td><td class="n">0</td><td class="n dim">—</td><td class="n dim">0</td></tr>
+      </tbody>
+      <tfoot><tr><td class="name">סה״כ קבוצה ב׳</td><td class="n">10,544</td><td class="n">1,578</td><td class="n">3,181</td><td class="n">4,403</td><td class="n">~2%</td><td class="n">554</td></tr></tfoot>
+    </table></div>
+  </article>
+
+  <!-- TIER C -->
+  <article class="tier" style="--tc:var(--amber)">
+    <div class="tier-head">
+      <div class="who"><span class="tier-tag">קבוצה ג׳</span><h3>תחנות בליעה — נכנסים ולא יוצאים</h3></div>
+      <span class="cadence">שבועי רק לטריים · 1,198 תיקים · 30 דק׳</span>
+    </div>
+    <p class="tier-why">
+      67,579 תיקים — <strong>שני שלישים מהמרשם</strong> — ורק 1.8% מהם זזו בשנה האחרונה.
+      "הופק-הוצא היתר בניה" הוא היעד של רוב המעברים, לא המקור שלהם: 33,606 מתיקיו לא זזו מעל עשור.
+      קריאה חוזרת של כל המלאי כאן עולה <strong>28 שעות ו-9 דקות</strong> בשבוע — וזה הרוב המוחלט
+      של העלות בתרחיש "כל מה שלא נסגר".
+      <br><br>
+      <strong>אבל זו אינה המלצה להתעלם מהם.</strong> "הוכנה טיוטת היתר בניה" נראה מת (20,558 תיקים,
+      20,267 מהם בני עשור ומעלה) — ובכל זאת 141 תיקים קיבלו את הסטטוס הזה ב-2026, ובמדגם הראשון
+      שערכתי <strong>שישה מתוך שבעה השינויים היו טיוטה ⟵ היתר שהופק</strong>. המלאי החי הזעיר שלו
+      (149 תיקים) הוא יעד בתשואה גבוהה; 20,409 האחרים אינם. בדיוק בשביל זה היעד הוא "מי שזז בשנה
+      האחרונה" ולא "הסטטוס".
+    </p>
+    <div class="scroll"><table>
+      <thead><tr><th class="name">סטטוס</th><th class="n">תיקים</th><th class="n">זזו ב-90 יום</th><th class="n">זזו בשנה ⟵ היעד</th><th class="n">ישנים מ-10ש׳</th><th class="n">% מלאי טרי</th></tr></thead>
+      <tbody>
+        <tr><td class="name">הופק-הוצא היתר בניה</td><td class="n">45,118</td><td class="n">335</td><td class="n">1,043</td><td class="n">33,606</td><td class="n">2.3%</td></tr>
+        <tr><td class="name">הוכנה טיוטת היתר בניה</td><td class="n">20,558</td><td class="n">132</td><td class="n">149</td><td class="n">20,267</td><td class="n">0.7%</td></tr>
+        <tr><td class="name">התקבל תיק ורוד / מסמכים חתומים</td><td class="n">1,903</td><td class="n">2</td><td class="n">6</td><td class="n">1,834</td><td class="n">0.3%</td></tr>
+      </tbody>
+      <tfoot><tr><td class="name">סה״כ קבוצה ג׳</td><td class="n">67,579</td><td class="n">469</td><td class="n">1,198</td><td class="n">55,707</td><td class="n">1.8%</td></tr></tfoot>
+    </table></div>
+  </article>
+
+  <!-- TIER D -->
+  <article class="tier" style="--tc:var(--slate)">
+    <div class="tier-head">
+      <div class="who"><span class="tier-tag">קבוצה ד׳</span><h3>מלאי מת — אין מה לדגום</h3></div>
+      <span class="cadence">סריקה חודשית בלבד · 1,263 תיקים</span>
+    </div>
+    <p class="tier-why">
+      אפס תנועה. "הופק היתר מוארך" מחזיק 722 תיקים <strong>שהסטטוס האחרון בהם נקבע ב-1990 או לפני כן</strong>
+      — הישן ביותר מ-1946. "ממתין לאישור נוסח פרסום" קפא ב-2021. 24 תיקים בלי סטטוס כלל.
+      אלה שרידי מיגרציה, לא תור עבודה, ולכן הם צריכים להיות מוחרגים מכל ריצה ממוקדת.
+    </p>
+    <div class="scroll"><table>
+      <thead><tr><th class="name">סטטוס</th><th class="n">תיקים</th><th class="n">זזו בשנה</th><th class="n">הסטטוס האחרון שנקבע</th></tr></thead>
+      <tbody>
+        <tr><td class="name">הופק היתר מוארך</td><td class="n">722</td><td class="n">0</td><td class="n dim">ספטמבר 1990</td></tr>
+        <tr><td class="name">ממתין לאישור נוסח פרסום</td><td class="n">515</td><td class="n">0</td><td class="n dim">דצמבר 2021</td></tr>
+        <tr><td class="name">(ריק — ללא סטטוס)</td><td class="n">24</td><td class="n">0</td><td class="n dim">אין תאריך</td></tr>
+        <tr><td class="name">היתר בוטל</td><td class="n">2</td><td class="n">0</td><td class="n dim">פברואר 2020</td></tr>
+      </tbody>
+      <tfoot><tr><td class="name">סה״כ קבוצה ד׳</td><td class="n">1,263</td><td class="n">0</td><td class="n">—</td></tr></tfoot>
+    </table></div>
+  </article>
+
+  <!-- TERMINAL -->
+  <article class="tier" style="--tc:var(--muted)">
+    <div class="tier-head">
+      <div class="who"><span class="tier-tag">סופי</span><h3>סטטוסים סגורים — מחוץ להגדרה</h3></div>
+      <span class="cadence">סריקה חודשית בלבד · 20,127 תיקים</span>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th class="name">סטטוס</th><th class="n">תיקים</th><th class="n">זזו בשנה</th><th class="n">הערה</th></tr></thead>
+      <tbody>
+        <tr><td class="name">הבקשה נסגרה</td><td class="n">20,017</td><td class="n">360</td><td class="dim">9,808 נסגרו ב-2023 בפעולה מרוכזת</td></tr>
+        <tr><td class="name">הבקשה נגנזה</td><td class="n">110</td><td class="n">3</td><td class="dim">—</td></tr>
+      </tbody>
+    </table></div>
+  </article>
+</section>
+
+<!-- ══════════════ YEARLY FLOW ══════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">חלק ג׳</span>
+    <h2>התפלגות התנועה בשש השנים האחרונות</h2>
+    <p class="lede">כמה תיקים בכל סטטוס קיבלו את הסטטוס הזה בכל שנה. ככל שהתא כהה יותר, כך זרמו דרכו יותר תיקים באותה שנה.</p>
+  </div>
+  <div class="scroll"><table>
+    <thead><tr>
+      <th class="name">סטטוס</th><th class="n">קבוצה</th>
+      <th class="n">2026*</th><th class="n">2025</th><th class="n">2024</th>
+      <th class="n">2023</th><th class="n">2022</th><th class="n">2021</th>
+      <th class="n">מגמה</th>
+    </tr></thead>
+    <tbody id="flowbody"></tbody>
+  </table></div>
+  <p class="note" style="margin-top:1rem">
+    <strong>* 2026 חלקית</strong> — הדגימה נלקחה ב-2 באוגוסט, כלומר 214 ימים מתוך השנה. להשוואה שנתית מלאה יש להכפיל ב-1.71.
+    <br><strong>אנומליה אחת:</strong> 9,808 תיקים נסגרו ב-2023 — פעולת סגירה מרוכזת, לא קצב שוטף. אל תשתמש בשורה הזו כבסיס למגמה.
+    <br><strong>מה המספר הזה כן ולא מודד:</strong> הוא סופר תיקים שהסטטוס הנוכחי שלהם נקבע באותה שנה. תיק שעבר דרך סטטוס והמשיך הלאה אינו נספר בו — ולכן דווקא בסטטוסי המעבר המהירים המספר נמוך, וזו הסיבה שהם דורשים דגימה תכופה יותר, לא פחות.
+  </p>
+</section>
+
+<!-- ══════════════ COST ══════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">חלק ד׳</span>
+    <h2>מה כל חלופה עולה</h2>
+    <p class="lede">הקצה של האתר נעול על 2 בקשות לשנייה. קריאה חוזרת של תיק היא 3 קריאות (חיפוש מדויק + שני טאבים) = 1.5 שניות. כל שאר המספרים נגזרים מזה.</p>
+  </div>
+  <div class="scroll"><table>
+    <thead><tr><th class="name">חלופה</th><th class="n">תיקים</th><th class="n">זמן לריצה</th><th class="n">בשבוע</th><th class="n">שורות/שנה</th><th class="n">כיסוי השינויים</th></tr></thead>
+    <tbody>
+      <tr><td class="name" style="color:var(--accent);font-weight:700">קבוצה א׳ — כל 3 ימים</td><td class="n">569</td><td class="n">14 דק׳</td><td class="n">33 דק׳</td><td class="n">68 MB</td><td class="n">שעוני הפרסום</td></tr>
+      <tr><td class="name" style="color:var(--flow);font-weight:700">קבוצות ב׳+ג׳ טריים — שבועי</td><td class="n">4,379</td><td class="n">110 דק׳</td><td class="n">110 דק׳</td><td class="n">226 MB</td><td class="n">~85–90%</td></tr>
+      <tr style="background:var(--rule-soft)"><td class="name"><strong>סה״כ החבילה המומלצת</strong></td><td class="n"><strong>4,948</strong></td><td class="n">—</td><td class="n"><strong>2ש׳ 23ד׳</strong></td><td class="n"><strong>294 MB</strong></td><td class="n"><strong>~90%</strong></td></tr>
+      <tr><td class="name dim">כל הסטטוסים "בטיפול" (מלאי מלא)</td><td class="n dim">13,545</td><td class="n dim">5ש׳ 39ד׳</td><td class="n dim">5ש׳ 39ד׳</td><td class="n dim">733 MB</td><td class="n dim">~95%</td></tr>
+      <tr><td class="name dim">כל מה שלא נסגר</td><td class="n dim">79,943</td><td class="n dim">33ש׳ 19ד׳</td><td class="n dim">33ש׳ 19ד׳</td><td class="n dim">4.2 GB</td><td class="n dim">100%</td></tr>
+      <tr><td class="name dim">סריקה מלאה (קיימת, חודשית)</td><td class="n dim">100,082</td><td class="n dim">48ש׳ 32ד׳</td><td class="n dim">—</td><td class="n dim">1.2 GB</td><td class="n dim">רשת ביטחון</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note" style="margin-top:1rem">
+    המעבר מהחבילה המומלצת ל"כל מה שלא נסגר" מכפיל את זמן הריצה פי 14 ואת נפח האחסון פי 15,
+    כדי לתפוס את ה-10% הנותרים — שממילא נתפסים בסריקה המלאה החודשית, כלומר בהשהיה של עד 30 יום
+    על תיק שלא זז מ-2011.
+  </p>
+</section>
+
+<!-- ══════════════ METHOD ══════════════ -->
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">חלק ה׳</span>
+    <h2>איך זה נמדד</h2>
+  </div>
+  <ul>
+    <li><strong>המלאי וההתפלגות</strong> — שאילתות SQL על <span class="num">append_ykpubdata_all_665e9000_76f0e069</span>, 100,082 שורות, הדגימה מ-1–2 באוגוסט 2026 בתוספת הריצה השבועית של היום.</li>
+    <li><strong>קצב השינוי — 1,520 תיקים נקראו מחדש חיים</strong> מול האתר ב-7 באוגוסט והושוו לסטטוס השמור מ-1–2 באוגוסט, כלומר חלון של 5 ימים:
+      <ul style="margin-top:.35rem">
+        <li>מדגם אקראי של 200 תיקים <strong>שלא זזו מעל עשור — 0 השתנו (0.0%)</strong>.</li>
+        <li>מדגם אקראי של 200 תיקים <strong>שזזו ב-90 יום — 12 השתנו (6.0%)</strong>.</li>
+        <li>סריקה <strong>מלאה</strong> של שמונה הסטטוסים הקטנים (940 תיקים, כל אחד ואחד) ועוד 180 תיקים טריים מסטטוסי הטיפול — <strong>52 השתנו</strong>. זו העמודה "נמדד" בטבלאות; היכן שכתוב "מלא" נקרא כל המלאי, ולא מדגם.</li>
+      </ul>
+    </li>
+    <li><strong>קצב הקריאה</strong> — 1.50 / 1.51 / 1.50 שניות לתיק בשלוש ההרצות, תואם ל-3,598 תיקים לשעה שנמדדו בסריקה המלאה ול-<span class="num">requests_per_second: 2.0</span> שבמניפסט.</li>
+    <li><strong>מגבלת המדידה</strong> — בסטטוסים הגדולים (ועדת המשנה, נפתח תיק, רשות הרישוי) המדגם הוא עשרות תיקים בלבד, ולכן "0%" שם משמעו "לא נמצא שינוי במדגם", לא "אפס". החלוקה בין קבוצה א׳ לקבוצה ב׳ נשענת גם על ראיה מבנית בלתי תלויה — התפלגות גיל המלאי — שמצביעה לאותו כיוון.</li>
+    <li><strong>האימות בפועל (8–21 באוגוסט)</strong> — המחזורים רצו בייצור, ומספרי חלק א׳ אינם מדגם אלא <em>כל</em> 12,017 הקריאות שבוצעו באחת עשרה הריצות. המעברים חושבו ב-SQL, בהשוואת הדגימה החדשה של כל תיק מול דגימת הבסיס שלו מ-1–2 באוגוסט, <strong>אחרי ניקוי רווחים בשני הצדדים</strong> — בלעדיו 47.7% מהתוצאה הייתה רעש.</li>
+  </ul>
+  <p class="note" style="margin-top:1.25rem">
+    <strong>מגבלה טכנית שקובעת מה אפשר לבנות:</strong> פרוצדורת החיפוש של האתר מקבלת רק
+    <span class="num">misparTik / gush / helka / rehovCode / mispBait / mezahe / migrash</span> —
+    <strong>אין ציר סטטוס</strong>. לכן רשימת היעדים לכל ריצה ממוקדת חייבת להיבנות מהארכיון של OVER, לא מהאתר.
+    המנוע כבר מקבל רשימת יעדים ולא דורש שינוי; מה שחסר הוא בורר שמסנן לפי <em>מתי התיק זז</em> ולא לפי <em>ערך הסטטוס</em>.
+  </p>
+</section>
+
+</div>
+
+<script>
+const FLOW = [
+ ["הופק-הוצא היתר בניה","ג",630,1062,1194,1217,1160,1001],
+ ["הבקשה נסגרה","סופי",228,313,441,9808,330,189],
+ ["נדונה בוועדת המשנה","ב",798,508,212,24,16,28],
+ ["נפתח תיק רישוי","ב",577,216,86,54,32,41],
+ ["שולמה מקדמה","ב",410,156,90,90,61,28],
+ ["הגשה מקוונת הושלמה","ב",224,114,98,95,64,46],
+ ["נדונה ברשות הרישוי","ב",246,214,115,8,4,4],
+ ["הוכנה טיוטת היתר בניה","ג",141,43,33,11,8,15],
+ ["תום תקופת פרסום","א",127,44,15,5,9,3],
+ ["חידוש טיפול בבקשה","ב",141,21,9,5,8,3],
+ ["אושר ע״י מהנדס העיר","ב",21,25,34,28,23,27],
+ ["נדונה בועדת ערר","ב",41,53,18,11,5,10],
+ ["נוסח פרסום אושר","א",52,16,21,4,4,2],
+ ["התקבל ערר","ב",60,19,7,1,5,2],
+ ["תחילת פרסום הבקשה להקלה","א",86,3,0,0,0,0],
+ ["תחילת הודעות לפני תקנה 36","א",42,0,0,0,0,0],
+ ["הבקשה נגנזה","סופי",2,1,2,2,5,20],
+ ["התקבל תיק ורוד / מסמכים חתומים","ג",4,2,2,13,4,3],
+ ["השלמת הודעות לפני תקנה 36","א",8,0,0,0,0,0],
+ ["פורסמה בקשה להקלה","א",4,0,0,0,0,0],
+ ["ממתין לאישור נוסח פרסום","ד",0,0,0,0,0,1],
+ ["התקבלה בקשה לדיון המועצה","ב",0,1,0,0,0,0],
+ ["הופק היתר מוארך","ד",0,0,0,0,0,0],
+];
+const TIER_COLOR = {"א":"var(--accent)","ב":"var(--flow)","ג":"var(--amber)","ד":"var(--slate)","סופי":"var(--muted)"};
+// Log scale: the range spans 0 to 9,808 and a linear ramp would flatten
+// everything below ~500 into one indistinguishable shade.
+const cap = Math.log1p(1300);
+const body = document.getElementById("flowbody");
+for (const [name, tier, ...years] of FLOW) {
+  const tr = document.createElement("tr");
+  const recent = years[0] * 1.71, older = (years[3] + years[4] + years[5]) / 3;
+  const trend = older === 0 ? (recent > 0 ? "חדש" : "—")
+              : recent > older * 1.8 ? "עולה" : recent < older * 0.55 ? "יורד" : "יציב";
+  let html = `<td class="name">${name}</td><td class="n" style="color:${TIER_COLOR[tier]};font-weight:700">${tier}</td>`;
+  for (const v of years) {
+    const h = v === 0 ? 0 : Math.min(0.82, Math.log1p(v) / cap * 0.82);
+    html += `<td class="n heat" style="--h:${h.toFixed(3)}"><span>${v ? v.toLocaleString("he-IL") : "·"}</span></td>`;
+  }
+  html += `<td class="n dim">${trend}</td>`;
+  tr.innerHTML = html;
+  body.appendChild(tr);
+}
+</script>

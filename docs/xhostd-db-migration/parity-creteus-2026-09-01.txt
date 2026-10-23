@@ -1,0 +1,56 @@
+schemas checked : public
+tables in neon   : 46
+tables in xhostd : 46
+
+comparing 46 common tables ...
+
+ok       public.app_config                                                  40 rows
+ok       public.audit_log                                                 1124 rows
+ok       public.beer_log                                                     9 rows
+ok       public.bet_markets                                                  7 rows
+ok       public.bet_trades                                                  25 rows
+ok       public.calendar_event_edits                                        12 rows
+ok       public.calendar_event_matches                                      10 rows
+ok       public.calendar_events                                             22 rows
+ok       public.car_event_participants                                      15 rows
+ok       public.car_notes                                                    0 rows
+ok       public.cars                                                         4 rows
+ok       public.codename_cards                                               1 rows
+ok       public.codename_games                                               0 rows
+ok       public.drink_log                                                   45 rows
+ok       public.drinks_daily_team                                           12 rows
+ok       public.drinks_daily_team_winner                                     0 rows
+ok       public.drinks_daily_winner                                          0 rows
+ok       public.drinks_puke                                                  7 rows
+ok       public.drunk_vote_closed                                            0 rows
+ok       public.drunk_votes                                                 39 rows
+ok       public.event_rsvps                                                 72 rows
+ok       public.expense_changes                                             77 rows
+ok       public.expense_splits                                             528 rows
+ok       public.expenses                                                    63 rows
+ok       public.flight_passengers                                           26 rows
+ok       public.flights                                                     16 rows
+ok       public.fx_rates                                                     0 rows
+ok       public.map_places                                                  40 rows
+ok       public.nfc_group_members                                            0 rows
+ok       public.nfc_group_taps                                               0 rows
+ok       public.nfc_groups                                                   2 rows
+ok       public.nfc_nightbell_taps                                           9 rows
+ok       public.nfc_token_uses                                              75 rows
+ok       public.nfc_tokens                                                   4 rows
+ok       public.nfc_treasure                                                 1 rows
+ok       public.nfc_treasure_finds                                           0 rows
+ok       public.ofer_clicker_scores                                        245 rows
+ok       public.royalty_title_holders                                        1 rows
+ok       public.royalty_titles                                               4 rows
+ok       public.schema_migrations                                           35 rows
+ok       public.sessions                                                   111 rows
+ok       public.transfers                                                    0 rows
+ok       public.user_balances                                               14 rows
+ok       public.users                                                       14 rows
+ok       public.villa_photos                                                 3 rows
+ok       public.wc_matches                                                 104 rows
+
+------------------------------------------------------------------------
+elapsed 7.4s
+RESULT: IDENTICAL across 46 tables — safe to delete neon

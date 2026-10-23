@@ -231,8 +231,12 @@ async def search(q: str | None, author: str | None, doc_type: str | None,
                  limit: int = 20, offset: int = 0) -> dict:
     """Parameterized metadata search for the MMM tab (title/keywords/abstract)."""
     conds, params = [], []
-    if (q or "").strip():
-        params.append(f"%{q.strip()}%")
+    # One clause per WORD, ANDed: a word may land in the title and the next in
+    # the abstract, but every word has to land somewhere. As one contiguous
+    # ILIKE this found only documents carrying the words adjacent and in order,
+    # which is why the חיפוש רוחבי gateway had to send a single word instead.
+    for term in append_store.search_terms(q):
+        params.append(f"%{term}%")
         n = len(params)
         conds.append(f"(title ILIKE ${n} OR keywords ILIKE ${n} OR abstract ILIKE ${n})")
     if (author or "").strip():

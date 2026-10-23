@@ -52,7 +52,21 @@ class ParsedQuery:
 
     @property
     def has_operators(self) -> bool:
+        """Did the user type operator SYNTAX — quotes or a minus?"""
         return bool(self.phrases or self.excludes)
+
+    @property
+    def needs_local_filtering(self) -> bool:
+        """Does this query say more than the single ANCHOR word carries?
+
+        Yes for the operators — and, the case that actually bites, for a plain
+        multi-word search. `בנימין נתניהו` reaches a substring backend as
+        `בנימין` alone, so without re-checking here the column fills with every
+        מטה בנימין in the corpus and presents them as matches. Gating the check
+        on has_operators (quotes/minus only) left exactly that hole: the common
+        query was the unenforced one.
+        """
+        return bool(self.phrases or self.excludes or len(self.terms) > 1)
 
     @property
     def enforce_positives(self) -> bool:
@@ -122,6 +136,18 @@ def parse(q: str) -> ParsedQuery:
                        has_or=has_or)
 
 
+def positive_query(pq: ParsedQuery) -> str:
+    """The string for a backend that ANDs terms and honours quoted phrases, but
+    knows nothing of exclusion — and for one that merely tokenizes and ranks.
+
+    Phrases keep their quotes (the backend is expected to read them); exclusions
+    are dropped, because a backend that cannot express "not" would read `-x` as
+    a literal minus and match nothing. Enforcing them stays this module's job.
+    """
+    parts = [f'"{p}"' for p in pq.phrases] + list(pq.terms)
+    return " ".join(parts) or pq.raw.strip()
+
+
 def native_query(pq: ParsedQuery) -> str:
     """The string to send a backend that parses operators itself.
 
@@ -148,10 +174,16 @@ def matches(pq: ParsedQuery, *texts: str | None) -> bool:
     elif pq.positives and not any(n.lower() in hay for n in pq.positives):
         # An OR query still has to match SOMETHING — just not everything.
         return False
-    for needle in pq.excludes:
-        if needle.lower() in hay:
-            return False
-    return True
+    return not excluded(pq, *texts)
+
+
+def excluded(pq: ParsedQuery, *texts: str | None) -> bool:
+    """Does this record hit an exclusion? The half of ``matches`` that stays
+    ours even when the backend enforced every positive itself."""
+    if not pq.excludes:
+        return False
+    hay = " \n".join(t for t in texts if t).lower()
+    return any(n.lower() in hay for n in pq.excludes)
 
 
 # A single character matches inside almost every word, so highlighting it is

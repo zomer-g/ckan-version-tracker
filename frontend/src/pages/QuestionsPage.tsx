@@ -230,9 +230,13 @@ export default function QuestionsPage() {
       <div className="page-header">
         <h1>שאלות לעם</h1>
         <p className="text-muted" style={{ maxWidth: 760, lineHeight: 1.6 }}>
-          שאלה אחת, חיפוש בכל מה שגרסאות לעם אוספת — מאגרי המידע שבמעקב, טבלאות
+          מונח אחד, חיפוש בכל מה שגרסאות לעם אוספת: מאגרי המידע שבמעקב, טבלאות
           מסד הנתונים, אינדקס הלמ״ס, פרוטוקולי ועדות הכנסת, מסמכי ממ״מ, יומני בעלי
-          תפקידים ומרשמי התאגידים. כל מקור עונה בנפרד ומופיע ברגע שהוא מוכן.
+          תפקידים ומרשמי התאגידים. זה לא מנוע שמבין שאלות בשפה חופשית: הוא מחפש את
+          המילים עצמן, כפי שהן כתובות במקור, ומראה איפה הן מופיעות. לכן כדאי להקליד
+          מונח או צירוף קצר, כמו <strong>תעופה</strong>, <strong>חתונה</strong> או{" "}
+          <strong>"רכבת קלה"</strong>, ולא משפט כמו "כמה כסף הוציאה המדינה על
+          טיסות". כל מקור עונה בנפרד ומופיע ברגע שהוא מוכן.
         </p>
       </div>
 
@@ -256,8 +260,8 @@ export default function QuestionsPage() {
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder='למשל: תקציב · "תקציב הביטחון" · דיור -ירושלים'
-          aria-label="טקסט לחיפוש בכל המקורות"
+          placeholder='למשל: תעופה · חתונה · "רכבת קלה" · פסולת -בניין'
+          aria-label="מונח לחיפוש בכל המקורות"
           style={{
             flex: "1 1 260px",
             padding: "0.5rem 0.7rem",
@@ -330,6 +334,10 @@ export default function QuestionsPage() {
         className="text-sm text-muted"
         style={{ marginTop: "-0.5rem", marginBottom: "0.85rem", fontSize: "0.78rem" }}
       >
+        {/* Say the default out loud. It used not to be true — a plain two-word
+            search reached most columns as ONE word — and a reader who assumed
+            AND was right about the intent and wrong about the behaviour. */}
+        <strong>כמה מילים</strong> — כולן חייבות להופיע ·{" "}
         <strong>"מרכאות"</strong> לביטוי מדויק · <strong>-מילה</strong> להחרגה ·{" "}
         <strong>OR</strong> לחלופה. בעמודות הטקסט המלא החיפוש רץ בתוך גוף המסמך,
         ובשאר לפי מטא-דאטה.{" "}
@@ -337,8 +345,8 @@ export default function QuestionsPage() {
             searches תקציב and misses התקציב will read it as "no such document"
             rather than "different prefix". */}
         <span style={{ opacity: 0.85 }}>
-          שימו לב: החיפוש בגוף המסמך אינו מזהה הטיות — <strong>תקציב</strong> לא
-          ימצא <strong>התקציב</strong> או <strong>בתקציב</strong>.
+          שימו לב: החיפוש בגוף המסמך אינו מזהה הטיות, <strong>חתונה</strong> לא
+          תמצא <strong>החתונה</strong> או <strong>בחתונה</strong>.
         </span>
       </div>
 

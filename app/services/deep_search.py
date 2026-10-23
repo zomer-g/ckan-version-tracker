@@ -338,19 +338,40 @@ def _remote_caller(source: Source, token: str | None, budget_s: float):
 
 # ── the fan-out ─────────────────────────────────────────────────────────────
 
+def _enforcement(source: Source, pq) -> str:
+    """How much of the query is still this gateway's to enforce.
+
+    ``"all"`` — the backend got one ANCHOR word out of the query, so every
+    phrase, every other term and every exclusion is checked here.
+    ``"excludes"`` — the backend ANDed the positives across its own columns;
+    only the exclusion it cannot express is left. Re-checking its positives on
+    the little text a card shows would undo a search that ran over every column.
+    ``"none"`` — the backend parsed the whole query, or run() already judged
+    each row against the full record.
+    """
+    if source.enforces_positives:
+        return "excludes" if (pq.excludes and source.query_support != "operators") else "none"
+    return "all" if pq.needs_local_filtering else "none"
+
+
 def _apply_operators(source: Source, pq, cards: list, limit: int) -> list:
-    """Enforce the operators and give every card a highlighted match snippet.
+    """Enforce the query and give every card a highlighted match snippet.
 
     Two things happen here, and they are deliberately central rather than
     per-source so the page behaves identically whichever corpus answered.
 
-    FILTERING runs only for sources that could not do it themselves, and only
-    when the query actually carries operators — a plain one-word search must be
-    left exactly as the backend ranked it. The judgement is made on the text we
-    can see (title + snippet), which is the honest limit of the technique: a
-    row that matched on a column the card does not display can be dropped. That
-    is why it is gated on has_operators, where the user has explicitly asked for
-    precision over recall.
+    FILTERING runs for whatever the source did not enforce itself (see
+    _enforcement). It used to be gated on has_operators — quotes or a minus —
+    which left the ordinary multi-word search unchecked: a substring backend is
+    handed ONE word, so `בנימין נתניהו` came back as every מטה בנימין in the
+    corpus and nothing here objected.
+
+    The judgement is made on the text we can see (title + snippet), which is
+    the honest limit of the technique: a row that matched on a column the card
+    does not display would be dropped. That is why the sources whose search is
+    wider than their card now SAY so — see deep_search_sources.match_note and
+    the matched_topic on a protocol — and why _query over-fetches, so the
+    narrowing happens before the page size rather than after it.
 
     HIGHLIGHTING is applied to everyone. TAG-IT already returns «…» around the
     match, so its cards are left alone; for the rest we build a window around
@@ -358,10 +379,12 @@ def _apply_operators(source: Source, pq, cards: list, limit: int) -> list:
     """
     from dataclasses import replace
 
+    mode = _enforcement(source, pq)
     out = []
     for c in cards:
-        if (pq.has_operators and not source.native_operators
-                and not dsq.matches(pq, c.title, c.snippet)):
+        if mode == "all" and not dsq.matches(pq, c.title, c.snippet):
+            continue
+        if mode == "excludes" and dsq.excluded(pq, c.title, c.snippet):
             continue
         if not dsq.already_highlighted(c.snippet):
             # Only ever from the snippet — falling back to the title would
@@ -399,7 +422,7 @@ def _truthful_total(source: Source, pq, backend_total, cards: list) -> int:
     filtering here is a truthful answer, even though it is bounded by how much
     we fetched — an undercount the page can live with, an overcount it cannot.
     """
-    if pq.has_operators and not source.native_operators:
+    if _enforcement(source, pq) != "none":
         return len(cards)
     return int(backend_total) if isinstance(backend_total, int) else len(cards)
 
@@ -427,15 +450,21 @@ def _column(source: Source, *, configured: bool = True, error: str | None = None
 async def _query(request, source: Source, q: str, limit: int, filters: dict) -> dict:
     """Run one source and return its column. Raises — wrapped by run_source."""
     pq = dsq.parse(q)
-    # A source that parses operators gets the user's words; one that does not
-    # gets a plain anchor it can actually match, and we enforce the operators
-    # on the way back. Over-fetch in that case, because post-filtering can only
-    # narrow what already came back.
-    if source.native_operators:
+    # What the backend can be trusted to do with the string decides what it
+    # gets. Only a backend matching one contiguous run of text is reduced to an
+    # anchor — for it, a second word would mean zero rows. Everything that
+    # tokenizes gets the user's words, because an anchor can never surface a
+    # row that only the other words would have reached.
+    if source.query_support == "operators":
         send_q, send_limit = dsq.native_query(pq), limit
+    elif source.query_support in ("and", "tokens"):
+        send_q, send_limit = dsq.positive_query(pq), limit
     else:
         send_q = pq.anchor()
-        send_limit = min(limit * 4, 200) if pq.has_operators else limit
+        # Over-fetch whenever we are going to narrow: post-filtering can only
+        # cut what already came back, so asking for the page size and then
+        # filtering it would spend most of the page on rows we discard.
+        send_limit = min(limit * 4, 200) if pq.needs_local_filtering else limit
 
     aclose = None
     if source.local:
@@ -450,8 +479,7 @@ async def _query(request, source: Source, q: str, limit: int, filters: dict) -> 
             cards = _apply_operators(source, pq, cards, limit)
             # A source that ran its own calls may know its count is unavailable
             # rather than zero — only it can tell the two apart.
-            unknown = bool(out.get("total_unknown")) and not (
-                pq.has_operators and not source.native_operators)
+            unknown = bool(out.get("total_unknown")) and _enforcement(source, pq) == "none"
             return _column(source, results=cards, total_unknown=unknown,
                            total=_truthful_total(source, pq, out.get("total"), cards))
 

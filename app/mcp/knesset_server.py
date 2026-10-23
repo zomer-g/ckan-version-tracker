@@ -260,6 +260,13 @@ async def _tool_search_committees(request, db, user, a) -> tuple[dict, int]:
             "source": "over.org.il — מראה נתוני הכנסת (ODATA)"}, len(rows)
 
 
+def _q_terms(a: dict) -> list[str]:
+    """The free-text query as ILIKE patterns, one per word. Shared with the
+    append store so the whole site splits a search box the same way."""
+    from app.services.append_store import search_terms
+    return [f"%{t}%" for t in search_terms(a.get("q"))]
+
+
 def _session_filters(a: dict, params: list) -> str:
     """Shared WHERE builder for session-scoped searches ($-numbered params)."""
     conds = []
@@ -277,8 +284,13 @@ def _session_filters(a: dict, params: list) -> str:
     if d_to:
         params.append(d_to)
         conds.append(f"s.startdate < ${len(params)}::date + 1")
-    if (a.get("q") or "").strip():
-        params.append(f"%{a['q'].strip()}%")
+    # One clause per WORD, ANDed. A sitting on "תקציב הביטחון" carries the two
+    # words in one topic; a search for "ועדת הכספים תקציב" needs one from the
+    # committee name and one from a topic — as a single contiguous ILIKE neither
+    # worked, so the gateway sent one word and the column filled with sittings
+    # that had nothing to do with the question.
+    for term in _q_terms(a):
+        params.append(term)
         n = len(params)
         conds.append(
             f"(EXISTS (SELECT 1 FROM knesset.kns_cmtsessionitem it "
@@ -313,10 +325,27 @@ async def _tool_search_protocols(request, db, user, a) -> tuple[dict, int]:
     params: list = [PROTOCOL_GROUP_TYPE]
     where = _session_filters(a, params)
     where = (where + " AND " if where else "WHERE ") + "d.grouptypeid = $1"
+    # q searches the sitting's TOPICS (kns_cmtsessionitem.name) or the committee
+    # name, and a result carrying neither left the caller unable to tell a real
+    # hit from a wrong one — the חיפוש רוחבי column showed nothing but a
+    # committee and a date. Name the topic that matched. Its own parameter
+    # rather than the one _session_filters appended, so this does not depend on
+    # the order that builder happens to bind in.
+    matched_topic = "NULL::text AS matched_topic"
+    topic_hits = []
+    for term in _q_terms(a):
+        params.append(term)
+        topic_hits.append(f"it.name ILIKE ${len(params)}")
+    if topic_hits:
+        matched_topic = (
+            f"(SELECT it.name FROM knesset.kns_cmtsessionitem it "
+            f" WHERE it.committeesessionid = s.id AND ({' OR '.join(topic_hits)}) "
+            f" ORDER BY it.ordinal LIMIT 1) AS matched_topic")
     limit = _clamp(a, "limit", 20)
     offset = max(int(a.get("offset") or 0), 0)
     rows = await _fetch(
         f"SELECT d.id AS document_id, d.filepath AS file_url, d.applicationdesc AS file_format, "
+        f"  {matched_topic}, "
         f"  s.id AS session_id, s.startdate, s.knessetnum, s.sessionurl AS session_url, "
         f"  c.id AS committee_id, c.name AS committee_name "
         f"FROM knesset.kns_documentcommitteesession d "

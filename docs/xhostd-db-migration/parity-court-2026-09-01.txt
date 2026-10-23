@@ -1,0 +1,11 @@
+schemas checked : public
+tables in neon   : 1
+tables in xhostd : 1
+
+comparing 1 common tables ...
+
+ok       public.jobs                                                        68 rows
+
+------------------------------------------------------------------------
+elapsed 0.2s
+RESULT: IDENTICAL across 1 tables — safe to delete neon
