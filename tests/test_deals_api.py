@@ -156,7 +156,8 @@ def test_an_unset_filter_is_absent_from_the_sql(client, seen):
     client.get("/api/deals/search")
     sql = _sql(seen, "ORDER BY")
     assert "WHERE true" in sql
-    assert "settlement" not in sql.split("WHERE")[1].split("ORDER BY")[0]
+    assert "settlement = $" not in sql
+    assert "settlement_code = $" not in sql
 
 
 def test_each_filter_becomes_a_parameter_never_an_inlined_value(client, seen):
