@@ -1,0 +1,10 @@
+# Tells xhostd that a branch moved, so it syncs its mirror of this repo; the
+# prod channel follows master and deploys the new head. The URL carries no
+# secret: xhostd fetches from GitHub itself with its read-only deploy key.
+name: Notify xhostd
+on: push
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS --retry 5 --retry-all-errors -X POST https://api.xhostd.com/webhooks/github/463f1059-260b-430a-887d-fdb1231a534f
