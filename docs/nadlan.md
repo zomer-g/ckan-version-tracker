@@ -763,6 +763,43 @@ planning-area layer, מחיר מפוקח plots (200558), and a קדסטר ושי
 cadastre processes (240040), תצ"ר (81), jurisdiction (212192), village lands
 (187).
 
+### Layers too large for the idx mirror: the crosswalk
+
+Checked on production 2026-10-27: 24 of 32 cubes are answerable, and the 8
+that are not are exactly the national planning layers — מבא"ת's blue lines,
+both רצף layers, משהב"ש plots, מחיר מפוקח, cadastre processes, traffic noise.
+None of them has a table anywhere (idx or public): the mirror's size gate
+(`index_mirror_max_csv_mb`, 100 MB) keeps them out, and it cannot be raised on
+a container that peaks at 7.7 of its 8 GB.
+
+`app/services/nadlan_layer_links.py` answers them without storing the layer:
+
+* The version's index CSV is read as a **stream** from R2 (never downloaded),
+  in batches bounded by rows and bytes.
+* Each batch is COPYed into a temp table, and Postgres matches it against the
+  1.1 M parcel centroids through their GiST index (containment, or the cube's
+  radius).
+* Only features that touch a parcel are kept, in `over_re_layer_features`:
+  their attributes (no geometry) and the **array** of parcels they touch, with a
+  GIN index. A row per (parcel, plan) pair was the first design and did not
+  survive measurement — a city-wide plan covers tens of thousands of parcels,
+  and 11,000 synthetic plans already made 10 M pairs.
+* Builds write a new `generation` and flip `over_re_layer_link_state` only when
+  done; a failed build leaves readers on the previous one.
+
+The cubes use a layer's own table when it has one and the crosswalk otherwise.
+What is lost: the plan's outline cannot be drawn, because no geometry is kept.
+
+```bash
+# one layer, or several in order (stops at the first failure)
+curl -X POST 'https://www.over.org.il/api/admin/nadlan/layer-links/build?dataset_id=b105ae22-a6f5-4cd0-b37e-c63dc5da40c3' -H "Authorization: Bearer $TOKEN"
+curl 'https://www.over.org.il/api/admin/nadlan/layer-links/state' -H "Authorization: Bearer $TOKEN"
+```
+
+A layer built once is rebuilt daily when a newer version of it has landed
+(`nadlan_layer_links` scheduler job). The integration tests run against a real
+PostGIS when `NADLAN_PG_TEST_URL` names a throwaway database.
+
 **Not yet verified against production.** The registry was built from the OVER
 catalog. This session could not reach the SQL console, so two things should be
 checked on a live parcel: that each layer's `idx` table has a `geom` (a layer

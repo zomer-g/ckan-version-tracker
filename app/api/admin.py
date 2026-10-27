@@ -3688,6 +3688,77 @@ async def nadlan_state(request: Request, user: User = Depends(get_admin_user)):
     return {"stages": state, "ready": bool(stats), "stats": stats}
 
 
+async def _run_layer_links_bg(dataset_ids: list[str], force: bool):
+    from app.services import nadlan_layer_links, nadlan_layers
+    for ds in dataset_ids:
+        res = await nadlan_layer_links.build(
+            ds, radius_m=nadlan_layers.radius_for_dataset(ds), force=force)
+        logger.info("layer links build: %s", res)
+        if res.get("status") not in ("ok", "current"):
+            break   # stop on the first failure: the next layer is larger
+
+
+@router.post("/nadlan/layer-links/build")
+@limiter.limit("6/minute")
+async def nadlan_layer_links_build(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    dataset_id: str,
+    force: bool = False,
+    user: User = Depends(get_admin_user),
+):
+    """Compute the parcel crosswalk for GovMap layers too large for the idx
+    mirror (``app/services/nadlan_layer_links.py``).
+
+    ``dataset_id`` is one dataset id or several, comma-separated; they run one
+    after the other, in the order given, and the run stops at the first
+    failure. Only datasets that belong to a נדל"ן לעם cube are accepted — the
+    cube is what says whether the layer is matched by containment or by radius.
+    ``force`` rebuilds a layer whose crosswalk is already at its latest version.
+    Progress: GET /api/admin/nadlan/layer-links/state."""
+    from app.services import append_store as _as
+    from app.services import nadlan_layer_links, nadlan_layers
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    if nadlan_layer_links.is_building():
+        raise HTTPException(status_code=409, detail="a layer crosswalk is already building")
+    known = {d for c in nadlan_layers.registry() for d in c["datasets"]}
+    wanted = [d.strip() for d in dataset_id.split(",") if d.strip()]
+    for d in wanted:
+        parse_uuid(d, "dataset_id")
+    unknown = [d for d in wanted if d not in known]
+    if unknown or not wanted:
+        raise HTTPException(status_code=422,
+                            detail=f"not a cube dataset: {', '.join(unknown) or '(none)'}")
+    background_tasks.add_task(_run_layer_links_bg, wanted, force)
+    logger.info("layer links build %s started by %s", wanted, user.email)
+    return {"status": "started", "datasets": wanted,
+            "message": "Building in the background; poll GET /api/admin/nadlan/layer-links/state."}
+
+
+@router.get("/nadlan/layer-links/state")
+@limiter.limit("30/minute")
+async def nadlan_layer_links_state(request: Request, user: User = Depends(get_admin_user)):
+    """Per-layer crosswalk state: generation, version, counts, timing, and the
+    size the crosswalk table takes on disk."""
+    from app.services import append_store as _as
+    from app.services import nadlan_layer_links
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    state = await nadlan_layer_links.get_state()
+    sizes = {}
+    try:
+        pool = await _as.get_pool()
+        async with pool.acquire() as conn:
+            for t in (nadlan_layer_links.FEATURES_TABLE,):
+                sizes[t] = await conn.fetchval(
+                    "SELECT pg_total_relation_size(to_regclass($1))", f"public.{t}")
+    except Exception:  # noqa: BLE001 — tables not created yet
+        pass
+    return {"building": nadlan_layer_links.is_building(), "layers": state,
+            "table_bytes": sizes}
+
+
 async def _run_harvest_bg(phase: str, per_col_cap: int):
     from app.services import settlement_harvest
     try:
