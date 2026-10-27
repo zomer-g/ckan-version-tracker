@@ -1821,9 +1821,36 @@ export interface CkanCoverage {
   resources: CkanCoverageResource[];
 }
 
+// One card of the home page's tracked list — only the fields a card renders.
+export type HomeDataset = Pick<
+  TrackedDataset,
+  | "id" | "ckan_id" | "ckan_name" | "title" | "organization" | "organization_id"
+  | "organization_title" | "odata_dataset_id" | "poll_interval" | "version_count"
+  | "resource_name" | "source_type" | "source_url" | "tags"
+>;
+
+// One page of the home list, ordered and filtered server-side (see
+// app/services/home_catalog.py), plus the hero's catalog-wide totals.
+export interface HomeDatasetsPage {
+  items: HomeDataset[];
+  total: number;
+  page: number;
+  page_size: number;
+  // The Knesset committees folded into one tile; null while searching.
+  committee: { count: number; versions: number } | null;
+  stats: { datasets: number; versions: number; organizations: number };
+}
+
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
+  homeDatasets: (q: string, page: number) => {
+    const p = new URLSearchParams();
+    if (q) p.set("q", q);
+    if (page > 1) p.set("page", String(page));
+    const qs = p.toString();
+    return request<HomeDatasetsPage>(`/home/datasets${qs ? `?${qs}` : ""}`);
+  },
   siteStats: () => request<SiteStats>("/stats"),
   dataset: (id: string) => request<TrackedDataset>(`/datasets/public/${id}`),
   // What of a data.gov.il collection this site already archives, per file.

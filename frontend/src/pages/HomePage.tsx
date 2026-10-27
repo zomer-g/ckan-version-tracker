@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, pageContent, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, TrackedDataset, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
+import { ckan, publicApi, pageContent, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, HomeDataset, HomeDatasetsPage, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 import TagChips from "../components/TagChips";
 import Pagination from "../components/Pagination";
@@ -87,35 +87,13 @@ interface SearchResult {
   resources?: CkanResource[];
 }
 
-// Lower-cased "searchable text" for a tracked dataset — its title, org,
-// tags, ckan id, source URL. Powers the in-site keyword search so a query
-// matches datasets ALREADY tracked here, not just data.gov.il.
-function trackedHaystack(ds: TrackedDataset): string {
-  const tags = Array.isArray((ds as any).tags)
-    ? (ds as any).tags
-        .map((tg: any) => (typeof tg === "string" ? tg : tg?.name || ""))
-        .join(" ")
-    : "";
-  return [
-    ds.title,
-    ds.organization_title,
-    ds.organization,
-    ds.ckan_id,
-    ds.source_url,
-    ds.resource_name,
-    tags,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
 /**
  * Stat row under the search bar.
  *
  * Mirrors the Ocal/Ocoi hero canonical: big white number, small primary-200
- * label. The first three (datasets / versions / organizations) are derived from
- * the dataset list we already fetch — no second roundtrip, no flash of zero.
+ * label. The first three (datasets / versions / organizations) arrive with the
+ * first page of the dataset list (/api/home/datasets), computed server-side
+ * over the whole catalog — the page no longer downloads the catalog to sum it.
  *
  * The last three (SQL tables, their total rows, archived files) are site-wide
  * totals that only the server can compute; they arrive separately from
@@ -131,29 +109,20 @@ function trackedHaystack(ds: TrackedDataset): string {
  * it, so all six stats still scan as one row of same-size numbers.
  */
 function HomeStats({
-  datasets,
-  loading,
+  stats,
   siteStats,
   siteStatsLoading,
   t,
   lang,
 }: {
-  datasets: TrackedDataset[];
-  loading: boolean;
+  stats: HomeDatasetsPage["stats"] | null;
   siteStats: SiteStats | null;
   siteStatsLoading: boolean;
   t: (k: string) => string;
   lang: string;
 }) {
-  const datasetCount = datasets.length;
-  const versionCount = datasets.reduce((sum, d) => sum + (d.version_count || 0), 0);
-  const orgCount = new Set(
-    datasets
-      .map((d) => d.organization_id || d.organization)
-      .filter((x): x is string => Boolean(x)),
-  ).size;
-
   const fmt = (n: number) => n.toLocaleString("he-IL");
+  const catalogStat = (n: number | undefined) => (n == null ? "—" : fmt(n));
   // A site total is shown when we have it; still loading → "—"; failed on the
   // server (null) → the stat is dropped from the row entirely.
   const big = (n: number | null | undefined): BigNumberParts | null =>
@@ -183,15 +152,15 @@ function HomeStats({
   return (
     <div className="home-stats" aria-label="סטטיסטיקות">
       <div className="home-stat">
-        <div className="home-stat-number">{loading ? "—" : fmt(datasetCount)}</div>
+        <div className="home-stat-number">{catalogStat(stats?.datasets)}</div>
         <div className="home-stat-label">{t("home.stats_datasets")}</div>
       </div>
       <div className="home-stat">
-        <div className="home-stat-number">{loading ? "—" : fmt(versionCount)}</div>
+        <div className="home-stat-number">{catalogStat(stats?.versions)}</div>
         <div className="home-stat-label">{t("home.stats_versions")}</div>
       </div>
       <div className="home-stat">
-        <div className="home-stat-number">{loading ? "—" : fmt(orgCount)}</div>
+        <div className="home-stat-number">{catalogStat(stats?.organizations)}</div>
         <div className="home-stat-label">{t("home.stats_organizations")}</div>
       </div>
       {tables && (
@@ -250,39 +219,25 @@ export default function HomePage() {
   // search yet). Drives the in-site filter over already-tracked datasets.
   const [submittedQuery, setSubmittedQuery] = useState("");
 
-  // Tracked datasets
-  const [trackedDatasets, setTrackedDatasets] = useState<TrackedDataset[]>([]);
-  const [trackedLoading, setTrackedLoading] = useState(true);
+  // Tracked datasets — one page at a time from /api/home/datasets. The page
+  // used to download the whole catalog (~1,850 rows, 2.3MB) and filter, order
+  // and slice it here; the server now does all three and sends 24 cards.
+  const [homePage, setHomePage] = useState<HomeDatasetsPage | null>(null);
+  // Which (query, page) homePage answers. While it differs from what the URL
+  // asks for, the previous page stays on screen (dimmed) rather than blanking
+  // the grid behind a loading line on every page change.
+  const [homeKey, setHomeKey] = useState<string | null>(null);
+  const [homeReload, setHomeReload] = useState(0);
+  // A first load that failed: show the empty state, not an endless "loading".
+  const [homeFailed, setHomeFailed] = useState(false);
   const [siteStats, setSiteStats] = useState<SiteStats | null>(null);
   const [siteStatsLoading, setSiteStatsLoading] = useState(true);
 
-  // Tracked datasets that match the submitted keyword search. Reactive so
-  // it fills in once the dataset list finishes loading (e.g. on a deep
-  // link like /?q=...). Empty when there's no active keyword search.
-  const matchedTracked = useMemo(() => {
-    const tokens = submittedQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return [];
-    // Match datasets where EVERY query word appears (order-independent),
-    // so "ממשלה החלטות" still finds "החלטות ממשלה".
-    return trackedDatasets.filter((ds) => {
-      const hay = trackedHaystack(ds);
-      return tokens.every((tok) => hay.includes(tok));
-    });
-  }, [submittedQuery, trackedDatasets]);
-
-  // Collapse the hundreds of Knesset-committee datasets (tag "ועדות כנסת")
-  // into ONE card on the default list, so they don't drown the main screen.
-  // The card links to /knesset (the protocol-search page). When the user is
-  // searching, individual committees still surface via matchedTracked.
-  const KNESSET_COMMITTEE_TAG = "ועדות כנסת";
-  const isCommitteeDataset = (ds: TrackedDataset) =>
-    (Array.isArray((ds as any).tags) ? (ds as any).tags : []).some(
-      (tg: any) => (typeof tg === "string" ? tg : tg?.name || "") === KNESSET_COMMITTEE_TAG,
-    );
   // Up to FEATURED_MAX datasets an admin pinned to the head of the list, in
   // the order they were pinned. Stored as a JSON id list in the page_content
-  // table (page "home"), so a pin goes live without a deploy. The ★ badge on
-  // the card says the position is an editorial choice, not the natural order.
+  // table (page "home"), so a pin goes live without a deploy. The server orders
+  // the list by it; here it only drives the ★ badge and the admin toggle. The
+  // badge says the position is an editorial choice, not the natural order.
   const FEATURED_MAX = 3;
   const [featuredIds, setFeaturedIds] = useState<string[]>([]);
   const featuredSet = useMemo(() => new Set(featuredIds), [featuredIds]);
@@ -306,28 +261,12 @@ export default function HomePage() {
       if (next.length) await pageContent.save("home", "he", FEATURED_KEY, JSON.stringify(next));
       else await pageContent.revert("home", "he", FEATURED_KEY);
       setFeaturedIds(next);
+      // The order is the server's now — ask for the page again.
+      setHomeReload((n) => n + 1);
     } catch (e: any) {
       alert(e?.message || "השמירה נכשלה");
     }
   };
-
-  const restTracked = useMemo(() => {
-    const rest = trackedDatasets.filter((ds) => !isCommitteeDataset(ds));
-    if (!featuredIds.length) return rest;
-    // Featured first, in pin order; a pinned id that is no longer listed
-    // (deleted, hidden) simply drops out.
-    const byId = new Map(rest.map((ds) => [ds.id, ds]));
-    const head = featuredIds.map((id) => byId.get(id)).filter(Boolean) as TrackedDataset[];
-    return [...head, ...rest.filter((ds) => !featuredSet.has(ds.id))];
-  }, [trackedDatasets, featuredIds, featuredSet]);
-  const committeeGroup = useMemo(() => {
-    const list = trackedDatasets.filter(isCommitteeDataset);
-    if (list.length === 0) return null;
-    return {
-      count: list.length,
-      versions: list.reduce((s, d) => s + (d.version_count || 0), 0),
-    };
-  }, [trackedDatasets]);
 
   // ── Paging the tracked list ───────────────────────────────────────────────
   //
@@ -338,37 +277,55 @@ export default function HomePage() {
   //
   // 24 a page because the grid is `repeat(auto-fill, minmax(320px, 1fr))`, so
   // the column count follows the viewport: 24 divides evenly by 1, 2, 3 and 4
-  // and never leaves a ragged last row at any of those widths.
-  const PAGE_SIZE = 24;
+  // and never leaves a ragged last row at any of those widths. The server owns
+  // the number (page_size) and slices the same way.
+  const PAGE_SIZE = homePage?.page_size ?? 24;
 
-  // What is actually on screen: search hits while searching, otherwise the
-  // whole tracked list with the Knesset committees folded into one card.
-  const shownTracked = submittedQuery ? matchedTracked : restTracked;
-
-  // The committee card is a tile in the same grid, so it takes a slot rather
-  // than sitting outside the count — otherwise page 1 would render 25 tiles and
-  // break the 3- and 4-column rows, which is the whole point of 24.
+  // Searching: the datasets matching every query word, committees included.
+  // Otherwise: the whole list, pinned first, with the hundreds of Knesset
+  // committees folded into ONE tile linking to /knesset (the server sends it
+  // as `committee`, null while searching).
+  const committeeGroup = homePage?.committee ?? null;
+  const shownTotal = homePage?.total ?? 0;
+  // The committee tile takes a slot in the same grid rather than sitting
+  // outside the count — otherwise page 1 would render 25 tiles and break the
+  // 3- and 4-column rows, which is the whole point of 24.
   const showCommitteeCard = !submittedQuery && !!committeeGroup;
-  const tileCount = shownTracked.length + (showCommitteeCard ? 1 : 0);
+  const tileCount = shownTotal + (showCommitteeCard ? 1 : 0);
   const pageCount = Math.max(1, Math.ceil(tileCount / PAGE_SIZE));
+  // Matching tracked datasets while a keyword search is active, else 0.
+  const matchedCount = submittedQuery && homePage ? shownTotal : 0;
 
   // Derived from the URL, not held in state: a page is a place, so it should
-  // survive a reload, be linkable, and answer the back button. Clamped on read
-  // because the list arrives asynchronously — a deep link to ?page=7 lands
-  // while pageCount is still 1, and recomputes to 7 the moment the data does.
-  const trackedPage = Math.min(
-    Math.max(1, Number(searchParams.get("page")) || 1),
-    pageCount,
-  );
+  // survive a reload, be linkable, and answer the back button. The server
+  // clamps an out-of-range ?page= and says which page it sent; until the
+  // answer for this URL is in, the clamp uses the previous answer's count.
+  const requestedPage = Math.max(1, Number(searchParams.get("page")) || 1);
+  const trackedPage = homePage && homeKey === `${submittedQuery}\n${requestedPage}`
+    ? homePage.page
+    : Math.min(requestedPage, pageCount);
+  const pageTracked: HomeDataset[] = homePage?.items ?? [];
+  const trackedLoading = homePage === null && !homeFailed;
+  const trackedStale = homePage !== null && homeKey !== `${submittedQuery}\n${requestedPage}`;
 
-  const pageTracked = useMemo(() => {
-    const slotStart = (trackedPage - 1) * PAGE_SIZE;
-    const offset = showCommitteeCard ? 1 : 0;
-    return shownTracked.slice(
-      Math.max(0, slotStart - offset),
-      Math.max(0, slotStart + PAGE_SIZE - offset),
-    );
-  }, [shownTracked, trackedPage, showCommitteeCard]);
+  useEffect(() => {
+    let cancelled = false;
+    const key = `${submittedQuery}\n${requestedPage}`;
+    publicApi.homeDatasets(submittedQuery, requestedPage)
+      .then((data) => {
+        if (cancelled) return;
+        setHomePage(data);
+        setHomeKey(key);
+        setHomeFailed(false);
+      })
+      .catch(() => {
+        // A later page failing leaves the current one on screen.
+        if (!cancelled) setHomeFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [submittedQuery, requestedPage, homeReload]);
 
   const trackedHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -444,13 +401,6 @@ export default function HomePage() {
   // the site name and the poll cadence all arrive with the validation.
   const [registryResult, setRegistryResult] =
     useState<RegistrySourceValidation | null>(null);
-
-  useEffect(() => {
-    publicApi.datasets()
-      .then(setTrackedDatasets)
-      .catch(() => {})
-      .finally(() => setTrackedLoading(false));
-  }, []);
 
   // Site-wide totals (SQL tables / rows / archived files) for the hero. Its own
   // request: server-side cached, but seconds long on a cold cache — the dataset
@@ -913,7 +863,7 @@ export default function HomePage() {
         setCount(1);
       } else {
         // 3. Keyword search — data.gov.il AND, via submittedQuery, the
-        // datasets already tracked here (matchedTracked memo + section).
+        // datasets already tracked here (/api/home/datasets ?q=, see the list section).
         const data = await ckan.search(query);
         setResults(data.results);
         setCount(data.count);
@@ -938,7 +888,7 @@ export default function HomePage() {
   // One tracked-dataset card. A function, not inline JSX, because the
   // featured cards render before the Knesset-committees tile and the rest
   // after it — two passes over the same page slice.
-  const renderTrackedCard = (ds: TrackedDataset) => (
+  const renderTrackedCard = (ds: HomeDataset) => (
     <article
       key={ds.id}
       className="card"
@@ -1140,8 +1090,7 @@ export default function HomePage() {
           </form>
 
           <HomeStats
-            datasets={trackedDatasets}
-            loading={trackedLoading}
+            stats={homePage?.stats ?? null}
             siteStats={siteStats}
             siteStatsLoading={siteStatsLoading}
             t={t}
@@ -2164,12 +2113,12 @@ export default function HomePage() {
           </section>
         )}
 
-        {!loading && results.length === 0 && matchedTracked.length === 0 && resolvedMatches.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
+        {!loading && results.length === 0 && matchedCount === 0 && resolvedMatches.length === 0 && !govIlResult && !govMapResult && !idfResult && query && !error && (
           <div className="empty-state mb-2">{t("search.no_results")}</div>
         )}
 
         {/* Tracked Datasets Section. During an in-site keyword search this
-            is filtered to the datasets that match (matchedTracked) so the
+            is filtered (server-side) to the datasets that match so the
             search covers "my own site", not just data.gov.il; otherwise it
             lists everything tracked. */}
         <section aria-labelledby="tracked-heading" style={{ marginTop: "1rem" }}>
@@ -2182,7 +2131,7 @@ export default function HomePage() {
             style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.35rem", outline: "none" }}
           >
             {submittedQuery
-              ? `${t("home.tracked_matches_title")} (${matchedTracked.length})`
+              ? `${t("home.tracked_matches_title")} (${matchedCount})`
               : t("home.tracked_title")}
           </h2>
 
@@ -2213,12 +2162,16 @@ export default function HomePage() {
 
           {trackedLoading ? (
             <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>
-          ) : (submittedQuery ? matchedTracked.length === 0 : restTracked.length === 0 && !committeeGroup) ? (
+          ) : tileCount === 0 ? (
             <div className="empty-state">
               {submittedQuery ? t("home.tracked_matches_empty") : t("home.no_tracked")}
             </div>
           ) : (
-            <div className="grid grid-2">
+            <div
+              className="grid grid-2"
+              aria-busy={trackedStale}
+              style={trackedStale ? { opacity: 0.55, transition: "opacity 0.15s" } : undefined}
+            >
               {pageTracked.filter((ds) => featuredSet.has(ds.id)).map(renderTrackedCard)}
               {showCommitteeCard && trackedPage === 1 && committeeGroup && (
                 <article key="knesset-committees" className="card" style={{ borderInlineStart: "3px solid var(--tint-indigo-fg)" }}>

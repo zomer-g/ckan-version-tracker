@@ -53,6 +53,7 @@ from app.api.settlements import router as settlements_router
 from app.api.seo import router as seo_router
 from app.services import seo
 from app.api.site_stats import router as site_stats_router
+from app.api.home import router as home_router
 from app.api.connector import router as connector_router
 from app.api.cbs import router as cbs_router
 from app.api.cbs_ask import router as cbs_ask_router
@@ -424,6 +425,16 @@ app.add_middleware(MCPCorsMiddleware)
 from app.api_access_log_middleware import ApiAccessLogMiddleware
 app.add_middleware(ApiAccessLogMiddleware)
 
+# Compression. Nothing in front of uvicorn compresses (no CDN does it for us), so
+# the JS bundle went out at 1.5MB instead of ~0.4MB and JSON lists at ~9x their
+# gzipped size. Outermost, so the access log and the per-IP data budget keep
+# counting the uncompressed bytes the app produced. Starlette skips SSE, zip and
+# images on its own and flushes every chunk of a streamed response, so CSV
+# downloads still stream. Level 6: almost all of level 9's ratio at a fraction
+# of the CPU, which matters on the per-request JS bundle.
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+
 
 # Referrer policy. The /data console keeps the current query in the page URL so
 # it can be shared and reloaded — which means the browser's default policy
@@ -594,6 +605,7 @@ app.include_router(admin_nl_query_router)
 app.include_router(settlements_router)
 app.include_router(seo_router)
 app.include_router(site_stats_router)
+app.include_router(home_router)
 app.include_router(connector_router)
 app.include_router(cbs_router)
 app.include_router(cbs_ask_router)
