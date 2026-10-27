@@ -274,7 +274,7 @@ def test_a_failed_build_is_recorded_and_leaves_readers_alone(pg):
 def test_the_r2_reader_streams_text_with_a_bom_and_hebrew(monkeypatch):
     import io
 
-    raw = ("﻿pl_number,pl_name,geometry_wkt\n"
+    raw = ("\ufeffpl_number,pl_name,geometry_wkt\n"
            '"פת/1","שורה\nשנייה","POINT(34.8 32.08)"\n').encode("utf-8")
     closed = {}
 
