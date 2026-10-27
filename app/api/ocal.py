@@ -18,13 +18,19 @@ Endpoints (all public, rate-limited):
     GET  /api/ocal/content                 site CMS key/values
     GET  /api/ocal/download/source/{id}    single-diary CSV/JSON export
     POST /api/ocal/download/bulk           multi-diary ZIP export
+    GET  /api/ocal/owners                  diary owners
+    GET  /api/ocal/owners/detail?key=      one owner's diaries (+ expenses, when on)
+    GET  /api/ocal/owners/timeline?key=&from=&to=  meetings + expenses, day by day
 
 The Hebrew tsquery construction (geresh/gershayim stripping, prefix vs exact
 abbreviation matching, boolean AND/OR/NOT) mirrors Ocal's DiaryEvent model and
 must stay aligned with the ``search_vector`` trigger (Ocal migration 021).
 
-Not ported here: the MK-expenses layer (deferred) and the admin surface
-(app/api/ocal_admin.py, later phase).
+The owner layer (diary_source_owners, app/services/ocal_owners.py) and the
+contact-with-the-voter expenses (mk_expenses, app/services/ocal_mk_expenses.py,
+off until a data source is loaded — settings.ocal_mk_expenses_enabled) are OVER
+additions; ``owner=`` on /events and
+/calendar narrows to one owner's diaries. Admin: app/api/ocal_admin.py.
 """
 import csv
 import io
@@ -55,6 +61,26 @@ def _require_configured() -> None:
             status_code=503,
             detail="יומן לעם אינו זמין כרגע (OCAL_DATABASE_URL not configured).",
         )
+
+
+_owners_ok = False
+
+
+async def _owner_tables() -> bool:
+    """True once diary_source_owners / mk_expenses exist (created on first use)."""
+    global _owners_ok
+    if not _owners_ok:
+        try:
+            from app.services import ocal_mk_expenses
+            await ocal_mk_expenses.ensure_tables()
+            _owners_ok = True
+        except Exception:  # noqa: BLE001 — e.g. no DDL rights: owners just stay off
+            return False
+    return True
+
+
+def _owner_clause(a: "_Args", owner: str) -> str:
+    return f"e.source_id IN (SELECT source_id FROM diary_source_owners WHERE owner_key = {a.add(owner)})"
 
 
 def _valid_uuid(s: str) -> bool:
@@ -160,7 +186,7 @@ _FROM = "diary_events e JOIN diary_sources s ON e.source_id = s.id"
 
 async def _search_events(
     *, q, from_date, to_date, source_ids, location, participants,
-    entity_names, cross_ref_status, sort, offset, limit,
+    entity_names, cross_ref_status, sort, offset, limit, owner=None,
 ) -> tuple[list[dict], int]:
     a = _Args()
     where = ["e.is_active = true", "s.is_enabled = true"]
@@ -185,6 +211,8 @@ async def _search_events(
     if source_ids:
         phs = ",".join(a.add(_as_uuid(sid)) for sid in source_ids)
         where.append(f"e.source_id IN ({phs})")
+    if owner:
+        where.append(_owner_clause(a, owner))
     if location:
         where.append(f"e.location ILIKE {a.add('%' + location + '%')}")
     if participants:
@@ -243,6 +271,7 @@ async def list_events(
     participants: str | None = Query(None),
     entity_names: str | None = Query(None, description="'||'-separated names"),
     cross_ref_status: str | None = Query(None),
+    owner: str | None = Query(None, description="owner_key from /owners"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=500),
     sort: str | None = Query(None),
@@ -262,12 +291,14 @@ async def list_events(
     )
     effective_sort = sort or ("relevance" if q else "date_desc")
     offset = (page - 1) * per_page
+    if owner and not await _owner_tables():
+        owner = None
 
     rows, total = await _search_events(
         q=q, from_date=from_date, to_date=to_date, source_ids=src,
         location=location, participants=participants, entity_names=ents,
         cross_ref_status=cross_ref_status, sort=effective_sort,
-        offset=offset, limit=per_page,
+        offset=offset, limit=per_page, owner=owner,
     )
     return {
         "data": rows,
@@ -401,12 +432,22 @@ _SOURCE_SELECT = (
 )
 
 
+_SOURCE_OWNERS_COL = (
+    ", (SELECT json_agg(json_build_object('key', o.owner_key, 'label', o.owner_label, "
+    "'role', o.role, 'kind', o.kind) ORDER BY o.position) "
+    "FROM diary_source_owners o WHERE o.source_id = diary_sources.id) AS owners "
+)
+
+
 @router.get("/sources")
 @limiter.limit("60/minute")
 async def list_sources(request: Request):
     _require_configured()
+    sel = _SOURCE_SELECT
+    if await _owner_tables():
+        sel = sel.replace(" FROM diary_sources ", _SOURCE_OWNERS_COL + "FROM diary_sources ", 1)
     rows = await ocal_db.fetch(
-        _SOURCE_SELECT + "WHERE diary_sources.is_enabled = true ORDER BY diary_sources.name"
+        sel + "WHERE diary_sources.is_enabled = true ORDER BY diary_sources.name"
     )
     return {"data": [dict(r) for r in rows]}
 
@@ -454,7 +495,7 @@ def _calendar_window(date_str: str, view: str) -> tuple[str, str]:
     return d.isoformat(), d.isoformat()
 
 
-async def _events_by_date_range(from_d, to_d, source_ids, entity_names) -> list[dict]:
+async def _events_by_date_range(from_d, to_d, source_ids, entity_names, owner=None) -> list[dict]:
     a = _Args()
     where = [
         "e.is_active = true", "s.is_enabled = true",
@@ -463,6 +504,8 @@ async def _events_by_date_range(from_d, to_d, source_ids, entity_names) -> list[
     if source_ids:
         phs = ",".join(a.add(_as_uuid(sid)) for sid in source_ids)
         where.append(f"e.source_id IN ({phs})")
+    if owner:
+        where.append(_owner_clause(a, owner))
     if entity_names:
         norm = [n.strip().lower() for n in entity_names]
         phs = ",".join(a.add(n) for n in norm)
@@ -479,7 +522,7 @@ async def _events_by_date_range(from_d, to_d, source_ids, entity_names) -> list[
     return [dict(r) for r in rows]
 
 
-async def _counts_by_date_range(from_d, to_d, source_ids, entity_names) -> dict:
+async def _counts_by_date_range(from_d, to_d, source_ids, entity_names, owner=None) -> dict:
     a = _Args()
     where = [
         "e.is_active = true", "s.is_enabled = true",
@@ -488,6 +531,8 @@ async def _counts_by_date_range(from_d, to_d, source_ids, entity_names) -> dict:
     if source_ids:
         phs = ",".join(a.add(_as_uuid(sid)) for sid in source_ids)
         where.append(f"e.source_id IN ({phs})")
+    if owner:
+        where.append(_owner_clause(a, owner))
     if entity_names:
         norm = [n.strip().lower() for n in entity_names]
         phs = ",".join(a.add(n) for n in norm)
@@ -512,6 +557,7 @@ async def calendar(
     source_ids: str | None = Query(None),
     entity_names: str | None = Query(None, description="comma-separated names"),
     max_date: str | None = Query(None),
+    owner: str | None = Query(None, description="owner_key from /owners"),
 ):
     _require_configured()
     _check_date("date", date)
@@ -526,8 +572,10 @@ async def calendar(
     if max_date and to_d > max_date:
         to_d = max_date
 
-    events = await _events_by_date_range(from_d, to_d, src, ents)
-    counts = await _counts_by_date_range(from_d, to_d, src, ents)
+    if owner and not await _owner_tables():
+        owner = None
+    events = await _events_by_date_range(from_d, to_d, src, ents, owner)
+    counts = await _counts_by_date_range(from_d, to_d, src, ents, owner)
     return {"events": events, "date_range": {"from": from_d, "to": to_d}, "event_counts": counts}
 
 
@@ -681,6 +729,271 @@ async def content(request: Request):
         except (ValueError, TypeError):
             out[r["key"]] = r["value"]
     return {"content": out}
+
+
+# ---------------------------------------------------------------------------
+# Owners (diary owners + contact-with-the-voter expenses, when enabled)
+# ---------------------------------------------------------------------------
+
+# Per (owner, file): the category rows when there are any, else the file's own
+# total column — never both, so a total is not double-counted.
+_EXPENSE_PER_FILE = """
+    SELECT owner_key, file_id, year,
+           CASE WHEN bool_or(NOT is_total) THEN sum(amount) FILTER (WHERE NOT is_total)
+                ELSE sum(amount) END AS amount
+    FROM mk_expenses {where} GROUP BY owner_key, file_id, year
+"""
+
+_owners_cache: tuple[list, float] | None = None
+_OWNERS_TTL = 5 * 60
+
+
+def invalidate_owners_cache() -> None:
+    """Called by the admin after a rebuild or an expenses import."""
+    global _owners_cache
+    _owners_cache = None
+
+
+def _expenses_on() -> bool:
+    from app.services import ocal_mk_expenses
+    return ocal_mk_expenses.is_enabled()
+
+
+def _expense_ctes() -> str:
+    """The owners query's expense side — empty while the layer is off."""
+    if not _expenses_on():
+        return ("x AS (SELECT NULL::text AS owner_key, NULL::numeric AS expense_total, "
+                "NULL::int[] AS expense_years, NULL::text AS mk_name WHERE false)")
+    return f"""f AS ({_EXPENSE_PER_FILE.format(where="")}),
+        x AS (
+            SELECT f.owner_key, sum(f.amount) AS expense_total,
+                   array_agg(DISTINCT f.year ORDER BY f.year)
+                     FILTER (WHERE f.year IS NOT NULL) AS expense_years,
+                   (SELECT min(m.mk_name) FROM mk_expenses m WHERE m.owner_key = f.owner_key) AS mk_name
+            FROM f GROUP BY f.owner_key)"""
+
+
+async def _owners_list() -> list[dict]:
+    global _owners_cache
+    if _owners_cache and time.time() < _owners_cache[1]:
+        return _owners_cache[0]
+    rows = await ocal_db.fetch(f"""
+        WITH d AS (
+            SELECT o.owner_key, min(o.owner_label) AS label, min(o.kind) AS kind,
+                   count(DISTINCT o.source_id) AS diary_count,
+                   sum(s.total_events) AS event_count,
+                   min(s.first_event_date) AS first_event_date,
+                   max(s.last_event_date) AS last_event_date,
+                   (array_agg(o.role ORDER BY s.last_event_date DESC NULLS LAST)
+                      FILTER (WHERE o.role IS NOT NULL))[1] AS role
+            FROM diary_source_owners o
+            JOIN diary_sources s ON s.id = o.source_id AND s.is_enabled
+            GROUP BY o.owner_key),
+        {_expense_ctes()}
+        SELECT coalesce(d.owner_key, x.owner_key) AS key,
+               coalesce(d.label, x.mk_name) AS label,
+               coalesce(d.kind, 'person') AS kind,
+               d.role, coalesce(d.diary_count, 0) AS diary_count,
+               coalesce(d.event_count, 0) AS event_count,
+               d.first_event_date, d.last_event_date,
+               x.expense_total, x.expense_years, x.mk_name
+        FROM d FULL OUTER JOIN x ON x.owner_key = d.owner_key
+        ORDER BY coalesce(d.event_count, 0) DESC, label
+    """)
+    data = [dict(r) for r in rows]
+    for r in data:
+        if r["expense_total"] is not None:
+            r["expense_total"] = float(r["expense_total"])
+    _owners_cache = (data, time.time() + _OWNERS_TTL)
+    return data
+
+
+@router.get("/owners")
+@limiter.limit("60/minute")
+async def list_owners(
+    request: Request,
+    q: str | None = Query(None),
+    kind: str | None = Query(None, description="person|subject"),
+    has: str | None = Query(None, description="diaries|expenses|both"),
+):
+    """Every diary owner — a person, or the office of a diary that names nobody —
+    with counts; plus, when the expenses layer is on, each person with
+    contact-with-the-voter expenses."""
+    _require_configured()
+    if not await _owner_tables():
+        return {"data": [], "expenses_enabled": False}
+    data = await _owners_list()
+    if kind:
+        data = [r for r in data if r["kind"] == kind]
+    if has == "diaries":
+        data = [r for r in data if r["diary_count"]]
+    elif has == "expenses":
+        data = [r for r in data if r["expense_total"] is not None]
+    elif has == "both":
+        data = [r for r in data if r["diary_count"] and r["expense_total"] is not None]
+    if q:
+        from app.services.ocal_owners import name_tokens
+        qt = name_tokens(q)
+        data = [r for r in data
+                if all(any(t2.startswith(t) for t2 in name_tokens(f"{r['label']} {r.get('mk_name') or ''} {r.get('role') or ''}"))
+                       for t in qt)]
+    return {"data": data, "expenses_enabled": _expenses_on()}
+
+
+@router.get("/owners/detail")
+@limiter.limit("60/minute")
+async def owner_detail(request: Request, key: str = Query(..., min_length=3, max_length=300)):
+    """One owner: their diaries, and (when the layer is on) their
+    contact-with-the-voter expenses."""
+    _require_configured()
+    if not await _owner_tables():
+        raise HTTPException(404, "Owner not found")
+    owner = next((r for r in await _owners_list() if r["key"] == key), None)
+    if owner is None:
+        raise HTTPException(404, "Owner not found")
+    sources = await ocal_db.fetch(
+        "SELECT s.id, s.name, s.color, s.total_events, s.first_event_date, s.last_event_date, "
+        "s.dataset_url, o.role, "
+        "(SELECT json_agg(json_build_object('key', o2.owner_key, 'label', o2.owner_label) "
+        "  ORDER BY o2.position) FROM diary_source_owners o2 "
+        "  WHERE o2.source_id = s.id AND o2.owner_key <> o.owner_key) AS co_owners "
+        "FROM diary_source_owners o JOIN diary_sources s ON s.id = o.source_id "
+        "WHERE o.owner_key = $1 AND s.is_enabled "
+        "ORDER BY s.first_event_date DESC NULLS LAST, s.name", key)
+    if not _expenses_on():
+        return {"owner": owner, "sources": [dict(r) for r in sources], "expenses": None}
+    by_year = await ocal_db.fetch(
+        f"SELECT f.year, sum(f.amount) AS amount, count(DISTINCT f.file_id) AS files, "
+        # A year the Knesset has reported only part of (its latest transaction,
+        # across all MKs, is before December) — e.g. the January–June file.
+        "(SELECT max(m.expense_date) < make_date(f.year, 12, 1) FROM mk_expenses m "
+        "  WHERE m.year = f.year AND m.expense_date IS NOT NULL) AS partial "
+        f"FROM ({_EXPENSE_PER_FILE.format(where='WHERE owner_key = $1')}) f "
+        "GROUP BY f.year ORDER BY f.year", key)
+    by_category = await ocal_db.fetch(
+        "SELECT category, sum(amount) AS amount, count(*) AS items, "
+        "array_agg(DISTINCT year ORDER BY year) FILTER (WHERE year IS NOT NULL) AS years "
+        "FROM mk_expenses WHERE owner_key = $1 AND NOT is_total "
+        "GROUP BY category ORDER BY sum(amount) DESC", key)
+    items = await ocal_db.fetch(
+        "SELECT m.year, m.mk_name, m.faction, m.category, m.description, m.amount, m.is_total, "
+        "m.supplier, m.expense_date, m.receipt_url, "
+        "f.title AS file_title, f.file_name, "
+        "CASE WHEN f.source_url LIKE 'http%' THEN f.source_url "
+        "     WHEN f.source_url LIKE 'over:%' THEN 'https://www.over.org.il/versions/' "
+        "          || split_part(f.source_url, ':', 2) END AS file_url "
+        "FROM mk_expenses m JOIN mk_expense_files f ON f.id = m.file_id "
+        "WHERE m.owner_key = $1 "
+        "ORDER BY m.year DESC NULLS LAST, m.expense_date DESC NULLS LAST, m.amount DESC "
+        "LIMIT 3000", key)
+    n_items = await ocal_db.fetchval("SELECT count(*) FROM mk_expenses WHERE owner_key = $1", key)
+
+    def _f(rows):
+        out = [dict(r) for r in rows]
+        for r in out:
+            if r.get("amount") is not None:
+                r["amount"] = float(r["amount"])
+        return out
+
+    return {
+        "owner": owner,
+        "sources": [dict(r) for r in sources],
+        "expenses": {
+            "total": owner["expense_total"],
+            "by_year": _f(by_year),
+            "by_category": _f(by_category),
+            "items": _f(items),
+            "item_count": int(n_items or 0),
+        },
+    }
+
+
+_TIMELINE_MAX_DAYS = 92
+
+
+@router.get("/owners/timeline")
+@limiter.limit("60/minute")
+async def owner_timeline(
+    request: Request,
+    key: str = Query(..., min_length=3, max_length=300),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+):
+    """One owner's diary meetings and contact-with-the-voter expenses, day by
+    day, over a window (up to 92 days) — so the two can be read side by side.
+    Without a window: the latest month that has both a meeting and an expense
+    (else the latest month with meetings)."""
+    from datetime import date, timedelta
+    _require_configured()
+    _check_date("from", from_date)
+    _check_date("to", to_date)
+    if not await _owner_tables():
+        raise HTTPException(404, "Owner not found")
+    owner = next((r for r in await _owners_list() if r["key"] == key), None)
+    if owner is None:
+        raise HTTPException(404, "Owner not found")
+    expenses_on = _expenses_on()
+    src_sql = "SELECT source_id FROM diary_source_owners WHERE owner_key = $1"
+
+    if not from_date or not to_date:
+        month = None
+        if expenses_on:
+            month = await ocal_db.fetchval(
+                "SELECT max(m) FROM ("
+                "  SELECT date_trunc('month', e.event_date) AS m FROM diary_events e "
+                f"  WHERE e.is_active AND e.source_id IN ({src_sql}) "
+                "  INTERSECT "
+                "  SELECT date_trunc('month', x.expense_date) FROM mk_expenses x "
+                "  WHERE x.owner_key = $1 AND x.expense_date IS NOT NULL) t", key)
+        if month is None:
+            month = await ocal_db.fetchval(
+                "SELECT date_trunc('month', max(e.event_date)) FROM diary_events e "
+                f"WHERE e.is_active AND e.source_id IN ({src_sql})", key)
+        if month is None:
+            return {"owner": owner, "from": None, "to": None, "days": [],
+                    "expenses_enabled": expenses_on}
+        start = month.date() if hasattr(month, "date") else month
+        nxt = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
+        from_d, to_d = start, nxt - timedelta(days=1)
+    else:
+        from_d, to_d = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        if to_d < from_d:
+            from_d, to_d = to_d, from_d
+        if (to_d - from_d).days >= _TIMELINE_MAX_DAYS:
+            to_d = from_d + timedelta(days=_TIMELINE_MAX_DAYS - 1)
+
+    events = await ocal_db.fetch(
+        "SELECT e.id, e.event_date, e.start_time, e.end_time, e.title, e.location, "
+        "e.participants, e.dataset_link, s.name AS source_name, s.color AS source_color "
+        "FROM diary_events e JOIN diary_sources s ON s.id = e.source_id "
+        f"WHERE e.is_active AND s.is_enabled AND e.source_id IN ({src_sql}) "
+        "AND e.event_date BETWEEN $2 AND $3 ORDER BY e.event_date, e.start_time",
+        key, from_d, to_d)
+    expenses = []
+    if expenses_on:
+        expenses = await ocal_db.fetch(
+            "SELECT expense_date, year, category, supplier, description, amount, receipt_url "
+            "FROM mk_expenses WHERE owner_key = $1 AND expense_date BETWEEN $2 AND $3 "
+            "ORDER BY expense_date, amount DESC", key, from_d, to_d)
+
+    days: dict = {}
+    for e in events:
+        d = e["event_date"]
+        d = d.date() if hasattr(d, "date") else d
+        days.setdefault(d.isoformat(), {"events": [], "expenses": []})["events"].append(dict(e))
+    for x in expenses:
+        row = dict(x)
+        row["amount"] = float(row["amount"])
+        days.setdefault(x["expense_date"].isoformat(), {"events": [], "expenses": []})["expenses"].append(row)
+    out = [{"date": d, **v, "expense_total": sum(x["amount"] for x in v["expenses"])}
+           for d, v in sorted(days.items())]
+    return {
+        "owner": owner, "from": from_d.isoformat(), "to": to_d.isoformat(),
+        "expenses_enabled": expenses_on, "days": out,
+        "totals": {"events": len(events), "expenses": len(expenses),
+                   "expense_amount": sum(float(x["amount"]) for x in expenses),
+                   "days_with_both": sum(1 for d in out if d["events"] and d["expenses"])},
+    }
 
 
 # ---------------------------------------------------------------------------

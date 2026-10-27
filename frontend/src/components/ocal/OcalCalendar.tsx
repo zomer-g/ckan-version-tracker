@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ocal, OcalEvent } from "../../api/client";
 import { fmtTime, HE_DOW, HE_MONTHS, isoDate } from "./ocalUtils";
+import OwnerSelect, { loadOwners } from "./OwnerSelect";
 
 function parseDate(s: string): Date {
   const [y, m, d] = s.slice(0, 10).split("-").map(Number);
@@ -22,16 +24,38 @@ export default function OcalCalendar() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // ?owner= narrows the calendar to one diary owner's diaries (see OcalOwners).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const owner = searchParams.get("owner") || "";
+  const setOwner = (key: string) => {
+    const sp = new URLSearchParams(searchParams);
+    if (key) sp.set("owner", key);
+    else sp.delete("owner");
+    setSearchParams(sp);
+  };
+  // Picking an owner opens their most recent month — this month is usually
+  // empty for a diary released a year late.
+  useEffect(() => {
+    if (!owner) return;
+    loadOwners().then((all) => {
+      const last = all.find((o) => o.key === owner)?.last_event_date;
+      if (last) {
+        const d = parseDate(last);
+        setSelected(null);
+        setCursor(new Date(d.getFullYear(), d.getMonth(), 1));
+      }
+    }).catch(() => {});
+  }, [owner]);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
     ocal
-      .calendar({ date: isoDate(cursor), view: "month" })
+      .calendar({ date: isoDate(cursor), view: "month", owner: owner || undefined })
       .then((r) => { setEvents(r.events); setRange(r.date_range); })
       .catch((e) => { setError(e?.message || "שגיאה בטעינת לוח השנה"); setEvents([]); setRange(null); })
       .finally(() => setLoading(false));
-  }, [cursor]);
+  }, [cursor, owner]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -81,6 +105,7 @@ export default function OcalCalendar() {
         <strong style={{ fontSize: "1.05rem", marginInlineStart: "0.5rem" }}>
           {HE_MONTHS[cursor.getMonth()]} {cursor.getFullYear()}
         </strong>
+        <OwnerSelect value={owner} onChange={setOwner} />
         <span className="text-sm text-muted" style={{ marginInlineStart: "auto" }}>
           {loading ? "טוען…" : `${events.length.toLocaleString()} אירועים בחודש`}
         </span>
@@ -130,7 +155,7 @@ export default function OcalCalendar() {
         <div className="card" style={{ marginTop: "1rem", padding: "0.9rem" }}>
           <strong>{selected.split("-").reverse().join(".")}</strong>{" "}
           <span className="text-sm text-muted">· {selectedEvents.length} אירועים</span>
-          <ul style={{ margin: "0.6rem 0 0", padding: 0, listStyle: "none" }}>
+          <ul style={{ margin: "0.6rem 0 0", padding: 0, listStyle: "none", overflowWrap: "anywhere" }}>
             {selectedEvents.map((ev) => (
               <li key={ev.id} style={{ padding: "0.4rem 0", borderTop: "1px solid var(--border)", display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
                 <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: ev.source_color || "#3B82F6", flex: "0 0 auto" }} />
