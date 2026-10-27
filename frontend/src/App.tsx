@@ -1,6 +1,6 @@
 import { Routes, Route, useLocation, useNavigationType } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef, lazy, Suspense } from "react";
+import { useEffect, useRef, Suspense } from "react";
 import { sources } from "./api/client";
 import { primeRegistryBadges } from "./utils/sourceBadge";
 import { AuthProvider } from "./auth/AuthContext";
@@ -9,42 +9,45 @@ import Navbar from "./components/Navbar";
 import { RouteAnnouncer } from "./components/a11y";
 import SessionWarning from "./components/a11y/SessionWarning";
 import Footer from "./components/Footer";
-import LoginPage from "./pages/LoginPage";
 import HomePage from "./pages/HomePage";
-import LookupPage from "./pages/LookupPage";
-import VersionsPage from "./pages/VersionsPage";
-import AppendArchivePage from "./pages/AppendArchivePage";
-import AdminPage from "./pages/AdminPage";
-import AboutPage from "./pages/AboutPage";
-import SecurityPage from "./pages/SecurityPage";
-import RationalePage from "./pages/RationalePage";
-import DecisionAnalysisPage from "./pages/DecisionAnalysisPage";
-import ApiPage from "./pages/ApiPage";
-import ProjectImportPage from "./pages/ProjectImportPage";
-import OcalPage from "./pages/OcalPage";
-import OcoiPage from "./pages/OcoiPage";
-import NadlanPage from "./pages/NadlanPage";
-import DealsPage from "./pages/DealsPage";
-import PricesPage from "./pages/PricesPage";
-import QuestionsPage from "./pages/QuestionsPage";
-import OrganizationsPage from "./pages/OrganizationsPage";
-import OrganizationDetailPage from "./pages/OrganizationDetailPage";
-import TagsPage from "./pages/TagsPage";
-import TagDetailPage from "./pages/TagDetailPage";
-import SourcesPage from "./pages/SourcesPage";
-import SourceDetailPage from "./pages/SourceDetailPage";
-import CbsPage from "./pages/CbsPage";
-import CbsFeedbackPage from "./pages/CbsFeedbackPage";
-import KnessetDbPage from "./pages/KnessetDbPage";
-import DataSqlPage from "./pages/DataSqlPage";
-import DataExplorePage from "./pages/DataExplorePage";
-import DataGuidePage from "./pages/DataGuidePage";
-import SettlementNormalizePage from "./pages/SettlementNormalizePage";
-// Lazy: the growth page pulls Leaflet + the streaming JSON parser, ~60 KB
-// gzipped. Other pages should not pay that cost.
-const GrowthPage = lazy(() => import("./pages/GrowthPage"));
-// Lazy: the Knesset SQL guide pulls the marked renderer (~15 KB gzipped).
-const KnessetGuidePage = lazy(() => import("./pages/KnessetGuidePage"));
+import { lazyPage } from "./utils/lazyPage";
+// Every page but the home page is its own chunk, fetched on first visit. The
+// single bundle used to carry all ~35 pages (1.5MB, ~420KB gzipped), so the
+// landing page downloaded and parsed the SQL console, the Knesset tools and
+// the admin screens before showing anything. The home page stays eager: it is
+// where most visits start, and a second round-trip there would only add delay.
+const LoginPage = lazyPage(() => import("./pages/LoginPage"));
+const LookupPage = lazyPage(() => import("./pages/LookupPage"));
+const VersionsPage = lazyPage(() => import("./pages/VersionsPage"));
+const AppendArchivePage = lazyPage(() => import("./pages/AppendArchivePage"));
+const AdminPage = lazyPage(() => import("./pages/AdminPage"));
+const AboutPage = lazyPage(() => import("./pages/AboutPage"));
+const SecurityPage = lazyPage(() => import("./pages/SecurityPage"));
+const RationalePage = lazyPage(() => import("./pages/RationalePage"));
+const DecisionAnalysisPage = lazyPage(() => import("./pages/DecisionAnalysisPage"));
+const ApiPage = lazyPage(() => import("./pages/ApiPage"));
+const ProjectImportPage = lazyPage(() => import("./pages/ProjectImportPage"));
+const OcalPage = lazyPage(() => import("./pages/OcalPage"));
+const OcoiPage = lazyPage(() => import("./pages/OcoiPage"));
+const NadlanPage = lazyPage(() => import("./pages/NadlanPage"));
+const DealsPage = lazyPage(() => import("./pages/DealsPage"));
+const PricesPage = lazyPage(() => import("./pages/PricesPage"));
+const QuestionsPage = lazyPage(() => import("./pages/QuestionsPage"));
+const OrganizationsPage = lazyPage(() => import("./pages/OrganizationsPage"));
+const OrganizationDetailPage = lazyPage(() => import("./pages/OrganizationDetailPage"));
+const TagsPage = lazyPage(() => import("./pages/TagsPage"));
+const TagDetailPage = lazyPage(() => import("./pages/TagDetailPage"));
+const SourcesPage = lazyPage(() => import("./pages/SourcesPage"));
+const SourceDetailPage = lazyPage(() => import("./pages/SourceDetailPage"));
+const CbsPage = lazyPage(() => import("./pages/CbsPage"));
+const CbsFeedbackPage = lazyPage(() => import("./pages/CbsFeedbackPage"));
+const KnessetDbPage = lazyPage(() => import("./pages/KnessetDbPage"));
+const DataSqlPage = lazyPage(() => import("./pages/DataSqlPage"));
+const DataExplorePage = lazyPage(() => import("./pages/DataExplorePage"));
+const DataGuidePage = lazyPage(() => import("./pages/DataGuidePage"));
+const SettlementNormalizePage = lazyPage(() => import("./pages/SettlementNormalizePage"));
+const GrowthPage = lazyPage(() => import("./pages/GrowthPage"));
+const KnessetGuidePage = lazyPage(() => import("./pages/KnessetGuidePage"));
 
 export default function App() {
   const { t, i18n } = useTranslation();
@@ -126,6 +129,9 @@ export default function App() {
           reads the new page title once the route has set it (WCAG 4.1.3). */}
       <RouteAnnouncer />
       <main id="main-content" ref={mainRef} tabIndex={-1} style={{ outline: "none", flex: 1 }}>
+        {/* One boundary for every lazy page. Inside <main>, so the navbar and
+            footer stay put while a page's chunk loads. */}
+        <Suspense fallback={<div className="loading" role="status">{t("common.loading")}</div>}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           {/* Shareable deep link → the dataset's versions page if tracked, the
@@ -161,11 +167,7 @@ export default function App() {
           <Route path="/knesset" element={<KnessetDbPage />} />
           <Route
             path="/knesset/guide"
-            element={
-              <Suspense fallback={<div className="loading" role="status">{t("common.loading")}</div>}>
-                <KnessetGuidePage />
-              </Suspense>
-            }
+            element={<KnessetGuidePage />}
           />
           <Route path="/api" element={<ApiPage />} />
           {/* A first-party page, so it gets its own component rather than the
@@ -189,11 +191,7 @@ export default function App() {
           <Route path="/rationale/:key" element={<DecisionAnalysisPage />} />
           <Route
             path="/growth"
-            element={
-              <Suspense fallback={<div className="loading" role="status">{t("common.loading")}</div>}>
-                <GrowthPage />
-              </Suspense>
-            }
+            element={<GrowthPage />}
           />
           <Route
             path="/admin"
@@ -205,6 +203,7 @@ export default function App() {
           />
           <Route path="/admin/login" element={<LoginPage />} />
         </Routes>
+        </Suspense>
       </main>
       <Footer />
       <SessionWarning />
