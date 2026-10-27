@@ -44,7 +44,7 @@ ROWS = [
 ]
 
 
-# ── the CSV side ──────────────────────────────────────────────────────────────
+# ── the CSV side ──
 def test_a_feature_row_keeps_attributes_and_drops_plumbing():
     [(header, batch)] = list(L.iter_csv_batches(iter(_csv(ROWS[:1]))))
     key, wkt, attrs = batch[0]
@@ -92,7 +92,7 @@ def test_every_cube_dataset_has_a_radius():
     assert nadlan_layers.radius_for_dataset("not-a-cube") == 0
 
 
-# ── the build, against a real PostGIS ─────────────────────────────────────────
+# ── the build, against a real PostGIS ──
 PG = os.environ.get("NADLAN_PG_TEST_URL")
 
 

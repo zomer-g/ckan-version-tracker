@@ -140,7 +140,7 @@ async def ensure_tables() -> None:
                     logger.debug("layer links: grant on %s failed", t, exc_info=True)
 
 
-# ── reading a layer ───────────────────────────────────────────────────────────
+# ── reading a layer ──
 def feature_key(row: list[str]) -> str:
     """A content hash of the source row. Stable across rebuilds of the same
     version, and the same feature in two versions only collides if it is
@@ -215,7 +215,7 @@ async def _next(gen):
     return await asyncio.to_thread(next, gen, None)
 
 
-# ── which version, which labels ───────────────────────────────────────────────
+# ── which version, which labels ──
 async def latest_version(dataset_id: str) -> tuple[int, dict] | None:
     """``(version_number, resource_mappings)`` of the newest version that
     carries an index CSV, or None."""
@@ -235,7 +235,7 @@ async def latest_version(dataset_id: str) -> tuple[int, dict] | None:
     return None
 
 
-# ── the build ─────────────────────────────────────────────────────────────────
+# ── the build ──
 _build_lock = asyncio.Lock()
 
 
@@ -470,7 +470,7 @@ async def refresh_stale() -> list[dict]:
     return out
 
 
-# ── reading the crosswalk ─────────────────────────────────────────────────────
+# ── reading the crosswalk ──
 _GEN_TTL = 60.0
 _gen_cache: tuple[float, dict[str, dict]] | None = None
 
