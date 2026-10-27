@@ -745,6 +745,24 @@ Two grains:
 The hit counts on closed cubes come from one `UNION ALL` of GiST bbox probes, so
 the page can show "3" without reading a single attribute.
 
+**Where a layer is found.** `idx` first, then `public.append_*` — both carry a
+`geom` with a GiST index. The national רצף layers (רצף מגרשי תב"ע: 1,092,211
+plots) are too large for the idx mirror's size gate, so the archive table can be
+their only geometry. An archive table keeps every version of a row, so it is
+read with `last_seen IS NULL` (current rows only), and identical features are
+collapsed.
+
+**Links.** A field whose value is a URL opens it. מבא"ת addresses a plan by its
+*internal* id (`mavat.iplan.gov.il/SV4/1/{id}/310`), never by the public plan
+number, so a plan link is built only from a field named as that id (`pl_id`,
+`mavat_code`, …) holding a 10-digit value — no link rather than a guessed one.
+
+Planning cubes since the first cut: מבא"ת's own blue lines (lay 203, 37,708
+plans), משהב"ש plots (335), municipal plan boundaries and plots, every
+planning-area layer, מחיר מפוקח plots (200558), and a קדסטר ושיפוט group —
+cadastre processes (240040), תצ"ר (81), jurisdiction (212192), village lands
+(187).
+
 **Not yet verified against production.** The registry was built from the OVER
 catalog. This session could not reach the SQL console, so two things should be
 checked on a live parcel: that each layer's `idx` table has a `geom` (a layer

@@ -222,3 +222,69 @@ def test_parcel_layers_carry_probe_counts(client, monkeypatch):
     by_id = {c["id"]: c for c in body["data"]}
     assert by_id["taba_bounds"]["hits"] == 3
     assert by_id["taba_plots"]["hits"] is None   # not on this deployment
+
+
+# ── where a layer is found, and what links it yields ──────────────────────────
+@pytest.mark.asyncio
+async def test_a_layer_only_in_the_archive_table_is_still_found(monkeypatch):
+    # The national רצף layers are too large for the idx mirror; their geometry
+    # lives on public.append_*. A cube that looked in idx alone missed them.
+    _stub_tables(monkeypatch, public={
+        "append_govmap_11_dd13a381_68b8e2fe": [{"name": "pl_number"}, {"name": "geom"}],
+        "not_an_append_table_2156f30e": [{"name": "geom"}],
+    })
+    cat = {c["id"]: c for c in await nadlan_layers.catalog()}
+    assert cat["taba_plots"]["available"] is True
+    assert cat["taba_bounds"]["available"] is False   # only append_* tables count
+    seen = {}
+
+    async def _fetch(sql, *args):
+        seen["sql"] = sql
+        return []
+
+    monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    out = await nadlan_layers.spatial_cube(nadlan_layers.cube("taba_plots"), _PARCEL)
+    assert '"public"."append_govmap_11_dd13a381_68b8e2fe"' in seen["sql"]
+    assert out["sources"][0]["table"] == "public.append_govmap_11_dd13a381_68b8e2fe"
+
+
+@pytest.mark.asyncio
+async def test_the_index_mirror_wins_over_the_archive_table(monkeypatch):
+    _stub_tables(monkeypatch,
+                 idx={_TABA: [{"name": "pl_number"}, {"name": "geom"}]},
+                 public={"append_govmap_357_d9a9ad35_2156f30e": [{"name": "geom"}]})
+    [(_, schema, table, _)] = await nadlan_layers._resolve(nadlan_layers.cube("taba_bounds"))
+    assert (schema, table) == ("idx", _TABA)
+
+
+@pytest.mark.parametrize("key,value,url", [
+    ("pl_url", "https://mavat.iplan.gov.il/SV4/1/2000343621/310",
+     "https://mavat.iplan.gov.il/SV4/1/2000343621/310"),
+    ("mavat_code", "2000343621", "https://mavat.iplan.gov.il/SV4/1/2000343621/310"),
+    ("pl_id", "4005381140", "https://mavat.iplan.gov.il/SV4/1/4005381140/310"),
+    # a plan NUMBER is not an id, and an id-shaped value in another field is
+    # not one either: no link rather than a link to the wrong plan
+    ("pl_number", "קא/300", None),
+    ("area_dunam", "2000343621", None),
+    ("pl_id", "12345", None),
+])
+def test_links_are_built_only_from_what_is_published_as_one(key, value, url):
+    assert nadlan_layers._link_for(key, value) == url
+
+
+@pytest.mark.asyncio
+async def test_an_archive_table_answers_with_current_rows_only(monkeypatch):
+    _stub_tables(monkeypatch, public={"append_govmap_11_dd13a381_68b8e2fe": [
+        {"name": "pl_number"}, {"name": "first_seen"}, {"name": "last_seen"}, {"name": "geom"}]})
+    seen = {}
+
+    async def _fetch(sql, *args):
+        seen["sql"] = sql
+        return [{"pl_number": "פת/1", "__distance_m": 0},
+                {"pl_number": "פת/1", "__distance_m": 0}]
+
+    monkeypatch.setattr(nadlan_query, "_fetch", _fetch)
+    out = await nadlan_layers.spatial_cube(nadlan_layers.cube("taba_plots"), _PARCEL)
+    assert "l.last_seen IS NULL" in seen["sql"]
+    assert "last_seen" not in seen["sql"].split("FROM")[0]   # not shown as a field
+    assert out["count"] == 1

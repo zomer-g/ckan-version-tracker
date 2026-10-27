@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 
 from app.services import append_store, column_aliases, nadlan_query
@@ -74,6 +75,10 @@ _NOISE_COLS = {
 # in the comment so the GovMap source can be found by hand.
 _SPATIAL: list[tuple[str, str, str, list[str], int, str]] = [
     # תכנון
+    ("mavat_plans", "תכנון", 'תוכניות במבא"ת (קווים כחולים)',
+     ["b105ae22-a6f5-4cd0-b37e-c63dc5da40c3"], 0,       # lay=203, מינהל התכנון
+     'כל תוכנית במערכת מבא"ת של מינהל התכנון שהקו הכחול שלה מכיל את החלקה, '
+     'מאושרת או בהליך. זו השכבה הרשמית של גבולות התוכניות.'),
     ("taba_plots", "תכנון", 'מגרשי תב"ע',
      ["68b8e2fe-d757-4478-aa46-ee756001f6bc"], 0,       # lay=11, רמ"י
      'המגרש בתוכנית בניין העיר החלה על הנקודה: מספר תוכנית, ייעוד ושטח. '
@@ -85,6 +90,18 @@ _SPATIAL: list[tuple[str, str, str, list[str], int, str]] = [
     ("moch_taba", "תכנון", 'תב"ע — משרד הבינוי והשיכון',
      ["be92c1d4-4c75-4ac7-bccf-3d8259be30c3"], 0,       # lay=336
      'תוכניות של משרד הבינוי והשיכון החלות על הנקודה.'),
+    ("moch_plots", "תכנון", "מגרשים — משרד הבינוי והשיכון",
+     ["9ddf9d2f-d090-4596-8223-1bdbf4a0e305"], 0,       # lay=335
+     "המגרש בתוכניות של משרד הבינוי והשיכון שהחלקה בתוכו."),
+    ("plans_municipal", "תכנון", "גבולות תוכניות עירוניים",
+     ["f514654e-236f-495b-8019-64459d9dca09",           # גבעת זאב, lay=228069
+      "7c640256-ac4c-456c-ada8-385c981b395e"], 0,       # אשקלון (אינדקס ישן), lay=217578
+     "שכבות גבולות תוכניות שפרסמו רשויות מקומיות בודדות."),
+    ("plots_municipal", "תכנון", "מגרשים עירוניים",
+     ["c1a9e9cc-ef3a-49e1-b53a-852b3d2f47aa",           # נס ציונה, lay=211932
+      "e5e95a91-1346-4db0-b8df-1a2b30c685a5",           # מספרי מגרשים, lay=212147
+      "29b97437-a083-4b4b-9e4c-351046b2eaae"], 0,       # מגרשים, lay=221390
+     "שכבות מגרשים שפרסמו רשויות מקומיות בודדות."),
     ("land_use_municipal", "תכנון", "ייעודי קרקע עירוניים",
      ["07033f8e-dcbf-4e71-8c7a-b8e47bca2dc3",           # חיפה, lay=217697
       "79ee02fd-f90f-4bfa-be0c-a96c5283e356",           # כפר סבא, lay=228802
@@ -104,7 +121,10 @@ _SPATIAL: list[tuple[str, str, str, list[str], int, str]] = [
      ["d3965af2-c01f-44d1-a739-8a79a20d2c53"], 0,       # lay=268
      "תוכניות שמחייבות תקן בנייה ירוקה."),
     ("planning_area", "תכנון", "מרחב תכנון (ועדה מקומית)",
-     ["e9dbbf16-712b-49eb-979f-8f8a07df343b"], 0,       # lay=202
+     ["e9dbbf16-712b-49eb-979f-8f8a07df343b",           # lay=202
+      "3b674f5a-1e54-418e-aa98-49584640f4fb",           # תחום מרחב תכנון, lay=212191
+      "e28228c5-d8d6-4d66-bf93-cb340b9310d6",           # מרחב תכנון, lay=232240
+      "2d72d7cb-7cca-4832-ac68-bd69f545c443"], 0,       # ועדות אזוריות, lay=210772
      "הוועדה המקומית לתכנון ובנייה שבתחומה החלקה — הכתובת להיתרים ולהתנגדויות."),
     # רמ"י
     ("rmi_tender_plots", 'רמ"י', 'מכרזי רמ"י — מגרשים',
@@ -131,6 +151,22 @@ _SPATIAL: list[tuple[str, str, str, list[str], int, str]] = [
     ("rmi_appeals", 'רמ"י', "החלטות ועדת השגות על שומות",
      ["2abf506a-cd3d-4a71-843b-36daf0573fdc"], 300,     # lay=242719
      'החלטות ועדת ההשגות על שומות רמ"י בסביבה (300 מ׳).'),
+    ("controlled_price", 'רמ"י', "מגרשים במחיר מפוקח",
+     ["b85a7bc3-4455-4600-86f7-343b138fa6c7"], 300,     # lay=200558
+     "מגרשים שהוקצו לתוכנית מחיר מפוקח / דירה בהנחה, בתוך 300 מ׳."),
+    # קדסטר ושיפוט
+    ("cadastre_processes", "קדסטר ושיפוט", "תהליכי קדסטר",
+     ["295a8254-9135-44a2-814a-556350d69b8d"], 0,       # lay=240040
+     "הליכי הסדר, פרצלציה וחלוקה פתוחים בשטח. חלקה בתהליך עשויה לקבל מספר חדש."),
+    ("tazar", "קדסטר ושיפוט", 'תצ"ר — תוכניות לצורכי רישום',
+     ["469807c0-e92f-4cb2-84f8-4b80126b7a49"], 0,       # lay=81
+     'תצ"ר שגבולה מכיל את החלקה: התוכנית שלפיה נרשמה (או תירשם) החלוקה בטאבו.'),
+    ("jurisdiction", "קדסטר ושיפוט", "גבולות שיפוט",
+     ["fc1f42d4-58d7-42bc-884d-03c53f470214"], 0,       # lay=212192
+     "הרשות המקומית שבתחום השיפוט שלה החלקה — מי גובה ארנונה ומי נותן שירותים."),
+    ("village_lands", "קדסטר ושיפוט", "גבולות אדמות הכפרים",
+     ["3cb47dde-5bf6-4d2e-b93b-8c8bbeeb6841"], 0,       # lay=187
+     "גבולות אדמות הכפרים ההיסטוריים שהשטח היה חלק מהם."),
     # סביבה
     ("airport_noise", "סביבה", "רעש משדות תעופה",
      ["91b518f8-bf2c-4042-8fc3-092819c6213e"], 0,       # lay=301
@@ -191,77 +227,86 @@ def cube(cube_id: str) -> dict | None:
 
 # ── finding the tables ──
 _TABLES_TTL = 600.0
-_idx_cache: tuple[float, dict[str, tuple[str, list[str]]]] | None = None
-_crime_cache: tuple[float, list[str]] | None = None
+_cols_cache: dict[str, tuple[float, dict[str, list[str]]]] = {}
 _lock = asyncio.Lock()
 
 #: The crime register's signature. One table per year, every year the same.
 CRIME_COLS = {"StatisticAreaKod", "YeshuvKod", "StatisticGroup", "Year", "Quarter"}
+
+#: Where a GovMap layer can live with a PostGIS ``geom``, in order of preference.
+#: ``idx`` is the index mirror every layer is meant to reach; ``public.append_*``
+#: is the archive table, which ``append_geometry`` also gives a ``geom`` (and a
+#: GiST index) — and which is the ONLY copy for a layer too large for the
+#: mirror's size gate. The national רצף layers (1.09 M plots for רצף מגרשי תב"ע)
+#: are exactly that size, so a cube that looked in idx alone would report them
+#: missing while their geometry sat one schema over.
+GEO_SCHEMAS = ("idx", "public")
 
 
 def _id8(dataset_id: str) -> str:
     return dataset_id.replace("-", "")[:8].lower()
 
 
-async def _idx_tables() -> dict[str, tuple[str, list[str]]]:
-    """``{id8: (idx table, [columns])}`` for every idx table that has a ``geom``.
-
-    Keyed on the dataset-id suffix ``index_mirror.table_name`` gives every
-    mirror table, so a layer re-scraped under a new ckan_name still resolves."""
-    global _idx_cache
-    if _idx_cache and time.monotonic() - _idx_cache[0] < _TABLES_TTL:
-        return _idx_cache[1]
+async def _schema_cols(schema: str) -> dict[str, list[str]]:
+    """``{table: [columns]}`` for one schema, cached. One information_schema
+    read per schema per ten minutes, shared by every cube and the crime lookup."""
+    hit = _cols_cache.get(schema)
+    if hit and time.monotonic() - hit[0] < _TABLES_TTL:
+        return hit[1]
     async with _lock:
-        if _idx_cache and time.monotonic() - _idx_cache[0] < _TABLES_TTL:
-            return _idx_cache[1]
-        found: dict[str, tuple[str, list[str]]] = {}
+        hit = _cols_cache.get(schema)
+        if hit and time.monotonic() - hit[0] < _TABLES_TTL:
+            return hit[1]
         try:
-            cols = await append_store.schema_table_columns("idx")
-        except Exception:  # noqa: BLE001 — no idx schema on this deployment
-            logger.warning("nadlan layers: idx schema unavailable", exc_info=True)
-            cols = {}
-        for table, cs in cols.items():
-            names = [c["name"] if isinstance(c, dict) else c for c in cs]
+            raw = await append_store.schema_table_columns(schema)
+        except Exception:  # noqa: BLE001 — schema absent on this deployment
+            logger.warning("nadlan layers: schema %s unavailable", schema, exc_info=True)
+            raw = {}
+        cols = {t: [c["name"] if isinstance(c, dict) else c for c in cs]
+                for t, cs in raw.items()}
+        _cols_cache[schema] = (time.monotonic(), cols)
+        return cols
+
+
+async def _geo_tables() -> dict[str, tuple[str, str, list[str]]]:
+    """``{id8: (schema, table, [columns])}`` for every table that has a ``geom``.
+
+    Keyed on the dataset-id suffix both ``index_mirror.table_name`` and the
+    append tables end in, so a layer re-scraped under a new ckan_name still
+    resolves. The first schema in GEO_SCHEMAS that holds the layer wins."""
+    found: dict[str, tuple[str, str, list[str]]] = {}
+    for schema in GEO_SCHEMAS:
+        for table, names in sorted((await _schema_cols(schema)).items()):
             if "geom" not in names:
                 continue
+            if schema == "public" and not table.startswith("append_"):
+                continue
             suffix = table.rsplit("_", 1)[-1].lower()
-            if len(suffix) == 8:
-                found[suffix] = (table, names)
-        _idx_cache = (time.monotonic(), found)
-        return found
+            if len(suffix) == 8 and suffix not in found:
+                found[suffix] = (schema, table, names)
+    return found
 
 
 async def crime_tables() -> list[str]:
     """Every public table carrying the crime signature, newest year first is
     decided later (by the ``Year`` the rows carry, not by the table name)."""
-    global _crime_cache
-    if _crime_cache and time.monotonic() - _crime_cache[0] < _TABLES_TTL:
-        return _crime_cache[1]
-    try:
-        cols = await append_store.schema_table_columns("public")
-    except Exception:  # noqa: BLE001
-        cols = {}
-    tables = sorted(t for t, cs in cols.items()
-                    if CRIME_COLS <= {c["name"] if isinstance(c, dict) else c for c in cs})
-    _crime_cache = (time.monotonic(), tables)
-    return tables
+    return sorted(t for t, names in (await _schema_cols("public")).items()
+                  if CRIME_COLS <= set(names))
 
 
 def invalidate_caches() -> None:
-    global _idx_cache, _crime_cache
-    _idx_cache = None
-    _crime_cache = None
+    _cols_cache.clear()
 
 
-async def _resolve(c: dict) -> list[tuple[str, str, list[str]]]:
-    """``[(dataset_id, idx table, columns)]`` for the cube's datasets on hand."""
-    idx = await _idx_tables()
-    return [(ds, *idx[_id8(ds)]) for ds in c["datasets"] if _id8(ds) in idx]
+async def _resolve(c: dict) -> list[tuple[str, str, str, list[str]]]:
+    """``[(dataset_id, schema, table, columns)]`` for the cube's datasets on hand."""
+    geo = await _geo_tables()
+    return [(ds, *geo[_id8(ds)]) for ds in c["datasets"] if _id8(ds) in geo]
 
 
 async def catalog() -> list[dict]:
     """The registry plus whether each cube can be answered here."""
-    idx = await _idx_tables()
+    idx = await _geo_tables()
     crime = await crime_tables()
     out = []
     for c in registry():
@@ -286,6 +331,24 @@ def _deg(radius_m: float) -> float:
     return max(radius_m, 1.0) / 90_000.0
 
 
+#: מבא"ת addresses a plan by its INTERNAL id, never by the public plan number
+#: (``mavat.iplan.gov.il/SV4/1/{id}/310``; the number "קא/300" cannot be put in a
+#: URL). So a link is built only from a field that is named as that id and
+#: holds one — a guessed link to the wrong plan is worse than no link.
+_MAVAT_ID_KEY = re.compile(r"(^|_)(mavat|pl_?id|plan_?id|mavat_?code|id_?mavat)($|_)", re.I)
+_MAVAT_ID_VAL = re.compile(r"^[1-9][0-9]{9}$")
+MAVAT_PLAN_URL = "https://mavat.iplan.gov.il/SV4/1/{id}/310"
+
+
+def _link_for(key: str, value: str) -> str | None:
+    """A URL a field's value can be opened at, or None."""
+    if re.match(r"^https?://", value):
+        return value
+    if _MAVAT_ID_KEY.search(key) and _MAVAT_ID_VAL.match(value):
+        return MAVAT_PLAN_URL.format(id=value)
+    return None
+
+
 def _clean(v) -> str | None:
     if v is None:
         return None
@@ -295,6 +358,13 @@ def _clean(v) -> str | None:
     return s if len(s) <= MAX_VALUE_CHARS else s[:MAX_VALUE_CHARS] + "…"
 
 
+def _current(columns: list[str]) -> str:
+    """The rows still in the source. An append table keeps every version of a
+    row and closes the superseded ones with ``last_seen``; without this a
+    re-drawn plot would answer twice, its old outline beside its new one."""
+    return " AND l.last_seen IS NULL" if "last_seen" in columns else ""
+
+
 async def spatial_cube(c: dict, parcel: dict) -> dict:
     """The features of every dataset in the cube that touch this parcel."""
     tables = await _resolve(c)
@@ -302,7 +372,10 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
     aliases = await column_aliases.load_map()
     results: list[dict] = []
     sources: list[dict] = []
-    for ds, table, columns in tables:
+    # Identical features (the same row mirrored twice, or two versions that
+    # differ only in a dropped bookkeeping column) are one answer.
+    seen: set[tuple] = set()
+    for ds, schema, table, columns in tables:
         cols = [x for x in columns if x.lower() not in _NOISE_COLS]
         if not cols:
             continue
@@ -322,9 +395,9 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
                    round({_X}.ST_Distance(l.geom::{_X}.geography,
                                          k.centroid::{_X}.geography)::numeric, 1)
                      AS "__distance_m"
-            FROM k JOIN idx.{_qi(table)} l
+            FROM k JOIN {_qi(schema)}.{_qi(table)} l
               ON l.geom OPERATOR({_X}.&&) {_X}.ST_Expand(k.centroid, {_deg(radius)})
-             AND {pred}
+             AND {pred}{_current(columns)}
             ORDER BY "__distance_m"
             LIMIT {MAX_FEATURES}
         """
@@ -333,20 +406,26 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
         except Exception as e:  # noqa: BLE001 — one bad layer must not sink the cube
             logger.warning("nadlan layers: %s/%s failed: %s", c["id"], table, e)
             continue
-        labels = aliases.get(("idx", table), {})
-        console = (f'SELECT * FROM idx.{_qi(table)} l WHERE {_X}.ST_DWithin('
+        labels = aliases.get((schema, table), {})
+        console = (f'SELECT * FROM {_qi(schema)}.{_qi(table)} l WHERE {_X}.ST_DWithin('
                    f'l.geom::{_X}.geography, {_X}.ST_SetSRID({_X}.ST_MakePoint('
                    f'{parcel["lon"]}, {parcel["lat"]}), 4326)::{_X}.geography, '
                    f'{max(radius, 1.0)}) LIMIT 200') if parcel.get("lat") is not None else \
-            f"SELECT * FROM idx.{_qi(table)} LIMIT 200"
-        sources.append({"dataset_id": ds, "table": f"idx.{table}",
+            f"SELECT * FROM {_qi(schema)}.{_qi(table)} LIMIT 200"
+        sources.append({"dataset_id": ds, "table": f"{schema}.{table}",
                         "page_url": f"{nadlan_query.SITE}/versions/{ds}",
                         "row_url": nadlan_query._console_url(console)})
         for r in rows:
             fields = [{"key": k, "label": labels.get(k) or k, "value": _clean(r.get(k))}
                       for k in cols]
             fields = [f for f in fields if f["value"] is not None]
-            if fields:
+            for f in fields:
+                link = _link_for(f["key"], f["value"])
+                if link:
+                    f["url"] = link
+            sig = (ds, tuple((f["key"], f["value"]) for f in fields))
+            if fields and sig not in seen:
+                seen.add(sig)
                 results.append({"dataset_id": ds, "distance_m": float(r["__distance_m"] or 0),
                                 "fields": fields})
     results.sort(key=lambda f: f["distance_m"])
@@ -365,14 +444,14 @@ async def probe(parcel: dict) -> dict[str, int]:
         if c["grain"] != "spatial":
             continue
         radius = float(c["radius_m"] or 0)
-        for _, table, _cols in await _resolve(c):
+        for _, schema, table, cols in await _resolve(c):
             pred = (f"{_X}.ST_Intersects(l.geom, k.centroid)" if radius == 0 else
                     f"{_X}.ST_DWithin(l.geom::{_X}.geography, "
                     f"k.centroid::{_X}.geography, {radius})")
             parts.append(
                 f"SELECT {nadlan_query._lit(c['id'])} AS cube, count(*) AS n "
-                f"FROM k JOIN idx.{_qi(table)} l ON l.geom OPERATOR({_X}.&&) "
-                f"{_X}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}")
+                f"FROM k JOIN {_qi(schema)}.{_qi(table)} l ON l.geom OPERATOR({_X}.&&) "
+                f"{_X}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}{_current(cols)}")
     if not parts:
         return {}
     sql = (f"WITH k AS (SELECT centroid FROM public.{_qi(PARCELS_TABLE)} "

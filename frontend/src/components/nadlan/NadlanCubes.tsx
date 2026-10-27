@@ -161,7 +161,13 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
                 {f.fields.map((fl) => (
                   <div key={fl.key} style={{ display: "contents" }}>
                     <dt style={{ color: "var(--text-muted)", overflowWrap: "anywhere" }}>{fl.label}</dt>
-                    <dd style={{ margin: 0, overflowWrap: "anywhere" }}>{fl.value}</dd>
+                    <dd style={{ margin: 0, overflowWrap: "anywhere" }}>
+                      {fl.url
+                        ? <a href={fl.url} target="_blank" rel="noopener noreferrer">
+                            {fl.value}<span className="sr-only"> (נפתח בחלון חדש)</span>
+                          </a>
+                        : fl.value}
+                    </dd>
                   </div>
                 ))}
               </dl>

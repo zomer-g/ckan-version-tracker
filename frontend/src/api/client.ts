@@ -3416,7 +3416,9 @@ export interface NadlanCubeInfo {
 export interface NadlanCubeFeature {
   dataset_id: string;
   distance_m: number;
-  fields: { key: string; label: string; value: string }[];
+  /** `url` is set when the value can be opened: it is a URL, or a מבא"ת
+   *  plan id in a field named for one. */
+  fields: { key: string; label: string; value: string; url?: string }[];
 }
 
 export interface NadlanCrimeScope {
