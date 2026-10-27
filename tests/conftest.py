@@ -47,3 +47,19 @@ def _attach_auth_schema_on_sqlite(dbapi_connection, connection_record):
 def _jsonb_as_json_on_sqlite(type_, compiler, **kw):
     """SQLite has no JSONB; it stores JSON as text and has a JSON type name."""
     return "JSON"
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clear_catalog_caches():
+    """The public catalog caches are module-level (app/services/swr_cache.py);
+    without this, one test's rows would answer the next test's request."""
+    yield
+    import sys
+    for mod, attr in (("app.services.home_catalog", "cache"),
+                      ("app.api.datasets", "public_catalog_cache")):
+        m = sys.modules.get(mod)
+        if m is not None:
+            getattr(m, attr).clear()

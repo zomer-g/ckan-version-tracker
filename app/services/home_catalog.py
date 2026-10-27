@@ -13,27 +13,28 @@ search). The hero's datasets / versions / organizations totals come with it,
 computed over the same rows the old client-side reduce summed.
 
 Freshness: the catalog changes when a dataset is approved or deleted and when a
-poll writes a version, never per request. A TTL of a minute keeps it close;
-past the TTL the stale copy is still served while one background task rebuilds
-it, so no visitor waits on the multi-second build except on a cold process.
+poll writes a version, never per request. It sits in an SWRCache with a TTL of
+a minute: past the TTL the stale copy is still served while one background task
+rebuilds it, so no visitor waits on the build except on a cold process. Only
+the columns a card needs are loaded — the full rows carry large JSONB columns
+(scraper_config, field_flags, …) that made this the slowest query on the site.
 The pinned list is NOT cached — it is one tiny row, read per request, so an
 admin's pin shows on their very next load.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from app.models.organization import Organization
 from app.models.page_content import PageContent
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.services.swr_cache import SWRCache
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,6 @@ PAGE_SIZE = 24
 # this tag and are shown as ONE tile linking to /knesset when not searching.
 KNESSET_COMMITTEE_TAG = "ועדות כנסת"
 FEATURED_KEY = "featured_datasets"
-
-_TTL_SECONDS = 60.0
-_cache: dict | None = None
-_cache_at: float = 0.0
-_lock = asyncio.Lock()
-_refresh_task: asyncio.Task | None = None
 
 
 def _haystack(card: dict) -> str:
@@ -71,7 +66,18 @@ async def _build(db: AsyncSession) -> dict:
 
     result = await db.execute(
         select(TrackedDataset, Organization)
-        .options(selectinload(TrackedDataset.tags))
+        .options(
+            # What a card renders, and what _build_source_url reads.
+            load_only(
+                TrackedDataset.id, TrackedDataset.ckan_id, TrackedDataset.ckan_name,
+                TrackedDataset.title, TrackedDataset.organization,
+                TrackedDataset.organization_id, TrackedDataset.odata_dataset_id,
+                TrackedDataset.poll_interval, TrackedDataset.source_type,
+                TrackedDataset.source_url, TrackedDataset.resource_id,
+            ),
+            load_only(Organization.id, Organization.title),
+            selectinload(TrackedDataset.tags),
+        )
         .outerjoin(Organization, TrackedDataset.organization_id == Organization.id)
         .where(
             TrackedDataset.status.in_(["active", "pending"]),
@@ -122,31 +128,12 @@ async def _build(db: AsyncSession) -> dict:
     }
 
 
-async def _refresh_in_background() -> None:
-    global _cache, _cache_at
-    from app.database import async_session
-
-    try:
-        async with async_session() as db:
-            built = await _build(db)
-        _cache, _cache_at = built, time.monotonic()
-    except Exception:  # noqa: BLE001 — keep serving the stale copy
-        logger.warning("home_catalog: background refresh failed", exc_info=True)
+cache = SWRCache("home_catalog", _build, ttl_seconds=60.0)
 
 
 async def get_catalog(db: AsyncSession) -> dict:
-    """The cached slim catalog; built inline only when there is none at all."""
-    global _cache, _cache_at, _refresh_task
-    if _cache is not None:
-        if time.monotonic() - _cache_at >= _TTL_SECONDS and (
-            _refresh_task is None or _refresh_task.done()
-        ):
-            _refresh_task = asyncio.create_task(_refresh_in_background())
-        return _cache
-    async with _lock:
-        if _cache is None:
-            _cache, _cache_at = await _build(db), time.monotonic()
-        return _cache
+    """The cached slim catalog (see SWRCache for the freshness rules)."""
+    return await cache.get(db)
 
 
 async def featured_ids(db: AsyncSession) -> list[str]:

@@ -525,6 +525,29 @@ label {
   color: var(--text-muted);
 }
 
+/* Placeholder cards while a list loads: the grid takes its final shape at once
+   instead of a "loading" line that the cards later push down the page. */
+.skeleton-card {
+  min-height: 10.5rem;
+}
+.skeleton-line {
+  height: 0.8rem;
+  border-radius: 4px;
+  background: var(--border);
+  margin-bottom: 0.7rem;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-line.is-title { height: 1rem; width: 70%; }
+.skeleton-line.is-short { width: 45%; }
+.skeleton-line.is-button { height: 2rem; width: 6rem; margin: 1.1rem 0 0; }
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line { animation: none; }
+}
+
 /* Hero section */
 .hero {
   background: linear-gradient(180deg, var(--chrome-bg) 0%, var(--chrome-bg-2) 100%);

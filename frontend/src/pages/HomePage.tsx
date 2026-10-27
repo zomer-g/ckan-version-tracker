@@ -2161,7 +2161,19 @@ export default function HomePage() {
           )}
 
           {trackedLoading ? (
-            <div className="loading" role="status" aria-live="polite">{t("common.loading")}</div>
+            // Placeholder cards, so the grid takes its final shape at once. The
+            // status text is for screen readers; the shapes are decoration.
+            <div className="grid grid-2" aria-busy="true">
+              <span className="sr-only" role="status" aria-live="polite">{t("common.loading")}</span>
+              {Array.from({ length: 6 }, (_, i) => (
+                <div key={i} className="card skeleton-card" aria-hidden="true">
+                  <div className="skeleton-line is-title" />
+                  <div className="skeleton-line is-short" />
+                  <div className="skeleton-line" />
+                  <div className="skeleton-line is-button" />
+                </div>
+              ))}
+            </div>
           ) : tileCount === 0 ? (
             <div className="empty-state">
               {submittedQuery ? t("home.tracked_matches_empty") : t("home.no_tracked")}

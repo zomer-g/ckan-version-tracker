@@ -129,9 +129,9 @@ def env():
     app.include_router(home_router)
     app.dependency_overrides[get_db] = _db
     limiter.reset()
-    home_catalog._cache, home_catalog._cache_at = None, 0.0
+    home_catalog.cache.clear()
     yield TestClient(app), (lambda *t: asyncio.run(pin(*t)))
-    home_catalog._cache, home_catalog._cache_at = None, 0.0
+    home_catalog.cache.clear()
 
 
 def _get(client, **params):
@@ -220,8 +220,8 @@ def test_stale_catalog_is_served_while_it_rebuilds(env, monkeypatch):
     async def _refresh():
         started.append(True)
 
-    monkeypatch.setattr(home_catalog, "_refresh_in_background", _refresh)
-    home_catalog._cache_at -= home_catalog._TTL_SECONDS + 1
+    monkeypatch.setattr(home_catalog.cache, "_refresh", _refresh)
+    home_catalog.cache.built_at -= home_catalog.cache.ttl_seconds + 1
     # Answered from the stale copy, with one rebuild kicked off behind it.
     assert _get(client) == first
     assert started == [True]

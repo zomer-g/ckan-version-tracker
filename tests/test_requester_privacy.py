@@ -156,3 +156,24 @@ def test_admin_list_still_shows_the_requester(client):
     (row,) = r.json()["items"]
     assert row["requester_name"] == REQUESTER_NAME
     assert row["requester_email"] == REQUESTER_EMAIL
+
+
+def test_public_catalog_is_built_once_and_served_from_memory(client, monkeypatch):
+    """GET /api/datasets is cached (app/services/swr_cache.py): the expensive
+    catalog query runs once, later calls get the same serialized body."""
+    from app.api import datasets as D
+
+    builds = []
+    real_build = D.public_catalog_cache._build
+
+    async def counting_build(db):
+        builds.append(1)
+        return await real_build(db)
+
+    monkeypatch.setattr(D.public_catalog_cache, "_build", counting_build)
+    first = client.get("/api/datasets")
+    second = client.get("/api/datasets")
+    assert first.status_code == second.status_code == 200
+    assert first.headers["content-type"] == "application/json"
+    assert first.content == second.content
+    assert len(builds) == 1

@@ -1,8 +1,8 @@
 import logging
 import time
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from app.services.ckan_client import ckan_client
 from app.services.dataset_lookup import find_datasets_for_url
 from app.services.odata_client import odata_client
 from app.services import archive_state, ckan_coverage, source_registry
+from app.services.swr_cache import SWRCache
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -664,17 +665,8 @@ def build_dataset_response(
     )
 
 
-@router.get("", response_model=list[DatasetResponse])
-# Heavy AND anonymous: a 3-way join + selectinload(tags) + a catalog-wide
-# VersionIndex count, with no pagination — the very cost that contributed to the
-# 512MB-dyno OOMs noted below. 30/minute is far above what browsing the SPA
-# needs while stopping a single client from replaying it in a loop.
-@limiter.limit("30/minute")
-async def list_tracked(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Public endpoint — lists all active/pending tracked datasets."""
+async def _build_public_catalog(db: AsyncSession) -> bytes:
+    """The public catalog, serialized once — see list_tracked."""
     from app.models.version_index import VersionIndex
     from sqlalchemy import func
     from sqlalchemy.orm import selectinload
@@ -710,10 +702,34 @@ async def list_tracked(
     )
     version_counts = dict(count_result.all())
     # Build response — no external API calls here (performance critical)
-    return [
+    return _PUBLIC_CATALOG_ADAPTER.dump_json([
         build_dataset_response(ds, None, org, version_counts.get(ds.id, 0))
         for ds, org in rows
-    ]
+    ])
+
+
+_PUBLIC_CATALOG_ADAPTER = TypeAdapter(list[DatasetResponse])
+# The query behind this list was the most expensive statement on the database
+# (~1.2s a call, thousands of calls a day), and the list is the same for every
+# caller. Served from memory; stale-while-revalidate past a minute (see
+# app/services/swr_cache.py), so a newly approved dataset shows within ~1 min.
+public_catalog_cache = SWRCache("public_catalog", _build_public_catalog, ttl_seconds=60.0)
+
+
+@router.get("", response_model=list[DatasetResponse])
+# Anonymous, and once heavy: a 3-way join + selectinload(tags) + a catalog-wide
+# VersionIndex count, with no pagination — the very cost that contributed to the
+# 512MB-dyno OOMs noted above. Now cached, but 30/minute still stops a single
+# client from replaying a 2MB response in a loop.
+@limiter.limit("30/minute")
+async def list_tracked(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint — lists all active/pending tracked datasets."""
+    body = await public_catalog_cache.get(db)
+    # Already validated and serialized against DatasetResponse when built.
+    return Response(content=body, media_type="application/json")
 
 
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
