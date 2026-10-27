@@ -32,7 +32,7 @@ const PILL: React.CSSProperties = {
   border: "1px solid var(--border)", borderRadius: 999, background: "none",
 };
 
-// ── crime ─────────────────────────────────────────────────────────────────────
+// ── crime ──
 type Scope = "area" | "settlement" | "national";
 const SCOPE_LABEL: Record<Scope, string> = {
   area: "האזור הסטטיסטי", settlement: "היישוב", national: "כל הארץ",
@@ -138,7 +138,7 @@ function CrimeView({ data, onYear }: { data: NadlanCubeData; onYear: (y: string)
   );
 }
 
-// ── spatial ───────────────────────────────────────────────────────────────────
+// ── spatial ──
 function SpatialView({ data }: { data: NadlanCubeData }) {
   const feats = data.features ?? [];
   const radius = data.cube.radius_m ?? 0;
@@ -187,7 +187,7 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
   );
 }
 
-// ── one cube ──────────────────────────────────────────────────────────────────
+// ── one cube ──
 function Cube({ info, property }: { info: NadlanCubeInfo; property: NadlanProperty }) {
   const id = property.identity;
   const [open, setOpen] = useState(false);
@@ -248,7 +248,7 @@ function Cube({ info, property }: { info: NadlanCubeInfo; property: NadlanProper
   );
 }
 
-// ── the panel ─────────────────────────────────────────────────────────────────
+// ── the panel ──
 export default function NadlanCubes({ property }: { property: NadlanProperty }) {
   const id = property.identity;
   const [cubes, setCubes] = useState<NadlanCubeInfo[] | null>(null);

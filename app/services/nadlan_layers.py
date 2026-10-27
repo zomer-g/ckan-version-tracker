@@ -68,7 +68,7 @@ _NOISE_COLS = {
     "st_length(shape)", "symbol", "symbolid", "symbol_id",
 }
 
-# ── the registry ──────────────────────────────────────────────────────────────
+# ── the registry ──
 # (id, group, title, grain, dataset ids, radius_m, description)
 # Every dataset id here was looked up in the OVER catalog; the layer number is
 # in the comment so the GovMap source can be found by hand.
@@ -189,7 +189,7 @@ def cube(cube_id: str) -> dict | None:
     return _BY_ID.get(cube_id)
 
 
-# ── finding the tables ────────────────────────────────────────────────────────
+# ── finding the tables ──
 _TABLES_TTL = 600.0
 _idx_cache: tuple[float, dict[str, tuple[str, list[str]]]] | None = None
 _crime_cache: tuple[float, list[str]] | None = None
@@ -274,7 +274,7 @@ async def catalog() -> list[dict]:
     return out
 
 
-# ── the parcel a cube is asked about ──────────────────────────────────────────
+# ── the parcel a cube is asked about ──
 async def parcel_row(gush: int, helka: int, suffix: int | None) -> dict | None:
     rows = await nadlan_query.by_gush_helka(gush, helka, suffix)
     return rows[0] if rows else None
@@ -386,7 +386,7 @@ async def probe(parcel: dict) -> dict[str, int]:
     return {r["cube"]: r["n"] for r in rows}
 
 
-# ── crime ─────────────────────────────────────────────────────────────────────
+# ── crime ──
 def _per_1000(n: int | None, pop: int | None) -> float | None:
     return round(n * 1000 / pop, 1) if n is not None and pop else None
 
