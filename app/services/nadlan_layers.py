@@ -37,6 +37,7 @@ itself shows (``over_column_aliases``) where one is known.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -304,6 +305,29 @@ async def _resolve(c: dict) -> list[tuple[str, str, str, list[str]]]:
     return [(ds, *geo[_id8(ds)]) for ds in c["datasets"] if _id8(ds) in geo]
 
 
+def radius_for_dataset(dataset_id: str) -> float:
+    """The radius of the cube a dataset belongs to (0 = containment)."""
+    for c in registry():
+        if dataset_id in c["datasets"]:
+            return float(c["radius_m"] or 0)
+    return 0.0
+
+
+async def _crosswalked(c: dict, geo: dict | None = None) -> list[tuple[str, dict]]:
+    """``[(dataset_id, link state)]`` for the cube's datasets that have NO
+    table to query but a completed crosswalk (``nadlan_layer_links``) — the
+    layers too large for the idx mirror. A table, when there is one, wins: it
+    is always the layer's current content."""
+    from app.services import nadlan_layer_links
+    geo = geo if geo is not None else await _geo_tables()
+    try:
+        gens = await nadlan_layer_links.current_generations()
+    except Exception:  # noqa: BLE001 — the crosswalk is optional
+        return []
+    return [(ds, gens[ds]) for ds in c["datasets"]
+            if _id8(ds) not in geo and ds in gens]
+
+
 async def catalog() -> list[dict]:
     """The registry plus whether each cube can be answered here."""
     idx = await _geo_tables()
@@ -313,7 +337,8 @@ async def catalog() -> list[dict]:
         if c["grain"] == "stat_area":
             available = bool(crime)
         else:
-            available = any(_id8(d) in idx for d in c["datasets"])
+            available = (any(_id8(d) in idx for d in c["datasets"])
+                         or bool(await _crosswalked(c, idx)))
         out.append({k: v for k, v in c.items() if k != "datasets"}
                    | {"available": available})
     return out
@@ -428,9 +453,58 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
                 seen.add(sig)
                 results.append({"dataset_id": ds, "distance_m": float(r["__distance_m"] or 0),
                                 "fields": fields})
+    crosswalked = await _crosswalked(c)
+    for ds, state in crosswalked:
+        rows_x, source = await _crosswalk_features(ds, state, parcel)
+        sources.append(source)
+        labels = state.get("labels") or {}
+        for r in rows_x:
+            fields = []
+            for k, v in r["attrs"].items():
+                f = {"key": k, "label": labels.get(k) or k, "value": _clean(v)}
+                if f["value"] is None:
+                    continue
+                link = _link_for(k, f["value"])
+                if link:
+                    f["url"] = link
+                fields.append(f)
+            sig = (ds, tuple((f["key"], f["value"]) for f in fields))
+            if fields and sig not in seen:
+                seen.add(sig)
+                results.append({"dataset_id": ds, "distance_m": float(r["distance_m"] or 0),
+                                "fields": fields})
     results.sort(key=lambda f: f["distance_m"])
     return {"features": results[:MAX_FEATURES], "count": len(results),
-            "sources": sources, "available": bool(tables)}
+            "sources": sources, "available": bool(tables or crosswalked)}
+
+
+async def _crosswalk_features(ds: str, state: dict, parcel: dict) -> tuple[list[dict], dict]:
+    """One crosswalked layer's features for a parcel, nearest first.
+
+    The GIN lookup (``parcels @> ARRAY[key]``) finds them; the parcel array is
+    read back only for a radius layer, to pick this parcel's distance out of
+    it — a containment layer's distance is 0, and a city-wide plan's array is
+    tens of thousands of keys that there is no reason to detoast."""
+    from app.services.nadlan_layer_links import FEATURES_TABLE
+    F = f"public.{_qi(FEATURES_TABLE)}"
+    dist = ("coalesce(distances[array_position(parcels, $1)], 0)"
+            if radius_for_dataset(ds) > 0 else "0::real")
+    rows = await nadlan_query._fetch(f"""
+        SELECT attrs::text AS attrs, {dist} AS distance_m
+        FROM {F}
+        WHERE parcels @> ARRAY[$1]::text[] AND dataset_id = $2 AND generation = $3
+        ORDER BY 2 LIMIT {MAX_FEATURES}""",
+        parcel["parcel_key"], ds, int(state["generation"]))
+    for r in rows:
+        r["attrs"] = json.loads(r["attrs"]) if r.get("attrs") else {}
+    console = (f"SELECT attrs FROM {F} "
+               f"WHERE parcels @> ARRAY[{nadlan_query._lit(parcel['parcel_key'])}] "
+               f"AND dataset_id = {nadlan_query._lit(ds)} "
+               f"AND generation = {int(state['generation'])}")
+    return rows, {"dataset_id": ds, "table": f"public.{FEATURES_TABLE}",
+                  "page_url": f"{nadlan_query.SITE}/versions/{ds}",
+                  "row_url": nadlan_query._console_url(console),
+                  "version_number": state.get("version_number")}
 
 
 async def probe(parcel: dict) -> dict[str, int]:
@@ -452,6 +526,17 @@ async def probe(parcel: dict) -> dict[str, int]:
                 f"SELECT {nadlan_query._lit(c['id'])} AS cube, count(*) AS n "
                 f"FROM k JOIN {_qi(schema)}.{_qi(table)} l ON l.geom OPERATOR({_X}.&&) "
                 f"{_X}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}{_current(cols)}")
+    from app.services.nadlan_layer_links import FEATURES_TABLE
+    geo = await _geo_tables()
+    for c in registry():
+        if c["grain"] != "spatial":
+            continue
+        for ds, state in await _crosswalked(c, geo):
+            parts.append(
+                f"SELECT {nadlan_query._lit(c['id'])} AS cube, count(*) AS n "
+                f"FROM public.{_qi(FEATURES_TABLE)} WHERE parcels @> ARRAY[$1]::text[] "
+                f"AND dataset_id = {nadlan_query._lit(ds)} "
+                f"AND generation = {int(state['generation'])}")
     if not parts:
         return {}
     sql = (f"WITH k AS (SELECT centroid FROM public.{_qi(PARCELS_TABLE)} "
