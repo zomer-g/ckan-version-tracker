@@ -1185,6 +1185,8 @@ async def track_dataset(
             created_by=user.id,
             last_modified=None,
         )
+        if registry_match:
+            await apply_registry_labels(db, ds, registry_match)
         db.add(ds)
         await db.commit()
         await db.refresh(ds)
@@ -1192,6 +1194,18 @@ async def track_dataset(
         if dataset_status == "active":
             from app.worker.poll_job import poll_dataset
             background_tasks.add_task(poll_dataset, str(ds.id))
+
+        # An admin tracking a URL whose pattern declares companions gets them
+        # too, the way an anonymous request does — and, since an admin opened
+        # them, in the same status as the dataset itself rather than queued
+        # for an approval nobody else would give.
+        if registry_match and getattr(registry_match, "companion_urls", None):
+            opened = await _create_companion_requests(
+                db, registry_match, status=dataset_status, created_by=user.id)
+            if dataset_status == "active":
+                from app.worker.poll_job import poll_dataset
+                for c in opened:
+                    background_tasks.add_task(poll_dataset, c["id"])
 
         return DatasetResponse(
             id=str(ds.id),
@@ -2067,7 +2081,43 @@ class TrackingRequest(BaseModel):
     # amount of personal data to collect from a request is none.
 
 
-async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
+async def apply_registry_labels(db: AsyncSession, ds, match) -> None:
+    """File a just-created dataset under the organization and tags its
+    manifest pattern names (UrlPattern.tags / .organization).
+
+    Only ever called before the dataset's first commit, so it labels a new
+    dataset and never overrides an admin's later choice. Names that do not
+    exist are logged and skipped — never created.
+    """
+    from app.models.organization import Organization
+    from app.models.tag import Tag
+
+    org_name = getattr(match, "organization", None)
+    if org_name:
+        org = (await db.execute(
+            select(Organization).where(Organization.name == org_name)
+        )).scalar_one_or_none()
+        if org is None:
+            logger.warning("Manifest organization %r does not exist — not filed", org_name)
+        else:
+            ds.organization_id = org.id
+            ds.organization = org.name
+
+    names = [t for t in (getattr(match, "tags", None) or []) if t]
+    if names:
+        found = list((await db.execute(
+            select(Tag).where(Tag.name.in_(names))
+        )).scalars().all())
+        missing = set(names) - {t.name for t in found}
+        if missing:
+            logger.warning("Manifest tags do not exist — skipped: %s", ", ".join(sorted(missing)))
+        if found:
+            ds.tags = found
+
+
+async def _create_companion_requests(db: AsyncSession, match, *,
+                                     status: str = "pending",
+                                     created_by=None) -> list[dict]:
     """Open the datasets a matched pattern declares as belonging with it.
 
     A source can hold one corpus that is honestly two datasets — a Telegram
@@ -2114,17 +2164,20 @@ async def _create_companion_requests(db: AsyncSession, match) -> list[dict]:
                 poll_interval=max(
                     companion.poll_interval, settings.min_poll_interval,
                 ),
-                status="pending",
-                created_by=None,
+                status=status,
+                created_by=created_by,
                 last_modified=None,
             )
+            await apply_registry_labels(db, ds, companion)
             db.add(ds)
             await db.commit()
             await log_event(
-                event="requested", dataset=ds, status="info", actor="request",
-                message="נפתח יחד עם המאגר המשויך (ממתין לאישור)",
+                event="requested", dataset=ds, status="info",
+                actor="request" if status == "pending" else "admin",
+                message=("נפתח יחד עם המאגר המשויך (ממתין לאישור)" if status == "pending"
+                         else "נפתח יחד עם המאגר המשויך"),
             )
-            created.append({"url": url, "title": companion.title,
+            created.append({"id": str(ds.id), "url": url, "title": companion.title,
                             "poll_interval": ds.poll_interval})
         except Exception:  # noqa: BLE001
             logger.warning("Could not open companion %s", url, exc_info=True)
@@ -2618,6 +2671,8 @@ async def submit_tracking_request(
             created_by=None,
             last_modified=None,
         )
+        if registry_match:
+            await apply_registry_labels(db, ds, registry_match)
         db.add(ds)
         await db.commit()
         from app.services.activity_log import log_event

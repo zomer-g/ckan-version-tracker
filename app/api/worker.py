@@ -1692,6 +1692,30 @@ async def _push_task_outcome(db: AsyncSession, ds, task_id: str, request: Reques
     raise HTTPException(status_code=409, detail={"error": "not_reclaimable", "status": task.status})
 
 
+async def promote_registry_title(db, ds, scrape_metadata: dict) -> bool:
+    """Give a manifest-source dataset the title its scrape reports.
+
+    Its title at creation is its pattern's template, rendered from the URL
+    alone: the registry answers while the user types, so it cannot fetch the
+    page. A source whose URL does not carry its name (a Power BI visual is an
+    opaque id) sends the real one as ``dataset_title_he``. Promoted only while
+    the title is still exactly that template, so a hand-edited title stands,
+    and only for the source the dataset belongs to.
+    """
+    new_title = ((scrape_metadata or {}).get("dataset_title_he") or "").strip()[:500]
+    if not new_title or new_title == ds.title or not ds.source_url:
+        return False
+    try:
+        match = await source_registry.classify_url(db, ds.source_url)
+    except Exception:  # noqa: BLE001
+        return False
+    if (match is None or match.source_id != (ds.scraper_config or {}).get("kind")
+            or ds.title != match.title):
+        return False
+    ds.title = new_title
+    return True
+
+
 async def _cold_guard(ds) -> None:
     """A dataset moved to the cold tier (docs/history-phase4-plan.md) has empty
     tables in SQL and its rows in R2; loading into it would re-insert every
@@ -1809,6 +1833,15 @@ async def push_version(
                     )
                 except Exception as e:
                     logger.warning("Failed to patch odata title for %s: %s", ds.id, e)
+
+    # The same promotion for a worker-declared (manifest) source. Its title at
+    # creation is the pattern's template, rendered from the URL alone — the
+    # registry must answer instantly while the user types, so it cannot fetch
+    # the page. A source whose URL does not carry its name (a Power BI visual
+    # is an opaque id) sends the real one here. Promoted only while the title
+    # is still exactly that template, so a hand-edited title stands.
+    elif ds.source_type == "scraper" and body.scrape_metadata:
+        await promote_registry_title(db, ds, body.scrape_metadata)
 
     # Archive mode: no new items — update checkpoint and mark task done without
     # creating a version (avoids re-uploading the full CSV when nothing changed).
