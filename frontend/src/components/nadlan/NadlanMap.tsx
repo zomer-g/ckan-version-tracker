@@ -78,6 +78,16 @@ function Recenter({ lat, lon, zoom }: { lat: number | null; lon: number | null; 
   return null;
 }
 
+// A stable id per outline object, so a new outline for the same selection
+// (a refetch) also remounts the layer.
+const _seq = new WeakMap<object, number>();
+let _next = 0;
+function polygonSeq(o: object): number {
+  let n = _seq.get(o);
+  if (n == null) { n = ++_next; _seq.set(o, n); }
+  return n;
+}
+
 export default function NadlanMap({
   lat, lon, radiusM, results, selected, polygon, basemap = "streets", onPick, onSelect,
 }: {
@@ -160,8 +170,11 @@ export default function NadlanMap({
       {/* The high-detail outline of the selected parcel, when the page fetched
           one separately (a finer simplification than the bulk layer). */}
       {polygon && (
+        // Keyed on the outline itself: <GeoJSON> ignores a new `data` prop, so
+        // a key that outlives its data (the selection changing before the new
+        // outline arrives) leaves the PREVIOUS parcel drawn.
         <GeoJSON
-          key={selected ?? "poly"}
+          key={`${selected ?? "poly"}:${polygonSeq(polygon)}`}
           data={polygon}
           style={() => ({ color: "var(--tint-teal-fg)", weight: 3, fillOpacity: 0.2 })}
         />

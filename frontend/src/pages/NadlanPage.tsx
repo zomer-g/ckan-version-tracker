@@ -95,7 +95,10 @@ export default function NadlanPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [polygon, setPolygon] = useState<GeoJsonObject | null>(null);
+  // The outline is held WITH the parcel it belongs to. react-leaflet's
+  // <GeoJSON> never redraws on a new `data`, only on a new `key`, so an outline
+  // that is not tied to its parcel stays drawn over the previous selection.
+  const [polygon, setPolygon] = useState<{ key: string; geo: GeoJsonObject } | null>(null);
 
   useEffect(() => {
     nadlan.stats().then(setStats).catch(() => setStats(null));
@@ -177,10 +180,15 @@ export default function NadlanPage() {
   // only payload that touches the 4.58 GB source table.
   useEffect(() => {
     const p = env?.data.find((d) => d.parcel_key === expanded);
-    if (!p) { setPolygon(null); return; }
+    // Cleared at once, not when the next outline arrives: until then the old
+    // one would be drawn as if it were the new selection.
+    setPolygon(null);
+    if (!p) return;
     let cancelled = false;
     nadlan.geometry(p.identity.gush, p.identity.helka, p.identity.gush_suffix)
-      .then((r) => { if (!cancelled) setPolygon(JSON.parse(r.geojson)); })
+      .then((r) => {
+        if (!cancelled) setPolygon({ key: p.parcel_key, geo: JSON.parse(r.geojson) });
+      })
       .catch(() => { if (!cancelled) setPolygon(null); });
     return () => { cancelled = true; };
   }, [env, expanded]);
@@ -343,7 +351,7 @@ export default function NadlanPage() {
                   radiusM={radiusM}
                   results={results}
                   selected={expanded}
-                  polygon={polygon}
+                  polygon={polygon && polygon.key === expanded ? polygon.geo : null}
                   onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
                   onSelect={(k) => setExpanded(k)}
                 />
