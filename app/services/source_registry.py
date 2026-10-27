@@ -103,6 +103,17 @@ class UrlPattern(BaseModel):
     # Up to 48: the price-transparency source opens one dataset per retailer
     # (33 today) from the regulator's single list page.
     companions: list[str] = Field(default_factory=list, max_length=48)
+    # Labels a dataset of this shape is CREATED with — tag names and an
+    # organization name (Organization.name, e.g. "the_electricity_authority").
+    # Applied once, at creation, on every path (admin, request, companion);
+    # never re-applied, so an admin's later edit stands. A name that does not
+    # exist is skipped with a warning rather than created: tags and
+    # organizations are curated by hand, and a manifest must not invent them.
+    #
+    # Without this, a pattern that opens 48 companions leaves 48 datasets to be
+    # tagged and filed one by one.
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    organization: str | None = None
 
     @field_validator("regex")
     @classmethod
@@ -383,6 +394,9 @@ class RegistryMatch:
     # that should be tracked alongside this one. Already substituted, so a
     # caller just classifies and creates each. See UrlPattern.companions.
     companion_urls: list[str] = field(default_factory=list)
+    # The matched pattern's creation labels (UrlPattern.tags / .organization).
+    tags: list[str] = field(default_factory=list)
+    organization: str | None = None
 
 
 # {name} or {name|modifier}. Only word characters, so a literal brace in a
@@ -488,6 +502,8 @@ def match_manifests(url: str, manifests: list[SourceManifest]) -> RegistryMatch 
                     rendered for template in pattern.companions
                     if (rendered := _render(template, groups))
                 ],
+                tags=list(pattern.tags),
+                organization=pattern.organization,
             )
     return None
 

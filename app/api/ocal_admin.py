@@ -9,7 +9,7 @@ app/api/admin.py; everything else is here.
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_admin_user
@@ -617,3 +617,121 @@ async def merge_entities(request: Request, body: EntityMergeBody,
     await ocal_enrich.refresh_entity_matview()
     logger.info("ocal admin: merged %d entities into '%s' by %s", len(names), target, user.email)
     return {"merged": len(names), "target_name": target}
+
+
+# ── diary owners + contact-with-the-voter expenses (off until a source is loaded) ───────────────────
+
+def _owners_changed() -> None:
+    from app.api.ocal import invalidate_owners_cache
+    invalidate_owners_cache()
+
+
+@router.post("/owners/rebuild")
+@limiter.limit("6/minute")
+async def rebuild_owners(request: Request, user: User = Depends(get_admin_user)):
+    """Re-derive every diary's owner(s) from its title (and re-link expenses,
+    when that layer is on)."""
+    from app.services import ocal_mk_expenses, ocal_owners
+    await ocal_mk_expenses.ensure_tables()
+    result = await ocal_owners.rebuild_owners()
+    result["expenses"] = (await ocal_mk_expenses.link_expenses()
+                          if ocal_mk_expenses.is_enabled() else None)
+    _owners_changed()
+    logger.info("ocal admin: owners rebuilt by %s — %s", user.email, result)
+    return result
+
+
+@router.get("/owners")
+@limiter.limit("60/minute")
+async def list_owner_links(request: Request, q: str | None = Query(None),
+                           limit: int = Query(500, ge=1, le=5000),
+                           user: User = Depends(get_admin_user)):
+    """The owner rows per diary, for checking the extraction."""
+    from app.services import ocal_mk_expenses
+    await ocal_mk_expenses.ensure_tables()
+    args: list = [limit]
+    where = ""
+    if q:
+        args.append(f"%{q}%")
+        where = "WHERE o.owner_label ILIKE $2 OR s.name ILIKE $2"
+    rows = await ocal_db.fetch(
+        "SELECT o.source_id, s.name AS source_name, o.owner_key, o.owner_label, o.kind, "
+        "o.role, o.method, o.person_id "
+        "FROM diary_source_owners o JOIN diary_sources s ON s.id = o.source_id "
+        f"{where} ORDER BY o.owner_label, s.name LIMIT $1", *args)
+    return {"owners": _rows(rows), "count": len(rows)}
+
+
+def _require_expenses() -> None:
+    from app.services import ocal_mk_expenses
+    if not ocal_mk_expenses.is_enabled():
+        raise HTTPException(409, "שכבת הוצאות הקשר עם הבוחר כבויה (OCAL_MK_EXPENSES_ENABLED).")
+
+
+@router.post("/mk-expenses/sync")
+@limiter.limit("4/minute")
+async def sync_expenses(request: Request, force: bool = Query(True),
+                        user: User = Depends(get_admin_user)):
+    """Copy the Knesset contact expenses from OVER's archive of the dataset
+    (settings.ocal_mk_expenses_dataset_id) and link them to diary owners."""
+    _require_expenses()
+    from app.services import ocal_mk_expenses
+    try:
+        result = await ocal_mk_expenses.sync_from_over(force=force, imported_by=user.email)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _owners_changed()
+    return result
+
+
+@router.post("/mk-expenses/upload")
+@limiter.limit("10/minute")
+async def upload_expenses(request: Request, files: list[UploadFile] = File(...),
+                          user: User = Depends(get_admin_user)):
+    """Import contact-with-the-voter expense Excel files. Re-uploading a file
+    replaces it. Refused while the expenses layer is off."""
+    _require_expenses()
+    from app.services import ocal_mk_expenses
+    results, errors = [], []
+    for f in files:
+        data = await f.read(ocal_mk_expenses.MAX_FILE_BYTES + 1)
+        name = f.filename or "upload.xlsx"
+        if len(data) > ocal_mk_expenses.MAX_FILE_BYTES:
+            errors.append({"file": name, "error": "file too large"})
+            continue
+        try:
+            results.append(await ocal_mk_expenses.import_file(
+                data, source_url=ocal_mk_expenses.upload_url(name), file_name=name,
+                title=name, imported_by=user.email))
+        except Exception as e:  # noqa: BLE001 — report per file
+            errors.append({"file": name, "error": str(e)[:300]})
+    linked = await ocal_mk_expenses.link_expenses() if results else None
+    _owners_changed()
+    return {"files": results, "errors": errors, "linked": linked}
+
+
+@router.get("/mk-expenses/files")
+@limiter.limit("60/minute")
+async def list_expense_files(request: Request, user: User = Depends(get_admin_user)):
+    from app.services import ocal_mk_expenses
+    if not ocal_mk_expenses.is_enabled():
+        return {"files": [], "enabled": False}
+    await ocal_mk_expenses.ensure_tables()
+    rows = await ocal_db.fetch(
+        "SELECT f.id, f.source_url, f.file_name, f.title, f.year, f.row_count, f.sheets, "
+        "f.imported_at, f.imported_by, "
+        "(SELECT count(DISTINCT mk_name) FROM mk_expenses m WHERE m.file_id = f.id) AS mks, "
+        "(SELECT count(DISTINCT mk_name) FROM mk_expenses m WHERE m.file_id = f.id "
+        "   AND m.owner_key IN (SELECT owner_key FROM diary_source_owners)) AS mks_with_diaries "
+        "FROM mk_expense_files f ORDER BY f.year DESC NULLS LAST, f.file_name")
+    return {"files": _rows(rows), "enabled": True}
+
+
+@router.delete("/mk-expenses/files/{file_id}")
+@limiter.limit("20/minute")
+async def delete_expense_file(request: Request, file_id: str,
+                              user: User = Depends(get_admin_user)):
+    _require_expenses()
+    await ocal_db.execute("DELETE FROM mk_expense_files WHERE id=$1", _uuid(file_id))
+    _owners_changed()
+    return {"deleted": True}
