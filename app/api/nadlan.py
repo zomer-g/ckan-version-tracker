@@ -18,6 +18,11 @@ Endpoints (all public, rate-limited):
     GET /api/nadlan/zip/{zip}                  by מיקוד (5 or 7 digits)
     GET /api/nadlan/address?city=&street=&…    by כתובת
     GET /api/nadlan/streets?q=&settlement=     street autocomplete
+    GET /api/nadlan/layers                     the information cubes on offer
+    GET /api/nadlan/parcel/{g}/{h}/layers      the same, with hit counts for
+                                               one parcel (one bbox probe)
+    GET /api/nadlan/parcel/{g}/{h}/layer/{id}  ONE cube for one parcel, fetched
+                                               when the reader opens it
 
 Beside the four identities, every answer also carries the two layers that
 DESCRIBE the property rather than identify it: its CBS statistical area (א"ס),
@@ -33,10 +38,12 @@ The data here is DERIVED — the crosswalk between four sources, not any one of
 them — so every response carries ``processed: true`` and the coverage caveats
 travel with it rather than being left for the UI to remember.
 """
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from app.rate_limit import limiter
-from app.services import nadlan_query, nadlan_text
+from app.services import nadlan_layers, nadlan_query, nadlan_text
 
 router = APIRouter(prefix="/api/nadlan", tags=["nadlan"])
 
@@ -159,6 +166,72 @@ async def nadlan_parcel_deals(
             "data": data, "count": len(data), "total": total,
             "limit": limit, "offset": offset, "processed": True,
             "caveats": CAVEATS}
+
+
+@router.get("/layers")
+@limiter.limit("60/minute")
+async def nadlan_layers_catalog(request: Request):
+    """Every information cube a parcel can be opened into, and whether this
+    deployment holds the table behind it."""
+    await _require_ready()
+    return {"data": await nadlan_layers.catalog(), "processed": True}
+
+
+async def _parcel_or_404(gush: int, helka: int, suffix: int | None) -> dict:
+    parcel = await nadlan_layers.parcel_row(gush, helka, suffix)
+    if not parcel:
+        raise HTTPException(status_code=404, detail="לא נמצאה חלקה כזו")
+    return parcel
+
+
+@router.get("/parcel/{gush}/{helka}/layers")
+@limiter.limit("60/minute")
+async def nadlan_parcel_layers(
+    request: Request,
+    gush: int = Path(..., ge=1, le=99_999_999),
+    helka: int = Path(..., ge=0, le=99_999_999),
+    suffix: int | None = Query(None, ge=0, le=999, description="תת-גוש"),
+):
+    """The cube catalog for ONE parcel, each spatial cube carrying how many
+    features it would return. The counts are one UNION of GiST probes; nothing
+    is read until a cube is opened."""
+    await _require_ready()
+    parcel = await _parcel_or_404(gush, helka, suffix)
+    cat, hits = await asyncio.gather(nadlan_layers.catalog(),
+                                     nadlan_layers.probe(parcel))
+    # Every probed table answers a row even at zero (an aggregate without
+    # GROUP BY), so a missing key means "not counted", never "none there".
+    for c in cat:
+        c["hits"] = hits.get(c["id"])
+    return {"parcel_key": parcel["parcel_key"], "data": cat, "processed": True}
+
+
+@router.get("/parcel/{gush}/{helka}/layer/{cube_id}")
+@limiter.limit("60/minute")
+async def nadlan_parcel_layer(
+    request: Request,
+    gush: int = Path(..., ge=1, le=99_999_999),
+    helka: int = Path(..., ge=0, le=99_999_999),
+    cube_id: str = Path(..., max_length=40, pattern=r"^[a-z0-9_]+$"),
+    suffix: int | None = Query(None, ge=0, le=999, description="תת-גוש"),
+    year: str | None = Query(None, max_length=4, pattern=r"^[0-9]{4}$",
+                             description="שנה (לקוביית הפשיעה)"),
+):
+    """One information cube for one parcel — fetched on demand, never with the
+    lookup, because there are dozens of cubes and a lookup returns up to 200
+    parcels."""
+    await _require_ready()
+    c = nadlan_layers.cube(cube_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="קובייה לא מוכרת")
+    parcel = await _parcel_or_404(gush, helka, suffix)
+    if c["grain"] == "stat_area":
+        body = await nadlan_layers.crime_cube(parcel, year)
+    else:
+        body = await nadlan_layers.spatial_cube(c, parcel)
+    meta = {k: v for k, v in c.items() if k != "datasets"}
+    return {"cube": meta, "parcel_key": parcel["parcel_key"], **body,
+            "processed": True}
 
 
 @router.get("/point")

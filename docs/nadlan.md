@@ -707,3 +707,47 @@ POST /api/admin/nadlan/dataset/snapshot?force=true   → override the gate
 
 `state` returns the refusal without performing it, so a panel can show the
 reason rather than offering a button that silently does nothing.
+
+
+## Information cubes: everything else known about one parcel
+
+The envelope says what a property IS. `app/services/nadlan_layers.py` adds what
+is known ABOUT its ground, as **cubes** that load only when opened, one parcel
+at a time. There are about twenty of them, and a lookup can return 200 parcels,
+so none of them rides the envelope.
+
+```
+GET /api/nadlan/layers                       the registry + availability here
+GET /api/nadlan/parcel/{g}/{h}/layers        same, with a hit count per cube
+GET /api/nadlan/parcel/{g}/{h}/layer/{id}    one cube (?year= for crime)
+```
+
+Two grains:
+
+* **spatial**: a GovMap layer mirrored into `idx` with a PostGIS `geom`. The
+  parcel centroid is tested for being *inside* the layer's polygons (`radius_m =
+  0`), or the layer's features *within* `radius_m` are listed, nearest first.
+  This covers תב"ע plots and boundaries (רמ"י 11/357, משהב"ש 336), municipal
+  land-use layers, urban renewal compounds, every רמ"י layer (tenders, plans for
+  marketing, plans in preparation, master plans, surveys, regions, assessment
+  appeals), airport and traffic noise, soil-test zones, declared antiquities,
+  preservation lists and school shelters. The table is found by the dataset-id
+  suffix `index_mirror.table_name` gives it, never by a hardcoded name. Columns
+  are all published columns minus GIS bookkeeping, labelled from
+  `over_column_aliases`.
+* **stat_area**: the police crime register (`append_crime_records_data_*`,
+  one table per year, found by column signature). Its `StatisticAreaKod` is the
+  national 8-digit code (`62000113` = area 113 of בת ים), the same value as the
+  א"ס block's `yishuv_stat`, so it joins by equality. Area, settlement and
+  country are counted from ONE scan of the year's table and shown per 1,000
+  residents, with the raw counts kept beside the rates.
+
+The hit counts on closed cubes come from one `UNION ALL` of GiST bbox probes, so
+the page can show "3" without reading a single attribute.
+
+**Not yet verified against production.** The registry was built from the OVER
+catalog. This session could not reach the SQL console, so two things should be
+checked on a live parcel: that each layer's `idx` table has a `geom` (a layer
+without one reports `available: false`), and that police area codes match the
+2022 division (if they follow 2011, the area count is 0 and the cube says so in
+its notes).

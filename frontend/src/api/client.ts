@@ -3244,6 +3244,57 @@ export interface NadlanStreet {
   located?: boolean;
 }
 
+/** One information cube a parcel can be opened into. Listed up front, fetched
+ *  only when opened: there are dozens, and a lookup returns up to 200 parcels.
+ *  `hits` is the feature count from one cheap bbox probe — null when it was not
+ *  counted (the crime cube, or a layer this deployment does not hold). */
+export interface NadlanCubeInfo {
+  id: string;
+  group: string;
+  title: string;
+  grain: "spatial" | "stat_area";
+  radius_m: number | null;
+  description: string;
+  available: boolean;
+  hits?: number | null;
+}
+
+export interface NadlanCubeFeature {
+  dataset_id: string;
+  distance_m: number;
+  fields: { key: string; label: string; value: string }[];
+}
+
+export interface NadlanCrimeScope {
+  code?: number | null;
+  name?: string | null;
+  population: number | null;
+  total: number;
+  per_1000: number | null;
+}
+
+export interface NadlanCubeData {
+  cube: Omit<NadlanCubeInfo, "available" | "hits">;
+  parcel_key: string;
+  available: boolean;
+  // spatial
+  features?: NadlanCubeFeature[];
+  count?: number;
+  sources?: { dataset_id: string; table: string; page_url: string; row_url: string }[];
+  // crime
+  year?: string;
+  years?: string[];
+  table?: string;
+  row_url?: string;
+  scopes?: { area: NadlanCrimeScope; settlement: NadlanCrimeScope; national: NadlanCrimeScope };
+  groups?: {
+    group: string; area: number; settlement: number; national: number;
+    area_per_1000: number | null; settlement_per_1000: number | null;
+    national_per_1000: number | null;
+  }[];
+  notes?: string[];
+}
+
 export const nadlan = {
   stats: () => request<NadlanStats>("/nadlan/stats"),
   parcel: (gush: number, helka: number, suffix?: number, geometry = false) =>
@@ -3277,6 +3328,17 @@ export const nadlan = {
     request<{ data: NadlanDeal[]; total: number; count: number }>(
       `/nadlan/parcel/${gush}/${helka}/deals?limit=${limit}&offset=${offset}` +
       (subParcel ? `&sub_parcel=${encodeURIComponent(subParcel)}` : "")),
+  /** The cube catalog for one parcel, with probe counts. */
+  parcelLayers: (gush: number, helka: number, suffix?: number) =>
+    request<{ parcel_key: string; data: NadlanCubeInfo[] }>(
+      `/nadlan/parcel/${gush}/${helka}/layers` + (suffix != null ? `?suffix=${suffix}` : "")),
+  /** One cube for one parcel, fetched when the reader opens it. */
+  parcelLayer: (gush: number, helka: number, cubeId: string, suffix?: number, year?: string) =>
+    request<NadlanCubeData>(
+      `/nadlan/parcel/${gush}/${helka}/layer/${encodeURIComponent(cubeId)}?` +
+      new URLSearchParams(Object.entries({ suffix, year })
+        .filter(([, v]) => v != null && v !== "")
+        .map(([k, v]) => [k, String(v)])).toString()),
   /** The unified entry point: any identifier in, any subset of the answer out.
    *  The dedicated calls above return the same envelope; this one exists so a
    *  caller does not have to know which of them to use. */

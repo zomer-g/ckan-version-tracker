@@ -21,8 +21,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  nadlan, type NadlanDeal, type NadlanProperty, type NadlanSourceBlock,
+  nadlan, type NadlanAddress, type NadlanDeal, type NadlanProperty, type NadlanSourceBlock,
 } from "../../api/client";
+import NadlanCubes from "./NadlanCubes";
 
 const SOURCE_LABELS: Record<string, string> = {
   parcels: "חלקות (מרכז למיפוי ישראל)",
@@ -95,13 +96,18 @@ function fmt(v: unknown, key?: string): string {
   return String(v);
 }
 
-function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
+function SourceCard({ id, block, children, wide }: {
+  id: string;
+  block: NadlanSourceBlock;
+  children?: React.ReactNode;
+  wide?: boolean;
+}) {
   const fields = Object.entries(block.fields).filter(([, v]) => v != null && v !== "" &&
     !(Array.isArray(v) && v.length === 0));
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 8, padding: "0.7rem 0.85rem",
-      background: "var(--surface)",
+      background: "var(--surface)", gridColumn: wide ? "1 / -1" : undefined,
     }}>
       <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.4rem" }}>
         {SOURCE_LABELS[id] ?? id}
@@ -118,6 +124,7 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
       ) : (
         <div className="text-sm text-muted">אין נתונים במקור הזה לחלקה זו.</div>
       )}
+      {children}
       <a
         href={block.row_url}
         target="_blank"
@@ -138,6 +145,44 @@ function SourceCard({ id, block }: { id: string; block: NadlanSourceBlock }) {
            style={{ fontSize: "0.75rem", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
         {block.table}
       </div>
+    </div>
+  );
+}
+
+/** The parcel's addresses, shown INSIDE the address-list source card.
+ *
+ *  They used to be a table of their own under the source cards, which said the
+ *  same thing twice: the address-list card counted the addresses and the table
+ *  listed them. The list now lives in the card it comes from. */
+function AddressList({ addresses }: { addresses: NadlanAddress[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? addresses : addresses.slice(0, 12);
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <ul style={{
+        margin: 0, padding: 0, listStyle: "none", display: "grid", gap: "0.15rem 0.9rem",
+        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", fontSize: "0.83rem",
+      }}>
+        {shown.map((a, i) => (
+          <li key={i} style={{ borderTop: "1px solid var(--border)", padding: "0.2rem 0" }}>
+            {a.street ?? "—"} <Ltr>{a.house ?? ""}{a.suffix ?? ""}</Ltr>
+            <span className="text-muted" style={{ fontSize: "0.75rem" }}>
+              {a.zip7 ? <> · <Ltr>{a.zip7}</Ltr></> : null}
+              {a.neighbourhood ? ` · ${a.neighbourhood}` : ""}
+              {a.match && a.match !== "pip" ? ` · ${a.match}` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {addresses.length > 12 && (
+        <button type="button" onClick={() => setAll(!all)}
+          style={{
+            marginTop: "0.3rem", padding: "0.15rem 0.6rem", fontSize: "0.78rem", cursor: "pointer",
+            border: "1px solid var(--border)", borderRadius: 6, background: "none",
+          }}>
+          {all ? "פחות" : `כל ${addresses.length.toLocaleString("he-IL")} הכתובות`}
+        </button>
+      )}
     </div>
   );
 }
@@ -373,7 +418,7 @@ export default function NadlanResultCard({
           border: "1px solid var(--border)", borderRadius: 6, background: "none",
         }}
       >
-        {expanded ? "הסתרת ההצלבה המלאה" : "ההצלבה המלאה בכל המקורות"}
+        {expanded ? "הסתרת המידע המלא" : "כל המידע על תא השטח"}
       </button>
 
       {expanded && (
@@ -383,43 +428,16 @@ export default function NadlanResultCard({
             gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
           }}>
             {Object.entries(property.sources).map(([k, b]) => (
-              <SourceCard key={k} id={k} block={b as NadlanSourceBlock} />
+              <SourceCard key={k} id={k} block={b as NadlanSourceBlock}
+                          wide={k === "address_list" && id.addresses.length > 0}>
+                {k === "address_list" && id.addresses.length > 0 && (
+                  <AddressList addresses={id.addresses} />
+                )}
+              </SourceCard>
             ))}
           </div>
 
-          {id.addresses.length > 0 && (
-            <div tabIndex={0} role="region" aria-label="פרטי הנכס" className="scroll-region" style={{ marginTop: "0.8rem", overflowX: "auto" }}>
-              <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>רחוב</th>
-                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מס׳</th>
-                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>מיקוד</th>
-                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שכונה</th>
-                    <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>שיוך</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {id.addresses.slice(0, 40).map((a, i) => (
-                    <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>{a.street ?? "—"}</td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>{a.house ?? "—"}{a.suffix ?? ""}</td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>{a.zip7 ?? "—"}</td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>{a.neighbourhood ?? "—"}</td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>
-                        {a.match === "pip" ? "נקודה בתוך החלקה" : a.match ?? "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {id.addresses.length > 40 && (
-                <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
-                  מוצגות 40 מתוך {id.addresses.length.toLocaleString("he-IL")} כתובות.
-                </div>
-              )}
-            </div>
-          )}
+          <NadlanCubes property={property} />
         </>
       )}
     </div>
