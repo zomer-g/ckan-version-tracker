@@ -109,10 +109,21 @@ cd frontend && npm install && npm run dev
 
 ## Deployment
 
-Deployed on [Render](https://render.com) with the `render.yaml` blueprint.
-Database on [Neon](https://neon.tech) (PostgreSQL). Version files on
+Hosted on [xhostd](https://xhostd.com) (project `over`, channel `prod`), with
+the channel's own PostgreSQL (see `xhostd-env.sh`; Neon is retired and the app
+refuses to boot on a Neon address). Version files on
 [Cloudflare R2](https://developers.cloudflare.com/r2/). The scraping worker is
 deployed separately from `zomer-g/govil-scraper`.
+
+**Every push to `master` deploys.** xhostd mirrors this GitHub repository
+through a read-only deploy key; `.github/workflows/notify-xhostd.yml` pings it
+on each push, xhostd syncs, and `prod` (which follows `master`) builds with
+`install.sh` and starts with `launch.sh`. A failed build leaves the previous
+version serving. Commits made directly to the xhostd repo are refused while
+the repository is connected — GitHub is the only source. So push to `master`
+only what is ready to go live; work on a branch otherwise.
+
+`render.yaml` is the earlier Render blueprint and is no longer used.
 
 ### Environment Variables
 
@@ -160,7 +171,7 @@ worker protocol.
 - **File storage:** Cloudflare R2 (S3-compatible)
 - **Worker:** separate `zomer-g/govil-scraper` repo (self-updating, version-pinned)
 - **Auth:** Google OAuth2, JWT (PyJWT); MCP via OAuth 2.1 + PKCE
-- **Deployment:** Render
+- **Deployment:** xhostd, deployed from GitHub `master` on every push
 
 ## License
 
