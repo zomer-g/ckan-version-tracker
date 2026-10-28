@@ -324,7 +324,18 @@ class Settings(BaseSettings):
     # the scheduler builds on its own, comma-separated dataset ids, in order.
     # One first build per tick, and a failed one is not retried, so the rollout
     # is one layer at a time: add the next id once the previous one is measured.
-    nadlan_layer_links_autobuild: str = "b105ae22-a6f5-4cd0-b37e-c63dc5da40c3"
+    # מבא"ת (built 2026-10-28: 37,708 plans, 4.6 M links, 85 s, 149 MB), then
+    # the rest one per hour, רצף מגרשי תב"ע — the largest — last.
+    nadlan_layer_links_autobuild: str = ",".join((
+        "b105ae22-a6f5-4cd0-b37e-c63dc5da40c3",   # mavat_plans
+        "b85a7bc3-4455-4600-86f7-343b138fa6c7",   # controlled_price (300 m)
+        "9ddf9d2f-d090-4596-8223-1bdbf4a0e305",   # moch_plots
+        "295a8254-9135-44a2-814a-556350d69b8d",   # cadastre_processes
+        "0dc57594-c352-4e3d-8cd4-00cafa7441f9",   # traffic_noise_day
+        "7464913d-195d-4c04-b0a5-9c29f9ed7686",   # traffic_noise_night
+        "2156f30e-cb97-4737-a2f5-bd030b61c944",   # taba_bounds
+        "68b8e2fe-d757-4478-aa46-ee756001f6bc",   # taba_plots
+    ))
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.
