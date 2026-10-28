@@ -800,7 +800,9 @@ The scheduler builds them on its own too, so no admin token is needed: every
 hour the `nadlan_layer_links` job makes the first build of the next layer listed
 in `NADLAN_LAYER_LINKS_AUTOBUILD` (comma-separated dataset ids, in order; the
 default lists all eight, רצף מגרשי תב"ע last), one per tick. A failed layer stops the list — it is not
-retried, and the layers after it wait — and a build a restart cut short is
+retried, and the layers after it wait — a layer with no index CSV is passed
+over (משהב"ש plots and רצף מגרשי תב"ע are published as GPKG/GeoParquet only,
+so the CSV reader cannot build them yet), and a build a restart cut short is
 started over. The build logs a progress line every 20 batches and its summary
 (time, counts, `table_bytes`) at the end, so the runtime log is enough to
 measure it. מבא"ת, the first, took 85 s for 37,708 plans: 28,858 touch a

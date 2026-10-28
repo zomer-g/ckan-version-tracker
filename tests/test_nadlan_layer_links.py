@@ -346,3 +346,22 @@ def test_a_build_cut_short_by_a_restart_is_built_again_cleanly(pg):
     res, keys = run(main)
     assert res["status"] == "ok" and res["generation"] == 1 and res["links"] == 3
     assert "stale" not in {k["feature_key"] for k in keys}
+
+
+def test_a_layer_without_an_index_csv_is_passed_over_not_a_stop(pg):
+    _stub_source(pg, ROWS)
+    stub = L.latest_version
+
+    async def _latest(ds):
+        return None if ds == MAVAT else await stub(ds)   # MAVAT: GPKG only
+
+    pg.setattr(L, "latest_version", _latest)
+    pg.setattr(L.settings, "nadlan_layer_links_autobuild", f"{MAVAT},{PRICE}")
+
+    async def main():
+        return await L.build_pending(), await L.build_pending(), await L.build_pending()
+
+    skipped, built, done = run(main)
+    assert skipped["status"] == "no_index_csv"
+    assert built["dataset_id"] == PRICE and built["status"] == "ok"
+    assert done is None

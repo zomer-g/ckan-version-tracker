@@ -493,15 +493,20 @@ async def build_pending() -> dict | None:
 
     A layer whose build failed is left alone (its note says why; an admin
     rebuilds it with ``force``), and so is everything after it: the list is an
-    order, and the next layer is the larger one. A layer whose build a restart
-    cut short reads as ``building`` with no generation, and is built again."""
+    order, and the next layer is the larger one. A layer with no index CSV is
+    passed over instead — nothing was attempted, so nothing says the next one
+    is risky (the GPKG-only layers: משהב"ש plots, רצף מגרשי תב"ע). A layer whose
+    build a restart cut short reads as ``building`` with no generation, and is
+    built again."""
     from app.services import nadlan_layers
     states = {s["dataset_id"]: s for s in await get_state()}
     for ds in autobuild_ids():
         st = states.get(ds) or {}
         if st.get("generation"):
             continue
-        if st.get("status") in ("failed", "no_index_csv"):
+        if st.get("status") == "no_index_csv":
+            continue
+        if st.get("status") == "failed":
             return None
         return await build(ds, radius_m=nadlan_layers.radius_for_dataset(ds))
     return None
