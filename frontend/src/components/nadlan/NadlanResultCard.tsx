@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   nadlan, type NadlanAddress, type NadlanDeal, type NadlanProperty, type NadlanSourceBlock,
+  type NadlanSourceRows,
 } from "../../api/client";
 import NadlanCubes from "./NadlanCubes";
 
@@ -96,18 +97,128 @@ function fmt(v: unknown, key?: string): string {
   return String(v);
 }
 
-function SourceCard({ id, block, children, wide }: {
+/** The sources whose own rows can be opened inside their card. */
+const DETAIL_SOURCES = new Set(["gazetteer", "parcels", "postal", "stat_area"]);
+
+const DETAIL_PAGE = 50;
+
+function detailButtonLabel(id: string, block: NadlanSourceBlock, open: boolean): string {
+  if (open) return "הסתרת הפרטים";
+  const n = Number(block.fields.n_assets);
+  if (id === "gazetteer" && n > 0) return `כל ${n.toLocaleString("he-IL")} הנכסים בגזטיר`;
+  if (id === "postal") return "שורות המיקוד המלאות";
+  return "כל השדות במקור";
+}
+
+/** A source's own rows for this parcel, fetched when its card is opened.
+ *
+ *  The card shows the summary the envelope carries ("12 נכסים"); this is the
+ *  twelve. One row reads as a field list, several as a table, paged. */
+function SourceRowsView({ property, source }: { property: NadlanProperty; source: string }) {
+  const id = property.identity;
+  const [data, setData] = useState<NadlanSourceRows | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    nadlan.sourceRows(id.gush, id.helka, source, DETAIL_PAGE, 0, id.gush_suffix)
+      .then((r) => { if (!cancelled) setData(r); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "הטעינה נכשלה"); });
+    return () => { cancelled = true; };
+  }, [id.gush, id.helka, id.gush_suffix, source]);
+
+  const more = () => {
+    if (!data) return;
+    setLoadingMore(true);
+    nadlan.sourceRows(id.gush, id.helka, source, DETAIL_PAGE, data.rows.length, id.gush_suffix)
+      .then((r) => setData({ ...data, rows: [...data.rows, ...r.rows] }))
+      .catch((e) => setError(e instanceof Error ? e.message : "הטעינה נכשלה"))
+      .finally(() => setLoadingMore(false));
+  };
+
+  if (error) return <div className="text-sm" style={{ color: "var(--danger)", marginTop: "0.4rem" }}>{error}</div>;
+  if (!data) return <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>טוען…</div>;
+  if (!data.rows.length) {
+    return <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>לא נמצאו שורות במקור לחלקה זו.</div>;
+  }
+
+  if (data.total === 1) {
+    const row = data.rows[0];
+    return (
+      <dl style={{
+        margin: "0.5rem 0 0", display: "grid", gridTemplateColumns: "auto 1fr",
+        gap: "0.15rem 0.6rem", fontSize: "0.83rem", borderTop: "1px solid var(--border)",
+        paddingTop: "0.4rem",
+      }}>
+        {data.columns.map((c, i) => (
+          <div key={c.key} style={{ display: "contents" }}>
+            <dt style={{ color: "var(--text-muted)" }} title={c.key}>{c.label}</dt>
+            <dd style={{ margin: 0, overflowWrap: "anywhere" }}>{row[i] ?? "—"}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <div tabIndex={0} role="region" aria-label={`שורות ${SOURCE_LABELS[source] ?? source}`}
+           className="scroll-region" style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", fontSize: "0.82rem", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ color: "var(--text-muted)" }}>
+              {data.columns.map((c) => (
+                <th key={c.key} scope="col" title={c.key}
+                    style={{ textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                {r.map((v, j) => (
+                  <td key={j} style={{ padding: "0.2rem 0.4rem" }}>{v ?? "—"}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+        מוצגות <Ltr>{data.rows.length.toLocaleString("he-IL")}</Ltr> מתוך{" "}
+        <Ltr>{data.total.toLocaleString("he-IL")}</Ltr> שורות.
+        {data.rows.length < data.total && (
+          <button type="button" onClick={more} disabled={loadingMore}
+            style={{
+              marginInlineStart: "0.5rem", padding: "0.1rem 0.6rem", fontSize: "0.78rem",
+              cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6, background: "none",
+            }}>
+            {loadingMore ? "טוען…" : "עוד"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SourceCard({ id, block, children, wide, property }: {
   id: string;
   block: NadlanSourceBlock;
   children?: React.ReactNode;
   wide?: boolean;
+  property: NadlanProperty;
 }) {
+  const [open, setOpen] = useState(false);
   const fields = Object.entries(block.fields).filter(([, v]) => v != null && v !== "" &&
     !(Array.isArray(v) && v.length === 0));
+  const canOpen = DETAIL_SOURCES.has(id) && fields.length > 0;
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 8, padding: "0.7rem 0.85rem",
-      background: "var(--surface)", gridColumn: wide ? "1 / -1" : undefined,
+      background: "var(--surface)", gridColumn: wide || open ? "1 / -1" : undefined,
     }}>
       <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.4rem" }}>
         {SOURCE_LABELS[id] ?? id}
@@ -125,6 +236,16 @@ function SourceCard({ id, block, children, wide }: {
         <div className="text-sm text-muted">אין נתונים במקור הזה לחלקה זו.</div>
       )}
       {children}
+      {canOpen && (
+        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+          style={{
+            display: "block", marginTop: "0.5rem", padding: "0.2rem 0.65rem", fontSize: "0.8rem",
+            cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6, background: "none",
+          }}>
+          {detailButtonLabel(id, block, open)}
+        </button>
+      )}
+      {open && <SourceRowsView property={property} source={id} />}
       <a
         href={block.row_url}
         target="_blank"
@@ -428,7 +549,7 @@ export default function NadlanResultCard({
             gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
           }}>
             {Object.entries(property.sources).map(([k, b]) => (
-              <SourceCard key={k} id={k} block={b as NadlanSourceBlock}
+              <SourceCard key={k} id={k} block={b as NadlanSourceBlock} property={property}
                           wide={k === "address_list" && id.addresses.length > 0}>
                 {k === "address_list" && id.addresses.length > 0 && (
                   <AddressList addresses={id.addresses} />

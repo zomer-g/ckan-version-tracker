@@ -3451,6 +3451,19 @@ export interface NadlanCubeData {
   notes?: string[];
 }
 
+/** One source's own rows for one parcel — the detail behind a source card. */
+export interface NadlanSourceRows {
+  source: string;
+  table: string;
+  parcel_key: string;
+  columns: { key: string; label: string }[];
+  rows: (string | null)[][];
+  total: number;
+  offset: number;
+  limit: number;
+  row_url: string;
+}
+
 export const nadlan = {
   stats: () => request<NadlanStats>("/nadlan/stats"),
   parcel: (gush: number, helka: number, suffix?: number, geometry = false) =>
@@ -3484,6 +3497,13 @@ export const nadlan = {
     request<{ data: NadlanDeal[]; total: number; count: number }>(
       `/nadlan/parcel/${gush}/${helka}/deals?limit=${limit}&offset=${offset}` +
       (subParcel ? `&sub_parcel=${encodeURIComponent(subParcel)}` : "")),
+  /** A source's own rows for one parcel (gazetteer assets, the parcel row,
+   *  its zip codes, its statistical area), paged. */
+  sourceRows: (gush: number, helka: number, source: string, limit = 50, offset = 0,
+               suffix?: number) =>
+    request<NadlanSourceRows>(
+      `/nadlan/parcel/${gush}/${helka}/source/${encodeURIComponent(source)}` +
+      `?limit=${limit}&offset=${offset}` + (suffix != null ? `&suffix=${suffix}` : "")),
   /** The cube catalog for one parcel, with probe counts. */
   parcelLayers: (gush: number, helka: number, suffix?: number) =>
     request<{ parcel_key: string; data: NadlanCubeInfo[] }>(

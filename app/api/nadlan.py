@@ -43,7 +43,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from app.rate_limit import limiter
-from app.services import nadlan_layers, nadlan_query, nadlan_text
+from app.services import nadlan_layers, nadlan_query, nadlan_sources, nadlan_text
 
 router = APIRouter(prefix="/api/nadlan", tags=["nadlan"])
 
@@ -166,6 +166,27 @@ async def nadlan_parcel_deals(
             "data": data, "count": len(data), "total": total,
             "limit": limit, "offset": offset, "processed": True,
             "caveats": CAVEATS}
+
+
+@router.get("/parcel/{gush}/{helka}/source/{source}")
+@limiter.limit("60/minute")
+async def nadlan_parcel_source(
+    request: Request,
+    gush: int = Path(..., ge=1, le=99_999_999),
+    helka: int = Path(..., ge=0, le=99_999_999),
+    source: str = Path(..., pattern=r"^(gazetteer|parcels|postal|stat_area)$"),
+    suffix: int | None = Query(None, ge=0, le=999, description="תת-גוש"),
+    limit: int = Query(50, ge=1, le=nadlan_sources.MAX_ROWS),
+    offset: int = Query(0, ge=0, le=100_000),
+):
+    """One source's own rows for this parcel — the gazetteer's assets one by
+    one, the parcel's full row, its zip codes, its statistical area — with
+    Hebrew captions, paged. The envelope carries only each source's summary;
+    this is the detail behind it, read when a source card is opened."""
+    await _require_ready()
+    parcel = await _parcel_or_404(gush, helka, suffix)
+    return {**await nadlan_sources.source_rows(source, parcel, limit=limit, offset=offset),
+            "parcel_key": parcel["parcel_key"], "processed": False}
 
 
 @router.get("/layers")
