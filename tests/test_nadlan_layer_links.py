@@ -294,3 +294,55 @@ def test_the_r2_reader_streams_text_with_a_bom_and_hebrew(monkeypatch):
     assert wkt == "POINT(34.8 32.08)"
     assert json.loads(attrs) == {"pl_number": "פת/1", "pl_name": "שורה\nשנייה"}
     assert closed == {"yes": True}
+
+
+def test_the_scheduler_builds_the_listed_layers_in_order_one_per_tick(pg):
+    _stub_source(pg, ROWS)
+    pg.setattr(L.settings, "nadlan_layer_links_autobuild", f"{MAVAT}, {PRICE}")
+
+    async def main():
+        first = await L.build_pending()
+        second = await L.build_pending()
+        third = await L.build_pending()
+        return first, second, third
+
+    first, second, third = run(main)
+    assert first["dataset_id"] == MAVAT and first["status"] == "ok"
+    assert first["table_bytes"] > 0
+    assert second["dataset_id"] == PRICE and second["status"] == "ok"
+    assert third is None                                   # nothing left
+
+
+def test_a_failed_layer_stops_the_rollout(pg):
+    _stub_source(pg, [["1", "x", "", "", "NOT WKT AT ALL 99"]])
+    pg.setattr(L.settings, "nadlan_layer_links_autobuild", f"{MAVAT},{PRICE}")
+
+    async def main():
+        failed = await L.build_pending()
+        _stub_source(pg, ROWS)
+        return failed, await L.build_pending(), await L.get_state(PRICE)
+
+    failed, after, price = run(main)
+    assert failed["status"] == "failed"
+    assert after is None and price == []                   # not retried, next not started
+
+
+def test_a_build_cut_short_by_a_restart_is_built_again_cleanly(pg):
+    _stub_source(pg, ROWS)
+    pg.setattr(L.settings, "nadlan_layer_links_autobuild", MAVAT)
+
+    async def main():
+        await L.ensure_tables()
+        await L._set_state(MAVAT, status="building", building=1)
+        pool = await append_store.get_pool()
+        async with pool.acquire() as conn:            # a half-written generation 1
+            await conn.execute(
+                f'INSERT INTO public."{L.FEATURES_TABLE}" VALUES '
+                f"($1, 1, 'stale', '{{}}', ARRAY['1-0-1'], NULL)", MAVAT)
+        res = await L.build_pending()
+        keys = await _fetch(f'SELECT feature_key FROM public."{L.FEATURES_TABLE}"')
+        return res, keys
+
+    res, keys = run(main)
+    assert res["status"] == "ok" and res["generation"] == 1 and res["links"] == 3
+    assert "stale" not in {k["feature_key"] for k in keys}

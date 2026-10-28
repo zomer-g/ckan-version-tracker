@@ -353,25 +353,30 @@ async def init_scheduler() -> None:
         except Exception:  # noqa: BLE001
             logger.exception("deals indexes check failed")
 
-    # The נדל"ן לעם crosswalk of the layers too large for the idx mirror: a
-    # layer an admin built once is rebuilt when a newer version of it lands.
-    # Daily is enough — these are national planning layers, re-scraped weekly.
+    # The נדל"ן לעם crosswalk of the layers too large for the idx mirror: the
+    # first build of the next layer in settings.nadlan_layer_links_autobuild,
+    # then a rebuild of any built layer a newer version of it has landed for.
+    # Hourly, so a rollout of several layers moves along; a tick with nothing
+    # to build is two small queries.
     async def layer_links_job() -> None:
         if not settings.append_database_url:
             return
         from app.services import nadlan_layer_links
         try:
+            first = await nadlan_layer_links.build_pending()
+            if first:
+                logger.info("layer links first build: %s", first)
             res = await nadlan_layer_links.refresh_stale()
             if res:
                 logger.info("layer links refresh: %s", res)
         except Exception:  # noqa: BLE001
-            logger.exception("layer links refresh failed")
+            logger.exception("layer links job failed")
 
     scheduler.add_job(
         layer_links_job,
         trigger=IntervalTrigger(
-            hours=24,
-            start_date=datetime.now(timezone.utc) + timedelta(minutes=37),
+            hours=1,
+            start_date=datetime.now(timezone.utc) + timedelta(minutes=10),
         ),
         id="nadlan_layer_links",
         replace_existing=True,

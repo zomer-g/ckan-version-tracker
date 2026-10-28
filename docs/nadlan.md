@@ -796,8 +796,14 @@ curl -X POST 'https://www.over.org.il/api/admin/nadlan/layer-links/build?dataset
 curl 'https://www.over.org.il/api/admin/nadlan/layer-links/state' -H "Authorization: Bearer $TOKEN"
 ```
 
-A layer built once is rebuilt daily when a newer version of it has landed
-(`nadlan_layer_links` scheduler job). The integration tests run against a real
+The scheduler builds them on its own too, so no admin token is needed: every
+hour the `nadlan_layer_links` job makes the first build of the next layer listed
+in `NADLAN_LAYER_LINKS_AUTOBUILD` (comma-separated dataset ids, in order; the
+default is מבא"ת alone), one per tick. A failed layer stops the list — it is not
+retried, and the layers after it wait — and a build a restart cut short is
+started over. The build logs a progress line every 20 batches and its summary
+(time, counts, `table_bytes`) at the end, so the runtime log is enough to
+measure it. The same job rebuilds a built layer when a newer version lands. The integration tests run against a real
 PostGIS when `NADLAN_PG_TEST_URL` names a throwaway database.
 
 **Not yet verified against production.** The registry was built from the OVER

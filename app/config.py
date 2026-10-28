@@ -320,6 +320,11 @@ class Settings(BaseSettings):
     # between, a live table keeps up with its source — a query that silently
     # answers about last quarter is a worse outcome than a deferral nobody sees.
     index_mirror_refresh_max_csv_mb: int = 120
+    # נדל"ן לעם: layers whose parcel crosswalk (app/services/nadlan_layer_links)
+    # the scheduler builds on its own, comma-separated dataset ids, in order.
+    # One first build per tick, and a failed one is not retried, so the rollout
+    # is one layer at a time: add the next id once the previous one is measured.
+    nadlan_layer_links_autobuild: str = "b105ae22-a6f5-4cd0-b37e-c63dc5da40c3"
     # Datasets per tick. Each is streamed one at a time, so this bounds how long
     # a tick runs, not how much memory it uses. Kept small because the tick
     # shares a 512MB dyno with the web app: a measured tick reached 427MB RSS.

@@ -358,13 +358,18 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                      features_linked=0, links=0, note=None, finished_at=None)
     t0 = time.monotonic()
     pool = await append_store.get_pool()
-    read = linked = links = 0
+    read = linked = links = batches = 0
     gen_iter = iter_csv_batches(_r2_lines(index_csv_value(mappings)),
                                 batch_rows=BATCH_ROWS, batch_bytes=BATCH_BYTES)
     srid_expr = None
     async with pool.acquire() as conn:
         await conn.execute(f"UPDATE public.{_qi(STATE_TABLE)} SET started_at = now() "
                            f"WHERE dataset_id = $1", dataset_id)
+        # Rows of this generation left by a build a restart cut short: it never
+        # flipped, so no reader uses them, and starting clean keeps the counts true.
+        await conn.execute(f"DELETE FROM public.{_qi(FEATURES_TABLE)} "
+                           f"WHERE dataset_id = $1 AND generation = $2",
+                           dataset_id, gen, timeout=1800)
         await conn.execute(f"""CREATE TEMP TABLE IF NOT EXISTS _layer_batch (
                                   feature_key text, wkt text, attrs text,
                                   g {_X}.geometry)""")
@@ -427,6 +432,10 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                     f"UPDATE public.{_qi(STATE_TABLE)} SET features_read = $2, "
                     f"features_linked = $3, links = $4 WHERE dataset_id = $1",
                     dataset_id, read, linked, links)
+                batches += 1
+                if batches % 20 == 0:
+                    logger.info("layer links: %s building, %d read, %d linked, %d links, %.0fs",
+                                dataset_id, read, linked, links, time.monotonic() - t0)
         finally:
             await conn.execute("DROP TABLE IF EXISTS _layer_batch")
 
@@ -444,10 +453,13 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
             f"DELETE FROM public.{_qi(FEATURES_TABLE)} "
             f"WHERE dataset_id = $1 AND generation <> $2",
             dataset_id, gen, timeout=1800)
+        table_bytes = await conn.fetchval(
+            "SELECT pg_total_relation_size(to_regclass($1))", f"public.{FEATURES_TABLE}")
     invalidate_generations()
     summary = {"dataset_id": dataset_id, "status": "ok", "version_number": vnum,
                "generation": gen, "features_read": read, "features_linked": linked,
-               "links": links, "duration_s": round(time.monotonic() - t0, 1)}
+               "links": links, "duration_s": round(time.monotonic() - t0, 1),
+               "table_bytes": table_bytes}
     logger.info("layer links: %s", summary)
     return summary
 
@@ -468,6 +480,31 @@ async def refresh_stale() -> list[dict]:
             out.append(await build(st["dataset_id"],
                                    radius_m=nadlan_layers.radius_for_dataset(st["dataset_id"])))
     return out
+
+
+def autobuild_ids() -> list[str]:
+    return [d.strip() for d in (settings.nadlan_layer_links_autobuild or "").split(",")
+            if d.strip()]
+
+
+async def build_pending() -> dict | None:
+    """The first build of the next layer listed in
+    ``settings.nadlan_layer_links_autobuild`` that has none yet — one per call.
+
+    A layer whose build failed is left alone (its note says why; an admin
+    rebuilds it with ``force``), and so is everything after it: the list is an
+    order, and the next layer is the larger one. A layer whose build a restart
+    cut short reads as ``building`` with no generation, and is built again."""
+    from app.services import nadlan_layers
+    states = {s["dataset_id"]: s for s in await get_state()}
+    for ds in autobuild_ids():
+        st = states.get(ds) or {}
+        if st.get("generation"):
+            continue
+        if st.get("status") in ("failed", "no_index_csv"):
+            return None
+        return await build(ds, radius_m=nadlan_layers.radius_for_dataset(ds))
+    return None
 
 
 # ── reading the crosswalk ──
