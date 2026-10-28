@@ -4146,6 +4146,21 @@ async def govmap_parcels_ingest(request: Request, body: dict):
     return await address_govmap_parcels.record_batch(body)
 
 
+@router.post("/govmap-points/ingest")
+async def govmap_points_ingest(request: Request, body: dict):
+    """Store each swept address's OWN point, looked up after the parcel sweep.
+
+    ``{"points": [{address_objectid, status, lat, lon, itm_x, itm_y}, ...]}``
+    where status is found / not_found / mismatch / too_far. Attaches to rows
+    the parcel sweep already ingested; ids OVER has not seen yet come back in
+    ``unknown`` for the worker to re-send. The hourly merge then upgrades the
+    parcel-centroid point of those addresses to ``point_source='govmap_address'``.
+    """
+    _verify_worker_key(request)
+    from app.services import address_govmap_parcels
+    return await address_govmap_parcels.record_points(body)
+
+
 # ── יומן לעם (Ocal) diary import via the residential worker ────────────────────
 # odata.org.il's file downloads 403 Render's datacenter IP, so the Render backend
 # can discover diaries + parse/import their bytes but cannot DOWNLOAD them. The

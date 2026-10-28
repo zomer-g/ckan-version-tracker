@@ -85,6 +85,15 @@ TABLE = "over_re_govmap_parcels"
 #: docstring). A reader tracing a coordinate has to be able to tell them apart.
 POINT_SOURCE = "govmap_parcel"
 
+#: The address's OWN point, from GovMap's search box (``govmap_point_sweep.py``
+#: on the worker), looked up per address after the parcel sweep found it.
+#: Distinct from the geocoder's ``'govmap'`` for the same reason as above: it
+#: is a different pipeline with its own match rule, and the geocode repair in
+#: ``geocode_queue`` clears ``'govmap'`` points on its own criteria -- it must
+#: not reach these. Ranked above ``govmap_parcel`` (a doorway, not a plot) and
+#: below the register: it UPGRADES a centroid, it never displaces anything else.
+EXACT_POINT_SOURCE = "govmap_address"
+
 #: How many distinct parcels one `resolve_parcels()` call will look up. The
 #: sweep can only ingest ~15 parcels a minute (GovMap publishes
 #: `X-RateLimit-Limit: 15` over a 60-second window), so this is never the
@@ -115,6 +124,20 @@ CREATE TABLE IF NOT EXISTS public.{_qi(TABLE)} (
     fetched_at        timestamptz DEFAULT now()
 )
 """
+#: The exact point, added 2026-10-28. Separate columns rather than overwriting
+#: lat/lon: the centroid is what resolves the PARCEL (it is inside its polygon
+#: by construction; a doorway point near a boundary may not be), so both are
+#: kept and each is used for what it is good at.
+_EXACT_COLUMNS = [
+    ("exact_lat", "double precision"),
+    ("exact_lon", "double precision"),
+    ("exact_itm_x", "double precision"),
+    ("exact_itm_y", "double precision"),
+    # found / not_found / mismatch / too_far -- the worker's own verdict.
+    ("exact_status", "text"),
+    ("exact_checked_at", "timestamptz"),
+]
+
 _INDEXES = [
     f"CREATE INDEX IF NOT EXISTS {_qi(TABLE + '_parcel_idx')} "
     f"ON public.{_qi(TABLE)} (parcel_object_id)",
@@ -129,6 +152,16 @@ async def ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
+        for column, kind in _EXACT_COLUMNS:
+            # One statement each, and never fatal: a failed ALTER must leave
+            # the sweep's ingest working (see the pg-store migration rule).
+            try:
+                await conn.execute(
+                    f"ALTER TABLE public.{_qi(TABLE)} "
+                    f"ADD COLUMN IF NOT EXISTS {_qi(column)} {kind}")
+            except Exception:  # noqa: BLE001
+                logger.warning("govmap_parcels: could not add %s", column,
+                               exc_info=True)
         for stmt in _INDEXES:
             await conn.execute(stmt)
     await _revoke_from_public_console()
@@ -233,6 +266,77 @@ async def record_batch(payload: dict) -> dict:
     return out
 
 
+# ── exact points ──────────────────────────────────────────────────────────────
+_EXACT_STATUSES = {"found", "not_found", "mismatch", "too_far"}
+
+
+def _point_row(a: dict) -> tuple | None:
+    """One looked-up address, or None if it cannot be keyed or is malformed.
+
+    A ``found`` row must carry a plausible Israeli point; anything else is
+    stored as a verdict with no coordinate. A point is never accepted from a
+    row whose verdict is not ``found`` -- the worker rejected it for a reason.
+    """
+    def _f(v):
+        try:
+            return float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    try:
+        aoid = int(a.get("address_objectid"))
+    except (TypeError, ValueError):
+        return None
+    status = (a.get("status") or "").strip()
+    if status not in _EXACT_STATUSES:
+        return None
+    lat, lon = _f(a.get("lat")), _f(a.get("lon"))
+    x, y = _f(a.get("itm_x")), _f(a.get("itm_y"))
+    if (status != "found" or lat is None or lon is None
+            or not (29.0 <= lat <= 33.6 and 34.0 <= lon <= 36.0)):
+        if status == "found":
+            status = "mismatch"   # claimed found, but no usable point
+        lat = lon = x = y = None
+    return (aoid, lat, lon, x, y, status)
+
+
+async def record_points(payload: dict) -> dict:
+    """Store the per-address points the worker looked up.
+
+    ``{"points": [{address_objectid, status, lat, lon, itm_x, itm_y}, ...]}``
+
+    UPDATE only: the address row comes from the parcel sweep's own ingest, and
+    a point for an address OVER has never seen has nothing to attach to. Those
+    ids are returned as ``unknown`` so the worker can send them again later --
+    the two pushes are independent and the points pass can get ahead.
+    Re-sending is a no-op apart from the timestamp.
+    """
+    rows = [r for r in (_point_row(a) for a in (payload.get("points") or [])) if r]
+    received = len(payload.get("points") or [])
+    if not rows:
+        return {"received": received, "stored": 0, "unknown": []}
+    await ensure_tables()
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            matched = await conn.fetch(f"""
+                UPDATE public.{_qi(TABLE)} g
+                   SET exact_lat = v.lat, exact_lon = v.lon,
+                       exact_itm_x = v.x, exact_itm_y = v.y,
+                       exact_status = v.status, exact_checked_at = now()
+                  FROM unnest($1::bigint[], $2::float8[], $3::float8[],
+                              $4::float8[], $5::float8[], $6::text[])
+                       AS v(aoid, lat, lon, x, y, status)
+                 WHERE g.address_objectid = v.aoid
+             RETURNING g.address_objectid
+            """, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
+                [r[3] for r in rows], [r[4] for r in rows], [r[5] for r in rows])
+    got = {m["address_objectid"] for m in matched}
+    unknown = [r[0] for r in rows if r[0] not in got]
+    out = {"received": received, "stored": len(got), "unknown": unknown}
+    logger.info("govmap_parcels: points %s", {**out, "unknown": len(unknown)})
+    return out
+
+
 # ── parcel resolution ─────────────────────────────────────────────────────────
 async def resolve_parcels(limit: int = RESOLVE_BATCH) -> dict:
     """Turn GovMap's parcel object ids into gush-חלקה keys, once per parcel.
@@ -312,7 +416,9 @@ def _keyed_cte(*, project_resolution: bool = False) -> str:
                over_street_key(g.settlement_code, g.street_name)     AS street_key,
                g.street_name                                         AS street_raw,
                g.house_num                                           AS house_num,
-               g.lat, g.lon, {parcel}                                AS parcel_key
+               g.lat, g.lon, {parcel}                                AS parcel_key,
+               g.exact_lat                                           AS xlat,
+               g.exact_lon                                           AS xlon
         FROM public.{_qi(TABLE)} g
         {join}
         WHERE g.settlement_code IS NOT NULL
@@ -335,9 +441,11 @@ def _distinct_cte() -> str:
     """
     return f"""
         SELECT DISTINCT ON (sc, street_key, house_num)
-               sc, street_key, house_num, street_raw, lat, lon, parcel_key
+               sc, street_key, house_num, street_raw, lat, lon, parcel_key,
+               xlat, xlon
         FROM k WHERE street_key IS NOT NULL
-        ORDER BY sc, street_key, house_num, (parcel_key IS NULL), parcel_key
+        ORDER BY sc, street_key, house_num, (parcel_key IS NULL),
+                 (xlat IS NULL), parcel_key
     """
 
 
@@ -427,10 +535,14 @@ async def merge(*, dry_run: bool = False) -> dict:
             tag = await conn.execute(f"""
                 WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
                 UPDATE public.{_qi(ADDRESSES_TABLE)} o
-                   SET lat = d.lat, lon = d.lon,
-                       point = extensions.ST_SetSRID(
-                                 extensions.ST_MakePoint(d.lon, d.lat), 4326),
-                       point_source = '{POINT_SOURCE}'
+                   SET lat = coalesce(d.xlat, d.lat),
+                       lon = coalesce(d.xlon, d.lon),
+                       point = extensions.ST_SetSRID(extensions.ST_MakePoint(
+                                 coalesce(d.xlon, d.lon),
+                                 coalesce(d.xlat, d.lat)), 4326),
+                       point_source = CASE WHEN d.xlat IS NOT NULL
+                                           THEN '{EXACT_POINT_SOURCE}'
+                                           ELSE '{POINT_SOURCE}' END
                   FROM d
                  WHERE o.settlement_code = d.sc
                    AND o.street_key = d.street_key
@@ -438,6 +550,25 @@ async def merge(*, dry_run: bool = False) -> dict:
                    AND o.point IS NULL
             """, timeout=1800)
             points_filled = int(str(tag).rsplit(" ", 1)[-1] or 0)
+
+            # A centroid this source put there earlier, now that the address's
+            # own point is known. ONLY our own centroids: a point from the
+            # register, the geocoder or a municipal layer is never touched.
+            tag = await conn.execute(f"""
+                WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
+                UPDATE public.{_qi(ADDRESSES_TABLE)} o
+                   SET lat = d.xlat, lon = d.xlon,
+                       point = extensions.ST_SetSRID(
+                                 extensions.ST_MakePoint(d.xlon, d.xlat), 4326),
+                       point_source = '{EXACT_POINT_SOURCE}'
+                  FROM d
+                 WHERE o.settlement_code = d.sc
+                   AND o.street_key = d.street_key
+                   AND o.house_num = d.house_num
+                   AND o.point_source = '{POINT_SOURCE}'
+                   AND d.xlat IS NOT NULL AND d.xlon IS NOT NULL
+            """, timeout=1800)
+            points_upgraded = int(str(tag).rsplit(" ", 1)[-1] or 0)
 
             tag = await conn.execute(f"""
                 WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
@@ -454,10 +585,11 @@ async def merge(*, dry_run: bool = False) -> dict:
                        -- has no standing to disagree with it.
                        d.sc, t.name, d.street_key,
                        coalesce(s.name, d.street_raw),
-                       d.house_num, d.lat, d.lon,
-                       extensions.ST_SetSRID(
-                         extensions.ST_MakePoint(d.lon, d.lat), 4326),
-                       '{POINT_SOURCE}',
+                       d.house_num, coalesce(d.xlat, d.lat), coalesce(d.xlon, d.lon),
+                       extensions.ST_SetSRID(extensions.ST_MakePoint(
+                         coalesce(d.xlon, d.lon), coalesce(d.xlat, d.lat)), 4326),
+                       CASE WHEN d.xlat IS NOT NULL THEN '{EXACT_POINT_SOURCE}'
+                            ELSE '{POINT_SOURCE}' END,
                        d.parcel_key,
                        CASE WHEN d.parcel_key IS NOT NULL
                             THEN '{POINT_SOURCE}' END,
@@ -472,7 +604,7 @@ async def merge(*, dry_run: bool = False) -> dict:
     from app.services import nadlan_query
     nadlan_query.invalidate_stats_cache()
     out = {"parcels_filled": parcels_filled, "points_filled": points_filled,
-           "inserted": inserted}
+           "points_upgraded": points_upgraded, "inserted": inserted}
     logger.info("govmap_parcels: merged %s", out)
     return out
 
@@ -487,6 +619,8 @@ async def stats() -> dict:
                    count(DISTINCT settlement_code)                       AS settlements,
                    count(*) FILTER (WHERE parcel_resolved)               AS parcel_resolved,
                    count(*) FILTER (WHERE parcel_key IS NOT NULL)        AS with_parcel_key,
+                   count(*) FILTER (WHERE exact_status IS NOT NULL)      AS exact_checked,
+                   count(*) FILTER (WHERE exact_lat IS NOT NULL)         AS exact_found,
                    max(fetched_at)                                       AS last_ingest
             FROM public.{_qi(TABLE)}
         """)

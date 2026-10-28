@@ -262,3 +262,64 @@ def test_the_scheduled_merge_is_single_flight_and_cannot_kill_the_job():
     assert "max_instances=1" in block
     assert "except Exception" in block
     assert "replace_existing=True" in block
+
+
+# ── the address's own point (2026-10-28) ──────────────────────────────────────
+def test_the_exact_point_has_its_own_stamp():
+    """Not the geocoder's 'govmap' (whose repair clears points on its own
+    criteria) and not the centroid's 'govmap_parcel'."""
+    assert gp.EXACT_POINT_SOURCE == "govmap_address"
+    assert gp.EXACT_POINT_SOURCE not in ("govmap", gp.POINT_SOURCE)
+
+
+def test_only_our_own_centroids_are_upgraded():
+    """The upgrade step may replace a point ONLY where this source put a
+    centroid; a register, geocoder or municipal point is never touched."""
+    src = inspect.getsource(gp.merge)
+    assert "o.point_source = '{POINT_SOURCE}'" in src
+    upgrade = src[src.index("points_filled = int"):src.index("points_upgraded = int")]
+    assert "o.point IS NULL" not in upgrade
+    assert "d.xlat IS NOT NULL" in upgrade
+
+
+def test_a_new_address_prefers_its_exact_point():
+    src = inspect.getsource(gp.merge)
+    assert "coalesce(d.xlat, d.lat)" in src
+
+
+def test_the_centroid_still_resolves_the_parcel():
+    """A doorway point near a boundary may fall in the neighbour's polygon;
+    the centroid cannot. Resolution keeps reading lat/lon, never exact_*."""
+    src = inspect.getsource(gp.resolve_parcels)
+    assert "exact_" not in src
+
+
+def test_a_point_is_only_taken_from_a_found_verdict():
+    found = gp._point_row({"address_objectid": "7", "status": "found",
+                           "lat": "32.67", "lon": "35.25"})
+    assert found[1:3] == (32.67, 35.25) and found[5] == "found"
+    rejected = gp._point_row({"address_objectid": "7", "status": "mismatch",
+                              "lat": "32.67", "lon": "35.25"})
+    assert rejected[1] is None and rejected[5] == "mismatch"
+
+
+def test_a_found_point_outside_israel_is_demoted():
+    row = gp._point_row({"address_objectid": "7", "status": "found",
+                         "lat": "51.5", "lon": "-0.1"})
+    assert row[1] is None and row[5] == "mismatch"
+
+
+def test_garbage_point_rows_are_dropped():
+    assert gp._point_row({"address_objectid": "x", "status": "found"}) is None
+    assert gp._point_row({"address_objectid": "7", "status": "maybe"}) is None
+
+
+def test_points_attach_to_existing_rows_and_report_the_rest():
+    src = inspect.getsource(gp.record_points)
+    assert "UPDATE public" in src and "INSERT" not in src
+    assert "unknown" in src
+
+
+def test_adding_the_columns_can_never_break_ingest():
+    src = inspect.getsource(gp.ensure_tables)
+    assert "ADD COLUMN IF NOT EXISTS" in src and "except Exception" in src
