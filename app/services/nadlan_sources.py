@@ -42,22 +42,42 @@ _NOISE = {
     "shape_leng", "objectid", "fid", "ogc_fid", "globalid",
 }
 
-# The gazetteer publishes English machine names and no captions of its own.
-# These are the ones the index build reads (nadlan_index.build_gazetteer) plus
-# the obvious rest; an unlisted column keeps its own name rather than a guess.
-GAZETTEER_LABELS = {
-    "Type": "סוג נכס",
-    "SubParcelNum": "תת-חלקה",
-    "BuildingFloors": "קומות בבניין",
-    "BuildingYear": "שנת בנייה",
-    "EstimatedAppartments": "אומדן דירות",
-    "StreetNameHeb": "רחוב",
-    "StreetCode": "קוד רחוב",
-    "SettlementNameHeb": "יישוב",
-    "SettlmentID": "סמל יישוב",
-    "GushNum": "גוש",
-    "ParcelNum": "חלקה",
-    "ID": "מזהה",
+# These sources publish machine names and no captions of their own (and none
+# is in over_column_aliases). The names are the ones production returns, read
+# off live rows on 2026-10-28; a column not listed keeps its own name rather
+# than a guessed caption.
+LABELS = {
+    "gazetteer": {
+        "Type": "סוג נכס",
+        "SubParcelNum": "תת-חלקה",
+        "BuildingFloors": "קומות בבניין",
+        "BuildingYear": "שנת בנייה",
+        "EstimatedAppartments": "אומדן דירות",
+        "StreetNameHeb": "רחוב",
+        "StreetCode": "סמל רחוב",
+        "AssetID": "מזהה נכס",
+        "Region_ID": "סמל מחוז",
+    },
+    "parcels": {
+        "PARCEL_ID": "מזהה חלקה", "GUSH_NUM": "גוש", "GUSH_SUFFI": "תת-גוש",
+        "PARCEL": "חלקה", "LEGAL_AREA": "שטח רשום (מ״ר)", "STATUS": "קוד סטטוס",
+        "STATUS_TEX": "סטטוס", "LOCALITY_I": "סמל יישוב", "LOCALITY_N": "יישוב",
+        "REG_MUN_ID": "סמל מועצה אזורית", "REG_MUN_NA": "מועצה אזורית",
+        "COUNTY_ID": "סמל נפה", "COUNTY_NAM": "נפה", "REGION_ID": "סמל מחוז",
+        "REGION_NAM": "מחוז", "TALAR_NUMB": "מספר תצ״ר", "TALAR_YEAR": "שנת תצ״ר",
+        "SYS_DATE": "תאריך עדכון", "IS3D": "חלקה תלת-ממדית", "SHAPE_LEN": "היקף (מ׳)",
+    },
+    "postal": {
+        "LocationID": "קוד יישוב (דואר)", "Location Name": "יישוב",
+        "StreetID": "קוד רחוב (דואר)", "Street Name": "רחוב",
+        "House Number": "מספר בית", "ZIP 5": "מיקוד 5", "ZIP 7": "מיקוד 7",
+        "Updated": "עדכון אחרון",
+    },
+    "stat_area": {
+        "SEMEL_YISHUV": "סמל יישוב", "SHEM_YISHUV": "יישוב",
+        "STAT_2022": "אזור סטטיסטי", "YISHUV_STAT_2022": "קוד אזור מלא",
+        "ROVA": "רובע", "TAT_ROVA": "תת-רובע", "COD_TIFKUD": "קוד תפקוד",
+    },
 }
 
 # What a reader looks at first; the rest follow in the table's own order.
@@ -66,10 +86,12 @@ _FIRST = {
                   "EstimatedAppartments", "StreetNameHeb"],
 }
 
-# Constant per source: the gazetteer and the parcels layer repeat these on
-# every row, and the card already says them once.
+# Said once on the card, repeated on every row, or an English copy of a
+# Hebrew column beside it.
 _REPEATED = {
-    "gazetteer": {"GushNum", "ParcelNum", "SettlmentID", "SettlementNameHeb"},
+    "gazetteer": {"GushNum", "ParcelNum", "SettlmentID", "SettlementNameHeb",
+                  "SettlementNameEng", "StreetNameEng", "ID"},
+    "stat_area": {"SHEM_YISHUV_ENGLISH"},
 }
 
 
@@ -118,6 +140,9 @@ def _clean(v):
     # fraction — show it as the integer it is.
     if s.endswith(".0") and s[:-2].lstrip("-").isdigit():
         return s[:-2]
+    # Israel Post pads house numbers and ids with zeros ("00008").
+    if len(s) > 1 and s.startswith("0") and s.isdigit() and len(s) <= 5:
+        return s.lstrip("0") or "0"
     return s
 
 
@@ -173,9 +198,7 @@ async def source_rows(source: str, parcel: dict, *, limit: int = 50,
     records, total = (await _rows(src, where, args, order=order, limit=limit, offset=offset)
                       if all(a not in (None, []) for a in args) else ([], 0))
 
-    labels = dict((await column_aliases.load_map()).get(src, {}))
-    if source == "gazetteer":
-        labels = {**labels, **GAZETTEER_LABELS}
+    labels = {**(await column_aliases.load_map()).get(src, {}), **LABELS.get(source, {})}
     order_cols = await _column_order(*src)
     first = [c for c in _FIRST.get(source, []) if c in order_cols]
     keys = first + [c for c in order_cols if c not in first]

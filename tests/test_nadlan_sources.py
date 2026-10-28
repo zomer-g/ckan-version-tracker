@@ -22,6 +22,8 @@ def test_float_text_integers_read_as_integers_and_blanks_as_nothing():
     assert S._clean("4.5") == "4.5"
     assert S._clean("  ") is None and S._clean("NULL") is None and S._clean(None) is None
     assert S._clean("דירת מגורים") == "דירת מגורים"
+    assert S._clean("00008") == "8" and S._clean("0") == "0"   # Israel Post's house numbers
+    assert S._clean("094151") == "094151"                      # a six-digit code keeps its zero
 
 
 def test_a_source_is_matched_in_both_of_its_integer_forms():
