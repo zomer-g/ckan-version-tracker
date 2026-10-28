@@ -784,6 +784,12 @@ a container that peaks at 7.7 of its 8 GB.
   GIN index. A row per (parcel, plan) pair was the first design and did not
   survive measurement — a city-wide plan covers tens of thousands of parcels,
   and 11,000 synthetic plans already made 10 M pairs.
+* A layer published without the index CSV — רצף מגרשי תב"ע (1.09 M plots, a
+  627 MB GeoParquet) and משהב"ש plots — is read from its **GeoParquet** instead,
+  one row group (2,000 rows) at a time over ranged GETs (`R2RangeFile`), so the
+  file is neither downloaded nor held; the geometry arrives as WKB and its CRS
+  comes from the file's `geo` metadata. משהב"ש plots has a GeoParquet only in
+  version 2, so that is the version built (the lookup goes back five versions).
 * Builds write a new `generation` and flip `over_re_layer_link_state` only when
   done; a failed build leaves readers on the previous one.
 
@@ -800,9 +806,8 @@ The scheduler builds them on its own too, so no admin token is needed: every
 hour the `nadlan_layer_links` job makes the first build of the next layer listed
 in `NADLAN_LAYER_LINKS_AUTOBUILD` (comma-separated dataset ids, in order; the
 default lists all eight, רצף מגרשי תב"ע last), one per tick. A failed layer stops the list — it is not
-retried, and the layers after it wait — a layer with no index CSV is passed
-over (משהב"ש plots and רצף מגרשי תב"ע are published as GPKG/GeoParquet only,
-so the CSV reader cannot build them yet), and a build a restart cut short is
+retried, and the layers after it wait — a layer with neither an index CSV
+nor a GeoParquet is passed over, and a build a restart cut short is
 started over. The build logs a progress line every 20 batches and its summary
 (time, counts, `table_bytes`) at the end, so the runtime log is enough to
 measure it. מבא"ת, the first, took 85 s for 37,708 plans: 28,858 touch a

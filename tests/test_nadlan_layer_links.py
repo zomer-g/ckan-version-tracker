@@ -365,3 +365,159 @@ def test_a_layer_without_an_index_csv_is_passed_over_not_a_stop(pg):
     assert skipped["status"] == "no_index_csv"
     assert built["dataset_id"] == PRICE and built["status"] == "ok"
     assert done is None
+
+
+# ── GeoParquet layers (רצף מגרשי תב"ע, משהב"ש plots) ──
+def _wkb_polygon(wkt: str) -> bytes:
+    """WKB for the simple one-ring POLYGON((...)) strings above, little-endian."""
+    import struct
+    pts = [tuple(map(float, p.split())) for p in wkt[wkt.index("((") + 2:-2].split(",")]
+    return (struct.pack("<BII", 1, 3, 1) + struct.pack("<I", len(pts))
+            + b"".join(struct.pack("<dd", x, y) for x, y in pts))
+
+
+GEO_META = {"version": "1.0.0", "primary_column": "geometry", "columns": {"geometry": {
+    "encoding": "WKB", "geometry_types": ["Polygon"],
+    "crs": {"type": "GeographicCRS", "name": "WGS 84 (CRS84)",
+            "id": {"authority": "OGC", "code": "CRS84"}}}}}
+
+
+def _parquet_bytes(rows, *, row_group_size=2, geo=GEO_META) -> bytes:
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    cols = {"geometry": [_wkb_polygon(r[4]) if r[4] else None for r in rows],
+            "objectId": [r[0] for r in rows], "tochnit": [r[1] for r in rows],
+            "pl_name": [r[2] for r in rows], "mavat_code": [r[3] for r in rows]}
+    table = pa.table(cols)
+    if geo is not None:
+        table = table.replace_schema_metadata({b"geo": json.dumps(geo).encode()})
+    buf = io.BytesIO()
+    pq.write_table(table, buf, row_group_size=row_group_size)
+    return buf.getvalue()
+
+
+class _FakeR2:
+    def __init__(self, data):
+        self.data, self.gets = data, 0
+
+    def head_object(self, Bucket, Key):
+        return {"ContentLength": len(self.data)}
+
+    def get_object(self, Bucket, Key, Range):
+        import io
+        self.gets += 1
+        lo, hi = map(int, Range.split("=")[1].split("-"))
+        return {"Body": io.BytesIO(self.data[lo:hi + 1])}
+
+
+def _parquet_file(data):
+    import pyarrow.parquet as pq
+    return pq.ParquetFile(L.R2RangeFile("r2:layer.parquet", client=_FakeR2(data)))
+
+
+def test_a_geoparquet_layer_is_read_row_group_by_row_group():
+    pf = _parquet_file(_parquet_bytes(ROWS))
+    batches = list(L.iter_parquet_batches(pf, batch_rows=3))
+    assert [len(b) for _, b in batches] == [3, 1]          # the no-geometry row skipped
+    header, batch = batches[0]
+    assert "geometry" not in header
+    key, wkb, attrs = batch[0]
+    assert wkb == _wkb_polygon(SQUARE_P1_P2)
+    assert json.loads(attrs) == {"tochnit": "פת/1000", "pl_name": "תוכנית גדולה",
+                                 "mavat_code": "2000343621"}   # objectId dropped
+    assert batch[1][0] != key and len(key) == 32
+
+
+def test_the_range_reader_needs_few_requests_and_reads_exactly():
+    data = _parquet_bytes(ROWS * 50, row_group_size=40)
+    fake = _FakeR2(data)
+    f = L.R2RangeFile("r2:layer.parquet", client=fake)
+    f.seek(-8, 2)
+    assert f.read(8) == data[-8:]
+    f.seek(5)
+    assert f.read(100) == data[5:105] and f.tell() == 105
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(L.R2RangeFile("r2:layer.parquet", client=fake))
+    assert sum(len(b) for _, b in L.iter_parquet_batches(pf)) == 200
+    assert fake.gets <= 6                                  # small file: read-ahead covers it
+
+
+@pytest.mark.parametrize("crs,srid", [
+    (GEO_META["columns"]["geometry"]["crs"], 4326),
+    (None, 4326),                                          # the spec's default
+    ({"type": "ProjectedCRS", "name": "Israel 1993 / Israeli TM Grid",
+      "id": {"authority": "EPSG", "code": 2039}}, L.ITM_SRID),
+])
+def test_the_geoparquet_crs_is_read_from_its_metadata(crs, srid):
+    geo = {"primary_column": "geometry", "columns": {"geometry": {"encoding": "WKB"}}}
+    if crs is not None:
+        geo["columns"]["geometry"]["crs"] = crs
+    assert L.parquet_srid({b"geo": json.dumps(geo).encode()}) == srid
+
+
+def test_an_unknown_crs_is_refused():
+    geo = {"primary_column": "geometry", "columns": {"geometry": {
+        "crs": {"name": "Somewhere Else", "id": {"authority": "EPSG", "code": 3857}}}}}
+    with pytest.raises(ValueError):
+        L.parquet_srid({b"geo": json.dumps(geo).encode()})
+
+
+def test_a_version_offers_the_csv_first_then_the_geoparquet():
+    assert L.layer_source({"נתוני הסורק": "r2:a.csv", "_parquet": ["r2:a.parquet"]}) == (
+        "csv", "r2:a.csv")
+    assert L.layer_source({"_gpkg": ["r2:a.gpkg"], "_parquet": ["r2:a.parquet"]}) == (
+        "parquet", "r2:a.parquet")
+    assert L.layer_source({"_gpkg": ["r2:a.gpkg"]}) is None
+
+
+def test_a_geoparquet_layer_builds_like_a_csv_one(pg):
+    data = _parquet_bytes(ROWS)
+
+    async def _latest(ds):
+        return 11, {"_gpkg": ["r2:x.gpkg"], "_parquet": ["r2:x.parquet"]}
+
+    async def _labels(values):
+        return {}
+
+    pg.setattr(L, "latest_version", _latest)
+    pg.setattr(L, "_r2_parquet", lambda value: _parquet_file(data))
+    pg.setattr(column_aliases, "_bundle_dictionary", _labels)
+    pg.setattr(L, "BATCH_ROWS", 2)
+
+    async def main():
+        res = await L.build(MAVAT)
+        L.invalidate_generations()
+        out = await nadlan_layers.spatial_cube(nadlan_layers.cube("mavat_plans"),
+                                               {"parcel_key": "1-0-1", "lat": 32.08,
+                                                "lon": 34.80})
+        return res, out
+
+    res, out = run(main)
+    assert res["status"] == "ok", res
+    assert (res["features_read"], res["features_linked"], res["links"]) == (4, 2, 3)
+    assert res["version_number"] == 11
+    assert out["count"] == 2
+
+
+def test_a_layer_once_without_a_source_is_built_when_it_gains_one(pg):
+    _stub_source(pg, ROWS)
+    stub = L.latest_version
+    has = {"source": False}
+
+    async def _latest(ds):
+        return await stub(ds) if has["source"] else None
+
+    pg.setattr(L, "latest_version", _latest)
+    pg.setattr(L.settings, "nadlan_layer_links_autobuild", MAVAT)
+
+    async def main():
+        first = await L.build_pending()
+        idle = await L.build_pending()
+        has["source"] = True
+        return first, idle, await L.build_pending()
+
+    first, idle, built = run(main)
+    assert first["status"] == "no_index_csv" and idle is None
+    assert built["status"] == "ok"

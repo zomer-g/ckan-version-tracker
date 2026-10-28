@@ -44,6 +44,7 @@ import asyncio
 import codecs
 import csv
 import hashlib
+import io
 import json
 import logging
 import time
@@ -57,7 +58,7 @@ from app.services.index_mirror import (
     classify_wkt_crs, index_csv_value,
 )
 from app.services.nadlan_index import PARCELS_TABLE
-from app.services.storage_client import key_of, storage_client
+from app.services.storage_client import is_storage_value, key_of, storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -215,10 +216,158 @@ async def _next(gen):
     return await asyncio.to_thread(next, gen, None)
 
 
+# ── reading a GeoParquet layer ──
+# The two largest layers (רצף מגרשי תב"ע, 1.09 M plots / 627 MB; משהב"ש plots)
+# are published as GPKG + GeoParquet only. A Parquet file is read one row group
+# at a time — 2,000 rows in the scraper's files — through ranged GETs, so the
+# file is never downloaded, and memory holds one row group and one read-ahead.
+PARQUET_RESOURCE_KEY = "_parquet"
+READ_AHEAD = 4 * 1024 * 1024
+
+
+def parquet_value(mappings: dict | None) -> str | None:
+    v = (mappings or {}).get(PARQUET_RESOURCE_KEY)
+    if isinstance(v, list):
+        v = v[0] if v else None
+    return v if (v and is_storage_value(v)) else None
+
+
+def layer_source(mappings: dict | None) -> tuple[str, str] | None:
+    """``("csv", value)`` or ``("parquet", value)`` — the index CSV when the
+    version has one (it is what the mirror and the console read), else the
+    GeoParquet — or None."""
+    if index_csv_value(mappings):
+        return "csv", index_csv_value(mappings)
+    if parquet_value(mappings):
+        return "parquet", parquet_value(mappings)
+    return None
+
+
+class R2RangeFile(io.RawIOBase):
+    """A seekable, read-only view of one R2 object over ranged GETs, for
+    pyarrow. Reads are rounded up to ``READ_AHEAD`` and the last block kept, so
+    the many small reads of a Parquet footer and column chunks cost a handful
+    of requests. Blocking: use it from a worker thread."""
+
+    def __init__(self, r2_value: str, client=None):
+        self._client = client or storage_client._get_client()
+        self._key = key_of(r2_value)
+        head = self._client.head_object(Bucket=settings.s3_bucket, Key=self._key)
+        self.size = int(head["ContentLength"])
+        self._pos = 0
+        self._buf_start, self._buf = 0, b""
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._pos
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self._pos, io.SEEK_END: self.size}[whence]
+        self._pos = max(0, base + offset)
+        return self._pos
+
+    def _fetch(self, start: int, length: int) -> bytes:
+        end = min(self.size, start + length) - 1
+        body = self._client.get_object(Bucket=settings.s3_bucket, Key=self._key,
+                                       Range=f"bytes={start}-{end}")["Body"]
+        try:
+            return body.read()
+        finally:
+            body.close()
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = self.size - self._pos
+        n = min(n, self.size - self._pos)
+        if n <= 0:
+            return b""
+        lo = self._pos - self._buf_start
+        if not (0 <= lo and lo + n <= len(self._buf)):
+            self._buf_start = self._pos
+            self._buf = self._fetch(self._pos, max(n, READ_AHEAD))
+            lo = 0
+        out = self._buf[lo:lo + n]
+        self._pos += len(out)
+        return out
+
+    def readinto(self, b):
+        data = self.read(len(b))
+        b[:len(data)] = data
+        return len(data)
+
+
+def parquet_srid(schema_metadata: dict | None) -> int:
+    """The SRID of a GeoParquet's primary geometry column: 4326 for CRS84 /
+    WGS 84 (and when the file says nothing — the spec's default), ITM for an
+    Israeli grid. Anything else is refused rather than guessed."""
+    geo = (schema_metadata or {}).get(b"geo")
+    if not geo:
+        return GEOM_SRID
+    meta = json.loads(geo)
+    col = meta.get("columns", {}).get(meta.get("primary_column") or "geometry", {})
+    crs = col.get("crs")
+    if crs is None:
+        return GEOM_SRID
+    text = json.dumps(crs)
+    if any(t in text for t in ("CRS84", "WGS 84", '"code": 4326')):
+        return GEOM_SRID
+    if any(t in text for t in ('"code": 2039', '"code": 6991', "Israeli TM", "Israel 1993")):
+        return ITM_SRID
+    raise ValueError(f"unsupported GeoParquet CRS: {text[:120]}")
+
+
+def iter_parquet_batches(pf, *, batch_rows: int = BATCH_ROWS,
+                         batch_bytes: int = BATCH_BYTES):
+    """Yield ``(header, [(key, wkb, attrs_json), ...])`` batches from a
+    ``pyarrow.parquet.ParquetFile``, one row group at a time — the same shape
+    as ``iter_csv_batches`` with WKB in place of WKT."""
+    meta = json.loads((pf.schema_arrow.metadata or {}).get(b"geo") or b"{}")
+    gcol = meta.get("primary_column") or "geometry"
+    names = pf.schema_arrow.names
+    if gcol not in names:
+        raise ValueError(f"GeoParquet has no {gcol} column")
+    header = [n for n in names if n != gcol]
+    keep = [i for i, h in enumerate(header) if h and h.lower() not in _NOISE]
+    batch: list[tuple[str, bytes, str]] = []
+    nbytes = 0
+    for rg in range(pf.metadata.num_row_groups):
+        table = pf.read_row_group(rg)
+        geoms = table.column(gcol).to_pylist()
+        cols = [table.column(h).to_pylist() for h in header]
+        for r, wkb in enumerate(geoms):
+            if not wkb:
+                continue
+            row = ["" if c[r] is None else str(c[r]) for c in cols]
+            h = hashlib.md5(wkb)
+            for v in row:
+                h.update(v.encode("utf-8"))
+                h.update(b"\x1f")
+            batch.append((h.hexdigest(), bytes(wkb),
+                          json.dumps(attrs_of(header, row, keep), ensure_ascii=False)))
+            nbytes += len(wkb)
+            if len(batch) >= batch_rows or nbytes >= batch_bytes:
+                yield header, batch
+                batch, nbytes = [], 0
+        del table, geoms, cols
+    if batch:
+        yield header, batch
+
+
+def _r2_parquet(r2_value: str):
+    import pyarrow.parquet as pq
+    return pq.ParquetFile(R2RangeFile(r2_value), pre_buffer=False)
+
+
 # ── which version, which labels ──
 async def latest_version(dataset_id: str) -> tuple[int, dict] | None:
     """``(version_number, resource_mappings)`` of the newest version that
-    carries an index CSV, or None."""
+    carries an index CSV or a GeoParquet (``layer_source``), or None. Looks
+    back five versions: משהב"ש plots has a GeoParquet only in an older one."""
     from sqlalchemy import select
 
     from app.database import async_session
@@ -230,7 +379,7 @@ async def latest_version(dataset_id: str) -> tuple[int, dict] | None:
             .order_by(VersionIndex.version_number.desc()).limit(5)
         )).all()
     for vnum, mappings in rows:
-        if index_csv_value(mappings):
+        if layer_source(mappings):
             return int(vnum), mappings or {}
     return None
 
@@ -340,7 +489,7 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
     latest = await latest_version(dataset_id)
     if latest is None:
         await _set_state(dataset_id, status="no_index_csv", finished=True,
-                         note="no version of this dataset carries an index CSV")
+                         note="no recent version carries an index CSV or a GeoParquet")
         return {"dataset_id": dataset_id, "status": "no_index_csv"}
     vnum, mappings = latest
     [state] = await get_state(dataset_id) or [{}]
@@ -359,9 +508,20 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
     t0 = time.monotonic()
     pool = await append_store.get_pool()
     read = linked = links = batches = 0
-    gen_iter = iter_csv_batches(_r2_lines(index_csv_value(mappings)),
-                                batch_rows=BATCH_ROWS, batch_bytes=BATCH_BYTES)
-    srid_expr = None
+    kind, value = layer_source(mappings)
+    if kind == "parquet":
+        pf = await asyncio.to_thread(_r2_parquet, value)
+        srid = parquet_srid(pf.schema_arrow.metadata)
+        geom_col = "wkb"
+        srid_expr = f"{_X}.ST_GeomFromWKB(wkb, {srid})"
+        if srid != GEOM_SRID:
+            srid_expr = f"{_X}.ST_Transform({srid_expr}, {GEOM_SRID})"
+        gen_iter = iter_parquet_batches(pf, batch_rows=BATCH_ROWS, batch_bytes=BATCH_BYTES)
+    else:
+        geom_col = "wkt"
+        srid_expr = None     # read off the first row: the CSV says nothing
+        gen_iter = iter_csv_batches(_r2_lines(value),
+                                    batch_rows=BATCH_ROWS, batch_bytes=BATCH_BYTES)
     async with pool.acquire() as conn:
         await conn.execute(f"UPDATE public.{_qi(STATE_TABLE)} SET started_at = now() "
                            f"WHERE dataset_id = $1", dataset_id)
@@ -371,8 +531,8 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                            f"WHERE dataset_id = $1 AND generation = $2",
                            dataset_id, gen, timeout=1800)
         await conn.execute(f"""CREATE TEMP TABLE IF NOT EXISTS _layer_batch (
-                                  feature_key text, wkt text, attrs text,
-                                  g {_X}.geometry)""")
+                                  feature_key text, wkt text, wkb bytea,
+                                  attrs text, g {_X}.geometry)""")
         try:
             while True:
                 item = await _next(gen_iter)
@@ -394,11 +554,11 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                     await conn.execute("TRUNCATE _layer_batch")
                     await conn.copy_records_to_table(
                         "_layer_batch", records=batch,
-                        columns=["feature_key", "wkt", "attrs"])
+                        columns=["feature_key", geom_col, "attrs"])
                     # Parse each polygon ONCE, then drop the text: the join
                     # below must see a stored geometry (see _match_sql).
-                    await conn.execute(f"UPDATE _layer_batch SET g = {srid_expr}, wkt = NULL",
-                                       timeout=600)
+                    await conn.execute(f"UPDATE _layer_batch SET g = {srid_expr}, "
+                                       f"{geom_col} = NULL", timeout=600)
                     await conn.execute("ANALYZE _layer_batch")
                     await conn.execute(f"""
                         CREATE TEMP TABLE _layer_hits ON COMMIT DROP AS
@@ -493,9 +653,10 @@ async def build_pending() -> dict | None:
 
     A layer whose build failed is left alone (its note says why; an admin
     rebuilds it with ``force``), and so is everything after it: the list is an
-    order, and the next layer is the larger one. A layer with no index CSV is
-    passed over instead — nothing was attempted, so nothing says the next one
-    is risky (the GPKG-only layers: משהב"ש plots, רצף מגרשי תב"ע). A layer whose
+    order, and the next layer is the larger one. A layer with nothing to read
+    (no index CSV, no GeoParquet) is passed over instead — nothing was
+    attempted, so nothing says the next one is risky — and looked at again on
+    the next tick, since a newer version may carry one. A layer whose
     build a restart cut short reads as ``building`` with no generation, and is
     built again."""
     from app.services import nadlan_layers
@@ -504,8 +665,8 @@ async def build_pending() -> dict | None:
         st = states.get(ds) or {}
         if st.get("generation"):
             continue
-        if st.get("status") == "no_index_csv":
-            continue
+        if st.get("status") == "no_index_csv" and await latest_version(ds) is None:
+            continue     # still nothing to read; a later version may bring it
         if st.get("status") == "failed":
             return None
         return await build(ds, radius_m=nadlan_layers.radius_for_dataset(ds))
