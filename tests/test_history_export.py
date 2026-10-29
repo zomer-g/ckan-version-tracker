@@ -953,6 +953,12 @@ def test_run_forwards_the_clock_to_plan_and_delete(monkeypatch):
     monkeypatch.setattr(database, "async_session", lambda: _Session())
     monkeypatch.setattr(hx, "is_available", lambda: (True, None))
 
+    async def fake_close(db, *, only_dataset=None, now=None):
+        seen["close"] = (only_dataset, now)
+        return {TABLE: 0}
+
+    monkeypatch.setattr(hx, "close_stamped_states", fake_close)
+
     async def fake_plan(db, *, only_dataset=None, now=None):
         seen["plan"] = (only_dataset, now)
         return [hx.Job(dataset_id=DSID, table=TABLE, month=date(2026, 10, 1), part=0,
@@ -1000,6 +1006,7 @@ def test_run_forwards_the_clock_to_plan_and_delete(monkeypatch):
     monkeypatch.setitem(hx._state, "running", False)
 
     asyncio.run(hx.run(only_dataset=DSID, now=future))
+    assert seen["close"] == (DSID, future)
     assert seen["plan"] == (DSID, future)
     assert seen["delete"] == (30, future, False)
     assert seen["vacuum"] == TABLE

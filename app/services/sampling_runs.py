@@ -142,6 +142,21 @@ def stamp_column(ds) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def state_stamp_column(ds) -> str | None:
+    """The column whose non-empty value says a STATE has ended, or None.
+
+    Only ``append_stamp_column`` means that (the prices source fills
+    ``last_seen_date`` with the last day a state was seen). A sampled source's
+    ``sample_column`` is set on every row — when it was read, not when it
+    ended — so a dataset that samples has no state stamp even if it also
+    declares the other key."""
+    spec = sampling_spec(ds) or {}
+    if spec.get("sample_column"):
+        return None
+    value = (getattr(ds, "scraper_config", None) or {}).get("append_stamp_column")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def sampling_spec(ds) -> dict | None:
     """The dataset's ``sampling`` block, or None if it declares none.
 

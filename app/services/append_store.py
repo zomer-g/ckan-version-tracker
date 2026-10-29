@@ -1373,7 +1373,14 @@ def reopen_open_sql(table: str, ident_col: str = "row_hash", *, batch: int = CLO
 
 def reopen_refusal(ds) -> str | None:
     """Why ``ds`` must not be reopened, or None: only a source that does NOT
-    close by its effective setting can have closures that are wrong."""
+    close by its effective setting can have closures that are wrong. A state
+    source with a window is closed by its own stamp (history_export.
+    close_stamped_states): those closures are by design too."""
+    from app.services import history_export
+
+    if history_export.closes_by_stamp(ds):
+        return ("this dataset is closed by its own end-date stamp and a history "
+                "window: its closures are by design")
     if closes_rows_setting(ds) is False:
         return None
     return ("append_closes_rows is in force for this dataset (its config or its "

@@ -444,6 +444,11 @@ def _part_url(key: str) -> str:
 
 async def _catalog_parts(table: str) -> list[dict]:
     """Every catalog row of ``table``, each with its dataset's ``window_days``."""
+    return (await _catalog_parts_many([table])).get(table, [])
+
+
+async def _catalog_parts_many(tables: list[str]) -> dict[str, list[dict]]:
+    """``{table: catalog rows}`` for several tables in one read."""
     from sqlalchemy import select
 
     from app.database import async_session
@@ -455,10 +460,14 @@ async def _catalog_parts(table: str) -> list[dict]:
         rows = (await db.execute(
             select(HistoryPart, TrackedDataset.scraper_config)
             .join(TrackedDataset, TrackedDataset.id == HistoryPart.dataset_id, isouter=True)
-            .where(HistoryPart.table_name == table))).all()
-        return [{**history_export._part_dict(p),
-                 "window_days": history_export.window_days_of(
-                     types.SimpleNamespace(scraper_config=cfg))} for p, cfg in rows]
+            .where(HistoryPart.table_name.in_(list(tables))))).all()
+    out: dict[str, list[dict]] = {}
+    for p, cfg in rows:
+        out.setdefault(p.table_name, []).append({
+            **history_export._part_dict(p),
+            "window_days": history_export.window_days_of(
+                types.SimpleNamespace(scraper_config=cfg))})
+    return out
 
 
 def _is_partial(p: dict, now: datetime) -> bool:
@@ -484,7 +493,11 @@ async def cold_parts_for(table: str) -> list[dict]:
     except Exception:  # noqa: BLE001
         logger.debug("history query: catalog read failed for %s", table, exc_info=True)
         return []
-    now = datetime.now(UTC)
+    return only_in_r2(parts, datetime.now(UTC))
+
+
+def only_in_r2(parts: list[dict], now: datetime) -> list[dict]:
+    """The parts of one table that cold_parts_for answers with. Pure."""
     cold = is_cold_spec(parts)
     out = []
     for p in parts:
@@ -895,7 +908,8 @@ async def _specs(tables: Iterable) -> list[dict]:
 
 async def _run_internal(sql, *, tables: Iterable, as_of=None, current: bool = False,
                         timeout_s: float | None = None, max_rows: int = 1000,
-                        params: list | None = None, search_path: str | None = None) -> dict:
+                        params: list | None = None, search_path: str | None = None,
+                        specs: list[dict] | None = None, backend=None) -> dict:
     if as_of is not None and current:
         raise HistoryQueryError("as_of and current are mutually exclusive")
     ok, why = is_available()
@@ -906,8 +920,9 @@ async def _run_internal(sql, *, tables: Iterable, as_of=None, current: bool = Fa
     async with _gate.admit(settings.history_query_queue):
         t0 = time.monotonic()
         try:
-            specs = await _specs(tables)
-            backend = _hot_backend()
+            if specs is None:
+                specs = await _specs(tables)
+            backend = backend or _hot_backend()
             await backend.prepare(specs, as_of=as_of, current=current)
         except HistoryQueryError:
             _stats["errors"] += 1
@@ -978,6 +993,40 @@ async def run(sql: str, *, tables: Iterable, as_of: datetime | None = None,
     if _DIALECT_REGEX.search(_skeleton(s)):
         res["dialect_note"] = DIALECT_NOTE
     return res
+
+
+async def cold_parts_of(tables: Iterable[str]) -> dict[str, list[dict]]:
+    """``{table: parts}`` for those of ``tables`` (``public``) with rows that
+    are only in R2 (cold_parts_for), in one catalog read; a table with none is
+    left out. Raises if the catalog cannot be read."""
+    now = datetime.now(UTC)
+    out = {}
+    for t, parts in (await _catalog_parts_many(list(tables))).items():
+        mine = only_in_r2(parts, now)
+        if mine:
+            out[t] = mine
+    return out
+
+
+def cold_only_specs(parts_by_table: dict[str, list[dict]]) -> list[dict]:
+    """Specs that read each table from its R2 parts alone, no hot side. A part
+    still partly in SQL (``partial``) is read whole, so its rows that are still
+    in SQL come back too: the caller, which read SQL itself, dedups them."""
+    return [{"schema": "public", "table": t, "cold": True, "ident": None,
+             "parts": [{**p, "partial": False, "url": _part_url(p["r2_key"])}
+                       for p in parts]}
+            for t, parts in parts_by_table.items()]
+
+
+async def query_cold(sql: str, *, parts_by_table: dict[str, list[dict]],
+                     timeout_s: float | None = None, max_rows: int = 1000) -> dict:
+    """An internal SELECT over ONLY the R2 parts of the given tables (see
+    cold_only_specs), for a reader that queries SQL on its own and needs just
+    what has left it (prices_query.price_history). Same gate, limits and
+    errors as ``run``; nothing is read from Postgres."""
+    return await _run_internal(sql, tables=list(parts_by_table), timeout_s=timeout_s,
+                               max_rows=max_rows, specs=cold_only_specs(parts_by_table),
+                               backend=MemoryHot(lambda conn: None))
 
 
 # ── /rows and /datastore_search on the engine ────────────────────────────────

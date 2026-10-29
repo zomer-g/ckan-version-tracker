@@ -154,6 +154,59 @@ def window_days_of(ds) -> int | None:
         return None
 
 
+# ── closing a state source by its own end date ──────────────────────────────
+#
+# A source that publishes STATES (the prices source) never closes a row by
+# absence: it pushes only what changed (``append_closes_rows: false``), and
+# when a state ends it sends the same row again with its stamp column
+# (``last_seen_date``) set to the last day it was seen. The stamp lands on the
+# open row in place (sampling_runs.stamp_column), so the row says it has ended
+# while ``last_seen`` still reads NULL, and nothing in this module would ever
+# export it. close_stamped_states gives such a row the ``last_seen`` its stamp
+# implies: the day after the last day seen, at 00:00 UTC.
+#
+# Only for a dataset with a window, and only for states that ended before
+# BOTH the export cutoff and the window, so the run that closes a row is the
+# run that exports it and deletes it. A state ended more recently stays open
+# in SQL, as before: a re-sent ended state lands on it by the open-rows index
+# instead of beside it, and nothing that reads the stamp changes.
+
+def stamp_close_cutoff(now: datetime, window_days: int | None) -> datetime | None:
+    """States whose ``last_seen`` would fall before this are closed; None without a window."""
+    dcut = delete_cutoff(now, window_days)
+    return None if dcut is None else min(export_cutoff(now), dcut)
+
+
+def stamp_bound(cutoff: datetime) -> str:
+    """The first stamp (``YYYY-MM-DD``) NOT closed under ``cutoff``: a state
+    last seen on day D gets ``last_seen`` = D + 1 day, closed iff that is
+    before the cutoff. ISO dates compare as text, so the query needs no cast."""
+    limit = _utc(cutoff) - timedelta(days=1)
+    first = limit.date()
+    if limit != datetime(first.year, first.month, first.day, tzinfo=UTC):
+        first += timedelta(days=1)
+    return first.isoformat()
+
+
+def close_by_stamp_sql(table: str, stamp_col: str, *, batch: int = append_store.CLOSE_BATCH) -> str:
+    """One batch of ended states closed by their stamp; ``$1`` is stamp_bound.
+    A stamp that is not a valid date is left alone (pg_input_is_valid), so the
+    cast in SET only ever sees the rows the subquery chose."""
+    s = _qi(stamp_col)
+    return (f'UPDATE {_ref(table)} SET "last_seen" = '
+            f"(({s}::date + 1)::timestamp AT TIME ZONE 'UTC') "
+            f'WHERE ctid IN (SELECT ctid FROM {_ref(table)} WHERE "last_seen" IS NULL '
+            f"AND {s} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$' AND {s} < $1 "
+            f"AND pg_input_is_valid({s}, 'date') LIMIT {int(batch)})")
+
+
+def closes_by_stamp(ds) -> bool:
+    """Whether ``ds`` is closed by its stamp: a state source with a window."""
+    from app.services import sampling_runs
+
+    return bool(sampling_runs.state_stamp_column(ds)) and window_days_of(ds) is not None
+
+
 def part_key(dataset_id, table: str, month: date, part: int) -> str:
     return (f"{HISTORY_PREFIX}/{str(dataset_id)[:8]}/{table}/"
             f"closed_month={month:%Y-%m}/part-{int(part):04d}.parquet")
@@ -463,6 +516,7 @@ _state: dict = {
     "exported_parts": 0,
     "exported_rows": 0,
     "deleted_rows": 0,
+    "stamp_closed_rows": 0,
     "failed": [],
     "as_of": None,
     "stop": False,
@@ -738,6 +792,61 @@ async def admin_summary(db) -> dict:
 
 
 # ── plan / export / verify / delete ──────────────────────────────────────────
+
+async def close_stamped_states(db, *, only_dataset: str | None = None,
+                               now: datetime | None = None) -> dict:
+    """Close by their stamp the ended states of every dataset closes_by_stamp
+    allows (see stamp_close_cutoff). ``{table: rows closed}``, failures as
+    ``{table: "error: ..."}``. Runs before ``plan``, which then finds the rows
+    closed; a table that closed rows is ANALYZEd, because the planner's
+    first question (``_closed_estimate``) is answered from pg_stats."""
+    from sqlalchemy import select
+
+    from app.models.tracked_dataset import TrackedDataset
+    from app.services import sampling_runs
+    from app.services.parquet_export import _latest_mappings
+
+    now = now or datetime.now(UTC)
+    q = select(TrackedDataset).where(TrackedDataset.status == "active")
+    if only_dataset:
+        q = q.where(TrackedDataset.id == _uuid.UUID(str(only_dataset)))
+    datasets = [d for d in (await db.execute(q)).scalars().all()
+                if closes_by_stamp(d) and history_tier_of(d) != TIER_COLD]
+    if not datasets:
+        return {}
+    latest = await _latest_mappings(db, [d.id for d in datasets])
+    out: dict = {}
+    pool = await append_store.get_pool()
+    for ds in datasets:
+        stamp = sampling_runs.state_stamp_column(ds)
+        bound = stamp_bound(stamp_close_cutoff(now, window_days_of(ds)))
+        for entry in append_store.tables_from_mappings(ds, latest.get(ds.id)):
+            table = entry.get("table")
+            if not table or table in out:
+                continue
+            try:
+                async with pool.acquire() as conn:
+                    if stamp not in await _columns(conn, table):
+                        continue  # a companion table without states (coverage)
+                    if await _table_ident(conn, table) is None:
+                        continue  # no partial index: closed rows would block re-sends
+                    closed = 0
+                    while not _state["stop"]:
+                        n = _rowcount(await conn.execute(
+                            close_by_stamp_sql(table, stamp), bound,
+                            timeout=STATEMENT_TIMEOUT_S))
+                        closed += n
+                        if n == 0:
+                            break
+                    if closed:
+                        await conn.execute(f"ANALYZE {_ref(table)}", timeout=STATEMENT_TIMEOUT_S)
+                out[table] = closed
+            except Exception as e:  # noqa: BLE001 — one table must not stop the rest
+                logger.warning("history export: closing %s by its stamp failed: %s", table, e)
+                out[table] = f"error: {type(e).__name__}: {e}"[:300]
+    logger.info("history export: closed by stamp %s", {t: n for t, n in out.items() if n})
+    return out
+
 
 async def plan(db, *, only_dataset: str | None = None, now: datetime | None = None) -> list[Job]:
     """Every job for every active dataset's NEON tables (hidden ones are never
@@ -1049,13 +1158,24 @@ async def run(*, only_dataset: str | None = None, now: datetime | None = None) -
         return
     _state.update(running=True, stop=False, started_at=datetime.now(UTC).isoformat(),
                   finished_at=None, current=None, planned=0, done=0, exported_parts=0,
-                  exported_rows=0, deleted_rows=0, failed=[],
+                  exported_rows=0, deleted_rows=0, stamp_closed_rows=0, failed=[],
                   as_of=now.isoformat() if now else None)
     try:
         ok, why = is_available()
         if not ok:
             _state["failed"].append({"table": None, "error": why})
             return
+        try:
+            async with async_session() as db:
+                closed = await close_stamped_states(db, only_dataset=only_dataset, now=now)
+        except Exception as e:  # noqa: BLE001 — the export of what is closed goes on
+            logger.warning("history export: closing by stamp failed: %s", e)
+            closed = {None: f"error: {type(e).__name__}: {e}"[:300]}
+        for table, n in closed.items():
+            if isinstance(n, int):
+                _state["stamp_closed_rows"] += n
+            else:
+                _state["failed"].append({"table": table, "error": n})
         async with async_session() as db:
             jobs = await plan(db, only_dataset=only_dataset, now=now)
         _state["planned"] = len(jobs)

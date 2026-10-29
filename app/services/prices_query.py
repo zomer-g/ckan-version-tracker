@@ -669,6 +669,10 @@ async def price_history(db: AsyncSession, *, item_code: str,
     rows = await _fetch("SELECT * FROM (" + "\nUNION ALL\n".join(selects) + ") h "
                         f"ORDER BY first_seen_date DESC, chain, store_id LIMIT {limit + 1}",
                         params)
+    history = await _cold_price_states(entries, codes, store_id, rows, limit)
+    cold_rows = history.pop("rows", None)
+    if cold_rows:
+        rows = merge_states(rows, cold_rows)
     truncated = len(rows) > limit
     rows = rows[:limit]
     timeline: dict[tuple, list[float]] = {}
@@ -680,7 +684,87 @@ async def price_history(db: AsyncSession, *, item_code: str,
                 "max_price": max(v)} for (c, d), v in sorted(timeline.items(),
                                                              key=lambda kv: kv[0][1])]
     return {"item_code": item_code, "states": rows, "truncated": truncated,
-            "timeline": summary}
+            "timeline": summary, "history": history}
+
+
+_STATE_COLS = ("sub_chain_id", "store_id", "item_price", "unit_of_measure_price",
+               "first_seen_date", "last_seen_date", "price_update_time")
+
+
+def state_key(r: dict) -> tuple:
+    """One price state, wherever it was read from: a state still in SQL and
+    the same state in a part that is only partly deleted compare equal.
+    ``last_seen_date`` is left out: a state read from SQL before its end
+    arrived is the same state as its ended copy in R2."""
+    return (r.get("chain"), r.get("sub_chain_id"), r.get("store_id"),
+            r.get("first_seen_date"), r.get("item_price"), r.get("price_update_time"))
+
+
+def merge_states(hot: list[dict], cold: list[dict]) -> list[dict]:
+    """SQL's states plus the R2 ones SQL does not have, newest first. Pure."""
+    seen = {state_key(r) for r in hot}
+    out = list(hot) + [r for r in cold if state_key(r) not in seen]
+    out.sort(key=lambda r: (r.get("chain") or "", r.get("store_id") or ""))
+    out.sort(key=lambda r: r.get("first_seen_date") or "", reverse=True)
+    return out
+
+
+def cold_can_matter(hot: list[dict], limit: int, parts_by_table: dict) -> bool:
+    """Whether a state in R2 could enter the first ``limit`` states. Every one
+    there ended before its part's ``last_seen_max``, so it began before that
+    too; once SQL alone fills the page with states that began later, none can. Pure."""
+    if len(hot) <= limit:
+        return True
+    newest_cold = max((p["last_seen_max"] for parts in parts_by_table.values()
+                       for p in parts if p.get("last_seen_max")), default=None)
+    if newest_cold is None:
+        return True
+    oldest_shown = hot[limit - 1].get("first_seen_date") or ""
+    return oldest_shown <= newest_cold.date().isoformat()
+
+
+def cold_states_sql(cold: list[dict], codes: list[str], store_id: str | None,
+                    limit: int) -> str:
+    """DuckDB SQL over the parts of each ``{chain, name, table}``. Pure."""
+    match = f"ltrim(item_code, '0') IN ({', '.join(_lit(c) for c in codes)})"
+    if store_id:
+        match += f" AND store_id = {_lit(store_id)}"
+    cols = ", ".join(_STATE_COLS)
+    selects = [f"SELECT {_lit(e['chain'])} AS chain, {_lit(e['name'])} AS chain_name, "
+               f"{cols} FROM public.{_qi(e['table'])} WHERE {match}" for e in cold]
+    return ("SELECT * FROM (" + "\nUNION ALL\n".join(selects) + ") h "
+            f"ORDER BY first_seen_date DESC, chain, store_id LIMIT {int(limit) + 1}")
+
+
+async def _cold_price_states(entries: list[dict], codes: list[str], store_id: str | None,
+                             hot: list[dict], limit: int) -> dict:
+    """The item's states that have left SQL for Parquet (history_export closes
+    ended states by their ``last_seen_date`` and moves them once they pass the
+    dataset's window). ``{"rows": [...], "cold_parts": n}``; on any failure the
+    answer is SQL's alone, with ``error`` saying why, never an exception."""
+    from app.services import history_query
+
+    by_table = {e["tables"]["prices"]: e for e in entries}
+    try:
+        parts = await history_query.cold_parts_of(by_table)
+    except Exception:  # noqa: BLE001 — the catalog is optional here
+        return {}
+    if not parts or not cold_can_matter(hot, limit, parts):
+        return {}
+    cold = [{"chain": by_table[t]["chain"], "name": by_table[t]["name"], "table": t}
+            for t in parts]
+    sid = None
+    if store_id:
+        sid = str(int(store_id)) if str(store_id).strip().isdigit() else str(store_id)
+    try:
+        res = await history_query.query_cold(
+            cold_states_sql(cold, codes, sid, limit), parts_by_table=parts,
+            max_rows=limit + 1)
+    except Exception as e:  # noqa: BLE001 — SQL's answer stands without it
+        logger.warning("price history: R2 states unavailable: %s", e)
+        return {"cold_parts": sum(len(v) for v in parts.values()), "rows": [],
+                "error": str(e)[:300]}
+    return {"cold_parts": res.get("cold_parts"), "rows": res.get("rows") or []}
 
 
 async def item_promotions(db: AsyncSession, *, item_code: str,
