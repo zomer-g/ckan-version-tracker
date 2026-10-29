@@ -695,6 +695,40 @@ async def access_log_compact(_: User = Depends(get_admin_user)):
     return {"started": True}
 
 
+@router.post("/vacuum-full")
+async def vacuum_full_start(body: dict, _: User = Depends(get_admin_user)):
+    """Background: ``VACUUM (FULL, ANALYZE)`` on the given append tables, one at a
+    time, ``pause_s`` (default 60) apart; a table not locked within 10 s is
+    skipped. ``{"tables": [...], "pause_s": 60}``. GET for progress."""
+    import asyncio
+    from app.services import history_export
+    if history_export.vacuum_full_status()["running"]:
+        return {"started": False, "reason": "already running"}
+    try:
+        tables = history_export.vacuum_full_targets((body or {}).get("tables"))
+        pause_s = float((body or {}).get("pause_s", 60))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not 0 <= pause_s <= 3600:
+        raise HTTPException(status_code=400, detail="pause_s must be 0..3600")
+    asyncio.create_task(history_export.vacuum_full_tables(tables, pause_s=pause_s))
+    return {"started": True, "tables": len(tables), "pause_s": pause_s}
+
+
+@router.get("/vacuum-full")
+async def vacuum_full_get(_: User = Depends(get_admin_user)):
+    from app.services import history_export
+    return history_export.vacuum_full_status()
+
+
+@router.post("/vacuum-full/stop")
+async def vacuum_full_stop(_: User = Depends(get_admin_user)):
+    """Stop after the table being rewritten now (a rewrite is never cut)."""
+    from app.services import history_export
+    history_export.request_vacuum_full_stop()
+    return {"stopping": True}
+
+
 @router.post("/history/rehydrate/{dataset_id}")
 async def history_rehydrate(dataset_id: str, user: User = Depends(get_admin_user)):
     """Bring a cold dataset back to SQL: COPY its parts, verify count and hash

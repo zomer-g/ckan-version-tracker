@@ -342,3 +342,50 @@ def test_a_failing_close_step_does_not_stop_the_export(monkeypatch):
     asyncio.run(history_export.run())
     st = history_export.status()
     assert planned and any("no catalog" in f["error"] for f in st["failed"])
+
+
+# ── VACUUM FULL, one table at a time ─────────────────────────────────────────
+
+def test_vacuum_full_takes_append_tables_only():
+    assert history_export.vacuum_full_targets([TABLE, TABLE, " " + TABLE]) == [TABLE]
+    for bad in (["over_settlements"], ["append_x; DROP TABLE y"], ['append_"x"'], [], None):
+        with pytest.raises(ValueError):
+            history_export.vacuum_full_targets(bad)
+
+
+class _VacConn:
+    def __init__(self, sizes, locked=()):
+        self.sql, self._sizes, self._locked = [], dict(sizes), set(locked)
+
+    async def fetchval(self, sql, *a, **kw):
+        t = a[0].split('"')[3]
+        return self._sizes[t].pop(0)
+
+    async def execute(self, sql, *a, **kw):
+        self.sql.append(sql)
+        if sql.startswith("VACUUM") and any(t in sql for t in self._locked):
+            import asyncpg
+            raise asyncpg.exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+        return "VACUUM"
+
+
+def test_vacuum_full_runs_each_table_in_turn_and_skips_a_locked_one(monkeypatch):
+    other, third = TABLE + "x", TABLE + "y"
+    conn = _VacConn({TABLE: [1000, 400], other: [50], third: [70, 60]}, locked=[other])
+    monkeypatch.setattr(append_store, "get_pool", _pool(conn))
+    asyncio.run(history_export.vacuum_full_tables([TABLE, other, third], pause_s=0))
+    st = history_export.vacuum_full_status()
+    assert [t["status"] for t in st["tables"]] == ["done", "skipped", "done"]
+    assert st["freed_bytes"] == 610 and not st["running"]
+    vac = [s for s in conn.sql if s.startswith("VACUUM")]
+    assert vac[0] == f'VACUUM (FULL, ANALYZE) "public"."{TABLE}"'
+    # the lock timeout is set before every rewrite and reset after, even a failed one
+    assert conn.sql.count("SET lock_timeout = '10s'") == 3 and conn.sql.count("RESET lock_timeout") == 3
+
+
+def test_admin_has_the_vacuum_full_routes():
+    from app.api import admin_storage
+
+    paths = {(r.path, tuple(sorted(r.methods))) for r in admin_storage.router.routes}
+    assert ("/api/admin/storage/vacuum-full", ("POST",)) in paths
+    assert ("/api/admin/storage/vacuum-full", ("GET",)) in paths

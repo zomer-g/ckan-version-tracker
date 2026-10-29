@@ -56,6 +56,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import types
 import uuid as _uuid
 from dataclasses import dataclass
@@ -1084,6 +1085,101 @@ async def compact_cold_tables(tables: list[str] | None = None) -> dict:
     freed = sum(d["before"] - d["after"] for d in done)
     return {"tables": len(tables), "compacted": done, "skipped": skipped, "failed": failed,
             "freed_bytes": freed}
+
+
+# ── VACUUM FULL: giving a partly deleted table's space back to the disk ───────
+#
+# A plain VACUUM (what the export runs after a delete) frees a table's pages for
+# reuse inside the table: growth stops, the files do not shrink. A table that
+# keeps rows after a large delete (prices, whose ended states leave by the
+# window while the states in force stay) gives its space back only to a
+# rewrite. VACUUM FULL rewrites under an ACCESS EXCLUSIVE lock, so this runs
+# one table at a time, with a pause between, and gives up on a table it cannot
+# lock within LOCK_TIMEOUT rather than queue every reader behind it.
+
+VACUUM_FULL_LOCK_TIMEOUT = "10s"
+_vacuum_full: dict = {"running": False, "started_at": None, "finished_at": None,
+                      "current": None, "planned": 0, "tables": [], "stop": False}
+
+
+def vacuum_full_status() -> dict:
+    out = {k: v for k, v in _vacuum_full.items() if k != "stop"}
+    out["freed_bytes"] = sum(t["before"] - t["after"] for t in _vacuum_full["tables"]
+                             if t.get("after") is not None)
+    return out
+
+
+def request_vacuum_full_stop() -> None:
+    _vacuum_full["stop"] = True
+
+
+def vacuum_full_targets(tables: Iterable[str]) -> list[str]:
+    """The append tables of ``tables``, once each, in order. ValueError naming
+    every name that is not one: this rewrites dataset tables and nothing else."""
+    out, bad = [], []
+    for t in tables or []:
+        t = str(t or "").strip()
+        if not t.startswith("append_") or not t.replace("_", "").isalnum() or len(t) > 63:
+            bad.append(t)
+        elif t not in out:
+            out.append(t)
+    if bad:
+        raise ValueError("not append tables: " + ", ".join(bad))
+    if not out:
+        raise ValueError("no tables")
+    return out
+
+
+async def vacuum_full_tables(tables: list[str], *, pause_s: float = 60.0) -> None:
+    """Background: VACUUM FULL each table in turn, ``pause_s`` apart, sizes
+    before and after per table. A table that cannot be locked in time is
+    marked ``skipped``; any other failure ``error``; the rest go on."""
+    import asyncio
+
+    if _vacuum_full["running"]:
+        return
+    _vacuum_full.update(running=True, stop=False, started_at=datetime.now(UTC).isoformat(),
+                        finished_at=None, current=None, planned=len(tables), tables=[])
+    try:
+        pool = await append_store.get_pool()
+        for i, table in enumerate(tables):
+            if _vacuum_full["stop"]:
+                break
+            if i and pause_s:
+                await asyncio.sleep(pause_s)
+            _vacuum_full["current"] = table
+            rec = {"table": table, "before": None, "after": None, "seconds": None,
+                   "status": "running"}
+            _vacuum_full["tables"].append(rec)
+            t0 = time.monotonic()
+            try:
+                async with pool.acquire() as conn:
+                    rec["before"] = int(await conn.fetchval(RELATION_SIZE_SQL, relation_ref(table)))
+                    await conn.execute(f"SET lock_timeout = '{VACUUM_FULL_LOCK_TIMEOUT}'")
+                    try:
+                        await conn.execute(f"VACUUM (FULL, ANALYZE) {_ref(table)}",
+                                           timeout=STATEMENT_TIMEOUT_S)
+                    finally:
+                        await conn.execute("RESET lock_timeout")
+                    rec["after"] = int(await conn.fetchval(RELATION_SIZE_SQL, relation_ref(table)))
+                rec["status"] = "done"
+            except asyncpg_lock_errors() as e:
+                rec["status"] = "skipped"
+                rec["error"] = f"lock not granted within {VACUUM_FULL_LOCK_TIMEOUT}: {e}"[:300]
+            except Exception as e:  # noqa: BLE001 — one table must not stop the rest
+                rec["status"] = "error"
+                rec["error"] = f"{type(e).__name__}: {e}"[:300]
+            rec["seconds"] = round(time.monotonic() - t0, 1)
+            logger.info("vacuum full: %s", rec)
+    finally:
+        _vacuum_full.update(running=False, current=None,
+                            finished_at=datetime.now(UTC).isoformat())
+
+
+def asyncpg_lock_errors() -> tuple:
+    import asyncpg
+
+    return (asyncpg.exceptions.LockNotAvailableError,)
 
 
 async def delete_exported(part: dict | None, *, window_days: int | None,
