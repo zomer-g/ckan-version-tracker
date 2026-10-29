@@ -432,10 +432,13 @@ async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
     sql = a.get("sql") or ""
     max_rows = min(int(a.get("max_rows") or 200), MAX_SQL_ROWS)
 
-    def run_pg():
+    def run_pg_sql(s):
         return append_store.run_readonly_sql(
-            sql, search_path=data_catalog.CONSOLE_SEARCH_PATH,
+            s, search_path=data_catalog.CONSOLE_SEARCH_PATH,
             max_rows=max_rows, timeout_ms=SQL_TIMEOUT_MS)
+
+    def run_pg():
+        return run_pg_sql(sql)
 
     if a.get("include_history"):
         from app.services import history_query
@@ -443,7 +446,7 @@ async def _tool_run_sql(request, db, user, a) -> tuple[dict, int]:
             sql, tables=history_query.console_tables(
                 sql, await _catalog(db), data_catalog.CONSOLE_SEARCH_PATH),
             run_pg=run_pg, search_path=data_catalog.CONSOLE_SEARCH_PATH,
-            max_rows=max_rows)
+            max_rows=max_rows, run_pg_sql=run_pg_sql)
     else:
         res = await run_pg()
     notes: list[str] = []

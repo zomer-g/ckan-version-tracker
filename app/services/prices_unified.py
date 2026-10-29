@@ -255,8 +255,12 @@ def _city_exprs(alias: str, cols: set[str]) -> tuple[str, str]:
     return name, code
 
 
-def _branch(view: str, entry: dict, columns: dict[str, set[str]]) -> str | None:
-    """One chain's SELECT for ``view``, or None when it lacks the role's table."""
+def _branch(view: str, entry: dict, columns: dict[str, set[str]],
+            main_from: str | None = None) -> str | None:
+    """One chain's SELECT for ``view``, or None when it lacks the role's table.
+
+    ``main_from`` replaces the chain's role table with another relation of the
+    same columns (prices_history: the states that have left SQL for R2)."""
     spec = VIEWS[view]
     t = entry["tables"]
     main = t.get(spec["role"])
@@ -320,7 +324,8 @@ def _branch(view: str, entry: dict, columns: dict[str, set[str]]) -> str | None:
         else:  # pragma: no cover — a typo in VIEWS
             raise ValueError(kind)
         out.append(f"{expr} AS {_qi(name)}")
-    return (f"SELECT {', '.join(out)} FROM public.{_qi(main)} {alias}"
+    source = main_from if main_from is not None else f"public.{_qi(main)}"
+    return (f"SELECT {', '.join(out)} FROM {source} {alias}"
             + ("\n  " + "\n  ".join(joins) if joins else ""))
 
 
@@ -490,6 +495,8 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
     limit = max(1, min(int(limit or 100), MAX_LIMIT))
     offset = max(0, min(int(offset or 0), MAX_OFFSET))
     qb = Query()
+    # The same filters, as prices_history pushes them to the R2 parts.
+    cold_eq: dict[str, list[str]] = {}
 
     if view == "prices_market" and not (set(filters) & set(_SELECTIVE) or q):
         raise ValueError("prices_market מכילה מיליוני מצבי מחיר — ציינו item_code, q (שם "
@@ -505,6 +512,7 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
         if col in ("item_code", "item_code_bare"):
             codes = pq.bare_codes(values)
             qb.where.append(f"item_code_bare = ANY({qb.p(codes)}::text[])")
+            cold_eq["item_code_bare"] = codes
         elif kinds.get(col) == "num" and all(re.match(_NUM, v) for v in values):
             qb.where.append(f"{_qi(col)} = ANY({qb.p([float(v) for v in values])}::numeric[])")
         elif col == "city_code":
@@ -519,10 +527,13 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
             both = list(dict.fromkeys(values + [v.lstrip("0") or "0" for v in values
                                                 if v.isdigit()]))
             qb.where.append(f"store_id = ANY({qb.p(both)}::text[])")
+            cold_eq["store_id"] = both
         elif len(values) == 1:
             qb.where.append(f"{_qi(col)} = {qb.p(values[0])}")
+            cold_eq[col] = values
         else:
             qb.where.append(f"{_qi(col)} = ANY({qb.p(values)}::text[])")
+            cold_eq[col] = values
 
     q = (q or "").strip()
     resolved_codes: list[str] | None = None
@@ -534,6 +545,7 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
             if not resolved_codes:
                 return _empty(view, names, limit, offset, q=q)
             qb.where.append(f"item_code_bare = ANY({qb.p(pq.bare_codes(resolved_codes))}::text[])")
+            cold_eq["item_code_bare"] = pq.bare_codes(resolved_codes)
         elif view in _TEXT_COLS:
             for term in [t for t in re.split(r"\s+", q) if t][:6]:
                 n = qb.p(f"%{term}%")
@@ -592,9 +604,18 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
     sql = (f"SELECT {', '.join(_qi(c) for c in select_cols)} FROM public.{_qi(view)}"
            + (" WHERE " + " AND ".join(qb.where) if qb.where else "")
            + order_sql + f" LIMIT {limit + 1} OFFSET {offset}")
+    # A day in the past, or every state: ended ones past the window are on R2.
+    history: dict = {}
+    flag = filters.get("is_current")
+    wants_ended = has_state and (
+        (flag is None and (on_date or not current))
+        or (flag is not None and _split(flag)[0].lower() not in ("1", "true", "yes")))
+    run = sql
+    if wants_ended:
+        run, history = await _with_cold_states(view, sql, cold_eq, on_date)
     started = time.monotonic()
     try:
-        rows = await pq._fetch(sql, qb.params)
+        rows = await pq._fetch(run, qb.params)
     except Exception as e:  # noqa: BLE001
         if "statement timeout" in str(e) or "canceling statement" in str(e):
             raise TimeoutError("השאילתה ארכה יותר מדי — צמצמו אותה (item_code, chain, "
@@ -610,9 +631,27 @@ async def query(db: AsyncSession, view: str, *, filters: dict[str, str] | None =
                                         f" LIMIT {limit}" + (f" OFFSET {offset}" if offset else "")))
     return {"table": view, "columns": select_cols, "rows": rows, "count": len(rows),
             "has_more": more, "limit": limit, "offset": offset,
-            "resolved_item_codes": resolved_codes,
+            "resolved_item_codes": resolved_codes, "history": history,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
             "console_sql": console_sql, "row_url": _console_url(console_sql)}
+
+
+async def _with_cold_states(view: str, sql: str, eq: dict, on_date: str | None
+                            ) -> tuple[str, dict]:
+    """``sql`` with the view's R2 states added (prices_history), and what was
+    added. Without the history engine, ``sql`` as is and the reason why."""
+    from app.services import history_query, prices_history
+
+    ok, why = history_query.is_available()
+    if not ok:
+        return sql, {"included": False, "reason": why}
+    filters = {"eq": eq, "last_seen_from": on_date, "first_seen_to": on_date}
+    built = await prices_history.cold_cte(view, filters)
+    if not built or not built["sql"]:
+        return sql, {"included": True, "cold_rows": 0}
+    run = prices_history.wrap(sql.replace(f"FROM public.{_qi(view)}", f"FROM {_qi(view)}", 1),
+                              [built["sql"]])
+    return run, {"included": True, "cold_rows": built["rows"], "cold_parts": built["parts"]}
 
 
 def _empty(view, names, limit, offset, **extra) -> dict:

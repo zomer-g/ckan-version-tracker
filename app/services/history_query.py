@@ -1192,10 +1192,28 @@ NOTE_UNAVAILABLE = ("מנוע ההיסטוריה אינו זמין כרגע ({re
 
 
 async def route_sql(sql: str, *, tables: list, run_pg: Callable, search_path: str | None = None,
-                    max_rows: int = 1000, timeout_s: float | None = None) -> dict:
+                    max_rows: int = 1000, timeout_s: float | None = None,
+                    run_pg_sql: Callable | None = None) -> dict:
     """``include_history`` for a SQL endpoint: the engine when a table the
     statement names has rows only in R2 and the engine is up, otherwise
-    ``run_pg()`` with ``engine: "postgres"`` and a note that says why."""
+    ``run_pg()`` with ``engine: "postgres"`` and a note that says why.
+
+    A statement on the unified price views (prices_unified) stays on Postgres
+    with their R2 states injected (prices_history), when the caller can run
+    another statement (``run_pg_sql``): those views are built from Postgres
+    functions the engine does not have."""
+    from app.services import prices_history
+
+    views = prices_history.views_in(tables)
+    if views and run_pg_sql is not None:
+        others = [t for t in tables if not prices_history.views_in([t])]
+        for t in others:
+            schema, name = (t[0], t[1]) if isinstance(t, (tuple, list)) else ("public", t)
+            if schema == "public" and await cold_parts_for(name):
+                raise HistoryQueryError(
+                    f"השאילתה משלבת את {', '.join(views)} עם {name}, שגם לה שורות בקבצי "
+                    "ההיסטוריה; הריצו אותן בשאילתות נפרדות.")
+        return await prices_history.run_with_history(sql, views=views, run_sql=run_pg_sql)
     cold = False
     for t in tables:
         schema, name = (t[0], t[1]) if isinstance(t, (tuple, list)) else ("public", t)

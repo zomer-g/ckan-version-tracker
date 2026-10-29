@@ -259,7 +259,9 @@ async def run_sql(
             return await history_query.route_sql(
                 sql, tables=tables, search_path=data_catalog.CONSOLE_SEARCH_PATH,
                 run_pg=lambda: append_store.run_readonly_sql(
-                    sql, search_path=data_catalog.CONSOLE_SEARCH_PATH))
+                    sql, search_path=data_catalog.CONSOLE_SEARCH_PATH),
+                run_pg_sql=lambda s: append_store.run_readonly_sql(
+                    s, search_path=data_catalog.CONSOLE_SEARCH_PATH))
         res = await append_store.run_readonly_sql(
             sql, search_path=data_catalog.CONSOLE_SEARCH_PATH
         )

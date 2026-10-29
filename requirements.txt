@@ -61,3 +61,6 @@ pyarrow==23.0.1
 # The history query engine (app/services/history_query.py): reads the Parquet
 # parts on R2 together with the hot tables. Off unless HISTORY_QUERY_ENABLED.
 duckdb==1.5.1
+# Reads the filters of a console query on the unified price views
+# (app/services/prices_history.py), so only the matching R2 states are fetched.
+sqlglot==26.6.0
