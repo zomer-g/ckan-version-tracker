@@ -279,15 +279,30 @@ async def check_r2(ctx: Ctx) -> CheckResult:
                        {"checked": n, "missing": missing[:20]})
 
 
+def _cgroup_limit_mb() -> int | None:
+    """The container's memory limit (cgroup v2, then v1), or None if unbounded.
+
+    xhostd gives the container 8 GB; a fixed 512 (the old Render dyno) would
+    report a healthy process as failing every day."""
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            raw = open(path).read().strip()
+        except OSError:
+            continue
+        if raw.isdigit() and int(raw) < 1 << 50:   # v1 says "unlimited" with a huge number
+            return int(raw) // (1024 * 1024)
+    return None
+
+
 @check("process.memory", component="שרת", title="זיכרון התהליך",
-       description="RSS של תהליך ה-web מול HEALTH_MEMORY_LIMIT_MB (אזהרה ב-80%, כשל ב-92%).")
+       description="RSS של תהליך ה-web מול מגבלת הזיכרון של הקונטיינר (cgroup, או HEALTH_MEMORY_LIMIT_MB). אזהרה ב-80%, כשל ב-92%.")
 async def check_memory(ctx: Ctx) -> CheckResult:
     from app.services import heap
     kb = heap.rss_kb()
     if kb is None:
         return CheckResult(SKIP, "אין מדידת RSS בפלטפורמה הזו")
     mb = kb // 1024
-    limit = settings.health_memory_limit_mb or 512
+    limit = settings.health_memory_limit_mb or _cgroup_limit_mb() or 512
     frac = mb / limit if limit else 0
     st = FAIL if frac >= 0.92 else WARN if frac >= 0.8 else OK
     return CheckResult(st, f"{mb} MB מתוך {limit} MB ({int(frac * 100)}%)",
