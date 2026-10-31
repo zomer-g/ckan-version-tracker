@@ -4141,6 +4141,93 @@ async def geocode_results(
     return {"status": "recorded", **summary}
 
 
+# ── The Knesset mirror's ODATA sync (app/services/knesset_sync_queue.py) ──────
+# knesset.gov.il geo-blocks this server, so a worker in Israel fetches and the
+# server writes. Order within one task: metadata → plan → ingest… → finish.
+
+@router.post("/knesset-db/metadata")
+async def knesset_db_metadata(request: Request, body: dict):
+    """The worker's copy of the ODATA $metadata (the server cannot fetch it)."""
+    _verify_worker_key(request)
+    from app.services import knesset_db
+    xml = body.get("xml") or ""
+    if not xml.strip():
+        raise HTTPException(status_code=400, detail="xml is required")
+    try:
+        n = await knesset_db.accept_metadata(xml)
+    except Exception as e:  # noqa: BLE001 — a bad document is the worker's to see
+        logger.warning("knesset-db: rejected $metadata from the worker: %s", e)
+        raise HTTPException(status_code=422, detail=f"bad $metadata: {e}"[:300])
+    return {"entity_sets": n}
+
+
+@router.get("/knesset-db/plan/{task_id}")
+async def knesset_db_plan(request: Request, task_id: uuid.UUID,
+                          db: AsyncSession = Depends(get_db)):
+    """Per table: the URL, the base $filter, the Id to resume after, and whether
+    to ask for $count. ``metadata_needed`` until the worker has posted it."""
+    _verify_worker_key(request)
+    from app.services import knesset_db
+    task = await db.get(ScrapeTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    params = task.params or {}
+    return {"task_id": str(task_id),
+            **await knesset_db.build_plan(params.get("mode") or knesset_db.MODE_DAILY,
+                                          params.get("tables") or None)}
+
+
+@router.post("/knesset-db/ingest")
+async def knesset_db_ingest(request: Request, body: dict):
+    """One batch of rows for one table; ``done`` closes that table's pass,
+    ``error`` marks it failed (its checkpoint is kept for the next run)."""
+    _verify_worker_key(request)
+    from app.services import knesset_db
+    table = body.get("table")
+    if not table:
+        raise HTTPException(status_code=400, detail="table is required")
+    try:
+        return await knesset_db.ingest(
+            table, list(body.get("rows") or []),
+            last_id=int(body.get("last_id") or 0),
+            source_count=body.get("source_count"),
+            done=bool(body.get("done")),
+            pass_started=body.get("pass_started"),
+            error=body.get("error"),
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/knesset-db/finish")
+async def knesset_db_finish(request: Request, body: dict,
+                            db: AsyncSession = Depends(get_db)):
+    """Close the run's task with its summary. No version: the mirror is the
+    `knesset` schema itself, not a versioned corpus."""
+    _verify_worker_key(request)
+    try:
+        task = await db.get(ScrapeTask, uuid.UUID(str(body.get("task_id"))))
+    except (ValueError, TypeError):
+        task = None
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    failed = list(body.get("failed_tables") or [])
+    task.status = "failed" if body.get("aborted") else "completed"
+    task.phase = "aborted" if body.get("aborted") else "done"
+    task.progress = 100
+    task.completed_at = datetime.now(timezone.utc)
+    task.message = (body.get("message") or "")[:500] or None
+    if body.get("aborted"):
+        task.error = (body.get("message") or "aborted")[:2000]
+    ds = await db.get(TrackedDataset, task.tracked_dataset_id)
+    if ds is not None:
+        ds.last_polled_at = task.completed_at
+        ds.last_error = (f"טבלאות שנכשלו: {', '.join(failed)}"[:2000] if failed else None)
+    await db.commit()
+    logger.info("knesset-db: task %s finished — %s", task.id, task.message)
+    return {"status": task.status}
+
+
 # ── GovMap's parcel address sweep ─────────────────────────────────────────────
 # The opposite direction to the geocoder above. That one takes an address we
 # already have and asks GovMap where it is; this one ENUMERATES — a long-running

@@ -481,16 +481,14 @@ async def sync(body: SyncBody, admin=Depends(get_admin_user)):
             raise HTTPException(status_code=400, detail="reset requires a table name")
         await knesset_db.reset_table(body.table)
 
-    async def _run():
-        try:
-            res = await knesset_db.sync_tick(
-                budget_seconds=settings.knesset_db_tick_budget_seconds,
-                sync_interval_hours=settings.knesset_db_sync_interval_hours,
-                only_table=body.table,
-            )
-            logger.info("knesset-db manual sync: %s", res)
-        except Exception:  # noqa: BLE001
-            logger.exception("knesset-db manual sync failed")
-
-    asyncio.create_task(_run())
-    return {"started": True, "table": body.table, "reset": body.reset}
+    # The fetch runs on the worker fleet (knesset.gov.il geo-blocks this
+    # server): queue a run for this table, or a daily run for all of them.
+    from app.database import async_session
+    from app.services import knesset_sync_queue
+    async with async_session() as db:
+        res = await knesset_sync_queue.enqueue(
+            db, knesset_db.MODE_DAILY,
+            tables=[body.table] if body.table else None,
+            actor=getattr(admin, "email", None) or "admin")
+    return {"started": bool(res.get("queued")), "table": body.table,
+            "reset": body.reset, **res}

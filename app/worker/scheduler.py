@@ -426,25 +426,33 @@ async def init_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
-    # Knesset ODATA mirror: advance the sync within a per-tick time budget
-    # (initial full load of ~3M rows spans many ticks; each tick checkpoints,
-    # then it settles into 12h incremental refreshes). Memory-safe: at most
-    # ~1000 x 100-column rows are held between INSERT batches. max_instances=1
-    # + the module's own sync_lock keep it single-flight even against the
-    # admin's manual trigger. No-op when the append DB / feature is off.
     from app.config import settings as _settings
-    from app.services.knesset_db import sync_tick as _knesset_sync_tick
+    # Knesset ODATA mirror: the sync runs on the worker fleet now
+    # (knesset.gov.il geo-blocks this server; app/services/knesset_sync_queue.py).
+    # Here we only QUEUE it: once a day for what is new, on Saturday a weekly
+    # look-back for rows updated after the fact. A run that is overdue (process
+    # down at the hour, first deploy) is queued a few minutes after boot.
+    if _settings.knesset_db_enabled and _settings.append_database_url:
+        from app.services import knesset_sync_queue
+        scheduler.add_job(
+            knesset_sync_queue.scheduled,
+            trigger=CronTrigger(hour=5, minute=47, timezone="Asia/Jerusalem"),
+            id="knesset_db_sync",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=6 * 3600,
+        )
+        scheduler.add_job(
+            knesset_sync_queue.catch_up,
+            trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(minutes=6)),
+            id="knesset_db_sync_catch_up",
+            replace_existing=True,
+        )
 
-    async def knesset_db_sync_job() -> None:
-        try:
-            await _knesset_sync_tick(
-                budget_seconds=_settings.knesset_db_tick_budget_seconds,
-                sync_interval_hours=_settings.knesset_db_sync_interval_hours,
-            )
-        except Exception:  # noqa: BLE001 — never let a feed flap kill the job
-            logger.exception("knesset_db sync tick failed")
-        # MMM document catalog → knesset.mmm_documents. Version-gated: a no-op
-        # single SELECT until the MMM dataset publishes a new version.
+    # MMM document catalog → knesset.mmm_documents. Local work (no Knesset
+    # request): version-gated, a single SELECT until the MMM dataset publishes
+    # a new version. It used to ride the 3-minute ODATA tick.
+    async def knesset_mmm_sync_job() -> None:
         try:
             from app.services import knesset_mmm_db
             if _settings.knesset_db_enabled and _settings.append_database_url:
@@ -453,12 +461,12 @@ async def init_scheduler() -> None:
             logger.exception("knesset_mmm_db sync failed")
 
     scheduler.add_job(
-        knesset_db_sync_job,
-        trigger=IntervalTrigger(minutes=3),
-        id="knesset_db_sync",
+        knesset_mmm_sync_job,
+        trigger=IntervalTrigger(minutes=30),
+        id="knesset_mmm_sync",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=120,
+        misfire_grace_time=600,
     )
 
     # Index-CSV mirror → the `idx` schema, so /data can search inside the
