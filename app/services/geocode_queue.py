@@ -30,6 +30,11 @@ distinction matters):
 * ``failed``    — we never got an answer (transient error, or the batch aborted
   before reaching it). Recorded NOWHERE, so it returns on its own next time.
   Treating this as absence would quietly drop an address that was available.
+
+A fourth state sits above the three: GovMap REFUSING us (403/429/5xx/HTML, see
+``govmap_refusal``). It is not an outcome for any one address. A batch that
+reports one has its misses requeued rather than recorded, and no new batch is
+queued until the refusal is ``govmap_refusal.BACKOFF`` old.
 """
 from __future__ import annotations
 
@@ -40,7 +45,7 @@ from sqlalchemy import select
 
 from app.models.scrape_task import PRIORITY_GEOCODE, ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
-from app.services import append_store
+from app.services import append_store, govmap_refusal
 from app.services.append_store import _qi
 from app.services.nadlan_index import ADDRESSES_TABLE
 
@@ -190,12 +195,20 @@ async def pending_task(db) -> ScrapeTask | None:
     )).scalar_one_or_none()
 
 
-async def enqueue_next_batch(db, *, size: int = BATCH_SIZE) -> dict:
+async def enqueue_next_batch(db, *, size: int = BATCH_SIZE, force: bool = False) -> dict:
     """Queue ONE batch, and only if none is outstanding.
 
     One at a time on purpose: the queue is shared, and a thousand queued
     geocoding rows would bury every other job's visibility even though the
     priority band keeps them from being *claimed* first."""
+    if govmap_refusal.active() and not force:
+        # Queuing now would send 10,000 requests to a service that has just
+        # told us no, and every one would come back the same. `force` is for
+        # an admin who has reason to believe the block has lifted.
+        return {"queued": False, "reason": "GovMap is refusing us",
+                "last_refusal": govmap_refusal.last_refusal()}
+    if force:
+        govmap_refusal.clear()
     remaining = await remaining_count()
     if not remaining:
         return {"queued": False, "reason": "nothing left to geocode", "remaining": 0}
@@ -328,7 +341,14 @@ async def govmap_is_answering() -> bool | None:
                              "x-fingerprint-id": str(uuid.uuid4()),
                              "x-user-id": str(uuid.uuid4()),
                              "x-trace-id": str(uuid.uuid4())})
-                if r.status_code == 200 and (r.json().get("results") or []):
+                refused = govmap_refusal.classify_response(r)
+                if refused:
+                    # A refusal is the answer to the question this function
+                    # asks ("is GovMap answering?") — no need to collect the
+                    # same 403 for the other two control addresses.
+                    govmap_refusal.note(refused, "canary")
+                    return False
+                if r.json().get("results") or []:
                     ok += 1
     except Exception as exc:                                  # network, shape, anything
         logger.warning("geocode: canary check failed to run: %s", exc)
@@ -351,6 +371,51 @@ def _looks_implausible(hits, not_found, payload) -> str | None:
         return f"{asked} addresses asked, zero found"
     if hits / asked < _IMPLAUSIBLE_HIT_RATE:
         return f"{hits}/{asked} found ({100 * hits / asked:.1f}%)"
+    return None
+
+
+#: How many refusal-coded ``failed`` entries make a batch a refused one. One
+#: HTTP 500 in 10,000 is a hiccup, and the misses around it are real answers;
+#: three is GovMap saying no on purpose. An explicit refusal (or an abort for
+#: one) needs no count.
+REFUSAL_MIN_FAILED = 3
+
+
+def refusal_in_payload(payload: dict) -> str | None:
+    """Whether the worker's batch was refused by GovMap, and how, or None.
+
+    Read from three places, most explicit first, because the worker's report
+    has grown over time and an older worker only sends the last two:
+
+    * ``refusal`` — ``{"status": 403}`` / ``"HTTP 403"`` / ``true``: the worker
+      saying so outright (the contract this server now asks for);
+    * ``abort_reason`` of an aborted batch that names a refusal status;
+    * ``failed`` entries whose reason names one, at least REFUSAL_MIN_FAILED.
+    """
+    explicit = payload.get("refusal") or payload.get("refused")
+    if explicit:
+        if isinstance(explicit, dict):
+            code = explicit.get("status") or explicit.get("status_code")
+            return f"HTTP {code}" if isinstance(code, int) else str(code or "refused")
+        if explicit is True:
+            return "refused"
+        return govmap_refusal.refusal_in_text(explicit) or str(explicit)[:40]
+    if payload.get("aborted"):
+        hit = govmap_refusal.refusal_in_text(payload.get("abort_reason"))
+        if hit:
+            return hit
+    seen: dict[str, int] = {}
+    for f in payload.get("failed") or []:
+        if isinstance(f, dict):
+            code = f.get("status") or f.get("status_code")
+            hit = (govmap_refusal.refusal_in_text(f"HTTP {code}") if code
+                   else govmap_refusal.refusal_in_text(f.get("reason")))
+        else:
+            hit = None
+        if hit:
+            seen[hit] = seen.get(hit, 0) + 1
+    if seen and sum(seen.values()) >= REFUSAL_MIN_FAILED:
+        return max(seen, key=seen.get)
     return None
 
 
@@ -377,7 +442,21 @@ async def record_results(payload: dict) -> dict:
     failed = payload.get("failed") or []
     aborted = bool(payload.get("aborted"))
 
-    quarantine = _looks_implausible(len(results), len(not_found), payload)
+    # A refused batch first, and it settles the question without a canary:
+    # we already know GovMap is not answering, and asking it three more times
+    # to confirm would be exactly the leaning-on-it a refusal asks us to stop.
+    # Its misses are requeued, not recorded -- some were probably real, but
+    # re-asking a real miss costs one query later, while recording a refusal
+    # as a miss spends one of the address's MAX_ATTEMPTS on nothing. Hits are
+    # still recorded: a point is evidence whatever happened after it.
+    refused = refusal_in_payload(payload)
+    if refused:
+        govmap_refusal.note(refused, "worker")
+        failed = list(failed) + [{"address_key": k, "reason": f"refused: {refused}"}
+                                 for k in not_found]
+        not_found = []
+
+    quarantine = None if refused else _looks_implausible(len(results), len(not_found), payload)
     if quarantine:
         # Suspicion is not evidence. Ask GovMap about addresses it is known to
         # answer: if it answers them, this batch really did miss.
@@ -432,14 +511,17 @@ async def record_results(payload: dict) -> dict:
                     [(k, 0 if aborted else 1) for k in not_found if k])
     out = {"recorded_hits": len(results), "recorded_not_found": len(not_found),
            "requeued_failed": len(failed), "quarantined": quarantine,
+           "refused": refused,
            "attempted": payload.get("attempted"), "batch_size": payload.get("batch_size"),
            "aborted": bool(payload.get("aborted")),
            "abort_reason": payload.get("abort_reason")}
+    # One line per batch either way; the refusal itself was logged once by
+    # govmap_refusal.note, not once per address.
     logger.info("geocode: batch recorded %s", out)
     return out
 
 
-async def reset_misses(*, only_burned: bool = False) -> dict:
+async def reset_misses(*, only_burned: bool = False, since=None) -> dict:
     """Give back every address a soft block retired.
 
     On the first night 30,450 misses were recorded, 25,548 of them at
@@ -453,15 +535,27 @@ async def reset_misses(*, only_burned: bool = False) -> dict:
     address permanently. So the misses are deleted rather than sifted, and the
     addresses simply return to ``point IS NULL``.
 
-    Hits are never touched — they are evidence, not guesses."""
+    Hits are never touched — they are evidence, not guesses.
+
+    ``since`` (an aware datetime) limits the reset to misses whose LAST answer
+    came at or after it — for undoing one known episode, such as the GovMap
+    403s that began 2026-09-18, without re-asking every miss from the months
+    before it. ``fetched_at`` is re-stamped on every re-ask, so an address
+    missed in August and again during the episode is included, which is right:
+    its latest attempt is the one in doubt."""
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         where = "status = 'not_found'" + (" AND attempts >= 3" if only_burned else "")
+        args = []
+        if since is not None:
+            where += " AND fetched_at >= $1"
+            args.append(since)
         tag = await conn.execute(
-            f"DELETE FROM public.{_qi(GEOCODE_TABLE)} WHERE {where}", timeout=600)
+            f"DELETE FROM public.{_qi(GEOCODE_TABLE)} WHERE {where}", *args, timeout=600)
     freed = int(str(tag).rsplit(" ", 1)[-1]) if tag else 0
     logger.warning("geocode: reset %d recorded misses back into the work list", freed)
     return {"reset": freed, "only_burned": only_burned,
+            "since": since.isoformat() if since is not None else None,
             "remaining": await remaining_count()}
 
 

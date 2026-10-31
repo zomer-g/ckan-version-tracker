@@ -25,7 +25,9 @@ So this module does two things, and the second is not optional:
 
 Live, in a request path, so it is bounded hard: one call, a short timeout, a
 small memo, and any failure returns None rather than raising. A street we
-cannot place is the status quo, not an error.
+cannot place is the status quo, not an error. A REFUSAL (403 and kin, see
+``govmap_refusal``) also returns None to the reader, but is never memoised as
+"no such street", and while it holds no request is sent at all.
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ import logging
 import math
 import time
 import uuid
+
+from app.services import govmap_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +89,23 @@ async def locate_street(settlement_name: str, street: str) -> dict | None:
     if hit and now - hit[0] < _TTL_SECONDS:
         return hit[1]
 
+    # While GovMap is refusing us, do not ask at all: every reader who lands
+    # on a register-only street would otherwise spend a request (and up to
+    # TIMEOUT_SECONDS of their page load) collecting the same 403.
+    if govmap_refusal.active():
+        return None
+
     async with _lock:
         hit = _cache.get(q)
         if hit and time.monotonic() - hit[0] < _TTL_SECONDS:
             return hit[1]
-        found = await _ask(q)
+        try:
+            found = await _ask(q)
+        except govmap_refusal.GovMapRefused:
+            # NOT memoised. The memo holds answers for an hour; a refusal is
+            # not an answer about this street, and caching it as None would
+            # keep saying "no such street" after the block lifts.
+            return None
         if len(_cache) >= _MAX_CACHE:
             _cache.clear()
         _cache[q] = (time.monotonic(), found)
@@ -108,12 +124,21 @@ async def _ask(q: str) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             r = await client.post(ENDPOINT, json=body, headers=headers)
-        if r.status_code != 200:
-            return None
-        results = (r.json() or {}).get("results") or []
     except Exception as e:  # noqa: BLE001 — an unplaceable street is the status quo
         logger.info("street_geocode: %s unavailable (%s)", q, str(e)[:120])
         return None
+    # A 403/429/5xx or an HTML page is GovMap refusing us, not GovMap saying
+    # the street does not exist — see govmap_refusal. It raises so the caller
+    # can tell the two apart; noting it logs once per episode, not per street.
+    refused = govmap_refusal.classify_response(r)
+    if refused:
+        govmap_refusal.note(refused, "street_geocode")
+        raise govmap_refusal.GovMapRefused(refused, "street_geocode")
+    try:
+        results = (r.json() or {}).get("results") or []
+    except Exception as e:  # noqa: BLE001 — JSON content-type, unreadable body
+        govmap_refusal.note("unreadable JSON", "street_geocode")
+        raise govmap_refusal.GovMapRefused("unreadable JSON", "street_geocode") from e
 
     for it in results:
         if not isinstance(it, dict) or it.get("type") != "street":

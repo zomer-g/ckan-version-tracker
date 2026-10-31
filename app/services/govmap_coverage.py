@@ -40,6 +40,32 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
+#: How long a layer GovMap REMOVED from its catalog (its dataset carries
+#: ``source_gone_at``) waits between attempts, whatever else would make it due.
+#: Without it the engine-epoch backfill — or a refresh setting shorter than a
+#: quarter — kept re-queuing ~30 dead layers whose every attempt ends in the
+#: same certain verdict ("layer N is not in the catalog and returned 0
+#: features"). Still re-asked, rather than dropped, because layer ids get
+#: renumbered and come back, and only an attempt can notice; a version landing
+#: clears ``source_gone_at`` and the layer rejoins the normal cadence on its own.
+GONE_LAYER_RECHECK_DAYS = 90
+
+
+def _not_gone_or_recheck_due(now: datetime):
+    """SQL condition: the layer is NOT a gone one, or it is and its quarterly
+    recheck is due. The ``tracked_dataset_id IS NULL`` arm is load-bearing:
+    ``NULL NOT IN (...)`` is NULL in SQL, which would silently exclude every
+    layer that has no dataset yet — i.e. every brand-new layer."""
+    gone_ids = select(TrackedDataset.id).where(TrackedDataset.source_gone_at.is_not(None))
+    return (
+        GovmapCoverage.tracked_dataset_id.is_(None)
+        | GovmapCoverage.tracked_dataset_id.not_in(gone_ids)
+        | GovmapCoverage.last_triggered_at.is_(None)
+        | (GovmapCoverage.last_triggered_at
+           < now - timedelta(days=GONE_LAYER_RECHECK_DAYS))
+    )
+
+
 def engine_epoch() -> datetime | None:
     """Parse ``settings.govmap_engine_epoch`` into an aware UTC datetime.
 
@@ -415,6 +441,11 @@ async def scrape_next_layer() -> dict:
     "דגום". Transient flap victims that genuinely want a retry get it at the
     quarterly refresh or by re-triggering by hand.
 
+    A layer GovMap REMOVED (dataset ``source_gone_at`` set) is due only every
+    ``GONE_LAYER_RECHECK_DAYS``, even when the epoch or a shorter refresh
+    would make it due sooner — it stays active and readable, it just stops
+    being re-asked a question whose answer is known.
+
     Without the DUE filter, the drain-mode behavior (always refill to
     target) would keep re-scraping the stalest layers forever once the
     initial 859-layer import finished — a permanent treadmill cycling the
@@ -468,7 +499,7 @@ async def scrape_next_layer() -> dict:
             due = (
                 GovmapCoverage.last_triggered_at.is_(None)
                 | (GovmapCoverage.last_triggered_at < cutoff)
-            )
+            ) & _not_gone_or_recheck_due(datetime.now(timezone.utc))
             # Next DUE layers: never-scraped first, then HEAVIEST first:
             # layer_kind 2=polygon > 1=line > 0=point, tie-broken by GovMap's
             # own complexity score. Heavy-first is the operator's call for the

@@ -83,8 +83,8 @@ async def init_scheduler() -> None:
                 continue
             schedule_dataset(ds)
             logger.info(
-                "Scheduled poll for %s every %ds (last=%s)",
-                ds.ckan_name, ds.poll_interval, ds.last_polled_at,
+                "Scheduled poll for %s every %ss (last=%s)",
+                ds.ckan_name, effective_poll_interval(ds), ds.last_polled_at,
             )
 
     # The boot-time proof that the public console role reads nothing private,
@@ -861,10 +861,63 @@ def _next_at_hour(hour: int, now: datetime) -> datetime:
     return target.astimezone(timezone.utc)
 
 
+#: How often a dataset whose source is GONE (``TrackedDataset.source_gone_at``)
+#: is still polled. Not never: layer ids get renumbered and pages come back,
+#: and only a poll can notice — a version landing clears the mark. But not on
+#: the routine cadence either: ~30 removed GovMap layers were each failing
+#: their daily/weekly poll with "layer N is not in the catalog", a certain
+#: verdict that the next poll a day later will only repeat, filling the
+#: failures list with the same dead layers. A quarter matches the coverage
+#: rollout's own refresh (``govmap_coverage.GONE_LAYER_RECHECK_DAYS``).
+GONE_SOURCE_INTERVAL_SECONDS = 90 * 86400
+
+
+def effective_poll_interval(ds) -> int | None:
+    """The interval a dataset is actually polled at: its own, or the long
+    gone-source cadence if the source was confirmed removed. Never SHORTER
+    than its own — a dataset already polled less often than quarterly keeps
+    its interval, and an unpolled one (0/None) stays unpolled."""
+    interval = ds.poll_interval
+    if getattr(ds, "source_gone_at", None) is not None and interval and interval > 0:
+        return max(int(interval), GONE_SOURCE_INTERVAL_SECONDS)
+    return interval
+
+
 def schedule_dataset(ds) -> None:
-    """(Re)register a dataset's poll job from the dataset itself."""
-    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at,
-                 at_hour=poll_at_hour(ds))
+    """(Re)register a dataset's poll job from the dataset itself.
+
+    The ONE place that turns a dataset row into a job, so every caller gets
+    the gone-source cadence for free. A gone source is not pinned to its
+    hour: the pin exists for a source whose upstream is complete at a time
+    of day, and the point of this poll is only to see whether it exists."""
+    gone = getattr(ds, "source_gone_at", None) is not None
+    add_poll_job(str(ds.id), effective_poll_interval(ds),
+                 last_polled_at=ds.last_polled_at,
+                 at_hour=None if gone else poll_at_hour(ds))
+
+
+def reschedule_after_gone_change(ds) -> None:
+    """Re-register a dataset's job after ``source_gone_at`` was set or cleared.
+
+    Without this the change only takes effect at the next deploy (when
+    init_scheduler re-reads every row): a layer marked gone would go on
+    failing on its routine cadence until then, and — the direction that
+    matters more — a layer that came BACK would stay on the quarterly
+    cadence, missing a quarter of updates. Coverage-managed datasets have no
+    per-dataset job (the rollout drives them), and an inactive dataset has
+    none to re-register. Never raises: a push or a failure report must not
+    fail over a scheduling nicety."""
+    try:
+        if (ds.scraper_config or {}).get("coverage_managed"):
+            return
+        if not getattr(ds, "is_active", True) or getattr(ds, "status", "active") != "active":
+            return
+        schedule_dataset(ds)
+        logger.info("Rescheduled %s every %ss (source %s)", ds.id,
+                    effective_poll_interval(ds),
+                    "gone" if ds.source_gone_at is not None else "present")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not reschedule %s after a source-gone change: %s", ds.id, e)
 
 
 def add_poll_job(
