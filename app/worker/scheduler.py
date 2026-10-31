@@ -648,13 +648,23 @@ async def init_scheduler() -> None:
     # contributed to 512MB-dyno OOM crashes. Now it's just another scheduled
     # job like the ones above: predictable cadence, max_instances=1, never
     # triggered by request traffic.
+    #
+    # Hourly, not every 20 minutes. A run was measured outliving 20 minutes in
+    # production (2026-10-31: the next tick skipped 7 times in 15 h, "maximum
+    # number of running instances reached"), because it re-HEADed every R2
+    # object of every version on every run. Those sizes are now remembered
+    # between runs (admin._r2_object_size_cache), so a warm run is short — but
+    # the first run after a boot still starts cold and sizes everything, and a
+    # byte total on an admin page does not need to be fresher than an hour.
+    # The cache the page reads is unchanged: it is replaced only by a
+    # finished run, and an empty list before the first one.
     from app.api.admin import refresh_dataset_sizes_job
     scheduler.add_job(
         refresh_dataset_sizes_job,
         trigger=IntervalTrigger(
-            minutes=20,
+            minutes=60,
             # Populate the cache a couple minutes after boot rather than
-            # waiting the full 20 — but not immediately, so it doesn't
+            # waiting the full hour — but not immediately, so it doesn't
             # compete with the poll-job registration burst just above.
             start_date=datetime.now(timezone.utc) + timedelta(minutes=2),
         ),

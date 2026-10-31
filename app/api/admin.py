@@ -1260,6 +1260,29 @@ async def discovery_run_once(
 
 _dataset_sizes_cache: dict = {"at": 0.0, "payload": None}
 
+# Sizes of R2 objects already HEADed by an earlier refresh, keyed by the full
+# "r2:<key>" mapping value.
+#
+# The per-run cost of _compute_dataset_sizes was dominated by these HEADs, not
+# by the package_show calls: every run sized EVERY object of EVERY version of
+# every active dataset again (~10,800 versions catalog-wide, several objects
+# each), four at a time. On 2026-10-31 that pushed a run past its own 20-minute
+# interval and APScheduler skipped the next tick 7 times in 15 hours
+# ("maximum number of running instances reached").
+#
+# Caching is safe because an R2 object's size cannot change under its key:
+# storage_client.build_key mints a fresh random component for every upload, so
+# a new file is always a new key and an existing key is never rewritten with
+# different content (a "rename" is a copy to a new key). Only a definite size
+# is cached — a HEAD that failed or found nothing (None) is retried next run,
+# so a transient R2 error does not freeze a 0 into the admin page.
+#
+# Bounded: after each run the cache is narrowed to the values that run saw, so
+# deleted versions and deactivated datasets fall out instead of accumulating
+# for the life of the process. A few MB at most on today's catalog, against a
+# saving of every HEAD but the new objects' on each tick.
+_r2_object_size_cache: dict[str, int] = {}
+
 
 async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     """Do the actual odata fan-out + size aggregation. Pulled out of the
@@ -1273,7 +1296,7 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
     # list_tracked/list_scheduled_jobs — sizing ~2,900 auto-generated
     # per-committee-meeting mirrors on top of everything else this job does
     # (a package_show per dataset, plus a full version_index scan below) is
-    # unnecessary load even though this now only runs on its own 20-min
+    # unnecessary load even though this now only runs on its own hourly
     # schedule rather than per admin page load.
     ds_result = await db.execute(
         select(TrackedDataset).where(
@@ -1357,18 +1380,38 @@ async def _compute_dataset_sizes(db: AsyncSession) -> dict:
                         r2_values.add(val)
                     elif isinstance(val, list):
                         r2_values.update(x for x in val if storage_lib.is_storage_value(x))
-            async with sem:
-                for val in r2_values:
-                    try:
-                        sizes[val] = await storage_client.object_size(val) or 0
-                    except Exception:
-                        sizes[val] = 0
+            seen_r2_values.update(r2_values)
+            unknown = []
+            for val in r2_values:
+                cached = _r2_object_size_cache.get(val)
+                if cached is None:
+                    unknown.append(val)
+                else:
+                    sizes[val] = cached
+            if unknown:
+                async with sem:
+                    for val in unknown:
+                        try:
+                            size = await storage_client.object_size(val)
+                        except Exception:
+                            size = None
+                        if size is not None:
+                            _r2_object_size_cache[val] = int(size)
+                        sizes[val] = int(size or 0)
         return sizes
+
+    seen_r2_values: set[str] = set()
 
     rid_size_lists = await asyncio.gather(
         *[_fetch_resource_sizes(ds) for ds in datasets],
         return_exceptions=False,
     )
+    # Drop what this run no longer references (see _r2_object_size_cache).
+    # Only after a run that actually sized R2: with storage unconfigured
+    # nothing was seen, and that says nothing about which objects still exist.
+    if seen_r2_values:
+        for stale in set(_r2_object_size_cache) - seen_r2_values:
+            _r2_object_size_cache.pop(stale, None)
 
     out_datasets = []
     for ds, rid_to_size in zip(datasets, rid_size_lists):
