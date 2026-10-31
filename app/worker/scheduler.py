@@ -789,6 +789,36 @@ async def init_scheduler() -> None:
         logger.info("Ocal diary auto-import enabled — every %.1fh",
                     settings.ocal_import_interval_hours)
 
+    # System health checks (app/services/health_checks.py, docs/health-checks.md):
+    # a light pass every morning and the full pass once a week, each recorded in
+    # app.health_runs for the admin "בדיקות מערכת" tab. Crons, not intervals —
+    # an interval restarts on every deploy and a weekly one would never fire.
+    if settings.health_checks_enabled:
+        from app.services import health_checks
+        scheduler.add_job(
+            health_checks.scheduled,
+            trigger=CronTrigger(hour=settings.health_daily_hour,
+                                minute=settings.health_daily_minute,
+                                timezone="Asia/Jerusalem"),
+            args=["daily"],
+            id="health_daily",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3 * 3600,
+        )
+        scheduler.add_job(
+            health_checks.scheduled,
+            trigger=CronTrigger(day_of_week=settings.health_weekly_day,
+                                hour=settings.health_weekly_hour,
+                                minute=settings.health_weekly_minute,
+                                timezone="Asia/Jerusalem"),
+            args=["weekly"],
+            id="health_weekly",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=6 * 3600,
+        )
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

@@ -19,6 +19,7 @@ from app.models.decision_analysis import DecisionAnalysis
 from app.models.sql_share import SqlShare
 from app.models.api_access_log import ApiAccessLog
 from app.models.history_part import HistoryPart
+from app.models.health_run import HealthRun
 
 __all__ = [
     "User",
@@ -43,4 +44,5 @@ __all__ = [
     "SqlShare",
     "ApiAccessLog",
     "HistoryPart",
+    "HealthRun",
 ]

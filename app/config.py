@@ -802,6 +802,25 @@ class Settings(BaseSettings):
     profiler_auto_enabled: bool = True   # profile after each poll that changes data
     profiler_auto_enrich: bool = True    # allow the LLM layer on new/changed schemas
 
+    # ── System health checks (app/services/health_checks.py, docs/health-checks.md) ──
+    # A daily light pass and a weekly full one over every component (DB,
+    # archive, R2, scheduler, worker fleet, queues, every scraper source, the
+    # public site), each kept as a row in app.health_runs for the admin
+    # "בדיקות מערכת" tab. Times are Israel time.
+    # HEALTH_ALERT_WEBHOOK_URL: optional incoming-webhook (Slack / Discord /
+    # Google Chat / any JSON receiver). POSTed only when a run finds a problem
+    # that the previous run of that tier did not have, so it never repeats daily.
+    health_checks_enabled: bool = True
+    health_daily_hour: int = 7
+    health_daily_minute: int = 12
+    health_weekly_day: str = "sat"
+    health_weekly_hour: int = 4
+    health_weekly_minute: int = 37
+    health_retention_days: int = 180
+    health_alert_webhook_url: str = ""
+    # The process memory check warns at 80% and fails at 92% of this.
+    health_memory_limit_mb: int = 512
+
     # SSO
     app_base_url: str = "http://localhost:8000"
     google_client_id: str = ""

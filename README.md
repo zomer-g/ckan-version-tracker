@@ -49,6 +49,11 @@ journalists, and researchers.
   Claude.ai / ChatGPT / Cursor via OAuth 2.1 + PKCE (invite-only).
 - **Google SSO + admin approval** — secure login via Google OAuth2; new tracking
   requests require admin approval.
+- **System health checks** — a daily light pass and a weekly full pass over
+  every component (DB, R2, scheduler, worker fleet, queues, each scraper
+  source, the public site and the upstreams), run-on-demand from the admin
+  "בדיקות מערכת" tab, with a log of every run — see
+  [docs/health-checks.md](docs/health-checks.md).
 - **Bilingual UI** — Hebrew (RTL) and English with toggle; About/Rationale copy
   is editable at runtime from the admin panel.
 
