@@ -818,8 +818,9 @@ class Settings(BaseSettings):
     health_weekly_minute: int = 37
     health_retention_days: int = 180
     health_alert_webhook_url: str = ""
-    # The process memory check warns at 80% and fails at 92% of this.
-    health_memory_limit_mb: int = 512
+    # The process memory check warns at 80% and fails at 92% of the container's
+    # own cgroup limit. Set this only to override it (0 = read the cgroup).
+    health_memory_limit_mb: int = 0
 
     # SSO
     app_base_url: str = "http://localhost:8000"
