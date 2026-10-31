@@ -2838,6 +2838,7 @@ async def push_version(
     # A version landed, so the source is demonstrably there — clear any
     # "removed at the publisher" mark. Layer ids get renumbered and pages come
     # back; the badge must not outlive the outage that produced it.
+    _was_gone = ds.source_gone_at is not None
     ds.source_gone_at = None
 
     # Is there a reason to distrust what just landed? Evaluated per push and
@@ -2869,6 +2870,11 @@ async def push_version(
         if _warn:
             logger.warning("Dataset %s (%s) flagged: %s", ds.id, ds.title, _warn[:120])
     await db.commit()
+    # Back from the dead: put it on its routine cadence again now, not after
+    # the next deploy — it was on the quarterly gone-source poll.
+    if _was_gone:
+        from app.worker.scheduler import reschedule_after_gone_change
+        reschedule_after_gone_change(ds)
 
     # Refresh the ODATA package description so it carries current links back
     # to the source and to this dataset's over.org.il view. Best-effort — a
@@ -3973,6 +3979,10 @@ async def report_failure(
         ds_row.source_gone_at = datetime.now(timezone.utc)
         await db.commit()
         logger.info("Dataset %s (%s) marked source_gone", ds_row.id, ds_row.title)
+        # Off the routine cadence now: the next routine poll would only reach
+        # the same certain verdict. See GONE_SOURCE_INTERVAL_SECONDS.
+        from app.worker.scheduler import reschedule_after_gone_change
+        reschedule_after_gone_change(ds_row)
 
     from app.services.activity_log import log_event
     await log_event(
@@ -4067,6 +4077,15 @@ async def geocode_batch(
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     size = int((task.params or {}).get("batch_size") or geocode_queue.BATCH_SIZE)
+    from app.services import govmap_refusal
+    if govmap_refusal.active():
+        # A batch queued before GovMap started refusing us is still claimable.
+        # Handing it an empty list makes the worker post back an empty result
+        # and close the task, instead of spending 10,000 requests on a 403.
+        logger.info("geocode: task %s gets an empty batch — GovMap is refusing us (%s)",
+                    task_id, govmap_refusal.last_refusal())
+        return {"task_id": str(task_id), "batch_size": size, "count": 0,
+                "addresses": [], "refused": govmap_refusal.last_refusal()}
     rows = await geocode_queue.batch_for_task(size)
     logger.info("geocode: handing task %s a batch of %d", task_id, len(rows))
     return {"task_id": str(task_id), "batch_size": size,
@@ -4088,6 +4107,11 @@ async def geocode_results(
       * ``failed``    → recorded NOWHERE, so it returns in the next batch. It
         means "we could not ask", not "there is nothing there".
     Anything in neither list was never attempted, and likewise returns.
+
+    A batch GovMap REFUSED (``refusal: {"status": 403}``, an abort for one, or
+    several 403/429/5xx/non-JSON failures — see
+    ``geocode_queue.refusal_in_payload``) records its hits only; its misses go
+    back to the queue, because a refusal says nothing about the address.
     """
     _verify_worker_key(request)
     from app.services import geocode_queue
@@ -4110,6 +4134,7 @@ async def geocode_results(
                 f"גיאוקודינג: {summary['recorded_hits']} נמצאו, "
                 f"{summary['recorded_not_found']} לא קיימות, "
                 f"{summary['requeued_failed']} חוזרות לתור"
+                + (f" — GovMap סירב ({summary['refused']})" if summary.get("refused") else "")
                 + (f" — נעצר: {body.get('abort_reason')}" if aborted else "")
             )[:500]
             await db.commit()

@@ -39,7 +39,7 @@ from app.services.r2_backfill import (
     rebuild_dataset_versions,
     seed_neon_from_versions,
 )
-from app.worker.scheduler import add_poll_job, poll_at_hour, scheduler
+from app.worker.scheduler import add_poll_job, poll_at_hour, schedule_dataset, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -516,8 +516,7 @@ async def register_append_datasets_endpoint(
                     select(TrackedDataset).where(TrackedDataset.id == parse_uuid(r["id"], "id"))
                 )).scalar_one_or_none()
                 if ds:
-                    add_poll_job(str(ds.id), ds.poll_interval, last_polled_at=ds.last_polled_at,
-                                 at_hour=poll_at_hour(ds))
+                    schedule_dataset(ds)   # honours the gone-source cadence
                     if poll:
                         from app.worker.poll_job import poll_dataset
                         background_tasks.add_task(poll_dataset, str(ds.id))
@@ -3427,6 +3426,7 @@ async def settlements_load(
 async def nadlan_geocode_enqueue(
     request: Request,
     size: int = 10000,
+    force: bool = False,
     user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -3435,13 +3435,18 @@ async def nadlan_geocode_enqueue(
     One at a time by design — the queue is shared, and a thousand queued
     geocoding rows would bury every other job's visibility even though
     PRIORITY_GEOCODE keeps them from being claimed first. Until this dataset
-    exists the worker's govmap_geocode scraper is inert."""
+    exists the worker's govmap_geocode scraper is inert.
+
+    Refused while GovMap has recently refused us (see ``last_refusal`` on
+    /nadlan/geocode/state); ``force=true`` clears that and queues anyway, for
+    when there is reason to believe the block has lifted."""
     from app.services import append_store as _as
     from app.services import geocode_queue
     if not _as.is_configured():
         raise HTTPException(status_code=409, detail="Append DB is not configured")
     await geocode_queue.ensure_tables()
-    res = await geocode_queue.enqueue_next_batch(db, size=max(1, min(int(size), 50000)))
+    res = await geocode_queue.enqueue_next_batch(db, size=max(1, min(int(size), 50000)),
+                                                 force=force)
     logger.info("geocode enqueue by %s: %s", user.email, res)
     return res
 
@@ -3451,11 +3456,23 @@ async def nadlan_geocode_enqueue(
 async def nadlan_geocode_reset_misses(
     request: Request,
     only_burned: bool = False,
+    since: str | None = None,
     user: User = Depends(get_admin_user),
 ):
-    """Return soft-blocked addresses to the work list (hits are never touched)."""
+    """Return soft-blocked addresses to the work list (hits are never touched).
+
+    ``since`` (ISO date/time, e.g. ``2026-09-18``) limits it to misses last
+    recorded at or after then — one refusal episode rather than every miss."""
     from app.services import geocode_queue
-    res = await geocode_queue.reset_misses(only_burned=only_burned)
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="since must be an ISO date")
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+    res = await geocode_queue.reset_misses(only_burned=only_burned, since=since_dt)
     logger.warning("geocode reset-misses by %s: %s", user.email, res)
     return res
 
@@ -3622,7 +3639,12 @@ async def nadlan_geocode_state(
     except Exception as e:  # noqa: BLE001 — table may not exist before first use
         return {"ready": False, "note": str(e)}
     task = await geocode_queue.pending_task(db)
+    from app.services import govmap_refusal
     return {"ready": True, **st,
+            # {at, status, source} of the latest time GovMap refused us, or
+            # None. In-process: a restart forgets it (see govmap_refusal).
+            "last_refusal": govmap_refusal.last_refusal(),
+            "refusal_active": govmap_refusal.active(),
             "in_flight": ({"id": str(task.id), "status": task.status,
                            "phase": task.phase, "progress": task.progress}
                           if task is not None else None)}
