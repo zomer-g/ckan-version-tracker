@@ -558,8 +558,12 @@ async def _version_freeze(request, call_next):
 @app.get("/healthz")
 async def healthz():
     from app.worker.scheduler import scheduler
+    from app.services import health_checks
     return {
         "ok": True,
+        # When the daily / weekly system checks last finished, and their verdict
+        # (docs/health-checks.md). Read by .github/workflows/external-monitor.yml.
+        "health_checks": await health_checks.public_summary(),
         "host": "xhostd" if settings.on_xhostd else "other",
         "scheduler_enabled": settings.scheduler_enabled,
         "scheduler_running": bool(scheduler.running),

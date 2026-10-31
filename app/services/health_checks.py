@@ -1015,6 +1015,7 @@ async def run_checks(tier: str = "daily", keys: list[str] | None = None, *,
                 .execution_options(synchronize_session=False))
             await db.commit()
 
+        _forget_summary()
         log = logger.warning if status != OK else logger.info
         log("health %s run %s: %s (%s new problems, %s resolved)",
             tier, run_id, status, len(new), len(resolved))
@@ -1055,6 +1056,78 @@ async def scheduled(tier: str) -> None:
         logger.info("health %s skipped: another run is in progress", tier)
     except Exception:  # noqa: BLE001
         logger.exception("scheduled health %s run failed", tier)
+
+
+# ── what /healthz says about the checks ─────────────────────────────────
+# The outside monitor (.github/workflows/external-monitor.yml) cannot sign in,
+# so /healthz carries the one fact it needs to notice that the checks stopped
+# running: when each tier last finished, and its verdict. Cached, because
+# /healthz is hit by every platform probe.
+
+_SUMMARY_TTL = timedelta(minutes=5)
+_summary: dict | None = None
+_summary_at: datetime | None = None
+
+
+async def _latest_by_tier(session_factory) -> dict:
+    from app.models.health_run import HealthRun
+    out = {}
+    async with session_factory() as db:
+        for tier in ("daily", "weekly"):
+            r = (await db.execute(
+                select(HealthRun.finished_at, HealthRun.status, HealthRun.summary)
+                .where(HealthRun.tier == tier, HealthRun.finished_at.isnot(None),
+                       HealthRun.status != "running")
+                .order_by(HealthRun.started_at.desc()).limit(1)
+            )).first()
+            out[tier] = None if r is None else {
+                "finished_at": _as_utc(r[0]).isoformat(),
+                "status": r[1],
+                "new_problems": len((r[2] or {}).get("new_problems") or []),
+            }
+    return out
+
+
+async def public_summary(session_factory=None) -> dict | None:
+    """{"daily": {...} | None, "weekly": {...} | None}; None if unreadable."""
+    global _summary, _summary_at
+    now = datetime.now(timezone.utc)
+    if _summary is not None and _summary_at and now - _summary_at < _SUMMARY_TTL:
+        return _summary
+    if session_factory is None:
+        from app.database import async_session as session_factory
+    try:
+        _summary = await asyncio.wait_for(_latest_by_tier(session_factory), timeout=5)
+        _summary_at = now
+    except Exception:  # noqa: BLE001 — /healthz must answer regardless
+        logger.warning("health summary for /healthz unavailable", exc_info=True)
+        return _summary
+    return _summary
+
+
+def _forget_summary() -> None:
+    global _summary_at
+    _summary_at = None
+
+
+async def catch_up(session_factory=None) -> None:
+    """After boot: run a tier whose last run is overdue (never ran, or the
+    scheduled one was missed because the process was down at its hour).
+    Daily if older than 26 h, weekly if older than 8 days."""
+    if session_factory is None:
+        from app.database import async_session as session_factory
+    try:
+        latest = await _latest_by_tier(session_factory)
+    except Exception:  # noqa: BLE001
+        logger.exception("health catch-up: cannot read the last runs")
+        return
+    now = datetime.now(timezone.utc)
+    for tier, limit in (("daily", timedelta(hours=26)), ("weekly", timedelta(days=8))):
+        last = latest.get(tier)
+        if last and now - datetime.fromisoformat(last["finished_at"]) < limit:
+            continue
+        logger.info("health catch-up: running the overdue %s pass", tier)
+        await scheduled(tier)
 
 
 # ── alerting ────────────────────────────────────────────────────────────

@@ -818,6 +818,14 @@ async def init_scheduler() -> None:
             max_instances=1,
             misfire_grace_time=6 * 3600,
         )
+        # A pass that is overdue (first deploy, or the process was down at its
+        # hour) runs once, a while after boot — clear of the boot burst.
+        scheduler.add_job(
+            health_checks.catch_up,
+            trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(minutes=8)),
+            id="health_catch_up",
+            replace_existing=True,
+        )
 
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))

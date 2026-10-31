@@ -321,3 +321,27 @@ def test_admin_api_overview_log_and_run_detail():
     finally:
         app.dependency_overrides.clear()
     del admin_health
+
+
+def test_public_summary_and_catch_up(monkeypatch):
+    async def go():
+        S = await _db()
+        hc._summary, hc._summary_at = None, None
+        assert await hc.public_summary(S) == {"daily": None, "weekly": None}
+
+        ran = []
+
+        async def fake_scheduled(tier):
+            ran.append(tier)
+            await hc.run_checks(tier if tier == "daily" else "manual", ["db.app"], session_factory=S)
+        monkeypatch.setattr(hc, "scheduled", fake_scheduled)
+        await hc.catch_up(S)
+        assert ran == ["daily", "weekly"]           # both never ran
+
+        ran.clear()
+        await hc.catch_up(S)
+        assert ran == ["weekly"]                    # daily is fresh now
+        s = await hc.public_summary(S)
+        assert s["daily"]["status"] == "ok" and s["weekly"] is None
+        hc._summary, hc._summary_at = None, None
+    asyncio.run(go())
