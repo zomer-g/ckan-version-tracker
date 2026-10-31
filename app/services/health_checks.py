@@ -800,7 +800,6 @@ async def check_public_site(ctx: Ctx) -> CheckResult:
                     "כך מבדילים בין 'המקור נפל' ל'הסקרייפר שלנו נשבר'. כשל כאן הוא אזהרה בלבד."),
        timeout=120)
 async def check_upstreams(ctx: Ctx) -> CheckResult:
-    import httpx
     targets = [
         ("data.gov.il", "data.gov.il (CKAN)", "https://data.gov.il/api/3/action/package_search?rows=0", '"success"', None),
         ("knesset", "כנסת — ODATA", "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_KnessetDates?$top=1", None, None),
@@ -812,8 +811,12 @@ async def check_upstreams(ctx: Ctx) -> CheckResult:
         if pub:
             targets.append(("r2_public", "דומיין ההורדות (R2)", pub + "/", None, None))
     items = []
-    async with httpx.AsyncClient(timeout=25, follow_redirects=True,
-                                 headers={"User-Agent": _UA}) as client:
+    # knesset_http.client: the Knesset probe goes the way the mirror does —
+    # through KNESSET_PROXY_URL when set — so a green here means the mirror can
+    # reach the feed. Other targets on this client still go direct.
+    from app.services import knesset_http
+    async with knesset_http.client(timeout=25, follow_redirects=True,
+                                   headers={"User-Agent": _UA}) as client:
         for key, label, url, expect, hdrs in targets:
             st, msg, _ms = await _probe(client, url, expect=expect, headers=hdrs, max_bytes=8192)
             if key == "r2_public" and msg.startswith("HTTP 404"):

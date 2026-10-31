@@ -25,6 +25,7 @@ from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.rate_limit import limiter
 from app.services import knesset_db
+from app.services.knesset_http import GEO_BLOCK_MESSAGE_HE, KnessetGeoBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,14 @@ class SqlBody(BaseModel):
 class SyncBody(BaseModel):
     table: str | None = None   # limit the pass to one table
     reset: bool = False        # force a fresh full walk of that table
+
+
+def _geo_blocked_503(e: KnessetGeoBlocked) -> HTTPException:
+    # A known, configuration-level condition (knesset.gov.il refuses non-Israeli
+    # addresses; production is abroad) — one WARNING line, no traceback, and a
+    # detail a visitor can actually read instead of an exception class name.
+    logger.warning("knesset-db: %s", e)
+    return HTTPException(status_code=503, detail=GEO_BLOCK_MESSAGE_HE)
 
 
 def _require_enabled() -> None:
@@ -57,6 +66,8 @@ async def tables(request: Request):
     _require_enabled()
     try:
         return {"tables": await knesset_db.list_tables()}
+    except KnessetGeoBlocked as e:
+        raise _geo_blocked_503(e) from None
     except Exception as e:  # noqa: BLE001 — surface init errors readably
         logger.exception("knesset-db /tables failed")
         raise HTTPException(status_code=503, detail=f"מסד הנתונים של הכנסת אינו זמין כרגע ({type(e).__name__})")
@@ -70,6 +81,8 @@ async def schema_txt(request: Request, group: str | None = None):
     _require_enabled()
     try:
         return await knesset_db.schema_text(group)
+    except KnessetGeoBlocked as e:
+        raise _geo_blocked_503(e) from None
     except Exception as e:  # noqa: BLE001
         logger.exception("knesset-db /schema.txt failed")
         raise HTTPException(status_code=503, detail=f"מסד הנתונים של הכנסת אינו זמין כרגע ({type(e).__name__})")
@@ -307,7 +320,9 @@ async def _zip_stream(rows: list[dict]):
     truncated = False
 
     try:
-        async with httpx.AsyncClient(
+        from app.services import knesset_http
+        # fs.knesset.gov.il: through KNESSET_PROXY_URL when set (geo-block).
+        async with knesset_http.client(
             timeout=httpx.Timeout(60.0, connect=20.0), follow_redirects=True,
             headers={"User-Agent": "over.org.il protocol batches (+https://over.org.il/knesset)"},
         ) as client:
@@ -324,6 +339,9 @@ async def _zip_stream(rows: list[dict]):
                 seen_names.add(name)
                 try:
                     resp = await client.get(url)
+                    # Followed redirects would otherwise zip the geo-block
+                    # page's HTML under the protocol's file name.
+                    knesset_http.check_geo_block(resp)
                     resp.raise_for_status()
                     data = resp.content
                     if len(data) > BATCH_MAX_FILE_BYTES:

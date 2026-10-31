@@ -207,6 +207,16 @@ class Settings(BaseSettings):
     # Per scheduler tick, how long the sync may work before yielding (the
     # initial ~3M-row load spans many ticks; each tick checkpoints).
     knesset_db_tick_budget_seconds: float = 240.0
+    # Egress proxy for every server-side request to a knesset.gov.il host.
+    # knesset.gov.il geo-blocks addresses outside Israel (a 303 to
+    # /maintenance-page-geo), and production runs abroad — so without this the
+    # mirror, the committee-URL validator and the protocol ZIPs all fail. Point
+    # it at a small HTTP(S) forward proxy on a machine in Israel, e.g.
+    # "http://user:secret@il-worker.example:8888" (credentials live in the env
+    # VALUE, never in the repo). Empty ⇒ direct. Only knesset.gov.il and its
+    # subdomains go through it; see app/services/knesset_http.py and
+    # docs/knesset-geo-block.md.
+    knesset_proxy_url: str = ""
 
     # ── Committee-protocol batch ZIP guards (the /knesset "אצוות" tab) ──
     # /api/knesset-db/protocols/batch.zip is public and unauthenticated: for
