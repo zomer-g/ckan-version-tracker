@@ -163,6 +163,17 @@ def _clip(s: str | None, n: int = 300) -> str | None:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def is_real_error(message: str | None) -> bool:
+    """A dataset's ``last_error`` that is a failure, not a note.
+
+    The poll job also writes informational notes into that field, marked with
+    a leading ℹ: "external link — not kept as a file", "waiting for the browser
+    worker". Counting those as failures made the Knesset link datasets read as
+    broken scrapers every day."""
+    text = (message or "").strip()
+    return bool(text) and not text.startswith("ℹ")
+
+
 def _session(ctx: Ctx):
     return ctx.session_factory()
 
@@ -541,7 +552,8 @@ async def check_scraper_runs(ctx: Ctx) -> CheckResult:
             continue
         k = source_key(ckan_id, stype)
         s = per_src.setdefault(k, {"completed": 0, "failed": 0, "datasets": {}})
-        s["datasets"][ds_id] = ("failed" if err else "completed", err, title, polled)
+        s["datasets"][ds_id] = ("failed" if is_real_error(err) else "completed",
+                                err, title, polled)
 
     items = []
     for k, s in per_src.items():
@@ -652,7 +664,7 @@ async def check_silent(ctx: Ctx) -> CheckResult:
         else:
             limit = max(3 * interval, 3 * 86400)
         cands = [_as_utc(last_task.get(ds_id)), _as_utc(last_ver.get(ds_id))]
-        if stype == "ckan" and not err:
+        if stype == "ckan" and not is_real_error(err):
             cands.append(_as_utc(polled))
         ok_at = max([c for c in cands if c], default=None)
         k = source_key(ckan_id, stype)

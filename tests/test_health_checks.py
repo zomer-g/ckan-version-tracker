@@ -363,3 +363,21 @@ def test_probe_treats_a_redirect_to_a_maintenance_page_as_a_failure():
             st, _, _ = await hc._probe(c, "https://x.test/plain")
             assert st == "ok"
     asyncio.run(go())
+
+
+def test_an_informational_note_in_last_error_is_not_a_failure():
+    assert not hc.is_real_error(None) and not hc.is_real_error("  ")
+    assert not hc.is_real_error("ℹ קישור לאתר חיצוני — לא נשמר כקובץ: lawlaws.aspx")
+    assert hc.is_real_error("0/1 resources archived — 403 Forbidden")
+
+    async def go():
+        S = await _db()
+        async with S() as db:
+            db.add_all([_ds("a", "ckan", last_error="ℹ קישור לאתר חיצוני — לא נשמר כקובץ"),
+                        _ds("b", "ckan", last_error="ℹ ממתין לגירוד בדפדפן"),
+                        _ds("c", "ckan")])
+            await db.commit()
+        r = await hc.REGISTRY["scrapers.runs"].fn(_ctx(S))
+        (ckan,) = r.items
+        assert ckan["failing"] == 0 and ckan["status"] == "ok"
+    asyncio.run(go())
