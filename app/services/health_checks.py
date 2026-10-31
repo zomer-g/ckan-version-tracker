@@ -724,6 +724,39 @@ async def check_govmap_coverage(ctx: Ctx) -> CheckResult:
                                  "hours_since_last_trigger": round(idle_h, 1) if idle_h is not None else None})
 
 
+@check("knesset.mirror", component="סקרייפרים", title="מסד הנתונים של הכנסת (מראת ODATA)",
+       description=("מתי סונכרנה הטבלה האחרונה בסכמת knesset. הסנכרון רץ על הוורקר: יומי למה שחדש, "
+                    "ובשבת בדיעבד ל-30 יום אחורה. אזהרה אחרי 30 שעות בלי סנכרון או כשטבלה בשגיאה, כשל אחרי 8 ימים."))
+async def check_knesset_mirror(ctx: Ctx) -> CheckResult:
+    from app.services import knesset_db
+    if not knesset_db.is_configured():
+        return CheckResult(SKIP, "מראת הכנסת כבויה בסביבה הזו")
+    pool = await knesset_db.append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                f"SELECT table_name, status, error, last_synced_at "
+                f"FROM {knesset_db._qtable('sync_state')}")
+        except Exception as e:  # noqa: BLE001 — schema missing = never built
+            return CheckResult(FAIL, _clip(f"אין טבלת sync_state: {e}", 300))
+    if not rows:
+        return CheckResult(FAIL, "המראה ריקה — אף טבלה לא נרשמה")
+    last = max((_as_utc(r["last_synced_at"]) for r in rows if r["last_synced_at"]), default=None)
+    errors = [{"table": r["table_name"], "error": _clip(r["error"], 200)}
+              for r in rows if r["status"] == "error"]
+    age_h = (ctx.now - last).total_seconds() / 3600 if last else None
+    st = OK
+    if age_h is None or age_h > 8 * 24:
+        st = FAIL
+    elif age_h > 30 or errors:
+        st = WARN
+    msg = f"סנכרון אחרון {_ago(last, ctx.now)} · {len(rows)} טבלאות"
+    if errors:
+        msg += f" · {len(errors)} בשגיאה: " + ", ".join(e["table"] for e in errors[:5])
+    return CheckResult(st, msg, {"hours_since_sync": round(age_h, 1) if age_h is not None else None,
+                                 "errors": errors[:20]})
+
+
 # ── the public site and the upstreams ───────────────────────────────────
 
 def _public_base() -> str | None:
@@ -796,14 +829,21 @@ async def check_public_site(ctx: Ctx) -> CheckResult:
 
 
 @check("upstream.sources", component="מקורות חיצוניים", title="זמינות המקורות הממשלתיים",
-       description=("האם המקורות עצמם עונים מהשרת: data.gov.il, ODATA של הכנסת (ובשבועית גם קטלוג GovMap ודומיין ה-R2 הציבורי). "
+       description=("האם המקורות עצמם עונים מהשרת: data.gov.il (ובשבועית גם קטלוג GovMap ודומיין ה-R2 הציבורי). "
                     "כך מבדילים בין 'המקור נפל' ל'הסקרייפר שלנו נשבר'. כשל כאן הוא אזהרה בלבד."),
        timeout=120)
 async def check_upstreams(ctx: Ctx) -> CheckResult:
     targets = [
         ("data.gov.il", "data.gov.il (CKAN)", "https://data.gov.il/api/3/action/package_search?rows=0", '"success"', None),
-        ("knesset", "כנסת — ODATA", "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_KnessetDates?$top=1", None, None),
     ]
+    # The server itself is geo-blocked by knesset.gov.il by design now: the
+    # mirror is fed by the worker fleet (knesset_sync_queue), and its health is
+    # `knesset.mirror` below. Probe the feed from here only when a proxy says
+    # the server is meant to reach it.
+    if settings.knesset_proxy_url:
+        targets.append(("knesset", "כנסת — ODATA (דרך ה-proxy)",
+                        "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_KnessetDates?$top=1",
+                        None, None))
     if ctx.deep:
         from app.services.govmap_coverage import CATALOG_URL, _catalog_headers
         targets.append(("govmap", "GovMap — קטלוג שכבות", CATALOG_URL, None, _catalog_headers()))

@@ -174,7 +174,14 @@ async def fetch_metadata(client: httpx.AsyncClient) -> list[EntitySet]:
     resp = await client.get(f"{PARLIAMENT_BASE}/$metadata")
     knesset_http.check_geo_block(resp)   # before raise_for_status: name the 303
     resp.raise_for_status()
-    root = ET.fromstring(resp.text)
+    return parse_metadata(resp.text)
+
+
+def parse_metadata(xml_text: str) -> list[EntitySet]:
+    """The $metadata document → EntitySet descriptors. Pure: the document may
+    come from our own fetch or, since the server is geo-blocked, from a worker
+    in Israel that fetched it (see ``accept_metadata``)."""
+    root = ET.fromstring(xml_text)
     ns = {"edm": "http://docs.oasis-open.org/odata/ns/edm"}
     types: dict[str, list[tuple[str, str]]] = {}
     for et in root.findall(".//edm:EntityType", ns):
@@ -917,3 +924,146 @@ async def status_summary() -> dict:
         "geo_blocked_until": (geo_blocked_until().isoformat()
                               if geo_blocked_until() else None),
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The sync, run by the worker fleet
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# knesset.gov.il refuses every address outside Israel, and this server is
+# abroad (see app/services/knesset_http.py). The worker fleet is in Israel and
+# already does all the other collection, so the FETCH moved there; the WRITE
+# stays here, where the mirror lives. Split along the line the code already had:
+#
+#   worker:  $metadata  ──POST /api/worker/knesset-db/metadata──▶ accept_metadata
+#            GET /api/worker/knesset-db/plan/{task}  ◀── build_plan (per table:
+#                 URL, base filter, resume Id, whether to ask for $count)
+#            Id-ordered pages ──POST /api/worker/knesset-db/ingest──▶ ingest
+#                 (a batch at a time; the last one says done)
+#
+# Cadence, as the owner asked: there is no reason to look every 3 minutes.
+#
+#   daily   what is NEW: LastUpdatedDate since the table's watermark (minus the
+#           48 h overlap), and for the few sets that have no LastUpdatedDate,
+#           only Ids above the highest one held.
+#   weekly  what changed AFTER THE FACT: LastUpdatedDate over the last
+#           WEEKLY_LOOKBACK (30 days) whatever the watermark says, and a full
+#           re-walk of the sets that have no LastUpdatedDate (small views).
+#
+# A table that is not fully loaded (a reset, a new set upstream) is walked from
+# its checkpoint in either mode. Upserts are by Id, so overlap costs only
+# re-writes, never duplicates.
+
+MODE_DAILY = "daily"
+MODE_WEEKLY = "weekly"
+MODES = (MODE_DAILY, MODE_WEEKLY)
+WEEKLY_LOOKBACK = timedelta(days=30)
+
+
+async def accept_metadata(xml_text: str) -> int:
+    """A worker's copy of $metadata: parse it, adopt it, run the DDL (new sets
+    become tables, new columns ALTERs). Returns the number of sets."""
+    global _metadata_cache, _infra_ready
+    sets = parse_metadata(xml_text)
+    if not sets:
+        raise ValueError("the $metadata document declares no usable entity sets")
+    _metadata_cache = sets
+    _infra_ready = False
+    await ensure_infra()
+    return len(sets)
+
+
+def metadata_ready() -> bool:
+    return _metadata_cache is not None
+
+
+def plan_job(es: EntitySet, state: dict, mode: str, now: datetime,
+             max_id: int | None = None) -> dict:
+    """What the worker should fetch for one table. Pure, so the cadence rules
+    are testable without a database or a network."""
+    last_id = int(state.get("last_id") or 0)
+    watermark = state.get("updated_watermark")
+    job = {"table": es.table, "entity_set": es.name,
+           "url": f"{es.base_url}/{es.url_name}", "page_size": PAGE_SIZE}
+    if not state.get("full_loaded") or (es.has_last_updated and watermark is None):
+        # Never finished a full walk (new set, reset, interrupted): carry on.
+        return {**job, "kind": "full", "base_filter": "", "after_id": last_id,
+                "want_count": last_id == 0}
+    if es.has_last_updated:
+        since = watermark - INCREMENTAL_OVERLAP
+        if mode == MODE_WEEKLY:
+            since = min(since, now - WEEKLY_LOOKBACK)
+        return {**job, "kind": "updated", "after_id": last_id, "want_count": False,
+                "base_filter": f"LastUpdatedDate gt {_fmt_odata_dt(since)}"}
+    if mode == MODE_WEEKLY:
+        return {**job, "kind": "rewalk", "base_filter": "", "after_id": 0,
+                "want_count": True}
+    return {**job, "kind": "new_ids", "base_filter": "",
+            "after_id": max(last_id, int(max_id or 0)), "want_count": False}
+
+
+async def build_plan(mode: str, tables: list[str] | None = None) -> dict:
+    """Every table's job for one worker run, in the order the old tick used:
+    unfinished full loads first, smallest source first."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    if _metadata_cache is None:
+        return {"metadata_needed": True}
+    sets = {es.table: es for es in await ensure_infra()}
+    pool = await append_store.get_pool()
+    now = datetime.now(timezone.utc)
+    async with pool.acquire() as conn:
+        states = {r["table_name"]: dict(r) for r in await conn.fetch(
+            f"SELECT * FROM {_qtable('sync_state')}")}
+        jobs = []
+        for table, es in sets.items():
+            if tables and table not in tables:
+                continue
+            st = states.get(table) or {"full_loaded": False, "last_id": 0}
+            max_id = None
+            if not es.has_last_updated and st.get("full_loaded") and mode == MODE_DAILY:
+                max_id = await conn.fetchval(
+                    f"SELECT coalesce(max(id), 0) FROM {_qtable(table)}")
+            jobs.append((st, plan_job(es, st, mode, now, max_id)))
+    jobs.sort(key=lambda sj: (bool(sj[0].get("full_loaded")),
+                              int(sj[0].get("last_id") or 0) == 0,
+                              sj[0].get("source_count") if sj[0].get("source_count") is not None
+                              else 2**62))
+    return {"mode": mode, "pass_started": now.isoformat(),
+            "jobs": [j for _s, j in jobs]}
+
+
+async def ingest(table: str, rows: list[dict], *, last_id: int,
+                 source_count: int | None = None, done: bool = False,
+                 pass_started: str | None = None, error: str | None = None) -> dict:
+    """One batch from the worker: upsert, checkpoint, and on ``done`` close the
+    table's pass exactly as the in-process pass used to."""
+    if _metadata_cache is None:
+        raise LookupError("metadata first: POST /api/worker/knesset-db/metadata")
+    es = next((e for e in _metadata_cache if e.table == table), None)
+    if es is None:
+        raise LookupError(f"unknown table {table!r}")
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        if rows:
+            await _upsert(conn, es, rows)
+        if error:
+            await conn.execute(
+                f"UPDATE {_qtable('sync_state')} SET status='error', error=$2, "
+                f"last_id=$3, updated_at=now() WHERE table_name=$1",
+                table, error[:500], int(last_id or 0))
+        elif done:
+            started = (datetime.fromisoformat(pass_started) if pass_started
+                       else datetime.now(timezone.utc))
+            await conn.execute(
+                f"UPDATE {_qtable('sync_state')} SET last_id=0, full_loaded=true, "
+                f"updated_watermark=$2, last_synced_at=$2, status='ok', error=NULL, "
+                f"source_count=coalesce($3, source_count), "
+                f"total_rows=(SELECT count(*) FROM {_qtable(table)}), updated_at=now() "
+                f"WHERE table_name=$1", table, started, source_count)
+        else:
+            await conn.execute(
+                f"UPDATE {_qtable('sync_state')} SET last_id=$2, status='syncing', "
+                f"error=NULL, source_count=coalesce($3, source_count), updated_at=now() "
+                f"WHERE table_name=$1", table, int(last_id or 0), source_count)
+    return {"table": table, "rows": len(rows), "done": done, "error": bool(error)}
