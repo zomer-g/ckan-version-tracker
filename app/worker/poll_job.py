@@ -546,8 +546,14 @@ async def _poll_dataset(
             # (never parsed), so it can opt into a larger cap via
             # scraper_config.max_download_bytes to archive >200MB files.
             dl_cap = (ds.scraper_config or {}).get("max_download_bytes")
+            # Resources that are links to another site's web page (the
+            # Knesset's lawlaws.aspx), not files. Neither an error nor blocked:
+            # they are left out of what this version is expected to hold, so a
+            # package whose only "file" is such a link still versions instead
+            # of aborting 0/1 every day.
+            external_ids: set[str] = set()
             changed_resources, hash_map, detect_errors, blocked_ids = await detect_resource_changes(
-                old_mappings, resources, max_bytes=dl_cap
+                old_mappings, resources, max_bytes=dl_cap, external_ids=external_ids
             )
 
             # Standing indication: non-datastore FILES (SHP/KMZ/ZIP…) that
@@ -570,6 +576,9 @@ async def _poll_dataset(
                 blocked_entries, blocked_resources.stored(ds), modified=new_modified)
             blocked_resources.remember(ds, blocked_entries)
             pending_note = blocked_resources.note_for(blocked_entries)
+            link_note = blocked_resources.external_note(resources, external_ids)
+            if link_note:
+                pending_note = f"{pending_note} | {link_note}" if pending_note else link_note
             # …and hand the ones still missing to a worker that can reach them.
             rescue_queued = await _queue_blocked_files_task(
                 ds, blocked_resources.pending(blocked_entries))
@@ -654,11 +663,11 @@ async def _poll_dataset(
                 # files) never made it into changed_resources — surface them so
                 # the version warning explains what's missing (data still comes
                 # via the datastore API for tabular resources).
-                got_ids = {c["resource"]["id"] for c in changed_resources}
+                # Read straight off blocked_ids: inferring it ("not fetched, not
+                # failed, not datastore") also swept in external page links, and
+                # missed walled files of datastore-backed resources.
                 for r in resources:
-                    if (r.get("url") and r["id"] not in got_ids
-                            and not r.get("datastore_active")
-                            and hash_map.get(r["id"]) != "download_failed"):
+                    if r["id"] in blocked_ids:
                         skipped_iap.append(
                             f"{r.get('name', r['id'][:8])} ({r.get('format') or '?'})"
                         )
@@ -714,7 +723,11 @@ async def _poll_dataset(
                 # Count actual successful resource mappings (anything that's
                 # not a bookkeeping key like _hashes / _resource_ids).
                 successes = sum(1 for k in resource_mappings if not k.startswith("_"))
-                expected = sum(1 for r in resources if r.get("url"))
+                # A link to an external web page is not something this version
+                # was ever going to hold; counting it made a package whose only
+                # resource is such a link abort as 0/1 on every poll.
+                expected = sum(1 for r in resources
+                               if r.get("url") and r["id"] not in external_ids)
 
                 # If we expected to upload something and ended up with zero
                 # working resources, do NOT create a misleading empty version.
@@ -759,6 +772,21 @@ async def _poll_dataset(
                             detail=msg,
                         )
                         ds.last_error = blocked_resources.note_for(blocked_entries)
+                    elif errors and not skipped_iap and all(
+                            blocked_resources.DEAD_HOST_MARKER in e for e in errors):
+                        # Every failure is the publisher's host no longer
+                        # existing in DNS (אתרים לאומיים). The link is dead at
+                        # the source; nothing here failed and nothing here can
+                        # fix it, so it is recorded on last_error (the archive
+                        # really did not grow) but not logged as our failure.
+                        # The watermark still stays put, so a host that comes
+                        # back is picked up by the next poll.
+                        await log_event(
+                            event="skipped", dataset=ds, status="info",
+                            actor="system",
+                            message="הקישור במקור מת — כתובת המפרסם אינה קיימת עוד",
+                            detail=msg,
+                        )
                     else:
                         await log_event(
                             event="failed", dataset=ds, status="error",

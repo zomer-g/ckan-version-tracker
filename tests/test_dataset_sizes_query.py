@@ -276,3 +276,55 @@ def test_a_dataset_with_no_versions_still_reports():
         assert out["datasets"][0]["total_bytes"] == 0
 
     _run(go())
+
+
+def test_r2_sizes_are_remembered_between_runs(monkeypatch):
+    """An R2 key is minted fresh per upload (storage_client.build_key), so its
+    size cannot change; re-HEADing every object of every version on every run
+    is what pushed the job past its interval. A second run must HEAD only what
+    it has not sized yet, a failed HEAD must be retried rather than cached as
+    0, and keys no longer referenced must fall out of the cache."""
+    from app.api import admin
+    from app.services import storage_client as sc
+
+    heads: list[str] = []
+    missing = {"r2:flaky"}
+
+    async def fake_size(val):
+        heads.append(val)
+        return None if val in missing else 100
+
+    monkeypatch.setattr(sc.storage_client, "is_configured", lambda: True)
+    monkeypatch.setattr(sc.storage_client, "object_size", fake_size)
+    monkeypatch.setattr(admin, "_r2_object_size_cache", {})
+
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            d = _ds(db, name="cached")
+            await db.flush()
+            v1 = _ver(db, d, n=1, mappings={"a": "r2:one", "b": "r2:flaky"})
+            await db.commit()
+            first = await _compute(db)
+
+            _ver(db, d, n=2, mappings={"a": "r2:two"})
+            await db.commit()
+            second = await _compute(db)
+
+            await db.delete(v1)
+            await db.commit()
+            third = await _compute(db)
+        return first, second, third
+
+    first, second, third = _run(go())
+    # Run 1 sized both; run 2 sized only the new key and retried the failure.
+    assert sorted(heads[:2]) == ["r2:flaky", "r2:one"]
+    assert sorted(heads[2:4]) == ["r2:flaky", "r2:two"]
+    # Run 3 needed no HEAD for the cached key.
+    assert heads[4:] == []
+    # Totals unchanged by the cache: a cached size counts like a fresh one.
+    assert first["datasets"][0]["total_bytes"] == 100
+    assert second["datasets"][0]["total_bytes"] == 200
+    assert third["datasets"][0]["total_bytes"] == 100
+    # v1 gone: its keys are pruned, the surviving one is kept.
+    assert set(admin._r2_object_size_cache) == {"r2:two"}

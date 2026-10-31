@@ -35,7 +35,6 @@ import logging
 import re
 from urllib.parse import unquote, urlparse
 
-import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -46,6 +45,7 @@ from app.database import get_db
 from app.models.tracked_dataset import TrackedDataset
 from app.models.user import User
 from app.rate_limit import limiter
+from app.services import knesset_http
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +213,11 @@ async def _probe_committee_name(scope: tuple[str, int]) -> str | None:
         f"&$select=Name,KnessetNum&$orderby=KnessetNum desc&$top=1"
     )
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        # knesset_http: KNESSET_PROXY_URL egress (knesset.gov.il geo-blocks
+        # non-Israeli addresses, and production runs abroad).
+        async with knesset_http.client(timeout=10) as client:
             resp = await client.get(url, headers={"Accept": "application/json"})
+            knesset_http.check_geo_block(resp)
             resp.raise_for_status()
             rows = (resp.json() or {}).get("value") or []
             if rows:
@@ -320,7 +323,7 @@ async def _fetch_committees_for_knesset(knesset_num: int) -> list[dict]:
     rows: list[dict] = []
     skip = 0
     select_fields = "Id,Name,CommitteeTypeID,CommitteeTypeDesc"
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with knesset_http.client(timeout=30) as client:
         while True:
             url = (
                 f"{KNESSET_ODATA_BASE}/KNS_Committee"
@@ -328,8 +331,9 @@ async def _fetch_committees_for_knesset(knesset_num: int) -> list[dict]:
                 f"&$select={select_fields}&$orderby=Id&$top=100&$skip={skip}"
             )
             resp = await client.get(url, headers={"Accept": "application/json"})
+            knesset_http.check_geo_block(resp)
             resp.raise_for_status()
-            page = (resp.json() or {}).get("value") or []
+            page =(resp.json() or {}).get("value") or []
             if not page:
                 break
             rows.extend(page)

@@ -3,8 +3,7 @@ import json
 import logging
 from typing import Any
 
-import httpx
-
+from app.services import blocked_resources
 from app.services.ckan_client import ckan_client
 
 logger = logging.getLogger(__name__)
@@ -28,9 +27,16 @@ def has_metadata_changed(old_modified: str | None, new_modified: str) -> bool:
 async def detect_resource_changes(
     old_mappings: dict | None, resources: list[dict],
     max_bytes: int | None = None,
+    external_ids: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, str], list[str], set[str]]:
     """
     Download resources to disk and detect which ones changed.
+
+    ``external_ids``, when given, is filled with the ids of resources that
+    turned out to be links to another site's web page rather than files (see
+    ``blocked_resources.classify_download_failure``). An out-parameter rather
+    than a fifth return value so the four-tuple every caller and test unpacks
+    stays as it is; those resources are neither errors nor blocked.
     Returns (changed_resources, hash_map, errors, blocked_ids) where:
       - changed_resources: list of {resource, file_path, byte_count, sha256}
       - hash_map: {ckan_resource_id: sha256}
@@ -110,24 +116,40 @@ async def detect_resource_changes(
             # aws-e.data.gov.il and refused with a bare 403, while a home IP
             # gets the same URL as a 200 ZIP. Same wall, same remedy — the
             # worker fleet runs on home connections.
-            forbidden = (isinstance(e, httpx.HTTPStatusError)
-                         and e.response is not None
-                         and e.response.status_code == 403)
-            forbidden = forbidden or "403 Forbidden" in str(e)
-            blocked = forbidden or "Got HTML" in str(e) or "IAP" in str(e)
-            if blocked and not resource.get("datastore_active"):
+            # The decision itself lives in blocked_resources, shared with every
+            # other path that needs it — it used to be inline here and missed
+            # walled files of datastore-backed resources (see that module).
+            kind = blocked_resources.classify_download_failure(resource, e)
+            if kind == blocked_resources.BLOCKED:
                 logger.info(
-                    "Skipping IAP-blocked non-datastore resource %s (%s) — "
-                    "data collected via datastore API",
+                    "Skipping wall-blocked resource %s (%s) — queued for the "
+                    "browser worker",
                     resource.get("name"), resource.get("format"),
                 )
                 blocked_ids.add(rid)
                 if rid in old_hashes:
                     hash_map[rid] = old_hashes[rid]
                 continue
+            if kind == blocked_resources.EXTERNAL_LINK:
+                # A web page on another site, not a file: nothing to archive and
+                # nobody to hand it to. Keep the prior hash (if any) so the skip
+                # is not a change, and say so instead of failing.
+                logger.info("Resource %s links to an external web page (%s) — not a file",
+                            resource.get("name"), url)
+                if external_ids is not None:
+                    external_ids.add(rid)
+                if rid in old_hashes:
+                    hash_map[rid] = old_hashes[rid]
+                continue
             logger.warning("Failed to download resource %s: %s", rid, e)
             hash_map[rid] = "download_failed"
-            errors.append(f"download {resource.get('name', rid[:8])}: {e}")
+            if kind == blocked_resources.DEAD_HOST:
+                # "[Errno -2] Name or service not known" told the admin nothing;
+                # the fact is that the publisher's address is gone.
+                errors.append(f"download {resource.get('name', rid[:8])}: "
+                              f"{blocked_resources.dead_host_message(url)}")
+            else:
+                errors.append(f"download {resource.get('name', rid[:8])}: {e}")
 
     return changed, hash_map, errors, blocked_ids
 

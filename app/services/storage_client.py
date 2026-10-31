@@ -51,6 +51,33 @@ logger = logging.getLogger(__name__)
 # "r2:".
 STORAGE_PREFIX = "r2:"
 
+# urllib3 connection-pool size for the one shared boto3 client.
+#
+# botocore's default is 10, and production logged "Connection pool is full,
+# discarding connection" 19 times in 15 hours (2026-10-31). Each of those is a
+# finished request whose keep-alive TLS connection could not be returned to
+# the pool and was closed, so the next request pays a fresh handshake to R2.
+#
+# Ten is simply below what this process runs at once on that client:
+#   * every single-request call (HEAD, GET, PUT, DELETE, multipart
+#     create/complete) goes through asyncio.to_thread, i.e. the loop's default
+#     executor — min(32, cpu + 4) threads — and the fan-outs that feed it are
+#     capped at 4 (health-check R2 HEADs, the admin dataset-sizes HEADs) and 6
+#     (r2_backfill), and can overlap each other and the request path;
+#   * upload_file / download_file are boto3 MANAGED transfers: s3transfer runs
+#     each multipart transfer on its own pool of up to 10 threads (the default
+#     TransferConfig.max_concurrency), every one wanting a connection — so one
+#     large upload alone fills a pool of 10, and two (poll_max_concurrency is
+#     2) need 20 before anything else asks;
+#   * readers on worker threads (nadlan_layer_links' streamed GET, the ranged
+#     reads of R2RangeFile for pyarrow) hold a connection while they stream.
+# 32 covers two concurrent managed transfers plus a full executor-load of
+# single calls. A pooled idle connection is a socket and a TLS session, a few
+# tens of KB, so the headroom costs nothing like the memory a fan-out does.
+# Presigning (presign_part / presign_download) signs locally and opens no
+# connection, so it is not counted.
+MAX_POOL_CONNECTIONS = 32
+
 
 def mark(key: str) -> str:
     """Wrap an object key as a resource_mappings value (``r2:<key>``)."""
@@ -311,6 +338,7 @@ class StorageClient:
                 config=Config(
                     signature_version="s3v4",
                     retries={"max_attempts": 4, "mode": "standard"},
+                    max_pool_connections=MAX_POOL_CONNECTIONS,
                 ),
             )
         return self._client
