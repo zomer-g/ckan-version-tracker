@@ -345,3 +345,21 @@ def test_public_summary_and_catch_up(monkeypatch):
         assert s["daily"]["status"] == "ok" and s["weekly"] is None
         hc._summary, hc._summary_at = None, None
     asyncio.run(go())
+
+
+def test_probe_treats_a_redirect_to_a_maintenance_page_as_a_failure():
+    import httpx
+
+    def handler(req):
+        if req.url.path == "/odata":
+            return httpx.Response(303, headers={"location": "https://x.test/maintenance-page-geo"})
+        return httpx.Response(200, text="<html>maintenance</html>")
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                     follow_redirects=True) as c:
+            st, msg, _ = await hc._probe(c, "https://x.test/odata")
+            assert st == "fail" and "maintenance" in msg
+            st, _, _ = await hc._probe(c, "https://x.test/plain")
+            assert st == "ok"
+    asyncio.run(go())

@@ -751,6 +751,12 @@ async def _probe(client, url: str, *, expect: str | None = None,
             ms = int((time.monotonic() - t0) * 1000)
             if r.status_code >= 400:
                 return FAIL, f"HTTP {r.status_code}", ms
+            # A 200 at the END of a redirect to a maintenance / geo-block page is
+            # not an answer: knesset.gov.il 303s non-Israeli addresses to
+            # /maintenance-page-geo, which then serves a happy 200.
+            final = str(r.url).lower()
+            if r.history and ("maintenance" in final or "blocked" in final):
+                return FAIL, f"הופנה ל-{r.url} (תחזוקה או חסימה גיאוגרפית)", ms
             if expect and expect.encode() not in body:
                 return FAIL, f"HTTP {r.status_code} אבל בלי '{expect}' בתשובה", ms
             return (WARN if ms > 8000 else OK), f"HTTP {r.status_code} · {ms} ms", ms
@@ -1016,6 +1022,13 @@ async def run_checks(tier: str = "daily", keys: list[str] | None = None, *,
             await db.commit()
 
         _forget_summary()
+        # One line per non-ok verdict, so the app log alone says what a run found.
+        for key, r in _flat(results).items():
+            if r.get("status") in BAD:
+                logger.warning("health %s · %s: %s — %s", tier, key, r.get("status"),
+                               _clip(r.get("message"), 300))
+                for line in ((r.get("details") or {}).get("failing") or [])[:15]:
+                    logger.warning("health %s · %s   %s", tier, key, _clip(line, 300))
         log = logger.warning if status != OK else logger.info
         log("health %s run %s: %s (%s new problems, %s resolved)",
             tier, run_id, status, len(new), len(resolved))
