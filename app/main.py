@@ -325,6 +325,53 @@ def _refuse_platform_bucket_as_archive() -> None:
         )
 
 
+# Long-lived tasks the writers start (the pass sweep loop), held so they are not
+# garbage-collected mid-run and can be cancelled at shutdown.
+_writer_tasks: set = set()
+
+
+async def _start_writers() -> None:
+    """The scheduler and the one-time boot writers. Called once, by the
+    scheduler leader (app/worker/leader.py), or directly where there is no
+    election."""
+    import asyncio
+    await init_scheduler()
+    # One-time seed of the CBS content index into the NEON append archive
+    # (no-op once populated). Non-blocking so it never delays boot. See
+    # app/services/cbs_neon.py.
+    from app.services import cbs_neon
+    asyncio.create_task(cbs_neon.backfill_if_empty())
+    # One-time auto-activation of the MMM dataset's daily incremental archive
+    # mode (guarded + idempotent — no-op once active or if the catalog isn't
+    # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
+    from app.services import mmm_activate
+    asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
+    # Row validity: pass tables left by a process that died mid-load
+    # (append_store.PassTracker). NOT "everything, since nothing is mid-load at
+    # boot": during a deploy the old container still is (2026-10-31), so the
+    # sweep drops only passes whose owner stopped its heartbeat, and repeats.
+    # On the leader only, so one process sweeps at a time.
+    from app.services import append_store
+    if append_store.is_configured():
+        t = asyncio.create_task(append_store.sweep_loop())
+        _writer_tasks.add(t)
+        t.add_done_callback(_writer_tasks.discard)
+
+
+def _pause_scheduler() -> None:
+    """The leader lock was lost: another instance may lead now. Stop firing
+    jobs (running ones finish) until the lock is held again."""
+    from app.worker.scheduler import scheduler
+    if scheduler.running:
+        scheduler.pause()
+
+
+def _resume_scheduler() -> None:
+    from app.worker.scheduler import scheduler
+    if scheduler.running:
+        scheduler.resume()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting גרסאות לעם")
@@ -340,23 +387,20 @@ async def lifespan(app: FastAPI):
     # The scheduler and the one-time boot writers below only run on an instance
     # allowed to write. A second instance (SCHEDULER_ENABLED=false) and a
     # database move (MAINTENANCE_MODE=true) serve without them.
+    #
+    # And only on ONE such instance at a time: an xhostd deploy runs the new
+    # container beside the old one for ~15 s, and both used to start a
+    # scheduler. The new one now waits, in the background so HTTP is served
+    # meanwhile, for the old one to release the leader lock (app/worker/
+    # leader.py). Without Postgres to elect on (tests), it starts at once as
+    # before, awaited, so a failing init_scheduler still fails the boot there.
+    from app.worker import leader
     if settings.writers_enabled:
-        await init_scheduler()
-        # One-time seed of the CBS content index into the NEON append archive
-        # (no-op once populated). Non-blocking so it never delays boot. See
-        # app/services/cbs_neon.py.
-        from app.services import cbs_neon
-        asyncio.create_task(cbs_neon.backfill_if_empty())
-        # One-time auto-activation of the MMM dataset's daily incremental archive
-        # mode (guarded + idempotent — no-op once active or if the catalog isn't
-        # synced yet). Non-blocking so it never delays boot. See mmm_activate.py.
-        from app.services import mmm_activate
-        asyncio.create_task(mmm_activate.activate_mmm_archive_if_needed())
-        # Row validity: a pass table left by a process that died mid-load
-        # (append_store.PassTracker). Nothing is mid-load at boot.
-        from app.services import append_store
-        if append_store.is_configured():
-            asyncio.create_task(append_store.sweep_abandoned_passes())
+        if leader.lock_dsn() is None:
+            await leader.run(_start_writers)  # no election: WARNING, then at once
+        else:
+            leader.start(_start_writers, on_lost=_pause_scheduler,
+                         on_regained=_resume_scheduler)
     else:
         logger.warning(
             "scheduler and boot writers NOT started "
@@ -385,6 +429,11 @@ async def lifespan(app: FastAPI):
     from app.services import api_access_log
     await api_access_log.flush()
     shutdown_scheduler()
+    for t in list(_writer_tasks):
+        t.cancel()
+    # After the scheduler stops, so the next instance never overlaps it; and
+    # as early as possible, since that instance is waiting on it to start.
+    await leader.release()
     logger.info("Shutting down גרסאות לעם")
 
 
@@ -557,6 +606,8 @@ async def _version_freeze(request, call_next):
 
 @app.get("/healthz")
 async def healthz():
+    from apscheduler.schedulers.base import STATE_RUNNING
+    from app.worker import leader
     from app.worker.scheduler import scheduler
     from app.services import health_checks
     return {
@@ -566,7 +617,11 @@ async def healthz():
         "health_checks": await health_checks.public_summary(),
         "host": "xhostd" if settings.on_xhostd else "other",
         "scheduler_enabled": settings.scheduler_enabled,
-        "scheduler_running": bool(scheduler.running),
+        # Firing jobs right now: started, and not paused after losing the
+        # leader lock. A follower waiting on the lock reports False.
+        "scheduler_running": bool(scheduler.running) and scheduler.state == STATE_RUNNING,
+        # off / waiting / leader / lost / fallback (app/worker/leader.py).
+        "scheduler_leader": leader.state.status,
         "maintenance_mode": settings.maintenance_mode,
         "version_freeze": settings.version_freeze,
     }

@@ -33,7 +33,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
+import socket
 import ssl
 import uuid as _uuid
 from contextlib import asynccontextmanager
@@ -1003,8 +1005,9 @@ async def append_diff(table: str, source_cols: list[str], rows: list[dict],
 # streaming load takes whichever pool connection is free, and a TEMP table
 # lives on one. Not UNLOGGED either: xhostd's Postgres refuses them ("UNLOGGED
 # tables and sequences are not supported on xhost", seen on the first prod
-# pass), and the WAL cost of one narrow column per row is negligible. A pass that dies with the process is swept at boot
-# (sweep_abandoned_passes). Closing is one timestamp for the whole pass, so
+# pass), and the WAL cost of one narrow column per row is negligible. A pass
+# that dies with its process is swept later (sweep_abandoned_passes; see "Who
+# owns a pass table" below). Closing is one timestamp for the whole pass, so
 # "valid at X" means the same thing for every row of a version.
 
 _PASS_SCHEMA = "_loader"
@@ -1012,6 +1015,149 @@ _PASS_PREFIX = "pass_"
 CLOSE_BATCH = 50_000
 _CLOSE_TIMEOUT_S = 3600
 _PASS_TOKEN_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
+# ── Who owns a pass table ─────────────────────────────────────────────────────
+#
+# The sweep used to drop EVERY pass table at boot, on the assumption that
+# nothing is mid-load when a process starts. xhostd broke that: a deploy starts
+# the new container ~10-15 s before it stops the old one, and on 2026-10-31 the
+# new container's boot sweep (11:10:03.114) dropped the table of a load the old
+# one was still streaming (ica-changes died at 11:10:03.817, offset 170000:
+# relation "_loader.pass_…" does not exist).
+#
+# So a pass table now has a registered owner that proves it is alive: a row in
+# ``_loader.live_passes`` (name, owner, heartbeat), written in the SAME
+# transaction that creates the table, so no snapshot ever sees the table without
+# its row. While a process holds passes, one task refreshes ``heartbeat`` every
+# PASS_HEARTBEAT_S; the sweep drops only a pass whose heartbeat is older than
+# PASS_STALE_S. Every timestamp is the database's ``now()``, never a container
+# clock, so two hosts with skewed clocks cannot misjudge each other.
+#
+# Why a heartbeat and not a session advisory lock held per pass (the other way
+# to prove a live owner): a lock needs one server connection held for the whole
+# load, outside the pool. A load lasts hours, several can run at once, and
+# xhostd's write role has 15 server connections in all (app/database.py);
+# through a transaction-mode PgBouncer (a pooled APPEND_DATABASE_URL) a session
+# lock does not even stay on one server connection. And a held connection that
+# drops (an idle cut, a network blip) releases the lock silently while the load
+# carries on through the pool: exactly the false "owner died" that started
+# this. A heartbeat needs no session at all; its one failure mode is a live
+# process that cannot reach the database for PASS_STALE_S, and then its load is
+# failing anyway.
+#
+# The heartbeat opens its own short connection rather than taking one from the
+# pool: close_missing holds pool connections for up to _CLOSE_TIMEOUT_S, and a
+# beat queued behind five of them would let a live pass go stale.
+#
+# A pass table with no registry row was made by code from before this change
+# (the old container during the first rollout of it). Its owner cannot be
+# judged, so the sweep ADOPTS it (inserts an "unclaimed" row with a fresh
+# heartbeat) instead of dropping it, and a sweep PASS_STALE_S later drops it as
+# stale. By then the old container has long exited, and its load with it.
+#
+# The drop itself re-checks staleness under the row lock, in one transaction
+# with a short lock_timeout: a heartbeat landing meanwhile wins, and a table a
+# loader is writing to right now (it holds a lock on it) is skipped.
+
+_LIVE_TABLE = "live_passes"  # must NOT match _PASS_PREFIX ("pass_")
+PASS_HEARTBEAT_S = 60
+PASS_STALE_S = 15 * 60
+PASS_SWEEP_INTERVAL_S = 30 * 60
+_UNCLAIMED_OWNER = "unclaimed"
+# Who this process is, for the registry and the logs (never used for decisions).
+_OWNER = f"{socket.gethostname()}:{os.getpid()}:{_uuid.uuid4().hex[:8]}"
+# pass_names this process created and has not dropped yet.
+_live_passes: set[str] = set()
+_heartbeat_task: asyncio.Task | None = None
+_registry_ready = False
+
+
+def _live_table() -> str:
+    return f"{_qi(_PASS_SCHEMA)}.{_qi(_LIVE_TABLE)}"
+
+
+def registry_sql() -> list[str]:
+    return [
+        f"CREATE SCHEMA IF NOT EXISTS {_qi(_PASS_SCHEMA)}",
+        f"CREATE TABLE IF NOT EXISTS {_live_table()} ("
+        '"name" text PRIMARY KEY, "owner" text NOT NULL, '
+        '"started" timestamptz NOT NULL DEFAULT now(), '
+        '"heartbeat" timestamptz NOT NULL DEFAULT now())',
+    ]
+
+
+async def _ensure_registry(conn) -> None:
+    """Create ``_loader.live_passes`` once per process. Two processes racing on
+    CREATE … IF NOT EXISTS can still collide on the catalog (a unique violation
+    on pg_type); the loser just finds the table there."""
+    global _registry_ready
+    if _registry_ready:
+        return
+    for stmt in registry_sql():
+        try:
+            await conn.execute(stmt)
+        except (asyncpg.exceptions.UniqueViolationError,
+                asyncpg.exceptions.DuplicateTableError,
+                asyncpg.exceptions.DuplicateSchemaError):
+            pass
+    _registry_ready = True
+
+
+def sweep_decision(*, registered: bool, stale: bool, own: bool) -> str:
+    """What the sweep does with one pass table. Pure.
+
+    ``keep``: its owner is alive (this process, or a heartbeat within
+    PASS_STALE_S). ``adopt``: no registry row, so made by older code whose owner
+    cannot be judged; register it now and let a later sweep judge it.
+    ``drop``: registered, and its owner has not beaten for PASS_STALE_S."""
+    if own:
+        return "keep"
+    if not registered:
+        return "adopt"
+    return "drop" if stale else "keep"
+
+
+def _ensure_heartbeat() -> None:
+    global _heartbeat_task
+    if _heartbeat_task is None or _heartbeat_task.done():
+        _heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+
+async def _beat(names: list[str]) -> set[str]:
+    """Refresh the heartbeat of ``names``; return those still registered."""
+    dsn = _dsn()
+    conn = await asyncpg.connect(dsn=dsn, ssl=asyncpg_ssl_for(dsn), timeout=30)
+    try:
+        rows = await conn.fetch(
+            f'UPDATE {_live_table()} SET "heartbeat" = now(), "owner" = $2 '
+            'WHERE "name" = ANY($1::text[]) RETURNING "name"',
+            names, _OWNER, timeout=30)
+    finally:
+        await conn.close()
+    return {r["name"] for r in rows}
+
+
+async def _heartbeat_loop() -> None:
+    """Beat for this process's passes until it has none. Never raises."""
+    while True:
+        await asyncio.sleep(PASS_HEARTBEAT_S)
+        names = sorted(_live_passes)
+        if not names:
+            return
+        try:
+            alive = await _beat(names)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the next beat tries again
+            logger.warning("append close: pass heartbeat failed for %d passes",
+                           len(names), exc_info=True)
+            continue
+        lost = (set(names) - alive) & _live_passes
+        if lost:
+            # Swept as stale while we still held it: this process could not
+            # beat for PASS_STALE_S. Its load fails on the missing table; say why.
+            logger.error("append close: pass tables swept while still in use "
+                         "(no heartbeat for > %ds): %s", PASS_STALE_S, sorted(lost))
 
 
 def should_close(ds, *, start_offset: int = 0, partial_run: bool = False,
@@ -1155,14 +1301,23 @@ class PassTracker:
 
     async def start(self, conn=None) -> "PassTracker":
         async def _go(c):
-            for stmt in self.create_sql():
-                await c.execute(stmt)
+            await _ensure_registry(c)
+            # One transaction: the sweep must never see the table without the
+            # row that says who owns it (see "Who owns a pass table").
+            async with c.transaction():
+                for stmt in self.create_sql():
+                    await c.execute(stmt)
+                await c.execute(
+                    f'INSERT INTO {_live_table()} ("name", "owner") VALUES ($1, $2)',
+                    self.pass_name, _OWNER)
         if conn is not None:
             await _go(conn)
         else:
             pool = await get_pool()
             async with pool.acquire() as c:
                 await _go(c)
+        _live_passes.add(self.pass_name)
+        _ensure_heartbeat()
         return self
 
     def _records(self, idents: list) -> list[tuple]:
@@ -1201,9 +1356,16 @@ class PassTracker:
         try:
             pool = await get_pool()
             async with pool.acquire() as c:
-                await c.execute(self.drop_sql())
-        except Exception:  # noqa: BLE001 — the boot sweep is the backstop
+                async with c.transaction():
+                    await c.execute(self.drop_sql())
+                    await c.execute(f'DELETE FROM {_live_table()} WHERE "name" = $1',
+                                    self.pass_name)
+        except Exception:  # noqa: BLE001 — the sweep is the backstop
             logger.warning("append close: could not drop %s", self.pass_table, exc_info=True)
+        finally:
+            # No longer ours either way: without beats, a table that could not
+            # be dropped goes stale and a later sweep takes it.
+            _live_passes.discard(self.pass_name)
 
     async def close_missing(self, run_ts, *, max_fraction: float | None = None,
                             allow_shrink: bool = False, declared: bool = False) -> dict:
@@ -1281,23 +1443,88 @@ async def begin_pass(table: str, *, ident_col: str = "row_hash") -> PassTracker 
         return await PassTracker(table, ident_col=ident_col, ident_type=ident_type).start(conn)
 
 
-async def sweep_abandoned_passes() -> int:
-    """Drop every pass table a dead process left behind (boot). Never raises."""
+def sweep_candidates_sql() -> str:
+    """Every pass table, whether it is registered and whether it is stale.
+    $1 schema, $2 LIKE pattern, $3 stale seconds. One statement, one snapshot:
+    a pass created meanwhile shows with its row or not at all."""
+    return (
+        'SELECT t.tablename, r."name" IS NOT NULL AS registered, '
+        'COALESCE(r."heartbeat" < now() - make_interval(secs => $3), false) AS stale '
+        f'FROM pg_tables t LEFT JOIN {_live_table()} r ON r."name" = t.tablename '
+        "WHERE t.schemaname = $1 AND t.tablename LIKE $2"
+    )
+
+
+async def sweep_abandoned_passes(*, stale_s: int = PASS_STALE_S) -> int:
+    """Drop the pass tables whose owner stopped beating; adopt unregistered ones
+    (see "Who owns a pass table"). Returns how many were dropped. Never raises.
+
+    Safe while other processes are mid-load: unlike the boot sweep it replaces,
+    it does not assume that nothing is."""
     try:
         pool = await get_pool()
+        dropped = adopted = kept = 0
         async with pool.acquire() as conn:
-            names = await conn.fetch(
-                "SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE $2",
-                _PASS_SCHEMA, _PASS_PREFIX.replace("_", "\\_") + "%")
-            for r in names:
-                await conn.execute(
-                    f"DROP TABLE IF EXISTS {_qi(_PASS_SCHEMA)}.{_qi(r['tablename'])}")
-        if names:
-            logger.info("append close: swept %d abandoned pass tables", len(names))
-        return len(names)
+            await _ensure_registry(conn)
+            rows = await conn.fetch(
+                sweep_candidates_sql(), _PASS_SCHEMA,
+                _PASS_PREFIX.replace("_", "\\_") + "%", float(stale_s))
+            for r in rows:
+                name = r["tablename"]
+                action = sweep_decision(registered=r["registered"], stale=r["stale"],
+                                        own=name in _live_passes)
+                if action == "adopt":
+                    await conn.execute(
+                        f'INSERT INTO {_live_table()} ("name", "owner") VALUES ($1, $2) '
+                        'ON CONFLICT ("name") DO NOTHING', name, _UNCLAIMED_OWNER)
+                    adopted += 1
+                elif action == "drop" and await _drop_if_still_stale(conn, name, stale_s):
+                    dropped += 1
+                else:
+                    kept += 1
+            # Registry rows whose table is gone (a drop made by hand, say).
+            await conn.execute(
+                f'DELETE FROM {_live_table()} r WHERE r."heartbeat" < now() - '
+                "make_interval(secs => $2) AND NOT EXISTS (SELECT 1 FROM pg_tables t "
+                'WHERE t.schemaname = $1 AND t.tablename = r."name")',
+                _PASS_SCHEMA, float(stale_s))
+        if dropped or adopted:
+            logger.info("append close: swept %d abandoned pass tables "
+                        "(%d unregistered adopted for a later sweep, %d live kept)",
+                        dropped, adopted, kept)
+        return dropped
     except Exception:  # noqa: BLE001 — housekeeping must never stop a boot
         logger.warning("append close: pass sweep failed", exc_info=True)
         return 0
+
+
+async def _drop_if_still_stale(conn, name: str, stale_s: int) -> bool:
+    """Drop one stale pass, re-checked under its registry row lock. False when a
+    heartbeat landed meanwhile, or a loader holds a lock on the table (it is
+    writing to it right now, so it is not abandoned whatever the registry says)."""
+    try:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL lock_timeout = '5s'")
+            gone = await conn.fetchval(
+                f'DELETE FROM {_live_table()} WHERE "name" = $1 AND "heartbeat" < '
+                'now() - make_interval(secs => $2) RETURNING "name"', name, float(stale_s))
+            if gone is None:
+                return False
+            await conn.execute(f"DROP TABLE IF EXISTS {_qi(_PASS_SCHEMA)}.{_qi(name)}")
+        return True
+    except asyncpg.exceptions.LockNotAvailableError:
+        logger.warning("append close: %s is stale but locked by a loader; kept", name)
+        return False
+
+
+async def sweep_loop(interval_s: int = PASS_SWEEP_INTERVAL_S) -> None:
+    """Sweep now and every ``interval_s``. Periodic, not boot-only: an adopted
+    table is dropped on a later round, and a pass whose process died while this
+    one lives is found without waiting for the next deploy. Runs on the
+    scheduler leader only (app/main.py), so one process sweeps at a time."""
+    while True:
+        await sweep_abandoned_passes()
+        await asyncio.sleep(interval_s)
 
 
 # ── Reopening wrong closures (docs/history-phase4-plan.md section 0) ─────────
