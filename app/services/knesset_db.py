@@ -50,7 +50,8 @@ import asyncpg
 import httpx
 
 from app.config import settings
-from app.services import append_store
+from app.services import append_store, knesset_http
+from app.services.knesset_http import KnessetGeoBlocked
 from app.services.knesset_tables_meta import GROUP_ORDER, description_of, group_of
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,39 @@ sync_lock = asyncio.Lock()
 # runs (``only_table``), and is cleared by reset_table.
 _next_due_at: datetime | None = None
 
+# Geo-block backoff. knesset.gov.il 303s every non-Israeli address to its
+# /maintenance-page-geo (see app/services/knesset_http.py), and production runs
+# abroad. Before this gate the 3-minute tick re-fetched $metadata, got the 303
+# and logged a full ERROR traceback every time — 297 of them in 15 hours on
+# 2026-10-31, burying everything else in the log. A block is not a flap that
+# the next tick might ride out: it lasts until someone sets KNESSET_PROXY_URL
+# (which means a restart, which clears this). So after one block, stay quiet
+# for GEO_BLOCK_BACKOFF: the tick returns at once, and the read side
+# (get_entity_sets) answers from memory instead of asking knesset.gov.il again
+# on every /api/knesset-db/tables request. One WARNING per backoff period
+# keeps the condition visible without the noise.
+GEO_BLOCK_BACKOFF = timedelta(hours=1)
+_geo_blocked_until: datetime | None = None
+_geo_block_error: KnessetGeoBlocked | None = None
+
+
+def _note_geo_block(e: KnessetGeoBlocked) -> None:
+    global _geo_blocked_until, _geo_block_error
+    _geo_blocked_until = datetime.now(timezone.utc) + GEO_BLOCK_BACKOFF
+    _geo_block_error = e
+
+
+def geo_blocked_until() -> datetime | None:
+    """When the current geo-block backoff ends, or None when not backing off."""
+    if _geo_blocked_until and datetime.now(timezone.utc) < _geo_blocked_until:
+        return _geo_blocked_until
+    return None
+
+
+def _raise_if_geo_backoff() -> None:
+    if geo_blocked_until() and _geo_block_error is not None:
+        raise _geo_block_error
+
 
 class EntitySet:
     __slots__ = ("name", "url_name", "base_url", "table", "columns", "has_last_updated")
@@ -138,6 +172,7 @@ async def fetch_metadata(client: httpx.AsyncClient) -> list[EntitySet]:
     The ParliamentInfo document declares ALL sets including the lobbyist views
     (whose data lives on the sibling service), so one fetch covers everything."""
     resp = await client.get(f"{PARLIAMENT_BASE}/$metadata")
+    knesset_http.check_geo_block(resp)   # before raise_for_status: name the 303
     resp.raise_for_status()
     root = ET.fromstring(resp.text)
     ns = {"edm": "http://docs.oasis-open.org/odata/ns/edm"}
@@ -164,16 +199,22 @@ async def fetch_metadata(client: httpx.AsyncClient) -> list[EntitySet]:
 async def get_entity_sets(client: httpx.AsyncClient | None = None) -> list[EntitySet]:
     global _metadata_cache
     if _metadata_cache is None:
-        if client is not None:
-            _metadata_cache = await fetch_metadata(client)
-        else:
-            async with _http_client() as c:
-                _metadata_cache = await fetch_metadata(c)
+        _raise_if_geo_backoff()
+        try:
+            if client is not None:
+                _metadata_cache = await fetch_metadata(client)
+            else:
+                async with _http_client() as c:
+                    _metadata_cache = await fetch_metadata(c)
+        except KnessetGeoBlocked as e:
+            _note_geo_block(e)
+            raise
     return _metadata_cache
 
 
 def _http_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
+    # Through knesset_http so KNESSET_PROXY_URL applies (geo-block egress).
+    return knesset_http.client(
         timeout=httpx.Timeout(90.0, connect=20.0),
         headers={"Accept": "application/json",
                  "User-Agent": "over.org.il knesset-db mirror (+https://over.org.il)"},
@@ -295,11 +336,14 @@ async def _fetch_page(client: httpx.AsyncClient, es: EntitySet, flt: str,
     for attempt in range(3):
         try:
             resp = await client.get(f"{es.base_url}/{es.url_name}", params=params)
+            knesset_http.check_geo_block(resp)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):        # bare-array quirk (KNS_DocumentQuery)
                 return data, None
             return data.get("value", []), data.get("@odata.count")
+        except KnessetGeoBlocked:
+            raise   # not flaky: retrying only waits 6s to be refused again
         except Exception as e:  # noqa: BLE001 — flaky gov feed, retry with backoff
             last_exc = e
             await asyncio.sleep(2 * (attempt + 1))
@@ -455,6 +499,27 @@ async def sync_tick(budget_seconds: float = 240.0,
     if only_table is None and _next_due_at is not None:
         if datetime.now(timezone.utc) < _next_due_at:
             return {"skipped": "not due", "next_due_at": _next_due_at.isoformat()}
+    # Geo-block backoff: quiet ticks until it lapses. An admin-triggered run
+    # (only_table) goes through anyway — that is the "try again now" button.
+    global _geo_blocked_until
+    if only_table is None and geo_blocked_until():
+        return {"skipped": "geo-blocked", "until": _geo_blocked_until.isoformat()}
+    if only_table is not None:
+        _geo_blocked_until = None   # really ask knesset.gov.il again
+    try:
+        return await _sync_tick_locked(budget_seconds, sync_interval_hours, only_table)
+    except KnessetGeoBlocked as e:
+        _note_geo_block(e)
+        # WARNING without a traceback: the cause is fully known and the fix is
+        # configuration, not code. Once per backoff period (see above).
+        logger.warning("knesset_db: sync paused for %s — %s", GEO_BLOCK_BACKOFF, e)
+        return {"skipped": "geo-blocked", "until": _geo_blocked_until.isoformat(),
+                "error": str(e)}
+
+
+async def _sync_tick_locked(budget_seconds: float, sync_interval_hours: float,
+                            only_table: str | None) -> dict:
+    global _next_due_at
     async with sync_lock:
         deadline = time.monotonic() + budget_seconds
         sets = {es.table: es for es in await ensure_infra()}
@@ -501,6 +566,11 @@ async def sync_tick(budget_seconds: float = 240.0,
                     await _refresh_total(es.table)
                     completed_tables.append(es.table)
                 worked.append(es.table)
+            except KnessetGeoBlocked:
+                # Not this table's fault, and every other table would hit the
+                # same wall: abort the tick instead of stamping 48 tables
+                # "error" with 48 tracebacks.
+                raise
             except Exception as e:  # noqa: BLE001 — isolate per-table failures
                 logger.exception("knesset_db: sync of %s failed", es.table)
                 await _write_state(es.table, {"status": "error", "error": str(e)[:500]})
@@ -553,11 +623,27 @@ async def reset_table(table: str) -> None:
 # ── Read side ────────────────────────────────────────────────────────────────
 
 async def list_tables() -> list[dict]:
-    """All tables with schema, sync state and Hebrew descriptions (for the UI)."""
-    sets = {es.table: es for es in await ensure_infra()}
+    """All tables with schema, sync state and Hebrew descriptions (for the UI).
+
+    Survives a geo-block: the mirror's own sync_state already carries every
+    table's columns, so when knesset.gov.il refuses the live $metadata the list
+    is built from what we hold (the data stays queryable; only freshness
+    suffers). Only when sync_state itself is missing — a mirror that never got
+    off the ground — does the block propagate (→ 503 at the endpoint)."""
+    blocked: KnessetGeoBlocked | None = None
+    try:
+        sets = {es.table: es for es in await ensure_infra()}
+    except KnessetGeoBlocked as e:
+        blocked, sets = e, {}
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
-        states = await conn.fetch(f"SELECT * FROM {_qtable('sync_state')} ORDER BY table_name")
+        try:
+            states = await conn.fetch(
+                f"SELECT * FROM {_qtable('sync_state')} ORDER BY table_name")
+        except asyncpg.UndefinedTableError:
+            if blocked is not None:
+                raise blocked from None
+            raise
     out = []
     for r in states:
         # ODATA sets come from the live $metadata; other rows (e.g. the MMM
@@ -826,4 +912,8 @@ async def status_summary() -> dict:
         "rows": int(r["rows"]),
         "last_sync": r["last_sync"].isoformat() if r["last_sync"] else None,
         "last_activity": r["last_activity"].isoformat() if r["last_activity"] else None,
+        # Non-null while the sync is paused by knesset.gov.il's geo-block —
+        # explains a stale last_sync without anyone reading the server log.
+        "geo_blocked_until": (geo_blocked_until().isoformat()
+                              if geo_blocked_until() else None),
     }

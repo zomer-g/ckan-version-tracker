@@ -1582,7 +1582,9 @@ async def update_tracked(
         new_interval = max(body.poll_interval, settings.min_poll_interval)
         interval_changed = new_interval != ds.poll_interval
         ds.poll_interval = new_interval
+    reactivated = False
     if body.is_active is not None:
+        reactivated = bool(body.is_active) and not ds.is_active
         ds.is_active = body.is_active
     if body.storage_mode is not None:
         ds.storage_mode = _validate_storage_mode(body.storage_mode)
@@ -1724,7 +1726,13 @@ async def update_tracked(
     # is exactly the case where you need it to stop hammering immediately.
     # add_poll_job replaces an existing job and re-anchors to last_polled_at,
     # so the next fire is "last poll + new interval", not "now + interval".
-    if interval_changed and ds.status == "active":
+    #
+    # Re-activation needs the same. init_scheduler only registers datasets that
+    # are is_active at boot, so a paused dataset has NO job; flipping it back on
+    # used to leave it unpolled until some later restart happened to re-read it.
+    # (137 Knesset-23/24 committee datasets sat paused from 2026-07-11; the
+    # re-activation path must make them poll at once — overdue ⇒ next tick.)
+    if (interval_changed or reactivated) and ds.status == "active" and ds.is_active:
         try:
             from app.worker.scheduler import schedule_dataset
             schedule_dataset(ds)   # same job, plus the gone-source cadence
