@@ -32,6 +32,7 @@ import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
 import ParquetPanel from "../components/ParquetPanel";
 import StorageUsagePanel from "../components/StorageUsagePanel";
+import HealthChecksPanel from "../components/HealthChecksPanel";
 import CopyListButton from "../components/CopyListButton";
 import McpUsersPanel from "../components/McpUsersPanel";
 import ApiAccessPanel from "../components/ApiAccessPanel";
@@ -203,7 +204,7 @@ function isCkanLike(source_type: string | null | undefined): boolean {
   return source_type !== "scraper" && source_type !== "govmap";
 }
 
-type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "api" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal" | "ocoi" | "nadlan" | "parquet" | "storage";
+type AdminTab = "queue" | "schedule" | "push_jobs" | "requests" | "datasets" | "log" | "nl" | "mcp" | "api" | "orgs" | "tags" | "content" | "decision" | "drive" | "odata" | "ocal" | "ocoi" | "nadlan" | "parquet" | "storage" | "health";
 
 const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "queue",     label: "תור גירוד",        emoji: "⏳" },
@@ -226,6 +227,7 @@ const ADMIN_TABS: { id: AdminTab; label: string; emoji: string }[] = [
   { id: "nadlan",    label: "נדל\"ן לעם",          emoji: "🏘" },
   { id: "parquet",   label: "עותקי Parquet",     emoji: "🧱" },
   { id: "storage",   label: "נפח SQL",           emoji: "💽" },
+  { id: "health",    label: "בדיקות מערכת",      emoji: "🩺" },
 ];
 
 function readTabFromHash(): AdminTab {
@@ -1841,6 +1843,7 @@ export default function AdminPage() {
       {tab === "nadlan" && <NadlanBuildPanel />}
       {tab === "parquet" && <ParquetPanel />}
       {tab === "storage" && <StorageUsagePanel />}
+      {tab === "health" && <HealthChecksPanel />}
 
       {tab === "requests" && (<>
       {/* Section 1: Pending Requests */}

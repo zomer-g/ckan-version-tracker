@@ -2417,6 +2417,24 @@ export const admin = {
   // Parquet mirrors. Both are admin-only and go through request(), which
   // carries the logged-in token — the reason this exists as a button at all.
   parquetTables: () => request<ParquetTablesResponse>("/admin/parquet/tables"),
+  // System health checks (admin "בדיקות מערכת" tab, app/api/admin_health.py).
+  healthChecks: () => request<HealthChecksInfo>("/admin/health/checks"),
+  healthOverview: () => request<HealthOverview>("/admin/health/overview"),
+  healthRuns: (opts: { tier?: string; status?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.tier) p.set("tier", opts.tier);
+    if (opts.status) p.set("status", opts.status);
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.offset != null) p.set("offset", String(opts.offset));
+    const qs = p.toString();
+    return request<{ total: number; runs: HealthRunRow[] }>(`/admin/health/runs${qs ? `?${qs}` : ""}`);
+  },
+  healthRun: (id: string) => request<HealthRunRow & { results: HealthResult[] }>(
+    `/admin/health/runs/${encodeURIComponent(id)}`),
+  healthStart: (body: { tier?: string; checks?: string[] }) =>
+    request<{ id: string; tier: string; status: string }>("/admin/health/run", {
+      method: "POST", body: JSON.stringify(body),
+    }),
   parquetBuild: (table?: string) =>
     request<{ status: string; tables: number; message: string }>(
       `/admin/parquet/build${table ? `?table=${encodeURIComponent(table)}` : ""}`,
@@ -3196,6 +3214,73 @@ export interface OcalExpenseFile {
 // spatial identity you start from, the answer carries the property's identity
 // in every other codespace plus a per-source block linking to that source's
 // untouched full row on /data.
+
+export type HealthStatus = "ok" | "warn" | "fail" | "skip" | "error" | "running";
+
+export interface HealthItem {
+  key: string;
+  label: string;
+  status: HealthStatus;
+  message: string;
+  since?: string;
+  samples?: { dataset_id: string; title: string; error: string | null; at: string | null }[];
+  late?: { dataset_id: string; title: string; last_polled: string }[];
+  stale?: { dataset_id: string; title: string; last_success: string; error: string | null }[];
+  [extra: string]: unknown;
+}
+
+export interface HealthResult {
+  key: string;
+  component: string;
+  title: string;
+  status: HealthStatus;
+  message: string;
+  details?: Record<string, unknown> | null;
+  items?: HealthItem[] | null;
+  duration_ms: number;
+  since?: string;
+  run_id?: string;
+  run_tier?: string;
+  checked_at?: string;
+}
+
+export interface HealthRunRow {
+  id: string;
+  tier: string;
+  trigger: string;
+  status: HealthStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  summary: {
+    ok?: number; warn?: number; fail?: number; skip?: number; error?: number;
+    new_problems?: string[]; resolved?: string[]; checks?: string[]; note?: string;
+  };
+}
+
+export interface HealthCheckDef {
+  key: string;
+  component: string;
+  title: string;
+  description: string;
+  tiers: string[];
+  timeout: number;
+}
+
+export interface HealthChecksInfo {
+  checks: HealthCheckDef[];
+  enabled: boolean;
+  next_runs: { daily?: string; weekly?: string };
+  alerts_configured: boolean;
+  running: boolean;
+}
+
+export interface HealthOverview {
+  latest: Record<string, HealthRunRow>;
+  checks: HealthResult[];
+  running: HealthRunRow | null;
+  busy: boolean;
+}
 
 export interface ParquetTable {
   table: string;

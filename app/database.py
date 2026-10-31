@@ -24,6 +24,7 @@ APP_TABLES = frozenset({
     "decision_analysis",
     "drive_export_jobs",
     "govmap_coverage",
+    "health_runs",
     "history_parts",
     "llm_daily_usage",
     "nl_query_cache",
