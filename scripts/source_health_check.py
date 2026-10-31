@@ -233,7 +233,10 @@ def check_one(base, typ, d):
     problems = []
     if exp["geojson"] and not has_geojson:
         problems.append("missing GeoJSON")
-    if exp["zip"] is True and not has_zip:
+    # A document source can also publish a purely tabular register (mevaker's
+    # party-donations table: 51k rows, no documents). The ZIP is owed only when
+    # the version declares documents; with none declared there is nothing to zip.
+    if exp["zip"] is True and not has_zip and att > 0:
         problems.append(f"missing document ZIP (att={att})")
     if exp["zip"] is False and has_zip:
         problems.append("unexpected ZIP for catalog-only source")

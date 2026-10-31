@@ -1,0 +1,113 @@
+# Outside-in monitoring of over.org.il (docs/health-checks.md, "ניטור חיצוני").
+#
+# The system checks run inside the app, so they cannot report that the app is
+# down or that they stopped running. This runs from GitHub and keeps one open
+# issue per monitor: opened on failure (GitHub notifies you), closed on recovery.
+#
+#   site    every 15 min  /healthz, scheduler, the daily/weekly checks are running,
+#                         home page, /api/v1. Retried before it counts.
+#   api     daily         scripts/api_docs_test.py + scripts/source_health_check.py
+#   health  daily         the newest daily system-check run found a fault
+#
+# GitHub may delay a scheduled run by several minutes; that is fine for this use.
+name: External monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # site
+    - cron: "20 5 * * *"     # api + health, after the 07:12 Israel-time daily run
+  workflow_dispatch:
+    inputs:
+      monitor:
+        description: "Which monitor to run"
+        type: choice
+        options: [all, site, api, health]
+        default: all
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: external-monitor-${{ github.event.schedule || github.event.inputs.monitor }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail, so "script | tee" keeps the script's exit code
+
+env:
+  BASE: https://over.org.il
+  GH_TOKEN: ${{ github.token }}
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  site:
+    if: github.event.schedule == '*/15 * * * *' || contains(fromJSON('["all","site"]'), github.event.inputs.monitor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        continue-on-error: true
+        run: python3 scripts/external_monitor.py --mode site --base "$BASE" --report report.md
+      - name: Open / close the issue
+        if: always()
+        run: |
+          .github/scripts/monitor-issue.sh monitor-site \
+            "🚨 over.org.il לא תקין (ניטור חיצוני)" "${{ steps.check.outcome }}" report.md quiet
+      - if: steps.check.outcome == 'failure'
+        run: exit 1
+
+  api:
+    if: github.event.schedule == '20 5 * * *' || contains(fromJSON('["all","api"]'), github.event.inputs.monitor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - id: docs
+        continue-on-error: true
+        run: python3 scripts/api_docs_test.py --base "$BASE" | tee docs.txt
+      - id: sources
+        continue-on-error: true
+        run: python3 scripts/source_health_check.py --base "$BASE" | tee sources.txt
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "**$(date -u '+%Y-%m-%d %H:%M UTC')**"
+            echo
+            echo "### api_docs_test: ${{ steps.docs.outcome }}"
+            echo '```'; grep -E "FAIL|❌|TOTAL" docs.txt | head -40 || true; echo '```'
+            echo "### source_health_check: ${{ steps.sources.outcome }}"
+            echo '```'; grep -E "^\s*\[(PASS|FAIL)\]|RESULT" sources.txt | head -40 || true; echo '```'
+          } > report.md
+          if [ "${{ steps.docs.outcome }}" = success ] && [ "${{ steps.sources.outcome }}" = success ]; then
+            echo "outcome=success" >> "$GITHUB_ENV"
+          else
+            echo "outcome=failure" >> "$GITHUB_ENV"
+          fi
+      - name: Open / close the issue
+        if: always()
+        run: |
+          .github/scripts/monitor-issue.sh monitor-api \
+            "🚨 בדיקות ה-API / סוגי המקורות נכשלות (ניטור חיצוני)" "$outcome" report.md comment
+      - if: env.outcome == 'failure'
+        run: exit 1
+
+  health:
+    if: github.event.schedule == '20 5 * * *' || contains(fromJSON('["all","health"]'), github.event.inputs.monitor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        continue-on-error: true
+        run: python3 scripts/external_monitor.py --mode health --base "$BASE" --report report.md
+      - name: Open / close the issue
+        if: always()
+        run: |
+          .github/scripts/monitor-issue.sh monitor-health \
+            "🩺 בדיקת המערכת היומית מצאה תקלות" "${{ steps.check.outcome }}" report.md comment
+      - if: steps.check.outcome == 'failure'
+        run: exit 1
