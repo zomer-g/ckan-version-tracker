@@ -330,3 +330,31 @@ def test_presign_download_is_a_noop_without_credentials(monkeypatch):
     import asyncio
     monkeypatch.setattr(sc.StorageClient, "is_configured", lambda _s: False)
     assert asyncio.run(sc.StorageClient().presign_download("r2:k")) is None
+
+
+# ── client configuration ────────────────────────────────────────────────
+
+def test_client_pool_is_sized_above_botocore_default(monkeypatch):
+    """botocore pools 10 connections per host, below what this process runs at
+    once (one managed multipart transfer alone uses 10), which logged
+    "Connection pool is full, discarding connection" in production. The pool
+    size must reach the client, and the other Config settings must survive."""
+    import boto3
+
+    captured = {}
+
+    def fake_client(service, **kwargs):
+        captured.update(kwargs, service=service)
+        return object()
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    monkeypatch.setattr(settings, "s3_endpoint", "https://r2.test")
+    client = sc.StorageClient()
+    client._get_client()
+
+    cfg = captured["config"]
+    assert captured["service"] == "s3"
+    assert cfg.max_pool_connections == sc.MAX_POOL_CONNECTIONS
+    assert sc.MAX_POOL_CONNECTIONS > 10
+    assert cfg.signature_version == "s3v4"
+    assert cfg.retries == {"max_attempts": 4, "mode": "standard"}
