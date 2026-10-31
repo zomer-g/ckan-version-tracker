@@ -38,10 +38,180 @@ archive that is behind its plan. That costs one full poll per dataset, once.
 from __future__ import annotations
 
 import logging
+import os.path
+import socket
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 CONFIG_KEY = "blocked_resources"
+
+
+# ---------------------------------------------------------------------------
+# Why a download failed — one classifier for every path that downloads.
+#
+# The condition used to live inline in version_detector, as "403 / Got HTML /
+# IAP, on a NON-datastore resource". Two kinds of resource fell through it and
+# landed as raw errors in last_error, every poll, with nobody asked to fix them:
+#
+#   * a datastore-backed resource whose FILE is walled. ckan_client tries the
+#     datastore export first and falls back to the file URL only when that
+#     fails or comes back empty — so by the time the file's 403 reaches us the
+#     rows did NOT come through, and the old "its data comes via the datastore
+#     API" reason for ignoring it was false. Measured 2026-10-31: five decades
+#     of הסטוריית נתוני איכות מים בקידוחים, מדידות איכות במעיינות, תחנות -
+#     דיגום איכות מים, אירועים לפי מחוז — all "download …: Client error '403
+#     Forbidden' for url 'https://aws-e.data.gov.il/…'", none handed to the
+#     worker. On data.gov.il's own hosts a 403 IS the wall, whatever the
+#     resource's datastore flag says, and the worker's browser is the remedy.
+#
+#   * the opposite mistake: a CKAN resource that is not a file at all but a
+#     LINK to a web page on someone else's site (the Knesset's lawlaws.aspx
+#     search page). ckan_client correctly refuses an HTML body, that read as
+#     "Got HTML" = the wall, and the page was queued for the browser — which
+#     refuses, correctly, to drive itself at main.knesset.gov.il. Every day.
+#     And when the link was the package's only "file", the version was aborted
+#     as 0/1 too ("Aborting version … for https-main-knesset-gov-il-…"). A link
+#     to a page is a fact about the source, not a failure: it is noted and
+#     skipped, and the rest of the dataset versions normally.
+# ---------------------------------------------------------------------------
+
+#: Classifications returned by :func:`classify_download_failure`.
+BLOCKED = "blocked"          # data.gov.il's wall — hand it to the worker
+EXTERNAL_LINK = "external"   # a web page on another site — note it, skip it
+DEAD_HOST = "dead_host"      # the publisher's host no longer resolves
+
+#: Shown for a resource that links to a web page rather than a file.
+EXTERNAL_LINK_LABEL = "קישור לאתר חיצוני — לא נשמר כקובץ"
+
+#: Opens every dead-host error string, so the poll can tell "the source's link
+#: is dead" from "we failed" without parsing anything else.
+DEAD_HOST_MARKER = "כתובת המפרסם אינה קיימת עוד"
+
+# Path extensions that name a FILE. A URL ending in one of these is a download
+# even when it lives on another site, so it is never mistaken for a page.
+_FILE_EXTS = {
+    "csv", "tsv", "txt", "json", "geojson", "xml", "xls", "xlsx", "xlsm", "ods",
+    "doc", "docx", "odt", "ppt", "pptx", "pdf", "rtf", "zip", "gz", "tgz", "rar",
+    "7z", "shp", "dbf", "kml", "kmz", "gml", "gpkg", "gdb", "dwg", "dxf", "tif",
+    "tiff", "png", "jpg", "jpeg", "gif", "mdb", "accdb", "parquet", "sav", "dta",
+}
+# Path extensions that name a server-rendered PAGE.
+_PAGE_EXTS = {"aspx", "asp", "html", "htm", "shtml", "php", "jsp", "jspx", "cfm", "do"}
+# CKAN formats that promise a file. Consulted only when the URL path carries no
+# extension at all (a "/download?id=…" endpoint): there the declared format is
+# the only evidence that a file, not a page, is behind it.
+_FILE_FORMATS = {e.upper() for e in _FILE_EXTS} | {"SHAPEFILE", "ESRI SHAPEFILE"}
+
+
+def _host(url: str | None) -> str:
+    try:
+        return (urlparse(url or "").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def is_data_gov_il_host(url: str | None) -> bool:
+    """data.gov.il itself or one of its file hosts (e., aws-e., …)."""
+    host = _host(url)
+    return host == "data.gov.il" or host.endswith(".data.gov.il")
+
+
+def is_external_page(resource: dict) -> bool:
+    """Is this resource a link to a web page on another site, not a file?
+
+    Judged from the URL and the declared format alone, so it can also be asked
+    where nothing is downloaded (:func:`file_resources`). Deliberately narrow:
+    a URL with a file extension is a file wherever it lives, and data.gov.il's
+    own URLs are never "external" — an HTML answer there is the wall.
+    """
+    url = resource.get("url") or ""
+    if not _host(url) or is_data_gov_il_host(url):
+        return False
+    path = urlparse(url).path or ""
+    ext = os.path.splitext(path.rstrip("/"))[1].lstrip(".").lower()
+    if ext in _FILE_EXTS:
+        return False
+    if ext in _PAGE_EXTS:
+        return True
+    return (resource.get("format") or "").strip().upper() not in _FILE_FORMATS
+
+
+def _is_wall_signal(exc: BaseException) -> bool:
+    import httpx
+
+    text = str(exc)
+    forbidden = (isinstance(exc, httpx.HTTPStatusError)
+                 and exc.response is not None
+                 and exc.response.status_code == 403)
+    return forbidden or "403 Forbidden" in text or "Got HTML" in text or "IAP" in text
+
+
+def _failed_url(exc: BaseException) -> str:
+    """The URL the failing request actually went to (after redirects)."""
+    try:
+        return str(exc.request.url)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — no request attached
+        return ""
+
+
+def is_dead_host(exc: BaseException) -> bool:
+    """Did the download fail because the host name does not resolve at all?
+
+    Only the PERMANENT resolver answers count: EAI_NONAME ("[Errno -2] Name or
+    service not known") and EAI_NODATA. EAI_AGAIN ("Temporary failure in name
+    resolution") is our resolver having a bad moment and stays an ordinary
+    error. httpx flattens the gaierror into a ConnectError whose text is all
+    that survives, so the text is checked as well as the cause chain.
+    """
+    permanent = {getattr(socket, n) for n in ("EAI_NONAME", "EAI_NODATA") if hasattr(socket, n)}
+    seen, e = set(), exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, socket.gaierror) and e.errno in permanent:
+            return True
+        e = e.__cause__ or e.__context__
+    text = str(exc)
+    return ("Name or service not known" in text
+            or "No address associated with hostname" in text
+            or "nodename nor servname provided" in text)
+
+
+def dead_host_message(url: str | None) -> str:
+    host = _host(url) or "?"
+    return (f"{DEAD_HOST_MARKER} — השם {host} אינו מתורגם ב-DNS, "
+            f"כלומר הקישור מת אצל המפרסם (לא תקלה אצלנו)")
+
+
+def classify_download_failure(resource: dict, exc: BaseException) -> str | None:
+    """BLOCKED, EXTERNAL_LINK, DEAD_HOST, or None for an ordinary error.
+
+    The one place that decides; version_detector asks it for every failed
+    download. Order matters: an external page is recognised before the wall,
+    because another site's page answering with HTML (or with a 403 to a server
+    IP) looks exactly like the wall, and the browser worker will not go there.
+    """
+    if is_dead_host(exc):
+        return DEAD_HOST
+    if not _is_wall_signal(exc):
+        return None
+    if is_external_page(resource):
+        return EXTERNAL_LINK
+    if is_data_gov_il_host(resource.get("url")) or is_data_gov_il_host(_failed_url(exc)):
+        return BLOCKED
+    # Another site's FILE behind a wall: blocked only where the old rule said
+    # so (non-datastore), unchanged — nothing measured says otherwise.
+    return BLOCKED if not resource.get("datastore_active") else None
+
+
+def external_note(resources: list[dict], external_ids) -> str | None:
+    """The informative (not failing) line for linked web pages, or None."""
+    ids = set(external_ids or ())
+    names = [f"{r.get('name') or r['id'][:8]} ({_host(r.get('url')) or '?'})"
+             for r in resources if r.get("id") in ids]
+    if not names:
+        return None
+    return f"ℹ {EXTERNAL_LINK_LABEL}: " + ", ".join(names)
 
 
 def describe(resources: list[dict], blocked_ids) -> list[dict]:
@@ -185,7 +355,11 @@ def file_resources(resources: list[dict] | None) -> list[dict]:
     were never fetched by anyone (rail_stat, 2026-10-01: two tables archived,
     the map itself not at all).
     """
-    return [r for r in (resources or []) if r.get("url") and not r.get("datastore_active")]
+    # A link to another site's web page is not a file anyone can fetch for us:
+    # listed, it became a ckan_blocked_files task the worker refused every day
+    # ("Refusing to drive the browser at 'main.knesset.gov.il'").
+    return [r for r in (resources or [])
+            if r.get("url") and not r.get("datastore_active") and not is_external_page(r)]
 
 
 async def unstamp_empty_deliveries(db, rows) -> int:

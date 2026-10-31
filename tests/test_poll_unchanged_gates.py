@@ -93,7 +93,7 @@ def env(monkeypatch):
     # What data.gov.il is withholding this poll. Tests set it before polling.
     blocked: list[str] = []
 
-    async def _fake_detect(old_mappings, resources, max_bytes=None):
+    async def _fake_detect(old_mappings, resources, max_bytes=None, external_ids=None):
         archived.append("file")
         return [], {}, [], list(blocked)
 
