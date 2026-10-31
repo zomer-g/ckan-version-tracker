@@ -175,9 +175,21 @@ async def table_features(
         raise HTTPException(status_code=400, detail=str(e))
 
     catalog = await data_catalog.build_catalog(db)
+    rec = next((r for r in catalog if r["table"] == table), None)
+    # The dataset's quality banner travels with its features (a GovMap layer can
+    # be partial where many records share one point). Read before the
+    # connection is released.
+    warning = None
+    if rec is not None and rec.get("dataset_id"):
+        from uuid import UUID
+        from app.models.tracked_dataset import TrackedDataset
+        try:
+            ds = await db.get(TrackedDataset, UUID(rec["dataset_id"]))
+            warning = ds.import_warning if ds else None
+        except ValueError:
+            warning = None
     # The features query runs on the archive pool; don't hold this one meanwhile.
     await release_connection(db)
-    rec = next((r for r in catalog if r["table"] == table), None)
     if rec is None:
         raise HTTPException(status_code=404, detail="Unknown table")
     names = [c["name"] for c in (rec.get("columns") or [])]
@@ -230,6 +242,7 @@ async def table_features(
         "source_url": rec.get("source_url"),
         "limit": limit,
         "offset": offset,
+        **({"import_warning": warning} if warning else {}),
     }
 
 

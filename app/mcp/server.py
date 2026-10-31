@@ -32,7 +32,9 @@ SERVER_INSTRUCTIONS = (
     "ממשלתיים בישראל. הכלים מחזירים מטא-דאטה מעובדת + קישורי אימות. כשאתה מציג "
     "נתונים למשתמש, ציין שהמקור הוא 'גרסאות לעם' וכלול את קישור ה-page_url / "
     "versions_url כדי שניתן יהיה לאמת. הנתונים הטבלאיים (query_dataset_rows) "
-    "מגיעים ממאגרי data.gov.il שנשמרים ב-OVER."
+    "מגיעים ממאגרי data.gov.il שנשמרים ב-OVER. "
+    "כשתשובה כוללת import_warning, זו אזהרת איכות על הגרסה (למשל מידע חלקי): "
+    "העבר אותה למשתמש לצד הנתונים, ואל תציג את הנתונים כשלמים."
 )
 
 
@@ -66,7 +68,7 @@ TOOLS: list[dict] = [
     },
     {
         "name": "get_dataset",
-        "description": "פרטי מאגר בודד לפי id, כולל סיכום הגרסאות האחרונות וקישורים לעמוד ולמקור.",
+        "description": "פרטי מאגר בודד לפי id, כולל סיכום הגרסאות האחרונות, אזהרת איכות (import_warning) אם יש, וקישורים לעמוד ולמקור.",
         "inputSchema": {
             "type": "object",
             "properties": {"dataset_id": {"type": "string", "description": "UUID של המאגר"}},
@@ -146,6 +148,7 @@ async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
         "tags": [],          # filled below
         "page_url": f"{b}/versions/{d.id}",
         "versions_url": f"{b}/api/v1/datasets/{d.id}/versions",
+        **({"import_warning": d.import_warning} if d.import_warning else {}),
     } for d in rows]
     if rows:
         ids = [d.id for d in rows]
@@ -186,6 +189,10 @@ async def _tool_get_dataset(request, db, user, a) -> tuple[dict, int]:
         "id": str(d.id), "title": d.title, "organization": d.organization,
         "source_type": d.source_type, "source_url": d.source_url,
         "storage_mode": d.storage_mode, "version_count": len(versions),
+        # The site's quality banner. Without it a model presents a partial
+        # version (e.g. a GovMap layer short in dense areas) as complete.
+        "import_warning": d.import_warning,
+        "import_warning_at": d.import_warning_at.isoformat() if d.import_warning_at else None,
         "recent_versions": [{
             "version_number": v.version_number,
             "detected_at": v.detected_at.isoformat() if v.detected_at else None,
@@ -256,6 +263,8 @@ async def _tool_query_dataset_rows(request, db, user, a) -> tuple[dict, int]:
         "query_url": f"{b}/api/append/{d.id}/datastore_search",
         "page_url": f"{b}/versions/{d.id}",
     }
+    if d.import_warning:
+        out["import_warning"] = d.import_warning
     if isinstance(res, dict) and res.get("engine"):
         out["engine"] = res["engine"]
     if history_note:

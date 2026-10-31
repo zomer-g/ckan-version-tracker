@@ -787,6 +787,7 @@ async def datastore_search(
         raise HTTPException(status_code=404, detail="No archived rows yet for this dataset")
     res["resource_id"] = str(ds.id)
     res["table"] = tbl
+    _attach_quality_warning(res, ds)
     if len(tables) > 1:
         # Otherwise a caller (MCP's query_dataset_rows included) reads a partial
         # answer as the whole dataset — the same wrong conclusion the resolution
@@ -803,6 +804,19 @@ async def datastore_search(
     return {"success": True, "result": res}
 
 
+def _attach_quality_warning(result: dict, ds) -> None:
+    """The dataset's quality banner, on every answer that hands out its rows.
+
+    The site shows ``import_warning`` above the data; an API or MCP caller reads
+    the rows without ever seeing that page, and a partial layer (GovMap returns
+    at most 500 records on one point, so dense central areas come back short)
+    then reads as complete. Only present when there is one."""
+    if getattr(ds, "import_warning", None):
+        result["import_warning"] = ds.import_warning
+        at = getattr(ds, "import_warning_at", None)
+        result["import_warning_at"] = at.isoformat() if at else None
+
+
 @router.get("/{dataset_id}/datastore_search_sql")
 @limiter.limit("20/minute")
 async def datastore_search_sql(
@@ -817,12 +831,13 @@ async def datastore_search_sql(
     Reference the dataset's table(s) by the name(s) in /schema. Returns the CKAN
     envelope ``{success, result:{records, fields:[{id,type}]}}``."""
     admit(caller, dataset_id=dataset_id, sql=sql)
-    _, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
+    ds, tbl, _tables = await _resolve(dataset_id, db, _selector(request, table))
     try:
         r = await append_store.run_readonly_sql(sql, table=tbl)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
-    return {"success": True, "result": {"records": r["rows"], "fields": r["fields"],
-                                        "truncated": r["truncated"]}}
+    result = {"records": r["rows"], "fields": r["fields"], "truncated": r["truncated"]}
+    _attach_quality_warning(result, ds)
+    return {"success": True, "result": result}
