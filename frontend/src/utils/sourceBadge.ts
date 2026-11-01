@@ -34,6 +34,7 @@ export interface SourceBadge {
     | "home.source_link"
     | "home.source_link_govil"
     | "home.source_link_govmap"
+    | "home.source_link_atlas"
     | "home.source_link_idf"
     | "home.source_link_health"
     | "home.source_link_registries"
@@ -396,6 +397,18 @@ export function sourceBadgeFor(
   ckan_id: string | null | undefined = null,
 ): SourceBadge {
   if (source_type === "govmap") {
+    // אטלס ישראל: GovMap layers drawn with Atlas's own key, tracked as a
+    // source of their own (ckan_id "atlas-scraper-", app/api/govmap.py).
+    if (ckan_id && ckan_id.startsWith("atlas-scraper-")) {
+      return {
+        bg: "var(--tint-note-bg)",
+        fg: "var(--tint-note-fg)",
+        id: "atlas",
+        label: "אטלס ישראל",
+        accent: "var(--tint-note-bd)",
+        sourceLinkKey: "home.source_link_atlas",
+      };
+    }
     return {
       bg: "var(--tint-sky-bg)",
       fg: "var(--tint-sky-fg)",
@@ -626,6 +639,7 @@ export function sourceBadgeFor(
  */
 export function sourceBadgeForKey(key: string): SourceBadge {
   if (key === "govmap" || key === "cbs") return sourceBadgeFor(key);
+  if (key === "atlas") return sourceBadgeFor("govmap", null, "atlas-scraper-x");
   if (key === "ckan" || key === "datagovil") return sourceBadgeFor("ckan");
   const badge = sourceBadgeFor("scraper", null, `${key}-scraper-x`);
   // A key we can't place — an unclassifiable row ("unknown"), or a manifest

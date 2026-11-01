@@ -48,6 +48,8 @@ RESERVED_SOURCE_IDS = frozenset({
     "idf", "health", "health_practitioners", "registries", "avodata",
     "munidata", "emun", "servicescompass", "mevaker", "hatzav", "mankal",
     "jda", "eden", "knesset", "knesset_mmm", "cbs", "drive", "gov",
+    # Atlas layers: GovMap datasets with an "atlas-scraper-" ckan_id.
+    "atlas",
 })
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")

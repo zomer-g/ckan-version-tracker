@@ -84,6 +84,21 @@ _ATLAS_TTL_S = 3600
 _atlas_cache: tuple[float, list[dict]] | None = None
 
 
+# Atlas layers are GovMap layers (source_type "govmap", the GovMap pipeline),
+# but they are their own SOURCE: the ckan_id carries the "atlas-scraper-"
+# prefix that source_load.source_key reads, so Atlas has its own chip, its own
+# row on /sources and its own worker cap, apart from GovMap's.
+ATLAS_SOURCE_KEY = "atlas"
+ATLAS_ORGANIZATION = "atlas.gov.il"
+
+
+def govmap_dataset_origin(parsed: "ParsedGovmap") -> tuple[str, str]:
+    """``(ckan_id prefix, organization)`` for a new GovMap-layer dataset."""
+    if parsed.site == "atlas":
+        return f"{ATLAS_SOURCE_KEY}-scraper-", ATLAS_ORGANIZATION
+    return "govmap-", "govmap.gov.il"
+
+
 def build_atlas_layer_url(layer_id: str) -> str:
     """The app's own link to a layer: Atlas opens with it switched on."""
     return f"{ATLAS_SITE_URL}?lay={layer_id}"

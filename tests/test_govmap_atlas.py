@@ -132,3 +132,24 @@ def test_identity_is_the_layer_on_either_host():
     assert identity(MALLS) == ("govmap", "228527")
     assert identity("https://www.atlas.gov.il/?c=1,2&lay=228527&z=3") == ("govmap", "228527")
     assert identity("https://www.govmap.gov.il/?lay=228527") == ("govmap", "228527")
+
+
+def test_atlas_layers_are_their_own_source():
+    from app.api.govmap import govmap_dataset_origin
+    from app.services.source_load import source_key
+
+    prefix, org = govmap_dataset_origin(parse_govmap_url(MALLS))
+    assert (prefix, org) == ("atlas-scraper-", "atlas.gov.il")
+    # Still a GovMap layer for the pipeline, but the "atlas" source.
+    assert source_key(f"{prefix}govmap-228527-abc", "govmap") == "atlas"
+    # Ordinary GovMap layers, and the solar sub-site, stay GovMap.
+    for url in ("https://www.govmap.gov.il/?lay=11",
+                "https://www.govmap.gov.il/sites/energy/index.html?map=solar_panels&lay=225678"):
+        prefix, org = govmap_dataset_origin(parse_govmap_url(url))
+        assert (prefix, org) == ("govmap-", "govmap.gov.il")
+        assert source_key(f"{prefix}11-abc", "govmap") == "govmap"
+
+
+def test_no_manifest_can_claim_the_atlas_id():
+    from app.services.source_registry import RESERVED_SOURCE_IDS
+    assert "atlas" in RESERVED_SOURCE_IDS

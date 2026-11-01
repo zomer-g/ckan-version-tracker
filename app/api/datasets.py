@@ -1257,7 +1257,8 @@ async def track_dataset(
             raise HTTPException(status_code=400, detail="source_url is required for govmap datasets")
 
         from app.api.govmap import (
-            parse_govmap_url, build_govmap_title, site_layer_defaults, warm_site_titles,
+            govmap_dataset_origin, parse_govmap_url, build_govmap_title,
+            site_layer_defaults, warm_site_titles,
         )
         parsed = parse_govmap_url(body.source_url)
         if not parsed:
@@ -1279,7 +1280,9 @@ async def track_dataset(
 
         layer_id = parsed.layer_id
         unique_slug = scraper_url_slug(f"govmap-{layer_id}", body.source_url)
-        ckan_id = f"govmap-{unique_slug}"
+        # An Atlas layer is its own source (see govmap_dataset_origin).
+        id_prefix, organization = govmap_dataset_origin(parsed)
+        ckan_id = f"{id_prefix}{unique_slug}"
         ckan_name = unique_slug
         # A GovMap sub-site layer (solar potential, Atlas) has its own title
         # and cadence.
@@ -1326,7 +1329,7 @@ async def track_dataset(
             ckan_id=ckan_id,
             ckan_name=ckan_name,
             title=title,
-            organization="govmap.gov.il",
+            organization=organization,
             source_type="govmap",
             source_url=body.source_url,
             scraper_config=sc,
@@ -2717,7 +2720,8 @@ async def submit_tracking_request(
     # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
     if body.source_type == "govmap":
         from app.api.govmap import (
-            parse_govmap_url, build_govmap_title, site_layer_defaults, warm_site_titles,
+            govmap_dataset_origin, parse_govmap_url, build_govmap_title,
+            site_layer_defaults, warm_site_titles,
         )
 
         urls = list(body.source_urls or [])
@@ -2780,11 +2784,13 @@ async def submit_tracking_request(
             else:
                 title = build_govmap_title(layer_id)
 
+            # An Atlas layer is its own source (see govmap_dataset_origin).
+            id_prefix, organization = govmap_dataset_origin(parsed)
             ds = TrackedDataset(
-                ckan_id=f"govmap-{unique_slug}",
+                ckan_id=f"{id_prefix}{unique_slug}",
                 ckan_name=unique_slug,
                 title=title,
-                organization="govmap.gov.il",
+                organization=organization,
                 source_type="govmap",
                 source_url=url,
                 scraper_config=sc,
