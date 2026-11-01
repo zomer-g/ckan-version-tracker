@@ -793,6 +793,10 @@ async def poll_for_task(
         "scraper_config": _poll_scraper_config(ds, task),
         "callback_url": "/api/worker/push-version",
         "prev_total_rows": prev_total_rows,
+        # What the dataset is called. A GovMap layer that left every catalog has
+        # no caption left on the worker's side; this is the name it looks the
+        # renumbered layer up by (GOVSCRAPER govmap layer_gone_message).
+        "dataset_title": ds.title,
         # How big the worker may make each attachment ZIP part. R2 datasets get
         # a much larger limit (no CKAN/edge upload cap), so 1.5GB of files →
         # ~2 parts instead of ~19. Worker falls back to its own default if absent.
