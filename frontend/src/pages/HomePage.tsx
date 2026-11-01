@@ -65,8 +65,9 @@ const GOV_IL_PATTERN = /^https?:\/\/(www\.)?gov\.il\/he\/(departments?\/dynamicc
 /** Detect govmap.gov.il layer URLs (requires lay=<id>) */
 // A layer (lay=) or a layer GROUP (g=), which validation expands to its layers,
 // or a GovMap "sites" sub-site page (/sites/energy/...?map=solar_panels), which
-// validation expands to the sub-site's layers the same way.
-const GOVMAP_PATTERN = /^https?:\/\/(www\.)?govmap\.gov\.il(?:\/?\?(?:.*&)?(?:lay(?:er|ers)?|g)=\d+|\/sites\/[\w-]+\/)/i;
+// validation expands to the sub-site's layers the same way. אטלס ישראל
+// (atlas.gov.il) is GovMap layers too: the bare site expands to all of them.
+const GOVMAP_PATTERN = /^https?:\/\/(?:(www\.)?govmap\.gov\.il(?:\/?\?(?:.*&)?(?:lay(?:er|ers)?|g)=\d+|\/sites\/[\w-]+\/)|(www\.)?atlas\.gov\.il(?:[/?#]|$))/i;
 
 interface CkanResource {
   id: string;
@@ -1142,8 +1143,8 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="flex text-sm text-muted" style={{ gap: "0.75rem" }}>
-                  <span>{govMapResult.site_id ? `sites/${govMapResult.site_id}` : govMapResult.group_id ? `g=${govMapResult.group_id}` : `lay=${govMapResult.layer_id}`}</span>
-                  <span>govmap.gov.il</span>
+                  <span>{govMapResult.site_id === "atlas" ? `${govMapResult.layers?.length ?? 0} layers` : govMapResult.site_id ? `sites/${govMapResult.site_id}` : govMapResult.group_id ? `g=${govMapResult.group_id}` : `lay=${govMapResult.layer_id}`}</span>
+                  <span>{govMapResult.site_id === "atlas" || /atlas\.gov\.il/i.test(govMapResult.url || "") ? "atlas.gov.il" : "govmap.gov.il"}</span>
                 </div>
                 <p className="text-sm text-muted mt-1" style={{ wordBreak: "break-all", direction: "ltr" }}>
                   <a href={govMapResult.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
@@ -1155,9 +1156,9 @@ export default function HomePage() {
                 {govMapResult.layers && govMapResult.layers.length > 0 && (
                   <div className="text-sm mt-1">
                     <p className="text-muted" style={{ margin: "0 0 0.25rem" }}>
-                      {t(govMapResult.site_id ? "home.govmap_site_hint" : "home.govmap_group_hint", { count: govMapResult.layers.length })}
+                      {t(govMapResult.site_id === "atlas" ? "home.govmap_atlas_hint" : govMapResult.site_id ? "home.govmap_site_hint" : "home.govmap_group_hint", { count: govMapResult.layers.length })}
                     </p>
-                    <ul style={{ margin: 0, paddingInlineStart: "1.25rem" }}>
+                    <ul style={{ margin: 0, paddingInlineStart: "1.25rem", maxHeight: "18rem", overflowY: "auto" }}>
                       {govMapResult.layers.map((l) => (
                         <li key={l.layer_id}>
                           {l.caption} <span className="text-muted">(lay={l.layer_id})</span>

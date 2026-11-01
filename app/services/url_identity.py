@@ -192,7 +192,10 @@ def url_identity(
         return None
 
     # --- GovMap: the layer id IS the dataset ---
-    if source_type == "govmap" or host.endswith("govmap.gov.il"):
+    # An Atlas link (atlas.gov.il/?lay=N) is a GovMap layer drawn with Atlas's
+    # key: the same layer as govmap.gov.il/?lay=N.
+    if (source_type == "govmap" or host.endswith("govmap.gov.il")
+            or host.endswith("atlas.gov.il")):
         layer_id = None
         if isinstance(scraper_config, dict):
             raw = scraper_config.get("layer_id")

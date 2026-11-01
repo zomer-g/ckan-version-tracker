@@ -1256,7 +1256,9 @@ async def track_dataset(
         if not body.source_url:
             raise HTTPException(status_code=400, detail="source_url is required for govmap datasets")
 
-        from app.api.govmap import parse_govmap_url, build_govmap_title, site_layer_defaults
+        from app.api.govmap import (
+            parse_govmap_url, build_govmap_title, site_layer_defaults, warm_site_titles,
+        )
         parsed = parse_govmap_url(body.source_url)
         if not parsed:
             raise HTTPException(status_code=400, detail="Invalid govmap.gov.il layer URL (missing lay=<id>)")
@@ -1279,7 +1281,9 @@ async def track_dataset(
         unique_slug = scraper_url_slug(f"govmap-{layer_id}", body.source_url)
         ckan_id = f"govmap-{unique_slug}"
         ckan_name = unique_slug
-        # A GovMap sub-site layer (solar potential) has its own title and cadence.
+        # A GovMap sub-site layer (solar potential, Atlas) has its own title
+        # and cadence.
+        await warm_site_titles([body.source_url])
         site_title, site_interval = site_layer_defaults(body.source_url)
         title = body.title or site_title or build_govmap_title(layer_id)
         if site_interval:
@@ -2712,7 +2716,9 @@ async def submit_tracking_request(
 
     # ---- GovMap-type request (bulk: one TrackedDataset per URL) ----
     if body.source_type == "govmap":
-        from app.api.govmap import parse_govmap_url, build_govmap_title, site_layer_defaults
+        from app.api.govmap import (
+            parse_govmap_url, build_govmap_title, site_layer_defaults, warm_site_titles,
+        )
 
         urls = list(body.source_urls or [])
         if body.source_url and body.source_url not in urls:
@@ -2724,6 +2730,8 @@ async def submit_tracking_request(
                 detail="At least one source_url is required for govmap datasets",
             )
 
+        # Atlas captions come from the app's menu; read it once for the batch.
+        await warm_site_titles(urls)
         results: list[dict] = []
         any_created = False
         created_govmap: list = []

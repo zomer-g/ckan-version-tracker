@@ -128,6 +128,13 @@ async def find_datasets_for_url(
         candidate_filter = candidate_filter | (
             func.lower(TrackedDataset.ckan_name) == target[1]
         )
+    # One GovMap layer can be linked from two hosts (govmap.gov.il/?lay=N and
+    # Atlas's atlas.gov.il/?lay=N); the identity check below decides.
+    if target[0] == "govmap":
+        candidate_filter = candidate_filter | (
+            (TrackedDataset.source_type == "govmap")
+            & TrackedDataset.source_url.ilike(f"%{target[1]}%")
+        )
 
     rows = (
         await db.execute(
@@ -165,7 +172,8 @@ async def find_datasets_for_url(
     # GovMap link without ``lay=`` (a layer GROUP, ``?g=397``, or a bare
     # viewport) path-matched EVERY tracked layer and was shown as "already
     # tracked" while pointing at none of them.
-    target_path = None if host.endswith("govmap.gov.il") else path_key(url)
+    target_path = (None if host.endswith("govmap.gov.il") or host.endswith("atlas.gov.il")
+                   else path_key(url))
     exact: list = []
     loose: list = []
     for row in rows:

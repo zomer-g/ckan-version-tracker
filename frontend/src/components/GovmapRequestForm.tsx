@@ -4,7 +4,10 @@ import { Link } from "react-router-dom";
 import { publicApi } from "../api/client";
 
 const GOVMAP_LAY_RE = /[?&]lay(?:er|ers)?=(\d+)/i;
-const GOVMAP_HOST_RE = /^https?:\/\/(www\.)?govmap\.gov\.il\/?\?/i;
+// A layer link on GovMap itself, on a GovMap sub-site (/sites/energy/…?map=…),
+// or on Atlas (atlas.gov.il/?lay=N) — the last two are GovMap layers drawn with
+// the site's own key.
+const GOVMAP_HOST_RE = /^https?:\/\/(www\.)?(govmap\.gov\.il\/(sites\/[\w-]+\/[^?#]*)?\?|atlas\.gov\.il\/?\?)/i;
 
 const INTERVAL_OPTIONS = [
   { value: 86400, labelHe: "יום", labelEn: "1 day" },

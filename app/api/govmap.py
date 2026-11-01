@@ -19,6 +19,13 @@ key. Like a group, the page expands to its layers (``GOVMAP_SITES``). Each
 layer is stored as the sub-site page plus ``&lay=<id>``, which is what tells
 the worker to fetch that site's key (GOVSCRAPER govmap/embed_auth.py). See
 docs/govmap-solar-source.md.
+
+A link can also point at אטלס ישראל (https://www.atlas.gov.il/), an app on its
+own host that embeds GovMap with its own key. 290 of its ~293 layers are not in
+the public catalog. The bare site expands to every layer its menu lists, read
+live from the app's own menu (it grows, and hand-listing 293 layers would go
+stale); each is stored as the app's own layer link,
+``https://www.atlas.gov.il/?lay=<id>``. See docs/atlas-source.md.
 """
 
 import logging
@@ -42,6 +49,7 @@ CENTER_RE = re.compile(r"[?&]c=([-\d.]+),([-\d.]+)", re.IGNORECASE)
 SITE_RE = re.compile(
     r"^https?://(?:www\.)?govmap\.gov\.il/sites/([A-Za-z0-9_-]+)/[^?#]*\?", re.IGNORECASE)
 MAP_RE = re.compile(r"[?&]map=([A-Za-z0-9_-]+)", re.IGNORECASE)
+ATLAS_HOST_RE = re.compile(r"^https?://(?:www\.)?atlas\.gov\.il(?:/|\?|$)", re.IGNORECASE)
 
 MONTHLY = 30 * 24 * 3600
 
@@ -61,6 +69,95 @@ GOVMAP_SITES: dict[tuple[str, str], dict] = {
         ],
     },
 }
+
+# אטלס ישראל. Its layers come from the app's menu (``lay`` = GovMap layer id)
+# plus the layer-info file, which names one layer the menu does not.
+ATLAS = ("atlas", "")
+ATLAS_TITLE = "אטלס ישראל"
+ATLAS_SITE_URL = "https://www.atlas.gov.il/"
+ATLAS_MENU_URL = "https://www.atlas.gov.il/backend-assets/he/menus/main.json"
+ATLAS_INFO_URL = "https://www.atlas.gov.il/backend-assets/he/layers.json"
+# A full snapshot every month, like the other keyed site: the atlas is
+# reference data that changes slowly.
+ATLAS_POLL_INTERVAL = MONTHLY
+_ATLAS_TTL_S = 3600
+_atlas_cache: tuple[float, list[dict]] | None = None
+
+
+def build_atlas_layer_url(layer_id: str) -> str:
+    """The app's own link to a layer: Atlas opens with it switched on."""
+    return f"{ATLAS_SITE_URL}?lay={layer_id}"
+
+
+def atlas_layers_from(menu, info) -> list[dict]:
+    """Every layer the Atlas menu (and its layer-info file) names, in menu
+    order, each id once. The caption carries the menu group, because Atlas
+    reuses a name under different headings ("מגרשים" in four local plans)."""
+    items = menu if isinstance(menu, list) else []
+    by_uuid = {m.get("uuid"): m for m in items if isinstance(m, dict)}
+    layers: list[dict] = []
+    seen: set[str] = set()
+
+    def add(layer_id: str, caption: str) -> None:
+        if layer_id in seen:
+            return
+        seen.add(layer_id)
+        layers.append({"layer_id": layer_id, "caption": caption,
+                       "url": build_atlas_layer_url(layer_id)})
+
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        layer_id = str(m.get("lay") or "").strip()
+        if not layer_id.isdigit():
+            continue  # a heading, or a non-GovMap layer the app draws itself
+        title = " ".join(str(m.get("title") or "").split()) or f"שכבה {layer_id}"
+        parent = " ".join(str((by_uuid.get(m.get("parent")) or {}).get("title") or "").split())
+        add(layer_id, f"{title} — {parent}" if parent and parent != title else title)
+    for e in info if isinstance(info, list) else []:
+        layer_id = str((e or {}).get("field_layer_id") or "").strip()
+        if layer_id.isdigit():
+            add(layer_id, " ".join(str(e.get("title") or "").split()) or f"שכבה {layer_id}")
+    return layers
+
+
+async def fetch_atlas_layers() -> list[dict]:
+    """Atlas's layers, read from the app (cached for an hour; failures are
+    never cached)."""
+    global _atlas_cache
+    now = time.monotonic()
+    if _atlas_cache and now - _atlas_cache[0] < _ATLAS_TTL_S:
+        return _atlas_cache[1]
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; over.org.il)",
+               "Accept": "application/json"}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        r = await client.get(ATLAS_MENU_URL, headers=headers)
+        r.raise_for_status()
+        menu = r.json()
+        try:
+            r = await client.get(ATLAS_INFO_URL, headers=headers)
+            r.raise_for_status()
+            info = r.json()
+        except Exception:  # noqa: BLE001 — the menu alone names all but one
+            logger.warning("atlas: layer-info file unavailable", exc_info=True)
+            info = []
+    layers = atlas_layers_from(menu, info)
+    if not layers:
+        raise ValueError("Atlas menu lists no layers")
+    _atlas_cache = (now, layers)
+    return layers
+
+
+async def warm_site_titles(urls) -> None:
+    """Make the Atlas captions available to :func:`site_layer_defaults` (which
+    is synchronous) before datasets are created from Atlas links. Best effort:
+    a cold cache only costs the caption, not the dataset."""
+    if any(ATLAS_HOST_RE.match((u or "").strip()) for u in urls or []):
+        try:
+            await fetch_atlas_layers()
+        except Exception:  # noqa: BLE001
+            logger.warning("atlas: menu unavailable for titles", exc_info=True)
+
 
 # The catalog is ~730 KB and a group's membership changes rarely, so one fetch
 # serves every group lookup for a while. Failures are never cached.
@@ -82,7 +179,8 @@ def parse_govmap_url(url: str) -> ParsedGovmap | None:
     """
     s = (url or "").strip()
     site_m = SITE_RE.match(s)
-    if not GOVMAP_HOST_RE.match(s) and not site_m:
+    atlas = ATLAS_HOST_RE.match(s)
+    if not GOVMAP_HOST_RE.match(s) and not site_m and not atlas:
         return None
     lay_match = LAY_RE.search(s)
     if not lay_match:
@@ -96,12 +194,14 @@ def parse_govmap_url(url: str) -> ParsedGovmap | None:
         except ValueError:
             center = None
 
-    return ParsedGovmap(layer_id=lay_match.group(1), center_itm=center,
-                        site=site_m.group(1).lower() if site_m else None)
+    site = site_m.group(1).lower() if site_m else ("atlas" if atlas else None)
+    return ParsedGovmap(layer_id=lay_match.group(1), center_itm=center, site=site)
 
 
 def _site_key(url: str) -> tuple[str, str] | None:
     s = (url or "").strip()
+    if ATLAS_HOST_RE.match(s):
+        return ATLAS
     m = SITE_RE.match(s)
     if not m:
         return None
@@ -134,6 +234,16 @@ def site_layer_defaults(url: str) -> tuple[str | None, int | None]:
     ``(None, None)``. The interval is the site's cadence (monthly for the solar
     site), applied whatever interval the request form asked for."""
     key = _site_key(url)
+    if key == ATLAS:
+        parsed = parse_govmap_url(url)
+        if not parsed:
+            return None, None
+        layers = _atlas_cache[1] if _atlas_cache else []
+        caption = next((l["caption"] for l in layers
+                        if l["layer_id"] == parsed.layer_id), None)
+        title = (f"{caption} ({ATLAS_TITLE})" if caption
+                 else f"{ATLAS_TITLE} — שכבה {parsed.layer_id}")
+        return title, ATLAS_POLL_INTERVAL
     site = GOVMAP_SITES.get(key) if key else None
     parsed = parse_govmap_url(url) if site else None
     if not parsed:
@@ -246,6 +356,8 @@ async def validate_govmap_url(request: Request, body: ValidateRequest):
     parsed = parse_govmap_url(body.url)
     if not parsed:
         site_key = parse_govmap_site(body.url)
+        if site_key == ATLAS:
+            return await _validate_atlas(body.url.strip())
         if site_key:
             return _validate_site(body.url.strip(), site_key)
         group_id = parse_govmap_group_id(body.url)
@@ -285,6 +397,26 @@ def _validate_site(url: str, site_key: tuple[str, str]) -> ValidateResponse:
         site_id=site_id,
         layers=[GroupLayer(**layer) for layer in layers],
         poll_interval=GOVMAP_SITES[site_key].get("poll_interval"),
+    )
+
+
+async def _validate_atlas(url: str) -> ValidateResponse:
+    try:
+        layers = await fetch_atlas_layers()
+    except Exception:  # noqa: BLE001 — a lookup, not a reason to 500
+        logger.warning("atlas: menu fetch failed", exc_info=True)
+        return ValidateResponse(
+            valid=False, site_id="atlas",
+            error="קישור לאטלס ישראל, ולא ניתן היה לקרוא כרגע את רשימת השכבות שלו. "
+                  "נסו שוב בעוד כמה דקות, או העתיקו קישור לשכבה אחת (lay=).",
+        )
+    return ValidateResponse(
+        valid=True,
+        url=url,
+        title=ATLAS_TITLE,
+        site_id="atlas",
+        layers=[GroupLayer(**layer) for layer in layers],
+        poll_interval=ATLAS_POLL_INTERVAL,
     )
 
 
