@@ -4,6 +4,7 @@ and what the API asks of the table.
 The Parquet stores every column as a string and an absent value as the string
 "None"; the geometry is a one-point MultiPoint in WKB, lon/lat.
 """
+import datetime
 import os
 import struct
 import sys
@@ -69,7 +70,7 @@ def test_filters_are_parameters_and_unset_filters_are_absent():
     where, args = where_of({"settlement": "x'; drop table t; --", "gush": 19592,
                             "helka": 157, "date_from": "2021-01-01"})
     assert "drop" not in where and "$1" in where
-    assert args == ["x'; drop table t; --", 19592, 157, "2021-01-01"]
+    assert args == ["x'; drop table t; --", 19592, 157, datetime.date(2021, 1, 1)]
 
 
 def test_a_parcel_or_house_without_its_parent_is_ignored():

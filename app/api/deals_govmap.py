@@ -13,6 +13,7 @@ through, so ``processed`` is false and the caveats are about the source.
 """
 
 import asyncio
+import datetime
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -91,6 +92,13 @@ class GovmapFilters:
         }.items() if v not in (None, "")}
 
 
+def _day(v: str) -> datetime.date:
+    try:
+        return datetime.date.fromisoformat(v)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"תאריך לא תקין: {v}")
+
+
 def where_of(f: dict) -> tuple[str, list]:
     """The WHERE clause and its parameters. Every filter is one indexed or
     narrow predicate; an unset filter is absent, not ``IS NULL OR``."""
@@ -114,10 +122,12 @@ def where_of(f: dict) -> tuple[str, list]:
         clauses.append(f"house_num = {arg(f['house'])}")
     if f.get("property_type"):
         clauses.append(f"property_type = {arg(f['property_type'])}")
+    # asyncpg binds a ::date parameter as a date and refuses the string — every
+    # dated request 500'd ('str' object has no attribute 'toordinal').
     if f.get("date_from"):
-        clauses.append(f"deal_date >= {arg(f['date_from'])}::date")
+        clauses.append(f"deal_date >= {arg(_day(f['date_from']))}::date")
     if f.get("date_to"):
-        clauses.append(f"deal_date <= {arg(f['date_to'])}::date")
+        clauses.append(f"deal_date <= {arg(_day(f['date_to']))}::date")
     if f.get("min_amount") is not None:
         clauses.append(f"deal_amount >= {arg(int(f['min_amount']))}")
     if f.get("max_amount") is not None:
