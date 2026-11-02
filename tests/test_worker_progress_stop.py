@@ -37,3 +37,20 @@ def test_an_interrupted_task_is_not_reclaimed_by_another_worker_or_over_a_newer_
     assert progress_verdict(task, "GZ-14#2", superseded=False) == "stop"
     assert progress_verdict(task, "", superseded=False) == "stop"
     assert progress_verdict(task, "NucBox#1", superseded=True) == "stop"
+
+
+def test_a_task_that_no_longer_exists_is_stopped(monkeypatch):
+    import asyncio
+    import uuid
+    from unittest import mock
+
+    from app.api import worker
+
+    monkeypatch.setattr(worker, "_verify_worker_key", lambda request: None)
+    db = mock.AsyncMock()
+    db.execute.return_value = mock.Mock(scalar_one_or_none=mock.Mock(return_value=None))
+    # __wrapped__: past the rate limiter, which wants a real Request.
+    answer = asyncio.run(worker.update_progress.__wrapped__(
+        mock.Mock(), str(uuid.uuid4()), worker.ProgressUpdate(phase="scraping"), db,
+    ))
+    assert answer == {"status": "stop", "task_status": "deleted"}

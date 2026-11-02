@@ -3911,7 +3911,10 @@ async def update_progress(
     result = await db.execute(select(ScrapeTask).where(ScrapeTask.id == tid))
     task = result.scalar_one_or_none()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        # Gone altogether: cancelled and then dismissed from the failures panel
+        # (or its dataset deleted). A 404 meant nothing to the worker, which
+        # scraped on — one ran four hours on a dismissed task (2026-11-02).
+        return {"status": "stop", "task_status": "deleted"}
 
     # A task that is no longer running must say so, or its worker never learns.
     # "Cancel" on a running task only marks the row failed; the worker kept
