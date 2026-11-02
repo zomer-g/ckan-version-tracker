@@ -204,3 +204,46 @@ def test_pilot_prefers_nonempty():
     catalog = [_rec("append_empty", est_rows=0), _rec("append_full", est_rows=500)]
     pilot = p.select_pilot(catalog, n=1)
     assert pilot[0]["table"] == "append_full"
+
+
+# ── catch-up sweep planning ───────────────────────────────────────────────────
+def _cols(*names):
+    return [{"name": n, "type": "text"} for n in names]
+
+
+def _prof(rec, names):
+    return {"signature": p.table_signature(rec["est_rows"], rec["columns"]), "columns": set(names)}
+
+
+def test_sweep_takes_missing_tables_first_then_changed_ones():
+    same = {**_rec("append_same"), "columns": _cols("a")}
+    grown = {**_rec("append_grown", est_rows=10), "columns": _cols("a")}
+    new = {**_rec("idx_new", schema="idx", kind="index"), "columns": _cols("a")}
+    existing = {("public", "append_same"): _prof(same, ["a"]),
+                ("public", "append_grown"): _prof({**grown, "est_rows": 5}, ["a"])}
+    plan = p.plan_sweep([same, grown, new], existing, limit=10)
+    # The missing table leads and earns the LLM layer; more rows alone do not.
+    assert [(r["table"], e) for r, e in plan] == [("idx_new", True), ("append_grown", False)]
+    assert [r["table"] for r, _ in p.plan_sweep([same, grown, new], existing, limit=1)] == ["idx_new"]
+
+
+def test_sweep_reenriches_on_a_column_change_but_not_on_skipped_columns():
+    base = {**_rec("append_t"), "columns": _cols("a", "row_hash", "geometry_wkt")}
+    renamed = {**base, "columns": _cols("b", "row_hash")}
+    existing = {("public", "append_t"): {"signature": "old", "columns": {"a"}}}
+    assert p.plan_sweep([base], existing, 5) == [(base, False)]
+    assert p.plan_sweep([renamed], existing, 5) == [(renamed, True)]
+
+
+def test_sweep_skips_over_artifacts_and_unreadable_schemas():
+    catalog = [_rec("over_settlements"), _rec("prices_view", kind="over"),
+               _rec("events", schema="ocal", kind="ocal")]
+    assert p.plan_sweep(catalog, {}, 10) == []
+
+
+def test_worker_push_version_refreshes_the_profile():
+    """The hook used to live only in poll_job, so versions pushed by fleet
+    workers — nearly all of them — never refreshed a profile."""
+    import inspect
+    from app.api import worker
+    assert "table_profiler.kick_profile_after_poll" in inspect.getsource(worker)

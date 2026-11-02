@@ -2874,6 +2874,16 @@ async def push_version(
         if _warn:
             logger.warning("Dataset %s (%s) flagged: %s", ds.id, ds.title, _warn[:120])
     await db.commit()
+    # Refresh the table profile (the dataset's "ID card" on /data) once the
+    # run's last batch is in. The hook used to live only in poll_job — the
+    # server's own CKAN polling — so every version a fleet worker pushed, which
+    # is nearly all of them since the sources moved to workers, went unprofiled.
+    if not body.more_batches:
+        try:
+            from app.services import table_profiler
+            table_profiler.kick_profile_after_poll(ds.id, next_version == 1)
+        except Exception:  # noqa: BLE001 — never break a push
+            logger.exception("kick_profile_after_poll (push-version) failed for %s", ds.id)
     # Back from the dead: put it on its routine cadence again now, not after
     # the next deploy — it was on the quarterly gone-source poll.
     if _was_gone:

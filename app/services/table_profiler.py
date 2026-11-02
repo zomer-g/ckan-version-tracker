@@ -946,6 +946,80 @@ async def run_all(db, *, enrich: bool = True, force: bool = False) -> dict:
     return {**res, "catalog_size": len(catalog)}
 
 
+def plan_sweep(catalog: list[dict], existing: dict, limit: int) -> list[tuple[dict, bool]]:
+    """Which catalog tables a sweep should profile, and whether each one earns
+    the LLM layer: ``[(record, enrich), …]``, at most ``limit``.
+
+    ``existing`` maps (schema, table) → {"signature", "columns": set}. Tables
+    with no profile come first — they are what /data shows as blank — then
+    tables whose shape changed (signature: row estimate + columns). The LLM
+    layer is for a table it has never seen or whose column set changed, the
+    same rule as the per-push hook (profile_dataset)."""
+    missing, changed = [], []
+    for rec in catalog:
+        schema, table = rec.get("schema", "public"), rec.get("table")
+        if (not table or schema not in PROFILABLE_SCHEMAS or rec.get("kind") == "over"
+                or table.startswith("over_") or table == PROFILE_TABLE):
+            continue
+        cols = rec.get("columns") or []
+        prev = existing.get((schema, table))
+        if prev is None:
+            missing.append((rec, True))
+        elif prev.get("signature") != table_signature(rec.get("est_rows"), cols):
+            # The columns profile_table itself profiles, so a skipped one never
+            # reads as "new" and re-buys the LLM layer on every row change.
+            names = {c.get("name") for c in cols
+                     if c.get("type") != "geometry" and c.get("name") not in _HIDDEN
+                     and str(c.get("name")).lower() not in _BULK}
+            changed.append((rec, bool(prev.get("columns")) and names != prev["columns"]))
+    return (missing + changed)[:limit]
+
+
+async def _existing_signatures() -> dict:
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT schema_name, table_name, signature, "
+            f"ARRAY(SELECT jsonb_object_keys(CASE WHEN jsonb_typeof(sql_profile->'columns') = 'object' "
+            f"THEN sql_profile->'columns' ELSE '{{}}'::jsonb END)) AS cols "
+            f"FROM public.{_qi(PROFILE_TABLE)}")
+    return {(r["schema_name"], r["table_name"]): {"signature": r["signature"], "columns": set(r["cols"] or [])}
+            for r in rows}
+
+
+async def sweep(db, *, limit: int = 100) -> dict:
+    """Scheduled catch-up: profile up to ``limit`` tables that have no profile
+    or whose shape changed since theirs. The per-push hook covers NEON dataset
+    tables as their versions land; this covers everything else (idx mirrors,
+    odata, the tables of the months the hook was not wired to the worker push)
+    and anything the hook missed. Returns stats."""
+    from app.services.data_catalog import build_catalog
+    await ensure_profile_table()
+    catalog = await build_catalog(db)
+    plan = plan_sweep(catalog, await _existing_signatures(), limit)
+    if not plan:
+        return {"profiled": 0, "enriched": 0, "errors": 0}
+    localities = await _load_locality_names(db)
+    can_enrich = llm_available() and getattr(settings, "profiler_auto_enrich", True)
+    profiled = enriched = errors = 0
+    for rec, enrich in plan:
+        schema, table = rec.get("schema", "public"), rec["table"]
+        try:
+            await profile_table(schema, table, columns=rec.get("columns"), est_rows=rec.get("est_rows"),
+                                locality_names=localities, title=rec.get("title"), kind=rec.get("kind"))
+            profiled += 1
+            if enrich and can_enrich:
+                sample = await append_store.sample_rows(table, schema=schema, limit=5)
+                if await enrich_profile(schema, table, None, sample_rows=sample.get("rows")):
+                    enriched += 1
+        except Exception:  # noqa: BLE001 — one bad table must not stop the sweep
+            logger.exception("profile sweep failed on %s.%s", schema, table)
+            errors += 1
+    stats = {"planned": len(plan), "profiled": profiled, "enriched": enriched, "errors": errors}
+    logger.info("table_profiler.sweep: %s", stats)
+    return stats
+
+
 # ── Per-dataset auto-profiling (poll-pipeline hook) ───────────────────────────
 # Fire-and-forget tasks are kept referenced here so the event loop does not GC
 # them mid-run (the standard asyncio create_task pattern).
@@ -1006,6 +1080,20 @@ async def profile_dataset(db, dataset, *, is_new: bool = False) -> dict:
     return {"profiled": profiled, "enriched": enriched}
 
 
+_bg_sem = None
+
+
+def _bg_semaphore():
+    """At most two background profiles at once: a fleet finishing a run of
+    GovMap layers pushes dozens of versions a minute, and each profile is a
+    handful of whole-table aggregates on the web process."""
+    import asyncio
+    global _bg_sem
+    if _bg_sem is None:
+        _bg_sem = asyncio.Semaphore(2)
+    return _bg_sem
+
+
 async def _profile_after_poll_bg(dataset_id, is_new: bool) -> None:
     if not getattr(settings, "profiler_auto_enabled", True):
         return
@@ -1013,7 +1101,7 @@ async def _profile_after_poll_bg(dataset_id, is_new: bool) -> None:
     from app.models.tracked_dataset import TrackedDataset
     from sqlalchemy import select
     try:
-        async with async_session() as db:
+        async with _bg_semaphore(), async_session() as db:
             ds = (await db.execute(
                 select(TrackedDataset).where(TrackedDataset.id == dataset_id)
             )).scalar_one_or_none()

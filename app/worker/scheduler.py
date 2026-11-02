@@ -139,6 +139,27 @@ async def init_scheduler() -> None:
         except Exception:  # noqa: BLE001
             logger.exception("field_flags scheduled recompute failed")
 
+    # Table profiles (/data's per-table "ID card"): a sweep for tables with no
+    # profile or a changed shape, 100 a run. The per-push hook profiles a
+    # dataset as its version lands; this is the backstop and the backfill.
+    async def profile_sweep_job() -> None:
+        if not getattr(settings, "profiler_auto_enabled", True) or not settings.append_database_url:
+            return
+        try:
+            from app.services import table_profiler
+            async with async_session() as db:
+                await table_profiler.sweep(db, limit=100)
+        except Exception:  # noqa: BLE001
+            logger.exception("table profile sweep failed")
+
+    scheduler.add_job(
+        profile_sweep_job,
+        trigger=IntervalTrigger(minutes=30, start_date=datetime.now(timezone.utc) + timedelta(minutes=15)),
+        id="table_profile_sweep",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
     scheduler.add_job(
         facets_file_formats_job,
         trigger=IntervalTrigger(minutes=20, start_date=datetime.now(timezone.utc) + timedelta(minutes=4)),
