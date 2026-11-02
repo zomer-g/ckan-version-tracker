@@ -3873,6 +3873,25 @@ def _progress_limit_key(request: Request) -> str:
     return f"{get_client_ip(request)}|{request.path_params.get('task_id', '')}"
 
 
+def progress_verdict(task, worker_id: str, *, superseded: bool) -> str:
+    """What a progress report on ``task`` should do: "ok", "reclaim" or "stop".
+
+    "stop" whenever the task is no longer the dataset's live run — cancelled by
+    an admin, failed, completed, or replaced by a newer task. The one exception
+    is a run the stuck-task sweeper failed for silence, reported on again by
+    the very worker that held it: that worker is alive, so it takes the task
+    back ("reclaim"), the same rule push-version applies.
+    """
+    from app.models.scrape_task import PHASE_INTERRUPTED
+
+    if task.status == "running":
+        return "ok"
+    if (task.status == "failed" and task.phase == PHASE_INTERRUPTED
+            and worker_id and task.worker_id == worker_id and not superseded):
+        return "reclaim"
+    return "stop"
+
+
 @router.post("/progress/{task_id}")
 @limiter.limit("120/minute", key_func=_progress_limit_key)
 async def update_progress(
@@ -3893,6 +3912,32 @@ async def update_progress(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # A task that is no longer running must say so, or its worker never learns.
+    # "Cancel" on a running task only marks the row failed; the worker kept
+    # scraping regardless and stayed invisible to the queue — two machines spent
+    # a night on cancelled michrazim runs (2026-11-02), taking no other work.
+    # Answered without touching the row, so a cancel's phase and error stand.
+    worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
+    superseded = False
+    if task.status != "running":
+        superseded = (await db.execute(
+            select(ScrapeTask.id).where(
+                ScrapeTask.tracked_dataset_id == task.tracked_dataset_id,
+                ScrapeTask.status.in_(("pending", "running")),
+                ScrapeTask.id != task.id,
+            ).limit(1)
+        )).scalar_one_or_none() is not None
+    verdict = progress_verdict(task, worker_id, superseded=superseded)
+    if verdict == "stop":
+        return {"status": "stop", "task_status": task.status}
+    if verdict == "reclaim":
+        # Auto-failed for silence, but the same worker is plainly still on it
+        # (as push-version reclaims it): back to running, so the queue shows it.
+        task.status = "running"
+        task.error = None
+        task.completed_at = None
+        logger.info("progress: worker %s reclaimed interrupted task %s", worker_id, task.id)
 
     # Cap to the column widths (phase String(50), message String(500)) so an
     # over-length progress report can't fail the commit (StringDataRightTruncation)
@@ -3915,7 +3960,6 @@ async def update_progress(
     worker_ip = get_client_ip(request)
     if worker_ip and worker_ip != "unknown":
         task.worker_ip = worker_ip[:64]
-    worker_id = (request.headers.get("x-worker-id") or "").strip()[:64]
     if worker_id:
         task.worker_id = worker_id
     # Stamp the heartbeat EXPLICITLY. updated_at is what the stuck-task sweeper
