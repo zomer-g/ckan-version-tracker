@@ -229,6 +229,12 @@ def test_unknown_names_are_refused_not_ignored(env):
         mcp_search({"content_fields": ["settlement"]})
 
 
+def test_mcp_takes_an_array_sent_as_its_json_text(env):
+    _, mcp_search = env
+    found = mcp_search({"content_fields": '["locality", "date"]', "file_formats": "csv"})
+    assert _titles(found) == ["אוכלוסייה לפי יישוב"]
+
+
 def test_mcp_schema_lists_exactly_the_shared_vocabulary():
     props = next(t for t in mcp.TOOLS if t["name"] == "search_datasets")["inputSchema"]["properties"]
     assert props["content_fields"]["items"]["enum"] == list(df.CONTENT_FIELDS)

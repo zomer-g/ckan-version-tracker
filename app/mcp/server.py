@@ -132,9 +132,20 @@ TOOLS: list[dict] = [
 # ── tool implementations ────────────────────────────────────────────────────
 
 def _as_list(v) -> list:
-    """A tool argument a model may send as a list, a string, or not at all."""
+    """A tool argument a model may send as a list, a string, or not at all.
+
+    Some clients send an array argument as its JSON text ('["locality", "date"]'),
+    measured on a client holding the schema from before the field existed —
+    split on commas, that read as the field '["locality"'."""
     if v is None:
         return []
+    if isinstance(v, str) and v.strip().startswith("["):
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
     return v if isinstance(v, list) else [v]
 
 
