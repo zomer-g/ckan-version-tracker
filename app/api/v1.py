@@ -23,6 +23,7 @@ from app.models.tag import Tag, dataset_tags
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
+from app.services import dataset_facets
 from app.services import storage_client as storage
 from app.services.archive_state import ROW_ARCHIVE_KEYS
 from app.services.dataset_visibility import require_visible, require_visible_version
@@ -88,6 +89,12 @@ class DatasetSummary(BaseModel):
     new_resources_at_source: list[dict] | None  # source resources not yet picked
     version_count: int
     versions_url: str  # /api/v1/datasets/{id}/versions
+    # Search facets (see the has_field / file_format filters on
+    # /api/v1/datasets): the kinds of fields the dataset's table holds, named as
+    # in app/services/dataset_facets.CONTENT_FIELDS, and the format codes of the
+    # files its versions hold.
+    content_fields: list[str] = []
+    file_formats: list[str] = []
 
 
 class VersionResource(BaseModel):
@@ -249,6 +256,8 @@ def _dataset_summary(
         versions_url=_build_request_url(
             request, f"/api/v1/datasets/{ds.id}/versions"
         ),
+        content_fields=dataset_facets.content_fields_of(ds.field_flags),
+        file_formats=dataset_facets.ordered_formats(ds.file_formats),
     )
 
 
@@ -409,16 +418,44 @@ async def list_datasets(
             "have from a data.gov.il URL. Combine with status=all for pending."
         ),
     ),
+    has_field: list[str] | None = Query(
+        None,
+        description=(
+            "Content-field filter: datasets whose table holds a field of this "
+            "kind — locality (יישוב), authority (רשות מקומית), ministry (משרד "
+            "ממשלתי), date (תאריך), geometry (מידע מרחבי), parcel (גוש/חלקה). "
+            "Classified from column names, as on the /data console. May be "
+            "repeated or comma-separated; values AND-combine."
+        ),
+    ),
+    file_format: list[str] | None = Query(
+        None,
+        description=(
+            "File-format filter: datasets whose versions hold a file of this "
+            "type — csv, xlsx (incl. xls), json, geojson, shp, gpkg, parquet, "
+            "kml, pdf, docx, xml, txt, zip. May be repeated or comma-separated; "
+            "values OR-combine."
+        ),
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0, le=MAX_API_OFFSET),
     db: AsyncSession = Depends(get_db),
 ):
-    """List datasets, optionally filtered by organization and/or tags.
+    """List datasets, optionally filtered by organization, tags, content
+    fields and file formats.
 
     Multiple `tag_id` (or `tag`) parameters AND together: passing
     `?tag=enforcement&tag=guidelines` returns only datasets tagged with
-    BOTH (not either-or).
+    BOTH (not either-or). So do `has_field` values
+    (`?has_field=locality&has_field=date`); `file_format` values OR together
+    (`?file_format=csv,xlsx`). An unknown field or format is a 400.
     """
+    try:
+        fields = dataset_facets.parse_content_fields(has_field)
+        formats = dataset_facets.parse_file_formats(file_format)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # Resolve tag names → ids and merge with explicit tag_ids
     resolved_tag_ids: list = []
     if tag_id:
@@ -486,6 +523,8 @@ async def list_datasets(
             .having(func.count(distinct(dataset_tags.c.tag_id)) == n)
         )
         base = base.where(TrackedDataset.id.in_(subq))
+
+    base = dataset_facets.apply_filters(base, fields, formats, db.get_bind().dialect.name)
 
     # Total before pagination — same filters, just count distinct datasets
     count_query = base.with_only_columns(func.count(distinct(TrackedDataset.id)))

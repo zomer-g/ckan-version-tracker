@@ -34,9 +34,12 @@ logger = logging.getLogger(__name__)
 class _Flag:
     """A column-name classifier: match if any pattern hits and no exclusion does."""
 
-    def __init__(self, include: str, exclude: str | None = None):
+    def __init__(self, include: str, exclude: str | None = None,
+                 column_types: tuple[str, ...] = ()):
         self.include = re.compile(include)
         self.exclude = re.compile(exclude) if exclude else None
+        # A column of one of these SQL types matches whatever its name.
+        self.column_types = column_types
 
     def matches(self, col: str) -> bool:
         if not self.include.search(col):
@@ -89,16 +92,25 @@ FLAG_PATTERNS: dict[str, _Flag] = {
         # `the_geom`, and a layer that renames it usually keeps the word.
         r"(^|_)geom($|_)|geometry|_wkt$|קואורדינט|נ\.צ|"
         r"(^|[^a-z])(lat|lon|lng|latitude|longitude|easting|northing)($|[^a-z])",
+        # A PostGIS column is spatial by definition — the /data console's
+        # "מרחבי" chip is exactly this test, and the idx mirror names it `geom`
+        # anyway, but a renamed one must not fall through.
+        column_types=("geometry",),
     ),
 }
 
 DEFAULT_FIELDS = ("has_locality",)
+# What the scheduled recompute refreshes: every flag, since the search facets
+# (app/services/dataset_facets.py) filter on all of them.
+ALL_FIELDS = tuple(FLAG_PATTERNS)
 
 
 def _col_has(columns: list, flag: _Flag) -> bool:
     """True if any column name in this table matches the flag."""
     for c in columns:
         name = c["name"] if isinstance(c, dict) else str(c)
+        if flag.column_types and isinstance(c, dict) and c.get("type") in flag.column_types:
+            return True
         # `first_seen` is the ingest timestamp, not source data — never a date flag.
         if name == "first_seen":
             continue

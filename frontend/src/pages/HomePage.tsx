@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ckan, publicApi, pageContent, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, HomeDataset, HomeDatasetsPage, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
+import { ckan, publicApi, pageContent, govil, govmap, idf, health, registries, avodata, munidata, emun, servicescompass, mevaker, hatzav, mankal, jda, eden, knesset, sources, resolve, HomeDataset, HomeDatasetsPage, HomeFacets, GovIlValidation, GovMapValidation, RegistrySourceValidation, ResolveMatch, SiteStats } from "../api/client";
 import CatalogTabs from "../components/CatalogTabs";
 import TagChips from "../components/TagChips";
 import Pagination from "../components/Pagination";
@@ -282,6 +282,30 @@ export default function HomePage() {
   // the number (page_size) and slices the same way.
   const PAGE_SIZE = homePage?.page_size ?? 24;
 
+  // Search facets — content fields (AND) and file formats (OR), mirrors of
+  // app/services/dataset_facets.py. Held in the URL like the page, so a
+  // filtered list is linkable and survives a reload.
+  const selectedFields = searchParams.getAll("field");
+  const selectedFormats = searchParams.getAll("format");
+  const facetKey = `${selectedFields.join(",")}|${selectedFormats.join(",")}`;
+  const filtering = selectedFields.length > 0 || selectedFormats.length > 0;
+  const toggleFacet = (param: "field" | "format", value: string) => {
+    const params = new URLSearchParams(searchParams);
+    const current = params.getAll(param);
+    params.delete(param);
+    const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+    next.forEach((v) => params.append(param, v));
+    params.delete("page");
+    setSearchParams(params, { replace: true });
+  };
+  const clearFacets = () => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("field");
+    params.delete("format");
+    params.delete("page");
+    setSearchParams(params, { replace: true });
+  };
+
   // Searching: the datasets matching every query word, committees included.
   // Otherwise: the whole list, pinned first, with the hundreds of Knesset
   // committees folded into ONE tile linking to /knesset (the server sends it
@@ -291,28 +315,28 @@ export default function HomePage() {
   // The committee tile takes a slot in the same grid rather than sitting
   // outside the count — otherwise page 1 would render 25 tiles and break the
   // 3- and 4-column rows, which is the whole point of 24.
-  const showCommitteeCard = !submittedQuery && !!committeeGroup;
+  const showCommitteeCard = !submittedQuery && !filtering && !!committeeGroup;
   const tileCount = shownTotal + (showCommitteeCard ? 1 : 0);
   const pageCount = Math.max(1, Math.ceil(tileCount / PAGE_SIZE));
   // Matching tracked datasets while a keyword search is active, else 0.
-  const matchedCount = submittedQuery && homePage ? shownTotal : 0;
+  const matchedCount = (submittedQuery || filtering) && homePage ? shownTotal : 0;
 
   // Derived from the URL, not held in state: a page is a place, so it should
   // survive a reload, be linkable, and answer the back button. The server
   // clamps an out-of-range ?page= and says which page it sent; until the
   // answer for this URL is in, the clamp uses the previous answer's count.
   const requestedPage = Math.max(1, Number(searchParams.get("page")) || 1);
-  const trackedPage = homePage && homeKey === `${submittedQuery}\n${requestedPage}`
+  const trackedPage = homePage && homeKey === `${submittedQuery}\n${requestedPage}\n${facetKey}`
     ? homePage.page
     : Math.min(requestedPage, pageCount);
   const pageTracked: HomeDataset[] = homePage?.items ?? [];
   const trackedLoading = homePage === null && !homeFailed;
-  const trackedStale = homePage !== null && homeKey !== `${submittedQuery}\n${requestedPage}`;
+  const trackedStale = homePage !== null && homeKey !== `${submittedQuery}\n${requestedPage}\n${facetKey}`;
 
   useEffect(() => {
     let cancelled = false;
-    const key = `${submittedQuery}\n${requestedPage}`;
-    publicApi.homeDatasets(submittedQuery, requestedPage)
+    const key = `${submittedQuery}\n${requestedPage}\n${facetKey}`;
+    publicApi.homeDatasets(submittedQuery, requestedPage, selectedFields, selectedFormats)
       .then((data) => {
         if (cancelled) return;
         setHomePage(data);
@@ -326,7 +350,9 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [submittedQuery, requestedPage, homeReload]);
+    // facetKey stands in for the two arrays, which are new on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submittedQuery, requestedPage, homeReload, facetKey]);
 
   const trackedHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -519,7 +545,10 @@ export default function HomePage() {
     const trimmed = query.trim();
     if (!trimmed) return;
     // Reflect the query in the URL so a search is shareable / bookmarkable.
-    setSearchParams({ q: trimmed }, { replace: true });
+    const params = new URLSearchParams(searchParams);
+    params.set("q", trimmed);
+    params.delete("page");
+    setSearchParams(params, { replace: true });
     setLoading(true);
     setError("");
     setTargetResourceId(null);
@@ -962,6 +991,7 @@ export default function HomePage() {
       </p>
 
       <TagChips tags={ds.tags} />
+      <DatasetFacetChips fields={ds.content_fields} formats={ds.file_formats} />
 
       <div className="flex mt-1" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
         <Link
@@ -1077,7 +1107,10 @@ export default function HomePage() {
                   setSubmittedQuery("");
                   setResults([]);
                   setCount(0);
-                  setSearchParams({}, { replace: true });
+                  const params = new URLSearchParams(searchParams);
+                  params.delete("q");
+                  params.delete("page");
+                  setSearchParams(params, { replace: true });
                 }
               }}
               placeholder={t("home.search_placeholder")}
@@ -2131,10 +2164,20 @@ export default function HomePage() {
             tabIndex={-1}
             style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.35rem", outline: "none" }}
           >
-            {submittedQuery
+            {submittedQuery || filtering
               ? `${t("home.tracked_matches_title")} (${matchedCount})`
               : t("home.tracked_title")}
           </h2>
+
+          {homePage?.facets && (
+            <FacetBar
+              facets={homePage.facets}
+              fields={selectedFields}
+              formats={selectedFormats}
+              onToggle={toggleFacet}
+              onClear={clearFacets}
+            />
+          )}
 
           {/* Which slice of what — announced on every page change, because the
               cards themselves swap silently under a screen reader. */}
@@ -2177,7 +2220,7 @@ export default function HomePage() {
             </div>
           ) : tileCount === 0 ? (
             <div className="empty-state">
-              {submittedQuery ? t("home.tracked_matches_empty") : t("home.no_tracked")}
+              {submittedQuery || filtering ? t("home.tracked_matches_empty") : t("home.no_tracked")}
             </div>
           ) : (
             <div
@@ -2225,5 +2268,88 @@ export default function HomePage() {
         </section>
       </div>
     </div>
+  );
+}
+
+// ── Search facets ────────────────────────────────────────────────────────────
+// Labels for the codes app/services/dataset_facets.py sends; order = display
+// order. The classification itself is the /data console's (field_flags).
+const CONTENT_FIELD_LABELS: Record<string, { label: string; title: string }> = {
+  locality: { label: "יישוב", title: "כולל עמודת שם יישוב" },
+  authority: { label: "רשות מקומית", title: "כולל עמודת רשות מקומית" },
+  ministry: { label: "משרד ממשלתי", title: "כולל עמודת משרד ממשלתי" },
+  date: { label: "תאריך", title: "כולל עמודת תאריך — אפשר לנתח לאורך זמן" },
+  geometry: { label: "מידע מרחבי", title: "כולל גאומטריה או קואורדינטות — אפשר להציג על מפה" },
+  parcel: { label: "גוש/חלקה", title: "כולל גוש/חלקה — אפשר להצליב עם מפת החלקות" },
+};
+const FILE_FORMAT_LABELS: Record<string, string> = {
+  csv: "CSV", xlsx: "Excel", json: "JSON", geojson: "GeoJSON", shp: "Shapefile",
+  gpkg: "GeoPackage", parquet: "Parquet", kml: "KML", pdf: "PDF", docx: "Word",
+  xml: "XML", txt: "TXT", zip: "ZIP",
+};
+
+function FacetChip({ label, title, count, pressed, onClick }: {
+  label: string; title?: string; count: number; pressed: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="facet-chip"
+      aria-pressed={pressed}
+      title={title}
+      onClick={onClick}
+      // A chip that would leave nothing stays clickable only to un-press it.
+      disabled={!pressed && count === 0}
+    >
+      {label} <span className="facet-chip-count">{count.toLocaleString("he-IL")}</span>
+    </button>
+  );
+}
+
+function FacetBar({ facets, fields, formats, onToggle, onClear }: {
+  facets: HomeFacets;
+  fields: string[];
+  formats: string[];
+  onToggle: (param: "field" | "format", value: string) => void;
+  onClear: () => void;
+}) {
+  const formatCodes = Object.keys(FILE_FORMAT_LABELS)
+    .filter((c) => (facets.file_formats[c] ?? 0) > 0 || formats.includes(c));
+  return (
+    <div className="facet-bar" role="group" aria-label="סינון לפי סוג השדות וסוג הקבצים">
+      <div className="facet-row">
+        <span className="facet-row-label" title="מאגרים שיש בהם את כל השדות שנבחרו">שדות תוכן:</span>
+        {Object.entries(CONTENT_FIELD_LABELS).map(([key, f]) => (
+          <FacetChip key={key} label={f.label} title={f.title}
+            count={facets.content_fields[key] ?? 0} pressed={fields.includes(key)}
+            onClick={() => onToggle("field", key)} />
+        ))}
+      </div>
+      <div className="facet-row">
+        <span className="facet-row-label" title="מאגרים שיש בגרסאות שלהם קובץ מאחד הסוגים שנבחרו">סוג קבצים:</span>
+        {formatCodes.map((code) => (
+          <FacetChip key={code} label={FILE_FORMAT_LABELS[code]}
+            count={facets.file_formats[code] ?? 0} pressed={formats.includes(code)}
+            onClick={() => onToggle("format", code)} />
+        ))}
+        {(fields.length > 0 || formats.length > 0) && (
+          <button type="button" className="facet-clear" onClick={onClear}>ניקוי הסינון</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// What a card holds, in the same words as the filter above the list.
+function DatasetFacetChips({ fields, formats }: { fields?: string[]; formats?: string[] }) {
+  const f = (fields ?? []).filter((k) => CONTENT_FIELD_LABELS[k]);
+  const fm = (formats ?? []).filter((k) => FILE_FORMAT_LABELS[k]);
+  if (!f.length && !fm.length) return null;
+  return (
+    <p className="text-sm text-muted dataset-facets">
+      {f.length > 0 && <>שדות: {f.map((k) => CONTENT_FIELD_LABELS[k].label).join(" · ")}</>}
+      {f.length > 0 && fm.length > 0 && " | "}
+      {fm.length > 0 && <>קבצים: {fm.map((k) => FILE_FORMAT_LABELS[k]).join(" · ")}</>}
+    </p>
   );
 }

@@ -53,6 +53,8 @@ List datasets. Returns a paginated envelope.
 | `tag_id` | UUID, **repeatable** | — | Restrict to datasets carrying this tag. Repeat the parameter to require **multiple** tags (AND-logic). |
 | `tag` | string, **repeatable** | — | Same as `tag_id` but matches by tag NAME (case-insensitive). Mix-and-match with `tag_id` is allowed. |
 | `status` | `active` \| `pending` \| `all` | `active` | Default hides rejected and pending submissions. |
+| `has_field` | string, **repeatable** or comma-separated | — | Content field the dataset's table holds: `locality` (יישוב), `authority` (רשות מקומית), `ministry` (משרד ממשלתי), `date` (תאריך), `geometry` (מידע מרחבי), `parcel` (גוש/חלקה). Classified from column names, as on the /data console. **AND**-combined. Unknown name → 400. |
+| `file_format` | string, **repeatable** or comma-separated | — | Type of file the dataset's versions hold: `csv`, `xlsx` (incl. xls), `json`, `geojson`, `shp`, `gpkg`, `parquet`, `kml`, `pdf`, `docx`, `xml`, `txt`, `zip`. **OR**-combined. Unknown format → 400. |
 | `limit` | integer 1–500 | `100` | Page size. |
 | `offset` | integer ≥ 0 | `0` | Page offset. |
 
@@ -98,7 +100,9 @@ than an error, so callers can chain filters defensively.
       "last_modified": "2026-04-22T09:14:11.000000",
       "status": "active",
       "version_count": 7,
-      "versions_url": "https://example.org/api/v1/datasets/9d4c6e2a-.../versions"
+      "versions_url": "https://example.org/api/v1/datasets/9d4c6e2a-.../versions",
+      "content_fields": ["date"],
+      "file_formats": ["csv", "pdf"]
     }
   ]
 }
@@ -107,6 +111,9 @@ than an error, so callers can chain filters defensively.
 ### Examples
 
 ```bash
+# Datasets with both a locality field and a date field, published as CSV or Excel
+curl 'https://example.org/api/v1/datasets?has_field=locality&has_field=date&file_format=csv,xlsx'
+
 # Everything tracked from the Ministry of Health
 curl 'https://example.org/api/v1/datasets?organization_id=<UUID>'
 

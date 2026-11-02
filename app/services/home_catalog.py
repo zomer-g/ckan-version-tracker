@@ -17,7 +17,8 @@ poll writes a version, never per request. It sits in an SWRCache with a TTL of
 a minute: past the TTL the stale copy is still served while one background task
 rebuilds it, so no visitor waits on the build except on a cold process. Only
 the columns a card needs are loaded — the full rows carry large JSONB columns
-(scraper_config, field_flags, …) that made this the slowest query on the site.
+(scraper_config, resource_probes, …) that made this the slowest query on the
+site; field_flags and file_formats, the search facets, are a few keys each.
 The pinned list is NOT cached — it is one tiny row, read per request, so an
 admin's pin shows on their very next load.
 """
@@ -34,6 +35,7 @@ from app.models.organization import Organization
 from app.models.page_content import PageContent
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.services import dataset_facets
 from app.services.swr_cache import SWRCache
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,8 @@ async def _build(db: AsyncSession) -> dict:
                 TrackedDataset.organization_id, TrackedDataset.odata_dataset_id,
                 TrackedDataset.poll_interval, TrackedDataset.source_type,
                 TrackedDataset.source_url, TrackedDataset.resource_id,
+                # The search facets: a handful of booleans and format codes.
+                TrackedDataset.field_flags, TrackedDataset.file_formats,
             ),
             load_only(Organization.id, Organization.title),
             selectinload(TrackedDataset.tags),
@@ -112,6 +116,8 @@ async def _build(db: AsyncSession) -> dict:
             "source_type": ds.source_type or "ckan",
             "source_url": _build_source_url(ds),
             "tags": tags,
+            "content_fields": dataset_facets.content_fields_of(ds.field_flags),
+            "file_formats": dataset_facets.ordered_formats(ds.file_formats),
         }
         versions += card["version_count"]
         org_key = card["organization_id"] or ds.organization
@@ -153,19 +159,48 @@ async def featured_ids(db: AsyncSession) -> list[str]:
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
-def page_of(catalog: dict, featured: list[str], q: str, page: int) -> dict:
+def _facet_counts(base: list[dict], fields: list[str], formats: list[str]) -> dict:
+    """How many datasets each facet would leave, given the rest of the filter.
+
+    A content field ANDs onto the current selection, so its count is over the
+    rows the whole filter leaves; formats OR among themselves, so a format's
+    count is over the rows the content fields alone leave."""
+    by_fields = [c for c in base if dataset_facets.matches(
+        c["content_fields"], c["file_formats"], fields, [])]
+    shown = [c for c in by_fields if dataset_facets.matches(
+        c["content_fields"], c["file_formats"], [], formats)]
+    return {
+        "content_fields": {
+            name: sum(1 for c in shown if name in c["content_fields"])
+            for name in dataset_facets.CONTENT_FIELDS
+        },
+        "file_formats": {
+            code: sum(1 for c in by_fields if code in c["file_formats"])
+            for code in dataset_facets.FILE_FORMATS
+        },
+    }
+
+
+def page_of(catalog: dict, featured: list[str], q: str, page: int,
+            fields: list[str] | None = None, formats: list[str] | None = None) -> dict:
     """One page of the home list, ordered and sliced exactly as the page shows it.
 
-    Searching: every query word must appear in the haystack (order-free), and
-    the committees surface individually. Not searching: pinned datasets lead in
-    pin order, and the committees fold into one tile that takes the first slot
-    of page 1 — a slot, so every page still holds PAGE_SIZE tiles.
+    Searching (a query word, or a content-field / file-format facet): every
+    query word must appear in the haystack (order-free), every chosen content
+    field must be present and at least one chosen format; the committees
+    surface individually. Not searching: pinned datasets lead in pin order, and
+    the committees fold into one tile that takes the first slot of page 1 — a
+    slot, so every page still holds PAGE_SIZE tiles.
     """
     entries = catalog["entries"]
     tokens = q.strip().lower().split()
+    fields, formats = list(fields or []), list(formats or [])
+    base = [e["card"] for e in entries if all(t in e["hay"] for t in tokens)]         if tokens else [e["card"] for e in entries]
+    facets = _facet_counts(base, fields, formats)
     committee = None
-    if tokens:
-        shown = [e["card"] for e in entries if all(t in e["hay"] for t in tokens)]
+    if tokens or fields or formats:
+        shown = [c for c in base if dataset_facets.matches(
+            c["content_fields"], c["file_formats"], fields, formats)]
     else:
         rest = [e["card"] for e in entries if not e["committee"]]
         folded = [e["card"] for e in entries if e["committee"]]
@@ -189,6 +224,7 @@ def page_of(catalog: dict, featured: list[str], q: str, page: int) -> dict:
     items = shown[max(0, slot - offset):max(0, slot + PAGE_SIZE - offset)]
     return {
         "items": items,
+        "facets": facets,
         "total": len(shown),
         "page": page,
         "page_size": PAGE_SIZE,

@@ -22,6 +22,7 @@ from app.models.organization import Organization
 from app.models.tag import Tag, dataset_tags
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
+from app.services import dataset_facets
 
 SERVER_NAME = "over-mcp"
 SERVER_VERSION = "0.1.0"
@@ -43,13 +44,23 @@ SERVER_INSTRUCTIONS = (
 TOOLS: list[dict] = [
     {
         "name": "search_datasets",
-        "description": "חיפוש מאגרים שבמעקב גרסאות לעם לפי טקסט חופשי / ארגון / סוג מקור / תגית. מחזיר רשימה עם קישורים ותגיות. לסינון קבוצתי (למשל כל ועדות הכנסת ה-25, או כל מופעי ועדת הכספים) השתמש ב-tag; הרץ list_tags כדי לגלות שמות תגיות.",
+        "description": "חיפוש מאגרים שבמעקב גרסאות לעם לפי טקסט חופשי / סוג מקור / תגית / סוג שדות התוכן / סוג הקבצים. מחזיר רשימה עם קישורים, תגיות, content_fields (סוגי השדות שבטבלה) ו-file_formats (סוגי הקבצים בגרסאות). לסינון קבוצתי (למשל כל ועדות הכנסת ה-25, או כל מופעי ועדת הכספים) השתמש ב-tag; הרץ list_tags כדי לגלות שמות תגיות. כדי למצוא מאגרים שאפשר להצליב לפי יישוב/רשות, לנתח לאורך זמן או להציג על מפה — השתמש ב-content_fields, ואז query_dataset_rows / get_table_profile.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "טקסט חופשי לחיפוש בכותרת המאגר"},
                 "source_type": {"type": "string", "enum": ["ckan", "scraper", "govmap"], "description": "סינון לפי סוג מקור"},
                 "tag": {"type": "string", "description": "סינון למאגרים הנושאים תגית בשם זה (התאמה מדויקת, ללא תלות ברישיות). למשל 'כנסת 25', 'ועדות כנסת', או שם ועדה כמו 'ועדת הכספים'."},
+                "content_fields": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(dataset_facets.CONTENT_FIELDS)},
+                    "description": "רק מאגרים שהטבלה שלהם כוללת שדה מכל הסוגים האלה (וגם): locality = שם יישוב, authority = רשות מקומית, ministry = משרד ממשלתי, date = תאריך, geometry = מידע מרחבי (גאומטריה/קואורדינטות), parcel = גוש/חלקה. הסיווג לפי שמות העמודות, כמו בקונסולת /data.",
+                },
+                "file_formats": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(dataset_facets.FILE_FORMATS)},
+                    "description": "רק מאגרים שבגרסאות שלהם יש קובץ מאחד הסוגים האלה (או): csv, xlsx (כולל xls), json, geojson, shp, gpkg, parquet, kml, pdf, docx, xml, txt, zip.",
+                },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
@@ -120,6 +131,13 @@ TOOLS: list[dict] = [
 
 # ── tool implementations ────────────────────────────────────────────────────
 
+def _as_list(v) -> list:
+    """A tool argument a model may send as a list, a string, or not at all."""
+    if v is None:
+        return []
+    return v if isinstance(v, list) else [v]
+
+
 async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
     limit = min(int(a.get("limit") or 20), 50)
     offset = max(int(a.get("offset") or 0), 0)
@@ -138,6 +156,9 @@ async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
             .join(Tag, Tag.id == dataset_tags.c.tag_id)
             .where(func.lower(Tag.name) == tag_name.lower())
         )
+    fields = dataset_facets.parse_content_fields(_as_list(a.get("content_fields")))
+    formats = dataset_facets.parse_file_formats(_as_list(a.get("file_formats")))
+    stmt = dataset_facets.apply_filters(stmt, fields, formats, db.get_bind().dialect.name)
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
     rows = (await db.execute(stmt.order_by(TrackedDataset.title).limit(limit).offset(offset))).scalars().all()
     b = base_url(request)
@@ -146,6 +167,8 @@ async def _tool_search_datasets(request, db, user, a) -> tuple[dict, int]:
         "source_type": d.source_type, "source_url": d.source_url,
         "version_count": 0,  # filled below
         "tags": [],          # filled below
+        "content_fields": dataset_facets.content_fields_of(d.field_flags),
+        "file_formats": dataset_facets.ordered_formats(d.file_formats),
         "page_url": f"{b}/versions/{d.id}",
         "versions_url": f"{b}/api/v1/datasets/{d.id}/versions",
         **({"import_warning": d.import_warning} if d.import_warning else {}),

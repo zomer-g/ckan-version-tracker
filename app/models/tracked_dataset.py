@@ -76,6 +76,13 @@ class TrackedDataset(Base):
     field_flags: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'"), default=dict
     )
+    # Format codes of the files this dataset's versions hold, e.g.
+    # ["csv", "geojson"]; derived by app/services/dataset_facets.py (migration
+    # 076). file_formats_at = when last derived, NULL = not yet.
+    file_formats: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'"), default=list
+    )
+    file_formats_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("auth.users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

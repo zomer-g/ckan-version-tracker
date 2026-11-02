@@ -118,6 +118,50 @@ async def init_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
+    # Search facets (app/services/dataset_facets.py). file_formats: every 20
+    # minutes, re-reading only datasets that gained a version — the first runs
+    # after migration 076 backfill everything. field_flags: all flags nightly
+    # (and once shortly after boot), so a dataset tracked today is findable by
+    # its fields tomorrow; the admin endpoint recomputes on demand.
+    async def facets_file_formats_job() -> None:
+        try:
+            from app.services import dataset_facets
+            async with async_session() as db:
+                await dataset_facets.sync_file_formats(db)
+        except Exception:  # noqa: BLE001
+            logger.exception("dataset_facets file_formats sync failed")
+
+    async def facets_field_flags_job() -> None:
+        try:
+            from app.services import field_flags
+            async with async_session() as db:
+                await field_flags.recompute(db, fields=field_flags.ALL_FIELDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("field_flags scheduled recompute failed")
+
+    scheduler.add_job(
+        facets_file_formats_job,
+        trigger=IntervalTrigger(minutes=20, start_date=datetime.now(timezone.utc) + timedelta(minutes=4)),
+        id="facets_file_formats",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=600,
+    )
+    scheduler.add_job(
+        facets_field_flags_job,
+        trigger=CronTrigger(hour=4, minute=23, timezone="Asia/Jerusalem"),
+        id="facets_field_flags",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=6 * 3600,
+    )
+    scheduler.add_job(
+        facets_field_flags_job,
+        trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(minutes=9)),
+        id="facets_field_flags_catch_up",
+        replace_existing=True,
+    )
+
     # Closed history to Parquet on R2 (docs/history-phase2-plan.md), daily, and
     # a weekly HEAD of every catalog key. Crons, for the same reason as above.
     # Off until HISTORY_EXPORT_ENABLED; the admin storage tab runs it by hand.

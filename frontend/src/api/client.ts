@@ -1827,7 +1827,18 @@ export type HomeDataset = Pick<
   | "id" | "ckan_id" | "ckan_name" | "title" | "organization" | "organization_id"
   | "organization_title" | "odata_dataset_id" | "poll_interval" | "version_count"
   | "resource_name" | "source_type" | "source_url" | "tags"
->;
+> & {
+  // Search facets (app/services/dataset_facets.py): content-field names
+  // ("locality", "date", …) and file-format codes ("csv", "geojson", …).
+  content_fields: string[];
+  file_formats: string[];
+};
+
+// How many datasets each facet would leave, given the rest of the selection.
+export interface HomeFacets {
+  content_fields: Record<string, number>;
+  file_formats: Record<string, number>;
+}
 
 // One page of the home list, ordered and filtered server-side (see
 // app/services/home_catalog.py), plus the hero's catalog-wide totals.
@@ -1839,15 +1850,18 @@ export interface HomeDatasetsPage {
   // The Knesset committees folded into one tile; null while searching.
   committee: { count: number; versions: number } | null;
   stats: { datasets: number; versions: number; organizations: number };
+  facets: HomeFacets;
 }
 
 // Public API (no auth required)
 export const publicApi = {
   datasets: () => request<TrackedDataset[]>("/datasets"),
-  homeDatasets: (q: string, page: number) => {
+  homeDatasets: (q: string, page: number, fields: string[] = [], formats: string[] = []) => {
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (page > 1) p.set("page", String(page));
+    fields.forEach((f) => p.append("field", f));
+    formats.forEach((f) => p.append("format", f));
     const qs = p.toString();
     return request<HomeDatasetsPage>(`/home/datasets${qs ? `?${qs}` : ""}`);
   },
