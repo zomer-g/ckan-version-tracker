@@ -20,8 +20,11 @@ Three grains reach a parcel, and every cube declares which one it uses:
   statistical area. It is compared against the settlement and the whole
   country, per 1,000 residents, because an absolute count of cases in one area
   means nothing on its own.
-* ``gush_helka`` — already served by the deals block; listed here only so the
-  page can present every cube the same way.
+* ``gush_helka`` — a register keyed on the cadastral numbers themselves, joined
+  by equality rather than by geometry. The רמ"י tenders register lists, per
+  lot, every גוש/חלקה it was marketed on (76k rows); a polygon exists for only
+  ~1% of its lots, so the numbers are the only way most of them reach a parcel.
+  (The deals block is the other register of this grain; it rides the envelope.)
 
 Nothing here is hardcoded to a physical table. A GovMap layer's ``idx`` table is
 ``<ckan_name>_<first 8 hex of the dataset id>`` (``index_mirror.table_name``),
@@ -202,6 +205,15 @@ _SPATIAL: list[tuple[str, str, str, list[str], int, str]] = [
 ]
 
 CRIME_ID = "crime"
+TENDERS_ID = "rmi_tender_lots"
+_TENDERS_CUBE = {
+    "id": TENDERS_ID, "group": 'רמ"י', "title": 'מכרזי רמ"י — מתחמים על החלקה',
+    "grain": "gush_helka", "radius_m": None,
+    "description": ('כל מתחם שרמ"י שיווקה במכרז על הגוש והחלקה האלה: שנה, יח"ד, '
+                    "הזוכה וסכום הזכייה, הוצאות הפיתוח, ומחיר ליחידה. "
+                    "גוש וחלקה כפי שהיו בעת השיווק."),
+    "datasets": ["b252fc31-29cb-4a17-ac2e-2f22f8fa0878"],
+}
 
 
 def registry() -> list[dict]:
@@ -212,7 +224,7 @@ def registry() -> list[dict]:
         "description": ("תיקי פשיעה שפתחה משטרת ישראל באזור הסטטיסטי של החלקה, "
                         "לעומת היישוב כולו והממוצע הארצי, לכל 1,000 תושבים."),
         "datasets": [],
-    }]
+    }, dict(_TENDERS_CUBE)]
     for cid, group, title, ds, radius, desc in _SPATIAL:
         out.append({"id": cid, "group": group, "title": title, "grain": "spatial",
                     "radius_m": radius, "description": desc, "datasets": ds})
@@ -336,6 +348,8 @@ async def catalog() -> list[dict]:
     for c in registry():
         if c["grain"] == "stat_area":
             available = bool(crime)
+        elif c["grain"] == "gush_helka":
+            available = await _tenders_ready()
         else:
             available = (any(_id8(d) in idx for d in c["datasets"])
                          or bool(await _crosswalked(c, idx)))
@@ -537,8 +551,9 @@ async def probe(parcel: dict) -> dict[str, int]:
                 f"FROM public.{_qi(FEATURES_TABLE)} WHERE parcels @> ARRAY[$1]::text[] "
                 f"AND dataset_id = {nadlan_query._lit(ds)} "
                 f"AND generation = {int(state['generation'])}")
+    tenders = await _tenders_hits(parcel)
     if not parts:
-        return {}
+        return tenders
     sql = (f"WITH k AS (SELECT centroid FROM public.{_qi(PARCELS_TABLE)} "
            f"WHERE parcel_key = $1 AND centroid IS NOT NULL) "
            f"SELECT cube, sum(n)::int AS n FROM ({' UNION ALL '.join(parts)}) u GROUP BY cube")
@@ -546,8 +561,88 @@ async def probe(parcel: dict) -> dict[str, int]:
         rows = await nadlan_query._fetch(sql, parcel["parcel_key"])
     except Exception as e:  # noqa: BLE001 — counts are a nicety; the cubes still open
         logger.warning("nadlan layers: probe failed: %s", e)
+        return tenders
+    return {r["cube"]: r["n"] for r in rows} | tenders
+
+
+# ── רמ"י tenders, by גוש/חלקה ──
+async def _tenders_ready() -> bool:
+    from app.services import michrazim
+    try:
+        return await michrazim.is_ready() and "parcels" in await michrazim.tables()
+    except Exception:  # noqa: BLE001 — an optional register
+        return False
+
+
+async def _tenders_hits(parcel: dict) -> dict[str, int]:
+    from app.services import michrazim
+    if not await _tenders_ready():
         return {}
-    return {r["cube"]: r["n"] for r in rows}
+    key = (int(parcel["gush"]), int(parcel["parcel"]))
+    try:
+        counts = await michrazim.parcel_counts([key])
+    except Exception as e:  # noqa: BLE001 — counts are a nicety
+        logger.warning("nadlan layers: tenders probe failed: %s", e)
+        return {}
+    return {TENDERS_ID: counts.get(key, 0)}
+
+
+#: (key, Hebrew label) of a tender lot, in the order a reader wants them.
+TENDER_LOT_LABELS: list[tuple[str, str]] = [
+    ("tender_number", "מכרז"), ("year", "שנה"), ("tender_type", "סוג מכרז"),
+    ("purpose", "ייעוד"), ("committee_date", "ועדת מכרזים"), ("status", "סטטוס"),
+    ("settlement", "יישוב"), ("lot_name", "מתחם"), ("units", 'יח"ד'),
+    ("area_sqm", 'שטח (מ"ר)'), ("winner", "זוכה"), ("winning_amount", "סכום זכייה (₪)"),
+    ("amount_per_unit", 'סכום זכייה ליח"ד (₪)'), ("dev_costs", "הוצאות פיתוח (₪)"),
+    ("dev_costs_per_unit", 'הוצאות פיתוח ליח"ד (₪)'), ("threshold_price", "מחיר סף (₪)"),
+    ("bids", "מספר הצעות"), ("max_price", "מחיר מקסימום"),
+    ("reduced_consideration", "תמורה מופחתת"), ("gush_helka", "גושים וחלקות במתחם"),
+    ("plans", "תוכניות ומגרשים"), ("tender_url", "דף המכרז"),
+]
+
+
+def _fmt(key: str, v) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)) and key not in ("year",):
+        return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.2f}"
+    return _clean(v)
+
+
+def tender_lot_feature(lot: dict) -> dict:
+    """One lot as a cube feature: labelled fields, the tender page as a link,
+    and the per-sqm caveat on the lots whose amount is a sqm price."""
+    fields = []
+    for key, label in TENDER_LOT_LABELS:
+        val = _fmt(key, lot.get(key))
+        if val is None:
+            continue
+        f = {"key": key, "label": label, "value": val}
+        if key == "tender_url":
+            f["url"], f["value"] = val, "פתיחה באתר רמ\"י"
+        fields.append(f)
+    if lot.get("amount_basis") == "per_sqm_suspected":
+        fields.insert(0, {"key": "amount_basis", "label": "שימו לב",
+                          "value": 'סכום הזכייה כאן נראה כמחיר למ"ר דירה ולא כמחיר הקרקע '
+                                   '(מכרז מחיר למשתכן / מחיר מטרה)'})
+    return {"dataset_id": _TENDERS_CUBE["datasets"][0], "distance_m": 0.0, "fields": fields}
+
+
+async def tenders_cube(parcel: dict) -> dict:
+    from app.services import michrazim
+    if not await _tenders_ready():
+        return {"available": False}
+    res = await michrazim.parcel_lots(int(parcel["gush"]), int(parcel["parcel"]),
+                                      limit=MAX_FEATURES)
+    return {"available": True,
+            "features": [tender_lot_feature(r) for r in res["lots"]],
+            "count": res["total"],
+            "sources": [{"dataset_id": michrazim.DATASET_ID,
+                         "table": "מכרזי רמ\"י — מתחמים + גושים וחלקות",
+                         "page_url": michrazim.VERSIONS_URL,
+                         "row_url": res.get("row_url")}],
+            "notes": list(res.get("notes") or []) + [michrazim.CAVEATS[3],
+                                                      michrazim.CAVEATS[4]]}
 
 
 # ── crime ──

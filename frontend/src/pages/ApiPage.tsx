@@ -15,6 +15,7 @@ import Abbr from "../components/a11y/Abbr";
  *   • שאלות לעם — cross-source deep search   (/api/deep-search)
  *   • נדל"ן לעם — one property, every identity (/api/nadlan)
  *   • עסקאות נדל"ן — the מיסוי מקרקעין register (/api/deals)
+ *   • מכרזי רמ"י — the Israel Land Authority's land tenders (/api/michrazim)
  *   • שקיפות מחירים — every food retailer as one market (/api/prices)
  *   • SQL       — every queryable table + GeoJSON (/api/tables)
  * Each source also has a dedicated MCP server (see MCP_SERVERS / McpCard) —
@@ -530,6 +531,53 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
     ],
   },
   {
+    id: "michrazim",
+    title: 'מכרזי רמ"י — מכרזי המקרקעין של רשות מקרקעי ישראל',
+    note: "כל מכרזי המקרקעין של רמ\"י מ-2000, ברמת המתחם (מגרש): יח\"ד, שטח, הזוכה, סכום הזכייה, הוצאות פיתוח, מחיר סף, מספר הצעות, וגוש/חלקה. כתובת בסיס: /api/michrazim. · /lots ו-/series מקבלות את אותם מסננים בדיוק. · מתחם הוא (מזהה מכרז, מזהה מתחם): מתחם שלא נמכר משווק שוב באותו מזהה. · amount_basis מבדיל בין מחיר קרקע (lot_total, שרק לו מחושב amount_per_unit) לבין מחיר מ\"ר דירה במכרזי מחיר למשתכן / מחיר מטרה (per_sqm_suspected). סכום הזכייה אינו כולל הוצאות פיתוח. · כל תשובה מחזירה console_sql ו-row_url — אותה שאילתה להרצה ב-/data. processed=false.",
+    endpoints: [
+      {
+        path: "/api/michrazim/lots",
+        description: "המתחמים, מסוננים וממוינים — שורה לכל (מכרז, מתחם), עם amount_basis, מחיר ליח\"ד והוצאות פיתוח ליח\"ד.",
+        params: [
+          { name: "settlement", desc: "יישוב, בכתיב של רמ\"י או בשם הרשמי" },
+          { name: "year_from / year_to", desc: "שנת המכרז (שנת השיווק, כפי שהיא במספר המכרז)" },
+          { name: "won_only", desc: "true = רק מתחמים עם זוכה וסכום" },
+          { name: "amount_basis", desc: "lot_total | per_sqm_suspected" },
+          { name: "gush / helka", desc: "מתחמים ששווקו על גוש וחלקה" },
+          { name: "min_units, status, tender_id", desc: "מסננים נוספים" },
+          { name: "tender_type / purpose", desc: "סוג מכרז / ייעוד — כשטבלת המכרזים טעונה" },
+          { name: "sort", desc: "year_desc | year_asc | amount_desc | per_unit_desc | per_unit_asc | bids_desc" },
+        ],
+        example: "/api/michrazim/lots?settlement=באר שבע&won_only=true&amount_basis=lot_total&limit=20",
+      },
+      {
+        path: "/api/michrazim/series",
+        description: "לכל שנת מכרז: מתחמים ששווקו, שנמכרו ושלא קיבלו הצעות, יח\"ד, וחציוני מחיר הקרקע ליח\"ד, הוצאות הפיתוח ליח\"ד, עלות הקרקע הכוללת ליח\"ד ומחיר מ\"ר דירה.",
+        example: "/api/michrazim/series?settlement=באר שבע&year_from=2015",
+      },
+      {
+        path: "/api/michrazim/tender/{tender_id}",
+        description: "מכרז אחד במלואו: מתחמים, כל ההצעות, גושים וחלקות, תוכניות ומסמכים (בלי מספרי זהות של מציעים).",
+        example: "/api/michrazim/tender/20240134",
+      },
+      {
+        path: "/api/michrazim/parcel/{gush}/{helka}",
+        description: "כל המתחמים ששווקו על גוש וחלקה — אותה רשימה שמופיעה בקוביית רמ\"י בעמוד הנכס בנדל\"ן לעם.",
+        example: "/api/michrazim/parcel/20993/41",
+      },
+      {
+        path: "/api/michrazim/settlements",
+        description: "היישובים בכתיב של רמ\"י, עם מספר המתחמים והמכרזים והקוד הרשמי שאליו כל שם מזוהה — המפתח לחיבור עם עסקאות ועם כל מאגר אחר.",
+        example: "/api/michrazim/settlements",
+      },
+      {
+        path: "/api/michrazim/stats",
+        description: "אילו טבלאות של המאגר טעונות, כמה מתחמים ומכרזים, ומאיזו שנה עד איזו.",
+        example: "/api/michrazim/stats",
+      },
+    ],
+  },
+  {
     id: "prices",
     title: "שקיפות מחירים — מחירי המזון בכל הרשתות",
     note: "כ-30 רשתות מזון, שכל אחת מפרסמת בפורמט שלה ונאספת כאן כמאגר נפרד פעם ביום, מתושאלות דרך /api/prices כשוק אחד. · הבסיס הוא שש טבלאות אחידות — prices_market (כל מצב מחיר בכל סניף, עם שם המוצר, הסניף והעיר), prices_products, prices_stores, prices_promotions, prices_promotion_items ו-prices_coverage — שמאחדות את כל הרשתות בסכמה אחת. אותן טבלאות בדיוק זמינות בשמן בקונסולת /data, ב-POST /api/tables/sql ובשרת ה-SQL MCP, וכל תשובה של /table מחזירה console_sql ו-row_url — אותה שאילתה להרצה ב-/data. · שורה היא מצב, לא קריאה: last_seen_date ריק (NULL) = המחיר עדיין בתוקף, ו-as_of הוא תאריך הקובץ האחרון של הסניף. · ההתאמה בין רשתות היא לפי ברקוד בלי אפסים מובילים (item_code_bare). מבצעים אינם מקוזזים מהמחיר. processed=false: הערכים כפי שהרשתות פרסמו.",
@@ -691,15 +739,15 @@ const MCP_SERVERS: {
     path: "/nadlan/mcp",
     purpose:
       "שואלים בשפה חופשית על נכס — \"מה יש בגוש 6319 חלקה 225\", \"מה הכתובת הזו\" — ומקבלים את כל צורות הזיהוי האחרות: גוש, חלקה ותת-גוש, יישוב ומחוז, כתובות ומיקודים, הנקודה על המפה, האזור הסטטיסטי (א\"ס) עם אוכלוסייה ומדד חברתי-כלכלי, וסיכום עסקאות מיסוי מקרקעין. השרת יודע את המלכודות שמפילות תשובה שנראית נכונה: צמד גוש-חלקה עמום, שיוך כתובת שהוא ספציאלי ולא השוואת מחרוזות, ומדד חברתי-כלכלי שמתפרסם על חלוקת אזורים אחרת.",
-    tools: ["lookup_property", "parcel_deals", "suggest_streets", "parcel_geometry", "coverage_stats"],
+    tools: ["lookup_property", "parcel_deals", "parcel_tenders", "suggest_streets", "parcel_geometry", "coverage_stats"],
   },
   {
     key: "deals",
     label: 'עסקאות נדל"ן — מאגר מיסוי מקרקעין',
     path: "/deals/mcp",
     purpose:
-      "שאלות בשפה חופשית על שוק הנדל\"ן מעל 3.84 מיליון עסקאות מדווחות מ-1998: כמה נמכר, באיזה מחיר, איך זה השתנה לאורך השנים, ואיפה עלה או ירד יותר מכל. כל חישוב הוא חציון ולא ממוצע (שורה אחת יכולה להיות דירה או בניין שלם), ההשוואה בין יישובים דורשת מינימום עסקאות בשתי השנים, והסינון לפי יישוב הוא לפי השם — ל-17.5% מהשורות אין קוד יישוב במקור.",
-    tools: ["search_deals", "price_series", "compare_settlements", "list_settlements", "list_deal_types", "parcel_deals", "register_stats"],
+      "שאלות בשפה חופשית על שוק הנדל\"ן מעל 3.84 מיליון עסקאות מדווחות מ-1998: כמה נמכר, באיזה מחיר, איך זה השתנה לאורך השנים, ואיפה עלה או ירד יותר מכל. כל חישוב הוא חציון ולא ממוצע (שורה אחת יכולה להיות דירה או בניין שלם), ההשוואה בין יישובים דורשת מינימום עסקאות בשתי השנים, והסינון לפי יישוב הוא לפי השם — ל-17.5% מהשורות אין קוד יישוב במקור. באותו שרת גם מכרזי רמ\"י: מחירי הקרקע והדירות במכרזים לפי מתחם, יישוב ושנה, והחיבור ביניהם לבין העסקאות על אותו גוש וחלקה.",
+    tools: ["search_deals", "price_series", "compare_settlements", "list_settlements", "list_deal_types", "parcel_deals", "register_stats", "search_tender_lots", "tender_price_series", "get_tender", "parcel_tenders", "list_tender_settlements", "tender_register_stats"],
   },
   {
     key: "prices",

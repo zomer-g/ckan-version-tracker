@@ -248,6 +248,8 @@ async def nadlan_parcel_layer(
     parcel = await _parcel_or_404(gush, helka, suffix)
     if c["grain"] == "stat_area":
         body = await nadlan_layers.crime_cube(parcel, year)
+    elif c["grain"] == "gush_helka":
+        body = await nadlan_layers.tenders_cube(parcel)
     else:
         body = await nadlan_layers.spatial_cube(c, parcel)
     meta = {k: v for k, v in c.items() if k != "datasets"}

@@ -146,7 +146,9 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
     <div>
       {feats.length === 0 ? (
         <div className="text-sm text-muted">
-          {radius ? `אין רשומות בשכבה בתוך ${radius} מ׳ מהחלקה.` : "החלקה אינה בתוך אף רשומה בשכבה."}
+          {data.cube.grain === "gush_helka"
+            ? "לא נמצאו רשומות על הגוש והחלקה האלה."
+            : radius ? `אין רשומות בשכבה בתוך ${radius} מ׳ מהחלקה.` : "החלקה אינה בתוך אף רשומה בשכבה."}
         </div>
       ) : (
         <div style={{ display: "grid", gap: "0.45rem" }}>
@@ -177,6 +179,11 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
             <div className="text-sm text-muted">מוצגות {feats.length} מתוך {data.count}.</div>
           )}
         </div>
+      )}
+      {data.notes && data.notes.length > 0 && (
+        <ul className="text-muted" style={{ fontSize: "0.75rem", margin: "0.35rem 0 0", paddingInlineStart: "1.1rem", lineHeight: 1.6 }}>
+          {data.notes.map((nt, i) => <li key={i}>{nt}</li>)}
+        </ul>
       )}
       {data.sources && data.sources.length > 0 && (
         <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.35rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>

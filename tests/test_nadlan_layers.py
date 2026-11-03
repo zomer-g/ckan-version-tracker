@@ -26,7 +26,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.nadlan import router as nadlan_router
 from app.rate_limit import limiter
-from app.services import column_aliases, nadlan_layers, nadlan_query
+from app.services import column_aliases, michrazim, nadlan_layers, nadlan_query
 
 _PARCEL = {
     "parcel_key": "6319-0-225", "gush": 6319, "gush_suffix": 0, "parcel": 225,
@@ -40,8 +40,10 @@ _TABA = "govmap_357_d9a9ad35_2156f30e"
 def _fresh():
     nadlan_layers.invalidate_caches()
     nadlan_layers._years_cache.clear()
+    michrazim.invalidate_cache()
     yield
     nadlan_layers.invalidate_caches()
+    michrazim.invalidate_cache()
 
 
 def _stub_tables(monkeypatch, idx=None, public=None):
@@ -62,7 +64,7 @@ def test_registry_ids_are_unique_and_well_formed():
     assert len(ids) == len(set(ids))
     for c in reg:
         assert re.fullmatch(r"[a-z0-9_]+", c["id"]), c["id"]
-        assert c["grain"] in ("spatial", "stat_area")
+        assert c["grain"] in ("spatial", "stat_area", "gush_helka")
         for ds in c["datasets"]:
             uuid.UUID(ds)  # a typo in an id would silently never resolve
         if c["grain"] == "spatial":
