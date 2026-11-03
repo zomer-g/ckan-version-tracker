@@ -544,3 +544,68 @@ def test_convert_sld_checks_the_columns_it_is_given():
     assert any("kvuz_yeud" in w for w in warnings)
     _, warnings = _convert(KVUZ_RULES, columns=["kvuz_yeud"])
     assert not warnings
+
+
+# ── the scale-aware layer file ──────────────────────────────────────────
+
+HATCH_ONLY_RULE = """
+<Rule><Title>קווקוו</Title>
+  <ogc:Filter><ogc:PropertyIsEqualTo><ogc:PropertyName>name_h</ogc:PropertyName>
+    <ogc:Literal>חיפה</ogc:Literal></ogc:PropertyIsEqualTo></ogc:Filter>
+  <PolygonSymbolizer><Fill><GraphicFill><Graphic>
+  <Mark><WellKnownName>shape://slash</WellKnownName>
+    <Stroke><CssParameter name="stroke">#006064</CssParameter></Stroke>
+  </Mark><Size>8</Size></Graphic></GraphicFill></Fill></PolygonSymbolizer></Rule>"""
+
+
+def test_a_polygon_style_gets_a_detail_and_an_overview_layer_by_scale():
+    # Outlines and hatches in points drown a million-parcel layer at small
+    # scales (user report on layer 11, 2026-11-03).
+    doc, _ = _convert(POLY_RULE + HATCH_ONLY_RULE)
+    scaled = lyrx.scaled_document(doc)
+    group, detail, overview = scaled["layerDefinitions"]
+    assert scaled["layers"] == [group["uRI"]]
+    assert group["type"] == "CIMGroupLayer"
+    assert group["layers"] == [detail["uRI"], overview["uRI"]]
+    assert detail["minScale"] == lyrx.DETAIL_SCALE and not detail.get("maxScale")
+    assert overview["maxScale"] == lyrx.DETAIL_SCALE and not overview.get("minScale")
+    # The detail layer is the full style, untouched.
+    assert detail["renderer"] == _layer(doc)["renderer"]
+    classes = {c["label"]: c["symbol"]["symbol"]["symbolLayers"]
+               for c in overview["renderer"]["groups"][0]["classes"]}
+    assert [s["type"] for s in classes["אילת"]] == ["CIMSolidFill"]
+    # A hatch-only class keeps its colour as a fill instead of vanishing.
+    assert [s["type"] for s in classes["קווקוו"]] == ["CIMSolidFill"]
+    assert classes["קווקוו"][0]["color"]["values"][:3] == [0, 96, 100]
+    # The plain document is not changed by building the scaled one.
+    assert len(_layer(doc)["renderer"]["groups"][0]["classes"][0]["symbol"]["symbol"]
+               ["symbolLayers"]) > 1
+
+
+def test_line_and_point_styles_get_no_scaled_file():
+    assert lyrx.scaled_document(_convert(SINGLE_LINE_RULE)[0]) is None
+    assert lyrx.scaled_document(_convert(RANGE_RULES)[0]) is None
+
+
+def test_a_style_hidden_at_small_scales_already_needs_no_overview():
+    body = POLY_RULE.replace("<ogc:Filter>", "<MaxScaleDenominator>20000</MaxScaleDenominator>"
+                             "<ogc:Filter>", 1)
+    doc, _ = _convert(body)
+    assert _layer(doc)["minScale"] == 20000
+    assert lyrx.scaled_document(doc) is None
+
+
+def test_the_bundle_ships_the_scaled_file_and_explains_it():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("שכבה_11.sld", _sld(POLY_RULE))
+    out = zipfile.ZipFile(io.BytesIO(lyrx.convert_bundle(buf.getvalue())))
+    assert "שכבה_11.lyrx" in out.namelist()
+    scaled = json.loads(out.read("שכבה_11" + lyrx.SCALED_SUFFIX))
+    assert scaled["layerDefinitions"][0]["type"] == "CIMGroupLayer"
+    readme = out.read("README_ArcGIS.txt").decode("utf-8")
+    assert "1:50,000" in readme and lyrx.SCALED_SUFFIX in readme
+    # A point bundle has no scaled file and no paragraph about one.
+    out = zipfile.ZipFile(io.BytesIO(lyrx.convert_bundle(_bundle())))
+    assert not any(n.endswith(lyrx.SCALED_SUFFIX) for n in out.namelist())
+    assert "1:50,000" not in out.read("README_ArcGIS.txt").decode("utf-8")

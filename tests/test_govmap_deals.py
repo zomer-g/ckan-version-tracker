@@ -7,6 +7,7 @@ The Parquet stores every column as a string and an absent value as the string
 import datetime
 import os
 import struct
+from decimal import Decimal
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -56,6 +57,23 @@ def test_the_string_none_is_null_and_types_are_parsed():
     assert row["settlement_en"] is None and row["floor"] is None   # "None" → NULL
     assert row["rooms"] == 4.5 and row["gush"] == 19592 and row["sub_parcel"] == 12
     assert (row["lon"], row["lat"]) == (35.08, 33.0)
+
+
+def test_a_typed_parquet_reads_the_same_as_a_string_one():
+    # The worker types number and date columns since 2026-11-03.
+    import datetime as dt
+    batch = pa.RecordBatch.from_pydict({
+        "geometry": [_multipoint(35.08, 33.0)],
+        "objectId": ["689264"], "dealId": [5009467160],
+        "dealDate": pa.array([dt.datetime(2021, 2, 13)], pa.timestamp("ms", tz="UTC")),
+        "dealAmount": [1950000], "assetArea": [130.5], "gushNum": [19592],
+    })
+    [rec] = g.records_from_batch(batch)
+    row = dict(zip([c for c, *_ in g.COLUMNS] + ["lon", "lat"], rec))
+    assert row["deal_date"].isoformat() == "2021-02-13"
+    assert row["deal_date_raw"] == "2021-02-13T00:00:00.000Z"
+    assert row["deal_amount"] == 1950000 and row["deal_id"] == 5009467160
+    assert row["asset_area"] == Decimal("130.5") and row["gush"] == 19592
 
 
 def test_an_impossible_date_is_kept_raw_and_not_parsed():

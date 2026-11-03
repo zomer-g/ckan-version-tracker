@@ -35,7 +35,7 @@ import os
 import re
 import struct
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
@@ -89,6 +89,12 @@ _DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 def _text(v):
     if v is None:
         return None
+    if isinstance(v, datetime):
+        # The worker types a date column as a UTC timestamp (2026-11-03);
+        # ``deal_date_raw`` keeps the form GovMap publishes either way.
+        if v.tzinfo is not None:
+            v = v.astimezone(timezone.utc)
+        return v.strftime("%Y-%m-%dT%H:%M:%S.") + f"{v.microsecond // 1000:03d}Z"
     s = str(v).strip()
     return None if s in _ABSENT else s
 

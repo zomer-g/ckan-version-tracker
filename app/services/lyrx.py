@@ -1358,6 +1358,110 @@ def convert_sld(xml: str | bytes, *, name: str,
     return doc, warnings
 
 
+# Where the scale-aware layer file switches from the overview to GovMap's full
+# symbology. GovMap's zoom ladder steps 35,000 → 70,000; the full style reads
+# well up to ~1:45,000 (user report, 2026-11-03), so the switch sits between.
+DETAIL_SCALE = 50000
+
+
+def _overview_symbol(symbol: dict) -> dict:
+    """A polygon symbol for small scales: its fills only.
+
+    Strokes and hatches are sized in points, so at 1:500,000 every parcel of a
+    million-feature layer draws a full-width outline and hatch — the layer turns
+    into a mass of lines that hides the land use ("פיצוצים", user report on layer
+    11). A hatch-only class keeps its colour as a plain fill; an outline-only
+    class keeps a hairline.
+    """
+    if symbol.get("type") != "CIMPolygonSymbol":
+        return symbol
+    layers = symbol.get("symbolLayers") or []
+    fills = [lyr for lyr in layers if lyr.get("type") == "CIMSolidFill"]
+    if not fills:
+        for lyr in layers:
+            if lyr.get("type") == "CIMHatchFill":
+                strokes = (lyr.get("lineSymbol") or {}).get("symbolLayers") or []
+                if strokes and strokes[0].get("color"):
+                    fills = [{"type": "CIMSolidFill", "enable": True,
+                              "color": strokes[0]["color"]}]
+                    break
+    if not fills:
+        fills = [{**lyr, "width": min(lyr.get("width", 0.4), 0.4)}
+                 for lyr in layers if lyr.get("type") == "CIMSolidStroke"][:1]
+    return {**symbol, "symbolLayers": fills}
+
+
+def _symbol_refs(renderer: dict) -> list[dict]:
+    refs = [renderer.get("symbol"), renderer.get("defaultSymbol")]
+    refs += [c.get("symbol") for g in renderer.get("groups") or []
+             for c in g.get("classes") or []]
+    refs += [b.get("symbol") for b in renderer.get("breaks") or []]
+    return [r for r in refs if r and r.get("symbol")]
+
+
+def _overview_renderer(renderer: dict) -> dict:
+    r = json.loads(json.dumps(renderer))
+    for ref in _symbol_refs(r):
+        ref["symbol"] = _overview_symbol(ref["symbol"])
+    return r
+
+
+def scaled_document(doc: dict) -> dict | None:
+    """The layer as a group of two that draw at different scales: GovMap's full
+    symbology from ``DETAIL_SCALE`` inward, and fills only beyond it.
+
+    GovMap never shows its vector style at country scale — the map there is a
+    picture its server renders — so a GIS drawing the same style over a whole
+    polygon layer shows what GovMap never does. A separate file rather than a
+    change to the plain one: Apply Symbology From Layer takes a single feature
+    layer, and the plain file is what it needs. None when the layer is not a
+    polygon layer, or when the style already hides it beyond ``DETAIL_SCALE``.
+    """
+    layer = doc["layerDefinitions"][0]
+    renderer = layer.get("renderer")
+    if not renderer or {r["symbol"].get("type") for r in _symbol_refs(renderer)} \
+            != {"CIMPolygonSymbol"}:
+        return None
+    if layer.get("minScale") and layer["minScale"] <= DETAIL_SCALE:
+        return None
+    base = layer["uRI"].rsplit(".xml", 1)[0]
+    title = layer["name"]
+    scale = f"1:{DETAIL_SCALE:,}"
+
+    detail = json.loads(json.dumps(layer))
+    detail.update(uRI=f"{base}_detail.xml", name=f"{title} — פירוט (עד {scale})",
+                  minScale=DETAIL_SCALE)
+
+    overview = json.loads(json.dumps(layer))
+    overview.update(uRI=f"{base}_overview.xml", name=f"{title} — מבט על (מעבר ל-{scale})",
+                    maxScale=DETAIL_SCALE, renderer=_overview_renderer(renderer),
+                    labelVisibility=False,
+                    description="מילוי בלבד, בלי קווי מתאר וקווקוו, לקני מידה קטנים. "
+                                + layer.get("description", ""))
+    overview.pop("labelClasses", None)
+
+    group = {
+        "type": "CIMGroupLayer",
+        "name": title,
+        "uRI": f"{base}_group.xml",
+        "description": f"הסימבולוגיה של GovMap עד {scale}, ומילוי בלבד מעבר לו",
+        "layerType": "Operational",
+        "showLegends": True,
+        "visibility": True,
+        "displayCacheType": "Permanent",
+        "maxDisplayCacheAge": 5,
+        "showPopups": True,
+        "serviceLayerID": -1,
+        "refreshRate": -1,
+        "refreshRateUnit": "esriTimeUnitsSeconds",
+        "expanded": True,
+        "layers": [detail["uRI"], overview["uRI"]],
+        "sublayerVisibilityMode": "Independent",
+    }
+    return {**doc, "layers": [group["uRI"]],
+            "layerDefinitions": [group, detail, overview]}
+
+
 def lyrx_bytes(doc: dict) -> bytes:
     """The document as the UTF-8 JSON ArcGIS Pro expects in a ``.lyrx``."""
     return json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1395,8 +1499,24 @@ _README = """\
 * הסיווג נשען על שמות השדות המקוריים (machine names) שבהם משתמש ה-SLD. הפירוש
   שלהם בעברית נמצא בקובץ מילון השדות שבחבילה.
 * גדלים הומרו מפיקסלים (SLD) לנקודות (ArcGIS) ביחס של 0.75.
-{warnings}
+{scaled}{warnings}
 מקור: {source}
+"""
+
+
+SCALED_SUFFIX = "_לפי_קנה_מידה.lyrx"
+
+_SCALED_NOTE = """
+קובץ "לפי קנה מידה"
+-------------------
+ב-GovMap הסימבולוגיה הווקטורית לא מוצגת בקנה מידה ארצי — שם המפה היא תמונה
+שהשרת מצייר. מי שמצייר את אותו סגנון על כל השכבה ב-ArcGIS מקבל בקנה מידה קטן
+המון קווי מתאר וקווקוו שמסתירים את הייעודים. הקובץ הזה הוא שכבת קבוצה עם שתי
+שכבות על אותם נתונים:
+  * פירוט — הסימבולוגיה המלאה של GovMap, מוצגת מ-{scale} ופנימה
+  * מבט על — מילוי בלבד, בלי קווי מתאר וקווקוו, מוצגת מעבר ל-{scale}
+גררו אותו למפה, ואז Change Data Source לשתי השכבות שבו (או Replace Data Sources
+על המפה כולה). Apply Symbology From Layer עובד רק עם הקובץ הרגיל.
 """
 
 
@@ -1409,6 +1529,8 @@ def _readme(entries: list[str], warnings: list[str], source: str) -> bytes:
     body = _README.format(
         files="\n".join(f"  {e}" for e in entries),
         dataset=_PLACEHOLDER_DATASET,
+        scaled=(_SCALED_NOTE.format(scale=f"1:{DETAIL_SCALE:,}")
+                if any(SCALED_SUFFIX in e for e in entries) else ""),
         warnings=warn_block,
         source=source,
     )
@@ -1479,6 +1601,11 @@ def convert_bundle(zip_bytes: bytes, *, source_url: str = "over.org.il") -> byte
             entry = f"{stem}.lyrx"
             out.writestr(entry, lyrx_bytes(doc))
             entries.append(f"{entry} — קובץ שכבה ל-ArcGIS Pro")
+            scaled = scaled_document(doc)
+            if scaled:
+                entry = f"{stem}{SCALED_SUFFIX}"
+                out.writestr(entry, lyrx_bytes(scaled))
+                entries.append(f"{entry} — אותה שכבה, מותאמת לקני מידה (ראו למטה)")
         if not entries:
             raise LyrxError("no SLD in the bundle could be converted")
         for n in names:
