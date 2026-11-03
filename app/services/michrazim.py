@@ -181,27 +181,17 @@ def match_roles(cols_by_table: dict[str, list], sizes: dict | None = None
 
 async def _catalog_tables() -> dict[str, tuple[str, int]] | None:
     """``{table: (dataset_id, tables in that dataset)}`` for the public tables of
-    every dataset's CURRENT version — the /data catalog, cached there. None when
-    the catalog cannot be read (no main DB in this process).
+    every dataset's CURRENT version (source_tables.catalog_tables), or None.
 
     Why the catalog and not the raw schema alone: when a dataset changes shape
     its superseded tables stay in the schema until they are purged. The first
     michrazim version held all seven tables in one dataset; after the split one
     dataset per table, the old copies are not current and must not answer."""
-    try:
-        from app.database import async_session
-        from app.services import data_catalog
-        async with async_session() as db:
-            recs = await data_catalog.build_catalog(db)
-    except Exception:  # noqa: BLE001
-        logger.debug("michrazim: catalog unavailable", exc_info=True)
+    from app.services import source_tables
+    cat = await source_tables.catalog_tables()
+    if cat is None:
         return None
-    per_ds: dict[str, int] = {}
-    for r in recs:
-        if r.get("schema") == "public" and r.get("dataset_id"):
-            per_ds[r["dataset_id"]] = per_ds.get(r["dataset_id"], 0) + 1
-    return {r["table"]: (r["dataset_id"], per_ds[r["dataset_id"]]) for r in recs
-            if r.get("schema") == "public" and r.get("dataset_id")}
+    return {t: (v["dataset_id"], v["n_tables"]) for t, v in cat.items()}
 
 
 _datasets: dict[str, str] = {}

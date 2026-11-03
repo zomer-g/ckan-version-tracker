@@ -411,8 +411,34 @@ def rows_from_over(detail: list[dict], summary: list[dict],
     return out_d, out_s
 
 
+#: The Knesset expenses tables by their columns. Since the split (one dataset
+#: per table) each is its own dataset's primary resource, so its resource name
+#: no longer says which table it is; the columns do. The summary's columns are
+#: a subset of the transactions', hence the exclusion.
+def _roles():
+    from app.services.source_tables import Role
+    return {
+        DETAIL_RESOURCE: Role(frozenset({_C_YEAR, _C_MK, _C_CAT, _C_SUPPLIER, _C_AMOUNT})),
+        SUMMARY_RESOURCE: Role(frozenset({_C_YEAR, _C_MK, _C_CAT, _C_AMOUNT}),
+                               exclude=frozenset({_C_SUPPLIER})),
+        EXPLAIN_RESOURCE: Role(frozenset({_C_YEAR, _C_CAT, _C_EXPLAIN})),
+    }
+
+
+#: Every dataset of the mkexpenses manifest source carries this ckan_id prefix.
+MK_EXPENSES_CKAN_PREFIX = "mkexpenses-scraper-"
+
+
 async def _over_tables(dataset_id: str) -> dict[str, str]:
-    """{resource name: append-DB table} for the tracked dataset."""
+    """{resource name: append-DB table} for the Knesset expenses.
+
+    By column signature across the source's datasets (one per table since the
+    split); the configured dataset's own resources by name remain the fallback,
+    for a deployment whose catalog this process cannot read."""
+    from app.services import source_tables
+    found = await source_tables.find(_roles(), ckan_prefix=MK_EXPENSES_CKAN_PREFIX)
+    if found:
+        return {role: f["table"] for role, f in found.items()}
     import uuid as _uuid
     from app.database import async_session
     from app.models.tracked_dataset import TrackedDataset
