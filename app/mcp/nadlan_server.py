@@ -352,7 +352,7 @@ async def _tool_parcel_tenders(request, db, user, a) -> tuple[dict, int]:
     gush, helka = int(a["gush"]), int(a["helka"])
     res = await michrazim.parcel_lots(gush, helka, limit=_clamp(a.get("limit"), 1, 200, 50))
     return {"source": 'מכרזי רמ"י — רשות מקרקעי ישראל, דרך גרסאות לעם',
-            "versions_url": michrazim.VERSIONS_URL, "processed": False,
+            "datasets": await michrazim.dataset_links(), "processed": False,
             "gush": gush, "helka": helka, **res,
             "caveats": michrazim.CAVEATS}, len(res["lots"])
 

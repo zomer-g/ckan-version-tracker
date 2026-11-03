@@ -77,9 +77,14 @@ def _tb(without=()):
 
 
 @pytest.fixture(autouse=True)
-def _fresh():
+def _fresh(monkeypatch):
     michrazim.invalidate_cache()
     nadlan_layers.invalidate_caches()
+
+    async def _no_catalog():
+        return None
+
+    monkeypatch.setattr(michrazim, "_catalog_tables", _no_catalog)
     yield
     michrazim.invalidate_cache()
 
@@ -119,6 +124,33 @@ async def test_tables_are_found_by_signature_not_name(monkeypatch):
     assert set(tb) == {"lots"}
     assert tb["lots"][1] == "append_anything_12345678"
     assert await michrazim.is_ready()
+
+
+@pytest.mark.asyncio
+async def test_after_the_split_each_table_answers_from_its_own_dataset(monkeypatch):
+    """The first version held every table in one dataset (b252fc31). After the
+    split each table is a dataset of its own; while both exist the per-table
+    dataset answers, and a table the catalog no longer lists (a superseded
+    version's) never does."""
+    old_lots, new_lots = P + "d849f194", "append_michrazim_lots_1a2b3c4d_aaaaaaaa"
+    stale_plans = P + "ba6004b3"
+    _stub_tables(monkeypatch, {old_lots: LOT_COLUMNS + _ARCHIVE,
+                               new_lots: LOT_COLUMNS + _ARCHIVE,
+                               P + "8302b80d": PARCEL_COLUMNS + _ARCHIVE,
+                               stale_plans: PLAN_COLUMNS + _ARCHIVE})
+
+    async def _catalog():
+        return {old_lots: (michrazim.DATASET_ID, 2), P + "8302b80d": (michrazim.DATASET_ID, 2),
+                new_lots: ("1a2b3c4d-0000-4000-8000-000000000000", 1)}
+
+    monkeypatch.setattr(michrazim, "_catalog_tables", _catalog)
+    tb = await michrazim.tables()
+    assert tb["lots"][1] == new_lots
+    assert "plans" not in tb                      # not in any current version
+    assert michrazim.dataset_of("lots").startswith("1a2b3c4d")
+    assert michrazim.dataset_of("parcels") == michrazim.DATASET_ID
+    links = await michrazim.dataset_links()
+    assert links["lots"].endswith("/versions/1a2b3c4d-0000-4000-8000-000000000000")
 
 
 # ── SQL ───────────────────────────────────────────────────────────────────────

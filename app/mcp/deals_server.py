@@ -469,9 +469,13 @@ async def _tool_stats(request, db, user, a) -> tuple[dict, int]:
 TENDER_SOURCE = {
     "source": 'מכרזי רמ"י — אתר מכרזי המקרקעין של רשות מקרקעי ישראל, דרך גרסאות לעם',
     "source_url": michrazim.SOURCE_URL,
-    "versions_url": michrazim.VERSIONS_URL,
     "processed": False,
 }
+
+
+async def _tender_source() -> dict:
+    # One dataset per table: say which dataset each part of an answer is from.
+    return {**TENDER_SOURCE, "datasets": await michrazim.dataset_links()}
 
 
 async def _require_tenders() -> None:
@@ -491,14 +495,14 @@ async def _tool_tender_lots(request, db, user, a) -> tuple[dict, int]:
         f, limit=_clamp(a.get("limit"), 1, michrazim.MAX_LIMIT, 50),
         offset=_clamp(a.get("offset"), 0, 100_000, 0),
         sort=a.get("sort") if a.get("sort") in michrazim.SORTS else "year_desc")
-    return {**TENDER_SOURCE, "query": f, **res, "caveats": michrazim.CAVEATS}, len(res["data"])
+    return {**(await _tender_source()), "query": f, **res, "caveats": michrazim.CAVEATS}, len(res["data"])
 
 
 async def _tool_tender_series(request, db, user, a) -> tuple[dict, int]:
     await _require_tenders()
     f = _tender_filters(a)
     res = await michrazim.series(f)
-    return {**TENDER_SOURCE, "query": f, **res,
+    return {**(await _tender_source()), "query": f, **res,
             "note": "חציונים, לא ממוצעים. ציינו תמיד את lots_priced_per_unit / "
                     "lots_per_sqm לצד החציון — שנה עם שלושה מתחמים היא רעש.",
             "caveats": michrazim.CAVEATS}, len(res["years"])
@@ -508,15 +512,15 @@ async def _tool_get_tender(request, db, user, a) -> tuple[dict, int]:
     await _require_tenders()
     out = await michrazim.tender(int(a["tender_id"]))
     if not out:
-        return {**TENDER_SOURCE, "found": False}, 0
-    return {**TENDER_SOURCE, "found": True, **out, "caveats": michrazim.CAVEATS}, len(out["lots"])
+        return {**(await _tender_source()), "found": False}, 0
+    return {**(await _tender_source()), "found": True, **out, "caveats": michrazim.CAVEATS}, len(out["lots"])
 
 
 async def _tool_parcel_tenders(request, db, user, a) -> tuple[dict, int]:
     await _require_tenders()
     gush, helka = int(a["gush"]), int(a["helka"])
     res = await michrazim.parcel_lots(gush, helka, limit=_clamp(a.get("limit"), 1, 200, 50))
-    return {**TENDER_SOURCE, "gush": gush, "helka": helka, **res,
+    return {**(await _tender_source()), "gush": gush, "helka": helka, **res,
             "property_page": "https://www.over.org.il/projects/nadlan"
                              f"?tab=gush&g={gush}&h={helka}",
             "caveats": michrazim.CAVEATS}, len(res["lots"])
@@ -530,11 +534,11 @@ async def _tool_tender_settlements(request, db, user, a) -> tuple[dict, int]:
         rows = [r for r in rows if q in (r.get("settlement") or "")
                 or q in (r.get("resolved_name") or "")]
     rows = rows[:_clamp(a.get("limit"), 1, 500, 100)]
-    return {**TENDER_SOURCE, "settlements": rows}, len(rows)
+    return {**(await _tender_source()), "settlements": rows}, len(rows)
 
 
 async def _tool_tender_stats(request, db, user, a) -> tuple[dict, int]:
-    return {**TENDER_SOURCE, "stats": await michrazim.stats(),
+    return {**(await _tender_source()), "stats": await michrazim.stats(),
             "caveats": michrazim.CAVEATS}, 1
 
 

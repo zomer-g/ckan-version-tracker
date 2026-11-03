@@ -188,7 +188,7 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
       {data.sources && data.sources.length > 0 && (
         <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.35rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
           {data.sources.map((s) => (
-            <span key={s.dataset_id}>
+            <span key={`${s.dataset_id}:${s.table}`}>
               <a href={s.row_url} target="_blank" rel="noopener noreferrer">שורות המקור ↗</a>
               {" · "}
               <a href={s.page_url} target="_blank" rel="noopener noreferrer">גרסאות המאגר ↗</a>

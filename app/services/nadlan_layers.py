@@ -609,7 +609,7 @@ def _fmt(key: str, v) -> str | None:
     return _clean(v)
 
 
-def tender_lot_feature(lot: dict) -> dict:
+def tender_lot_feature(lot: dict, dataset_id: str | None = None) -> dict:
     """One lot as a cube feature: labelled fields, the tender page as a link,
     and the per-sqm caveat on the lots whose amount is a sqm price."""
     fields = []
@@ -625,7 +625,8 @@ def tender_lot_feature(lot: dict) -> dict:
         fields.insert(0, {"key": "amount_basis", "label": "שימו לב",
                           "value": 'סכום הזכייה כאן נראה כמחיר למ"ר דירה ולא כמחיר הקרקע '
                                    '(מכרז מחיר למשתכן / מחיר מטרה)'})
-    return {"dataset_id": _TENDERS_CUBE["datasets"][0], "distance_m": 0.0, "fields": fields}
+    return {"dataset_id": dataset_id or _TENDERS_CUBE["datasets"][0], "distance_m": 0.0,
+            "fields": fields}
 
 
 async def tenders_cube(parcel: dict) -> dict:
@@ -634,13 +635,18 @@ async def tenders_cube(parcel: dict) -> dict:
         return {"available": False}
     res = await michrazim.parcel_lots(int(parcel["gush"]), int(parcel["parcel"]),
                                       limit=MAX_FEATURES)
+    lots_ds = michrazim.dataset_of("lots")
     return {"available": True,
-            "features": [tender_lot_feature(r) for r in res["lots"]],
+            "features": [tender_lot_feature(r, lots_ds) for r in res["lots"]],
             "count": res["total"],
-            "sources": [{"dataset_id": michrazim.DATASET_ID,
-                         "table": "מכרזי רמ\"י — מתחמים + גושים וחלקות",
-                         "page_url": michrazim.VERSIONS_URL,
-                         "row_url": res.get("row_url")}],
+            # Two datasets answered: the parcels table found the lots, the
+            # lots table described them. Both are one click from here.
+            "sources": [{"dataset_id": michrazim.dataset_of(role),
+                         "table": label,
+                         "page_url": michrazim.versions_url(role),
+                         "row_url": res.get("row_url")}
+                        for role, label in (("lots", 'מכרזי רמ"י — מתחמים'),
+                                            ("parcels", 'מכרזי רמ"י — גושים וחלקות'))],
             "notes": list(res.get("notes") or []) + [michrazim.CAVEATS[3],
                                                       michrazim.CAVEATS[4]]}
 

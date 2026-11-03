@@ -32,8 +32,12 @@ router = APIRouter(prefix="/api/michrazim", tags=["michrazim"])
 
 CAVEATS = michrazim.CAVEATS
 SOURCE = {"source": 'מכרזי רמ"י — אתר מכרזי המקרקעין של רשות מקרקעי ישראל, דרך גרסאות לעם',
-          "source_url": michrazim.SOURCE_URL, "versions_url": michrazim.VERSIONS_URL,
-          "processed": False}
+          "source_url": michrazim.SOURCE_URL, "processed": False}
+
+
+async def _source() -> dict:
+    """The source block, with the versions page of each table's own dataset."""
+    return {**SOURCE, "datasets": await michrazim.dataset_links()}
 
 
 async def _require_ready() -> None:
@@ -106,7 +110,7 @@ async def michrazim_lots(
         res = await michrazim.search_lots(q, limit=limit, offset=offset, sort=sort)
     except ValueError as e:
         _bad_filter(e)
-    return {**SOURCE, "query": q, **res, "caveats": CAVEATS}
+    return {**(await _source()), "query": q, **res, "caveats": CAVEATS}
 
 
 @router.get("/series")
@@ -121,7 +125,7 @@ async def michrazim_series(request: Request, f: LotFilters = Depends()):
         res = await michrazim.series(q)
     except ValueError as e:
         _bad_filter(e)
-    return {**SOURCE, "query": q, **res, "caveats": CAVEATS}
+    return {**(await _source()), "query": q, **res, "caveats": CAVEATS}
 
 
 @router.get("/settlements")
@@ -132,7 +136,7 @@ async def michrazim_settlements(request: Request):
     the deals register and every other dataset."""
     await _require_ready()
     rows = await michrazim.settlements()
-    return {**SOURCE, "data": rows, "count": len(rows)}
+    return {**(await _source()), "data": rows, "count": len(rows)}
 
 
 @router.get("/tender/{tender_id}")
@@ -145,7 +149,7 @@ async def michrazim_tender(request: Request,
     out = await michrazim.tender(tender_id)
     if not out:
         raise HTTPException(status_code=404, detail="לא נמצא מכרז כזה")
-    return {**SOURCE, **out, "caveats": CAVEATS}
+    return {**(await _source()), **out, "caveats": CAVEATS}
 
 
 @router.get("/parcel/{gush}/{helka}")
@@ -160,7 +164,7 @@ async def michrazim_parcel(
     links to the property page and to that parcel's deals."""
     await _require_ready()
     res = await michrazim.parcel_lots(gush, helka, limit=limit)
-    return {**SOURCE, "gush": gush, "helka": helka, **res,
+    return {**(await _source()), "gush": gush, "helka": helka, **res,
             "property_page": f"{michrazim.SITE}/projects/nadlan?tab=gush&g={gush}&h={helka}",
             "deals_page": f"{michrazim.SITE}/projects/deals?gush={gush}&helka={helka}",
             "caveats": CAVEATS}

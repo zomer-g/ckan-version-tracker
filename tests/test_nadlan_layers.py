@@ -37,10 +37,15 @@ _TABA = "govmap_357_d9a9ad35_2156f30e"
 
 
 @pytest.fixture(autouse=True)
-def _fresh():
+def _fresh(monkeypatch):
     nadlan_layers.invalidate_caches()
     nadlan_layers._years_cache.clear()
     michrazim.invalidate_cache()
+
+    async def _no_catalog():
+        return None
+
+    monkeypatch.setattr(michrazim, "_catalog_tables", _no_catalog)
     yield
     nadlan_layers.invalidate_caches()
     michrazim.invalidate_cache()

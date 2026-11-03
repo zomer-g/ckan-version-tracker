@@ -2,38 +2,53 @@
 
 Added 2026-11-03. The Israel Land Authority's tenders site
 (`apps.land.gov.il/MichrazimSite`) is scraped daily by the worker
-(`govil-scraper`, source `michrazim`) into ONE tracked dataset,
-`b252fc31-29cb-4a17-ac2e-2f22f8fa0878`, whose version carries several tables in
-the append DB. This page is how that one dataset reaches the SQL console, the
-נדל"ן לעם parcel page, the REST API and the MCP — and the four facts about the
-data that each surface states.
+(`govil-scraper`, source `michrazim`). **One dataset per table** — no dataset
+carries tables side by side. This page is how those datasets reach the SQL
+console, the נדל"ן לעם parcel page, the REST API and the MCP, and the four facts
+about the data that each surface states.
 
-## The tables
+## The datasets
 
-| role | table (2026-11-03) | rows | one row is |
+| role | URL that tracks it | rows (v1) | one row is |
 |---|---|---|---|
-| tenders | *not yet in SQL* — see below | ~10.7k | a tender: type, ייעוד, region, settlement + code, dates |
-| lots | `…_b252fc31_d849f194` (מתחמים) | 51,752 | a lot of a tender: units, area, winner, winning amount, development costs, threshold, bids |
-| lot_bids | `…_b252fc31_abbf6b55` | 302,498 | every bid on every lot |
-| tender_bids | `…_b252fc31_6a9219cd` | 28,230 | tender-level bids of registration / lottery tenders |
-| parcels | `…_b252fc31_8302b80d` | 76,394 | (tender, lot, גוש, חלקה) |
-| plans | `…_b252fc31_ba6004b3` | 84,157 | (tender, lot, תוכנית, מגרש) |
-| documents | `…_b252fc31_19163596` | 62,751 | a tender document with its link |
+| tenders | `…/MichrazimSite/#/search` (any URL without a route below) — dataset `b252fc31` | ~10.7k | a tender: type, ייעוד, region, settlement + code, dates |
+| lots | `…/MichrazimSite/#/lots` | 51,752 | a lot of a tender: units, area, winner, winning amount, development costs, threshold, bids; a polygon for ~1% |
+| lot_bids | `…/MichrazimSite/#/lot-bids` | 302,498 | every bid on every lot |
+| tender_bids | `…/MichrazimSite/#/tender-bids` | 28,230 | tender-level bids of registration / lottery tenders |
+| parcels | `…/MichrazimSite/#/parcels` | 76,394 | (tender, lot, גוש, חלקה) |
+| plans | `…/MichrazimSite/#/plans` | 84,157 | (tender, lot, תוכנית, מגרש) |
+| documents | `…/MichrazimSite/#/documents` | ~63k | a tender document, with the file archived |
 
-`…` = `append_michrazim_register_33ed4e63`. Nothing in the code names these:
-`app/services/michrazim.py` finds each role by its **column signature**
-(`SIGNATURES`), the same rule `find_deals_table()` follows, so a re-registered
-dataset or a renamed resource does not break anything.
+All of them read one on-disk cache of tender reads on the worker machine, and a
+tender read in the last 20 hours is not read again (`FRESH_SECONDS`), so the
+site is read about once a day however many datasets poll. Only tenders and lots
+fetch the map call. The first run of a dataset on a machine without the cache is
+a full pass (~half a day; ~a quarter for the corpora without maps).
 
-**The tenders table is missing from version 1.** The scraper produces it as the
-dataset's primary CSV (`csv_path`) beside the six `csv_tables`; the worker that
-ran the first, 34-hour pass predates the fix that declares a primary uploaded
-as a file (`over_worker.push_version`, "michrazim's tenders, moc_cellular's
-sites"), so the server kept the side tables and dropped the primary. The next
-version published by a current worker carries it, and every surface picks it
-up on its own (the tables cache lives 5 minutes). Until then, the tender's own
-fields (type, ייעוד, dates) are null and `notes` says so; `year` is the
-tender-number year either way.
+Nothing in OVER names a physical table: `app/services/michrazim.py` finds each
+role by its **column signature** (`SIGNATURES`), restricted to tables of a
+dataset's current version (the /data catalog), and takes each role's dataset id
+from the catalog (`dataset_of`, `dataset_links`), so answers link to the
+versions page of the dataset each part came from.
+
+### The split (2026-11-03) and how to roll it out
+
+Version 1 of `b252fc31` held six tables in one dataset, and not the tenders
+table itself (the worker that ran it predated the fix that declares a primary
+uploaded as a file). After the split `b252fc31` is the tenders dataset, and
+each other table is tracked by its own URL. Order matters, because a version of
+`b252fc31` holding the tenders alone takes its six old tables out of the catalog:
+
+1. Deploy the worker (govil-scraper) and OVER.
+2. Track the five table URLs above (`#/lots`, `#/lot-bids`, `#/tender-bids`,
+   `#/parcels`, `#/plans`); `#/documents` only if not tracked yet.
+3. When they have their first versions, set `scraper_config.allow_shrink = true`
+   on `b252fc31` for ONE poll: tenders-only is ~10.7k rows against v1's 605k,
+   and the shrink guard (50%) would otherwise refuse it, rightly, as a collapse.
+   Clear it after that version lands.
+
+While both exist, a table that is its dataset's only table wins over the old
+combined one, so the surfaces never answer from the stale copy.
 
 ## Four facts every surface states
 
@@ -67,8 +82,9 @@ councils (`מ.א. …`, an authority, not a settlement).
 
 ## Surfaces
 
-**SQL console / SQL MCP.** The tables are ordinary `/data` tables (field flag
-`has_parcel` is set, so the dataset appears under the גוש/חלקה content filter).
+**SQL console / SQL MCP.** Each dataset is an ordinary `/data` table (the
+lots and parcels datasets carry the `has_parcel` flag, so they appear under the
+גוש/חלקה content filter).
 Rule **(4ג)** in `app/mcp/sql_server.py` states the join keys, the
 `last_seen IS NULL` filter, the direct join to the deals register
 (`p."גוש" = d.gush AND p."חלקה" = d.chelka` — both are integer text without

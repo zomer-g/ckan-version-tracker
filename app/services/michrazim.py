@@ -59,7 +59,9 @@ from app.services.append_store import _qi
 logger = logging.getLogger(__name__)
 
 SITE = "https://www.over.org.il"
-#: The tracked dataset, for links only — the tables are found by signature.
+#: The tenders dataset (the first version held every table; since the split it
+#: holds the tenders alone). A fallback for links only: each role's own dataset
+#: comes from the catalog (``dataset_of``), and the tables by signature.
 DATASET_ID = "b252fc31-29cb-4a17-ac2e-2f22f8fa0878"
 VERSIONS_URL = f"{SITE}/versions/{DATASET_ID}"
 SOURCE_URL = "https://apps.land.gov.il/MichrazimSite/#/search"
@@ -157,11 +159,12 @@ _cache: tuple[float, dict[str, tuple[str, str, list[str]]]] | None = None
 _lock = asyncio.Lock()
 
 
-def match_roles(cols_by_table: dict[str, list], sizes: dict[str, int] | None = None
+def match_roles(cols_by_table: dict[str, list], sizes: dict | None = None
                 ) -> dict[str, tuple[str, list[str]]]:
     """Pure: ``{role: (table, [columns])}`` for the tables whose columns carry a
-    role's signature. Several candidates for one role (a stale copy beside the
-    live table) → the largest, the fact that tells them apart."""
+    role's signature. Several candidates for one role → the one ranked highest
+    by ``sizes`` (a row count, or any comparable rank such as
+    ``(own dataset, rows)``)."""
     sizes = sizes or {}
     out: dict[str, tuple[str, list[str]]] = {}
     for table, cols in sorted(cols_by_table.items()):
@@ -176,9 +179,37 @@ def match_roles(cols_by_table: dict[str, list], sizes: dict[str, int] | None = N
     return out
 
 
+async def _catalog_tables() -> dict[str, tuple[str, int]] | None:
+    """``{table: (dataset_id, tables in that dataset)}`` for the public tables of
+    every dataset's CURRENT version — the /data catalog, cached there. None when
+    the catalog cannot be read (no main DB in this process).
+
+    Why the catalog and not the raw schema alone: when a dataset changes shape
+    its superseded tables stay in the schema until they are purged. The first
+    michrazim version held all seven tables in one dataset; after the split one
+    dataset per table, the old copies are not current and must not answer."""
+    try:
+        from app.database import async_session
+        from app.services import data_catalog
+        async with async_session() as db:
+            recs = await data_catalog.build_catalog(db)
+    except Exception:  # noqa: BLE001
+        logger.debug("michrazim: catalog unavailable", exc_info=True)
+        return None
+    per_ds: dict[str, int] = {}
+    for r in recs:
+        if r.get("schema") == "public" and r.get("dataset_id"):
+            per_ds[r["dataset_id"]] = per_ds.get(r["dataset_id"], 0) + 1
+    return {r["table"]: (r["dataset_id"], per_ds[r["dataset_id"]]) for r in recs
+            if r.get("schema") == "public" and r.get("dataset_id")}
+
+
+_datasets: dict[str, str] = {}
+
+
 async def tables(*, refresh: bool = False) -> dict[str, tuple[str, str, list[str]]]:
     """``{role: (schema, table, [columns])}`` on this deployment, cached."""
-    global _cache
+    global _cache, _datasets
     if not refresh and _cache and time.monotonic() - _cache[0] < _TTL:
         return _cache[1]
     async with _lock:
@@ -192,17 +223,45 @@ async def tables(*, refresh: bool = False) -> dict[str, tuple[str, str, list[str
         cand = {t: c for t, c in raw.items() if t.startswith("append_")
                 and any(sig <= {x["name"] if isinstance(x, dict) else x for x in c}
                         for sig in SIGNATURES.values())}
-        sizes: dict[str, int] = {}
+        catalog = await _catalog_tables()
+        if catalog is not None:
+            cand = {t: c for t, c in cand.items() if t in catalog}
+        rank: dict[str, tuple] = {}
         for t in cand:
             try:
-                sizes[t] = await append_store.table_count_estimate(t)
+                est = await append_store.table_count_estimate(t)
             except Exception:  # noqa: BLE001
-                sizes[t] = 0
-        found = {role: ("public", t, cols) for role, (t, cols) in match_roles(cand, sizes).items()}
+                est = 0
+            # A table that is its dataset's ONLY table beats one that shares a
+            # dataset with others (the pre-split combined dataset, while both
+            # exist); size decides between two of the same kind.
+            single = bool(catalog and catalog.get(t, ("", 0))[1] == 1)
+            rank[t] = (single, est)
+        matched = match_roles(cand, rank)
+        found = {role: ("public", t, cols) for role, (t, cols) in matched.items()}
+        _datasets = {role: catalog[t][0] for role, (t, _c) in matched.items()
+                     if catalog and t in catalog}
         _cache = (time.monotonic(), found)
         if found:
             logger.info("michrazim: tables %s", {r: v[1] for r, v in found.items()})
         return found
+
+
+def dataset_of(role: str) -> str:
+    """The tracked dataset that holds a role's table (the tenders dataset when
+    the catalog could not say). Call after ``tables()``."""
+    return _datasets.get(role) or DATASET_ID
+
+
+def versions_url(role: str) -> str:
+    return f"{SITE}/versions/{dataset_of(role)}"
+
+
+async def dataset_links() -> dict[str, str]:
+    """``{role: versions page}`` for every table on hand — one dataset per
+    table, so an answer built from several says where each part came from."""
+    tb = await tables()
+    return {role: versions_url(role) for role in tb}
 
 
 def invalidate_cache() -> None:
@@ -558,9 +617,10 @@ async def settlements() -> list[dict]:
 
 async def stats() -> dict:
     tb = await tables()
-    out: dict = {"dataset_id": DATASET_ID, "versions_url": VERSIONS_URL,
-                 "source_url": SOURCE_URL,
-                 "tables": {r: f"{e[0]}.{e[1]}" for r, e in tb.items()},
+    out: dict = {"source_url": SOURCE_URL,
+                 "datasets": {r: {"table": f"{e[0]}.{e[1]}", "dataset_id": dataset_of(r),
+                                  "versions_url": versions_url(r)}
+                              for r, e in tb.items()},
                  "missing_tables": [r for r in SIGNATURES if r not in tb]}
     if "lots" not in tb:
         return out
