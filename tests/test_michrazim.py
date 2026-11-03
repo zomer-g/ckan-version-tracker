@@ -212,7 +212,7 @@ def test_index_names_fit_postgres():
 
 
 @pytest.mark.asyncio
-async def test_tender_never_returns_bidder_id_numbers(monkeypatch):
+async def test_tender_returns_the_bidder_id_numbers(monkeypatch):
     _stub_tables(monkeypatch)
     seen = []
 
@@ -228,8 +228,9 @@ async def test_tender_never_returns_bidder_id_numbers(monkeypatch):
     out = await michrazim.tender(20240134)
     assert out["lots"][0]["units"] == 104
     bids_sql = next(s for s in seen if P + "6a9219cd" in s)
-    for col in michrazim.PERSONAL_COLUMNS:
-        assert f'"{col}"' not in bids_sql
+    # Public by the owner's decision: served in full, like the source does.
+    for col in michrazim.BIDDER_ID_COLUMNS:
+        assert f'"{col}"' in bids_sql
 
 
 # ── נדל"ן לעם cube ────────────────────────────────────────────────────────────

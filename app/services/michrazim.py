@@ -101,10 +101,10 @@ TENDER_FIELDS: list[tuple[str, str]] = [
     ("אוכלוסיות זכאיות", "eligible_populations"),
 ]
 
-#: Personal identifiers the register publishes on lottery tenders. They stay in
-#: the SQL console, where the dataset owner chose to publish them; the API and
-#: the MCP have no question that needs them, so they never leave through here.
-PERSONAL_COLUMNS = frozenset({"מספרי זהות של השותפים", "ShutafimMezaheIshiyut", "מזהה מציע"})
+#: The bidders' identifiers on lottery tenders. RMI publishes them on the
+#: tender page, and the owner decided (2026-11-03) they are public information
+#: to be served in full on every surface — SQL, API and MCP alike.
+BIDDER_ID_COLUMNS = ("מזהה מציע", "מספרי זהות של השותפים", "ShutafimMezaheIshiyut")
 
 #: Below this a won amount is a sqm price, not a lot price — when the lot is
 #: for several flats or carries a capped price. Measured: the won amounts are
@@ -575,7 +575,7 @@ async def tender(tender_id: int) -> dict | None:
         e = tb.get(role)
         if not e:
             return []
-        sel = ", ".join(_qi(c) for c in cols if c in e[2] and c not in PERSONAL_COLUMNS)
+        sel = ", ".join(_qi(c) for c in cols if c in e[2])
         if not sel:
             return []
         rows = await _fetch(f"SELECT {sel} FROM {_t(e)} x WHERE x.\"{T}\" = {tid} "
@@ -586,17 +586,15 @@ async def tender(tender_id: int) -> dict | None:
         await asyncio.gather(
             _rows("lot_bids", [L, "שם מתחם", "מזהה הצעה", "סכום הצעה", "תוספת לתמורה",
                                "מצב ההצעה"], f'x."{L}", {_num(_c("x", "סכום הצעה"))} DESC NULLS LAST'),
-            _rows("tender_bids", ["מזהה הצעה", "סכום הצעה", "מספר קדימות", "מספר המתנה",
-                                  "תיאור קדימות", "תיאור המתנה", "הצעה פסולה", "יחידות דיור",
+            _rows("tender_bids", ["מזהה הצעה", *BIDDER_ID_COLUMNS, "סכום הצעה",
+                                  "מספר קדימות", "מספר המתנה", "תיאור קדימות",
+                                  "תיאור המתנה", "הצעה פסולה", "יחידות דיור",
                                   "מספר שותפים"], 'x."מזהה הצעה"'),
             _rows("parcels", [L, "שם מתחם", "גוש", "חלקה"], 'x."גוש", x."חלקה"'),
             _rows("plans", [L, "שם מתחם", "תוכנית", "מגרש"], 'x."תוכנית", x."מגרש"'),
             _rows("documents", ["תיאור", "סוג פרסום", "מהות מסמך", "שם קובץ", "סוג קובץ",
                                 "תאריך עדכון", "קישור"], 'x."תאריך עדכון" DESC'),
         )
-    if out["tender_bids"]:
-        out["tender_bids_note"] = ("מספרי הזהות של המציעים מפורסמים במקור ובקונסולת "
-                                   "ה-SQL, ואינם מוחזרים כאן.")
     return out
 
 

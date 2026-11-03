@@ -144,7 +144,8 @@ async def michrazim_settlements(request: Request):
 async def michrazim_tender(request: Request,
                            tender_id: int = Path(..., ge=1, le=99_999_999)):
     """One tender: its row (when loaded), lots, bids on each lot, tender-level
-    bids (without the bidders' ID numbers), parcels, plans and documents."""
+    bids (with the bidders' ID numbers, as RMI publishes them), parcels,
+    plans and documents."""
     await _require_ready()
     out = await michrazim.tender(tender_id)
     if not out:

@@ -101,8 +101,9 @@ spatial cubes; they hold ~7k plots, the register 51k lots.
 
 **REST** (`app/api/michrazim.py`): `/api/michrazim/{stats,lots,series,
 settlements,tender/{id},parcel/{g}/{h}}`. `/lots` and `/series` share one filter
-dependency. The tender-level bidders' ID numbers are published by the source and
-kept in SQL, but never returned by the API or the MCP (`PERSONAL_COLUMNS`).
+dependency. The tender-level bidders' ID numbers are public — RMI publishes them —
+and are served in full in SQL, the API and the MCP (owner's decision, 2026-11-03;
+`BIDDER_ID_COLUMNS`).
 
 **MCP.** The deals server (`/deals/mcp`) is where price questions go, so the
 tenders live there too: `search_tender_lots`, `tender_price_series`,
