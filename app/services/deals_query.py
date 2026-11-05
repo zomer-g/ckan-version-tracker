@@ -41,7 +41,7 @@ from app.services import append_store
 from app.services import nadlan_index
 from app.services import nadlan_text
 from app.services.nadlan_index import DEAL_SORT_KEY, _t
-from app.services.nadlan_query import _console_url, _deal_row, _iso, _lit
+from app.services.nadlan_query import _console_url, _deal_row, _deals_from, _iso, _lit
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +281,7 @@ def _console_sql(src: tuple[str, str], f: dict) -> str:
     if f.get("street") and f.get("settlement"):
         parts.append(_address_console_where(f))
     where = " AND ".join(parts) or "true"
-    return (f'SELECT * FROM {_t(src)}\nWHERE {where}\n'
+    return (f'SELECT * {_deals_from(src, where)}\n'
             f'ORDER BY {DEAL_SORT_KEY} DESC\nLIMIT 200')
 
 
@@ -299,14 +299,13 @@ async def search(filters: dict, limit: int = 50, offset: int = 0,
             SELECT settlement_code, settlement, gush, chelka, sub_chelka, deal_date,
                    deal_amount, declared_amount, deal_nature, portion, year_built,
                    asset_area, room_num
-            FROM {_t(src)}
-            WHERE {where}
+            {_deals_from(src, where)}
             ORDER BY {order}
             LIMIT {limit} OFFSET {offset}
         """, *args),
         _fetch(f"""
             SELECT count(*) AS n FROM (
-              SELECT 1 FROM {_t(src)} WHERE {where} LIMIT {COUNT_CAP + 1}
+              SELECT 1 {_deals_from(src, where)} LIMIT {COUNT_CAP + 1}
             ) capped
         """, *args),
     )
@@ -362,8 +361,8 @@ async def _series(filters: dict, timeout_ms: int) -> list[dict]:
                  AS median_area,
                round(percentile_disc(0.5) WITHIN GROUP (ORDER BY {PPSQM_NORM}))
                  AS median_ppsqm_normalized
-        FROM {_t(src)}
-        WHERE {where} AND deal_date ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}$'
+        {_deals_from(src, where)}
+          AND deal_date ~ '^[0-9]{{2}}/[0-9]{{2}}/[0-9]{{4}}$'
         GROUP BY 1 ORDER BY 1
     """, *args, timeout_ms=timeout_ms)
     return [{"year": int(r["year"]), "deals": r["deals"],
@@ -385,8 +384,7 @@ async def breakdown(filters: dict, limit: int = 20) -> list[dict]:
                  AS median_amount,
                round(percentile_disc(0.5) WITHIN GROUP (ORDER BY {PPSQM_NORM}))
                  AS median_ppsqm_normalized
-        FROM {_t(src)}
-        WHERE {where}
+        {_deals_from(src, where)}
         GROUP BY 1 ORDER BY deals DESC LIMIT {max(1, min(int(limit), 60))}
     """, *args, timeout_ms=_AGGREGATE_TIMEOUT_MS if not filters else _TIMEOUT_MS)
     return [dict(r) | {"median_ppsqm_normalized": _int(r["median_ppsqm_normalized"])}
@@ -440,8 +438,7 @@ async def compare_settlements(year_from: int, year_to: int, *, nature: str | Non
                  substr(deal_date, 7, 4) AS yr,
                  nullif(deal_amount, '')::bigint AS amt,
                  {PPSQM_NORM} AS ppsqm
-          FROM {_t(src)}
-          WHERE {' AND '.join(where)}
+          {_deals_from(src, ' AND '.join(where))}
             AND substr(deal_date, 7, 4) IN ('{y1}', '{y2}')
         ), g AS (
           SELECT settlement,
@@ -508,7 +505,7 @@ async def stats() -> dict:
         # ride the date index) — 1.8s measured for the same numbers.
         t = _t(src)
         rows = await _fetch(f"""
-            SELECT (SELECT count(*) FROM {t}) AS deals,
+            SELECT (SELECT count(*) {_deals_from(src, 'true')}) AS deals,
                    (SELECT min({DEAL_SORT_KEY}) FROM {t}) AS first_deal,
                    (SELECT max({DEAL_SORT_KEY}) FROM {t}) AS last_deal,
                    (SELECT count(*) FROM (SELECT DISTINCT settlement FROM {t}
@@ -557,8 +554,7 @@ async def settlements() -> list[dict]:
                      max(nullif(btrim(settlement_code), '')) AS settlement_code,
                      count(*) AS deals,
                      max({DEAL_SORT_KEY}) AS last_deal
-              FROM {_t(src)}
-              WHERE btrim(settlement) <> ''
+              {_deals_from(src, "btrim(settlement) <> ''")}
               GROUP BY 1
             )
             SELECT g.*, public.over_settlement_code(g.settlement) AS resolved_code,
@@ -591,7 +587,7 @@ async def natures() -> list[dict]:
                          / count(*)) AS pct_no_area,
                    round(100.0 * count(*) FILTER (WHERE {_MISSING.format(c='room_num')})
                          / count(*)) AS pct_no_rooms
-            FROM {_t(src)}
+            {_deals_from(src, 'true')}
             GROUP BY 1 ORDER BY deals DESC LIMIT 60
         """, timeout_ms=_AGGREGATE_TIMEOUT_MS)
         return [dict(r) | {"pct_no_area": _int(r.get("pct_no_area")),

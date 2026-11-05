@@ -531,6 +531,36 @@ async def stat_areas(parcel_keys: list[str]) -> dict[str, dict]:
 MAX_DEALS = 200
 
 
+def _deals_from(src: tuple[str, str], where: str) -> str:
+    """FROM/WHERE shared by the browse, aggregates and parcel readers.
+
+    The merged register can hold a copy missing settlement_code beside an
+    otherwise identical coded row (issue #20). Hide ONLY that missing-code
+    copy. A missing code alone is not a duplicate, and a different amount,
+    declared amount, share, area, room count or year must remain a separate row.
+    Nothing is deleted from the archive or combined into an inferred sale.
+
+    The parcel equality uses the existing (gush, chelka) index. Nullable fields
+    compare null-safely without equating NULL with an empty source value.
+    ``where`` is built by the callers, never supplied as SQL by an API client.
+    """
+    fields = ("settlement", "sub_chelka", "deal_date", "deal_amount",
+              "declared_amount", "deal_nature", "portion", "year_built",
+              "asset_area", "room_num")
+    coded = ", ".join(f"coded.{c}" for c in fields)
+    original = ", ".join(f"d.{c}" for c in fields)
+    return f"""
+        FROM {_t(src)} AS d
+        WHERE {where}
+          AND (nullif(btrim(d.settlement_code), '') IS NOT NULL OR NOT EXISTS (
+            SELECT 1 FROM {_t(src)} AS coded
+            WHERE coded.gush = d.gush AND coded.chelka = d.chelka
+              AND nullif(btrim(coded.settlement_code), '') IS NOT NULL
+              AND ({coded}) IS NOT DISTINCT FROM ({original})
+          ))
+    """
+
+
 def _deal_row(r: dict) -> dict:
     """One deal, typed. Every numeric column in the register is clean integer
     text (measured over all 3.84 M rows), so a value that fails to parse means
@@ -594,12 +624,12 @@ async def deal_summaries(parcels: list[dict]) -> dict[str, dict]:
                  min({DEAL_SORT_KEY}) AS first_deal,
                  max({DEAL_SORT_KEY}) AS last_deal,
                  count(DISTINCT sub_chelka) AS sub_parcels
-          FROM {_t(src)} WHERE gush = k.g AND chelka = k.h
+          {_deals_from(src, 'gush = k.g AND chelka = k.h')}
         ) agg ON agg.deals > 0
         LEFT JOIN LATERAL (
           SELECT deal_date, deal_amount, declared_amount, deal_nature, asset_area,
                  room_num, year_built, portion, sub_chelka
-          FROM {_t(src)} WHERE gush = k.g AND chelka = k.h
+          {_deals_from(src, 'gush = k.g AND chelka = k.h')}
           ORDER BY {DEAL_SORT_KEY} DESC LIMIT 1
         ) newest ON true
     """, [g for g, _ in pairs], [h for _, h in pairs])
@@ -629,9 +659,7 @@ async def parcel_deals(gush: int, helka: int, limit: int = 50, offset: int = 0,
         SELECT settlement_code, settlement, gush, chelka, sub_chelka, deal_date,
                deal_amount, declared_amount, deal_nature, portion, year_built,
                asset_area, room_num, count(*) OVER () AS total
-        FROM {_t(src)}
-        WHERE gush = $1 AND chelka = $2
-          AND ($4::text IS NULL OR sub_chelka = $4)
+        {_deals_from(src, 'gush = $1 AND chelka = $2 AND ($4::text IS NULL OR sub_chelka = $4)')}
         ORDER BY {DEAL_SORT_KEY} DESC
         LIMIT {limit} OFFSET $3::int
     """, str(gush), str(helka), int(max(0, offset)), sub_parcel)
