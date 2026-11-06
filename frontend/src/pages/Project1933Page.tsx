@@ -166,8 +166,10 @@ export default function Project1933Page() {
                     <td className="project1933-date" data-label="פורסם במידע לעם">{formatDate(r.date)}</td>
                     <td data-label="מסמכים">
                       <ul className="project1933-files">
-                        {r.files.map((f, i) => (
-                          <li key={`${f}-${i}`}>{f}</li>
+                        {r.files.map((f) => (
+                          <li key={f.url}>
+                            <ExtLink href={f.url}>{f.name}</ExtLink>
+                          </li>
                         ))}
                       </ul>
                     </td>
