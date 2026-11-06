@@ -4444,3 +4444,76 @@ export const prices = {
     return `${BASE}/prices/table/${name}?${qs.toString()}`;
   },
 };
+
+// ── "חו\"ל": GovMap features outside Israel's outline ─────────────────────────
+// app/api/govmap_abroad.py. Israel = six Interior-Ministry districts; with
+// איו"ש and the maritime area, a feature outside all three is "abroad".
+export interface AbroadTotals {
+  layers_checked: number;
+  layers_abroad: number;
+  features_checked: number;
+  abroad: number;
+  in_maritime: number;
+  in_judea_samaria: number;
+  near_border: number;
+  checked_at: string | null;
+  tolerance_m: number | null;
+}
+export interface AbroadRegion { region: string; name: string; area_km2: number | null }
+export interface AbroadPublisher { publisher: string; layers: number; abroad: number }
+export interface AbroadLayer {
+  dataset_id: string;
+  table_name: string;
+  layer_id: string | null;
+  title: string | null;
+  publisher: string;
+  rows_with_geom: number;
+  in_israel: number;
+  in_judea_samaria: number;
+  in_maritime: number;
+  near_border: number;
+  abroad: number;
+  share: number | null;
+  min_distance_km: number | null;
+  max_distance_km: number | null;
+  checked_at: string;
+}
+export interface AbroadSummary {
+  ready: boolean;
+  note?: string;
+  totals?: AbroadTotals;
+  regions?: AbroadRegion[];
+  publishers?: AbroadPublisher[];
+  layers?: AbroadLayer[];
+}
+export interface AbroadFeature {
+  dataset_id: string;
+  layer_id: string | null;
+  title: string | null;
+  publisher: string;
+  row_hash: string;
+  name: string;
+  distance_km: number | null;
+  geom_type: string | null;
+  lon: number | null;
+  lat: number | null;
+  govmap_url: string | null;
+  attrs: Record<string, unknown>;
+}
+export interface AbroadFeaturesPage { total: number; limit: number; offset: number; items: AbroadFeature[] }
+
+function abroadQuery(f: { dataset_id?: string; publisher?: string }, extra: Record<string, string | number> = {}): string {
+  const p = new URLSearchParams();
+  if (f.dataset_id) p.set("dataset_id", f.dataset_id);
+  if (f.publisher) p.set("publisher", f.publisher);
+  for (const [k, v] of Object.entries(extra)) p.set(k, String(v));
+  return p.toString();
+}
+
+export const govmapAbroad = {
+  summary: () => request<AbroadSummary>("/govmap-abroad/summary"),
+  features: (f: { dataset_id?: string; publisher?: string }, limit = 200, offset = 0) =>
+    request<AbroadFeaturesPage>("/govmap-abroad/features?" + abroadQuery(f, { limit, offset })),
+  downloadCsv: (f: { dataset_id?: string; publisher?: string }, filename: string) =>
+    downloadCsv("/govmap-abroad/features.csv?" + abroadQuery(f), filename),
+};

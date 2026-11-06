@@ -18,7 +18,7 @@ import {
  */
 
 /** עמותת הצלחה's own site, as its organization page on מידע לעם gives it. */
-const HATZLACHA_URL = "http://htl.org.il";
+const HATZLACHA_URL = "https://www.htl.org.il/";
 const HATZLACHA_NAME = "עמותת הצלחה – לקידום חברה הוגנת";
 
 const STATUS_LABEL: Record<Finding1933Status, string> = {
@@ -85,7 +85,7 @@ export default function Project1933Page() {
         </div>
       </div>
 
-      <div className="about-section">
+      <div className="about-section project1933-section">
         <aside className="project1933-credit" aria-label="קרדיט">
           <span>את הבקשה הגישה</span>{" "}
           <ExtLink href={HATZLACHA_URL}>{HATZLACHA_NAME}</ExtLink>
@@ -128,15 +128,15 @@ export default function Project1933Page() {
           </p>
           {analysed.length > 0 && <p>{summarySentence(counts, analysed.length)}</p>}
 
-          <div className="table-scroll" style={{ overflowX: "auto" }}>
+          <div className="project1933-table-wrap">
             <table className="table project1933-table">
               <caption className="sr-only">תשובות משרדי הממשלה לבקשה על יישום החלטה 1933</caption>
               <thead>
                 <tr>
                   <th scope="col">משרד</th>
+                  <th scope="col">מה עולה מהתשובה</th>
                   <th scope="col">פורסם במידע לעם</th>
                   <th scope="col">מסמכים</th>
-                  <th scope="col">מה עולה מהתשובה</th>
                 </tr>
               </thead>
               <tbody>
@@ -151,15 +151,7 @@ export default function Project1933Page() {
                         </span>
                       ))}
                     </th>
-                    <td>{formatDate(r.date)}</td>
-                    <td>
-                      <ul className="project1933-files">
-                        {r.files.map((f, i) => (
-                          <li key={`${f}-${i}`}>{f}</li>
-                        ))}
-                      </ul>
-                    </td>
-                    <td>
+                    <td className="project1933-finding" data-label="מה עולה מהתשובה">
                       {r.finding ? (
                         <>
                           <strong>{STATUS_LABEL[r.finding.status]}</strong>
@@ -170,6 +162,14 @@ export default function Project1933Page() {
                       ) : (
                         <span className="text-muted">טרם סוכם — המסמכים זמינים בקישור</span>
                       )}
+                    </td>
+                    <td className="project1933-date" data-label="פורסם במידע לעם">{formatDate(r.date)}</td>
+                    <td data-label="מסמכים">
+                      <ul className="project1933-files">
+                        {r.files.map((f, i) => (
+                          <li key={`${f}-${i}`}>{f}</li>
+                        ))}
+                      </ul>
                     </td>
                   </tr>
                 ))}

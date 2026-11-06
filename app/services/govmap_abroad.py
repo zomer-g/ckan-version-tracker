@@ -41,8 +41,11 @@ whichever way the question needs. "Abroad" means outside ALL of them.
 
 Classification of one feature: it is in a region if it touches it at all
 (ST_Intersects), so a line that crosses the border counts as inside. A feature
-is "abroad" only if it touches no region. The distance is to the nearest piece
-of the outline, in kilometres on the spheroid.
+is "abroad" only if it touches no region AND lies farther than
+settings.govmap_abroad_tolerance_m (default 10 m) from all of them: a point
+drawn a few metres off a border line is "near the border" (``near_border``),
+not abroad. The distance is to the nearest piece of the outline, in
+kilometres on the spheroid.
 
 The per-layer result also drives a content flag, ``has_abroad`` on
 ``tracked_datasets.field_flags`` — the same flags as locality/authority/date —
@@ -51,7 +54,8 @@ console and the API like any other. Unlike those, it is computed from the
 DATA, not from column names, so field_flags.recompute never touches it.
 
 Re-checks are incremental: a layer is checked again only when its mirrored
-version changed or the outline was rebuilt after its last check.
+version changed, the outline was rebuilt after its last check, or the
+tolerance changed.
 """
 from __future__ import annotations
 
@@ -62,6 +66,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.tracked_dataset import TrackedDataset
 from app.services import append_store, data_catalog
 from app.services.append_store import _qi
@@ -192,6 +197,11 @@ _DDL = [
         ADD COLUMN IF NOT EXISTS definition_version integer""",
     f"""ALTER TABLE public.{_qi(LAYERS_TABLE)}
         ADD COLUMN IF NOT EXISTS in_maritime bigint NOT NULL DEFAULT 0""",
+    # Added with the border tolerance (settings.govmap_abroad_tolerance_m).
+    f"""ALTER TABLE public.{_qi(LAYERS_TABLE)}
+        ADD COLUMN IF NOT EXISTS near_border bigint NOT NULL DEFAULT 0""",
+    f"""ALTER TABLE public.{_qi(LAYERS_TABLE)}
+        ADD COLUMN IF NOT EXISTS tolerance_m double precision""",
 ]
 
 
@@ -203,12 +213,25 @@ def layer_id_of(table_name: str) -> str | None:
     return None
 
 
-def needs_check(prev: dict | None, version_number, boundary_built_at) -> bool:
+def tolerance_m() -> float:
+    """Metres from the outline within which a feature is not counted abroad
+    (settings.govmap_abroad_tolerance_m; never negative)."""
+    try:
+        return max(0.0, float(getattr(settings, "govmap_abroad_tolerance_m", 10.0)))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def needs_check(prev: dict | None, version_number, boundary_built_at,
+                tolerance: float | None = None) -> bool:
     """Whether a layer must be (re)checked: never checked, a new mirrored
-    version since, or an outline rebuilt after its last check."""
+    version since, an outline rebuilt after its last check, or checked under
+    another tolerance."""
     if prev is None:
         return True
     if version_number is not None and prev.get("version_number") != version_number:
+        return True
+    if tolerance is not None and prev.get("tolerance_m") != tolerance:
         return True
     built = prev.get("boundary_built_at")
     return built is None or (boundary_built_at is not None and built < boundary_built_at)
@@ -395,7 +418,18 @@ async def _boundary_built_at(conn):
         return None
 
 
-def _check_sql(table: str) -> tuple[str, str]:
+def _near_sql(parts: str, g: str, tol_m: float) -> str:
+    """EXISTS a piece of any region within ``tol_m`` metres of ``g``. The
+    bounding-box prefilter is generous (degrees of longitude are ~0.85 km
+    shorter than degrees of latitude at these latitudes); ST_DWithin on the
+    spheroid decides."""
+    deg = tol_m / 111_000 * 2
+    return (f"EXISTS (SELECT 1 FROM {parts} p WHERE "
+            f"p.geom OPERATOR({_X}.&&) {_X}.ST_Expand({g}, {deg:.8f}) AND "
+            f"{_X}.ST_DWithin(p.geom::{_X}.geography, {g}::{_X}.geography, {tol_m}))")
+
+
+def _check_sql(table: str, tol_m: float = 0.0) -> tuple[str, str]:
     """The two statements that check one layer: the abroad features (written)
     and the per-region counts (read). Both against the indexed outline pieces.
 
@@ -403,7 +437,10 @@ def _check_sql(table: str) -> tuple[str, str]:
     counted once, in the first of israel → judea_samaria → maritime; the
     maritime count is what remains. In a region = touches any piece of it. Distance = to the nearest of the
     five pieces closest by bounding box, which is the nearest piece for any
-    feature outside the outline."""
+    feature outside the outline.
+
+    A feature that touches no region but lies within ``tol_m`` metres of one
+    is "near the border": neither abroad nor in a region, counted on its own."""
     # The alias is deliberately unlikely: a layer with a column named like the
     # alias would make to_jsonb(alias) read that column instead of the row.
     src = f"{_qi(IDX_SCHEMA)}.{_qi(table)}"
@@ -413,6 +450,8 @@ def _check_sql(table: str) -> tuple[str, str]:
         where = f"p.region = '{region}' AND " if region else ""
         return (f"EXISTS (SELECT 1 FROM {parts} p WHERE {where}"
                 f"p.geom OPERATOR({_X}.&&) {g} AND {_X}.ST_Intersects(p.geom, {g}))")
+    near_clause = (f"\n          AND NOT {_near_sql(parts, 'zz_src.geom', tol_m)}"
+                   if tol_m > 0 else "")
     insert = f"""
         INSERT INTO public.{_qi(FEATURES_TABLE)}
             (dataset_id, table_name, layer_id, row_hash, distance_km, attrs, geom)
@@ -428,15 +467,17 @@ def _check_sql(table: str) -> tuple[str, str]:
         CROSS JOIN LATERAL (SELECT to_jsonb(zz_src) - 'geom' - 'geometry_wkt'
                                    - '_row_hash' - '_first_seen' AS j) a
         WHERE zz_src.geom IS NOT NULL
-          AND NOT {touches(None, 'zz_src.geom')}
+          AND NOT {touches(None, 'zz_src.geom')}{near_clause}
         ON CONFLICT (dataset_id, row_hash) DO NOTHING
     """
     counts = f"""
         SELECT count(*) AS rows,
                count(*) FILTER (WHERE geom IS NOT NULL) AS rows_with_geom,
                count(*) FILTER (WHERE geom IS NOT NULL AND il) AS in_israel,
-               count(*) FILTER (WHERE geom IS NOT NULL AND NOT il AND js) AS in_judea_samaria
+               count(*) FILTER (WHERE geom IS NOT NULL AND NOT il AND js) AS in_judea_samaria,
+               count(*) FILTER (WHERE geom IS NOT NULL AND anyr) AS in_any
         FROM (SELECT zz_src.geom,
+                     zz_src.geom IS NOT NULL AND {touches(None, 'zz_src.geom')} AS anyr,
                      zz_src.geom IS NOT NULL AND {touches(REGION_ISRAEL, 'zz_src.geom')} AS il,
                      zz_src.geom IS NOT NULL AND {touches(REGION_JUDEA_SAMARIA, 'zz_src.geom')} AS js
               FROM {src} zz_src) c
@@ -445,12 +486,12 @@ def _check_sql(table: str) -> tuple[str, str]:
 
 
 async def check_layer(conn, dataset_id: str, table: str, *, title: str | None,
-                      version_number, boundary_built_at) -> dict:
+                      version_number, boundary_built_at, tol_m: float = 0.0) -> dict:
     """Check one mirrored layer and store its result. One transaction: the
     layer's previous abroad features are replaced, never mixed."""
     t0 = time.monotonic()
     layer_id = layer_id_of(table)
-    insert, counts = _check_sql(table)
+    insert, counts = _check_sql(table, tol_m)
     async with conn.transaction():
         await conn.execute(f"SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}")
         await conn.execute(
@@ -462,14 +503,16 @@ async def check_layer(conn, dataset_id: str, table: str, *, title: str | None,
                 FROM public.{_qi(FEATURES_TABLE)} WHERE dataset_id = $1""", dataset_id)
         abroad = a["n"]
         in_js = c["in_judea_samaria"]
-        in_sea = max(0, c["rows_with_geom"] - c["in_israel"] - in_js - abroad)
+        in_sea = max(0, c["in_any"] - c["in_israel"] - in_js)
+        near = max(0, c["rows_with_geom"] - c["in_any"] - abroad)
         ms = int((time.monotonic() - t0) * 1000)
         await conn.execute(
             f"""INSERT INTO public.{_qi(LAYERS_TABLE)}
                   (dataset_id, table_name, layer_id, title, version_number, rows,
                    rows_with_geom, in_israel, in_judea_samaria, in_maritime, abroad,
-                   max_distance_km, checked_at, boundary_built_at, duration_ms)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),$13,$14)
+                   max_distance_km, checked_at, boundary_built_at, duration_ms,
+                   near_border, tolerance_m)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),$13,$14,$15,$16)
                 ON CONFLICT (dataset_id) DO UPDATE SET
                   table_name = EXCLUDED.table_name, layer_id = EXCLUDED.layer_id,
                   title = EXCLUDED.title, version_number = EXCLUDED.version_number,
@@ -477,16 +520,18 @@ async def check_layer(conn, dataset_id: str, table: str, *, title: str | None,
                   in_israel = EXCLUDED.in_israel,
                   in_judea_samaria = EXCLUDED.in_judea_samaria,
                   in_maritime = EXCLUDED.in_maritime,
+                  near_border = EXCLUDED.near_border,
+                  tolerance_m = EXCLUDED.tolerance_m,
                   abroad = EXCLUDED.abroad, max_distance_km = EXCLUDED.max_distance_km,
                   checked_at = EXCLUDED.checked_at,
                   boundary_built_at = EXCLUDED.boundary_built_at,
                   duration_ms = EXCLUDED.duration_ms""",
             dataset_id, table, layer_id, title, version_number, c["rows"],
             c["rows_with_geom"], c["in_israel"], in_js, in_sea, abroad, a["mx"],
-            boundary_built_at, ms)
+            boundary_built_at, ms, near, tol_m)
     return {"dataset_id": dataset_id, "table": table, "rows": c["rows"],
             "in_israel": c["in_israel"], "in_judea_samaria": in_js,
-            "in_maritime": in_sea, "abroad": abroad, "duration_ms": ms}
+            "in_maritime": in_sea, "near_border": near, "abroad": abroad, "duration_ms": ms}
 
 
 async def _govmap_layers(db: AsyncSession) -> list[dict]:
@@ -539,10 +584,11 @@ async def run(db: AsyncSession, *, limit: int | None = None,
         async with pool.acquire() as conn:
             built_at = await _boundary_built_at(conn)
 
+    tol = tolerance_m()
     layers = await _govmap_layers(db)
     async with pool.acquire() as conn:
         prev = {r["dataset_id"]: dict(r) for r in await conn.fetch(
-            f"SELECT dataset_id, version_number, boundary_built_at "
+            f"SELECT dataset_id, version_number, boundary_built_at, tolerance_m "
             f"FROM public.{_qi(LAYERS_TABLE)}")}
         live = {l["dataset_id"] for l in layers}
         # A layer no longer mirrored (or no longer spatial) leaves no stale rows.
@@ -554,7 +600,7 @@ async def run(db: AsyncSession, *, limit: int | None = None,
                 f"DELETE FROM public.{_qi(LAYERS_TABLE)} WHERE dataset_id = ANY($1::text[])", gone)
 
     todo = [l for l in layers
-            if force or needs_check(prev.get(l["dataset_id"]), l["version_number"], built_at)]
+            if force or needs_check(prev.get(l["dataset_id"]), l["version_number"], built_at, tol)]
     if limit is not None:
         todo = todo[:limit]
     checked, failed, abroad_layers = 0, [], 0
@@ -564,7 +610,7 @@ async def run(db: AsyncSession, *, limit: int | None = None,
             async with pool.acquire() as conn:
                 res = await check_layer(conn, l["dataset_id"], l["table"], title=l["title"],
                                         version_number=l["version_number"],
-                                        boundary_built_at=built_at)
+                                        boundary_built_at=built_at, tol_m=tol)
             checked += 1
             abroad_layers += 1 if res["abroad"] else 0
         except Exception as e:  # noqa: BLE001 — one bad layer must not stop the run
@@ -578,11 +624,12 @@ async def run(db: AsyncSession, *, limit: int | None = None,
             f"""SELECT count(*) AS layers, coalesce(sum(rows), 0) AS rows,
                        coalesce(sum(in_judea_samaria), 0) AS in_judea_samaria,
                        coalesce(sum(in_maritime), 0) AS in_maritime,
+                       coalesce(sum(near_border), 0) AS near_border,
                        coalesce(sum(abroad), 0) AS abroad,
                        count(*) FILTER (WHERE abroad > 0) AS layers_with_abroad
                 FROM public.{_qi(LAYERS_TABLE)}"""))
     data_catalog.invalidate_catalog_cache()
-    out = {"boundary": boundary, "layers_total": len(layers), "to_check": len(todo),
+    out = {"boundary": boundary, "tolerance_m": tol, "layers_total": len(layers), "to_check": len(todo),
            "checked": checked, "failed": failed, "flags": flags,
            "totals": {k: int(v) for k, v in totals.items()},
            "duration_ms": int((time.monotonic() - t0) * 1000)}
@@ -629,7 +676,8 @@ async def status() -> dict:
                 f"FROM public.{_qi(BOUNDARY_TABLE)} ORDER BY region")]
             top = [dict(r) for r in await conn.fetch(
                 f"""SELECT dataset_id, table_name, layer_id, title, rows, in_israel,
-                           in_judea_samaria, in_maritime, abroad, max_distance_km, checked_at
+                           in_judea_samaria, in_maritime, near_border, abroad,
+                           max_distance_km, tolerance_m, checked_at
                     FROM public.{_qi(LAYERS_TABLE)} WHERE abroad > 0
                     ORDER BY abroad DESC LIMIT 50""")]
             n = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(LAYERS_TABLE)}")
@@ -637,3 +685,142 @@ async def status() -> dict:
         return {"configured": True, "built": False, "note": str(e)}
     return {"configured": True, "built": bool(regions), "regions": regions,
             "layers_checked": n, "top_abroad": top}
+
+
+# ── Read side: the "חו\"ל" project page (/projects/abroad) ───────────────────
+# Who to write to. GovMap's own catalog (over_govmap_layers) names the
+# publisher of most layers; the atlas layers are not in it, and are labelled by
+# the atlas they come from rather than guessed.
+_PUBLISHER_SQL = (
+    "coalesce(nullif(g.publisher, ''), "
+    "CASE WHEN a.title LIKE '%(אטלס ישראל)%' THEN 'אטלס ישראל' END, 'לא ידוע')"
+)
+
+#: GovMap's zoom for a link to one feature: close enough to see the point.
+GOVMAP_POINT_ZOOM = 9
+
+#: Largest page of features one request may ask for.
+MAX_FEATURES_PAGE = 5000
+
+
+def govmap_point_url(layer_id: str | None, x_itm: float | None, y_itm: float | None) -> str | None:
+    """A GovMap link centred on a point (ITM metres), with its layer switched on."""
+    if x_itm is None or y_itm is None:
+        return None
+    lay = f"&lay={layer_id}" if layer_id else ""
+    return (f"https://www.govmap.gov.il/?c={x_itm:.2f},{y_itm:.2f}"
+            f"&z={GOVMAP_POINT_ZOOM}{lay}")
+
+
+_tables_ensured = False
+
+
+async def _ensure_once() -> None:
+    """The read side may run before this process has done a check run, on a
+    schema an older version created: add any missing column once."""
+    global _tables_ensured
+    if not _tables_ensured:
+        await ensure_tables()
+        _tables_ensured = True
+
+
+async def summary() -> dict:
+    """Totals, the publishers and the layers with features abroad, for the
+    project page. Empty (not an error) before the first run."""
+    try:
+        await _ensure_once()
+    except Exception:  # noqa: BLE001 — reported below as not ready
+        logger.debug("govmap_abroad: ensure_tables failed", exc_info=True)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            totals = dict(await conn.fetchrow(f"""
+                SELECT count(*) AS layers_checked,
+                       count(*) FILTER (WHERE abroad > 0) AS layers_abroad,
+                       coalesce(sum(rows_with_geom), 0) AS features_checked,
+                       coalesce(sum(abroad), 0) AS abroad,
+                       coalesce(sum(in_maritime), 0) AS in_maritime,
+                       coalesce(sum(in_judea_samaria), 0) AS in_judea_samaria,
+                       coalesce(sum(near_border), 0) AS near_border,
+                       max(checked_at) AS checked_at,
+                       max(tolerance_m) AS tolerance_m
+                FROM public.{_qi(LAYERS_TABLE)}"""))
+            regions = [dict(r) for r in await conn.fetch(
+                f"SELECT region, name, area_km2 FROM public.{_qi(BOUNDARY_TABLE)} "
+                f"ORDER BY region")]
+            layers = [dict(r) for r in await conn.fetch(f"""
+                SELECT a.dataset_id, a.table_name, a.layer_id, a.title,
+                       {_PUBLISHER_SQL} AS publisher,
+                       a.rows_with_geom, a.in_israel, a.in_judea_samaria,
+                       a.in_maritime, a.near_border, a.abroad,
+                       (SELECT min(distance_km) FROM public.{_qi(FEATURES_TABLE)} f
+                        WHERE f.dataset_id = a.dataset_id) AS min_distance_km,
+                       a.max_distance_km, a.checked_at
+                FROM public.{_qi(LAYERS_TABLE)} a
+                LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id
+                WHERE a.abroad > 0
+                ORDER BY a.abroad DESC, a.title""")]
+        except Exception as e:  # noqa: BLE001 — tables not built yet
+            logger.debug("govmap_abroad.summary before first run", exc_info=True)
+            return {"ready": False, "note": str(e)[:200]}
+    pubs: dict[str, dict] = {}
+    for l in layers:
+        l["share"] = (l["abroad"] / l["rows_with_geom"]) if l["rows_with_geom"] else None
+        p = pubs.setdefault(l["publisher"], {"publisher": l["publisher"], "layers": 0,
+                                             "abroad": 0})
+        p["layers"] += 1
+        p["abroad"] += l["abroad"]
+    publishers = sorted(pubs.values(), key=lambda p: (-p["abroad"], p["publisher"]))
+    return {"ready": True, "totals": {k: (float(v) if k == "tolerance_m" and v is not None
+                                          else v) for k, v in totals.items()},
+            "regions": regions, "publishers": publishers, "layers": layers}
+
+
+def _features_where(dataset_id: str | None, publisher: str | None) -> tuple[str, list]:
+    clauses, params = [], []
+    if dataset_id:
+        params.append(dataset_id)
+        clauses.append(f"f.dataset_id = ${len(params)}")
+    if publisher:
+        params.append(publisher)
+        clauses.append(f"{_PUBLISHER_SQL} = ${len(params)}")
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+async def features(*, dataset_id: str | None = None, publisher: str | None = None,
+                   limit: int = 500, offset: int = 0) -> dict:
+    """The abroad features themselves, one row each: the layer and publisher,
+    a representative point (WGS84 and ITM), the distance from the outline and
+    the feature's own attributes. Ordered by publisher, layer, then distance
+    (farthest first: the clearest errors lead)."""
+    limit = max(1, min(int(limit), MAX_FEATURES_PAGE))
+    offset = max(0, int(offset))
+    where, params = _features_where(dataset_id, publisher)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(f"""
+            SELECT count(*) FROM public.{_qi(FEATURES_TABLE)} f
+            JOIN public.{_qi(LAYERS_TABLE)} a ON a.dataset_id = f.dataset_id
+            LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id{where}""",
+            *params)
+        rows = await conn.fetch(f"""
+            SELECT f.dataset_id, f.layer_id, a.title, {_PUBLISHER_SQL} AS publisher,
+                   f.row_hash, f.distance_km, f.attrs::text AS attrs,
+                   {_X}.GeometryType(f.geom) AS geom_type,
+                   {_X}.ST_X(pt) AS lon, {_X}.ST_Y(pt) AS lat,
+                   {_X}.ST_X({_X}.ST_Transform(pt, 2039)) AS x_itm,
+                   {_X}.ST_Y({_X}.ST_Transform(pt, 2039)) AS y_itm
+            FROM public.{_qi(FEATURES_TABLE)} f
+            JOIN public.{_qi(LAYERS_TABLE)} a ON a.dataset_id = f.dataset_id
+            LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id
+            CROSS JOIN LATERAL (SELECT {_X}.ST_PointOnSurface(f.geom) AS pt) p{where}
+            ORDER BY 4, a.title, f.distance_km DESC NULLS LAST, f.row_hash
+            LIMIT {limit} OFFSET {offset}""", *params)
+    import json as _json
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["attrs"] = _json.loads(d["attrs"]) if d["attrs"] else {}
+        d["govmap_url"] = govmap_point_url(d["layer_id"], d.pop("x_itm"), d.pop("y_itm"))
+        items.append(d)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}

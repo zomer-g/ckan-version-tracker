@@ -25,6 +25,7 @@ export default function Footer() {
         { label: t("nav.deals", 'עסקאות נדל"ן'), to: "/projects/deals" },
         { label: t("nav.prices", "שקיפות מחירים"), to: "/projects/prices" },
         { label: t("nav.project1933", "פרויקט 1933"), to: "/projects/1933" },
+        { label: t("nav.abroad", 'חו"ל'), to: "/projects/abroad" },
       ],
     },
     {

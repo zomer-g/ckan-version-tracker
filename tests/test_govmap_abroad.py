@@ -19,6 +19,27 @@ def test_needs_check_on_new_layer_new_version_or_new_outline():
     assert ga.needs_check(prev, 4, built)                       # layer changed
     assert ga.needs_check(prev, 3, built + timedelta(hours=1))  # outline rebuilt
     assert ga.needs_check({"version_number": 3, "boundary_built_at": None}, 3, built)
+    # a different tolerance re-checks; the same one does not
+    prev_tol = {**prev, "tolerance_m": 10.0}
+    assert not ga.needs_check(prev_tol, 3, built, 10.0)
+    assert ga.needs_check(prev_tol, 3, built, 25.0)
+    assert ga.needs_check(prev, 3, built, 10.0)   # checked before tolerances existed
+
+
+def test_tolerance_keeps_points_near_the_border_out_of_abroad():
+    insert0, _ = ga._check_sql("govmap_442_7e4323a2_2c6b3fe1", 0.0)
+    assert "ST_DWithin" not in insert0
+    insert10, counts = ga._check_sql("govmap_442_7e4323a2_2c6b3fe1", 10.0)
+    assert "ST_DWithin" in insert10 and ", 10.0)" in insert10
+    assert insert10.count("AND NOT EXISTS") == 2      # touches nothing, and not near
+    assert "in_any" in counts
+
+
+def test_tolerance_setting_is_never_negative(monkeypatch):
+    monkeypatch.setattr(ga.settings, "govmap_abroad_tolerance_m", -5, raising=False)
+    assert ga.tolerance_m() == 0.0
+    monkeypatch.setattr(ga.settings, "govmap_abroad_tolerance_m", 25, raising=False)
+    assert ga.tolerance_m() == 25.0
 
 
 def test_abroad_means_touching_no_region_at_all():
@@ -57,3 +78,17 @@ def test_abroad_is_a_content_field_but_not_a_column_name_flag():
     # has_abroad is written by govmap_abroad and must never be reset by it.
     assert ga.FLAG_KEY not in field_flags.ALL_FIELDS
     assert dataset_facets.content_fields_of({"has_abroad": True}) == ["abroad"]
+
+
+def test_govmap_point_link_centres_on_the_feature():
+    url = ga.govmap_point_url("400", 996751.0, 830292.0)
+    assert url == "https://www.govmap.gov.il/?c=996751.00,830292.00&z=9&lay=400"
+    assert ga.govmap_point_url("400", None, 1.0) is None
+
+
+def test_feature_name_prefers_name_fields_then_any_hebrew_text():
+    from app.api.govmap_abroad import feature_name
+    assert feature_name({"new_name": "אולם ספורט חדש בית דגן", "objectId": "7"}) == "אולם ספורט חדש בית דגן"
+    assert feature_name({"name": "גשר הישנה"}) == "גשר הישנה"
+    assert feature_name({"code": "LLP1205", "place": "ים ראש הנקרה-אכזיב"}) == "ים ראש הנקרה-אכזיב"
+    assert feature_name({"objectId": "3", "x": "1"}) == ""

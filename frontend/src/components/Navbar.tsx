@@ -151,6 +151,7 @@ export default function Navbar() {
         // The rationale and the decision-1933 analysis used to sit under
         // "About"; they now live inside this project's page.
         { to: "/projects/1933", label: t("nav.project1933", "פרויקט 1933") },
+        { to: "/projects/abroad", label: t("nav.abroad", 'חו"ל') },
       ],
     },
     {
