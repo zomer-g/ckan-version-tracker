@@ -37,6 +37,9 @@ const STAGES: { id: string; label: string; note: string; optIn?: boolean }[] = [
   { id: "zip5", label: "גלגול מיקוד", note: "מיקוד 5 ליישוב." },
   { id: "pip", label: "שיוך כתובת לחלקה (PIP)",
     note: "נקודה בתוך פוליגון. חייב לרוץ אחרי שדרת הכתובות: ה-TRUNCATE שם מוחק כל parcel_key, ורק השלב הזה כותב אותם בחזרה." },
+  { id: "unsettled", label: "חלקות לא מוסדרות",
+    note: "כ-20 אלף חלקות משכבת GovMap 237294 שאינן בשכבת החלקות הרשומות, ושיוך הכתובות שבתוכן. שלב קל שאפשר להריץ לבד; בנייה מלאה כבר כוללת אותו בשדרת החלקות וב-PIP.",
+    optIn: true },
 ];
 
 const DEFAULT_SELECTION = STAGES.filter((s) => !s.optIn).map((s) => s.id);

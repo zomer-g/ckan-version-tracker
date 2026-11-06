@@ -138,6 +138,26 @@ _EXACT_COLUMNS = [
     ("exact_checked_at", "timestamptz"),
 ]
 
+#: Exact points for addresses of the POSTAL file, looked up by OVER's own
+#: ``address_key`` (2026-11-06). The parcel sweep only ever reaches addresses
+#: GovMap lists on a parcel; 165k of Israel Post's addresses never came up
+#: there, so the worker asks GovMap's search about them directly. Kept apart
+#: from TABLE because these rows have no GovMap address id and no parcel —
+#: the key is the spine's, which ``build_addresses`` rebuilds identically.
+POSTAL_TABLE = "over_re_govmap_postal_points"
+
+_POSTAL_DDL = f"""
+CREATE TABLE IF NOT EXISTS public.{_qi(POSTAL_TABLE)} (
+    address_key   text PRIMARY KEY,
+    status        text NOT NULL,
+    lat           double precision,
+    lon           double precision,
+    itm_x         double precision,
+    itm_y         double precision,
+    checked_at    timestamptz DEFAULT now()
+)
+"""
+
 _INDEXES = [
     f"CREATE INDEX IF NOT EXISTS {_qi(TABLE + '_parcel_idx')} "
     f"ON public.{_qi(TABLE)} (parcel_object_id)",
@@ -164,6 +184,11 @@ async def ensure_tables() -> None:
                                exc_info=True)
         for stmt in _INDEXES:
             await conn.execute(stmt)
+        try:
+            await conn.execute(_POSTAL_DDL)
+        except Exception:  # noqa: BLE001 — must not take the sweep's ingest down
+            logger.warning("govmap_parcels: could not create %s", POSTAL_TABLE,
+                           exc_info=True)
     await _revoke_from_public_console()
 
 
@@ -184,11 +209,13 @@ async def _revoke_from_public_console() -> None:
         return
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
-        try:
-            await conn.execute(
-                f"REVOKE ALL ON public.{_qi(TABLE)} FROM {_qi(role)}")
-        except Exception:  # noqa: BLE001 — a missing role must not fail a build
-            logger.debug("govmap_parcels: revoke on %s failed", TABLE, exc_info=True)
+        for table in (TABLE, POSTAL_TABLE):
+            try:
+                await conn.execute(
+                    f"REVOKE ALL ON public.{_qi(table)} FROM {_qi(role)}")
+            except Exception:  # noqa: BLE001 — a missing role must not fail a build
+                logger.debug("govmap_parcels: revoke on %s failed", table,
+                             exc_info=True)
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────
@@ -334,6 +361,89 @@ async def record_points(payload: dict) -> dict:
     unknown = [r[0] for r in rows if r[0] not in got]
     out = {"received": received, "stored": len(got), "unknown": unknown}
     logger.info("govmap_parcels: points %s", {**out, "unknown": len(unknown)})
+    return out
+
+
+def _postal_rows(a: dict) -> list[tuple]:
+    """One looked-up postal doorway → one row per address_key it covers.
+
+    The worker asks once per doorway and joins the keys of its entrances with
+    ``;`` — every entrance of a building is the same door to GovMap's search.
+    Same verdict rules as :func:`_point_row`.
+    """
+    keys = [k.strip() for k in str(a.get("address_key") or "").split(";") if k.strip()]
+    one = _point_row({**a, "address_objectid": 0})
+    if not keys or one is None:
+        return []
+    _, lat, lon, x, y, status = one
+    return [(k, status, lat, lon, x, y) for k in keys]
+
+
+#: Fill a postal address's point from GovMap's search. The same ranking as the
+#: sweep's own exact points: it fills a missing point and upgrades a centroid
+#: this source put there, and never displaces the register, the geocoder or a
+#: municipal layer. ``{where}`` narrows it to one batch at ingest.
+_APPLY_POSTAL = f"""
+    UPDATE public.{_qi(ADDRESSES_TABLE)} o
+       SET lat = q.lat, lon = q.lon,
+           point = extensions.ST_SetSRID(extensions.ST_MakePoint(q.lon, q.lat), 4326),
+           point_source = '{EXACT_POINT_SOURCE}'
+      FROM public.{_qi(POSTAL_TABLE)} q
+     WHERE o.address_key = q.address_key
+       AND q.status = 'found' AND q.lat IS NOT NULL AND q.lon IS NOT NULL
+       AND (o.point IS NULL OR o.point_source = '{POINT_SOURCE}')
+       {{where}}
+"""
+
+
+async def record_postal_points(payload: dict) -> dict:
+    """Store GovMap's answer for postal addresses, and apply the found ones.
+
+    ``{"points": [{address_key, status, lat, lon, itm_x, itm_y}, ...]}``
+
+    An UPSERT (the worker may re-send) followed by an immediate fill of the
+    spine for just these keys, so a point shows up without waiting for a
+    rebuild; the ``govmap_parcels`` build stage re-applies the whole table,
+    because ``build_addresses`` truncates the spine.
+
+    ``unknown`` is always empty: unlike the sweep's points, a postal row needs
+    no earlier ingest to attach to, so there is nothing for the worker to
+    re-send. Keys the spine does not have right now are stored anyway (a
+    rebuild may bring them back) and only counted, in ``not_in_spine``.
+    """
+    received = len(payload.get("points") or [])
+    # One row per key, the last word winning: ON CONFLICT cannot touch the
+    # same row twice in one statement.
+    rows = list({r[0]: r for a in (payload.get("points") or [])
+                 for r in _postal_rows(a)}.values())
+    if not rows:
+        return {"received": received, "stored": 0, "applied": 0,
+                "not_in_spine": 0, "unknown": []}
+    await ensure_tables()
+    pool = await append_store.get_pool()
+    keys = [r[0] for r in rows]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(f"""
+                INSERT INTO public.{_qi(POSTAL_TABLE)}
+                       (address_key, status, lat, lon, itm_x, itm_y, checked_at)
+                SELECT * , now() FROM unnest($1::text[], $2::text[], $3::float8[],
+                                             $4::float8[], $5::float8[], $6::float8[])
+                ON CONFLICT (address_key) DO UPDATE SET
+                  status = EXCLUDED.status, lat = EXCLUDED.lat, lon = EXCLUDED.lon,
+                  itm_x = EXCLUDED.itm_x, itm_y = EXCLUDED.itm_y, checked_at = now()
+            """, keys, [r[1] for r in rows], [r[2] for r in rows],
+                [r[3] for r in rows], [r[4] for r in rows], [r[5] for r in rows])
+            tag = await conn.execute(
+                _APPLY_POSTAL.format(where="AND o.address_key = ANY($1::text[])"), keys)
+            known = await conn.fetch(
+                f"SELECT address_key FROM public.{_qi(ADDRESSES_TABLE)} "
+                f"WHERE address_key = ANY($1::text[])", keys)
+    out = {"received": received, "stored": len(rows),
+           "applied": int(str(tag).rsplit(" ", 1)[-1] or 0),
+           "not_in_spine": len(set(keys) - {k["address_key"] for k in known}),
+           "unknown": []}
+    logger.info("govmap_parcels: postal points %s", out)
     return out
 
 
@@ -570,6 +680,11 @@ async def merge(*, dry_run: bool = False) -> dict:
             """, timeout=1800)
             points_upgraded = int(str(tag).rsplit(" ", 1)[-1] or 0)
 
+            # The postal file's own lookups, re-applied in full: a rebuild of
+            # the spine dropped whatever record_postal_points() filled.
+            tag = await conn.execute(_APPLY_POSTAL.format(where=""), timeout=1800)
+            postal_points = int(str(tag).rsplit(" ", 1)[-1] or 0)
+
             tag = await conn.execute(f"""
                 WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
                 INSERT INTO public.{_qi(ADDRESSES_TABLE)}
@@ -604,7 +719,8 @@ async def merge(*, dry_run: bool = False) -> dict:
     from app.services import nadlan_query
     nadlan_query.invalidate_stats_cache()
     out = {"parcels_filled": parcels_filled, "points_filled": points_filled,
-           "points_upgraded": points_upgraded, "inserted": inserted}
+           "points_upgraded": points_upgraded, "postal_points": postal_points,
+           "inserted": inserted}
     logger.info("govmap_parcels: merged %s", out)
     return out
 

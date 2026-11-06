@@ -57,6 +57,15 @@ logger = logging.getLogger(__name__)
 
 # ── source tables ─────────────────────────────────────────────────────────────
 PARCELS_SRC = ("public", "append_shape_ff3176b1")
+# GovMap layer 237294 "חלקות לא מוסדרות" (dataset f75f5dfb), added 2026-11-06.
+# The national shape layer above holds REGISTERED parcels only: 27,956 parcels
+# of unsettled land (428 gushim, mostly East Jerusalem) were absent from the
+# spine, and 8,749 addresses with a point sat inside one with no parcel at all.
+# This layer is their only publication. Its rows repeat per version, so every
+# reader takes the newest per gush-חלקה; a parcel the registered layer also has
+# (8,006 of them, i.e. since settled) keeps the registered row.
+UNSETTLED_SRC = ("idx", "govmap_237294_3f4e4f0f_f75f5dfb")
+UNSETTLED_STATUS = "לא מוסדר"
 GAZTIR_SRC = ("odata", "gaztir_41720377")
 POSTAL_SRC = ("odata", "00a9749e_c112_4190_9c37_97918b5792cf_2a021675")
 # The SAME Israel-Post dataset publishes a LOCALITY-level file too: one zip for
@@ -119,11 +128,14 @@ ALL_TABLES = [PARCELS_TABLE, GAZ_TABLE, STREETS_TABLE, STREET_ALIASES_TABLE,
               ZIP5_TABLE, STATE_TABLE]
 
 STAGES = ["source_indexes", "parcels", "gazetteer", "postal_localities",
-          "streets", "addresses", "zip5", "municipal", "govmap_parcels", "pip"]
+          "streets", "addresses", "zip5", "municipal", "govmap_parcels", "pip",
+          "unsettled"]
 # What a bare build() leaves out. `pip` is NOT in here: see build()'s docstring —
 # it rebuilds the links that `addresses` has just thrown away, and a rebuild that
-# skips it leaves the address spine with no parcel at all.
-DEFAULT_SKIP = ("source_indexes",)
+# skips it leaves the address spine with no parcel at all. `unsettled` is: a
+# full build already does its work inside `parcels` and `pip`; it exists to add
+# the unsettled parcels to a live spine without rebuilding it.
+DEFAULT_SKIP = ("source_indexes", "unsettled")
 
 # The parcels scan and the index builds far exceed the pool's command_timeout=180.
 _LONG_TIMEOUT = 3600
@@ -647,11 +659,28 @@ async def ensure_functions() -> None:
               WHERE s.street_key = public.over_street_key(p_settlement_code, p_q)
             $$;
             """)
+        # The registered layer first; an unsettled parcel only where it has
+        # none. The fallback is compiled in only when that layer is mirrored
+        # here — a LANGUAGE sql body naming a missing table fails to create.
+        unsettled_fallback = "NULL::text"
+        if await _unsettled_available(conn):
+            unsettled_fallback = f"""(
+                SELECT public.over_parcel_key(u.blocknumber, u.subblocknumber, u.parcelnumber)
+                FROM {_t(UNSETTLED_SRC)} u
+                WHERE u.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+                                  {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
+                  AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
+                        u.geom,
+                        {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
+                          {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
+                ORDER BY u._first_seen DESC
+                LIMIT 1)"""
         await conn.execute(
             f"""
             CREATE OR REPLACE FUNCTION public.over_parcel_at(p_lat double precision,
                                                              p_lon double precision)
             RETURNS text LANGUAGE sql STABLE AS $$
+              SELECT coalesce((
               SELECT public.over_parcel_key(p."GUSH_NUM", p."GUSH_SUFFI", p."PARCEL")
               FROM {_t(PARCELS_SRC)} p
               -- OPERATOR(extensions.&&), not a bare &&: PostGIS's operators
@@ -665,7 +694,7 @@ async def ensure_functions() -> None:
                       p.geom,
                       {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
                         {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
-              LIMIT 1
+              LIMIT 1), {unsettled_fallback})
             $$;
             """)
         await conn.execute(
@@ -817,6 +846,7 @@ async def build_parcels() -> dict:
                 ORDER BY k.parcel_key, k.sys_date DESC NULLS LAST
                 """,
                 timeout=_LONG_TIMEOUT)
+            unsettled = await _insert_unsettled_parcels(conn)
             # Flag the gush/parcel pairs the gazetteer cannot disambiguate,
             # because it publishes no gush suffix.
             await conn.execute(
@@ -830,9 +860,78 @@ async def build_parcels() -> dict:
             amb = await conn.fetchval(
                 f"SELECT count(*) FROM public.{_qi(PARCELS_TABLE)} WHERE gp_ambiguous")
             await _stage_done(conn, "parcels", t0, rows_out=n,
-                              note=f"gp_ambiguous={amb}")
+                              note=f"gp_ambiguous={amb} unsettled={unsettled}")
         await conn.execute(f"ANALYZE public.{_qi(PARCELS_TABLE)}", timeout=_LONG_TIMEOUT)
-    return {"parcels": n, "gp_ambiguous": amb}
+    return {"parcels": n, "gp_ambiguous": amb, "unsettled": unsettled}
+
+
+async def _unsettled_available(conn) -> bool:
+    return bool(await conn.fetchval(
+        "SELECT to_regclass($1) IS NOT NULL", f"{UNSETTLED_SRC[0]}.{UNSETTLED_SRC[1]}"))
+
+
+def _unsettled_latest_sql() -> str:
+    """The unsettled layer, one row per gush-חלקה (its newest version)."""
+    ext = _qi(PG_EXT_SCHEMA)
+    return f"""
+        SELECT DISTINCT ON (u.parcel_key) u.*
+        FROM (
+          SELECT split_part(s.blocknumber,'.',1)::int AS gush,
+                 coalesce(nullif(split_part(coalesce(s.subblocknumber,'0'),'.',1),'')::int, 0) AS sfx,
+                 split_part(s.parcelnumber,'.',1)::int AS parcel,
+                 split_part(s.blocknumber,'.',1)::int || '-' ||
+                   coalesce(nullif(split_part(coalesce(s.subblocknumber,'0'),'.',1),'')::int, 0) || '-' ||
+                   split_part(s.parcelnumber,'.',1)::int AS parcel_key,
+                 nullif(s.statedarea,'')::double precision AS legal_area,
+                 s.geom, s._first_seen
+          FROM {_t(UNSETTLED_SRC)} s
+          WHERE s.geom IS NOT NULL
+            AND s.blocknumber  ~ '^[0-9]+(\\.0*)?$'
+            AND s.parcelnumber ~ '^[0-9]+(\\.0*)?$'
+            AND {ext}.ST_IsValid(s.geom)
+        ) u
+        ORDER BY u.parcel_key, u._first_seen DESC
+    """
+
+
+async def _insert_unsettled_parcels(conn) -> int:
+    """Add the unsettled parcels the registered layer does not have.
+
+    The layer names no settlement, so the settlement comes from the nearest
+    registered parcel's — a parcel of unsettled land lies inside the town that
+    surrounds it, and its neighbours say which one that is. Skipped, never
+    fatal, when the layer is not mirrored on this database.
+    """
+    if not await _unsettled_available(conn):
+        logger.warning("nadlan parcels: %s missing — unsettled parcels skipped",
+                       _t(UNSETTLED_SRC))
+        return 0
+    ext = _qi(PG_EXT_SCHEMA)
+    tag = await conn.execute(
+        f"""
+        INSERT INTO public.{_qi(PARCELS_TABLE)}
+          (parcel_key, gush, gush_suffix, parcel, gp_key, settlement_code,
+           locality_name, reg_mun_name, county_name, region_name,
+           legal_area, status_text, lat, lon, centroid, refreshed_at)
+        SELECT u.parcel_key, u.gush, u.sfx, u.parcel, u.gush || '-' || u.parcel,
+               nb.settlement_code, nb.locality_name, nb.reg_mun_name,
+               nb.county_name, nb.region_name,
+               u.legal_area, '{UNSETTLED_STATUS}',
+               {ext}.ST_Y(u.pt), {ext}.ST_X(u.pt), u.pt, now()
+        FROM (SELECT l.*, {ext}.ST_PointOnSurface(l.geom) AS pt
+              FROM ({_unsettled_latest_sql()}) l) u
+        LEFT JOIN LATERAL (
+          SELECT p.settlement_code, p.locality_name, p.reg_mun_name,
+                 p.county_name, p.region_name
+          FROM public.{_qi(PARCELS_TABLE)} p
+          WHERE p.status_text IS DISTINCT FROM '{UNSETTLED_STATUS}'
+            AND p.settlement_code IS NOT NULL
+          ORDER BY p.centroid OPERATOR({ext}.<->) u.pt
+          LIMIT 1
+        ) nb ON true
+        ON CONFLICT (parcel_key) DO NOTHING
+        """, timeout=_LONG_TIMEOUT)
+    return int(str(tag).rsplit(" ", 1)[-1] or 0)
 
 
 # ── stage 2: the gazetteer, rolled up to parcel grain ─────────────────────────
@@ -1747,6 +1846,7 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
             done += n
             batches += 1
             logger.info("nadlan pip: %d addresses linked (%d batches)", done, batches)
+        unsettled = await _pip_unsettled(conn)
         hits = await conn.fetchval(
             f"SELECT count(*) FROM public.{_qi(ADDRESSES_TABLE)} WHERE parcel_match = 'pip'")
         remaining = await conn.fetchval(
@@ -1754,8 +1854,67 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
                 WHERE point IS NOT NULL AND parcel_match IS NULL""")
         await _stage_done(conn, "pip", t0, rows_out=hits,
                           status="ok" if not remaining else "partial",
-                          note=f"linked={hits} remaining={remaining}")
-    return {"processed": done, "linked": hits, "remaining": remaining}
+                          note=f"linked={hits} remaining={remaining} unsettled={unsettled}")
+    return {"processed": done, "linked": hits, "remaining": remaining,
+            "unsettled": unsettled}
+
+
+async def _pip_unsettled(conn) -> int:
+    """Second chance for addresses the registered layer has no parcel for.
+
+    The batched pass above probes the registered layer only and marks a miss
+    ``'none'``; this links those misses to an unsettled parcel when the point
+    is inside one that the spine holds. One statement: the misses are a few
+    tens of thousands and the unsettled layer has its own GiST index. Rows
+    stay ``'none'`` when they are in neither, so a re-run costs one probe each.
+    """
+    if not await _unsettled_available(conn):
+        return 0
+    ext = _qi(PG_EXT_SCHEMA)
+    tag = await conn.execute(
+        f"""
+        WITH hit AS (
+          SELECT a.address_key, u.pk
+          FROM public.{_qi(ADDRESSES_TABLE)} a
+          JOIN LATERAL (
+            SELECT public.over_parcel_key(s.blocknumber, s.subblocknumber, s.parcelnumber) AS pk
+            FROM {_t(UNSETTLED_SRC)} s
+            WHERE s.geom OPERATOR({ext}.&&) a.point
+              AND {ext}.ST_Contains(s.geom, a.point)
+            ORDER BY s._first_seen DESC
+            LIMIT 1
+          ) u ON true
+          WHERE a.parcel_match = 'none' AND a.point IS NOT NULL
+        )
+        UPDATE public.{_qi(ADDRESSES_TABLE)} a
+           SET parcel_key = hit.pk, parcel_match = 'pip'
+          FROM hit
+         WHERE a.address_key = hit.address_key
+           AND EXISTS (SELECT 1 FROM public.{_qi(PARCELS_TABLE)} p
+                        WHERE p.parcel_key = hit.pk)
+        """, timeout=_LONG_TIMEOUT)
+    n = int(str(tag).rsplit(" ", 1)[-1] or 0)
+    logger.info("nadlan pip: %d addresses linked to unsettled parcels", n)
+    return n
+
+
+async def build_unsettled() -> dict:
+    """Add the unsettled parcels to the live spine and link their addresses.
+
+    The two halves of what ``parcels`` and ``pip`` do for this layer during a
+    full build, without the full build: the insert is ON CONFLICT DO NOTHING
+    and the link touches only ``'none'`` rows, so running it again is a no-op.
+    """
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        t0 = await _stage_start(conn, "unsettled")
+        async with conn.transaction():
+            added = await _insert_unsettled_parcels(conn)
+        await conn.execute(f"ANALYZE public.{_qi(PARCELS_TABLE)}", timeout=_LONG_TIMEOUT)
+        linked = await _pip_unsettled(conn)
+        await _stage_done(conn, "unsettled", t0, rows_out=added,
+                          note=f"parcels_added={added} addresses_linked={linked}")
+    return {"parcels_added": added, "addresses_linked": linked}
 
 
 # ── driver ────────────────────────────────────────────────────────────────────
@@ -1813,6 +1972,7 @@ _BUILDERS = {
     "municipal": lambda: _build_municipal(),
     "govmap_parcels": lambda: _build_govmap_parcels(),
     "pip": build_pip,
+    "unsettled": build_unsettled,
 }
 
 

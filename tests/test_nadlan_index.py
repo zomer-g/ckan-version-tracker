@@ -197,7 +197,10 @@ def test_the_default_build_skips_only_source_indexes():
     a one-off over tables this module does not own — and it reads DEFAULT_SKIP,
     so a future change to what is skipped shows up here instead of hiding."""
     default = [s for s in ni.STAGES if s not in ni.DEFAULT_SKIP]
-    assert ni.DEFAULT_SKIP == ("source_indexes",)
+    # `unsettled` (2026-11-06) is skipped too, and harmlessly: a full build does
+    # its work inside `parcels` and `pip`; the stage only exists to add the
+    # unsettled layer to a LIVE spine without rebuilding it.
+    assert ni.DEFAULT_SKIP == ("source_indexes", "unsettled")
     assert "source_indexes" not in default
     # The stages that repair what `addresses` throws away must be in the
     # default set, or a bare rebuild is destructive.

@@ -323,3 +323,34 @@ def test_points_attach_to_existing_rows_and_report_the_rest():
 def test_adding_the_columns_can_never_break_ingest():
     src = inspect.getsource(gp.ensure_tables)
     assert "ADD COLUMN IF NOT EXISTS" in src and "except Exception" in src
+
+
+# ── the postal file's own lookups (2026-11-06) ────────────────────────────────
+def test_a_postal_doorway_fans_out_to_every_entrance_key():
+    rows = gp._postal_rows({"address_key": "5000|5000-a|3|;5000|5000-a|3|א",
+                            "status": "found", "lat": "32.08", "lon": "34.78",
+                            "itm_x": "180000", "itm_y": "665000"})
+    assert [r[0] for r in rows] == ["5000|5000-a|3|", "5000|5000-a|3|א"]
+    assert all(r[1] == "found" and r[2] == 32.08 for r in rows)
+
+
+def test_a_postal_verdict_without_a_usable_point_carries_no_point():
+    assert gp._postal_rows({"address_key": "k", "status": "mismatch",
+                            "lat": "32.08", "lon": "34.78"}) == [
+        ("k", "mismatch", None, None, None, None)]
+    # "found" outside Israel is demoted, exactly like the sweep's own points
+    assert gp._postal_rows({"address_key": "k", "status": "found",
+                            "lat": "51.5", "lon": "-0.1"})[0][1] == "mismatch"
+    assert gp._postal_rows({"address_key": "", "status": "found"}) == []
+    assert gp._postal_rows({"address_key": "k", "status": "bogus"}) == []
+
+
+def test_a_postal_point_only_fills_or_upgrades_our_own_centroid():
+    sql = gp._APPLY_POSTAL
+    assert "o.point IS NULL OR o.point_source = 'govmap_parcel'" in sql
+    assert "q.status = 'found'" in sql
+    assert gp.EXACT_POINT_SOURCE in sql
+
+
+def test_the_merge_re_applies_postal_points_after_a_rebuild():
+    assert "_APPLY_POSTAL" in inspect.getsource(gp.merge)

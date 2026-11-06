@@ -4334,6 +4334,20 @@ async def govmap_points_ingest(request: Request, body: dict):
     return await address_govmap_parcels.record_points(body)
 
 
+@router.post("/govmap-points/postal-ingest")
+async def govmap_postal_points_ingest(request: Request, body: dict):
+    """Exact points for the POSTAL file's addresses, keyed by ``address_key``.
+
+    ``{"points": [{address_key, status, lat, lon, itm_x, itm_y}, ...]}`` — the
+    key may join several entrances of one doorway with ``;``. Stored, and the
+    found ones fill the spine at once (missing points and our own centroids
+    only); the ``govmap_parcels`` build stage re-applies them after a rebuild.
+    """
+    _verify_worker_key(request)
+    from app.services import address_govmap_parcels
+    return await address_govmap_parcels.record_postal_points(body)
+
+
 # ── יומן לעם (Ocal) diary import via the residential worker ────────────────────
 # odata.org.il's file downloads 403 Render's datacenter IP, so the Render backend
 # can discover diaries + parse/import their bytes but cannot DOWNLOAD them. The
