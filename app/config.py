@@ -324,6 +324,11 @@ class Settings(BaseSettings):
     # evidence for the refresh ceiling first, and the largest few belong on the
     # worker service, not here.
     index_mirror_max_csv_mb: int = 100
+    # GovMap features outside Israel's outline (app/services/govmap_abroad.py):
+    # a feature within this many metres of the outline is NOT counted abroad,
+    # so a point drawn a few metres off a border line doesn't flag its layer.
+    # Changing it re-checks every layer on the next run.
+    govmap_abroad_tolerance_m: float = 10.0
     # The ceiling for REFRESHING a table the console already serves. The cap
     # above decides what is worth starting to mirror; this one decides how big a
     # dataset may grow before we would rather freeze it than risk the dyno. In

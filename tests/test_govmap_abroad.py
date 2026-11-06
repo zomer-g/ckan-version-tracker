@@ -19,6 +19,27 @@ def test_needs_check_on_new_layer_new_version_or_new_outline():
     assert ga.needs_check(prev, 4, built)                       # layer changed
     assert ga.needs_check(prev, 3, built + timedelta(hours=1))  # outline rebuilt
     assert ga.needs_check({"version_number": 3, "boundary_built_at": None}, 3, built)
+    # a different tolerance re-checks; the same one does not
+    prev_tol = {**prev, "tolerance_m": 10.0}
+    assert not ga.needs_check(prev_tol, 3, built, 10.0)
+    assert ga.needs_check(prev_tol, 3, built, 25.0)
+    assert ga.needs_check(prev, 3, built, 10.0)   # checked before tolerances existed
+
+
+def test_tolerance_keeps_points_near_the_border_out_of_abroad():
+    insert0, _ = ga._check_sql("govmap_442_7e4323a2_2c6b3fe1", 0.0)
+    assert "ST_DWithin" not in insert0
+    insert10, counts = ga._check_sql("govmap_442_7e4323a2_2c6b3fe1", 10.0)
+    assert "ST_DWithin" in insert10 and ", 10.0)" in insert10
+    assert insert10.count("AND NOT EXISTS") == 2      # touches nothing, and not near
+    assert "in_any" in counts
+
+
+def test_tolerance_setting_is_never_negative(monkeypatch):
+    monkeypatch.setattr(ga.settings, "govmap_abroad_tolerance_m", -5, raising=False)
+    assert ga.tolerance_m() == 0.0
+    monkeypatch.setattr(ga.settings, "govmap_abroad_tolerance_m", 25, raising=False)
+    assert ga.tolerance_m() == 25.0
 
 
 def test_abroad_means_touching_no_region_at_all():
