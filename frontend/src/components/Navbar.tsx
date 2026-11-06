@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { datasets as datasetsApi } from "../api/client";
-import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 import { useTheme } from "../hooks/useTheme";
 import DataCaveatNotice from "./DataCaveatNotice";
 
@@ -121,10 +120,6 @@ export default function Navbar() {
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
-  // Published decision analyses, if any — cached module-side, so this is one
-  // request per session and not one per navigation.
-  const publishedDecisions = usePublishedDecisions();
-
   // Two-level structure: a few flat entry points + grouped dropdowns.
   const navEntries: NavEntry[] = [
     { to: "/", label: t("nav.search") },
@@ -153,6 +148,9 @@ export default function Navbar() {
         { to: "/projects/nadlan", label: t("nav.nadlan", 'נדל"ן לעם') },
         { to: "/projects/deals", label: t("nav.deals", 'עסקאות נדל"ן') },
         { to: "/projects/prices", label: t("nav.prices", "שקיפות מחירים") },
+        // The rationale and the decision-1933 analysis used to sit under
+        // "About"; they now live inside this project's page.
+        { to: "/projects/1933", label: t("nav.project1933", "פרויקט 1933") },
       ],
     },
     {
@@ -160,13 +158,6 @@ export default function Navbar() {
       label: t("nav.about"),
       children: [
         { to: "/about", label: t("nav.about") },
-        { to: "/rationale", label: t("nav.rationale", "הרציונל") },
-        // Decision analyses appear here only once published — an unpublished
-        // draft returns nothing from the index endpoint and leaves no link.
-        ...publishedDecisions.map((d) => ({
-          to: `/rationale/${d.key}`,
-          label: t("nav.decision", "החלטה") + " " + d.key,
-        })),
         { to: "/api", label: t("nav.api", "API") },
       ],
     },

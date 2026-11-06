@@ -24,6 +24,7 @@ export default function Footer() {
         { label: t("nav.nadlan", 'נדל"ן לעם'), to: "/projects/nadlan" },
         { label: t("nav.deals", 'עסקאות נדל"ן'), to: "/projects/deals" },
         { label: t("nav.prices", "שקיפות מחירים"), to: "/projects/prices" },
+        { label: t("nav.project1933", "פרויקט 1933"), to: "/projects/1933" },
       ],
     },
     {
@@ -40,7 +41,6 @@ export default function Footer() {
       title: t("footer.group_about", "אודות"),
       links: [
         { label: t("nav.about"), to: "/about" },
-        { label: t("nav.rationale", "הרציונל"), to: "/rationale" },
         { label: t("nav.api", "API"), to: "/api" },
         { label: t("about.privacy_title"), to: "/about#privacy" },
         { label: t("about.accessibility_title"), to: "/about#accessibility" },

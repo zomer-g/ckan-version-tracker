@@ -32,6 +32,9 @@ export default function RationalePage() {
     <div>
       <div className="about-hero">
         <div className="container">
+          <p className="project1933-back">
+            <Link to="/projects/1933">{t("project1933.back", "← פרויקט 1933")}</Link>
+          </p>
           <h1>{t("rationale.title")}</h1>
           <p className="rationale-hero-sub">{t("rationale.subtitle")}</p>
         </div>
