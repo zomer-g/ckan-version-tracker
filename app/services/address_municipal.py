@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 
-from app.services import append_store
+from app.services import append_store, pg_ext
 from app.services.nadlan_index import ADDRESSES_TABLE
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,7 @@ def _layer_cte(table: str, town: str, st: str, hn: str, ot: str | None) -> str:
     one, but they spell it differently and some write a blank rather than NULL.
     """
     suffix = f"nullif(btrim(coalesce(l.{ot}::text,'')),'')" if ot else "NULL::text"
+    x = pg_ext.q()  # where PostGIS lives, read when the pool started
     return f"""
         SELECT over_settlement_code('{town}')                        AS sc,
                over_street_key(over_settlement_code('{town}'),
@@ -99,9 +100,9 @@ def _layer_cte(table: str, town: str, st: str, hn: str, ot: str | None) -> str:
                -- sits within ~6 m of either end. The `point` column is typed
                -- geometry(Point,4326), so it would have rejected the raw
                -- geometry anyway.
-               extensions.ST_Y(extensions.ST_Centroid(l.geom))        AS lat,
-               extensions.ST_X(extensions.ST_Centroid(l.geom))        AS lon,
-               extensions.ST_Centroid(l.geom)                         AS point
+               {x}.ST_Y({x}.ST_Centroid(l.geom))                      AS lat,
+               {x}.ST_X({x}.ST_Centroid(l.geom))                      AS lon,
+               {x}.ST_Centroid(l.geom)                                AS point
         FROM idx."{table}" l
         WHERE l.geom IS NOT NULL
           AND btrim(coalesce(l.{st}::text,'')) <> ''

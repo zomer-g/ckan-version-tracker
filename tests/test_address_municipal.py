@@ -127,7 +127,7 @@ def test_geometry_is_centroided_because_only_three_layers_are_points():
     import inspect
     src = inspect.getsource(am._layer_cte)
     assert "ST_Centroid" in src
-    assert "ST_Y(extensions.ST_Centroid" in src
+    assert "{x}.ST_Y({x}.ST_Centroid" in src
     assert "ST_Y(l.geom)" not in src, "a bare ST_Y crashes on the 4 non-point layers"
 
 

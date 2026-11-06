@@ -51,10 +51,10 @@ import time
 import uuid
 
 from app.config import settings
-from app.services import append_store, column_aliases
+from app.services import append_store, column_aliases, pg_ext
 from app.services.append_store import _qi
 from app.services.index_mirror import (
-    CSV_RESOURCE_KEY, GEOM_SRID, ITM_SRID, PG_EXT_SCHEMA, WKT_COLUMN,
+    CSV_RESOURCE_KEY, GEOM_SRID, ITM_SRID, WKT_COLUMN,
     classify_wkt_crs, index_csv_value,
 )
 from app.services.nadlan_index import PARCELS_TABLE
@@ -62,7 +62,9 @@ from app.services.storage_client import is_storage_value, key_of, storage_client
 
 logger = logging.getLogger(__name__)
 
-_X = _qi(PG_EXT_SCHEMA)
+def _X() -> str:
+    """The PostGIS schema, quoted (read from the DB when a pool starts)."""
+    return pg_ext.q()
 
 FEATURES_TABLE = "over_re_layer_features"
 STATE_TABLE = "over_re_layer_link_state"
@@ -407,18 +409,18 @@ def _match_sql(radius_m: float) -> str:
             SELECT f.feature_key, p.parcel_key, 0::real AS distance_m
             FROM _layer_batch f
             JOIN {p} p
-              ON p.centroid OPERATOR({_X}.&&) f.g
-             AND {_X}.ST_Intersects(f.g, p.centroid)
+              ON p.centroid OPERATOR({_X()}.&&) f.g
+             AND {_X()}.ST_Intersects(f.g, p.centroid)
             WHERE f.g IS NOT NULL"""
     deg = max(radius_m, 1.0) / 90_000.0
     return f"""
         SELECT f.feature_key, p.parcel_key,
-               {_X}.ST_Distance(f.g::{_X}.geography, p.centroid::{_X}.geography)::real
+               {_X()}.ST_Distance(f.g::{_X()}.geography, p.centroid::{_X()}.geography)::real
                  AS distance_m
         FROM _layer_batch f
         JOIN {p} p
-          ON p.centroid OPERATOR({_X}.&&) {_X}.ST_Expand(f.g, {deg})
-         AND {_X}.ST_DWithin(f.g::{_X}.geography, p.centroid::{_X}.geography, {radius_m})
+          ON p.centroid OPERATOR({_X()}.&&) {_X()}.ST_Expand(f.g, {deg})
+         AND {_X()}.ST_DWithin(f.g::{_X()}.geography, p.centroid::{_X()}.geography, {radius_m})
         WHERE f.g IS NOT NULL"""
 
 
@@ -513,9 +515,9 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
         pf = await asyncio.to_thread(_r2_parquet, value)
         srid = parquet_srid(pf.schema_arrow.metadata)
         geom_col = "wkb"
-        srid_expr = f"{_X}.ST_GeomFromWKB(wkb, {srid})"
+        srid_expr = f"{_X()}.ST_GeomFromWKB(wkb, {srid})"
         if srid != GEOM_SRID:
-            srid_expr = f"{_X}.ST_Transform({srid_expr}, {GEOM_SRID})"
+            srid_expr = f"{_X()}.ST_Transform({srid_expr}, {GEOM_SRID})"
         gen_iter = iter_parquet_batches(pf, batch_rows=BATCH_ROWS, batch_bytes=BATCH_BYTES)
     else:
         geom_col = "wkt"
@@ -532,7 +534,7 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                            dataset_id, gen, timeout=1800)
         await conn.execute(f"""CREATE TEMP TABLE IF NOT EXISTS _layer_batch (
                                   feature_key text, wkt text, wkb bytea,
-                                  attrs text, g {_X}.geometry)""")
+                                  attrs text, g {_X()}.geometry)""")
         try:
             while True:
                 item = await _next(gen_iter)
@@ -543,7 +545,7 @@ async def _build(dataset_id: str, *, radius_m: float, force: bool) -> dict:
                 if srid_expr is None:
                     crs = classify_wkt_crs(batch[0][1])
                     if crs == "itm":
-                        srid_expr = (f"{_X}.ST_Transform(idx.try_geom(wkt, {ITM_SRID}), "
+                        srid_expr = (f"{_X()}.ST_Transform(idx.try_geom(wkt, {ITM_SRID}), "
                                      f"{GEOM_SRID})")
                     elif crs == "degrees":
                         srid_expr = f"idx.try_geom(wkt, {GEOM_SRID})"

@@ -41,6 +41,7 @@ import uuid as _uuid
 from contextlib import asynccontextmanager
 
 from app.pg_ssl import asyncpg_ssl_for
+from app.services import pg_ext
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import asyncpg
@@ -95,13 +96,27 @@ async def _register_geometry_codec(conn) -> None:
     ``ST_AsText(geom)``, which returns real WKT. This codec's job is narrower —
     make the raw column survive a SELECT instead of raising.
     """
+    await pg_ext.ensure(conn)
     try:
         await conn.set_type_codec(
-            "geometry", schema="extensions",
+            "geometry", schema=pg_ext.schema(),
             encoder=str, decoder=str, format="text",
         )
     except Exception:  # noqa: BLE001 — PostGIS absent, or installed elsewhere
         logger.debug("append_store: no geometry codec registered", exc_info=True)
+
+
+async def _detect_postgis(pool: asyncpg.Pool) -> None:
+    """Read where PostGIS lives as soon as a pool starts, before any caller
+    builds SQL that names it. Opening the connection runs the pool's init, which
+    asks (pg_ext.ensure). A database that cannot be reached now is not an error
+    here: the first connection that does open asks instead."""
+    try:
+        async with pool.acquire() as conn:
+            await pg_ext.ensure(conn)
+    except Exception:  # noqa: BLE001
+        logger.warning("append_store: PostGIS schema not read at pool start",
+                       exc_info=True)
 
 
 def _dsn_from(raw: str) -> str:
@@ -130,6 +145,9 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         async with _pool_lock:
             if _pool is None:
+                # A pool starting is when we read where PostGIS lives: the
+                # first connection's init (_register_geometry_codec) asks.
+                pg_ext.forget()
                 ctx = asyncpg_ssl_for(_dsn())
                 _pool = await asyncpg.create_pool(
                     dsn=_dsn(),
@@ -140,6 +158,7 @@ async def get_pool() -> asyncpg.Pool:
                     init=_register_geometry_codec,
                 )
                 logger.info("append_store: connection pool created")
+                await _detect_postgis(_pool)
     return _pool
 
 
@@ -202,6 +221,9 @@ async def get_readonly_pool() -> asyncpg.Pool:
     if _ro_pool is None:
         async with _ro_pool_lock:
             if _ro_pool is None:
+                # A pool starting is when we read where PostGIS lives: the
+                # first connection's init (_register_geometry_codec) asks.
+                pg_ext.forget()
                 ctx = asyncpg_ssl_for(_dsn_from(raw))
                 _ro_pool = await asyncpg.create_pool(
                     dsn=_dsn_from(raw),
@@ -215,6 +237,7 @@ async def get_readonly_pool() -> asyncpg.Pool:
                     init=_register_geometry_codec,
                 )
                 logger.info("append_store: read-only connection pool created")
+                await _detect_postgis(_ro_pool)
     return _ro_pool
 
 
@@ -2032,9 +2055,8 @@ def validate_readonly_sql(sql: str) -> str:
     return s
 
 
-# PostGIS lives in its own schema (see index_mirror.PG_EXT_SCHEMA); qualify the
-# call so the rewrite works even for a caller that did not put it on the path.
-_PG_EXT_SCHEMA = "extensions"
+# PostGIS lives in its own schema (see app.services.pg_ext); qualify the call so
+# the rewrite works even for a caller that did not put it on the path.
 _GEOMETRY_TYPES = ("geometry", "geography")
 
 
@@ -2065,7 +2087,7 @@ def wkt_projection(attrs: list[tuple[str, str | None]]) -> str | None:
     if not any((t or "") in _GEOMETRY_TYPES for _, t in attrs):
         return None
     return ", ".join(
-        f'{_qi(_PG_EXT_SCHEMA)}.ST_AsText({_qi(n)}) AS {_qi(n)}'
+        f'{pg_ext.q()}.ST_AsText({_qi(n)}) AS {_qi(n)}'
         if (t or "") in _GEOMETRY_TYPES else _qi(n)
         for n, t in attrs
     )
@@ -2375,7 +2397,7 @@ async def geo_features(
     limit = max(1, min(int(limit or 500), MAX_FEATURES))
     offset = max(0, int(offset or 0))
     ref = f"{_qi(schema)}.{_qi(table)}"
-    ext = _qi(_PG_EXT_SCHEMA)
+    ext = pg_ext.q()
     props = ", ".join(f"{_qi(c)}::text AS {_qi(c)}" for c in columns)
     select_props = f"{props}, " if props else ""
 

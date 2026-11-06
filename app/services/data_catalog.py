@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 # the autocomplete. It has to be on the path anyway, or ST_AsText / ST_DWithin
 # do not resolve and every spatial example in the help below is a syntax error.
 # Last position means the three data schemas win any name collision.
-CONSOLE_SEARCH_PATH = "public, knesset, idx, odata, ocal, extensions"
+# `postgis` follows it: xhostd is moving PostGIS there, and listing both keeps the
+# path working before and after the move (Postgres skips a missing schema).
+CONSOLE_SEARCH_PATH = "public, knesset, idx, odata, ocal, extensions, postgis"
 
 # ── catalog cache ────────────────────────────────────────────────────────────
 # build_catalog() is called on EVERY /data page load *and* on every detail-cube

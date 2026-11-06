@@ -52,7 +52,11 @@ _DATA_SCHEMAS = {"public", "knesset", "idx", "odata", "ocal"}
 # spatial_ref_sys, but default privileges would be meaningless — we never create
 # anything there, and future objects belong to the extension.
 _SUPPORT_SCHEMAS = {"extensions"}
-_CONSOLE_SCHEMAS = _DATA_SCHEMAS | _SUPPORT_SCHEMAS
+# On the path but not provisioned by these scripts: xhostd is moving PostGIS from
+# `extensions` to `postgis` and grants that schema itself. Listing both keeps
+# the path working in either layout; Postgres skips the one that does not exist.
+_HOST_MANAGED_SCHEMAS = {"postgis"}
+_CONSOLE_SCHEMAS = _DATA_SCHEMAS | _SUPPORT_SCHEMAS | _HOST_MANAGED_SCHEMAS
 
 
 def _grant_map(path: str) -> dict[str, set[str]]:

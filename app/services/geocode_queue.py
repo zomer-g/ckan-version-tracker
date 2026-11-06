@@ -45,7 +45,7 @@ from sqlalchemy import select
 
 from app.models.scrape_task import PRIORITY_GEOCODE, ScrapeTask
 from app.models.tracked_dataset import TrackedDataset
-from app.services import append_store, govmap_refusal
+from app.services import append_store, govmap_refusal, pg_ext
 from app.services.append_store import _qi
 from app.services.nadlan_index import ADDRESSES_TABLE
 
@@ -692,8 +692,8 @@ async def merge_into_addresses() -> dict:
     """
     await ensure_tables()
     pool = await append_store.get_pool()
-    from app.services.nadlan_index import GEOM_SRID, PARCELS_TABLE, PG_EXT_SCHEMA
-    x = _qi(PG_EXT_SCHEMA)
+    from app.services.nadlan_index import GEOM_SRID, PARCELS_TABLE
+    x = pg_ext.q()
     point = (f"{x}.ST_SetSRID({x}.ST_MakePoint(c.lon, c.lat), {GEOM_SRID})"
              f"::{x}.geography")
     unmerged = await unmerge_wrong_addresses()

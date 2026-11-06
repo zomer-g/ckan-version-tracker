@@ -44,12 +44,14 @@ import time
 
 from app.services import append_store, column_aliases, nadlan_query
 from app.services.append_store import _qi
-from app.services.index_mirror import PG_EXT_SCHEMA
+from app.services import pg_ext
 from app.services.nadlan_index import PARCELS_TABLE
 
 logger = logging.getLogger(__name__)
 
-_X = _qi(PG_EXT_SCHEMA)
+def _X() -> str:
+    """The PostGIS schema, quoted (read from the DB when a pool starts)."""
+    return pg_ext.q()
 
 #: How many features a spatial cube returns. A parcel sits inside a handful of
 #: plans at most; a radius layer near a city centre can hit dozens, and the
@@ -440,20 +442,20 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
         # Inside for a polygon cube; within the radius, nearest first, for a
         # point cube. The && against an expanded centroid is what lets the
         # layer's GiST index answer before any exact predicate runs.
-        pred = (f"{_X}.ST_Intersects(l.geom, k.centroid)" if radius == 0 else
-                f"{_X}.ST_DWithin(l.geom::{_X}.geography, "
-                f"k.centroid::{_X}.geography, {radius})")
+        pred = (f"{_X()}.ST_Intersects(l.geom, k.centroid)" if radius == 0 else
+                f"{_X()}.ST_DWithin(l.geom::{_X()}.geography, "
+                f"k.centroid::{_X()}.geography, {radius})")
         sql = f"""
             WITH k AS (
               SELECT centroid FROM public.{_qi(PARCELS_TABLE)}
               WHERE parcel_key = $1 AND centroid IS NOT NULL
             )
             SELECT {sel},
-                   round({_X}.ST_Distance(l.geom::{_X}.geography,
-                                         k.centroid::{_X}.geography)::numeric, 1)
+                   round({_X()}.ST_Distance(l.geom::{_X()}.geography,
+                                         k.centroid::{_X()}.geography)::numeric, 1)
                      AS "__distance_m"
             FROM k JOIN {_qi(schema)}.{_qi(table)} l
-              ON l.geom OPERATOR({_X}.&&) {_X}.ST_Expand(k.centroid, {_deg(radius)})
+              ON l.geom OPERATOR({_X()}.&&) {_X()}.ST_Expand(k.centroid, {_deg(radius)})
              AND {pred}{_current(columns)}
             ORDER BY "__distance_m"
             LIMIT {MAX_FEATURES}
@@ -464,9 +466,9 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
             logger.warning("nadlan layers: %s/%s failed: %s", c["id"], table, e)
             continue
         labels = aliases.get((schema, table), {})
-        console = (f'SELECT * FROM {_qi(schema)}.{_qi(table)} l WHERE {_X}.ST_DWithin('
-                   f'l.geom::{_X}.geography, {_X}.ST_SetSRID({_X}.ST_MakePoint('
-                   f'{parcel["lon"]}, {parcel["lat"]}), 4326)::{_X}.geography, '
+        console = (f'SELECT * FROM {_qi(schema)}.{_qi(table)} l WHERE {_X()}.ST_DWithin('
+                   f'l.geom::{_X()}.geography, {_X()}.ST_SetSRID({_X()}.ST_MakePoint('
+                   f'{parcel["lon"]}, {parcel["lat"]}), 4326)::{_X()}.geography, '
                    f'{max(radius, 1.0)}) LIMIT 200') if parcel.get("lat") is not None else \
             f"SELECT * FROM {_qi(schema)}.{_qi(table)} LIMIT 200"
         sources.append({"dataset_id": ds, "table": f"{schema}.{table}",
@@ -551,13 +553,13 @@ async def probe(parcel: dict) -> dict[str, int]:
             continue
         radius = float(c["radius_m"] or 0)
         for _, schema, table, cols in await _resolve(c):
-            pred = (f"{_X}.ST_Intersects(l.geom, k.centroid)" if radius == 0 else
-                    f"{_X}.ST_DWithin(l.geom::{_X}.geography, "
-                    f"k.centroid::{_X}.geography, {radius})")
+            pred = (f"{_X()}.ST_Intersects(l.geom, k.centroid)" if radius == 0 else
+                    f"{_X()}.ST_DWithin(l.geom::{_X()}.geography, "
+                    f"k.centroid::{_X()}.geography, {radius})")
             parts.append(
                 f"SELECT {nadlan_query._lit(c['id'])} AS cube, {_distinct_count_sql(cols)} AS n "
-                f"FROM k JOIN {_qi(schema)}.{_qi(table)} l ON l.geom OPERATOR({_X}.&&) "
-                f"{_X}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}{_current(cols)}")
+                f"FROM k JOIN {_qi(schema)}.{_qi(table)} l ON l.geom OPERATOR({_X()}.&&) "
+                f"{_X()}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}{_current(cols)}")
     from app.services.nadlan_layer_links import FEATURES_TABLE
     geo = await _geo_tables()
     for c in registry():

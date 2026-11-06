@@ -62,7 +62,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 from app.config import settings
-from app.services import append_store
+from app.services import append_store, pg_ext
 from app.services.storage_client import is_storage_value, storage_client
 
 logger = logging.getLogger(__name__)
@@ -124,10 +124,10 @@ _loaded_versions_cache: dict[str, int] | None = None
 #
 # The extension lives in its OWN schema so its ~1,000 functions and
 # spatial_ref_sys stay out of the console's autocomplete. That isolation is
-# exactly why every reference below is schema-qualified: the worker's connection
+# exactly why every reference below is schema-qualified (pg_ext.q(): the
+# schema is read from the database when a pool starts, not hard-coded): the worker's connection
 # carries no search_path at all (it addresses everything as idx."table"), so a
 # bare `geometry` or `ST_GeomFromText` raises 42704 — measured, not assumed.
-PG_EXT_SCHEMA = "extensions"
 WKT_COLUMN = "geometry_wkt"
 GEOM_COLUMN = "geom"
 # Everything the scraper has written since 2026-07-08 is WGS84 lon/lat. Layers
@@ -359,10 +359,10 @@ async def ensure_schema(conn) -> None:
     try:
         await conn.execute(f"""
             CREATE OR REPLACE FUNCTION {_try_geom()}(w text, srid int)
-            RETURNS {_qi(PG_EXT_SCHEMA)}.geometry
+            RETURNS {pg_ext.q()}.geometry
             LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
             BEGIN
-                RETURN {_qi(PG_EXT_SCHEMA)}.ST_GeomFromText(w, srid);
+                RETURN {pg_ext.q()}.ST_GeomFromText(w, srid);
             EXCEPTION WHEN others THEN
                 RETURN NULL;
             END $fn$
@@ -532,7 +532,7 @@ async def _postgis_available(conn) -> bool:
                         "mirroring content only. Install it with: "
                         "CREATE SCHEMA IF NOT EXISTS %s; "
                         "CREATE EXTENSION postgis SCHEMA %s;",
-                        PG_EXT_SCHEMA, PG_EXT_SCHEMA)
+                        pg_ext.schema(), pg_ext.schema())
     return _postgis_present
 
 
@@ -543,7 +543,7 @@ async def _srid_available(conn, srid: int) -> bool:
     if srid not in _srid_present:
         try:
             _srid_present[srid] = bool(await conn.fetchval(
-                f"SELECT true FROM {_qi(PG_EXT_SCHEMA)}.spatial_ref_sys "
+                f"SELECT true FROM {pg_ext.q()}.spatial_ref_sys "
                 f"WHERE srid = $1", srid))
         except Exception:  # noqa: BLE001
             logger.debug("idx: could not probe spatial_ref_sys", exc_info=True)
@@ -608,7 +608,7 @@ async def _ensure_degrees(conn, table: str, schema: str = SCHEMA) -> tuple[str, 
         return crs, {"skipped": f"geometry is ITM but EPSG:{ITM_SRID} is not in "
                                 f"spatial_ref_sys — cannot reproject"}
 
-    ext = _qi(PG_EXT_SCHEMA)
+    ext = pg_ext.q()
     parsed = f"{_try_geom()}({wkt}, {ITM_SRID})"
     try:
         # One transaction: the column and the hashes that describe it move
@@ -682,7 +682,7 @@ async def _add_geometry(conn, staging: str, columns: list[str],
         async with conn.transaction():  # all-or-nothing: no half-built column
             await conn.execute(
                 f"ALTER TABLE {_qt(staging, schema)} ADD COLUMN {geom} "
-                f"{_qi(PG_EXT_SCHEMA)}.geometry(Geometry, {GEOM_SRID})")
+                f"{pg_ext.q()}.geometry(Geometry, {GEOM_SRID})")
             status = await conn.execute(
                 f"UPDATE {_qt(staging, schema)} SET {geom} = "
                 f"{_try_geom()}({wkt}, {GEOM_SRID}) "

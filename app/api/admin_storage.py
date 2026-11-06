@@ -100,6 +100,7 @@ _SCHEMA_PROJECT = {
     "app": "system",
     "auth": "system",
     "extensions": "system",
+    "postgis": "system",
     "_loader": "system",
 }
 

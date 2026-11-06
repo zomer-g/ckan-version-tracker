@@ -111,7 +111,8 @@ STAT_AREA_SOCIO_SRC = ("public", "append_cbs_pub_file_afb48290_5fa5cab4")
 # The repo's canonical ITM is 6991, not 2039 — they differ only in datum
 # realisation (~0.4 mm), and index_mirror already standardised on 6991. The
 # address list's X/Y are ITM easting/northing (X 157k–266k, Y 380k–798k).
-from app.services.index_mirror import GEOM_SRID, ITM_SRID, PG_EXT_SCHEMA  # noqa: E402
+from app.services import pg_ext  # noqa: E402
+from app.services.index_mirror import GEOM_SRID, ITM_SRID  # noqa: E402
 
 PARCELS_TABLE = "over_re_parcels"
 GAZ_TABLE = "over_re_parcel_gazetteer"
@@ -168,7 +169,7 @@ _DDL = [
         -- only spatial predicates touch `centroid`.
         lat             double precision,
         lon             double precision,
-        centroid        {_qi(PG_EXT_SCHEMA)}.geometry(Point, {GEOM_SRID}),
+        centroid        {pg_ext.TOKEN}.geometry(Point, {GEOM_SRID}),
         refreshed_at    timestamptz DEFAULT now()
     )
     """,
@@ -264,7 +265,7 @@ _DDL = [
         district        text,
         lat             double precision,
         lon             double precision,
-        point           {_qi(PG_EXT_SCHEMA)}.geometry(Point, {GEOM_SRID}),
+        point           {pg_ext.TOKEN}.geometry(Point, {GEOM_SRID}),
         parcel_key      text,
         -- 'pip'    → point-in-polygon, exact
         -- 'street' → inherited from the street's gazetteer parcels, approximate
@@ -286,11 +287,11 @@ _DDL = [
         -- both see real columns. ST_Transform/ST_X/ST_Y are IMMUTABLE, which
         -- is what a generated column requires.
         itm_x double precision
-            GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_X(
-                {_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED,
+            GENERATED ALWAYS AS ({pg_ext.TOKEN}.ST_X(
+                {pg_ext.TOKEN}.ST_Transform(point, {ITM_SRID}))) STORED,
         itm_y double precision
-            GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_Y(
-                {_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED
+            GENERATED ALWAYS AS ({pg_ext.TOKEN}.ST_Y(
+                {pg_ext.TOKEN}.ST_Transform(point, {ITM_SRID}))) STORED
     )
     """,
     f"""
@@ -351,11 +352,11 @@ _COLUMN_ADDITIONS = [
     # under an ACCESS EXCLUSIVE lock. Done once, at the same point in startup
     # as every other DDL here.
     (ADDRESSES_TABLE, "itm_x",
-     f"double precision GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_X("
-     f"{_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED"),
+     f"double precision GENERATED ALWAYS AS ({pg_ext.TOKEN}.ST_X("
+     f"{pg_ext.TOKEN}.ST_Transform(point, {ITM_SRID}))) STORED"),
     (ADDRESSES_TABLE, "itm_y",
-     f"double precision GENERATED ALWAYS AS ({_qi(PG_EXT_SCHEMA)}.ST_Y("
-     f"{_qi(PG_EXT_SCHEMA)}.ST_Transform(point, {ITM_SRID}))) STORED"),
+     f"double precision GENERATED ALWAYS AS ({pg_ext.TOKEN}.ST_Y("
+     f"{pg_ext.TOKEN}.ST_Transform(point, {ITM_SRID}))) STORED"),
 ]
 
 
@@ -363,11 +364,11 @@ async def ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         for stmt in _DDL:
-            await conn.execute(stmt)
+            await conn.execute(pg_ext.fill(stmt))
         for table, column, coltype in _COLUMN_ADDITIONS:
             await conn.execute(
                 f"ALTER TABLE public.{_qi(table)} "
-                f"ADD COLUMN IF NOT EXISTS {_qi(column)} {coltype}")
+                f"ADD COLUMN IF NOT EXISTS {_qi(column)} {pg_ext.fill(coltype)}")
         for stmt in _INDEXES:
             await conn.execute(stmt, timeout=_LONG_TIMEOUT)
         await _backfill_point_source(conn)
@@ -667,12 +668,12 @@ async def ensure_functions() -> None:
             unsettled_fallback = f"""(
                 SELECT public.over_parcel_key(u.blocknumber, u.subblocknumber, u.parcelnumber)
                 FROM {_t(UNSETTLED_SRC)} u
-                WHERE u.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                                  {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
-                  AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
+                WHERE u.geom OPERATOR({pg_ext.q()}.&&) {pg_ext.q()}.ST_SetSRID(
+                                  {pg_ext.q()}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
+                  AND {pg_ext.q()}.ST_Contains(
                         u.geom,
-                        {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                          {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
+                        {pg_ext.q()}.ST_SetSRID(
+                          {pg_ext.q()}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
                 ORDER BY u._first_seen DESC
                 LIMIT 1)"""
         await conn.execute(
@@ -683,17 +684,17 @@ async def ensure_functions() -> None:
               SELECT coalesce((
               SELECT public.over_parcel_key(p."GUSH_NUM", p."GUSH_SUFFI", p."PARCEL")
               FROM {_t(PARCELS_SRC)} p
-              -- OPERATOR(extensions.&&), not a bare &&: PostGIS's operators
-              -- live in the extensions schema and an OPERATOR cannot be
+              -- OPERATOR(<postgis schema>.&&), not a bare &&: PostGIS's operators
+              -- live in their own schema and an OPERATOR cannot be
               -- qualified with dot notation the way a function can. The worker
               -- connection carries no search_path, so a bare && raises
               -- "operator does not exist: extensions.geometry && extensions.geometry".
-              WHERE p.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                                {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
-                AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
+              WHERE p.geom OPERATOR({pg_ext.q()}.&&) {pg_ext.q()}.ST_SetSRID(
+                                {pg_ext.q()}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID})
+                AND {pg_ext.q()}.ST_Contains(
                       p.geom,
-                      {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                        {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
+                      {pg_ext.q()}.ST_SetSRID(
+                        {pg_ext.q()}.ST_MakePoint(p_lon, p_lat), {GEOM_SRID}))
               LIMIT 1), {unsettled_fallback})
             $$;
             """)
@@ -703,11 +704,11 @@ async def ensure_functions() -> None:
                 p_lat double precision, p_lon double precision, p_radius_m double precision)
             RETURNS SETOF public.{_qi(PARCELS_TABLE)} LANGUAGE sql STABLE AS $$
               SELECT p.* FROM public.{_qi(PARCELS_TABLE)} p
-              WHERE {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
-                      p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                      {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                        {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(p_lon, p_lat),
-                        {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography,
+              WHERE {pg_ext.q()}.ST_DWithin(
+                      p.centroid::{pg_ext.q()}.geography,
+                      {pg_ext.q()}.ST_SetSRID(
+                        {pg_ext.q()}.ST_MakePoint(p_lon, p_lat),
+                        {GEOM_SRID})::{pg_ext.q()}.geography,
                       p_radius_m)
             $$;
             """)
@@ -817,7 +818,7 @@ async def build_parcels() -> dict:
                        coalesce(s.code, public.over_settlement_code(k.locality_name)),
                        k.locality_name, k.reg_mun_name, k.county_name, k.region_name,
                        k.legal_area, k.status_text,
-                       {_qi(PG_EXT_SCHEMA)}.ST_Y(k.pt), {_qi(PG_EXT_SCHEMA)}.ST_X(k.pt),
+                       {pg_ext.q()}.ST_Y(k.pt), {pg_ext.q()}.ST_X(k.pt),
                        k.pt, now()
                 FROM (
                   SELECT split_part(p."GUSH_NUM",'.',1)::int AS gush,
@@ -834,7 +835,7 @@ async def build_parcels() -> dict:
                          nullif(p."LEGAL_AREA",'')::double precision AS legal_area,
                          p."STATUS_TEX" AS status_text,
                          p."SYS_DATE" AS sys_date,
-                         {_qi(PG_EXT_SCHEMA)}.ST_PointOnSurface(p.geom) AS pt
+                         {pg_ext.q()}.ST_PointOnSurface(p.geom) AS pt
                   FROM {_t(PARCELS_SRC)} p
                   WHERE p.geom IS NOT NULL
                     AND p."GUSH_NUM" ~ '^[0-9]+(\\.0*)?$'
@@ -872,7 +873,7 @@ async def _unsettled_available(conn) -> bool:
 
 def _unsettled_latest_sql() -> str:
     """The unsettled layer, one row per gush-חלקה (its newest version)."""
-    ext = _qi(PG_EXT_SCHEMA)
+    ext = pg_ext.q()
     return f"""
         SELECT DISTINCT ON (u.parcel_key) u.*
         FROM (
@@ -906,7 +907,7 @@ async def _insert_unsettled_parcels(conn) -> int:
         logger.warning("nadlan parcels: %s missing — unsettled parcels skipped",
                        _t(UNSETTLED_SRC))
         return 0
-    ext = _qi(PG_EXT_SCHEMA)
+    ext = pg_ext.q()
     tag = await conn.execute(
         f"""
         INSERT INTO public.{_qi(PARCELS_TABLE)}
@@ -1633,9 +1634,9 @@ async def build_addresses() -> dict:
                          nullif(a.district,'') AS district,
                          CASE WHEN a."X" ~ '^[0-9]' AND a."X" <> '0'
                                    AND a."Y" ~ '^[0-9]' AND a."Y" <> '0'
-                              THEN {_qi(PG_EXT_SCHEMA)}.ST_Transform(
-                                     {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                                       {_qi(PG_EXT_SCHEMA)}.ST_MakePoint(a."X"::double precision,
+                              THEN {pg_ext.q()}.ST_Transform(
+                                     {pg_ext.q()}.ST_SetSRID(
+                                       {pg_ext.q()}.ST_MakePoint(a."X"::double precision,
                                                                          a."Y"::double precision),
                                        {ITM_SRID}), {GEOM_SRID})
                          END AS pt,
@@ -1668,8 +1669,8 @@ async def build_addresses() -> dict:
                            CASE
                              WHEN src.zip7 IS NOT NULL THEN 'zip:' || src.zip7
                              WHEN src.pt IS NOT NULL THEN
-                               'xy:' || round({_qi(PG_EXT_SCHEMA)}.ST_Y(src.pt)::numeric, 6)
-                                     || ',' || round({_qi(PG_EXT_SCHEMA)}.ST_X(src.pt)::numeric, 6)
+                               'xy:' || round({pg_ext.q()}.ST_Y(src.pt)::numeric, 6)
+                                     || ',' || round({pg_ext.q()}.ST_X(src.pt)::numeric, 6)
                              ELSE 'raw:' || src.street_raw
                            END) AS key_part
                   FROM src
@@ -1691,8 +1692,8 @@ async def build_addresses() -> dict:
                        max(k.zip5), max(k.zip7),
                        CASE WHEN max(k.zip7) IS NOT NULL THEN 'address' END,
                        max(k.hood), max(k.district),
-                       {_qi(PG_EXT_SCHEMA)}.ST_Y((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
-                       {_qi(PG_EXT_SCHEMA)}.ST_X((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
+                       {pg_ext.q()}.ST_Y((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
+                       {pg_ext.q()}.ST_X((array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1]),
                        (array_agg(k.pt) FILTER (WHERE k.pt IS NOT NULL))[1],
                        -- Only a point actually set here is the register's; a
                        -- row with none is left NULL for the geocoder to claim.
@@ -1821,7 +1822,7 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
                 WITH todo AS (
                   SELECT address_key, point FROM public.{_qi(ADDRESSES_TABLE)}
                   WHERE point IS NOT NULL AND parcel_match IS NULL
-                  ORDER BY {_qi(PG_EXT_SCHEMA)}.ST_GeoHash(point)
+                  ORDER BY {pg_ext.q()}.ST_GeoHash(point)
                   LIMIT {_PIP_BATCH}
                 ), hit AS (
                   SELECT t.address_key,
@@ -1830,8 +1831,8 @@ async def build_pip(*, max_batches: int | None = None) -> dict:
                   LEFT JOIN LATERAL (
                     SELECT p."GUSH_NUM", p."GUSH_SUFFI", p."PARCEL"
                     FROM {_t(PARCELS_SRC)} p
-                    WHERE p.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) t.point
-                      AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(p.geom, t.point)
+                    WHERE p.geom OPERATOR({pg_ext.q()}.&&) t.point
+                      AND {pg_ext.q()}.ST_Contains(p.geom, t.point)
                     LIMIT 1
                   ) p ON true
                 )
@@ -1870,7 +1871,7 @@ async def _pip_unsettled(conn) -> int:
     """
     if not await _unsettled_available(conn):
         return 0
-    ext = _qi(PG_EXT_SCHEMA)
+    ext = pg_ext.q()
     tag = await conn.execute(
         f"""
         WITH hit AS (

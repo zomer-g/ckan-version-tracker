@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import logging
 
-from app.services import append_store
+from app.services import append_store, pg_ext
 from app.services.append_store import _qi
 from app.services.nadlan_index import ADDRESSES_TABLE
 
@@ -400,7 +400,7 @@ def _postal_rows(a: dict) -> list[tuple]:
 _APPLY_POSTAL = f"""
     UPDATE public.{_qi(ADDRESSES_TABLE)} o
        SET lat = q.lat, lon = q.lon,
-           point = extensions.ST_SetSRID(extensions.ST_MakePoint(q.lon, q.lat), 4326),
+           point = {{ext}}.ST_SetSRID({{ext}}.ST_MakePoint(q.lon, q.lat), 4326),
            point_source = '{EXACT_POINT_SOURCE}'
       FROM public.{_qi(POSTAL_TABLE)} q
      WHERE o.address_key = q.address_key
@@ -449,7 +449,7 @@ async def record_postal_points(payload: dict) -> dict:
             """, keys, [r[1] for r in rows], [r[2] for r in rows],
                 [r[3] for r in rows], [r[4] for r in rows], [r[5] for r in rows])
             tag = await conn.execute(
-                _APPLY_POSTAL.format(where="AND o.address_key = ANY($1::text[])"), keys)
+                _APPLY_POSTAL.format(ext=pg_ext.q(), where="AND o.address_key = ANY($1::text[])"), keys)
             known = await conn.fetch(
                 f"SELECT address_key FROM public.{_qi(ADDRESSES_TABLE)} "
                 f"WHERE address_key = ANY($1::text[])", keys)
@@ -661,7 +661,7 @@ async def merge(*, dry_run: bool = False) -> dict:
                 UPDATE public.{_qi(ADDRESSES_TABLE)} o
                    SET lat = coalesce(d.xlat, d.lat),
                        lon = coalesce(d.xlon, d.lon),
-                       point = extensions.ST_SetSRID(extensions.ST_MakePoint(
+                       point = {pg_ext.q()}.ST_SetSRID({pg_ext.q()}.ST_MakePoint(
                                  coalesce(d.xlon, d.lon),
                                  coalesce(d.xlat, d.lat)), 4326),
                        point_source = CASE WHEN d.xlat IS NOT NULL
@@ -682,8 +682,8 @@ async def merge(*, dry_run: bool = False) -> dict:
                 WITH k AS ({_keyed_cte()}), d AS ({_distinct_cte()})
                 UPDATE public.{_qi(ADDRESSES_TABLE)} o
                    SET lat = d.xlat, lon = d.xlon,
-                       point = extensions.ST_SetSRID(
-                                 extensions.ST_MakePoint(d.xlon, d.xlat), 4326),
+                       point = {pg_ext.q()}.ST_SetSRID(
+                                 {pg_ext.q()}.ST_MakePoint(d.xlon, d.xlat), 4326),
                        point_source = '{EXACT_POINT_SOURCE}'
                   FROM d
                  WHERE o.settlement_code = d.sc
@@ -696,7 +696,7 @@ async def merge(*, dry_run: bool = False) -> dict:
 
             # The postal file's own lookups, re-applied in full: a rebuild of
             # the spine dropped whatever record_postal_points() filled.
-            tag = await conn.execute(_APPLY_POSTAL.format(where=""), timeout=1800)
+            tag = await conn.execute(_APPLY_POSTAL.format(ext=pg_ext.q(), where=""), timeout=1800)
             postal_points = int(str(tag).rsplit(" ", 1)[-1] or 0)
 
             tag = await conn.execute(f"""
@@ -715,7 +715,7 @@ async def merge(*, dry_run: bool = False) -> dict:
                        d.sc, t.name, d.street_key,
                        coalesce(s.name, d.street_raw),
                        d.house_num, coalesce(d.xlat, d.lat), coalesce(d.xlon, d.lon),
-                       extensions.ST_SetSRID(extensions.ST_MakePoint(
+                       {pg_ext.q()}.ST_SetSRID({pg_ext.q()}.ST_MakePoint(
                          coalesce(d.xlon, d.lon), coalesce(d.xlat, d.lat)), 4326),
                        CASE WHEN d.xlat IS NOT NULL THEN '{EXACT_POINT_SOURCE}'
                             ELSE '{POINT_SOURCE}' END,

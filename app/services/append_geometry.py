@@ -40,6 +40,7 @@ import logging
 
 from app.config import settings
 from app.services import index_mirror as _idx
+from app.services import pg_ext
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def find_pair(columns: list[str]) -> tuple[str, str] | None:
     return None
 
 
-def point_expr(col_a: str, col_b: str, *, ext: str = "extensions",
+def point_expr(col_a: str, col_b: str, *, ext: str | None = None,
                srid: int = 4326, itm: int = 6991) -> str:
     """SQL that turns one row's coordinate pair into a point, or NULL.
 
@@ -89,6 +90,7 @@ def point_expr(col_a: str, col_b: str, *, ext: str = "extensions",
     swaps them. Anything outside the country in either reading — and anything
     that is not a plain number — yields NULL rather than a guess.
     """
+    ext = ext or pg_ext.q()  # where PostGIS lives, read when the pool started
     qa, qb = _idx._qi(col_a), _idx._qi(col_b)
     a = f"(CASE WHEN {qa} ~ '{_NUMERIC}' THEN {qa}::numeric END)"
     b = f"(CASE WHEN {qb} ~ '{_NUMERIC}' THEN {qb}::numeric END)"
@@ -224,7 +226,7 @@ async def fill(conn, table: str, columns: list[str]) -> dict:
             async with conn.transaction():   # DDL is transactional in Postgres
                 await conn.execute(
                     f"ALTER TABLE {qt} ADD COLUMN {geom} "
-                    f"{_idx._qi(_idx.PG_EXT_SCHEMA)}.geometry(Point, "
+                    f"{pg_ext.q()}.geometry(Point, "
                     f"{_idx.GEOM_SRID})")
                 await conn.execute(
                     f"CREATE INDEX {_idx._qi(_idx._geom_index_name(table))} "

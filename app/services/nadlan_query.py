@@ -26,7 +26,8 @@ from urllib.parse import quote
 
 from app.services import append_store, nadlan_text
 from app.services.append_store import _qi
-from app.services.index_mirror import GEOM_SRID, PG_EXT_SCHEMA
+from app.services import pg_ext
+from app.services.index_mirror import GEOM_SRID
 from app.services import nadlan_index
 from app.services.nadlan_index import (
     ADDRESSES_TABLE, DEAL_SORT_KEY, GAZ_TABLE, PARCELS_SRC,
@@ -52,8 +53,8 @@ async def _fetch(sql: str, *args) -> list[dict]:
             # The read-only pool carries no search_path of its own. Functions and
             # casts here are schema-qualified, but OPERATORS resolve only through
             # the path — so name it explicitly rather than depend on the role's
-            # default (see the OPERATOR(extensions.&&) note in nadlan_index).
-            await conn.execute(f"SET LOCAL search_path = public, {PG_EXT_SCHEMA}")
+            # default (see the OPERATOR(<postgis schema>.&&) note in nadlan_index).
+            await conn.execute(f"SET LOCAL search_path = public, {', '.join(pg_ext.SEARCH_PATH_SCHEMAS)}")
             rows = await conn.fetch(sql, *args)
     return [dict(r) for r in rows]
 
@@ -111,17 +112,17 @@ async def by_point(lat: float, lon: float, radius_m: float = 0.0,
         radius_m = min(float(radius_m), MAX_RADIUS_M)
         sql = f"""
             SELECT p.*,
-                   {_qi(PG_EXT_SCHEMA)}.ST_Distance(
-                     p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                     {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                       {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
-                       {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography) AS distance_m
+                   {pg_ext.q()}.ST_Distance(
+                     p.centroid::{pg_ext.q()}.geography,
+                     {pg_ext.q()}.ST_SetSRID(
+                       {pg_ext.q()}.ST_MakePoint($2, $1),
+                       {GEOM_SRID})::{pg_ext.q()}.geography) AS distance_m
             FROM public.{_qi(PARCELS_TABLE)} p
-            WHERE {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
-                    p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                    {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                      {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
-                      {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography, $3)
+            WHERE {pg_ext.q()}.ST_DWithin(
+                    p.centroid::{pg_ext.q()}.geography,
+                    {pg_ext.q()}.ST_SetSRID(
+                      {pg_ext.q()}.ST_MakePoint($2, $1),
+                      {GEOM_SRID})::{pg_ext.q()}.geography, $3)
             ORDER BY distance_m
             LIMIT {limit}
         """
@@ -131,11 +132,11 @@ async def by_point(lat: float, lon: float, radius_m: float = 0.0,
         WITH hit AS (
           SELECT public.over_parcel_key(s."GUSH_NUM", s."GUSH_SUFFI", s."PARCEL") AS pk
           FROM {_t(PARCELS_SRC)} s
-          WHERE s.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                            {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1), {GEOM_SRID})
-            AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(
-                  s.geom, {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                            {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1), {GEOM_SRID}))
+          WHERE s.geom OPERATOR({pg_ext.q()}.&&) {pg_ext.q()}.ST_SetSRID(
+                            {pg_ext.q()}.ST_MakePoint($2, $1), {GEOM_SRID})
+            AND {pg_ext.q()}.ST_Contains(
+                  s.geom, {pg_ext.q()}.ST_SetSRID(
+                            {pg_ext.q()}.ST_MakePoint($2, $1), {GEOM_SRID}))
           LIMIT 5
         )
         SELECT p.*, 0::double precision AS distance_m
@@ -292,18 +293,18 @@ async def locate_register_only_street(settlement_code: int, settlement_name: str
     near = await _fetch(
         f"""
         SELECT p.parcel_key, p.gush, p.gush_suffix, p.parcel, p.settlement_code,
-               round({_qi(PG_EXT_SCHEMA)}.ST_Distance(
-                 p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                 {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                   {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
-                   {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography)::numeric, 0) AS distance_m
+               round({pg_ext.q()}.ST_Distance(
+                 p.centroid::{pg_ext.q()}.geography,
+                 {pg_ext.q()}.ST_SetSRID(
+                   {pg_ext.q()}.ST_MakePoint($2, $1),
+                   {GEOM_SRID})::{pg_ext.q()}.geography)::numeric, 0) AS distance_m
         FROM public.{_qi(PARCELS_TABLE)} p
         WHERE p.settlement_code = $3
-          AND {_qi(PG_EXT_SCHEMA)}.ST_DWithin(
-                p.centroid::{_qi(PG_EXT_SCHEMA)}.geography,
-                {_qi(PG_EXT_SCHEMA)}.ST_SetSRID(
-                  {_qi(PG_EXT_SCHEMA)}.ST_MakePoint($2, $1),
-                  {GEOM_SRID})::{_qi(PG_EXT_SCHEMA)}.geography, $4)
+          AND {pg_ext.q()}.ST_DWithin(
+                p.centroid::{pg_ext.q()}.geography,
+                {pg_ext.q()}.ST_SetSRID(
+                  {pg_ext.q()}.ST_MakePoint($2, $1),
+                  {GEOM_SRID})::{pg_ext.q()}.geography, $4)
         ORDER BY distance_m
         LIMIT {STREET_GEOCODE_PARCELS}
     """, hit["lat"], hit["lon"], settlement_code, float(STREET_GEOCODE_GUARD_M))
@@ -589,8 +590,8 @@ async def stat_areas(parcel_keys: list[str]) -> dict[str, dict]:
                  nullif(btrim(a."ROVA"), '')             AS rova,
                  nullif(btrim(a."TAT_ROVA"), '')         AS tat_rova
           FROM {_t(STAT_AREA_SRC)} a
-          WHERE a.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) k.centroid
-            AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(a.geom, k.centroid)
+          WHERE a.geom OPERATOR({pg_ext.q()}.&&) k.centroid
+            AND {pg_ext.q()}.ST_Contains(a.geom, k.centroid)
           LIMIT 1
         ) sa ON true
         LEFT JOIN {_t(STAT_AREA_POP_SRC)} pop
@@ -598,8 +599,8 @@ async def stat_areas(parcel_keys: list[str]) -> dict[str, dict]:
         LEFT JOIN LATERAL (
           SELECT b.eshkol_madad2021, b."YISHUV_STAT11"
           FROM {_t(STAT_AREA_SOCIO_SRC)} b
-          WHERE b.geom OPERATOR({_qi(PG_EXT_SCHEMA)}.&&) k.centroid
-            AND {_qi(PG_EXT_SCHEMA)}.ST_Contains(b.geom, k.centroid)
+          WHERE b.geom OPERATOR({pg_ext.q()}.&&) k.centroid
+            AND {pg_ext.q()}.ST_Contains(b.geom, k.centroid)
           LIMIT 1
         ) so ON true
     """, keys)
@@ -983,8 +984,8 @@ async def parcel_geometries(parcel_keys, simplify: float = BULK_SIMPLIFY) -> dic
     rows = await _fetch(
         f"""
         SELECT public.over_parcel_key(s."GUSH_NUM", s."GUSH_SUFFI", s."PARCEL") AS parcel_key,
-               {_qi(PG_EXT_SCHEMA)}.ST_AsGeoJSON(
-                 {_qi(PG_EXT_SCHEMA)}.ST_SimplifyPreserveTopology(s.geom, $3)) AS geojson
+               {pg_ext.q()}.ST_AsGeoJSON(
+                 {pg_ext.q()}.ST_SimplifyPreserveTopology(s.geom, $3)) AS geojson
         FROM {_t(PARCELS_SRC)} s
         WHERE s."GUSH_NUM" = ANY($1::text[])
           AND s.geom IS NOT NULL
@@ -1001,8 +1002,8 @@ async def parcel_geometry(gush: int, suffix: int, helka: int,
     before ``ST_AsGeoJSON`` so a large rural parcel does not ship megabytes."""
     rows = await _fetch(
         f"""
-        SELECT {_qi(PG_EXT_SCHEMA)}.ST_AsGeoJSON(
-                 {_qi(PG_EXT_SCHEMA)}.ST_SimplifyPreserveTopology(s.geom, $4)) AS geojson,
+        SELECT {pg_ext.q()}.ST_AsGeoJSON(
+                 {pg_ext.q()}.ST_SimplifyPreserveTopology(s.geom, $4)) AS geojson,
                s."LEGAL_AREA" AS legal_area, s."STATUS_TEX" AS status_text
         FROM {_t(PARCELS_SRC)} s
         WHERE s."GUSH_NUM" = $1::text
