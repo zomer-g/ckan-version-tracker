@@ -86,6 +86,17 @@ CREATE SCHEMA IF NOT EXISTS extensions;
 GRANT USAGE ON SCHEMA extensions TO over_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO over_readonly;
 
+-- 3c') `postgis` — where xhostd is moving PostGIS. Granted only if the schema
+--      already exists: this script never creates it, and never creates, drops
+--      or moves the extension. Same treatment as `extensions`.
+DO $$
+BEGIN
+  IF to_regnamespace('postgis') IS NOT NULL THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA postgis TO over_readonly';
+    EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA postgis TO over_readonly';
+  END IF;
+END $$;
+
 -- 4) SELECT on every existing table/view in the three DATA schemas — and ONLY
 --    those. No grants on any other schema ⇒ the role cannot read outside them.
 -- odata (מידע לעם) and ocal (יומן לעם): co-located here and on

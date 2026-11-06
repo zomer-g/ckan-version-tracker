@@ -346,11 +346,11 @@ def test_a_postal_verdict_without_a_usable_point_carries_no_point():
 
 
 def test_a_postal_point_only_fills_or_upgrades_our_own_centroid():
-    sql = gp._APPLY_POSTAL
+    sql = gp._apply_postal()
     assert "o.point IS NULL OR o.point_source = 'govmap_parcel'" in sql
     assert "q.status = 'found'" in sql
     assert gp.EXACT_POINT_SOURCE in sql
 
 
 def test_the_merge_re_applies_postal_points_after_a_rebuild():
-    assert "_APPLY_POSTAL" in inspect.getsource(gp.merge)
+    assert "_apply_postal()" in inspect.getsource(gp.merge)

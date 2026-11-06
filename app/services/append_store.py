@@ -46,6 +46,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 import asyncpg
 
 from app.config import settings
+from app.services import postgis_schema
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,13 @@ async def _register_geometry_codec(conn) -> None:
     ``ST_AsText(geom)``, which returns real WKT. This codec's job is narrower —
     make the raw column survive a SELECT instead of raising.
     """
+    # Where PostGIS lives is read here, as each connection opens, so every SQL
+    # builder that asks postgis_schema.qschema() names the schema the database
+    # actually has (``extensions`` before xhostd's move, ``postgis`` after).
+    await postgis_schema.resolve(conn)
     try:
         await conn.set_type_codec(
-            "geometry", schema="extensions",
+            "geometry", schema=postgis_schema.schema(),
             encoder=str, decoder=str, format="text",
         )
     except Exception:  # noqa: BLE001 — PostGIS absent, or installed elsewhere
@@ -2032,9 +2037,8 @@ def validate_readonly_sql(sql: str) -> str:
     return s
 
 
-# PostGIS lives in its own schema (see index_mirror.PG_EXT_SCHEMA); qualify the
-# call so the rewrite works even for a caller that did not put it on the path.
-_PG_EXT_SCHEMA = "extensions"
+# PostGIS lives in its own schema (see app/services/postgis_schema.py); qualify
+# the call so the rewrite works even for a caller that did not put it on the path.
 _GEOMETRY_TYPES = ("geometry", "geography")
 
 
@@ -2065,7 +2069,7 @@ def wkt_projection(attrs: list[tuple[str, str | None]]) -> str | None:
     if not any((t or "") in _GEOMETRY_TYPES for _, t in attrs):
         return None
     return ", ".join(
-        f'{_qi(_PG_EXT_SCHEMA)}.ST_AsText({_qi(n)}) AS {_qi(n)}'
+        f'{postgis_schema.qschema()}.ST_AsText({_qi(n)}) AS {_qi(n)}'
         if (t or "") in _GEOMETRY_TYPES else _qi(n)
         for n, t in attrs
     )
@@ -2375,7 +2379,7 @@ async def geo_features(
     limit = max(1, min(int(limit or 500), MAX_FEATURES))
     offset = max(0, int(offset or 0))
     ref = f"{_qi(schema)}.{_qi(table)}"
-    ext = _qi(_PG_EXT_SCHEMA)
+    ext = postgis_schema.qschema()
     props = ", ".join(f"{_qi(c)}::text AS {_qi(c)}" for c in columns)
     select_props = f"{props}, " if props else ""
 

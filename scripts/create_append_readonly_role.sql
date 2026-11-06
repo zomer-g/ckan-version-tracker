@@ -108,6 +108,14 @@ CREATE SCHEMA IF NOT EXISTS extensions;
 GRANT USAGE ON SCHEMA extensions TO :"ro_role";
 GRANT SELECT ON ALL TABLES IN SCHEMA extensions TO :"ro_role";
 
+-- 3c') `postgis` — where xhostd is moving PostGIS. Granted only if the schema
+--      already exists: this script never creates it, and never creates, drops
+--      or moves the extension. Same treatment as `extensions`.
+SELECT format('GRANT USAGE ON SCHEMA postgis TO %I', :'ro_role')
+ WHERE to_regnamespace('postgis') IS NOT NULL \gexec
+SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA postgis TO %I', :'ro_role')
+ WHERE to_regnamespace('postgis') IS NOT NULL \gexec
+
 -- 3d) `odata` (מידע לעם, admin-curated imports) and `ocal` (יומן לעם) — both
 --      co-located IN this DB and both on CONSOLE_SEARCH_PATH, so the console
 --      resolves names in them. odata_import.py re-asserts the odata grants on

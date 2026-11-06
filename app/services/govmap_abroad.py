@@ -70,11 +70,13 @@ from app.config import settings
 from app.models.tracked_dataset import TrackedDataset
 from app.services import append_store, data_catalog
 from app.services.append_store import _qi
-from app.services.index_mirror import PG_EXT_SCHEMA, SCHEMA as IDX_SCHEMA
+from app.services import postgis_schema
+from app.services.index_mirror import SCHEMA as IDX_SCHEMA
 
 logger = logging.getLogger(__name__)
 
-_X = _qi(PG_EXT_SCHEMA)
+# Asked per statement: PostGIS may move schemas (see postgis_schema).
+_X = postgis_schema.qschema
 
 BOUNDARY_TABLE = "over_israel_boundary"
 PARTS_TABLE = "over_israel_boundary_parts"
@@ -138,14 +140,16 @@ FLAG_KEY = "has_abroad"
 #: hundred thousand features; with the parts index a check takes seconds.
 STATEMENT_TIMEOUT_MS = 10 * 60 * 1000
 
-_DDL = [
+def _ddl() -> list[str]:
+    # A function, not a constant: the PostGIS schema is read at runtime.
+    return [
     f"""
     CREATE TABLE IF NOT EXISTS public.{_qi(BOUNDARY_TABLE)} (
         region        text PRIMARY KEY,
         name          text NOT NULL,
         districts     text[] NOT NULL,
         area_km2      double precision,
-        geom          {_X}.geometry(MultiPolygon, 4326) NOT NULL,
+        geom          {_X()}.geometry(MultiPolygon, 4326) NOT NULL,
         source_table  text NOT NULL,
         built_at      timestamptz NOT NULL
     )
@@ -154,7 +158,7 @@ _DDL = [
     CREATE TABLE IF NOT EXISTS public.{_qi(PARTS_TABLE)} (
         region   text NOT NULL,
         part_id  integer NOT NULL,
-        geom     {_X}.geometry(Geometry, 4326) NOT NULL,
+        geom     {_X()}.geometry(Geometry, 4326) NOT NULL,
         PRIMARY KEY (region, part_id)
     )
     """,
@@ -186,7 +190,7 @@ _DDL = [
         row_hash     text NOT NULL,
         distance_km  double precision,
         attrs        jsonb NOT NULL,
-        geom         {_X}.geometry(Geometry, 4326) NOT NULL,
+        geom         {_X()}.geometry(Geometry, 4326) NOT NULL,
         PRIMARY KEY (dataset_id, row_hash)
     )
     """,
@@ -240,7 +244,7 @@ def needs_check(prev: dict | None, version_number, boundary_built_at,
 async def ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
-        for stmt in _DDL:
+        for stmt in _ddl():
             await conn.execute(stmt)
         from app.services.index_mirror import _readonly_role
         role = _readonly_role()
@@ -279,27 +283,27 @@ def _maritime_sql(atlas_table: str) -> tuple[str, list[str]]:
         for pat in c["lines"]:
             params.append(pat)
             lines.append(
-                f"(SELECT {_X}.ST_SnapToGrid({_X}.ST_GeometryN(geom, 1), 1e-7) FROM {src} "
+                f"(SELECT {_X()}.ST_SnapToGrid({_X()}.ST_GeometryN(geom, 1), 1e-7) FROM {src} "
                 f"WHERE englishname LIKE ${len(params)} AND geom IS NOT NULL "
                 f'ORDER BY "objectId" LIMIT 1)')
-        pts = ", ".join(f"{_X}.ST_SetSRID({_X}.ST_MakePoint({x}, {y}), 4326)"
+        pts = ", ".join(f"{_X()}.ST_SetSRID({_X()}.ST_MakePoint({x}, {y}), 4326)"
                         for x, y in c["path"])
-        closing = (f"{_X}.ST_MakeLine(ARRAY[{_X}.ST_EndPoint({lines[-1]}), {pts}, "
-                   f"{_X}.ST_StartPoint({lines[0]})])")
-        rings.append(f"{_X}.ST_MakePolygon({_X}.ST_LineMerge("
-                     f"{_X}.ST_Collect(ARRAY[{', '.join(lines)}, {closing}])))")
+        closing = (f"{_X()}.ST_MakeLine(ARRAY[{_X()}.ST_EndPoint({lines[-1]}), {pts}, "
+                   f"{_X()}.ST_StartPoint({lines[0]})])")
+        rings.append(f"{_X()}.ST_MakePolygon({_X()}.ST_LineMerge("
+                     f"{_X()}.ST_Collect(ARRAY[{', '.join(lines)}, {closing}])))")
     n = len(params)
     sql = f"""
-        WITH sea AS (SELECT {_X}.ST_Union(ARRAY[{', '.join(rings)}]) AS g),
-        land AS (SELECT {_X}.ST_Union(geom) AS g FROM public.{_qi(BOUNDARY_TABLE)}
+        WITH sea AS (SELECT {_X()}.ST_Union(ARRAY[{', '.join(rings)}]) AS g),
+        land AS (SELECT {_X()}.ST_Union(geom) AS g FROM public.{_qi(BOUNDARY_TABLE)}
                  WHERE region IN ('{REGION_ISRAEL}', '{REGION_JUDEA_SAMARIA}')),
         pieces AS (SELECT (d).geom AS g
-                   FROM (SELECT {_X}.ST_Dump({_X}.ST_Difference(sea.g, land.g)) AS d
+                   FROM (SELECT {_X()}.ST_Dump({_X()}.ST_Difference(sea.g, land.g)) AS d
                          FROM sea, land) s),
         kept AS (SELECT g FROM pieces
-                 WHERE {_X}.ST_Area(g::{_X}.geography) / 1e6 >= {MARITIME_MIN_PIECE_KM2})
-        SELECT {_X}.ST_Multi({_X}.ST_Union(g)) AS geom,
-               sum({_X}.ST_Area(g::{_X}.geography)) / 1e6 AS area_km2,
+                 WHERE {_X()}.ST_Area(g::{_X()}.geography) / 1e6 >= {MARITIME_MIN_PIECE_KM2})
+        SELECT {_X()}.ST_Multi({_X()}.ST_Union(g)) AS geom,
+               sum({_X()}.ST_Area(g::{_X()}.geography)) / 1e6 AS area_km2,
                ARRAY(SELECT englishname FROM {src}
                      WHERE englishname LIKE ANY (ARRAY[{', '.join(f'${i}' for i in range(1, n + 1))}])
                      ORDER BY englishname) AS line_names
@@ -339,11 +343,11 @@ async def build_boundary() -> dict:
                     SELECT region,
                            CASE region WHEN '{REGION_ISRAEL}' THEN $2 ELSE $3 END,
                            array_agg(DISTINCT d ORDER BY d),
-                           {_X}.ST_Area({_X}.ST_Union(g)::{_X}.geography) / 1e6,
-                           {_X}.ST_Multi({_X}.ST_CollectionExtract({_X}.ST_Union(g), 3)),
+                           {_X()}.ST_Area({_X()}.ST_Union(g)::{_X()}.geography) / 1e6,
+                           {_X()}.ST_Multi({_X()}.ST_CollectionExtract({_X()}.ST_Union(g), 3)),
                            $4, $5, {BOUNDARY_DEFINITION_VERSION}
                     FROM (SELECT {region_expr} AS region, {_qi(DISTRICT_COLUMN)} AS d,
-                                 {_X}.ST_MakeValid(geom) AS g
+                                 {_X()}.ST_MakeValid(geom) AS g
                           FROM {q_src} WHERE geom IS NOT NULL) s
                     GROUP BY region""",
                 JUDEA_SAMARIA_DISTRICT, REGION_NAMES[REGION_ISRAEL],
@@ -353,7 +357,7 @@ async def build_boundary() -> dict:
                 f"""INSERT INTO public.{_qi(PARTS_TABLE)} (region, part_id, geom)
                     SELECT region, row_number() OVER (PARTITION BY region)::int, g
                     FROM (SELECT region,
-                                 {_X}.ST_Subdivide(geom, {SUBDIVIDE_VERTICES}) AS g
+                                 {_X()}.ST_Subdivide(geom, {SUBDIVIDE_VERTICES}) AS g
                           FROM public.{_qi(BOUNDARY_TABLE)}) s""")
         await conn.execute(f"ANALYZE public.{_qi(PARTS_TABLE)}")
         regions = await conn.fetch(
@@ -425,8 +429,8 @@ def _near_sql(parts: str, g: str, tol_m: float) -> str:
     spheroid decides."""
     deg = tol_m / 111_000 * 2
     return (f"EXISTS (SELECT 1 FROM {parts} p WHERE "
-            f"p.geom OPERATOR({_X}.&&) {_X}.ST_Expand({g}, {deg:.8f}) AND "
-            f"{_X}.ST_DWithin(p.geom::{_X}.geography, {g}::{_X}.geography, {tol_m}))")
+            f"p.geom OPERATOR({_X()}.&&) {_X()}.ST_Expand({g}, {deg:.8f}) AND "
+            f"{_X()}.ST_DWithin(p.geom::{_X()}.geography, {g}::{_X()}.geography, {tol_m}))")
 
 
 def _check_sql(table: str, tol_m: float = 0.0) -> tuple[str, str]:
@@ -449,16 +453,16 @@ def _check_sql(table: str, tol_m: float = 0.0) -> tuple[str, str]:
         """EXISTS a piece of ``region`` (None = of ANY region) touching ``g``."""
         where = f"p.region = '{region}' AND " if region else ""
         return (f"EXISTS (SELECT 1 FROM {parts} p WHERE {where}"
-                f"p.geom OPERATOR({_X}.&&) {g} AND {_X}.ST_Intersects(p.geom, {g}))")
+                f"p.geom OPERATOR({_X()}.&&) {g} AND {_X()}.ST_Intersects(p.geom, {g}))")
     near_clause = (f"\n          AND NOT {_near_sql(parts, 'zz_src.geom', tol_m)}"
                    if tol_m > 0 else "")
     insert = f"""
         INSERT INTO public.{_qi(FEATURES_TABLE)}
             (dataset_id, table_name, layer_id, row_hash, distance_km, attrs, geom)
         SELECT $1, $2, $3, zz_src._row_hash::text,
-               (SELECT min({_X}.ST_Distance(n.geom::{_X}.geography, zz_src.geom::{_X}.geography))
+               (SELECT min({_X()}.ST_Distance(n.geom::{_X()}.geography, zz_src.geom::{_X()}.geography))
                 FROM (SELECT p.geom FROM {parts} p
-                      ORDER BY p.geom OPERATOR({_X}.<->) zz_src.geom LIMIT 5) n) / 1000.0,
+                      ORDER BY p.geom OPERATOR({_X()}.<->) zz_src.geom LIMIT 5) n) / 1000.0,
                CASE WHEN length(a.j::text) > {MAX_ATTRS_CHARS}
                     THEN jsonb_build_object('_truncated', left(a.j::text, {MAX_ATTRS_CHARS}))
                     ELSE a.j END,
@@ -806,14 +810,14 @@ async def features(*, dataset_id: str | None = None, publisher: str | None = Non
         rows = await conn.fetch(f"""
             SELECT f.dataset_id, f.layer_id, a.title, {_PUBLISHER_SQL} AS publisher,
                    f.row_hash, f.distance_km, f.attrs::text AS attrs,
-                   {_X}.GeometryType(f.geom) AS geom_type,
-                   {_X}.ST_X(pt) AS lon, {_X}.ST_Y(pt) AS lat,
-                   {_X}.ST_X({_X}.ST_Transform(pt, 2039)) AS x_itm,
-                   {_X}.ST_Y({_X}.ST_Transform(pt, 2039)) AS y_itm
+                   {_X()}.GeometryType(f.geom) AS geom_type,
+                   {_X()}.ST_X(pt) AS lon, {_X()}.ST_Y(pt) AS lat,
+                   {_X()}.ST_X({_X()}.ST_Transform(pt, 2039)) AS x_itm,
+                   {_X()}.ST_Y({_X()}.ST_Transform(pt, 2039)) AS y_itm
             FROM public.{_qi(FEATURES_TABLE)} f
             JOIN public.{_qi(LAYERS_TABLE)} a ON a.dataset_id = f.dataset_id
             LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id
-            CROSS JOIN LATERAL (SELECT {_X}.ST_PointOnSurface(f.geom) AS pt) p{where}
+            CROSS JOIN LATERAL (SELECT {_X()}.ST_PointOnSurface(f.geom) AS pt) p{where}
             ORDER BY 4, a.title, f.distance_km DESC NULLS LAST, f.row_hash
             LIMIT {limit} OFFSET {offset}""", *params)
     import json as _json

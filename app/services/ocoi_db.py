@@ -103,7 +103,7 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
 # migration, when pointing this pool at the original Render Postgres to compare).
 # Passed as a startup option so it survives the pool's RESET ALL between
 # acquisitions — a plain per-connection ``SET`` does not (the lesson from ocal).
-_SEARCH_PATH = "ocoi, extensions, public"
+_SEARCH_PATH = "ocoi, extensions, postgis, public"
 
 # See the module docstring: matches what ocoi's own engine did, so timestamps
 # written by OVER stay on the same clock as the rows already in the table.

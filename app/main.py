@@ -384,6 +384,10 @@ async def lifespan(app: FastAPI):
     # is the guard on every topology; with one database it is the only one.
     await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
     await _prove_app_tables_are_private(shared_db=shared_db)
+    # Read where PostGIS lives (`extensions` before xhostd's move, `postgis`
+    # after) before the scheduler builds any spatial SQL. Never raises.
+    from app.services import postgis_schema
+    await postgis_schema.ensure_resolved()
     import asyncio
     # The scheduler and the one-time boot writers below only run on an instance
     # allowed to write. A second instance (SCHEDULER_ENABLED=false) and a

@@ -1465,7 +1465,7 @@ export default function DataSqlPage() {
               this line still said "public, knesset" long after idx joined the
               path, so the console was telling users they had to qualify tables
               that in fact resolved bare. */}
-          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · search_path: public, knesset, idx, extensions</span>
+          <span className="text-sm text-muted">SELECT בלבד · עד 1,000 שורות בתצוגה · search_path: public, knesset, idx, odata, ocal, extensions, postgis</span>
           <CopySchemaButton url={dataCatalog.schemaTxtUrl(selectedTable?.table)} />
           <select
             aria-label="שאילתות לדוגמה"

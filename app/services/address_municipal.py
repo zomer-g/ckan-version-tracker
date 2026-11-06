@@ -45,6 +45,7 @@ from __future__ import annotations
 import logging
 
 from app.services import append_store
+from app.services import postgis_schema
 from app.services.nadlan_index import ADDRESSES_TABLE
 
 logger = logging.getLogger(__name__)
@@ -99,9 +100,9 @@ def _layer_cte(table: str, town: str, st: str, hn: str, ot: str | None) -> str:
                -- sits within ~6 m of either end. The `point` column is typed
                -- geometry(Point,4326), so it would have rejected the raw
                -- geometry anyway.
-               extensions.ST_Y(extensions.ST_Centroid(l.geom))        AS lat,
-               extensions.ST_X(extensions.ST_Centroid(l.geom))        AS lon,
-               extensions.ST_Centroid(l.geom)                         AS point
+               {postgis_schema.qschema()}.ST_Y({postgis_schema.qschema()}.ST_Centroid(l.geom))        AS lat,
+               {postgis_schema.qschema()}.ST_X({postgis_schema.qschema()}.ST_Centroid(l.geom))        AS lon,
+               {postgis_schema.qschema()}.ST_Centroid(l.geom)                         AS point
         FROM idx."{table}" l
         WHERE l.geom IS NOT NULL
           AND btrim(coalesce(l.{st}::text,'')) <> ''

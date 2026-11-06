@@ -51,7 +51,8 @@ _DATA_SCHEMAS = {"public", "knesset", "idx", "odata", "ocal"}
 # in `extensions`; the role needs USAGE (or no ST_* call resolves) and SELECT on
 # spatial_ref_sys, but default privileges would be meaningless — we never create
 # anything there, and future objects belong to the extension.
-_SUPPORT_SCHEMAS = {"extensions"}
+# `postgis` is where xhostd moves it; granted only when that schema exists.
+_SUPPORT_SCHEMAS = {"extensions", "postgis"}
 _CONSOLE_SCHEMAS = _DATA_SCHEMAS | _SUPPORT_SCHEMAS
 
 

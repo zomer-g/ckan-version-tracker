@@ -25,7 +25,7 @@ from app.services import nadlan_index as ni  # noqa: E402
 
 
 def _addresses_ddl() -> str:
-    ddl = [d for d in ni._DDL if ni.ADDRESSES_TABLE in d]
+    ddl = [d for d in ni._ddl() if ni.ADDRESSES_TABLE in d]
     assert len(ddl) == 1, "expected exactly one CREATE TABLE for the addresses"
     return ddl[0]
 
@@ -64,7 +64,7 @@ def test_the_addresses_table_stores_itm():
 def test_itm_is_also_added_to_tables_that_already_exist():
     """CREATE TABLE IF NOT EXISTS never evolves a live table — the production
     one is three years old. Every post-launch column needs the ALTER too."""
-    added = {col for _t, col, _ty in ni._COLUMN_ADDITIONS}
+    added = {col for _t, col, _ty in ni._column_additions()}
     assert {"itm_x", "itm_y", "point_source"} <= added
 
 

@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-FUNCTION_SCHEMAS = ("public", "extensions", "idx", "knesset", "ocal", "ocoi", "odata")
+FUNCTION_SCHEMAS = ("public", "extensions", "postgis", "idx", "knesset", "ocal", "ocoi", "odata")
 
 
 def log(msg: str) -> None:

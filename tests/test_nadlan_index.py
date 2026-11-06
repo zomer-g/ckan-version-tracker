@@ -218,8 +218,8 @@ def test_every_ddl_column_added_after_launch_has_a_migration():
     an explicit ALTER runs, and the build then dies on "column does not exist" —
     which is exactly what happened to `zip_level`. Anything in _COLUMN_ADDITIONS
     must name a real table and appear in that table's DDL."""
-    ddl = "\n".join(ni._DDL)
-    for table, column, _type in ni._COLUMN_ADDITIONS:
+    ddl = "\n".join(ni._ddl())
+    for table, column, _type in ni._column_additions():
         assert table in ni.ALL_TABLES, f"{table} is not a known table"
         assert column in ddl, f"{column} is migrated but missing from _DDL"
 

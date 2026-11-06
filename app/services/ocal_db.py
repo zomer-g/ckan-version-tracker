@@ -81,7 +81,7 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
 # acquisitions — a plain per-connection ``SET`` does not. On the append DB it is
 # ALSO the ocal_app role default (ALTER ROLE ... SET search_path). ocal issues no
 # DDL at runtime, so there is no risk of writing into public.
-_SEARCH_PATH = "ocal, extensions, public"
+_SEARCH_PATH = "ocal, extensions, postgis, public"
 
 
 async def get_pool() -> asyncpg.Pool:

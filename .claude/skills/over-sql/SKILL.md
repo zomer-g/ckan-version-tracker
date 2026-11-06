@@ -56,7 +56,7 @@ console is the same database.
 | endpoint | `POST https://www.over.org.il/api/tables/sql`, body `{"sql_b64": "<base64 of the SQL>"}` |
 | host | the **www** host — `over.org.il` answers 307 and urllib drops the POST body |
 | allowed | ONE `SELECT` or `WITH` statement, read-only role, no DDL/DML |
-| `search_path` | `public, knesset, idx, odata, ocal, extensions` — schema-qualify only on a name collision |
+| `search_path` | `public, knesset, idx, odata, ocal, extensions, postgis` — schema-qualify only on a name collision |
 | statement timeout | **10 s** (60 s on `/api/tables/export.csv`) |
 | rows | 1,000 in the browser, 200,000 via export |
 | rate limit | 20/min for SQL, 6/min for CSV export |
