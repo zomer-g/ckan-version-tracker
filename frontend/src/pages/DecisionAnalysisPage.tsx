@@ -169,6 +169,9 @@ export default function DecisionAnalysisPage() {
     <div>
       <div className="about-hero">
         <div className="container">
+          <p className="project1933-back">
+            <Link to="/projects/1933">{t("project1933.back", "← פרויקט 1933")}</Link>
+          </p>
           <h1>{doc.title}</h1>
           <p className="rationale-hero-sub">{doc.subtitle}</p>
         </div>

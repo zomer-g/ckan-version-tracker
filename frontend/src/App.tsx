@@ -24,6 +24,7 @@ const AdminPage = lazyPage(() => import("./pages/AdminPage"));
 const AboutPage = lazyPage(() => import("./pages/AboutPage"));
 const SecurityPage = lazyPage(() => import("./pages/SecurityPage"));
 const RationalePage = lazyPage(() => import("./pages/RationalePage"));
+const Project1933Page = lazyPage(() => import("./pages/Project1933Page"));
 const DecisionAnalysisPage = lazyPage(() => import("./pages/DecisionAnalysisPage"));
 const ApiPage = lazyPage(() => import("./pages/ApiPage"));
 const ProjectImportPage = lazyPage(() => import("./pages/ProjectImportPage"));
@@ -181,6 +182,9 @@ export default function App() {
               /projects/nadlan and were never property lookups. */}
           <Route path="/projects/deals" element={<DealsPage />} />
           <Route path="/projects/prices" element={<PricesPage />} />
+          {/* The project hub; /rationale and /rationale/1933 keep their own
+              URLs (they are linked from outside) and link back here. */}
+          <Route path="/projects/1933" element={<Project1933Page />} />
           <Route path="/about" element={<AboutPage />} />
           {/* Beside the privacy policy and the accessibility statement: how to
               report, and the public log of what was reported and fixed. */}
