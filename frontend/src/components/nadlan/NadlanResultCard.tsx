@@ -25,6 +25,7 @@ import {
   type NadlanSourceRows,
 } from "../../api/client";
 import NadlanCubes from "./NadlanCubes";
+import { DEAL_HEADER_TITLES, declaredDiffers, portionLabel } from "../../utils/dealFields";
 
 const SOURCE_LABELS: Record<string, string> = {
   parcels: "חלקות (מרכז למיפוי ישראל)",
@@ -105,6 +106,33 @@ const DETAIL_SOURCES = new Set(["gazetteer", "parcels", "postal", "stat_area"]);
  *  and status, the zips, the statistical area and the deals. Their cards used
  *  to repeat each of those a second time, field for field. */
 const COMPACT_SOURCES = new Set(["parcels", "postal", "stat_area", "deals"]);
+
+/** Sources whose summary block above carries their way to the rows too, so
+ *  they get no card of their own below. The statistical area and the deals
+ *  used to appear twice: in full in the summary, and again further down as a
+ *  card holding nothing but a link — which read as a second, empty answer. */
+const FOLDED_SOURCES = new Set(["stat_area", "deals"]);
+
+/** True when a source has anything for this parcel. A card for a source with
+ *  nothing (no postal row for a parcel without zips, "0 linked addresses"
+ *  under a summary that already says there are none) is a box with a link to
+ *  "WHERE false" — it is left out. */
+function sourceHasData(block: NadlanSourceBlock): boolean {
+  return Object.values(block.fields).some(
+    (v) => v != null && v !== "" && v !== 0 && !(Array.isArray(v) && v.length === 0));
+}
+
+/** The link to a source's own rows on /data, as every source card has it. */
+function SourceLink({ block, style }: { block: NadlanSourceBlock | undefined; style?: React.CSSProperties }) {
+  if (!block) return null;
+  return (
+    <a href={block.row_url} target="_blank" rel="noopener noreferrer"
+       style={{ fontSize: "0.82rem", ...style }} title={`${block.table}\n${block.console_sql}`}>
+      שורות המקור ב-/data ↗
+      <span className="sr-only"> (נפתח בחלון חדש)</span>
+    </a>
+  );
+}
 
 const DETAIL_PAGE = 50;
 
@@ -351,7 +379,12 @@ function AddressList({ addresses }: { addresses: NadlanAddress[] }) {
  *  its own division year on purpose: it is published on the 2011 areas, which
  *  are NOT the 2022 areas this property's code comes from, and collapsing the
  *  two would read as one fact when it is two. */
-function StatAreaBlock({ area }: { area: NonNullable<NadlanProperty["stat_area"]> }) {
+function StatAreaBlock({ area, property }: {
+  area: NonNullable<NadlanProperty["stat_area"]>;
+  property: NadlanProperty;
+}) {
+  const [open, setOpen] = useState(false);
+  const block = property.sources.stat_area as NadlanSourceBlock | undefined;
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 8, padding: "0.6rem 0.8rem",
@@ -388,9 +421,27 @@ function StatAreaBlock({ area }: { area: NonNullable<NadlanProperty["stat_area"]
           </div>
         )}
       </div>
+      {block && (
+        <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+            style={{
+              padding: "0.2rem 0.65rem", fontSize: "0.8rem", cursor: "pointer",
+              border: "1px solid var(--border)", borderRadius: 6, background: "none",
+            }}>
+            {open ? "הסתרת הפרטים" : "כל השדות במקור"}
+          </button>
+          <SourceLink block={block} />
+        </div>
+      )}
+      {open && <SourceRowsView property={property} source="stat_area" />}
     </div>
   );
 }
+
+const DEAL_COLUMNS: { label: string; title?: string }[] = [
+  "תאריך", "שווי מכירה", "תמורה מוצהרת", "חלק נמכר", "מהות", "תת-חלקה", "חדרים",
+  "שטח (מ״ר)", "₪ למ״ר", "שנת בנייה",
+].map((label) => ({ label, title: DEAL_HEADER_TITLES[label] }));
 
 /** The deal history. The summary is already in the envelope; the list is
  *  fetched only when it is opened, because a parcel in a condo tower holds
@@ -421,9 +472,12 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
     }}>
       <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 700, fontSize: "0.9rem" }}>עסקאות מקרקעין</div>
-        <Link to={dealsHref} style={{ fontSize: "0.82rem" }}>
-          במאגר עסקאות נדל״ן ←
-        </Link>
+        <span className="flex" style={{ gap: "0.7rem", alignItems: "baseline", flexWrap: "wrap" }}>
+          <SourceLink block={property.sources.deals as NadlanSourceBlock | undefined} />
+          <Link to={dealsHref} style={{ fontSize: "0.82rem" }}>
+            במאגר עסקאות נדל״ן ←
+          </Link>
+        </span>
       </div>
       <div className="text-sm" style={{ lineHeight: 1.8 }}>
         <div>
@@ -437,6 +491,12 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
           <div className="text-muted">
             אחרונה: <Ltr>{heDate(summary.latest.date)}</Ltr>
             {summary.latest.amount != null && <> · <Ltr>{NIS.format(summary.latest.amount)}</Ltr></>}
+            {declaredDiffers(summary.latest) && summary.latest.declared_amount != null && (
+              <> (מוצהר <Ltr>{NIS.format(summary.latest.declared_amount)}</Ltr>)</>
+            )}
+            {summary.latest.portion_fraction != null && summary.latest.portion_fraction < 0.9995 && (
+              <> · חלק נמכר <Ltr>{portionLabel(summary.latest)}</Ltr></>
+            )}
             {summary.latest.nature ? ` · ${summary.latest.nature}` : ""}
             {summary.latest.rooms ? <> · <Ltr>{summary.latest.rooms}</Ltr> חד׳</> : null}
           </div>
@@ -465,8 +525,9 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
               <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                    {["תאריך", "שווי", "מהות", "תת-חלקה", "חדרים", "שטח (מ״ר)", "שנת בנייה"].map((h) => (
-                      <th key={h} scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>{h}</th>
+                    {DEAL_COLUMNS.map((h) => (
+                      <th key={h.label} scope="col" title={h.title}
+                          style={{ textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>{h.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -477,10 +538,21 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
                       <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
                         <Ltr>{d.amount != null ? NIS.format(d.amount) : "—"}</Ltr>
                       </td>
+                      <td style={{
+                        padding: "0.2rem 0.4rem", whiteSpace: "nowrap",
+                        color: declaredDiffers(d) ? "var(--warning)" : "var(--text-muted)",
+                        fontWeight: declaredDiffers(d) ? 600 : undefined,
+                      }} title={declaredDiffers(d) ? "שונה משווי המכירה" : "זהה לשווי המכירה"}>
+                        <Ltr>{d.declared_amount != null ? NIS.format(d.declared_amount) : "—"}</Ltr>
+                      </td>
+                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}><Ltr>{portionLabel(d)}</Ltr></td>
                       <td style={{ padding: "0.2rem 0.4rem" }}>{d.nature ?? "—"}</td>
                       <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.sub_parcel ?? "—"}</Ltr></td>
                       <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.rooms || "—"}</Ltr></td>
                       <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.area_sqm || "—"}</Ltr></td>
+                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
+                        <Ltr>{d.price_per_sqm_normalized ? NIS.format(d.price_per_sqm_normalized) : "—"}</Ltr>
+                      </td>
                       <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.year_built || "—"}</Ltr></td>
                     </tr>
                   ))}
@@ -620,7 +692,7 @@ export default function NadlanResultCard({
           display: "grid", gap: "0.5rem", marginTop: "0.6rem",
           gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
         }}>
-          {property.stat_area && <StatAreaBlock area={property.stat_area} />}
+          {property.stat_area && <StatAreaBlock area={property.stat_area} property={property} />}
           {property.deals && <DealsBlock property={property} />}
         </div>
       )}
@@ -651,6 +723,7 @@ export default function NadlanResultCard({
             {/* Sources with something the summary does not already say come
                 first and in full; the rest keep only their way to the rows. */}
             {Object.entries(property.sources)
+              .filter(([k, b]) => !FOLDED_SOURCES.has(k) && sourceHasData(b as NadlanSourceBlock))
               .sort(([a], [b]) => Number(COMPACT_SOURCES.has(a)) - Number(COMPACT_SOURCES.has(b)))
               .map(([k, b]) => (
               <SourceCard key={k} id={k} block={b as NadlanSourceBlock} property={property}

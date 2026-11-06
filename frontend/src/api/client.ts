@@ -3371,6 +3371,12 @@ export interface NadlanDeal {
   rooms: number | null;
   year_built: number | null;
   portion: string | null;
+  /** `portion` as a number, 0-1: the share of the asset this deal sold. */
+  portion_fraction?: number | null;
+  /** amount / whole-asset area. */
+  price_per_sqm?: number | null;
+  /** amount / (area x portion): the price per sqm actually bought. */
+  price_per_sqm_normalized?: number | null;
   sub_parcel: string | null;
   settlement?: string | null;
   settlement_code?: string | null;

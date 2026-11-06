@@ -27,6 +27,7 @@ import {
 
 import SearchableSelect, { SearchableOption } from "../components/SearchableSelect";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { DEAL_HEADER_TITLES, declaredDiffers, portionLabel } from "../utils/dealFields";
 const NadlanGaps = lazy(() => import("../components/deals/NadlanGaps"));
 const NadlanQuiz = lazy(() => import("../components/deals/NadlanQuiz"));
 const DealsLogTab = lazy(() => import("../components/deals/DealsLog"));
@@ -493,9 +494,10 @@ export default function DealsPage() {
                 <table style={{ width: "100%", fontSize: "0.86rem", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                      {["תאריך", "יישוב", "כתובת", "גוש־חלקה", "תת-חלקה", "שווי", "מהות", "חדרים",
-                        "שטח (מ״ר)", "שנת בנייה", "חלק"].map((h) => (
-                        <th key={h} scope="col" style={{ textAlign: "start", padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
+                      {["תאריך", "יישוב", "כתובת", "גוש־חלקה", "תת-חלקה", "שווי מכירה", "תמורה מוצהרת",
+                        "חלק נמכר", "מהות", "חדרים", "שטח (מ״ר)", "₪ למ״ר", "שנת בנייה"].map((h) => (
+                        <th key={h} scope="col" title={DEAL_HEADER_TITLES[h]}
+                            style={{ textAlign: "start", padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
                           {h}
                         </th>
                       ))}
@@ -534,11 +536,24 @@ export default function DealsPage() {
                         <td style={{ padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
                           <Ltr>{d.amount != null ? NIS.format(d.amount) : "—"}</Ltr>
                         </td>
+                        <td style={{
+                          padding: "0.3rem 0.45rem", whiteSpace: "nowrap",
+                          color: declaredDiffers(d) ? "var(--warning)" : "var(--text-muted)",
+                          fontWeight: declaredDiffers(d) ? 600 : undefined,
+                        }} title={declaredDiffers(d) ? "שונה משווי המכירה" : "זהה לשווי המכירה"}>
+                          <Ltr>{d.declared_amount != null ? NIS.format(d.declared_amount) : "—"}</Ltr>
+                        </td>
+                        <td style={{ padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}
+                            title={d.portion ? `${d.portion} מהנכס` : undefined}>
+                          <Ltr>{portionLabel(d)}</Ltr>
+                        </td>
                         <td style={{ padding: "0.3rem 0.45rem" }}>{d.nature ?? "—"}</td>
                         <td style={{ padding: "0.3rem 0.45rem" }}><Ltr>{d.rooms || "—"}</Ltr></td>
                         <td style={{ padding: "0.3rem 0.45rem" }}><Ltr>{d.area_sqm || "—"}</Ltr></td>
+                        <td style={{ padding: "0.3rem 0.45rem", whiteSpace: "nowrap" }}>
+                          <Ltr>{d.price_per_sqm_normalized ? NIS.format(d.price_per_sqm_normalized) : "—"}</Ltr>
+                        </td>
                         <td style={{ padding: "0.3rem 0.45rem" }}><Ltr>{d.year_built || "—"}</Ltr></td>
-                        <td style={{ padding: "0.3rem 0.45rem" }}><Ltr>{d.portion ?? "—"}</Ltr></td>
                       </tr>
                     ))}
                   </tbody>
