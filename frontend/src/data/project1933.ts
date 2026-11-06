@@ -37,8 +37,9 @@ export interface Response1933 {
   url: string;
   /** Duplicate uploads of the same answer. */
   also?: string[];
-  /** Attached documents, without the e-mail signature images. */
-  files: string[];
+  /** Attached documents, without the e-mail signature images: the file name
+   *  as uploaded, and its download link on מידע לעם. */
+  files: { name: string; url: string }[];
   /** How many inline e-mail images (logos, signatures) were uploaded too. */
   images: number;
   finding: null | { status: Finding1933Status; summary: string };
@@ -87,7 +88,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד הנגב, הגליל והחוסן הלאומי",
     date: "2024-10-10",
     url: "https://www.odata.org.il/dataset/49400a24-da68-4955-b27d-addeaa43f457",
-    files: ["מענה הצלחה החמ 1933.pdf"],
+    files: [
+      { name: "מענה הצלחה החמ 1933.pdf", url: "https://www.odata.org.il/dataset/ffbefa57-6763-444c-a5fe-0fe357eb8fcb/resource/85384685-2ef0-4e6e-b90a-1581392b5537/download/-1933.pdf" },
+    ],
     images: 0,
     finding: {
       status: "refused",
@@ -99,7 +102,12 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד האנרגיה",
     date: "2024-11-05",
     url: "https://www.odata.org.il/dataset/a3b471e2-dc0f-4870-b889-1cf636a73294",
-    files: ["MH_87_2018.pdf", "פורמט לנספח - הנגשת מאגרי מידע והעברות מידע - משרד האנרגיה - 2019.pdf", "MH_92_2018.xlsx", "dov_549_2024.pdf"],
+    files: [
+      { name: "MH_87_2018.pdf", url: "https://www.odata.org.il/dataset/bff3ebb7-a648-48ed-af5c-477ac049eb8e/resource/10bada73-636e-4e89-a407-358214000418/download/mh_87_2018.pdf" },
+      { name: "פורמט לנספח - הנגשת מאגרי מידע והעברות מידע - משרד האנרגיה - 2019.pdf", url: "https://www.odata.org.il/dataset/bff3ebb7-a648-48ed-af5c-477ac049eb8e/resource/c468cd1f-2412-4794-be92-bcba839ead25/download/-2019.pdf" },
+      { name: "MH_92_2018.xlsx", url: "https://www.odata.org.il/dataset/bff3ebb7-a648-48ed-af5c-477ac049eb8e/resource/1b6993b6-dbd7-43b3-a6ee-31661a874348/download/mh_92_2018.xlsx" },
+      { name: "dov_549_2024.pdf", url: "https://www.odata.org.il/dataset/bff3ebb7-a648-48ed-af5c-477ac049eb8e/resource/1575dac0-0572-4670-a329-b0c5b96c8625/download/dov_549_2024.pdf" },
+    ],
     images: 6,
     finding: {
       status: "acted",
@@ -111,7 +119,10 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד התרבות והספורט",
     date: "2024-11-11",
     url: "https://www.odata.org.il/dataset/a35657c6-82dd-403b-9fa3-5dd6e0a1db45",
-    files: ["מענה לפניה.pdf", "עותק של הנגשת מאגרים - משרד התרבות והספורט.xlsx"],
+    files: [
+      { name: "מענה לפניה.pdf", url: "https://www.odata.org.il/dataset/c841657b-7b9a-4c4b-b3fc-12a0094b3e5e/resource/03f34c6e-8b41-4ecb-8733-39d42bac4ced/download/-.pdf" },
+      { name: "עותק של הנגשת מאגרים - משרד התרבות והספורט.xlsx", url: "https://www.odata.org.il/dataset/c841657b-7b9a-4c4b-b3fc-12a0094b3e5e/resource/2df623cc-2d38-491c-b662-9123cae68c2e/download/-.xlsx" },
+    ],
     images: 0,
     finding: {
       status: "acted",
@@ -123,7 +134,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד החקלאות",
     date: "2024-11-20",
     url: "https://www.odata.org.il/dataset/6a2b33b0-f809-4a80-b2a8-9fda497b4573",
-    files: ["החלטת ממשלה 1933 - משרד החקלאות.docx"],
+    files: [
+      { name: "החלטת ממשלה 1933 - משרד החקלאות.docx", url: "https://www.odata.org.il/dataset/d96ed509-0398-48cf-bfc4-df74283a2c9c/resource/6fa30b1c-3c70-4730-8d84-9a43a34a173e/download/-1933-.docx" },
+    ],
     images: 11,
     finding: {
       status: "nothing",
@@ -135,7 +148,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד התפוצות והמאבק באנטישמיות",
     date: "2024-11-27",
     url: "https://www.odata.org.il/dataset/3360eab5-415f-47cf-b918-1c989c38d32c",
-    files: ["מענה לבקשת מאגרי מידע.pdf"],
+    files: [
+      { name: "מענה לבקשת מאגרי מידע.pdf", url: "https://www.odata.org.il/dataset/4518408b-7046-485e-81e1-f76e016b31c2/resource/61584133-8b77-49c9-a647-fd301f7b1886/download/-.pdf" },
+    ],
     images: 1,
     finding: null,
     findingNote: "המשרד השיב במשפט אחד: \"אין ברשות משרד התפוצות והמאבק באנטישמיות מאגרי מידע\". התשובה לא מתאימה לאף אחת מהקטגוריות, ולכן לא סווגה.",
@@ -145,7 +160,9 @@ export const RESPONSES_1933: Response1933[] = [
     date: "2024-11-28",
     url: "https://www.odata.org.il/dataset/68c54698-ddbb-40bd-b868-4350e1868838",
     also: ["https://www.odata.org.il/dataset/15968372-cf3d-4725-a4b5-9b5ccaa60fe1"],
-    files: ["מענה לבקשת חופש מידע בנוגע להחלטת ממשלה 1933 בעניין מאגרי מידע לציבור.pdf"],
+    files: [
+      { name: "מענה לבקשת חופש מידע בנוגע להחלטת ממשלה 1933 בעניין מאגרי מידע לציבור.pdf", url: "https://www.odata.org.il/dataset/95ec1484-0270-4b9a-a115-df7bcf3d18ac/resource/a72c02cc-be7a-4d0f-a08b-6335c1052d99/download/-1933-.pdf" },
+    ],
     images: 4,
     finding: {
       status: "partial",
@@ -157,7 +174,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד הבינוי והשיכון",
     date: "2024-12-05",
     url: "https://www.odata.org.il/dataset/db15d4be-06f4-466e-a6b1-215524d5013a",
-    files: ["מענה לבקשת מידע.pdf"],
+    files: [
+      { name: "מענה לבקשת מידע.pdf", url: "https://www.odata.org.il/dataset/cad9e9d5-0167-4386-8eae-7ee949de9a95/resource/8a816fc8-f068-4f7c-8ba2-c594c5e39736/download/-.pdf" },
+    ],
     images: 3,
     finding: {
       status: "partial",
@@ -169,7 +188,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד ירושלים ומסורת ישראל",
     date: "2024-12-10",
     url: "https://www.odata.org.il/dataset/fbab09a7-ed41-432c-a518-25183930eb1b",
-    files: ["מענה סופי - אלעד מן - החלטת הממשלה 1933 מאגרי מידע - 9.12.24.pdf"],
+    files: [
+      { name: "מענה סופי - אלעד מן - החלטת הממשלה 1933 מאגרי מידע - 9.12.24.pdf", url: "https://www.odata.org.il/dataset/778535cd-8aad-4f4b-b359-2087b0da0367/resource/917a78d1-4339-45de-a8bd-f513938bd5ef/download/-1933-9.12.24.pdf" },
+    ],
     images: 2,
     finding: {
       status: "nothing",
@@ -181,7 +202,13 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד החינוך",
     date: "2024-12-25",
     url: "https://www.odata.org.il/dataset/1118a606-2cd9-4350-80c6-398d371f56ec",
-    files: ["מענה למבקר המדינה -מענה פעם אחת.pdf", "מענה למבקר המדינה -מענה פעם אחת.pdf", "1933 (1)_241115_154137.pdf", "מבקר המידנה מדיניות פעם אחת.pdf", "אלעד מן - החלטת ממשלה 1933- מאגרי מידע.pdf"],
+    files: [
+      { name: "מענה למבקר המדינה -מענה פעם אחת.pdf", url: "https://www.odata.org.il/dataset/324ccff7-f0aa-4154-8fef-e53062821e33/resource/1a263815-c328-423b-bc7a-b4367c59e921/download/-.pdf" },
+      { name: "מענה למבקר המדינה -מענה פעם אחת.pdf", url: "https://www.odata.org.il/dataset/324ccff7-f0aa-4154-8fef-e53062821e33/resource/86b9734c-211d-4f40-9d2a-a024e2692100/download/-.pdf" },
+      { name: "1933 (1)_241115_154137.pdf", url: "https://www.odata.org.il/dataset/324ccff7-f0aa-4154-8fef-e53062821e33/resource/4ff8b799-b9b1-43a1-b96d-1bca109e0a30/download/1933-1_241115_154137.pdf" },
+      { name: "מבקר המידנה מדיניות פעם אחת.pdf", url: "https://www.odata.org.il/dataset/324ccff7-f0aa-4154-8fef-e53062821e33/resource/38e04926-aa79-4e3a-b702-ed77f75ccbc7/download/-.pdf" },
+      { name: "אלעד מן - החלטת ממשלה 1933- מאגרי מידע.pdf", url: "https://www.odata.org.il/dataset/324ccff7-f0aa-4154-8fef-e53062821e33/resource/a79f9cd3-648f-4044-9204-eec891f993d6/download/-1933-.pdf" },
+    ],
     images: 10,
     finding: {
       status: "refused",
@@ -193,7 +220,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "המשרד לשיתוף פעולה איזורי",
     date: "2024-12-25",
     url: "https://www.odata.org.il/dataset/8606a2c8-4a5a-45e0-811c-87fb31f1b78e",
-    files: ["עמותת הצלחה - בקשת חופש מידע-החלטת הממשלה 1933 בעניין מאגרי מידע (003).pdf"],
+    files: [
+      { name: "עמותת הצלחה - בקשת חופש מידע-החלטת הממשלה 1933 בעניין מאגרי מידע (003).pdf", url: "https://www.odata.org.il/dataset/ee5ccc83-2ed8-495c-a4d5-0f15c843e1b2/resource/5b1c10e8-8a9b-4521-aeac-8be18d4afee8/download/-1933-003.pdf" },
+    ],
     images: 0,
     finding: {
       status: "nothing",
@@ -205,7 +234,15 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד התיירות",
     date: "2025-01-01",
     url: "https://www.odata.org.il/dataset/1493e5a1-7f17-493b-8cde-b5348600a637",
-    files: ["החלטת ממשלה 1933 מאגרי מידע -מענה לבקשתך באמצעות חוק חופש המידע (002).pdf", "אופן הוצאת נתונים ל OPEN DATA.pdf", "חשיבה מחדש על תכני אתר מידע למטייל - סיכום ישיבה - 2 נוסף.pdf", "אופן טיפול בעיות ב OPEN DATA 3.pdf", "דגשים להוצאת מאגרים ל OPEN DATA 4.pdf", "חשיבה מחדש על תכני אתר מידע למטייל - סיכום ישיבה 5.pdf", "נוהל הוועדה להעברת מידע בין גופים ציבוריים.pdf"],
+    files: [
+      { name: "החלטת ממשלה 1933 מאגרי מידע -מענה לבקשתך באמצעות חוק חופש המידע (002).pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/4a5d255e-e862-4201-9199-5d4e882f7b9f/download/-1933-002.pdf" },
+      { name: "אופן הוצאת נתונים ל OPEN DATA.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/8395cb1c-945b-49fc-a698-463e0c1ef500/download/-open-data.pdf" },
+      { name: "חשיבה מחדש על תכני אתר מידע למטייל - סיכום ישיבה - 2 נוסף.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/d8765078-db55-4170-bfa9-0b8af03ed088/download/-2-.pdf" },
+      { name: "אופן טיפול בעיות ב OPEN DATA 3.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/0fe1306f-15f8-4486-88cc-a33ea614a763/download/-open-data-3.pdf" },
+      { name: "דגשים להוצאת מאגרים ל OPEN DATA 4.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/5550d0a7-59c4-4476-aaf4-84029a9806c3/download/-open-data-4.pdf" },
+      { name: "חשיבה מחדש על תכני אתר מידע למטייל - סיכום ישיבה 5.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/fbee5e76-8d45-4ea3-8162-aadf409a321c/download/-5.pdf" },
+      { name: "נוהל הוועדה להעברת מידע בין גופים ציבוריים.pdf", url: "https://www.odata.org.il/dataset/17c40028-80f7-401e-94b8-f92aa3880f1a/resource/d61fba75-9b57-4a18-aa10-4d4fe018d11b/download/-.pdf" },
+    ],
     images: 0,
     finding: {
       status: "acted",
@@ -217,7 +254,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד הכלכלה",
     date: "2025-01-16",
     url: "https://www.odata.org.il/dataset/8fdc8461-24da-457c-881e-000c98706dc5",
-    files: ["מענה.pdf"],
+    files: [
+      { name: "מענה.pdf", url: "https://www.odata.org.il/dataset/7bb260eb-64ba-47af-8ce6-4c21e946a3e3/resource/7153d231-79b1-4a43-98df-6fea0765fb59/download/.pdf" },
+    ],
     images: 8,
     finding: {
       status: "partial",
@@ -230,7 +269,10 @@ export const RESPONSES_1933: Response1933[] = [
     date: "2025-01-21",
     url: "https://www.odata.org.il/dataset/b2843348-0df4-42bd-b89d-229ec16134fb",
     also: ["https://www.odata.org.il/dataset/2210694a-9159-4fe7-8707-f8cbf311f3f4"],
-    files: ["מענה בעניין החלטת ממשלה 1933.pdf", "הנגשת מאגרים - משרד המדע.xlsx"],
+    files: [
+      { name: "מענה בעניין החלטת ממשלה 1933.pdf", url: "https://www.odata.org.il/dataset/6a80ac8e-9682-46cb-8f4c-7a3c0139110b/resource/648decd7-00e0-4c75-94f1-04ea2f1353b6/download/-1933.pdf" },
+      { name: "הנגשת מאגרים - משרד המדע.xlsx", url: "https://www.odata.org.il/dataset/6a80ac8e-9682-46cb-8f4c-7a3c0139110b/resource/696b79e6-e5f7-4705-bb30-b731a389a12d/download/-.xlsx" },
+    ],
     images: 0,
     finding: {
       status: "partial",
@@ -242,7 +284,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד הפנים",
     date: "2025-02-26",
     url: "https://www.odata.org.il/dataset/dcec1a5b-a8cb-45fc-9e5a-1c888aba3632",
-    files: ["Untitled_20250226_133523.pdf"],
+    files: [
+      { name: "Untitled_20250226_133523.pdf", url: "https://www.odata.org.il/dataset/ec231ffd-15c4-4e73-ab15-bb518498aa0b/resource/4aff3bc3-5407-4917-a396-0bb89a35cc32/download/untitled_20250226_133523.pdf" },
+    ],
     images: 0,
     finding: {
       status: "nothing",
@@ -254,7 +298,9 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "המשרד לשיוויון חברתי",
     date: "2025-03-03",
     url: "https://www.odata.org.il/dataset/74da2369-bb6a-4eb0-956a-2651a5682593",
-    files: ["תשובה - החלטת ממשלה 1933 בעניין מאגרי מידע 31-24 -.pdf"],
+    files: [
+      { name: "תשובה - החלטת ממשלה 1933 בעניין מאגרי מידע 31-24 -.pdf", url: "https://www.odata.org.il/dataset/3f8f8df2-3b61-4b34-982e-685e8f0a222e/resource/98f2e01d-c1e4-4d79-a0d2-ba2fd9305a3e/download/-1933-31-24-.pdf" },
+    ],
     images: 0,
     finding: {
       status: "partial",
@@ -266,7 +312,12 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד הביטחון",
     date: "2025-09-02",
     url: "https://www.odata.org.il/dataset/18c6b812-22f9-42a1-b913-8e4c78ad0055",
-    files: ["מענה חח''מ 239134.pdf", "נספח א.pdf", "נספח ב.pdf", "נספח ג.pdf"],
+    files: [
+      { name: "מענה חח''מ 239134.pdf", url: "https://www.odata.org.il/dataset/291d1d52-c6f7-4134-b294-3eccd20abc88/resource/41e0e405-b69a-4c5a-b6fd-a2567a13a8bb/download/-239134.pdf" },
+      { name: "נספח א.pdf", url: "https://www.odata.org.il/dataset/291d1d52-c6f7-4134-b294-3eccd20abc88/resource/bc2c4c83-085a-472f-b5f1-58ec852e7918/download/-.pdf" },
+      { name: "נספח ב.pdf", url: "https://www.odata.org.il/dataset/291d1d52-c6f7-4134-b294-3eccd20abc88/resource/cca5be6d-e99c-451e-8c20-049ea5f3d978/download/-.pdf" },
+      { name: "נספח ג.pdf", url: "https://www.odata.org.il/dataset/291d1d52-c6f7-4134-b294-3eccd20abc88/resource/21960951-2c01-40a6-94ac-17df72f99a3a/download/-.pdf" },
+    ],
     images: 1,
     finding: {
       status: "partial",
@@ -278,7 +329,10 @@ export const RESPONSES_1933: Response1933[] = [
     ministry: "משרד ראש הממשלה",
     date: "2026-01-12",
     url: "https://www.odata.org.il/dataset/a9c6abab-d8db-45d9-be0d-96c0b03d5287",
-    files: ["ועדת היגוי מאי 2021.pdf", "מענה החלטת ממשלה 1933 בעניין מאגרי מידע.pdf"],
+    files: [
+      { name: "ועדת היגוי מאי 2021.pdf", url: "https://www.odata.org.il/dataset/0e832707-ea0e-4eb0-b85b-7f7934ba3228/resource/5d16b4f6-d01a-4268-b1e8-a61bc64a588f/download/-2021.pdf" },
+      { name: "מענה החלטת ממשלה 1933 בעניין מאגרי מידע.pdf", url: "https://www.odata.org.il/dataset/0e832707-ea0e-4eb0-b85b-7f7934ba3228/resource/b1482f40-4415-4c5a-8b5e-b09323df8822/download/-1933-.pdf" },
+    ],
     images: 3,
     finding: {
       status: "partial",
