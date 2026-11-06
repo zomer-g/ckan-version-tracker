@@ -180,7 +180,7 @@ def test_the_raw_ledger_is_kept_out_of_the_public_console():
     """The console runs free-form SQL, so hiding the table from /data hides the
     signpost and not the table. What the public gets is the reconciled result
     in over_re_addresses."""
-    src = inspect.getsource(gp.ensure_tables)
+    src = inspect.getsource(gp._ensure_tables)
     assert "_revoke_from_public_console" in src
 
 
@@ -321,7 +321,7 @@ def test_points_attach_to_existing_rows_and_report_the_rest():
 
 
 def test_adding_the_columns_can_never_break_ingest():
-    src = inspect.getsource(gp.ensure_tables)
+    src = inspect.getsource(gp._ensure_tables)
     assert "ADD COLUMN IF NOT EXISTS" in src and "except Exception" in src
 
 

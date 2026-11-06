@@ -168,7 +168,21 @@ _INDEXES = [
 ]
 
 
+#: Set once this process has run the DDL. Every ingest calls ensure_tables(),
+#: and the ALTERs alone were measured at 1.6 s a call — 19,324 calls, 8.6 hours
+#: of database time by 2026-11-06 — to re-learn that nothing had changed.
+_ensured = False
+
+
 async def ensure_tables() -> None:
+    global _ensured
+    if _ensured:
+        return
+    await _ensure_tables()
+    _ensured = True
+
+
+async def _ensure_tables() -> None:
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
@@ -199,7 +213,7 @@ async def _revoke_from_public_console() -> None:
     leaving this out of the ``/data`` catalog hides the signpost but not the
     table. The read-only role inherits a grant from ``ALTER DEFAULT PRIVILEGES
     IN SCHEMA public``, which re-applies whenever the role is reprovisioned, so
-    the revoke is re-asserted on every ``ensure_tables()`` rather than run once
+    the revoke is re-asserted by every process (``ensure_tables()``) rather than run once
     by hand. What the public gets is the merged result in
     ``over_re_addresses``, which is the part that has been reconciled.
     """
