@@ -1,0 +1,11 @@
+# What the test suite needs on top of the app's own requirements.
+# Not installed in production (the image installs requirements.txt only).
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest tests
+-r requirements.txt
+pytest==9.2.0
+# test_knesset_geo_block, test_nadlan_layers and test_reactivate_schedules_poll
+# are written as @pytest.mark.asyncio tests; without this plugin pytest fails
+# them with "async def functions are not natively supported".
+pytest-asyncio==1.4.1.post1

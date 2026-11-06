@@ -112,6 +112,13 @@ uvicorn app.main:app --reload
 cd frontend && npm install && npm run dev
 ```
 
+Tests need the dev requirements on top (pytest and pytest-asyncio):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
 ## Deployment
 
 Hosted on [xhostd](https://xhostd.com) (project `over`, channel `prod`), with
