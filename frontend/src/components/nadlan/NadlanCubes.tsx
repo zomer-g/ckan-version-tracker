@@ -139,6 +139,22 @@ function CrimeView({ data, onYear }: { data: NadlanCubeData; onYear: (y: string)
 }
 
 // ── spatial ──
+/** A layer value as a reader reads it. GIS layers publish dates as ISO
+ *  timestamps ("2022-12-07T00:00:00.000Z") or as packed digits
+ *  ("20221211124944441"); both read as a date here, and the raw value stays in
+ *  the tooltip. Anything else is shown as published. */
+function displayValue(v: string): string {
+  let m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/.exec(v);
+  if (!m) {
+    const p = /^((?:19|20)\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\d{2,5}$/.exec(v);
+    if (p && Number(p[2]) >= 1 && Number(p[2]) <= 12 && Number(p[3]) >= 1 && Number(p[3]) <= 31) m = p;
+  }
+  if (!m) return v;
+  const [, y, mo, d, hh, mm] = m;
+  const time = hh && mm && !(hh === "00" && mm === "00") ? ` ${hh}:${mm}` : "";
+  return `${d}/${mo}/${y}${time}`;
+}
+
 function SpatialView({ data }: { data: NadlanCubeData }) {
   const feats = data.features ?? [];
   const radius = data.cube.radius_m ?? 0;
@@ -166,7 +182,9 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
                         ? <a href={fl.url} target="_blank" rel="noopener noreferrer">
                             {fl.value}<span className="sr-only"> (נפתח בחלון חדש)</span>
                           </a>
-                        : fl.value}
+                        : <span title={displayValue(fl.value) !== fl.value ? fl.value : undefined}>
+                            {displayValue(fl.value)}
+                          </span>}
                     </dd>
                   </div>
                 ))}

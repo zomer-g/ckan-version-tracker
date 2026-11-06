@@ -383,6 +383,38 @@ def _clean(v) -> str | None:
     return s if len(s) <= MAX_VALUE_CHARS else s[:MAX_VALUE_CHARS] + "…"
 
 
+def _label(key: str, labels: dict) -> str:
+    """The caption GovMap shows for a column, unless it is plainly wrong. One
+    layer captions its ``area_sqm`` column "שטח קמ\"ר" over values in square
+    metres (57,096,785 for Tel Aviv): a column named in square metres is
+    captioned in square metres."""
+    lab = labels.get(key) or key
+    if key.lower().endswith("sqm") and 'קמ"ר' in lab:
+        return "שטח (מ״ר)"
+    return lab
+
+
+def _value_sql(col: str) -> str:
+    """A column's value as the cube shows it: text, trimmed, and NULL for what
+    ``_clean`` drops ('', 'null', 'none', 'nan')."""
+    v = f"btrim(l.{_qi(col)}::text)"
+    return f"(CASE WHEN lower({v}) IN ('', 'null', 'none', 'nan') THEN NULL ELSE {v} END)"
+
+
+def _distinct_count_sql(cols: list[str]) -> str:
+    """``count(...)`` of the features the cube would SHOW: rows with at least
+    one non-empty reader-facing column, identical rows once. A plain
+    ``count(*)`` said "2" on a closed cube that opened onto one feature: the
+    second was the same plan mirrored twice, or a polygon with no attributes
+    at all (a regional-committee outline carrying only its objectId)."""
+    shown = [c for c in cols if c.lower() not in _NOISE_COLS]
+    if not shown:
+        return "0::bigint"
+    vals = [_value_sql(c) for c in shown]
+    sig = "md5(concat_ws(chr(31), " + ", ".join(f"coalesce({v}, chr(1))" for v in vals) + "))"
+    return f"count(DISTINCT {sig}) FILTER (WHERE coalesce({', '.join(vals)}) IS NOT NULL)"
+
+
 def _current(columns: list[str]) -> str:
     """The rows still in the source. An append table keeps every version of a
     row and closes the superseded ones with ``last_seen``; without this a
@@ -441,7 +473,7 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
                         "page_url": f"{nadlan_query.SITE}/versions/{ds}",
                         "row_url": nadlan_query._console_url(console)})
         for r in rows:
-            fields = [{"key": k, "label": labels.get(k) or k, "value": _clean(r.get(k))}
+            fields = [{"key": k, "label": _label(k, labels), "value": _clean(r.get(k))}
                       for k in cols]
             fields = [f for f in fields if f["value"] is not None]
             for f in fields:
@@ -461,7 +493,7 @@ async def spatial_cube(c: dict, parcel: dict) -> dict:
         for r in rows_x:
             fields = []
             for k, v in r["attrs"].items():
-                f = {"key": k, "label": labels.get(k) or k, "value": _clean(v)}
+                f = {"key": k, "label": _label(k, labels), "value": _clean(v)}
                 if f["value"] is None:
                     continue
                 link = _link_for(k, f["value"])
@@ -523,7 +555,7 @@ async def probe(parcel: dict) -> dict[str, int]:
                     f"{_X}.ST_DWithin(l.geom::{_X}.geography, "
                     f"k.centroid::{_X}.geography, {radius})")
             parts.append(
-                f"SELECT {nadlan_query._lit(c['id'])} AS cube, count(*) AS n "
+                f"SELECT {nadlan_query._lit(c['id'])} AS cube, {_distinct_count_sql(cols)} AS n "
                 f"FROM k JOIN {_qi(schema)}.{_qi(table)} l ON l.geom OPERATOR({_X}.&&) "
                 f"{_X}.ST_Expand(k.centroid, {_deg(radius)}) AND {pred}{_current(cols)}")
     from app.services.nadlan_layer_links import FEATURES_TABLE
@@ -533,7 +565,8 @@ async def probe(parcel: dict) -> dict[str, int]:
             continue
         for ds, state in await _crosswalked(c, geo):
             parts.append(
-                f"SELECT {nadlan_query._lit(c['id'])} AS cube, count(*) AS n "
+                f"SELECT {nadlan_query._lit(c['id'])} AS cube, "
+                f"count(DISTINCT attrs::text) FILTER (WHERE attrs <> '{{}}'::jsonb) AS n "
                 f"FROM public.{_qi(FEATURES_TABLE)} WHERE parcels @> ARRAY[$1]::text[] "
                 f"AND dataset_id = {nadlan_query._lit(ds)} "
                 f"AND generation = {int(state['generation'])}")
