@@ -10,9 +10,12 @@ dependency-light style (see tests/test_auth_codes.py).
 """
 import asyncio
 import os
+import pathlib
 import re
 import sys
 import uuid
+
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -347,6 +350,16 @@ def _app_client():
     return httpx.ASGITransport(app=main_module.app)
 
 
+# These three need the built SPA: without frontend/dist/index.html, main.py
+# mounts no SPA ("Frontend dist not found ... SPA disabled") and every route is
+# a 404. A fresh checkout or a worktree has no build, so say why and skip.
+_FRONTEND_INDEX = pathlib.Path(__file__).resolve().parents[1] / "frontend" / "dist" / "index.html"
+needs_built_frontend = pytest.mark.skipif(
+    not _FRONTEND_INDEX.is_file(),
+    reason="frontend/dist is not built (cd frontend && npm run build)")
+
+
+@needs_built_frontend
 def test_a_route_is_served_with_its_own_head_not_the_bare_shell():
     import httpx
 
@@ -366,6 +379,7 @@ def test_a_route_is_served_with_its_own_head_not_the_bare_shell():
     assert '<div id="root"></div>' in r.text
 
 
+@needs_built_frontend
 def test_two_different_routes_do_not_share_a_title():
     import httpx
 
@@ -377,6 +391,7 @@ def test_two_different_routes_do_not_share_a_title():
     assert _run(go("/data")) != _run(go("/knesset"))
 
 
+@needs_built_frontend
 def test_html_is_cached_briefly_and_revalidated():
     """Long enough to absorb a burst, short enough not to pin a stale bundle."""
     import httpx

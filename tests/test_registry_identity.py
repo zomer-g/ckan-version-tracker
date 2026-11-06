@@ -409,6 +409,10 @@ def test_every_registered_manifest_uses_route_shaped_fragments():
     reaches for "#something" to split a corpus gets caught here."""
     import re as _re
 
+    if not os.path.isdir(_GOVSCRAPER_ROOT):
+        # No sibling checkout at all (a worktree, CI): nothing to guard here.
+        # A checkout that IS there but cannot be read still fails below.
+        pytest.skip(f"no govscraper checkout at {_GOVSCRAPER_ROOT}")
     manifests = _load_repo_manifests()
     assert manifests, "govscraper checkout not readable — the guard would pass vacuously"
     for manifest in manifests:
@@ -419,6 +423,11 @@ def test_every_registered_manifest_uses_route_shaped_fragments():
                     "not a route — url_identity drops it, so this route shares "
                     f"an identity with the same URL without it. Use '#/{anchor}'."
                 )
+
+
+# The sibling govscraper checkout, next to this repo's folder.
+_GOVSCRAPER_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "GOV scraper"))
 
 
 def _load_repo_manifests():
@@ -436,9 +445,7 @@ def _load_repo_manifests():
     import subprocess
     import sys
 
-    root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "GOV scraper")
-    )
+    root = _GOVSCRAPER_ROOT
     if not os.path.isdir(root):
         return []
     code = (

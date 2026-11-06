@@ -131,13 +131,21 @@ def test_heartbeat_writes_are_throttled_but_a_code_change_is_not():
             node = await db.get(WorkerNode, "box-a")
             assert _as_utc(node.last_seen_at) == first_seen
 
+            # Back-date the heartbeat by one second — well inside the 20 s
+            # throttle, so only the version change can cause the next write.
+            # Without it the three calls can share one clock tick (Windows'
+            # clock steps every 15.6 ms on Python 3.12) and `>` fails at random.
+            backdated = first_seen - timedelta(seconds=1)
+            node.last_seen_at = backdated
+            await db.commit()
+
             # Restarted on new code: written through at once.
             await touch_worker(db, worker_id="box-a", worker_ip="10.0.0.5",
                                worker_version="new", worker_upstream="current")
             node = await db.get(WorkerNode, "box-a")
             assert node.worker_version == "new"
             assert node.worker_upstream == "current"
-            assert _as_utc(node.last_seen_at) > first_seen
+            assert _as_utc(node.last_seen_at) > backdated
     _run(go())
 
 
