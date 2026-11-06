@@ -53,8 +53,8 @@ CAVEATS = [
     # Israeli postal reality: only the big cities get a zip per street+house.
     # Everywhere else has ONE zip for the whole locality — a weaker fact, and
     # flagged as such (`zip_level`) rather than passed off as the doorway's own.
-    "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא "
-    "מיקוד כלל-יישובי אחד (מסומן zip_level=locality).",
+    "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים יש מיקוד אחד "
+    "לכל היישוב (בשדה zip_level מסומן locality).",
     "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד — לא למספר בית.",
     # A municipal address layer is not obliged to publish a POINT. Measured on
     # the seven layers merged so far: four are ST_Point, two are single-part
@@ -63,10 +63,14 @@ CAVEATS = [
     # on average, so its centroid is within about six metres of either end.
     # Close enough to place a house on its parcel, not close enough to call a
     # doorway, and the reader is told which rather than left to assume.
-    "נקודות כתובת שמקורן בשכבות כתובות עירוניות מסומנות "
-    "point_source='municipal_<מזהה שכבה>'. כשהשכבה העירונית מפרסמת קו במקום "
-    "נקודה, הנקודה השמורה היא מרכז אותו קו — מיקום של הכתובת, לא של פתח הבניין.",
-    "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
+    "מיקום של כתובת מגיע ממרשם הכתובות, משכבת כתובות של הרשות המקומית או "
+    "מ-GovMap, ולכל כתובת מצוין מאיזה מהם (בשדה point_source; רשות מקומית: "
+    "municipal_ ומזהה השכבה). כשרשות מקומית מפרסמת קו במקום נקודה, המיקום הוא "
+    "מרכז הקו — של הכתובת, לא של פתח הבניין.",
+    # The share used to be quoted here as a fixed 42%. It went stale within
+    # weeks as points arrived (17.9% by 2026-11-06), and the live figure is in
+    # /api/nadlan/stats — so this says what it means, not how much.
+    "כתובת שאין לה מיקום אינה משויכת לחלקה. השיעור העדכני מופיע בנתוני הכיסוי.",
     # The deal register is keyed on גוש+חלקה with no suffix, exactly like the
     # gazetteer — so it inherits the same ambiguity, and says so.
     "עסקאות מיסוי מקרקעין מקושרות לפי גוש וחלקה בלבד (המאגר אינו מפרסם תת-גוש), "
@@ -330,6 +334,10 @@ async def nadlan_address(
     data = await nadlan_query.property_envelope(
         parcels, addresses=addrs, with_geometry=geometry,
         with_stat_area=stat_area, with_deals=deals)
+    if number:
+        # One house on several parcels means its rows disagree about where it
+        # is; say which parcel the better-placed rows point to, and put it first.
+        data = nadlan_query.rank_address_results(data)
     # An empty list is the one answer a person cannot act on: it does not say
     # whether the town, the spelling or the street itself is the problem, and
     # each of those is a different next move.
@@ -337,7 +345,8 @@ async def nadlan_address(
     # no parcel behind it is the COMMON empty answer, not a miss, and the reader
     # is owed what we do hold about it rather than a blank screen.
     extra = ({} if data else
-             {"miss": await nadlan_query.explain_address_miss(city, street, addrs)})
+             {"miss": await nadlan_query.explain_address_miss(
+                 city, street, addrs, number=number)})
     return _envelope("address", {"city": city, "street": street, "number": number},
                      data, addresses=addrs, **extra)
 

@@ -48,6 +48,7 @@ const FIELD_LABELS: Record<string, string> = {
   apartments_est: "אומדן דירות",
   street_name_src: "רחוב (כפי שבגזטיר)",
   street_code: "קוד רחוב",
+  building_years: "שנת בנייה",
   zip7: "מיקוד 7",
   zip5: "מיקוד 5",
   n_addresses: "כתובות מקושרות",
@@ -84,7 +85,7 @@ function heDate(iso: string | null | undefined): string {
 // are both wrong, and the second is unreadable as the thing it identifies.
 const PLAIN_NUMBER_FIELDS = new Set([
   "code", "yishuv_stat", "rova", "tat_rova", "street_code", "zip7", "zip5",
-  "building_year_min", "building_year_max",
+  "building_year_min", "building_year_max", "building_years",
 ]);
 
 function fmt(v: unknown, key?: string): string {
@@ -99,6 +100,11 @@ function fmt(v: unknown, key?: string): string {
 
 /** The sources whose own rows can be opened inside their card. */
 const DETAIL_SOURCES = new Set(["gazetteer", "parcels", "postal", "stat_area"]);
+
+/** Sources whose fields the card's summary already shows — the parcel's area
+ *  and status, the zips, the statistical area and the deals. Their cards used
+ *  to repeat each of those a second time, field for field. */
+const COMPACT_SOURCES = new Set(["parcels", "postal", "stat_area", "deals"]);
 
 const DETAIL_PAGE = 50;
 
@@ -204,26 +210,51 @@ function SourceRowsView({ property, source }: { property: NadlanProperty; source
   );
 }
 
-function SourceCard({ id, block, children, wide, property }: {
+/** The gazetteer's fields, minus what the card already says or what reads as
+ *  noise: an internal street code, the street when it is the one shown above,
+ *  and a build year split into "earliest" and "latest" when they are equal. */
+function visibleFields(id: string, block: NadlanSourceBlock, property: NadlanProperty) {
+  const f = { ...block.fields } as Record<string, unknown>;
+  if (id === "gazetteer") {
+    delete f.street_code;
+    const streets = property.identity.addresses.map((a) => a.street);
+    if (f.street_name_src && streets.includes(String(f.street_name_src))) delete f.street_name_src;
+    if (f.n_subparcels != null && f.n_subparcels === f.n_assets) delete f.n_subparcels;
+    const lo = f.building_year_min, hi = f.building_year_max;
+    delete f.building_year_min; delete f.building_year_max;
+    if (lo != null || hi != null) {
+      f.building_years = lo === hi || hi == null ? String(lo) : lo == null ? String(hi) : `${lo}–${hi}`;
+    }
+  }
+  return Object.entries(f).filter(([, v]) => v != null && v !== "" &&
+    !(Array.isArray(v) && v.length === 0));
+}
+
+function SourceCard({ id, block, children, wide, property, compact }: {
   id: string;
   block: NadlanSourceBlock;
   children?: React.ReactNode;
   wide?: boolean;
   property: NadlanProperty;
+  /** The summary above already shows this source's fields: keep only the way
+   *  to its own rows, so nothing is said twice. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const fields = Object.entries(block.fields).filter(([, v]) => v != null && v !== "" &&
-    !(Array.isArray(v) && v.length === 0));
-  const canOpen = DETAIL_SOURCES.has(id) && fields.length > 0;
+  const fields = visibleFields(id, block, property);
+  const canOpen = DETAIL_SOURCES.has(id) && Object.keys(block.fields).some((k) => {
+    const v = block.fields[k];
+    return v != null && v !== "" && !(Array.isArray(v) && v.length === 0);
+  });
   return (
     <div style={{
-      border: "1px solid var(--border)", borderRadius: 8, padding: "0.7rem 0.85rem",
+      border: "1px solid var(--border)", borderRadius: 8, padding: compact ? "0.5rem 0.85rem" : "0.7rem 0.85rem",
       background: "var(--surface)", gridColumn: wide || open ? "1 / -1" : undefined,
     }}>
-      <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.4rem" }}>
+      <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: compact ? 0 : "0.4rem" }}>
         {SOURCE_LABELS[id] ?? id}
       </div>
-      {fields.length ? (
+      {compact ? null : fields.length ? (
         <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", fontSize: "0.85rem" }}>
           {fields.map(([k, v]) => (
             <div key={k} style={{ display: "contents" }}>
@@ -246,28 +277,34 @@ function SourceCard({ id, block, children, wide, property }: {
         </button>
       )}
       {open && <SourceRowsView property={property} source={id} />}
+      {/* The physical table name used to be printed under every card — a
+          58-character `odata.ac1ae1fa_…` id that meant nothing to a reader and
+          wrapped mid-word. It is the link's tooltip now, for whoever wants it. */}
       <a
         href={block.row_url}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ display: "inline-block", marginTop: "0.5rem", fontSize: "0.82rem" }}
-        title={block.console_sql}
+        style={{ display: "inline-block", marginTop: compact ? "0.3rem" : "0.5rem", fontSize: "0.82rem" }}
+        title={`${block.table}\n${block.console_sql}`}
       >
-        צפייה בשורות המקור ב-/data ↗
+        שורות המקור ב-/data ↗
       <span className="sr-only"> (נפתח בחלון חדש)</span></a>
-      {/* A physical table name, and several are a schema plus a 32-hex resource
-          id joined by underscores — `odata.ac1ae1fa_6d43_4685_8434_9953e950ca9b_19c5be7f`
-          is 58 characters. An underscore is not a break opportunity in CSS, so
-          the name is one unbreakable word: it ran straight out of the card and
-          past the edge of the grid on the postal-code and address-list blocks,
-          whose ids are the longest. Breaking anywhere keeps it inside whatever
-          width the card happens to have. */}
-      <div className="text-sm text-muted"
-           style={{ fontSize: "0.75rem", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
-        {block.table}
-      </div>
     </div>
   );
+}
+
+/** Where an address's point came from, in a few words — shown only for the
+ *  sources a reader should weigh (the register is the default and says
+ *  nothing). The raw `pip` match code used to be printed here instead. */
+const POINT_SOURCE_SHORT: Record<string, string> = {
+  municipal: "מיקום מהרשות המקומית",
+  govmap_address: "מיקום מ-GovMap",
+  govmap: "מיקום משוער",
+  govmap_parcel: "מיקום משוער (מרכז חלקה)",
+};
+
+function pointFamily(s: string): string {
+  return s.startsWith("municipal") ? "municipal" : s;
 }
 
 /** The parcel's addresses, shown INSIDE the address-list source card.
@@ -287,10 +324,12 @@ function AddressList({ addresses }: { addresses: NadlanAddress[] }) {
         {shown.map((a, i) => (
           <li key={i} style={{ borderTop: "1px solid var(--border)", padding: "0.2rem 0" }}>
             {a.street ?? "—"} <Ltr>{a.house ?? ""}{a.suffix ?? ""}</Ltr>
+            {a.entrance ? <> · כניסה {a.entrance}</> : null}
             <span className="text-muted" style={{ fontSize: "0.75rem" }}>
               {a.zip7 ? <> · <Ltr>{a.zip7}</Ltr></> : null}
               {a.neighbourhood ? ` · ${a.neighbourhood}` : ""}
-              {a.match && a.match !== "pip" ? ` · ${a.match}` : ""}
+              {a.point_source && POINT_SOURCE_SHORT[pointFamily(a.point_source)]
+                ? ` · ${POINT_SOURCE_SHORT[pointFamily(a.point_source)]}` : ""}
             </span>
           </li>
         ))}
@@ -348,9 +387,6 @@ function StatAreaBlock({ area }: { area: NonNullable<NadlanProperty["stat_area"]
             </span>
           </div>
         )}
-        <div className="text-muted" style={{ fontSize: "0.78rem" }}>
-          נקבע לפי מרכז החלקה בתוך שכבת האזורים הסטטיסטיים של {area.division}.
-        </div>
       </div>
     </div>
   );
@@ -467,6 +503,47 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
   );
 }
 
+/** A building's address rows, one line per house: the address list carries a
+ *  row per ENTRANCE, so "דיזנגוף 50" used to appear twice with nothing to tell
+ *  the two apart. */
+function groupAddresses(addresses: NadlanAddress[]) {
+  const groups = new Map<string, { label: string; entrances: string[]; zips: string[] }>();
+  for (const a of addresses) {
+    const label = `${a.street ?? "—"} ${a.house ?? ""}${a.suffix ?? ""}`.trim();
+    const g = groups.get(label) ?? { label, entrances: [], zips: [] };
+    if (a.entrance && !g.entrances.includes(a.entrance)) g.entrances.push(a.entrance);
+    if (a.zip7 && !g.zips.includes(a.zip7)) g.zips.push(a.zip7);
+    groups.set(label, g);
+  }
+  return [...groups.values()];
+}
+
+/** The pill next to the parcel title. It answers ONE question: how sure are we
+ *  that this is the parcel. It used to say "התאמה מדויקת" on every result —
+ *  including both parcels of an address whose rows disagreed by 250 m — because
+ *  it described the gazetteer join, not the address. */
+function MatchPill({ property }: { property: NadlanProperty }) {
+  const am = property.address_match;
+  let text: string | null = null;
+  let good = false;
+  if (am) {
+    text = am.primary ? am.label : `מיקום חלופי · ${am.label}`;
+    good = am.primary && am.precise;
+  } else if (property.match.confidence !== "exact") {
+    text = "גוש-חלקה לא חד-ערכי";
+  }
+  if (!text) return null;
+  return (
+    <span style={{
+      fontSize: "0.75rem", padding: "0.12rem 0.5rem", borderRadius: 999,
+      background: good ? "var(--tint-good-bg)" : "#fef3c7",
+      color: good ? "var(--success)" : "#833909",
+    }}>
+      {text}
+    </span>
+  );
+}
+
 export default function NadlanResultCard({
   property, expanded, onToggle,
 }: {
@@ -475,15 +552,18 @@ export default function NadlanResultCard({
   onToggle: () => void;
 }) {
   const id = property.identity;
-  const approx = property.match.confidence !== "exact";
+  const houses = groupAddresses(id.addresses);
+  const SHOWN = 3;
 
   return (
     <div style={{
       border: "1px solid var(--border)", borderRadius: 10, padding: "0.9rem 1rem",
       marginBottom: "0.75rem", background: "var(--surface)",
+      opacity: property.address_match && !property.address_match.primary ? 0.92 : 1,
     }}>
       <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: "1.05rem" }}>
+        <h3 style={{ margin: 0, fontSize: "1.05rem" }}
+            title={id.point ? `${id.point.lat.toFixed(6)}, ${id.point.lon.toFixed(6)}` : undefined}>
           גוש {id.gush}
           {id.gush_suffix ? `/${id.gush_suffix}` : ""} · חלקה {id.helka}
           {id.settlement.name ? ` · ${id.settlement.name}` : ""}
@@ -492,27 +572,47 @@ export default function NadlanResultCard({
           {id.distance_m != null && (
             <span className="text-sm text-muted">{Math.round(id.distance_m).toLocaleString("he-IL")} מ׳</span>
           )}
-          <span style={{
-            fontSize: "0.75rem", padding: "0.12rem 0.5rem", borderRadius: 999,
-            background: approx ? "#fef3c7" : "var(--tint-good-bg)",
-            color: approx ? "#833909" : "var(--success)",
-          }}>
-            {approx ? "התאמה משוערת" : "התאמה מדויקת"}
-          </span>
+          <MatchPill property={property} />
         </div>
       </div>
 
+      {/* What is ON the parcel, said once: each house with its entrances and
+          zips. The street, the zips and a raw coordinate used to be three
+          separate lines here and then repeated in three source cards below. */}
       <div className="text-sm" style={{ marginTop: "0.45rem", lineHeight: 1.8 }}>
-        {id.streets.length > 0 && <div>רחוב: {id.streets.join(" · ")}</div>}
-        {id.zip7.length > 0 && <div>מיקוד: {id.zip7.slice(0, 6).join(", ")}{id.zip7.length > 6 ? ` (+${id.zip7.length - 6})` : ""}</div>}
-        {id.point && (
+        {houses.length > 0 ? (
+          <div>
+            {houses.slice(0, SHOWN).map((h, i) => (
+              <span key={h.label}>
+                {i > 0 && " · "}
+                <b>{h.label}</b>
+                {h.entrances.length > 1 && (
+                  <span className="text-muted"> ({h.entrances.length} כניסות)</span>
+                )}
+                {h.zips.length > 0 && (
+                  <span className="text-muted"> · מיקוד <Ltr>{h.zips.join(", ")}</Ltr></span>
+                )}
+              </span>
+            ))}
+            {houses.length > SHOWN && (
+              <span className="text-muted"> · ועוד {(houses.length - SHOWN).toLocaleString("he-IL")} כתובות</span>
+            )}
+          </div>
+        ) : id.streets.length > 0 ? (
+          <div>
+            רחוב: {id.streets.join(" · ")}
+            <span className="text-muted"> · אין כתובות עם מספר בית בחלקה</span>
+          </div>
+        ) : (
+          <div className="text-muted">אין כתובות ידועות בחלקה.</div>
+        )}
+        {property.sources.parcels.fields.legal_area != null && (
           <div className="text-muted" style={{ fontSize: "0.82rem" }}>
-            נקודה: {id.point.lat.toFixed(6)}, {id.point.lon.toFixed(6)}
+            שטח רשום <Ltr>{fmt(property.sources.parcels.fields.legal_area)}</Ltr> מ״ר
+            {property.sources.parcels.fields.status
+              ? ` · ${String(property.sources.parcels.fields.status)}` : ""}
           </div>
         )}
-        <div className="text-muted" style={{ fontSize: "0.82rem" }}>
-          {id.addresses.length.toLocaleString("he-IL")} כתובות מקושרות
-        </div>
       </div>
 
       {(property.stat_area || property.deals) && (
@@ -548,8 +648,13 @@ export default function NadlanResultCard({
             display: "grid", gap: "0.6rem", marginTop: "0.7rem",
             gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
           }}>
-            {Object.entries(property.sources).map(([k, b]) => (
+            {/* Sources with something the summary does not already say come
+                first and in full; the rest keep only their way to the rows. */}
+            {Object.entries(property.sources)
+              .sort(([a], [b]) => Number(COMPACT_SOURCES.has(a)) - Number(COMPACT_SOURCES.has(b)))
+              .map(([k, b]) => (
               <SourceCard key={k} id={k} block={b as NadlanSourceBlock} property={property}
+                          compact={COMPACT_SOURCES.has(k)}
                           wide={k === "address_list" && id.addresses.length > 0}>
                 {k === "address_list" && id.addresses.length > 0 && (
                   <AddressList addresses={id.addresses} />

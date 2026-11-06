@@ -3333,6 +3333,9 @@ export interface NadlanAddress {
   lat: number | null;
   lon: number | null;
   match: string | null;
+  /** Where this address's point came from: address_register, municipal_<id>,
+   *  govmap_address, govmap or govmap_parcel. */
+  point_source?: string | null;
 }
 
 /** A property's CBS statistical area (א"ס), resolved by putting the parcel
@@ -3420,6 +3423,12 @@ export interface NadlanProperty {
     stat_area: NadlanSourceBlock;
   };
   match: { method: string | null; confidence: string; notes: string[] };
+  /** Address lookups with a house number only: how the matched rows placed the
+   *  address on THIS parcel. `primary` is false for a parcel only a weaker
+   *  source puts the address on — the address's rows disagree. */
+  address_match?: {
+    source: string | null; label: string; primary: boolean; precise: boolean;
+  };
   // The parcel polygon as a GeoJSON *string*, present when the request asked
   // for it (`geometry=true`). Rides the same envelope as the identity so a
   // property found by zip is as locatable on the map as one found by clicking.
@@ -3444,6 +3453,8 @@ export interface NadlanMiss {
   n_addresses?: number;
   zip7?: string[];
   has_point?: boolean;
+  /** no_house_match: house numbers that do exist on the street, nearest first. */
+  house_numbers?: number[];
   /** street_located_externally: GovMap's street index placed it, and the point
    *  was verified to sit inside the settlement that was asked for. */
   street_point?: { lat: number; lon: number };

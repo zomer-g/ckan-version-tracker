@@ -69,6 +69,36 @@ function FitToResults({ results, active }: { results: NadlanProperty[]; active: 
   return null;
 }
 
+/** The wheel scrolls the PAGE until the reader clicks into the map.
+ *
+ *  The map sits at the top of a long page, so a reader scrolling down to the
+ *  results passed the cursor over it and the wheel zoomed the map out to the
+ *  whole country instead of moving the page. A click (or keyboard focus) hands
+ *  the wheel to the map; leaving the map hands it back. */
+function WheelGuard() {
+  const map = useMap();
+  useEffect(() => {
+    map.scrollWheelZoom.disable();
+    const on = () => map.scrollWheelZoom.enable();
+    const off = () => map.scrollWheelZoom.disable();
+    map.on("click focus", on);
+    map.on("mouseout blur", off);
+    return () => { map.off("click focus", on); map.off("mouseout blur", off); };
+  }, [map]);
+  return null;
+}
+
+/** Open the map on a place the page knows about without having a parcel for
+ *  it — the street of an address with no parcel, say. Never a lookup. */
+function FocusOn({ focus }: { focus: { lat: number; lon: number; zoom: number } | null }) {
+  const map = useMap();
+  const lat = focus?.lat, lon = focus?.lon, zoom = focus?.zoom;
+  useEffect(() => {
+    if (lat != null && lon != null) map.setView([lat, lon], zoom ?? 16);
+  }, [lat, lon, zoom, map]);
+  return null;
+}
+
 /** Recentre when the caller moves the pin (e.g. from a gush/helka lookup). */
 function Recenter({ lat, lon, zoom }: { lat: number | null; lon: number | null; zoom?: number }) {
   const map = useMap();
@@ -90,7 +120,9 @@ function polygonSeq(o: object): number {
 
 export default function NadlanMap({
   lat, lon, radiusM, results, selected, polygon, basemap = "streets", onPick, onSelect,
+  focus = null,
 }: {
+  focus?: { lat: number; lon: number; zoom: number } | null;
   lat: number | null;
   lon: number | null;
   radiusM: number;
@@ -115,6 +147,8 @@ export default function NadlanMap({
     >
       <TileLayer url={tile.url} attribution={tile.attr} maxZoom={19} />
       <ClickHandler onPick={onPick} />
+      <WheelGuard />
+      <FocusOn focus={lat == null && !results.length ? focus : null} />
       <Recenter lat={lat} lon={lon} />
       <FitToResults results={results} active={lat == null || lon == null} />
 

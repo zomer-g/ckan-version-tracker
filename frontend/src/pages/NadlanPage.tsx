@@ -195,6 +195,21 @@ export default function NadlanPage() {
 
   const results: NadlanProperty[] = useMemo(() => env?.data ?? [], [env]);
 
+  // An answer without a parcel still knows roughly WHERE: the address's own
+  // point, the middle of its street, or the town. The map used to stay on the
+  // whole country for every one of those.
+  const missFocus = useMemo(() => {
+    const m = env?.miss;
+    if (!m) return null;
+    if (m.street_point) return { ...m.street_point, zoom: 17 };
+    if (m.settlement_point) return { ...m.settlement_point, zoom: 14 };
+    return null;
+  }, [env]);
+
+  // One house on several parcels: its rows disagree about where it is. Said
+  // once, above the results, instead of two identical "exact match" cards.
+  const alternates = results.filter((r) => r.address_match && !r.address_match.primary).length;
+
   return (
     <div>
       {/* Processed-data notice, shared with the other "לעם" projects. */}
@@ -354,6 +369,7 @@ export default function NadlanPage() {
                   polygon={polygon && polygon.key === expanded ? polygon.geo : null}
                   onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
                   onSelect={(k) => setExpanded(k)}
+                  focus={missFocus}
                 />
               </Suspense>
               {env?.query?.widened === true && (
@@ -366,11 +382,23 @@ export default function NadlanPage() {
                   ביותר ברדיוס {String(env.query.radius_used)} מ׳.
                 </div>
               )}
-              {results.length > 0 && (
+              {results.length > 1 && (
                 <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
-                  {results.filter((r) => r.geometry).length.toLocaleString("he-IL")} מתוך{" "}
-                  {results.length.toLocaleString("he-IL")} חלקות מוצגות עם גבולות החלקה.
-                  לחיצה על חלקה במפה תפתח את ההצלבה שלה.
+                  {results.length.toLocaleString("he-IL")} חלקות. לחיצה על חלקה במפה פותחת את
+                  הפרטים שלה.
+                </div>
+              )}
+              {results.length > 0 && <div className="text-sm text-muted" style={{ marginTop: "0.2rem" }}>
+                גלילה בעכבר מזיזה את הדף; לחיצה על המפה מפעילה בה זום בגלגלת.
+              </div>}
+              {alternates > 0 && (
+                <div className="text-sm" style={{
+                  marginTop: "0.4rem", padding: "0.5rem 0.75rem", borderRadius: 8,
+                  background: "var(--tint-warn-bg, #fef3c7)", color: "#833909", lineHeight: 1.7,
+                }}>
+                  הכתובת מופיעה ביותר מחלקה אחת, כי המקורות לא מסכימים על המיקום שלה. החלקה
+                  הראשונה היא זו שהמקור המדויק יותר מצביע עליה; {alternates === 1 ? "החלקה השנייה מסומנת" : `${alternates} האחרות מסומנות`}{" "}
+                  "מיקום חלופי" — בדרך כלל כניסה נוספת של הבניין שמוקמה באופן משוער.
                 </div>
               )}
             </div>
@@ -385,6 +413,23 @@ export default function NadlanPage() {
                   background: "var(--surface-2)", border: "1px solid var(--border)",
                 }}>
                   <div className="text-sm" style={{ lineHeight: 1.8 }}>{env.miss.message}</div>
+                  {env.miss.house_numbers && env.miss.house_numbers.length > 0 && (
+                    <div className="flex" style={{ gap: "0.35rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+                      {env.miss.house_numbers.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => patch({ no: String(n) })}
+                          style={{
+                            padding: "0.25rem 0.7rem", fontSize: "0.85rem", cursor: "pointer",
+                            border: "1px solid var(--border)", borderRadius: 999, background: "none",
+                          }}
+                        >
+                          {env.miss!.street_name ?? street} {n}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {env.miss.suggestions && env.miss.suggestions.length > 0 && (
                     <div className="flex" style={{ gap: "0.35rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
                       {env.miss.suggestions.map((n) => (
@@ -415,7 +460,7 @@ export default function NadlanPage() {
                         <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
                           <thead>
                             <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                              {["רחוב", "מס׳", "מיקוד", "שכונה"].map((h) => (
+                              {["רחוב", "מס׳", "כניסה", "מיקוד", "שכונה"].map((h) => (
                                 <th key={h} scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>{h}</th>
                               ))}
                             </tr>
@@ -427,6 +472,7 @@ export default function NadlanPage() {
                                 <td style={{ padding: "0.2rem 0.4rem" }}>
                                   {String(a.house_num ?? "—")}{String(a.house_suffix ?? "")}
                                 </td>
+                                <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.entrance ?? "—")}</td>
                                 <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.zip7 ?? "—")}</td>
                                 <td style={{ padding: "0.2rem 0.4rem" }}>{String(a.neighbourhood ?? "—")}</td>
                               </tr>
@@ -494,14 +540,20 @@ export default function NadlanPage() {
                     || env.miss.reason === "addresses_without_parcel") && (
                     <button
                       type="button"
-                      onClick={() => patch({ tab: null })}
+                      // Straight to the parcels around the address (or its
+                      // street) when we know where that is; the bare map tab
+                      // opened on the whole country.
+                      onClick={() => patch(env.miss?.street_point
+                        ? { tab: null, lat: String(env.miss.street_point.lat),
+                            lon: String(env.miss.street_point.lon), r: "100" }
+                        : { tab: null })}
                       style={{
                         marginTop: "0.5rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem",
                         cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6,
                         background: "none",
                       }}
                     >
-                      מעבר למפה ואיתור החלקה בנגיעה
+                      {env.miss.street_point ? "החלקות הסמוכות על המפה" : "מעבר למפה ואיתור החלקה בנגיעה"}
                     </button>
                   )}
                 </div>
@@ -520,33 +572,36 @@ export default function NadlanPage() {
             ))}
 
             {/* ── coverage, stated up front rather than discovered ── */}
-            <div style={{
+            {/* Closed by default: seven bullets of method notes under every
+                answer pushed the next search below the fold, and read as part
+                of the answer when they are about the whole index. */}
+            <details style={{
               marginTop: "1.5rem", padding: "0.8rem 1rem", borderRadius: 8,
               background: "var(--surface-2)", border: "1px solid var(--border)",
             }}>
-              <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.35rem" }}>
+              <summary style={{ fontWeight: 700, fontSize: "0.9rem", cursor: "pointer" }}>
                 מה הקישור הזה כן ולא יודע
-              </div>
-              <ul style={{ margin: 0, paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.8 }}>
+                {stats?.coverage && (
+                  <span className="text-muted" style={{ fontWeight: 400 }}>
+                    {" "}· {stats.coverage.addresses_linked_pct}% מהכתובות משויכות לחלקה
+                  </span>
+                )}
+              </summary>
+              <ul style={{ margin: "0.5rem 0 0", paddingInlineStart: "1.1rem", fontSize: "0.85rem", lineHeight: 1.8 }}>
                 {(env?.caveats ?? [
-                  "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים המיקוד הוא מיקוד כלל-יישובי אחד.",
+                  "מיקוד ברמת הכתובת קיים ל-91 יישובים בלבד; בשאר היישובים יש מיקוד אחד לכל היישוב.",
                   "גזטיר הנכסים מקשר גוש-חלקה לרחוב בלבד, לא למספר בית.",
-                  "כ-42% מרשימת הכתובות ללא קואורדינטות, ולכן ללא שיוך מדויק לחלקה.",
                 ]).map((c, i) => <li key={i}>{c}</li>)}
                 {stats?.coverage && (
                   <li>
-                    כיסוי בפועל: {stats.coverage.addresses_with_point_pct}% מהכתובות עם נקודה ·{" "}
+                    כיסוי עדכני: {stats.coverage.addresses_with_point_pct}% מהכתובות עם מיקום ·{" "}
                     {stats.coverage.addresses_linked_pct}% משויכות לחלקה ·{" "}
-                    {stats.coverage.addresses_with_zip_pct}% עם מיקוד (מתוכם{" "}
-                    {stats.coverage.addresses_with_address_zip_pct}% ברמת הכתובת) ·{" "}
-                    {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר ·{" "}
-                    {stats.coverage.streets_in_gazetteer_pct}% מהרחובות שיש להם מיקום מוכרים
-                    גם לגזטיר, ועוד {stats.coverage.streets_register_only_pct}% מהרחובות
-                    באינדקס מגיעים ממרשם הרחובות הרשמי בלבד ואין להם מיקום.
+                    {stats.coverage.addresses_with_zip_pct}% עם מיקוד ·{" "}
+                    {stats.coverage.parcels_with_gazetteer_pct}% מהחלקות עם נתוני גזטיר.
                   </li>
                 )}
               </ul>
-            </div>
+            </details>
 
             <div className="text-sm text-muted" style={{ margin: "1rem 0 0.5rem" }}>
               המידע מעובד, הצלבה שנגזרה מארבעה מקורות, לא מקור ממשלתי ראשוני. כל שדה מקושר לשורת

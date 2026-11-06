@@ -481,7 +481,7 @@ def test_an_explicit_radius_is_never_quietly_widened(client, monkeypatch):
 def test_an_empty_address_answer_says_why(client, monkeypatch):
     """Empty is the one answer a person cannot act on: unknown town, different
     spelling and a street nothing can place are three different next moves."""
-    async def _miss(city, street, addresses=None):
+    async def _miss(city, street, addresses=None, number=None):
         return {"reason": "street_not_located", "message": "…", "official_code": 391}
 
     monkeypatch.setattr(nadlan_query, "explain_address_miss", _miss)
@@ -747,3 +747,36 @@ def test_linked_coverage_counts_every_route_to_a_parcel(monkeypatch):
                 == s["addresses_with_parcel"])
     finally:
         nadlan_query.invalidate_stats_cache()
+
+
+# ── one house on several parcels (2026-11-06) ─────────────────────────────────
+def test_the_register_parcel_comes_first_and_the_geocoded_one_is_an_alternate():
+    """הנביאים 10, חיפה: the register puts it in 12458/7, the geocoder put its
+    entrances in 12220/16. Both used to read "exact"."""
+    from app.services import nadlan_query as nq
+
+    def prop(key, *sources):
+        return {"parcel_key": key, "identity": {"addresses": [
+            {"point_source": s} for s in sources]}}
+
+    out = nq.rank_address_results([prop("12220-0-16", "govmap", "govmap"),
+                                   prop("12458-0-7", "address_register")])
+    assert [p["parcel_key"] for p in out] == ["12458-0-7", "12220-0-16"]
+    assert out[0]["address_match"]["primary"] and out[0]["address_match"]["precise"]
+    assert not out[1]["address_match"]["primary"]
+    assert not out[1]["address_match"]["precise"]
+
+
+def test_a_municipal_layer_ranks_as_one_family_and_ties_stay_primary():
+    from app.services import nadlan_query as nq
+    out = nq.rank_address_results([
+        {"parcel_key": "a", "identity": {"addresses": [{"point_source": "municipal_224203"}]}},
+        {"parcel_key": "b", "identity": {"addresses": [{"point_source": "municipal_215337"}]}},
+    ])
+    assert [p["address_match"]["primary"] for p in out] == [True, True]
+    assert out[0]["address_match"]["source"] == "municipal"
+
+
+def test_the_caveats_quote_no_stale_share():
+    from app.api import nadlan as api
+    assert not any("42%" in c for c in api.CAVEATS)

@@ -206,6 +206,60 @@ async def by_address(city: str, street: str, number: str | None = None
     return addrs, parcels
 
 
+# How each point source places an address, best first. One address can land on
+# two parcels when its rows disagree — measured on הנביאים 10, חיפה: the
+# register puts the house in 12458/7, and its entrances א and ב, which only the
+# geocoder placed, 250 m away in 12220/16. Both parcels used to be shown with
+# the same "exact match" badge, which told the reader nothing about which one
+# to believe. The register is surveyed; a municipal layer is the town's own;
+# GovMap's exact search is a doorway; its geocoder is a best guess; a parcel
+# centroid is only "somewhere on the plot".
+POINT_SOURCE_RANK = {"address_register": 0, "municipal": 1, "govmap_address": 2,
+                     "govmap": 3, "govmap_parcel": 4}
+POINT_SOURCE_LABEL = {
+    "address_register": "מיקום לפי מרשם הכתובות",
+    "municipal": "מיקום לפי שכבת הכתובות של הרשות המקומית",
+    "govmap_address": "מיקום לפי חיפוש הכתובת ב-GovMap",
+    "govmap": "מיקום משוער (איתור אוטומטי ב-GovMap)",
+    "govmap_parcel": "מיקום משוער (מרכז החלקה ב-GovMap)",
+}
+
+
+def _source_family(point_source: str | None) -> str | None:
+    if not point_source:
+        return None
+    return "municipal" if point_source.startswith("municipal") else point_source
+
+
+def rank_address_results(data: list[dict]) -> list[dict]:
+    """Order an address lookup's parcels by how its rows were placed, best first.
+
+    Each property gets ``address_match``: the best source behind it, a label a
+    reader can act on, and ``primary`` — true for the parcels the best-placed
+    rows point to, false for the ones only a weaker row puts the address on.
+    Ties keep the incoming order, so a single-source answer is unchanged.
+    """
+    def best(prop: dict) -> tuple[int, str | None]:
+        fams = [_source_family(a.get("point_source"))
+                for a in prop["identity"].get("addresses") or []]
+        ranked = [(POINT_SOURCE_RANK.get(f, 9), f) for f in fams if f]
+        return min(ranked) if ranked else (9, None)
+
+    scored = sorted(((best(p), i, p) for i, p in enumerate(data)),
+                    key=lambda t: (t[0][0], t[1]))
+    top = scored[0][0][0] if scored else 9
+    out = []
+    for (rank, fam), _, p in scored:
+        p["address_match"] = {
+            "source": fam,
+            "label": POINT_SOURCE_LABEL.get(fam or "", "ללא מיקום לכתובת"),
+            "primary": rank == top,
+            "precise": rank <= POINT_SOURCE_RANK["govmap_address"],
+        }
+        out.append(p)
+    return out
+
+
 # How near a parcel of the SETTLEMENT WE ASKED FOR a geocoded street point
 # must land to be believed. GovMap answers the street name and ignores the
 # locality — asked for הר הצופים in Dimona under the address index it returns
@@ -268,8 +322,42 @@ async def locate_register_only_street(settlement_code: int, settlement_name: str
                          "distance_m": float(r["distance_m"])} for r in near]}
 
 
+async def _street_point(settlement_code: int, street_key: str | None) -> dict | None:
+    """The middle of the street's placed addresses — where to open the map for
+    an address that has no point of its own. None when nothing on it is placed."""
+    if not street_key:
+        return None
+    rows = await _fetch(
+        f"""SELECT round(avg(lat)::numeric, 6) AS lat, round(avg(lon)::numeric, 6) AS lon
+            FROM public.{_qi(ADDRESSES_TABLE)}
+            WHERE settlement_code = $1 AND street_key = $2 AND lat IS NOT NULL""",
+        settlement_code, street_key)
+    if not rows or rows[0].get("lat") is None:
+        return None
+    return {"lat": float(rows[0]["lat"]), "lon": float(rows[0]["lon"])}
+
+
+async def _house_numbers_near(settlement_code: int, street_key: str,
+                              number: str | None, limit: int = 12) -> list[int]:
+    """House numbers that DO exist on the street, nearest to the one asked for.
+
+    "Try without a house number" sent the reader to a list of every parcel on
+    the street; the numbers themselves are the answer to "what did I get wrong"."""
+    house, _ = nadlan_text.parse_house_number(number) if number else (None, None)
+    rows = await _fetch(
+        f"""SELECT DISTINCT house_num FROM public.{_qi(ADDRESSES_TABLE)}
+            WHERE settlement_code = $1 AND street_key = $2 AND house_num > 0""",
+        settlement_code, street_key)
+    nums = sorted({int(r["house_num"]) for r in rows if r.get("house_num") is not None})
+    if house is not None:
+        nums = sorted(nums, key=lambda n: (abs(n - house), n))[:limit]
+        return sorted(nums)
+    return nums[:limit]
+
+
 async def explain_address_miss(city: str, street: str,
-                               addresses: list[dict] | None = None) -> dict:
+                               addresses: list[dict] | None = None,
+                               number: str | None = None) -> dict:
     """Why an address lookup came back empty, and what to try instead.
 
     An empty list is the one answer a person cannot act on: it does not say
@@ -322,12 +410,21 @@ async def explain_address_miss(city: str, street: str,
                    "אין גוש-חלקה להציג עבורה. זו מגבלת כיסוי של המרשם ולא כשל "
                    "בהתאמה — הכתובת עצמה נמצאה, והמיקום שלה תקף.")
         else:
-            why = ("הכתובת אינה משויכת לחלקה, ולכן אין חלקה להציג. שיוך נעשה "
-                   "לפי נקודה בתוך פוליגון, "
-                   + ("ולכתובת הזו אין קואורדינטות." if not points
-                      else "והנקודה של הכתובת הזו אינה נופלת בתוך חלקה רשומה.")
-                   + " כ-29% מהכתובות בישראל במצב הזה. אפשר לאתר את החלקה "
-                     "בלשונית המפה.")
+            # Plain words, and no percentage: the share it used to quote (29%)
+            # went stale as the GovMap points arrived, and the live figure is
+            # in the coverage box anyway.
+            why = ("אבל לא ידוע לנו על איזו חלקה היא יושבת: "
+                   + ("אין לה מיקום באף אחד מהמקורות."
+                      if not points else
+                      "המיקום שלה אינו נופל בתוך חלקה רשומה (למשל בשטח שטרם הוסדר).")
+                   + " אפשר לאתר את החלקה בלחיצה על המפה.")
+        own = next((a for a in points if a.get("lat") is not None), None)
+        if own is not None:
+            street_point = {"lat": float(own["lat"]), "lon": float(own["lon"])}
+        elif sc is not None:
+            street_point = await _street_point(sc, addresses[0].get("street_key"))
+        else:
+            street_point = None
         return {
             "reason": ("locality_not_in_parcel_register" if not covered
                        else "addresses_without_parcel"),
@@ -337,7 +434,11 @@ async def explain_address_miss(city: str, street: str,
             "zip7": zips,
             "has_point": bool(points),
             "parcel_register_covers_locality": covered,
-            "message": "הכתובת נמצאה במאגר. " + why,
+            # Where to open the map: the address's own point, else the middle
+            # of its street. Lets the "find it on the map" step start there.
+            "street_point": street_point,
+            "message": ("הכתובת נמצאה במאגר, " if covered
+                        else "הכתובת נמצאה במאגר. ") + why,
         }
 
     rows = await _fetch(
@@ -415,11 +516,17 @@ async def explain_address_miss(city: str, street: str,
                             f"אפשר לאתר את החלקה בלשונית המפה."),
                 "settlement_point": point}
 
+    houses = await _house_numbers_near(sc, r["street_key"], number)
     return {"reason": "no_house_match", "settlement_code": sc,
             "settlement_name": r.get("settlement_name"),
             "street_name": r.get("street_name"),
-            "message": (f"הרחוב \"{r.get('street_name')}\" מוכר, אך לא נמצאה כתובת "
-                        f"תואמת במספר הבית הזה. נסו בלי מספר בית.")}
+            "house_numbers": houses,
+            "street_point": await _street_point(sc, r["street_key"]),
+            "settlement_point": point,
+            "message": (f"הרחוב \"{r.get('street_name')}\" מוכר, אבל מספר הבית הזה "
+                        f"אינו מופיע באף אחד מהמקורות."
+                        + (" אלה מספרי הבתים הקרובים שכן מופיעים:" if houses
+                           else " נסו בלי מספר בית."))}
 
 
 # ── the two layers that hang off a parcel ─────────────────────────────────────
@@ -735,7 +842,8 @@ async def property_envelope(parcels: list[dict], *, addresses: list[dict] | None
                      "suffix": a.get("house_suffix"), "entrance": a.get("entrance"),
                      "zip7": a.get("zip7"), "neighbourhood": a.get("neighbourhood"),
                      "lat": a.get("lat"), "lon": a.get("lon"),
-                     "match": a.get("parcel_match")}
+                     "match": a.get("parcel_match"),
+                     "point_source": a.get("point_source")}
                     for a in addrs[:100]
                 ],
             },
