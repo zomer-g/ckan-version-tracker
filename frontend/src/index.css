@@ -4148,10 +4148,67 @@ li > a:only-child,
   font-size: 0.95rem;
 }
 .project1933-credit a { font-weight: 600; }
+/* The request tab carries a four-column table; .about-section's 800px pushed
+   its last column out of view, so this tab gets the wide shell. */
+.project1933-section {
+  max-width: 1200px;
+}
+.project1933-table-wrap {
+  overflow-x: auto;
+}
 .project1933-table th[scope="row"] {
   font-weight: 600;
   text-align: start;
+  min-width: 9rem;
+  width: 14rem;
+}
+.project1933-table .project1933-finding {
+  min-width: 18rem;
+  line-height: 1.6;
+}
+.project1933-table .project1933-date {
   white-space: nowrap;
+}
+.project1933-table td:last-child {
+  width: 15rem;
+  overflow-wrap: anywhere;
+}
+/* Phones: each ministry becomes a card, every cell labelled. */
+@media (max-width: 720px) {
+  .project1933-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .project1933-table,
+  .project1933-table tbody,
+  .project1933-table tr,
+  .project1933-table th[scope="row"],
+  .project1933-table td {
+    display: block;
+    width: auto;
+    min-width: 0;
+  }
+  .project1933-table tr {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .project1933-table th[scope="row"],
+  .project1933-table td {
+    border-bottom: none;
+    padding: 0.2rem 0;
+  }
+  .project1933-table th[scope="row"] {
+    font-size: 1rem;
+  }
+  .project1933-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-muted, #6b7280);
+  }
 }
 .project1933-table td,
 .project1933-table th {
