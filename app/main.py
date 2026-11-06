@@ -621,6 +621,11 @@ async def _security_headers(request, call_next):
     response.headers.setdefault("Referrer-Policy", "strict-origin")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    # robots.txt lets crawlers fetch /api/ (the SPA's content comes from there,
+    # and Google's renderer needs it); this keeps the JSON itself out of search
+    # results. See robots() in app/api/seo.py.
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("X-Robots-Tag", "noindex")
     return response
 
 # Maintenance mode (MAINTENANCE_MODE), for the minutes a database is being copied.
@@ -1020,6 +1025,25 @@ async def serve_story_page(name: str):
     return FileResponse(page, media_type=media_type, headers=headers)
 
 
+# One host for the pages. over.org.il and www.over.org.il both answered 200 with
+# the same content, so every page existed twice; the canonical tag points at
+# www, and a 301 makes that unambiguous. Pages only — HTML served by the SPA
+# fallback — so /api/, /mcp, OAuth and the worker keep working on either host
+# (a 301 on a POST would break them).
+_CANONICAL_HOST = "www.over.org.il"
+_APEX_HOST = "over.org.il"
+
+
+def _apex_redirect(request: Request) -> Response | None:
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host != _APEX_HOST or request.method not in ("GET", "HEAD"):
+        return None
+    target = f"https://{_CANONICAL_HOST}{request.url.path}"
+    if request.url.query:
+        target += f"?{request.url.query}"
+    return RedirectResponse(target, status_code=301)
+
+
 # Serve frontend SPA (built by Vite)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"
@@ -1082,14 +1106,17 @@ if frontend_dist.exists() and index_html.exists():
         Wrapped end to end: if anything in the SEO path misbehaves the shell
         goes out untouched, exactly as it did before.
         """
+        status = 200
         try:
             meta = await seo.meta_for(path)
             body = seo.render(_shell, meta)
+            status = meta.status
         except Exception:  # noqa: BLE001
             logger.warning("SEO head injection failed for %s", path, exc_info=True)
             body = _shell
         return HTMLResponse(
             content=body,
+            status_code=status,
             headers={
                 # Short, revalidated: the HTML names hashed assets, so a stale
                 # copy would pin an old bundle. Long enough to absorb a burst.
@@ -1111,11 +1138,11 @@ if frontend_dist.exists() and index_html.exists():
         if static_path is not None:
             return FileResponse(static_path)
         # For all other 404s, serve the SPA
-        return await _spa_response(request.url.path)
+        return _apex_redirect(request) or await _spa_response(request.url.path)
 
     # Explicit root route (some load balancers hit / for health checks)
     @app.get("/")
-    async def serve_root():
-        return await _spa_response("/")
+    async def serve_root(request: Request):
+        return _apex_redirect(request) or await _spa_response("/")
 else:
     logger.warning("Frontend dist not found at %s — SPA disabled", frontend_dist)

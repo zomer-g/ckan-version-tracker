@@ -3148,3 +3148,35 @@ async def get_tracked_public(
         tags=[TagBrief(id=str(t.id), name=t.name) for t in ds.tags],
         field_flags=ds.field_flags or {},
     )
+
+
+@router.get("/public/{dataset_id}/id-card")
+@limiter.limit("60/minute")
+async def get_dataset_id_card(
+    dataset_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """The dataset's "ID card": per table, the summary, tags and column
+    descriptions a LANGUAGE MODEL wrote from a sample of the rows.
+
+    Machine-generated, not the publisher's text. ``generated_by_llm`` is in the
+    payload so no consumer can miss it, and the dataset page labels the card
+    as AI output. ``cards`` is empty when nothing has been enriched yet."""
+    from app.services import table_profiler
+
+    uid = parse_uuid(dataset_id, "dataset_id")
+    ds = (await db.execute(
+        select(TrackedDataset).where(
+            TrackedDataset.id == uid,
+            TrackedDataset.status == "active",
+        )
+    )).scalar_one_or_none()
+    if ds is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    try:
+        cards = await table_profiler.dataset_id_cards(db, ds)
+    except Exception:  # noqa: BLE001 — the append DB being away costs the card, not the page
+        logger.warning("id-card: lookup failed for %s", uid, exc_info=True)
+        cards = []
+    return {"generated_by_llm": True, "cards": cards}
