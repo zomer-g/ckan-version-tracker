@@ -18,7 +18,7 @@ import {
  */
 
 /** עמותת הצלחה's own site, as its organization page on מידע לעם gives it. */
-const HATZLACHA_URL = "http://htl.org.il";
+const HATZLACHA_URL = "https://www.htl.org.il/";
 const HATZLACHA_NAME = "עמותת הצלחה – לקידום חברה הוגנת";
 
 const STATUS_LABEL: Record<Finding1933Status, string> = {
