@@ -388,6 +388,12 @@ async def lifespan(app: FastAPI):
     # after) before the scheduler builds any spatial SQL. Never raises.
     from app.services import postgis_schema
     await postgis_schema.ensure_resolved()
+    # Stored SQL functions (over_parcel_at, idx.try_geom, ...) keep the schema
+    # they were created with in their body text; recreate any that name another.
+    from app.services import postgis_functions
+    if settings.writers_enabled:
+        import asyncio as _asyncio
+        _asyncio.create_task(postgis_functions.refresh_if_stale())
     import asyncio
     # The scheduler and the one-time boot writers below only run on an instance
     # allowed to write. A second instance (SCHEDULER_ENABLED=false) and a

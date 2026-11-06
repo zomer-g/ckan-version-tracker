@@ -59,10 +59,15 @@ def set_schema(name: str | None) -> str:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
             logger.warning("postgis_schema: ignoring unexpected schema name %r", name)
             return _schema
-        if name != _schema:
+        changed = name != _schema
+        if changed:
             logger.info("postgis_schema: PostGIS is in schema %r (was %r)", name, _schema)
         _schema = name
         _resolved = True
+        if changed:
+            # Stored function bodies still name the old schema; recreate them.
+            from app.services import postgis_functions
+            postgis_functions.schedule_refresh()
     return _schema
 
 
