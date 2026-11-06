@@ -21,17 +21,34 @@ def test_needs_check_on_new_layer_new_version_or_new_outline():
     assert ga.needs_check({"version_number": 3, "boundary_built_at": None}, 3, built)
 
 
-def test_check_sql_tests_both_regions_through_the_indexed_parts():
+def test_abroad_means_touching_no_region_at_all():
     insert, counts = ga._check_sql("govmap_376_41d39d22_fb79e65e")
     assert "govmap_376_41d39d22_fb79e65e" in insert
-    # abroad = touches neither region: one NOT EXISTS per region
-    assert insert.count("AND NOT EXISTS") == 2
-    assert f"p.region = '{ga.REGION_ISRAEL}'" in insert
-    assert f"p.region = '{ga.REGION_JUDEA_SAMARIA}'" in insert
+    # one NOT EXISTS over the pieces of EVERY region (land, איו"ש and sea)
+    assert insert.count("AND NOT EXISTS") == 1
+    assert "p.region =" not in insert
     assert "ST_Intersects" in insert and "&&" in insert
     # the row alias must not be a word a layer could use as a column name
     assert "to_jsonb(zz_src)" in insert
-    assert "in_israel" in counts
+    # the per-region counts name the two land regions; the sea is the rest
+    assert f"p.region = '{ga.REGION_ISRAEL}'" in counts
+    assert f"p.region = '{ga.REGION_JUDEA_SAMARIA}'" in counts
+    assert "in_judea_samaria" in counts
+
+
+def test_maritime_rings_chain_the_atlas_lines_and_close_overland():
+    sql, params = ga._maritime_sql("govmap_232711_f8a56dde_e4d90588")
+    # every line of both chains is looked up by name, in chain order
+    assert params == [p for c in ga.MARITIME_CLOSURES for p in c["lines"]]
+    assert sql.count("ST_MakePolygon") == len(ga.MARITIME_CLOSURES)
+    # the closing path ends where the chain starts
+    assert "ST_EndPoint" in sql and "ST_StartPoint" in sql
+    # the sea is what the rings enclose minus the two land regions
+    assert "ST_Difference" in sql
+    assert f"'{ga.REGION_ISRAEL}', '{ga.REGION_JUDEA_SAMARIA}'" in sql
+    for c in ga.MARITIME_CLOSURES:
+        for lon, lat in c["path"]:
+            assert 34.0 < lon < 35.6 and 29.4 < lat < 33.2   # inside Israel's span
 
 
 def test_abroad_is_a_content_field_but_not_a_column_name_flag():

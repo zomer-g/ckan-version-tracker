@@ -195,7 +195,7 @@ const FIELD_FACETS: FieldFacet[] = [
     aria: "מאגר עם עמודת תאריך",
     icon: (<><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></>) },
   // Computed from the data (app/services/govmap_abroad.py), not from column
-  // names: at least one feature lies outside both Israel and איו"ש.
+  // names: at least one feature lies outside Israel, איו"ש and the sea area.
   // A cadastral key (גוש/חלקה): joinable to the parcel map, and through it to
   // every other dataset that carries one.
   { key: "has_parcel", short: "גוש/חלקה", bg: "var(--tint-indigo-bg)", fg: "var(--tint-indigo-fg)",
@@ -203,7 +203,7 @@ const FIELD_FACETS: FieldFacet[] = [
     aria: "מאגר עם עמודת גוש/חלקה",
     icon: (<><path d="M3 3h18v18H3z" /><path d="M3 12h18M12 3v18M7.5 3v9M16.5 12v9" /></>) },
   { key: "has_abroad", short: "חו\"ל", bg: "var(--tint-lime-bg)", fg: "var(--tint-lime-fg)",
-    title: "שכבת GovMap שחלק מהפריטים שלה נמצאים מחוץ לגבולות ישראל ואיו\"ש (לפי over_israel_boundary, מפת ישראל) — הפריטים עצמם ב-over_govmap_abroad_features.",
+    title: "שכבת GovMap שחלק מהפריטים שלה נמצאים מחוץ לישראל, לאיו\"ש ולמרחב הימי של ישראל גם יחד (לפי over_israel_boundary, מפת ישראל) — הפריטים עצמם ב-over_govmap_abroad_features.",
     aria: "שכבה עם אלמנטים מחוץ לגבולות המדינה",
     icon: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></>) },
 ];

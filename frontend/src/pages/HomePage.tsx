@@ -2281,7 +2281,7 @@ const CONTENT_FIELD_LABELS: Record<string, { label: string; title: string }> = {
   date: { label: "תאריך", title: "כולל עמודת תאריך — אפשר לנתח לאורך זמן" },
   geometry: { label: "מידע מרחבי", title: "כולל גאומטריה או קואורדינטות — אפשר להציג על מפה" },
   parcel: { label: "גוש/חלקה", title: "כולל גוש/חלקה — אפשר להצליב עם מפת החלקות" },
-  abroad: { label: "חו\"ל", title: "שכבת GovMap שחלק מהפריטים שלה נמצאים מחוץ לגבולות ישראל ואיו\"ש" },
+  abroad: { label: "חו\"ל", title: "שכבת GovMap שחלק מהפריטים שלה נמצאים מחוץ לישראל, לאיו\"ש ולמרחב הימי של ישראל" },
 };
 const FILE_FORMAT_LABELS: Record<string, string> = {
   csv: "CSV", xlsx: "Excel", json: "JSON", geojson: "GeoJSON", shp: "Shapefile",
