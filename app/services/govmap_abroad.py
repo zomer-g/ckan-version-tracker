@@ -685,3 +685,142 @@ async def status() -> dict:
         return {"configured": True, "built": False, "note": str(e)}
     return {"configured": True, "built": bool(regions), "regions": regions,
             "layers_checked": n, "top_abroad": top}
+
+
+# ── Read side: the "חו\"ל" project page (/projects/abroad) ───────────────────
+# Who to write to. GovMap's own catalog (over_govmap_layers) names the
+# publisher of most layers; the atlas layers are not in it, and are labelled by
+# the atlas they come from rather than guessed.
+_PUBLISHER_SQL = (
+    "coalesce(nullif(g.publisher, ''), "
+    "CASE WHEN a.title LIKE '%(אטלס ישראל)%' THEN 'אטלס ישראל' END, 'לא ידוע')"
+)
+
+#: GovMap's zoom for a link to one feature: close enough to see the point.
+GOVMAP_POINT_ZOOM = 9
+
+#: Largest page of features one request may ask for.
+MAX_FEATURES_PAGE = 5000
+
+
+def govmap_point_url(layer_id: str | None, x_itm: float | None, y_itm: float | None) -> str | None:
+    """A GovMap link centred on a point (ITM metres), with its layer switched on."""
+    if x_itm is None or y_itm is None:
+        return None
+    lay = f"&lay={layer_id}" if layer_id else ""
+    return (f"https://www.govmap.gov.il/?c={x_itm:.2f},{y_itm:.2f}"
+            f"&z={GOVMAP_POINT_ZOOM}{lay}")
+
+
+_tables_ensured = False
+
+
+async def _ensure_once() -> None:
+    """The read side may run before this process has done a check run, on a
+    schema an older version created: add any missing column once."""
+    global _tables_ensured
+    if not _tables_ensured:
+        await ensure_tables()
+        _tables_ensured = True
+
+
+async def summary() -> dict:
+    """Totals, the publishers and the layers with features abroad, for the
+    project page. Empty (not an error) before the first run."""
+    try:
+        await _ensure_once()
+    except Exception:  # noqa: BLE001 — reported below as not ready
+        logger.debug("govmap_abroad: ensure_tables failed", exc_info=True)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            totals = dict(await conn.fetchrow(f"""
+                SELECT count(*) AS layers_checked,
+                       count(*) FILTER (WHERE abroad > 0) AS layers_abroad,
+                       coalesce(sum(rows_with_geom), 0) AS features_checked,
+                       coalesce(sum(abroad), 0) AS abroad,
+                       coalesce(sum(in_maritime), 0) AS in_maritime,
+                       coalesce(sum(in_judea_samaria), 0) AS in_judea_samaria,
+                       coalesce(sum(near_border), 0) AS near_border,
+                       max(checked_at) AS checked_at,
+                       max(tolerance_m) AS tolerance_m
+                FROM public.{_qi(LAYERS_TABLE)}"""))
+            regions = [dict(r) for r in await conn.fetch(
+                f"SELECT region, name, area_km2 FROM public.{_qi(BOUNDARY_TABLE)} "
+                f"ORDER BY region")]
+            layers = [dict(r) for r in await conn.fetch(f"""
+                SELECT a.dataset_id, a.table_name, a.layer_id, a.title,
+                       {_PUBLISHER_SQL} AS publisher,
+                       a.rows_with_geom, a.in_israel, a.in_judea_samaria,
+                       a.in_maritime, a.near_border, a.abroad,
+                       (SELECT min(distance_km) FROM public.{_qi(FEATURES_TABLE)} f
+                        WHERE f.dataset_id = a.dataset_id) AS min_distance_km,
+                       a.max_distance_km, a.checked_at
+                FROM public.{_qi(LAYERS_TABLE)} a
+                LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id
+                WHERE a.abroad > 0
+                ORDER BY a.abroad DESC, a.title""")]
+        except Exception as e:  # noqa: BLE001 — tables not built yet
+            logger.debug("govmap_abroad.summary before first run", exc_info=True)
+            return {"ready": False, "note": str(e)[:200]}
+    pubs: dict[str, dict] = {}
+    for l in layers:
+        l["share"] = (l["abroad"] / l["rows_with_geom"]) if l["rows_with_geom"] else None
+        p = pubs.setdefault(l["publisher"], {"publisher": l["publisher"], "layers": 0,
+                                             "abroad": 0})
+        p["layers"] += 1
+        p["abroad"] += l["abroad"]
+    publishers = sorted(pubs.values(), key=lambda p: (-p["abroad"], p["publisher"]))
+    return {"ready": True, "totals": {k: (float(v) if k == "tolerance_m" and v is not None
+                                          else v) for k, v in totals.items()},
+            "regions": regions, "publishers": publishers, "layers": layers}
+
+
+def _features_where(dataset_id: str | None, publisher: str | None) -> tuple[str, list]:
+    clauses, params = [], []
+    if dataset_id:
+        params.append(dataset_id)
+        clauses.append(f"f.dataset_id = ${len(params)}")
+    if publisher:
+        params.append(publisher)
+        clauses.append(f"{_PUBLISHER_SQL} = ${len(params)}")
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+async def features(*, dataset_id: str | None = None, publisher: str | None = None,
+                   limit: int = 500, offset: int = 0) -> dict:
+    """The abroad features themselves, one row each: the layer and publisher,
+    a representative point (WGS84 and ITM), the distance from the outline and
+    the feature's own attributes. Ordered by publisher, layer, then distance
+    (farthest first: the clearest errors lead)."""
+    limit = max(1, min(int(limit), MAX_FEATURES_PAGE))
+    offset = max(0, int(offset))
+    where, params = _features_where(dataset_id, publisher)
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(f"""
+            SELECT count(*) FROM public.{_qi(FEATURES_TABLE)} f
+            JOIN public.{_qi(LAYERS_TABLE)} a ON a.dataset_id = f.dataset_id
+            LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id{where}""",
+            *params)
+        rows = await conn.fetch(f"""
+            SELECT f.dataset_id, f.layer_id, a.title, {_PUBLISHER_SQL} AS publisher,
+                   f.row_hash, f.distance_km, f.attrs::text AS attrs,
+                   {_X}.GeometryType(f.geom) AS geom_type,
+                   {_X}.ST_X(pt) AS lon, {_X}.ST_Y(pt) AS lat,
+                   {_X}.ST_X({_X}.ST_Transform(pt, 2039)) AS x_itm,
+                   {_X}.ST_Y({_X}.ST_Transform(pt, 2039)) AS y_itm
+            FROM public.{_qi(FEATURES_TABLE)} f
+            JOIN public.{_qi(LAYERS_TABLE)} a ON a.dataset_id = f.dataset_id
+            LEFT JOIN public.over_govmap_layers g ON g.layer_id = a.layer_id
+            CROSS JOIN LATERAL (SELECT {_X}.ST_PointOnSurface(f.geom) AS pt) p{where}
+            ORDER BY 4, a.title, f.distance_km DESC NULLS LAST, f.row_hash
+            LIMIT {limit} OFFSET {offset}""", *params)
+    import json as _json
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["attrs"] = _json.loads(d["attrs"]) if d["attrs"] else {}
+        d["govmap_url"] = govmap_point_url(d["layer_id"], d.pop("x_itm"), d.pop("y_itm"))
+        items.append(d)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}

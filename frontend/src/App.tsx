@@ -26,6 +26,7 @@ const SecurityPage = lazyPage(() => import("./pages/SecurityPage"));
 const RationalePage = lazyPage(() => import("./pages/RationalePage"));
 const Project1933Page = lazyPage(() => import("./pages/Project1933Page"));
 const Project1933Layout = lazyPage(() => import("./components/Project1933Layout"));
+const AbroadPage = lazyPage(() => import("./pages/AbroadPage"));
 const DecisionAnalysisPage = lazyPage(() => import("./pages/DecisionAnalysisPage"));
 const ApiPage = lazyPage(() => import("./pages/ApiPage"));
 const ProjectImportPage = lazyPage(() => import("./pages/ProjectImportPage"));
@@ -186,6 +187,8 @@ export default function App() {
           {/* פרויקט 1933: three tabs (components/Project1933Layout.tsx). The
               rationale and the decision-1933 analysis used to live at
               /rationale and /rationale/1933; those addresses redirect here. */}
+          {/* GovMap features outside Israel's outline, by publisher, for letters. */}
+          <Route path="/projects/abroad" element={<AbroadPage />} />
           <Route path="/projects/1933" element={<Project1933Layout />}>
             <Route index element={<RationalePage />} />
             <Route path="decision" element={<DecisionAnalysisPage />} />

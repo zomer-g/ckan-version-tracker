@@ -4255,3 +4255,88 @@ li > a:only-child,
 .project1933-request li + li {
   margin-top: 0.3rem;
 }
+
+/* ── פרויקט חו"ל (/projects/abroad) ───────────────────────────────── */
+.abroad-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.5rem max(16px, env(safe-area-inset-left, 0px)) 2.5rem;
+  display: grid;
+  gap: 1.25rem;
+}
+.abroad-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.abroad-counts > div { padding: 0.8rem 1rem; display: grid; gap: 0.15rem; min-width: 0; }
+.abroad-counts > div + div { border-inline-start: 1px solid var(--border); }
+.abroad-counts b { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.abroad-counts span { font-size: 0.85rem; color: var(--text-muted); }
+@media (max-width: 720px) {
+  .abroad-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .abroad-counts > div:nth-child(3) { border-inline-start: 0; }
+  .abroad-counts > div:nth-child(n + 3) { border-top: 1px solid var(--border); }
+}
+.abroad-method {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  background: var(--surface);
+}
+.abroad-method summary { cursor: pointer; font-weight: 600; }
+.abroad-method p { margin: 0.6rem 0 0; line-height: 1.7; max-width: 80ch; }
+.abroad-section h2 { margin: 0; font-size: 1.15rem; }
+.abroad-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.abroad-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.abroad-check { display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.9rem; }
+.abroad-btn { padding: 0.3rem 0.8rem; font-size: 0.85rem; white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; }
+.abroad-table-wrap { overflow-x: auto; }
+.abroad-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.abroad-table th, .abroad-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+.abroad-table thead th { border-bottom-width: 2px; white-space: nowrap; font-weight: 600; }
+.abroad-table tbody th { font-weight: 500; }
+.abroad-table .num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.abroad-table tr.is-selected { background: var(--surface-2); }
+.abroad-table button.linkish {
+  all: unset;
+  cursor: pointer;
+  color: var(--primary-700);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.abroad-table button.linkish[aria-pressed="true"] { font-weight: 700; }
+.abroad-table button.linkish:focus-visible { outline: 2px solid var(--primary-700); outline-offset: 2px; }
+.abroad-tag {
+  margin-inline-start: 0.4rem;
+  padding: 0 0.4rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
+}
+.abroad-coord { font-size: 0.8rem; unicode-bidi: isolate; }
+.abroad-attrs { margin: 0.4rem 0 0; display: grid; gap: 0.15rem; font-size: 0.8rem; }
+.abroad-attrs > div { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: 0.5rem; }
+.abroad-attrs dt { color: var(--text-muted); font-family: ui-monospace, Menlo, monospace; }
+.abroad-attrs dd { margin: 0; overflow-wrap: anywhere; }
+.abroad-pager { display: flex; gap: 0.75rem; align-items: center; justify-content: center; margin-top: 0.75rem; }
+.abroad-error {
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  background: var(--tint-bad-bg);
+  color: var(--tint-bad-fg);
+}

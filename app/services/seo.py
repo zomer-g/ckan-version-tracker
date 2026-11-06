@@ -98,6 +98,11 @@ _STATIC: dict[str, PageMeta] = {
         description="החלטת ממשלה 1933 סעיף אחר סעיף: המשימות שנגזרו ממנה, מה היה הפוטנציאל ומה קרה בפועל.",
         canonical_path="/projects/1933/decision",
     ),
+    "/projects/abroad": PageMeta(
+        title='חו"ל — פריטי GovMap מחוץ לגבולות המדינה',
+        description='פריטים בשכבות GovMap שנמצאים מחוץ לגבולות ישראל, איו"ש והמרחב הימי: לפי גוף מפרסם ושכבה, עם רשימה מלאה של הפריטים להורדה.',
+        canonical_path="/projects/abroad",
+    ),
     "/projects/1933/request": PageMeta(
         title="פרויקט 1933 — הבקשה הרוחבית",
         description="בקשת חופש מידע של עמותת הצלחה לכל משרדי הממשלה: מה עשיתם כדי ליישם את החלטה 1933? התשובות, משרד אחר משרד.",

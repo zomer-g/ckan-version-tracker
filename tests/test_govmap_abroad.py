@@ -78,3 +78,17 @@ def test_abroad_is_a_content_field_but_not_a_column_name_flag():
     # has_abroad is written by govmap_abroad and must never be reset by it.
     assert ga.FLAG_KEY not in field_flags.ALL_FIELDS
     assert dataset_facets.content_fields_of({"has_abroad": True}) == ["abroad"]
+
+
+def test_govmap_point_link_centres_on_the_feature():
+    url = ga.govmap_point_url("400", 996751.0, 830292.0)
+    assert url == "https://www.govmap.gov.il/?c=996751.00,830292.00&z=9&lay=400"
+    assert ga.govmap_point_url("400", None, 1.0) is None
+
+
+def test_feature_name_prefers_name_fields_then_any_hebrew_text():
+    from app.api.govmap_abroad import feature_name
+    assert feature_name({"new_name": "אולם ספורט חדש בית דגן", "objectId": "7"}) == "אולם ספורט חדש בית דגן"
+    assert feature_name({"name": "גשר הישנה"}) == "גשר הישנה"
+    assert feature_name({"code": "LLP1205", "place": "ים ראש הנקרה-אכזיב"}) == "ים ראש הנקרה-אכזיב"
+    assert feature_name({"objectId": "3", "x": "1"}) == ""
