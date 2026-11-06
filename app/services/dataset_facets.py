@@ -41,6 +41,9 @@ CONTENT_FIELDS: dict[str, tuple[str, str]] = {
     "date": ("has_date", "תאריך"),
     "geometry": ("has_geometry", "מידע מרחבי"),
     "parcel": ("has_parcel", "גוש/חלקה"),
+    # Computed from the data, not from column names: a GovMap layer with at
+    # least one feature outside both Israel and איו"ש (app/services/govmap_abroad.py).
+    "abroad": ("has_abroad", "אלמנטים בחו\"ל"),
 }
 
 # format code -> label. Order is display order.

@@ -237,6 +237,12 @@ _OVER_TITLES = {
     "over_re_addresses": "נדל\"ן לעם — כתובות מוצלבות (מיקוד + נקודה + חלקה)",
     "over_re_zip5": "נדל\"ן לעם — מיקוד (5 ספרות) לפי יישוב",
     "over_re_build_state": "נדל\"ן לעם — מצב בניית האינדקס",
+    # The state's outline and what in GovMap lies outside it
+    # (app/services/govmap_abroad.py).
+    "over_israel_boundary": "גרסאות לעם — גבולות המדינה (מחוזות משרד הפנים: ישראל ואיו\"ש)",
+    "over_israel_boundary_parts": "גרסאות לעם — גבולות המדינה, מחולקים לחלקים קטנים (לבדיקות מרחביות מהירות)",
+    "over_govmap_abroad": "גרסאות לעם — שכבות GovMap: כמה פריטים בישראל, באיו\"ש ובחו\"ל",
+    "over_govmap_abroad_features": "גרסאות לעם — פריטי GovMap שמחוץ לגבולות המדינה (אלמנטים בחו\"ל)",
 }
 
 #: `over_*` tables kept OUT of the public /data catalog.
