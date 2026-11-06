@@ -214,7 +214,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/tables",
         description:
-          "קטלוג כל הטבלאות: שם הטבלה, הסכימה, כותרת, ארגון, תגיות, רשימת העמודות, הערכת מספר שורות ו-field_flags (has_geometry, has_date, has_parcel, has_locality). זו נקודת ההתחלה — שם הטבלה מכאן הוא הקלט לכל שאר הקריאות בקבוצה.",
+          "קטלוג כל הטבלאות: שם הטבלה, הסכימה, כותרת, ארגון, תגיות, רשימת העמודות, הערכת מספר שורות ו-field_flags (has_geometry, has_date, has_parcel, has_locality, has_abroad — שכבת GovMap עם פריטים מחוץ לגבולות המדינה). זו נקודת ההתחלה — שם הטבלה מכאן הוא הקלט לכל שאר הקריאות בקבוצה.",
         example: "/api/tables",
       },
       {

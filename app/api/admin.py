@@ -3737,6 +3737,68 @@ async def nadlan_build(
             "message": "Building in the background; poll GET /api/admin/nadlan/state."}
 
 
+_govmap_abroad_running = False
+
+
+async def _run_govmap_abroad_bg(rebuild_boundary: bool, force: bool, limit: int | None):
+    global _govmap_abroad_running
+    from app.database import async_session
+    from app.services import govmap_abroad
+    try:
+        async with async_session() as db:
+            res = await govmap_abroad.run(db, limit=limit, force=force,
+                                          rebuild_boundary=rebuild_boundary)
+        logger.info("govmap_abroad admin run: %s",
+                    {k: v for k, v in res.items() if k != "failed"})
+    except Exception:  # noqa: BLE001
+        logger.exception("govmap_abroad admin run failed")
+    finally:
+        _govmap_abroad_running = False
+
+
+@router.post("/govmap-abroad/run")
+@limiter.limit("6/minute")
+async def govmap_abroad_run(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    rebuild_boundary: bool = False,
+    force: bool = False,
+    limit: int | None = None,
+    user: User = Depends(get_admin_user),
+):
+    """Build Israel's outline (over_israel_boundary) and check every mirrored
+    GovMap layer for features outside it (``app/services/govmap_abroad.py``).
+
+    ``rebuild_boundary`` rebuilds the outline from GovMap layer 119 first, which
+    also re-checks every layer. ``force`` re-checks layers whose version did not
+    change. ``limit`` caps how many layers this run checks.
+    Progress: GET /api/admin/govmap-abroad/state."""
+    global _govmap_abroad_running
+    from app.services import append_store as _as
+    if not _as.is_configured():
+        raise HTTPException(status_code=409, detail="Append DB is not configured")
+    if _govmap_abroad_running:
+        raise HTTPException(status_code=409, detail="a run is already in progress")
+    if limit is not None and limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be positive")
+    _govmap_abroad_running = True
+    background_tasks.add_task(_run_govmap_abroad_bg, rebuild_boundary, force, limit)
+    logger.info("govmap_abroad run started by %s (rebuild=%s force=%s limit=%s)",
+                user.email, rebuild_boundary, force, limit)
+    return {"status": "started", "rebuild_boundary": rebuild_boundary,
+            "force": force, "limit": limit}
+
+
+@router.get("/govmap-abroad/state")
+@limiter.limit("30/minute")
+async def govmap_abroad_state(request: Request, user: User = Depends(get_admin_user)):
+    """The outline's regions and the layers with the most features abroad."""
+    from app.services import govmap_abroad
+    out = await govmap_abroad.status()
+    out["running"] = _govmap_abroad_running
+    return out
+
+
 @router.get("/nadlan/state")
 @limiter.limit("30/minute")
 async def nadlan_state(request: Request, user: User = Depends(get_admin_user)):

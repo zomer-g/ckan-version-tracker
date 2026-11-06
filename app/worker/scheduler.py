@@ -139,6 +139,35 @@ async def init_scheduler() -> None:
         except Exception:  # noqa: BLE001
             logger.exception("field_flags scheduled recompute failed")
 
+    # Israel's outline and the GovMap features outside it
+    # (app/services/govmap_abroad.py): nightly, after the field-flags recompute,
+    # and once after boot. Incremental — only layers whose mirrored version
+    # changed are re-checked — so a quiet night costs a few catalog reads.
+    async def govmap_abroad_job() -> None:
+        if not settings.append_database_url:
+            return
+        try:
+            from app.services import govmap_abroad
+            async with async_session() as db:
+                await govmap_abroad.run(db)
+        except Exception:  # noqa: BLE001
+            logger.exception("govmap_abroad scheduled run failed")
+
+    scheduler.add_job(
+        govmap_abroad_job,
+        trigger=CronTrigger(hour=4, minute=53, timezone="Asia/Jerusalem"),
+        id="govmap_abroad",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=6 * 3600,
+    )
+    scheduler.add_job(
+        govmap_abroad_job,
+        trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(minutes=25)),
+        id="govmap_abroad_catch_up",
+        replace_existing=True,
+    )
+
     # Table profiles (/data's per-table "ID card"): a sweep for tables with no
     # profile or a changed shape, 100 a run. The per-push hook profiles a
     # dataset as its version lands; this is the backstop and the backfill.

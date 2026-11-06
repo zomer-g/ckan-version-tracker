@@ -194,6 +194,12 @@ const FIELD_FACETS: FieldFacet[] = [
     title: "כולל עמודת תאריך — ניתן לנתח לאורך זמן (מגמות, סדרות עתיות).",
     aria: "מאגר עם עמודת תאריך",
     icon: (<><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></>) },
+  // Computed from the data (app/services/govmap_abroad.py), not from column
+  // names: at least one feature lies outside both Israel and איו"ש.
+  { key: "has_abroad", short: "בחו\"ל", bg: "var(--tint-lime-bg)", fg: "var(--tint-lime-fg)",
+    title: "שכבת GovMap שחלק מהפריטים שלה נמצאים מחוץ לגבולות ישראל ואיו\"ש — הפריטים עצמם ב-over_govmap_abroad_features.",
+    aria: "שכבה עם אלמנטים מחוץ לגבולות המדינה",
+    icon: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></>) },
 ];
 
 // One row per filterable facet: the PostGIS capability (SpatialMark) + every
