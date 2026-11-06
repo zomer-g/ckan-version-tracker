@@ -4141,3 +4141,20 @@ li > a:only-child,
   border-bottom-width: 2px;
   white-space: nowrap;
 }
+.project1933-request {
+  margin: 0.75rem 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-2);
+  border-inline-start: 3px solid var(--border);
+  border-radius: 4px;
+}
+.project1933-request p {
+  margin: 0 0 0.4rem;
+}
+.project1933-request ol {
+  margin: 0 0 0.5rem;
+  padding-inline-start: 1.4rem;
+}
+.project1933-request li + li {
+  margin-top: 0.3rem;
+}
