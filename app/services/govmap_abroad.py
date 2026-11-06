@@ -6,31 +6,43 @@ its other processed indexes:
 
     over_israel_boundary        one row per region: ``israel`` (the six
                                 Interior-Ministry districts, East Jerusalem and
-                                the Golan included) and ``judea_samaria``
-                                (the ministry's seventh, איו"ש)
+                                the Golan included), ``judea_samaria`` (the
+                                ministry's seventh, איו"ש) and ``maritime``
+                                (the sea out to the maritime boundaries)
     over_israel_boundary_parts  the same outline cut into small pieces
                                 (ST_Subdivide) under a GiST index — what every
                                 point-in-polygon test actually runs against
     over_govmap_abroad          one row per mirrored GovMap layer: how many of
-                                its features are in Israel, in איו"ש, and
-                                outside both
-    over_govmap_abroad_features one row per feature outside both, with its
+                                its features are in Israel, in איו"ש, at sea,
+                                and outside all three
+    over_govmap_abroad_features one row per feature outside all three, with its
                                 geometry, its attributes and its distance from
                                 the outline
 
-Where the outline comes from. GovMap publishes no polygon of the state: the
-atlas layer "גבולות ישראל ומעמדם הבין-לאומי" is border LINES only. The
-Interior Ministry's district layer (GovMap layer 119, ``machoz``) is the one
-layer whose polygons tile the country, so the outline is their union. Its
-limits are the source's: land only (no territorial sea), Gaza outside. איו"ש
-is kept as a region of its own rather than folded into either side, so a
-reader can count it whichever way the question needs; "abroad" here means
-outside BOTH regions.
+Where the outline comes from. GovMap publishes no polygon of the state.
+
+* Land: the Interior Ministry's district layer (GovMap layer 119, ``machoz``)
+  is the one layer whose polygons tile the country, so the land regions are
+  their union — ``israel`` for six districts, ``judea_samaria`` for the
+  seventh. Gaza is outside, as in the source.
+* Sea: the atlas layer "גבולות ישראל ומעמדם הבין-לאומי" (232711) draws the
+  maritime boundaries as LINES. In the Mediterranean they chain end to end —
+  the estimated boundary from the coast at Zikim out to the Cyprus line, the
+  Israel–Cyprus EEZ boundary, the Israel–Lebanon maritime boundary back to the
+  coast at Rosh HaNikra — and in the Gulf of Eilat the Jordan and Egypt
+  maritime boundaries do the same between the two land borders. Each chain is
+  closed into a ring by a short overland path through Israeli territory
+  (MARITIME_CLOSURES), and the land is then subtracted, so ``maritime`` is sea
+  only: the EEZ in the Mediterranean (about 25,000 km²) and the waters off
+  Eilat.
+
+Each region is kept as its own row, so a reader can count איו"ש or the sea
+whichever way the question needs. "Abroad" means outside ALL of them.
 
 Classification of one feature: it is in a region if it touches it at all
 (ST_Intersects), so a line that crosses the border counts as inside. A feature
-is "abroad" only if it touches neither region. The distance is to the nearest
-piece of the outline, in kilometres on the spheroid.
+is "abroad" only if it touches no region. The distance is to the nearest piece
+of the outline, in kilometres on the spheroid.
 
 The per-layer result also drives a content flag, ``has_abroad`` on
 ``tracked_datasets.field_flags`` — the same flags as locality/authority/date —
@@ -73,10 +85,39 @@ JUDEA_SAMARIA_DISTRICT = "יהודה ושומרון"
 
 REGION_ISRAEL = "israel"
 REGION_JUDEA_SAMARIA = "judea_samaria"
+REGION_MARITIME = "maritime"
 REGION_NAMES = {
     REGION_ISRAEL: "ישראל — שישה מחוזות משרד הפנים (כולל ירושלים המזרחית והגולן)",
     REGION_JUDEA_SAMARIA: 'איו"ש — מחוז יהודה ושומרון של משרד הפנים',
+    REGION_MARITIME: ("המרחב הימי — עד קווי הגבול הימי באטלס ישראל: האזור הכלכלי "
+                      "הבלעדי בים התיכון והמים מול אילת"),
 }
+
+#: Bump when the regions are defined differently: a stored outline built under
+#: another version is rebuilt on the next run, and every layer re-checked.
+BOUNDARY_DEFINITION_VERSION = 2
+
+#: The atlas layer that draws Israel's borders and maritime boundaries as lines.
+MARITIME_LAYER_ID = "232711"
+
+#: The two maritime chains, as ``englishname`` LIKE patterns in the order the
+#: lines connect, each closed by an overland path through Israeli territory
+#: (lon, lat) from the chain's last point back to its first. The paths only
+#: have to stay inside Israel: whatever land they enclose is subtracted.
+MARITIME_CLOSURES: list[dict] = [
+    {   # Mediterranean: Zikim → Cyprus line → Lebanon line → Rosh HaNikra.
+        "lines": ["Estimated Maritime Boundary", "%Israel and Cyprus%",
+                  "%Lebanon%Maritime Boundary%"],
+        "path": [(35.11, 33.08), (35.15, 33.0), (35.15, 31.6), (34.6, 31.6)],
+    },
+    {   # Gulf of Eilat: the Jordanian coast → the Egyptian coast at Taba.
+        "lines": ["%Israel-Jordan Maritime Boundary%", "%Egypt Maritime Boundary%"],
+        "path": [(34.915, 29.53), (34.96, 29.565)],
+    },
+]
+
+#: Pieces of sea smaller than this are slivers between district polygons, not sea.
+MARITIME_MIN_PIECE_KM2 = 1.0
 
 #: Vertices per outline piece. Small pieces keep each bounding box tight, so
 #: the GiST index rejects almost every piece before any exact test runs.
@@ -146,6 +187,11 @@ _DDL = [
     """,
     f"""CREATE INDEX IF NOT EXISTS {_qi(FEATURES_TABLE + '_geom_gist')}
         ON public.{_qi(FEATURES_TABLE)} USING gist (geom)""",
+    # Added with the maritime region (definition version 2).
+    f"""ALTER TABLE public.{_qi(BOUNDARY_TABLE)}
+        ADD COLUMN IF NOT EXISTS definition_version integer""",
+    f"""ALTER TABLE public.{_qi(LAYERS_TABLE)}
+        ADD COLUMN IF NOT EXISTS in_maritime bigint NOT NULL DEFAULT 0""",
 ]
 
 
@@ -183,15 +229,60 @@ async def ensure_tables() -> None:
                     logger.debug("govmap_abroad: grant on %s failed", t, exc_info=True)
 
 
-async def _districts_table(conn) -> str | None:
-    """The live idx mirror table of GovMap layer 119, or None."""
+async def _layer_table(conn, layer_id: str) -> str | None:
+    """The live idx mirror table of a GovMap layer, or None."""
     return await conn.fetchval(
         """SELECT c.relname FROM pg_class c
            JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = $1 AND c.relkind = 'r'
              AND c.relname LIKE $2
            ORDER BY c.relname LIMIT 1""",
-        IDX_SCHEMA, f"govmap\\_{DISTRICTS_LAYER_ID}\\_%")
+        IDX_SCHEMA, f"govmap\\_{layer_id}\\_%")
+
+
+def _maritime_sql(atlas_table: str) -> tuple[str, list[str]]:
+    """The statement that builds the sea region from the atlas border lines.
+
+    One ring per entry of MARITIME_CLOSURES: its lines in order, plus the
+    closing overland path from the last line's end to the first line's start.
+    The union of the rings minus the land regions, keeping only pieces of at
+    least MARITIME_MIN_PIECE_KM2, is the sea. Returns (sql, params); the sql
+    yields one row (geom, area_km2, line_names)."""
+    src = f"{_qi(IDX_SCHEMA)}.{_qi(atlas_table)}"
+    params: list[str] = []
+    rings = []
+    for c in MARITIME_CLOSURES:
+        lines = []
+        for pat in c["lines"]:
+            params.append(pat)
+            lines.append(
+                f"(SELECT {_X}.ST_SnapToGrid({_X}.ST_GeometryN(geom, 1), 1e-7) FROM {src} "
+                f"WHERE englishname LIKE ${len(params)} AND geom IS NOT NULL "
+                f'ORDER BY "objectId" LIMIT 1)')
+        pts = ", ".join(f"{_X}.ST_SetSRID({_X}.ST_MakePoint({x}, {y}), 4326)"
+                        for x, y in c["path"])
+        closing = (f"{_X}.ST_MakeLine(ARRAY[{_X}.ST_EndPoint({lines[-1]}), {pts}, "
+                   f"{_X}.ST_StartPoint({lines[0]})])")
+        rings.append(f"{_X}.ST_MakePolygon({_X}.ST_LineMerge("
+                     f"{_X}.ST_Collect(ARRAY[{', '.join(lines)}, {closing}])))")
+    n = len(params)
+    sql = f"""
+        WITH sea AS (SELECT {_X}.ST_Union(ARRAY[{', '.join(rings)}]) AS g),
+        land AS (SELECT {_X}.ST_Union(geom) AS g FROM public.{_qi(BOUNDARY_TABLE)}
+                 WHERE region IN ('{REGION_ISRAEL}', '{REGION_JUDEA_SAMARIA}')),
+        pieces AS (SELECT (d).geom AS g
+                   FROM (SELECT {_X}.ST_Dump({_X}.ST_Difference(sea.g, land.g)) AS d
+                         FROM sea, land) s),
+        kept AS (SELECT g FROM pieces
+                 WHERE {_X}.ST_Area(g::{_X}.geography) / 1e6 >= {MARITIME_MIN_PIECE_KM2})
+        SELECT {_X}.ST_Multi({_X}.ST_Union(g)) AS geom,
+               sum({_X}.ST_Area(g::{_X}.geography)) / 1e6 AS area_km2,
+               ARRAY(SELECT englishname FROM {src}
+                     WHERE englishname LIKE ANY (ARRAY[{', '.join(f'${i}' for i in range(1, n + 1))}])
+                     ORDER BY englishname) AS line_names
+        FROM kept
+    """
+    return sql, params
 
 
 async def build_boundary() -> dict:
@@ -203,7 +294,7 @@ async def build_boundary() -> dict:
     pool = await append_store.get_pool()
     t0 = time.monotonic()
     async with pool.acquire() as conn:
-        src = await _districts_table(conn)
+        src = await _layer_table(conn, DISTRICTS_LAYER_ID)
         if not src:
             return {"error": f"GovMap layer {DISTRICTS_LAYER_ID} is not mirrored in idx"}
         q_src = f"{_qi(IDX_SCHEMA)}.{_qi(src)}"
@@ -220,19 +311,21 @@ async def build_boundary() -> dict:
             await conn.execute(f"DELETE FROM public.{_qi(BOUNDARY_TABLE)}")
             await conn.execute(
                 f"""INSERT INTO public.{_qi(BOUNDARY_TABLE)}
-                        (region, name, districts, area_km2, geom, source_table, built_at)
+                        (region, name, districts, area_km2, geom, source_table, built_at,
+                         definition_version)
                     SELECT region,
                            CASE region WHEN '{REGION_ISRAEL}' THEN $2 ELSE $3 END,
                            array_agg(DISTINCT d ORDER BY d),
                            {_X}.ST_Area({_X}.ST_Union(g)::{_X}.geography) / 1e6,
                            {_X}.ST_Multi({_X}.ST_CollectionExtract({_X}.ST_Union(g), 3)),
-                           $4, $5
+                           $4, $5, {BOUNDARY_DEFINITION_VERSION}
                     FROM (SELECT {region_expr} AS region, {_qi(DISTRICT_COLUMN)} AS d,
                                  {_X}.ST_MakeValid(geom) AS g
                           FROM {q_src} WHERE geom IS NOT NULL) s
                     GROUP BY region""",
                 JUDEA_SAMARIA_DISTRICT, REGION_NAMES[REGION_ISRAEL],
                 REGION_NAMES[REGION_JUDEA_SAMARIA], src, now)
+            maritime_note = await _build_maritime(conn, now)
             await conn.execute(
                 f"""INSERT INTO public.{_qi(PARTS_TABLE)} (region, part_id, geom)
                     SELECT region, row_number() OVER (PARTITION BY region)::int, g
@@ -246,13 +339,52 @@ async def build_boundary() -> dict:
                         WHERE p.region = b.region) AS parts
                 FROM public.{_qi(BOUNDARY_TABLE)} b ORDER BY b.region""")
     data_catalog.invalidate_catalog_cache()
-    out = {"source_table": src, "built_at": now.isoformat(),
+    out = {"source_table": src, "built_at": now.isoformat(), "maritime": maritime_note,
            "duration_ms": int((time.monotonic() - t0) * 1000),
            "regions": [{"region": r["region"], "area_km2": round(r["area_km2"] or 0),
                         "districts": list(r["districts"]), "parts": r["parts"]}
                        for r in regions]}
     logger.info("govmap_abroad.build_boundary: %s", out)
     return out
+
+
+async def _build_maritime(conn, now) -> str:
+    """Add the sea region inside the caller's transaction. A failure here (the
+    atlas layer missing, its lines renamed) leaves the land regions standing:
+    it is logged and reported, not raised."""
+    atlas = await _layer_table(conn, MARITIME_LAYER_ID)
+    if not atlas:
+        logger.warning("govmap_abroad: atlas layer %s not mirrored; no maritime region",
+                       MARITIME_LAYER_ID)
+        return f"skipped: GovMap layer {MARITIME_LAYER_ID} is not mirrored in idx"
+    sql, params = _maritime_sql(atlas)
+    try:
+        async with conn.transaction():   # a savepoint: the land rows survive a failure
+            row = await conn.fetchrow(sql, *params)
+            if row is None or row["geom"] is None:
+                return "skipped: the maritime lines did not close into a ring"
+            await conn.execute(
+                f"""INSERT INTO public.{_qi(BOUNDARY_TABLE)}
+                        (region, name, districts, area_km2, geom, source_table, built_at,
+                         definition_version)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, {BOUNDARY_DEFINITION_VERSION})""",
+                REGION_MARITIME, REGION_NAMES[REGION_MARITIME], list(row["line_names"]),
+                row["area_km2"], row["geom"], atlas, now)
+    except Exception as e:  # noqa: BLE001 — the land outline must not depend on it
+        logger.warning("govmap_abroad: maritime region failed: %s", e)
+        return f"failed: {str(e)[:200]}"
+    return f"ok: {round(row['area_km2'] or 0)} km2 from {atlas}"
+
+
+async def _boundary_state(conn) -> tuple:
+    """(built_at, definition_version) of the stored outline, or (None, None)."""
+    try:
+        row = await conn.fetchrow(
+            f"SELECT max(built_at) AS b, min(definition_version) AS v "
+            f"FROM public.{_qi(BOUNDARY_TABLE)}")
+        return (row["b"], row["v"]) if row else (None, None)
+    except Exception:  # noqa: BLE001 — table not built yet
+        return (None, None)
 
 
 async def _boundary_built_at(conn):
@@ -267,16 +399,20 @@ def _check_sql(table: str) -> tuple[str, str]:
     """The two statements that check one layer: the abroad features (written)
     and the per-region counts (read). Both against the indexed outline pieces.
 
-    In a region = touches any piece of it. Distance = to the nearest of the
+    Abroad = touches no piece of any region. A feature in several regions is
+    counted once, in the first of israel → judea_samaria → maritime; the
+    maritime count is what remains. In a region = touches any piece of it. Distance = to the nearest of the
     five pieces closest by bounding box, which is the nearest piece for any
     feature outside the outline."""
     # The alias is deliberately unlikely: a layer with a column named like the
     # alias would make to_jsonb(alias) read that column instead of the row.
     src = f"{_qi(IDX_SCHEMA)}.{_qi(table)}"
     parts = f"public.{_qi(PARTS_TABLE)}"
-    touches = (lambda region, g:
-               f"EXISTS (SELECT 1 FROM {parts} p WHERE p.region = '{region}' "
-               f"AND p.geom OPERATOR({_X}.&&) {g} AND {_X}.ST_Intersects(p.geom, {g}))")
+    def touches(region: str | None, g: str) -> str:
+        """EXISTS a piece of ``region`` (None = of ANY region) touching ``g``."""
+        where = f"p.region = '{region}' AND " if region else ""
+        return (f"EXISTS (SELECT 1 FROM {parts} p WHERE {where}"
+                f"p.geom OPERATOR({_X}.&&) {g} AND {_X}.ST_Intersects(p.geom, {g}))")
     insert = f"""
         INSERT INTO public.{_qi(FEATURES_TABLE)}
             (dataset_id, table_name, layer_id, row_hash, distance_km, attrs, geom)
@@ -292,16 +428,18 @@ def _check_sql(table: str) -> tuple[str, str]:
         CROSS JOIN LATERAL (SELECT to_jsonb(zz_src) - 'geom' - 'geometry_wkt'
                                    - '_row_hash' - '_first_seen' AS j) a
         WHERE zz_src.geom IS NOT NULL
-          AND NOT {touches(REGION_ISRAEL, 'zz_src.geom')}
-          AND NOT {touches(REGION_JUDEA_SAMARIA, 'zz_src.geom')}
+          AND NOT {touches(None, 'zz_src.geom')}
         ON CONFLICT (dataset_id, row_hash) DO NOTHING
     """
     counts = f"""
         SELECT count(*) AS rows,
                count(*) FILTER (WHERE geom IS NOT NULL) AS rows_with_geom,
-               count(*) FILTER (WHERE geom IS NOT NULL
-                                AND {touches(REGION_ISRAEL, 'zz_src.geom')}) AS in_israel
-        FROM {src} zz_src
+               count(*) FILTER (WHERE geom IS NOT NULL AND il) AS in_israel,
+               count(*) FILTER (WHERE geom IS NOT NULL AND NOT il AND js) AS in_judea_samaria
+        FROM (SELECT zz_src.geom,
+                     zz_src.geom IS NOT NULL AND {touches(REGION_ISRAEL, 'zz_src.geom')} AS il,
+                     zz_src.geom IS NOT NULL AND {touches(REGION_JUDEA_SAMARIA, 'zz_src.geom')} AS js
+              FROM {src} zz_src) c
     """
     return insert, counts
 
@@ -323,30 +461,32 @@ async def check_layer(conn, dataset_id: str, table: str, *, title: str | None,
             f"""SELECT count(*) AS n, max(distance_km) AS mx
                 FROM public.{_qi(FEATURES_TABLE)} WHERE dataset_id = $1""", dataset_id)
         abroad = a["n"]
-        in_js = max(0, c["rows_with_geom"] - c["in_israel"] - abroad)
+        in_js = c["in_judea_samaria"]
+        in_sea = max(0, c["rows_with_geom"] - c["in_israel"] - in_js - abroad)
         ms = int((time.monotonic() - t0) * 1000)
         await conn.execute(
             f"""INSERT INTO public.{_qi(LAYERS_TABLE)}
                   (dataset_id, table_name, layer_id, title, version_number, rows,
-                   rows_with_geom, in_israel, in_judea_samaria, abroad,
+                   rows_with_geom, in_israel, in_judea_samaria, in_maritime, abroad,
                    max_distance_km, checked_at, boundary_built_at, duration_ms)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),$12,$13)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),$13,$14)
                 ON CONFLICT (dataset_id) DO UPDATE SET
                   table_name = EXCLUDED.table_name, layer_id = EXCLUDED.layer_id,
                   title = EXCLUDED.title, version_number = EXCLUDED.version_number,
                   rows = EXCLUDED.rows, rows_with_geom = EXCLUDED.rows_with_geom,
                   in_israel = EXCLUDED.in_israel,
                   in_judea_samaria = EXCLUDED.in_judea_samaria,
+                  in_maritime = EXCLUDED.in_maritime,
                   abroad = EXCLUDED.abroad, max_distance_km = EXCLUDED.max_distance_km,
                   checked_at = EXCLUDED.checked_at,
                   boundary_built_at = EXCLUDED.boundary_built_at,
                   duration_ms = EXCLUDED.duration_ms""",
             dataset_id, table, layer_id, title, version_number, c["rows"],
-            c["rows_with_geom"], c["in_israel"], in_js, abroad, a["mx"],
+            c["rows_with_geom"], c["in_israel"], in_js, in_sea, abroad, a["mx"],
             boundary_built_at, ms)
     return {"dataset_id": dataset_id, "table": table, "rows": c["rows"],
             "in_israel": c["in_israel"], "in_judea_samaria": in_js,
-            "abroad": abroad, "duration_ms": ms}
+            "in_maritime": in_sea, "abroad": abroad, "duration_ms": ms}
 
 
 async def _govmap_layers(db: AsyncSession) -> list[dict]:
@@ -382,16 +522,17 @@ async def run(db: AsyncSession, *, limit: int | None = None,
               rebuild_boundary: bool = False, force: bool = False) -> dict:
     """Check every GovMap layer that needs it, then update the flags.
 
-    Builds the outline first if it does not exist (or when asked). ``limit``
+    Builds the outline first if it does not exist, was built under another
+    BOUNDARY_DEFINITION_VERSION, or when asked. ``limit``
     caps how many layers this run checks; the rest wait for the next run."""
     if not append_store.is_configured():
         return {"skipped": "append DB not configured"}
     await ensure_tables()
     pool = await append_store.get_pool()
     async with pool.acquire() as conn:
-        built_at = await _boundary_built_at(conn)
+        built_at, version = await _boundary_state(conn)
     boundary = None
-    if built_at is None or rebuild_boundary:
+    if built_at is None or rebuild_boundary or version != BOUNDARY_DEFINITION_VERSION:
         boundary = await build_boundary()
         if "error" in boundary or "skipped" in boundary:
             return {"boundary": boundary}
@@ -436,6 +577,7 @@ async def run(db: AsyncSession, *, limit: int | None = None,
         totals = dict(await conn.fetchrow(
             f"""SELECT count(*) AS layers, coalesce(sum(rows), 0) AS rows,
                        coalesce(sum(in_judea_samaria), 0) AS in_judea_samaria,
+                       coalesce(sum(in_maritime), 0) AS in_maritime,
                        coalesce(sum(abroad), 0) AS abroad,
                        count(*) FILTER (WHERE abroad > 0) AS layers_with_abroad
                 FROM public.{_qi(LAYERS_TABLE)}"""))
@@ -487,7 +629,7 @@ async def status() -> dict:
                 f"FROM public.{_qi(BOUNDARY_TABLE)} ORDER BY region")]
             top = [dict(r) for r in await conn.fetch(
                 f"""SELECT dataset_id, table_name, layer_id, title, rows, in_israel,
-                           in_judea_samaria, abroad, max_distance_km, checked_at
+                           in_judea_samaria, in_maritime, abroad, max_distance_km, checked_at
                     FROM public.{_qi(LAYERS_TABLE)} WHERE abroad > 0
                     ORDER BY abroad DESC LIMIT 50""")]
             n = await conn.fetchval(f"SELECT count(*) FROM public.{_qi(LAYERS_TABLE)}")

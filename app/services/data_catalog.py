@@ -239,9 +239,9 @@ _OVER_TITLES = {
     "over_re_build_state": "נדל\"ן לעם — מצב בניית האינדקס",
     # The state's outline and what in GovMap lies outside it
     # (app/services/govmap_abroad.py).
-    "over_israel_boundary": "גרסאות לעם — מפת ישראל (גבולות המדינה לפי מחוזות משרד הפנים: ישראל ואיו\"ש)",
+    "over_israel_boundary": "גרסאות לעם — מפת ישראל (גבולות המדינה: ישראל, איו\"ש והמרחב הימי)",
     "over_israel_boundary_parts": "גרסאות לעם — מפת ישראל, מחולקת לחלקים קטנים (לבדיקות מרחביות מהירות)",
-    "over_govmap_abroad": "גרסאות לעם — שכבות GovMap: כמה פריטים בישראל, באיו\"ש ובחו\"ל",
+    "over_govmap_abroad": "גרסאות לעם — שכבות GovMap: כמה פריטים בישראל, באיו\"ש, בים ובחו\"ל",
     "over_govmap_abroad_features": "גרסאות לעם — פריטי GovMap שמחוץ לגבולות המדינה (אלמנטים בחו\"ל)",
 }
 

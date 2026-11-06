@@ -42,7 +42,8 @@ CONTENT_FIELDS: dict[str, tuple[str, str]] = {
     "geometry": ("has_geometry", "מידע מרחבי"),
     "parcel": ("has_parcel", "גוש/חלקה"),
     # Computed from the data, not from column names: a GovMap layer with at
-    # least one feature outside both Israel and איו"ש (app/services/govmap_abroad.py).
+    # least one feature outside Israel, איו"ש and Israel's maritime area
+    # together (app/services/govmap_abroad.py).
     "abroad": ("has_abroad", "חו\"ל"),
 }
 
