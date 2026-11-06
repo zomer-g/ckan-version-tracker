@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
   BUDGET_DATASET,
@@ -10,16 +9,17 @@ import {
 } from "../data/project1933";
 
 /**
- * פרויקט 1933 — the hub for government decision 1933 (2016).
+ * פרויקט 1933, third tab: the cross-government request.
  *
- * Three things in one place: the two pages that used to sit under "About"
- * (the rationale, and the clause-by-clause analysis of the decision), and what
- * מידע לעם holds about how the decision was carried out — chiefly the
- * ministries' answers to a cross-government FOI request asking what each had
- * done to implement it. The answers are listed from src/data/project1933.ts.
+ * What מידע לעם holds about how decision 1933 was carried out — chiefly the
+ * ministries' answers to the FOI request עמותת הצלחה sent every ministry, asking
+ * what each had done to implement it. The answers are listed from
+ * src/data/project1933.ts. The tabs themselves are Project1933Layout.
  */
 
-const DECISION_URL = "https://www.gov.il/he/pages/2016_dec1933";
+/** עמותת הצלחה's own site, as its organization page on מידע לעם gives it. */
+const HATZLACHA_URL = "http://htl.org.il";
+const HATZLACHA_NAME = "עמותת הצלחה – לקידום חברה הוגנת";
 
 const STATUS_LABEL: Record<Finding1933Status, string> = {
   nothing: "לא נעשה דבר",
@@ -65,8 +65,7 @@ function summarySentence(
 }
 
 export default function Project1933Page() {
-  useDocumentTitle("פרויקט 1933");
-  const decisions = usePublishedDecisions();
+  useDocumentTitle("פרויקט 1933 — הבקשה הרוחבית");
 
   const analysed = RESPONSES_1933.filter((r) => r.finding);
   const counts = analysed.reduce<Partial<Record<Finding1933Status, number>>>((acc, r) => {
@@ -79,45 +78,24 @@ export default function Project1933Page() {
     <div>
       <div className="about-hero">
         <div className="container">
-          <h1>פרויקט 1933</h1>
+          <h1>הבקשה הרוחבית: מה עשיתם כדי ליישם את ההחלטה?</h1>
           <p className="rationale-hero-sub">
-            החלטת ממשלה 1933 משנת 2016 התחייבה לפתוח את מאגרי המידע הממשלתיים לציבור. כאן מרוכז מה
-            שהיא קבעה, למה זה חשוב, ומה משרדי הממשלה עצמם השיבו כשנשאלו מה עשו כדי לקיים אותה.
+            בקשת חופש מידע אחת לכל משרדי הממשלה, ומה כל משרד השיב.
           </p>
         </div>
       </div>
 
       <div className="about-section">
-        <div className="about-card">
-          <h2>העמודים בפרויקט</h2>
-          <ul className="family-list">
-            <li>
-              <strong>
-                <Link to="/rationale">הרציונל</Link>
-              </strong>
-              {": "}
-              מה הובטח בהחלטה, מה התקן שנקבע, מה מצא מבקר המדינה, ולמה גרסאות לעם קיים.
-            </li>
-            {decisions.map((d) => (
-              <li key={d.key}>
-                <strong>
-                  <Link to={`/rationale/${d.key}`}>{d.title}</Link>
-                </strong>
-                {d.subtitle ? `: ${d.subtitle}` : ""}
-              </li>
-            ))}
-            <li>
-              <strong>
-                <ExtLink href={DECISION_URL}>נוסח ההחלטה באתר gov.il</ExtLink>
-              </strong>
-            </li>
-          </ul>
-        </div>
+        <aside className="project1933-credit" aria-label="קרדיט">
+          <span>את הבקשה הגישה</span>{" "}
+          <ExtLink href={HATZLACHA_URL}>{HATZLACHA_NAME}</ExtLink>
+          <span>, שגם פרסמה את התשובות במידע לעם.</span>
+        </aside>
 
         <div className="about-card">
-          <h2>הבקשה הרוחבית: מה עשיתם כדי ליישם את ההחלטה?</h2>
+          <h2>הבקשה והתשובות</h2>
           <p>
-            ב-{formatDate(REQUEST_1933.date)} שלחה עמותת הצלחה בקשת חופש מידע אחת לכל משרדי הממשלה,
+            ב-{formatDate(REQUEST_1933.date)} שלחה <ExtLink href={HATZLACHA_URL}>עמותת הצלחה</ExtLink> בקשת חופש מידע אחת לכל משרדי הממשלה,
             וביקשה את המסמכים שמראים מה כל משרד עשה כדי ליישם את החלטה 1933. התשובות פורסמו באתר{" "}
             <ExtLink href="https://www.odata.org.il">מידע לעם</ExtLink>, כל משרד בנפרד, ומרוכזות
             בטבלה שלמטה. זה נוסח הבקשה:

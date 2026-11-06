@@ -2,6 +2,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { usePageContentOverrides } from "../hooks/usePageContentOverrides";
 import { usePublishedDecisions } from "../hooks/usePublishedDecisions";
+import { decisionPath } from "../components/Project1933Layout";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const DECISION_URL = "https://www.gov.il/he/pages/2016_dec1933";
@@ -32,9 +33,6 @@ export default function RationalePage() {
     <div>
       <div className="about-hero">
         <div className="container">
-          <p className="project1933-back">
-            <Link to="/projects/1933">{t("project1933.back", "← פרויקט 1933")}</Link>
-          </p>
           <h1>{t("rationale.title")}</h1>
           <p className="rationale-hero-sub">{t("rationale.subtitle")}</p>
         </div>
@@ -135,7 +133,7 @@ export default function RationalePage() {
               {decisions.map((d) => (
                 <li key={d.key}>
                   <strong>
-                    <Link to={`/rationale/${d.key}`}>{d.title}</Link>
+                    <Link to={decisionPath(d.key)}>{d.title}</Link>
                   </strong>
                   {d.subtitle ? `: ${d.subtitle}` : ""}
                 </li>

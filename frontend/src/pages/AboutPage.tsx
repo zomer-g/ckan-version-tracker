@@ -53,7 +53,7 @@ export default function AboutPage() {
           <p>
             <Trans
               i18nKey="about.rationale_teaser"
-              components={{ 1: <Link to="/rationale" /> }}
+              components={{ 1: <Link to="/projects/1933" /> }}
             />
           </p>
         </div>
