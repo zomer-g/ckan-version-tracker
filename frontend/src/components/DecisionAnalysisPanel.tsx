@@ -300,7 +300,7 @@ export default function DecisionAnalysisPanel() {
           <span aria-hidden="true">📑</span> ניתוח החלטת ממשלה
         </h2>
         <a
-          href={`/rationale/${key}`}
+          href={key === "1933" ? "/projects/1933/decision" : `/rationale/${key}`}
           target="_blank"
           rel="noopener noreferrer"
           className="text-sm"

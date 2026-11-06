@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation, useNavigationType } from "react-router-dom";
+import { Navigate, Routes, Route, useLocation, useNavigationType } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, Suspense } from "react";
 import { sources } from "./api/client";
@@ -25,6 +25,7 @@ const AboutPage = lazyPage(() => import("./pages/AboutPage"));
 const SecurityPage = lazyPage(() => import("./pages/SecurityPage"));
 const RationalePage = lazyPage(() => import("./pages/RationalePage"));
 const Project1933Page = lazyPage(() => import("./pages/Project1933Page"));
+const Project1933Layout = lazyPage(() => import("./components/Project1933Layout"));
 const DecisionAnalysisPage = lazyPage(() => import("./pages/DecisionAnalysisPage"));
 const ApiPage = lazyPage(() => import("./pages/ApiPage"));
 const ProjectImportPage = lazyPage(() => import("./pages/ProjectImportPage"));
@@ -182,14 +183,20 @@ export default function App() {
               /projects/nadlan and were never property lookups. */}
           <Route path="/projects/deals" element={<DealsPage />} />
           <Route path="/projects/prices" element={<PricesPage />} />
-          {/* The project hub; /rationale and /rationale/1933 keep their own
-              URLs (they are linked from outside) and link back here. */}
-          <Route path="/projects/1933" element={<Project1933Page />} />
+          {/* פרויקט 1933: three tabs (components/Project1933Layout.tsx). The
+              rationale and the decision-1933 analysis used to live at
+              /rationale and /rationale/1933; those addresses redirect here. */}
+          <Route path="/projects/1933" element={<Project1933Layout />}>
+            <Route index element={<RationalePage />} />
+            <Route path="decision" element={<DecisionAnalysisPage />} />
+            <Route path="request" element={<Project1933Page />} />
+          </Route>
           <Route path="/about" element={<AboutPage />} />
           {/* Beside the privacy policy and the accessibility statement: how to
               report, and the public log of what was reported and fixed. */}
           <Route path="/security" element={<SecurityPage />} />
-          <Route path="/rationale" element={<RationalePage />} />
+          <Route path="/rationale" element={<Navigate to="/projects/1933" replace />} />
+          <Route path="/rationale/1933" element={<Navigate to="/projects/1933/decision" replace />} />
           {/* The page itself gates on `published` server-side, so the route may
               exist while the analysis is still a draft — only an admin sees it. */}
           <Route path="/rationale/:key" element={<DecisionAnalysisPage />} />

@@ -4104,10 +4104,50 @@ li > a:only-child,
 }
 
 /* ── פרויקט 1933 ─────────────────────────────────────────────── */
-.project1933-back {
-  margin: 0 0 0.4rem;
-  font-size: 0.9rem;
+/* The project's tab bar, in the hero's own colours so the tab's page hero
+   below reads as one band with it. */
+.project1933-bar {
+  background: var(--chrome-bg);
+  color: white;
+  padding-top: 1rem;
 }
+.project1933-eyebrow {
+  font-size: 0.85rem;
+  opacity: 0.85;
+  margin-bottom: 0.6rem;
+  text-align: center;
+}
+.project1933-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem;
+}
+.project1933-tab {
+  color: white;
+  text-decoration: none;
+  padding: 0.55rem 1rem;
+  border-radius: 6px 6px 0 0;
+  font-weight: 500;
+  opacity: 0.8;
+  border-bottom: 3px solid transparent;
+}
+.project1933-tab:hover { opacity: 1; background: rgba(255, 255, 255, 0.08); }
+.project1933-tab.is-active {
+  opacity: 1;
+  border-bottom-color: white;
+  background: rgba(255, 255, 255, 0.12);
+}
+.project1933-tab:focus-visible { outline: 2px solid white; outline-offset: 2px; }
+.project1933-credit {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface, transparent);
+  font-size: 0.95rem;
+}
+.project1933-credit a { font-weight: 600; }
 .project1933-table th[scope="row"] {
   font-weight: 600;
   text-align: start;

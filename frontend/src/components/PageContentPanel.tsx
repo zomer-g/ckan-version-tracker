@@ -19,7 +19,7 @@ const DEFAULTS: Record<string, Record<string, any>> = {
 
 const PAGES: { id: string; label: string; path: string }[] = [
   { id: "about", label: "אודות", path: "/about" },
-  { id: "rationale", label: "רציונל", path: "/rationale" },
+  { id: "rationale", label: "רציונל", path: "/projects/1933" },
 ];
 
 const LANGS: { id: string; label: string }[] = [

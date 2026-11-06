@@ -158,7 +158,7 @@ export default function DecisionAnalysisPage() {
             )}
           </p>
           <p>
-            <Link to="/rationale">{t("nav.rationale", "הרציונל")}</Link>
+            <Link to="/projects/1933">{t("nav.rationale", "הרציונל")}</Link>
           </p>
         </div>
       </div>
@@ -169,9 +169,6 @@ export default function DecisionAnalysisPage() {
     <div>
       <div className="about-hero">
         <div className="container">
-          <p className="project1933-back">
-            <Link to="/projects/1933">{t("project1933.back", "← פרויקט 1933")}</Link>
-          </p>
           <h1>{doc.title}</h1>
           <p className="rationale-hero-sub">{doc.subtitle}</p>
         </div>
@@ -258,7 +255,7 @@ export default function DecisionAnalysisPage() {
 
         <div className="about-card">
           <p>
-            <Link to="/rationale">
+            <Link to="/projects/1933">
               {t("decision.back_to_rationale", "חזרה לעמוד הרציונל")}
             </Link>
           </p>

@@ -86,10 +86,22 @@ _STATIC: dict[str, PageMeta] = {
         description="מה גרסאות לעם עושה, למה, ואיך המעקב אחרי מאגרי המידע הממשלתיים עובד.",
         canonical_path="/about",
     ),
-    "/rationale": PageMeta(
-        title="הרציונל",
-        description="למה שמירת גרסאות של מאגרי מידע ממשלתיים היא תנאי לשקיפות — הנימוק המלא.",
-        canonical_path="/rationale",
+    # פרויקט 1933: three tabs. The rationale is the first; /rationale redirects
+    # to it in the SPA.
+    "/projects/1933": PageMeta(
+        title="פרויקט 1933 — הרציונל",
+        description="למה שמירת גרסאות של מאגרי מידע ממשלתיים היא תנאי לשקיפות — הנימוק המלא, בעקבות החלטת ממשלה 1933.",
+        canonical_path="/projects/1933",
+    ),
+    "/projects/1933/decision": PageMeta(
+        title="פרויקט 1933 — הנוסח המלא, המשימות והחשבון",
+        description="החלטת ממשלה 1933 סעיף אחר סעיף: המשימות שנגזרו ממנה, מה היה הפוטנציאל ומה קרה בפועל.",
+        canonical_path="/projects/1933/decision",
+    ),
+    "/projects/1933/request": PageMeta(
+        title="פרויקט 1933 — הבקשה הרוחבית",
+        description="בקשת חופש מידע של עמותת הצלחה לכל משרדי הממשלה: מה עשיתם כדי ליישם את החלטה 1933? התשובות, משרד אחר משרד.",
+        canonical_path="/projects/1933/request",
     ),
     "/api": PageMeta(
         title="API ציבורי",
