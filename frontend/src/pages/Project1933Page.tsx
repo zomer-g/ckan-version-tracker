@@ -5,6 +5,7 @@ import {
   BUDGET_DATASET,
   Finding1933Status,
   ODATA_SEARCH_URL,
+  REQUEST_1933,
   RESPONSES_1933,
 } from "../data/project1933";
 
@@ -39,6 +40,28 @@ function ExtLink({ href, children }: { href: string; children?: React.ReactNode 
 function formatDate(iso: string): string {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
+}
+
+/** How each status reads inside the summary sentence ("ב-3 ..."). */
+const STATUS_PHRASE: Record<Finding1933Status, string> = {
+  nothing: "נכתב שלא נעשה דבר או שלא נמצא שום תיעוד",
+  partial: "תוארו צעדים חלקיים",
+  acted: "תואר יישום ממשי",
+  refused: "לא ניתנה תשובה לגופו של עניין",
+};
+
+/** One sentence built from the counts, so it can never drift from the table. */
+function summarySentence(
+  counts: Partial<Record<Finding1933Status, number>>,
+  analysed: number,
+): string {
+  const parts = (["nothing", "partial", "acted", "refused"] as Finding1933Status[])
+    .filter((s) => counts[s])
+    .map((s) => `ב-${counts[s]} ${STATUS_PHRASE[s]}`);
+  if (parts.length === 0) return "";
+  const list =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} ו${parts[parts.length - 1]}`;
+  return `מתוך ${analysed} התשובות שסווגו, ${list}.`;
 }
 
 export default function Project1933Page() {
@@ -94,18 +117,29 @@ export default function Project1933Page() {
         <div className="about-card">
           <h2>הבקשה הרוחבית: מה עשיתם כדי ליישם את ההחלטה?</h2>
           <p>
-            בקשת חופש מידע אחת נשלחה לכל משרדי הממשלה, ובה שאלה פשוטה: אילו צעדים ננקטו במשרד כדי
-            ליישם את החלטה 1933. התשובות
-            פורסמו באתר{" "}
-            <ExtLink href="https://www.odata.org.il">מידע לעם</ExtLink> על ידי עמותת הצלחה, כל משרד
-            בנפרד, ומרוכזות בטבלה שלמטה.
+            ב-{formatDate(REQUEST_1933.date)} שלחה עמותת הצלחה בקשת חופש מידע אחת לכל משרדי הממשלה,
+            וביקשה את המסמכים שמראים מה כל משרד עשה כדי ליישם את החלטה 1933. התשובות פורסמו באתר{" "}
+            <ExtLink href="https://www.odata.org.il">מידע לעם</ExtLink>, כל משרד בנפרד, ומרוכזות
+            בטבלה שלמטה. זה נוסח הבקשה:
           </p>
+          <blockquote className="project1933-request">
+            <p>{REQUEST_1933.intro}</p>
+            <ol>
+              {REQUEST_1933.items.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ol>
+            <footer className="text-sm text-muted">
+              {REQUEST_1933.sender}. מקור:{" "}
+              <ExtLink href={REQUEST_1933.source_url}>{REQUEST_1933.source_label}</ExtLink>.
+            </footer>
+          </blockquote>
           <p>
             נאספו {RESPONSES_1933.length} תשובות של משרדי ממשלה.
             {analysed.length > 0 && (
               <>
                 {" "}
-                מתוכן נותחו {analysed.length}:{" "}
+                מתוכן סווגו {analysed.length}:{" "}
                 {(Object.keys(STATUS_LABEL) as Finding1933Status[])
                   .filter((s) => counts[s])
                   .map((s) => `${STATUS_LABEL[s]} — ${counts[s]}`)
@@ -114,6 +148,7 @@ export default function Project1933Page() {
               </>
             )}
           </p>
+          {analysed.length > 0 && <p>{summarySentence(counts, analysed.length)}</p>}
 
           <div className="table-scroll" style={{ overflowX: "auto" }}>
             <table className="table project1933-table">
@@ -152,6 +187,8 @@ export default function Project1933Page() {
                           <strong>{STATUS_LABEL[r.finding.status]}</strong>
                           {r.finding.summary ? ` — ${r.finding.summary}` : ""}
                         </>
+                      ) : r.findingNote ? (
+                        <span className="text-muted">{r.findingNote}</span>
                       ) : (
                         <span className="text-muted">טרם סוכם — המסמכים זמינים בקישור</span>
                       )}
