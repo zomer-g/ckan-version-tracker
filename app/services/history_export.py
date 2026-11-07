@@ -92,6 +92,10 @@ _GEOMETRY_UDTS = {"geometry", "geography"}
 
 KIND_CLOSED = "closed"
 KIND_FULL = "full"
+# A cold table fed by app/services/cold_ingest.py (a files-only dataset): which
+# rows, open in an earlier full part, a later version no longer carried, and
+# when. No rows of the table; history_query applies them to the full parts.
+KIND_CLOSURES = "closures"
 TIER_COLD = "cold"
 TIER_HOT = "hot"
 # A dataset may go cold on its own when it is paused or polled this rarely.
@@ -686,8 +690,14 @@ def _iso(v) -> str | None:
     return v.isoformat() if v is not None else None
 
 
+def data_parts(parts: list[dict]) -> list[dict]:
+    """The parts that hold rows of the table (every kind but closures)."""
+    return [p for p in parts if (p.get("kind") or KIND_CLOSED) != KIND_CLOSURES]
+
+
 def summarize(parts: list[dict]) -> dict:
     """The ``history`` block of /schema for a list of catalog rows."""
+    parts = data_parts(parts)
     mins = [p["last_seen_min"] for p in parts if p.get("last_seen_min")]
     maxs = [p["last_seen_max"] for p in parts if p.get("last_seen_max")]
     return {
@@ -738,6 +748,7 @@ def public_file(p: dict, missing: set[str]) -> dict:
         "last_seen_min": _iso(p.get("last_seen_min")),
         "last_seen_max": _iso(p.get("last_seen_max")),
         "deleted_from_sql": bool(p.get("deleted_from_sql")),
+        "kind": p.get("kind") or KIND_CLOSED,
         "missing": p["r2_key"] in missing,
     }
 
@@ -755,9 +766,11 @@ async def admin_summary(db) -> dict:
                                                "rows_in_r2": 0, "rows_deleted": 0,
                                                "bytes": 0, "tables": set()})
         d["parts"] += 1
-        d["rows_in_r2"] += int(p["rows"])
         d["bytes"] += int(p["bytes"])
         d["tables"].add(p["table_name"])
+        if (p.get("kind") or KIND_CLOSED) == KIND_CLOSURES:
+            continue
+        d["rows_in_r2"] += int(p["rows"])
         if p.get("deleted_from_sql"):
             d["rows_deleted"] += int(p["rows"])
     titles = {}
@@ -1546,7 +1559,7 @@ async def _set_deleted(part_ids: list, value: bool) -> None:
 
 def rehydrate_parts(parts: list[dict]) -> list[dict]:
     """The parts whose rows are ONLY in R2 (full or closed), in file order."""
-    return sorted((p for p in parts if p.get("deleted_from_sql")),
+    return sorted((p for p in data_parts(parts) if p.get("deleted_from_sql")),
                   key=lambda p: (_as_date(p["closed_month"]), int(p["part"]),
                                  p.get("kind") == KIND_FULL))
 
@@ -1667,7 +1680,10 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
     """COPY the rows that are only in R2 back into the (empty) table, verify
     count and hash against the catalog in the same transaction, and only after
     the commit mark the parts ``deleted_from_sql=false``."""
-    parts = rehydrate_parts(await _table_parts(table))
+    all_parts = await _table_parts(table)
+    parts = rehydrate_parts(all_parts)
+    closure_parts = [p for p in all_parts if p.get("deleted_from_sql")
+                     and p.get("kind") == KIND_CLOSURES]
     if not parts:
         return {"ok": True, "rows": 0, "parts": 0}
     side = table_side if table_side is not None else PgTable(table)
@@ -1682,6 +1698,7 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
             known = set(cols) | {FIRST_COL, LAST_COL} | (
                 {HASH_COL} if ident_col == HASH_COL else set())
             expected: list[str] = []
+            closed_at = await _read_closures(closure_parts, tmpdir)
             for p in parts:
                 path = os.path.join(tmpdir, "part.parquet")
                 if not await storage_client.download_to_file(p["r2_key"], path):
@@ -1696,6 +1713,10 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
                 names = list(t.column_names)
                 for batch in t.to_batches(max_chunksize=FETCH_BATCH):
                     data = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
+                    if closed_at:
+                        data[names.index(LAST_COL)] = apply_closures(
+                            data[names.index(HASH_COL)], data[names.index(FIRST_COL)],
+                            data[names.index(LAST_COL)], closed_at)
                     await side.copy(names, list(zip(*data)))
                 ids, _l = _read_idents(path, ident_col)
                 expected.extend(ids)
@@ -1705,7 +1726,7 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
                 raise RuntimeError(f"rows differ (loaded {sql['rows']}, catalog {len(expected)})")
             if sql["content_hash"] != content_hash(expected):
                 raise RuntimeError("content hash differs after the load")
-        await _set_deleted([p["id"] for p in parts], False)
+        await _set_deleted([p["id"] for p in parts + closure_parts], False)
         logger.info("history rehydrate: %s ← %d parts, %d rows", table, len(parts), len(expected))
         return {"ok": True, "rows": len(expected), "parts": len(parts)}
     except Exception as e:  # noqa: BLE001 — the transaction rolled back, catalog untouched
@@ -1714,6 +1735,38 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
         return {"ok": False, "error": err}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def apply_closures(hashes: list, firsts: list, lasts: list, closed_at: dict) -> list:
+    """``lasts`` with every open row that a closures part closed given its
+    closing moment. Keys are ``(row_hash text, first_seen as UTC)``. Pure."""
+    out = []
+    for h, f, l in zip(hashes, firsts, lasts):
+        if l is None and f is not None:
+            l = closed_at.get((str(h), _utc(f)), None)
+        out.append(l)
+    return out
+
+
+async def _read_closures(parts: list[dict], tmpdir: str) -> dict:
+    """``{(row_hash, first_seen): last_seen}`` from closures parts, each one
+    checked against its catalog row first (count and ident hash)."""
+    import pyarrow.parquet as pq
+
+    out: dict = {}
+    for p in parts:
+        path = os.path.join(tmpdir, "closures.parquet")
+        if not await storage_client.download_to_file(p["r2_key"], path):
+            raise RuntimeError(f"could not read {p['r2_key']} from R2")
+        back = content_hash_of_parquet(path, HASH_COL)
+        if back["rows"] != int(p["rows"]) or back["content_hash"] != p["content_hash"]:
+            raise RuntimeError(f"{p['r2_key']} no longer matches its catalog row")
+        t = pq.read_table(path, columns=[HASH_COL, FIRST_COL, LAST_COL])
+        for h, f, l in zip(*(t.column(i).to_pylist() for i in range(3))):
+            key = (str(h), _utc(f))
+            out[key] = min(out[key], _utc(l)) if key in out else _utc(l)
+        os.remove(path)
+    return out
 
 
 # ── dataset-level moves (in-process job, one at a time) ──────────────────────
@@ -1772,6 +1825,19 @@ async def check_cold_move(dataset_id, *, confirm_rehydrate: bool) -> None:
         raise ColdRefused(why)
 
 
+async def _existing_tables(names: list[str]) -> list[str]:
+    """Those of ``names`` that are tables in the append DB, in order."""
+    if not names:
+        return []
+    pool = await append_store.get_pool()
+    async with pool.acquire() as conn:
+        found = {r["relname"] for r in await conn.fetch(
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = ANY($1::text[])",
+            list(names))}
+    return [n for n in names if n in found]
+
+
 async def move_to_cold(dataset_id, *, confirm_rehydrate: bool = False,
                        actor: str | None = None) -> dict:
     """Every NEON table of the dataset to full parts. The tier is set FIRST, so
@@ -1791,7 +1857,7 @@ async def move_to_cold(dataset_id, *, confirm_rehydrate: bool = False,
             why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate)
             if why:
                 raise ColdRefused(why)
-            tables = [t["table"] for t in await append_tables.resolve_tables(ds, db)]
+            tables = await _existing_tables(await append_tables.resolve_all_tables(ds, db))
             cfg = dict(ds.scraper_config or {})
             cfg["history_tier"] = TIER_COLD
             if confirm_rehydrate:
@@ -1886,6 +1952,12 @@ async def cold_poll_gate(ds) -> str | None:
     """Before any load into ``ds``: None when it may load (hot, or rehydrated
     just now because the admin promised it), else the refusal message."""
     if history_tier_of(ds) != TIER_COLD:
+        return None
+    from app.services.append_tables import is_append_archive
+
+    if not is_append_archive(ds):
+        # Files only: nothing is loaded into the empty tables, so nothing can
+        # double. New versions reach the cold tier through cold_ingest.
         return None
     if not rehydrate_promised(ds):
         return ("המאגר הועבר לשכבה הקרה (R2) והטבלאות שלו ריקות ב-SQL; טעינה הייתה מכפילה "

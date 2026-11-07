@@ -289,7 +289,8 @@ def build_history_view(table: str, parts: list[dict], hot_cols: list[str],
                        parquet_cols: list[str] | None = None, *, schema: str = "public",
                        url_of: Callable[[str], str] | None = None,
                        validity: str = "", cold: bool = False,
-                       ident_col: str | None = None) -> str | None:
+                       ident_col: str | None = None,
+                       closures: list[str] | None = None) -> str | None:
     """``CREATE VIEW`` uniting the hot table with its deleted parts, or None.
 
     Columns: the hot table's, then any only the parts have; a column one side
@@ -301,7 +302,15 @@ def build_history_view(table: str, parts: list[dict], hot_cols: list[str],
     reads the parts alone, no hot side. A part flagged ``partial`` (a closed
     part whose rows the window is deleting, still ``deleted_from_sql=false``)
     joins as its own branch WITHOUT the rows still in SQL: an anti-join on
-    ``(ident_col, last_seen)`` against the hot table, so each row shows once."""
+    ``(ident_col, last_seen)`` against the hot table, so each row shows once.
+
+    ``closures`` (cold tables fed by cold_ingest, files-only datasets): URLs of
+    ``closures`` parts, each row ``(row_hash, first_seen, last_seen)`` saying
+    that the row which opened at ``first_seen`` stopped being published at
+    ``last_seen``. A full part is never rewritten, so a row that a later
+    version no longer carried keeps ``last_seen`` NULL in its file; the view
+    takes the closing moment from the closures instead, BEFORE ``validity``, so
+    ``current`` and ``as_of`` see the row closed."""
     if not parts:
         return None
     url_of = url_of or _part_url
@@ -331,6 +340,12 @@ def build_history_view(table: str, parts: list[dict], hot_cols: list[str],
             f"(SELECT 1 FROM {hot_ref} h WHERE CAST(h.{i} AS VARCHAR) = CAST(c.{i} AS VARCHAR) "
             f'AND h."last_seen" = c."last_seen")')
     body = "\nUNION ALL\n".join(branches)
+    if closures:
+        h, f, lc = _qi(HASH_COL), _qi(FIRST_COL), _qi(LAST_COL)
+        body = (f"SELECT _d.* REPLACE (COALESCE(_d.{lc}, _c._cl) AS {lc}) FROM (\n{body}\n) _d "
+                f"LEFT JOIN (SELECT CAST({h} AS VARCHAR) AS _ch, CAST({f} AS TIMESTAMPTZ) AS _cf, "
+                f"MIN(CAST({lc} AS TIMESTAMPTZ)) AS _cl FROM {files(list(closures))} "
+                f"GROUP BY 1, 2) _c ON _c._ch = _d.{h} AND _c._cf = _d.{f}")
     if validity:
         body = f"SELECT * FROM (\n{body}\n) _h WHERE {validity}"
     return f"CREATE OR REPLACE VIEW {_qi(schema)}.{_qi(table)} AS\n{body}"
@@ -442,13 +457,20 @@ def _part_url(key: str) -> str:
     return f"s3://{settings.s3_bucket}/{key}"
 
 
-async def _catalog_parts(table: str) -> list[dict]:
-    """Every catalog row of ``table``, each with its dataset's ``window_days``."""
-    return (await _catalog_parts_many([table])).get(table, [])
+async def _catalog_parts(table: str, *, closures: bool = False) -> list[dict]:
+    """Every catalog row of ``table``, each with its dataset's ``window_days``
+    (rows of data, or with ``closures`` the closures parts alone)."""
+    return (await _catalog_parts_many([table], closures=closures)).get(table, [])
 
 
-async def _catalog_parts_many(tables: list[str]) -> dict[str, list[dict]]:
-    """``{table: catalog rows}`` for several tables in one read."""
+async def _catalog_parts_many(tables: list[str], *,
+                              closures: bool = False) -> dict[str, list[dict]]:
+    """``{table: catalog rows}`` for several tables in one read.
+
+    Rows of DATA only by default: a ``closures`` part (history_export.
+    KIND_CLOSURES) holds no rows of the table, only the moments some of them
+    closed, and every reader that unions parts as rows would count it as rows.
+    ``closures=True`` returns those parts alone (cold_closures_for)."""
     from sqlalchemy import select
 
     from app.database import async_session
@@ -463,6 +485,8 @@ async def _catalog_parts_many(tables: list[str]) -> dict[str, list[dict]]:
             .where(HistoryPart.table_name.in_(list(tables))))).all()
     out: dict[str, list[dict]] = {}
     for p, cfg in rows:
+        if ((p.kind or history_export.KIND_CLOSED) == history_export.KIND_CLOSURES) != closures:
+            continue
         out.setdefault(p.table_name, []).append({
             **history_export._part_dict(p),
             "window_days": history_export.window_days_of(
@@ -494,6 +518,27 @@ async def cold_parts_for(table: str) -> list[dict]:
         logger.debug("history query: catalog read failed for %s", table, exc_info=True)
         return []
     return only_in_r2(parts, datetime.now(UTC))
+
+
+async def cold_closures_for(table: str) -> list[dict]:
+    """The ``closures`` parts of ``table`` (see build_history_view), in
+    (month, part) order. Never raises: an unreadable catalog answers none."""
+    try:
+        parts = await _catalog_parts(table, closures=True)
+    except Exception:  # noqa: BLE001
+        logger.debug("history query: closures read failed for %s", table, exc_info=True)
+        return []
+    from app.services.history_export import KIND_CLOSURES
+
+    return sorted((p for p in parts if p.get("deleted_from_sql")
+                   and p.get("kind") == KIND_CLOSURES),
+                  key=lambda p: (_as_date(p["closed_month"]), int(p["part"])))
+
+
+def spec_urls(spec: dict) -> list[str]:
+    """Every R2 object a spec reads: its parts and its closures."""
+    return ([p["url"] for p in spec.get("parts") or []]
+            + [c["url"] for c in spec.get("closures") or []])
 
 
 def only_in_r2(parts: list[dict], now: datetime) -> list[dict]:
@@ -789,9 +834,9 @@ def _prepare_views(conn, backend, specs: list[dict], *, as_of, current,
                    search_path: str | None) -> dict[str, list[tuple[str, str]]]:
     """Attach the hot side and create one view per table. Returns the view
     columns ``{table: [(name, type)]}``. Leaves the connection unlocked."""
-    if any(p["url"].startswith("s3://") for s in specs for p in s["parts"]):
+    if any(u.startswith("s3://") for s in specs for u in spec_urls(s)):
         _setup_r2(conn)
-    _warm_metadata(conn, [p["url"] for s in specs for p in s["parts"]])
+    _warm_metadata(conn, [u for s in specs for u in spec_urls(s)])
     backend.setup(conn)
     created: list[str] = []
     out: dict[str, list[tuple[str, str]]] = {}
@@ -819,7 +864,8 @@ def _prepare_views(conn, backend, specs: list[dict], *, as_of, current,
             by_key = {p["r2_key"]: p["url"] for p in parts}
             conn.execute(build_history_view(table, parts, hot_cols, pq_cols, schema=schema,
                                             url_of=by_key.__getitem__, validity=cond,
-                                            cold=cold, ident_col=spec.get("ident")))
+                                            cold=cold, ident_col=spec.get("ident"),
+                                            closures=[c["url"] for c in spec.get("closures") or []]))
         else:
             sel = "*" if not (_EXCLUDE & set(hot_cols)) else (
                 f"* EXCLUDE ({', '.join(_qi(c) for c in hot_cols if c in _EXCLUDE)})")
@@ -845,7 +891,7 @@ def _execute(conn, backend, specs: list[dict], sql, params: list, max_rows: int,
     builders, a function of the view columns returning ``(statement, params)``."""
     views = _prepare_views(conn, backend, specs, as_of=as_of, current=current,
                            search_path=search_path)
-    _lock(conn, [p["url"] for s in specs for p in s["parts"]])
+    _lock(conn, [u for s in specs for u in spec_urls(s)])
     if callable(sql):
         sql, params = sql(views)
     wrapped = f"SELECT * FROM (\n{sql}\n) _q LIMIT {int(max_rows) + 1}"
@@ -876,8 +922,11 @@ def _execute(conn, backend, specs: list[dict], sql, params: list, max_rows: int,
 async def _table_spec(schema: str, name: str) -> dict:
     parts = await cold_parts_for(name) if schema == "public" else []
     ident = await _ident_for(name) if any(p.get("partial") for p in parts) else None
-    return {"schema": schema, "table": name, "cold": is_cold_spec(parts), "ident": ident,
-            "parts": [{**p, "url": _part_url(p["r2_key"])} for p in parts]}
+    cold = is_cold_spec(parts)
+    closures = await cold_closures_for(name) if cold else []
+    return {"schema": schema, "table": name, "cold": cold, "ident": ident,
+            "parts": [{**p, "url": _part_url(p["r2_key"])} for p in parts],
+            "closures": [{**c, "url": _part_url(c["r2_key"])} for c in closures]}
 
 
 async def _specs(tables: Iterable) -> list[dict]:
