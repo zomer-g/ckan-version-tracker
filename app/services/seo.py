@@ -226,7 +226,7 @@ _SPA_ROUTES = tuple(re.compile(p) for p in (
     r"^/cbs/feedback$",
     r"^/data/(explore|guide|normalize)$",
     r"^/knesset/guide$",
-    r"^/projects/(questions|odata|ocal|ocoi|nadlan|deals|prices|1933)$",
+    r"^/projects/(questions|odata|ocal|ocoi|nadlan|deals|prices|abroad|1933)$",
     r"^/projects/1933/(decision|request)$",
     r"^/rationale/[^/]+$",
     r"^/admin(/.*)?$",
