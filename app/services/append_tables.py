@@ -48,6 +48,31 @@ async def resolve_tables(ds, db: AsyncSession) -> list[dict]:
     return append_store.tables_from_mappings(ds, None)
 
 
+async def resolve_all_tables(ds, db: AsyncSession) -> list[str]:
+    """Every table any version of ``ds`` put rows in, newest version first.
+
+    resolve_tables answers "where are the rows NOW": the latest version with a
+    mapping. A dataset whose layout changed (one resource, then several: the
+    worker's neon_per_resource ratchet) left its earlier tables behind, still
+    full, and nothing else names them. Moving a dataset to the cold tier has to
+    move those too, or the SQL it was meant to free stays taken."""
+    rows = (await db.execute(
+        select(VersionIndex.resource_mappings)
+        .where(VersionIndex.tracked_dataset_id == ds.id)
+        .order_by(VersionIndex.version_number.desc())
+    )).all()
+    out: list[str] = []
+    for (mappings,) in rows:
+        if mappings and (mappings.get("append_table") or mappings.get("_append_tables")):
+            for t in append_store.tables_from_mappings(ds, mappings):
+                if t["table"] not in out:
+                    out.append(t["table"])
+    fallback = append_store.table_name(ds)
+    if fallback not in out:
+        out.append(fallback)
+    return out
+
+
 def is_append_archive(ds) -> bool:
     """Whether this dataset accumulates rows in the append DB at all — a classic
     ``append_only`` dataset, or a full-snapshot one opted into a NEON archive."""

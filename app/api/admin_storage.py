@@ -636,6 +636,38 @@ async def history_cold(dataset_id: str, confirm_rehydrate: bool = Query(False),
     return {"started": True, "dataset_id": dataset_id, "confirm_rehydrate": confirm_rehydrate}
 
 
+@router.post("/history/cold-ingest/{dataset_id}")
+async def history_cold_ingest(dataset_id: str, version: int = Query(..., ge=1),
+                              close: bool = Query(False),
+                              user: User = Depends(get_admin_user)):
+    """Carry one version of a files-only dataset in the cold tier into its
+    Parquet history (app/services/cold_ingest.py): what the push does on its
+    own, for a version that arrived before the switch or whose ingest failed.
+    Safe to repeat: rows already open write nothing. ``close`` closes the rows
+    the version did not carry (only for a full pass). Background job; the
+    activity log has the result."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.tracked_dataset import TrackedDataset
+    from app.services import cold_ingest
+    try:
+        ds_uuid = uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad dataset id")
+    async with async_session() as db:
+        ds = (await db.execute(select(TrackedDataset).where(TrackedDataset.id == ds_uuid))
+              ).scalar_one_or_none()
+    if ds is None:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    if not cold_ingest.should_ingest(ds):
+        raise HTTPException(status_code=409, detail=(
+            "רק מאגר בשכבה הקרה שתוכנית האחסון שלו קבצים בלבד (r2, בלי SQL)"))
+    cold_ingest.schedule(ds_uuid, version, close=close,
+                         actor=getattr(user, "email", None) or "admin")
+    return {"started": True, "dataset_id": dataset_id, "version": version, "close": close}
+
+
 @router.post("/history/compact")
 async def history_compact(_: User = Depends(get_admin_user)):
     """TRUNCATE every cold-tier table that is already empty in SQL, so the

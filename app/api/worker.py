@@ -1274,19 +1274,16 @@ async def _neon_stream_load_file(
             # Clip + dedup on BYTE length: Postgres truncates identifiers at 63
             # bytes, so two long Hebrew headers sharing a prefix would otherwise
             # collapse into one column and fail the CREATE TABLE.
-            safe = append_store.safe_column_names(header)
             # Blank-headed columns stay dropped (they were before this change);
             # materialising them as col_N would try to insert into a column that
-            # existing tables don't have.
-            keep = [i for i, raw in enumerate(header)
-                    if (raw or "").strip() and safe[i] != "_id"]
-            cols = [safe[i] for i in keep]
+            # existing tables don't have. Shared with cold_ingest, which must
+            # read the file the same way to compute the same row identity.
+            safe, keep, cols = append_store.csv_stream_layout(header)
             if not cols:
                 return 0
             BATCH = min(BATCH, append_store.chunk_size_for(len(cols), True))
             for row in reader:
-                batch.append({safe[i]: (row[i] if i < len(row) else "") or ""
-                              for i in keep})
+                batch.append(append_store.csv_stream_row(row, safe, keep))
                 if len(batch) >= BATCH:
                     if not ensured:
                         await _ensure()
@@ -2955,6 +2952,25 @@ async def push_version(
             _pq.add_done_callback(_NEON_BG_TASKS.discard)
         except Exception as e:  # noqa: BLE001
             logger.warning("parquet: could not schedule rebuild for %s: %s", ds.id, e)
+
+    # A files-only dataset in the cold tier keeps its row history as Parquet:
+    # this version's CSVs go there (app/services/cold_ingest.py), in the
+    # background, after the version is committed. Closing follows the SQL
+    # loader's rule for the same push.
+    try:
+        from app.services import cold_ingest
+        if cold_ingest.should_ingest(ds):
+            cold_ingest.schedule(
+                ds.id, next_version,
+                close=append_store.should_close(
+                    ds, partial_run=body.partial_run,
+                    completed=not (body.more_batches or body.consolidate_dedup_key
+                                   or body.skip_version)),
+                allow_shrink=bool((ds.scraper_config or {}).get("allow_shrink")),
+                declared=append_store.closes_rows_setting(ds) is True,
+                actor="worker")
+    except Exception as e:  # noqa: BLE001 — the version is in; this is its history copy
+        logger.warning("cold ingest: could not schedule %s v%s: %s", ds.id, next_version, e)
 
     # GovMap's deals layer lands as Parquet only; load it into the table the
     # /deals page searches (app/services/govmap_deals.py). In the background —

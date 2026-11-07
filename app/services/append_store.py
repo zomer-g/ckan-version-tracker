@@ -336,6 +336,27 @@ def safe_column_names(headers: list[str]) -> list[str]:
     return out
 
 
+def csv_stream_layout(header: list[str]) -> tuple[list[str], list[int], list[str]]:
+    """``(safe, keep, cols)`` for a streamed CSV's header row.
+
+    ``safe`` is every header made a legal column (safe_column_names), ``keep``
+    the positions loaded (blank-headed columns and ``_id`` are dropped), and
+    ``cols`` the loaded columns in order. Shared by the SQL stream loader
+    (api/worker._neon_stream_load_file) and the cold-tier ingest
+    (cold_ingest): the row identity is a hash of exactly these values, so the
+    two must read a file the same way or an unchanged row looks new."""
+    safe = safe_column_names(header)
+    keep = [i for i, raw in enumerate(header)
+            if (raw or "").strip() and safe[i] != "_id"]
+    return safe, keep, [safe[i] for i in keep]
+
+
+def csv_stream_row(row: list[str], safe: list[str], keep: list[int]) -> dict:
+    """One streamed CSV row as the loader stores it: text, a missing or empty
+    cell is ``""``."""
+    return {safe[i]: (row[i] if i < len(row) else "") or "" for i in keep}
+
+
 def _index_name(table: str, suffix: str) -> str:
     """Collision-safe index name ≤63 chars (Postgres identifier limit).
 
