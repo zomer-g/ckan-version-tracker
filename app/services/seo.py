@@ -69,6 +69,13 @@ class PageMeta:
     jsonld: list[dict] = field(default_factory=list)
     #: Sent as `noindex` for pages that must never rank (admin, login).
     noindex: bool = False
+    #: With noindex: also tell crawlers not to follow the page's links (admin).
+    nofollow: bool = False
+    #: Server-rendered content placed inside <div id="root"> — see render().
+    body_html: str = ""
+    #: HTTP status. 404 for a route the SPA does not have, or a detail page
+    #: whose record does not exist — never for a lookup that merely failed.
+    status: int = 200
 
 
 # ── static routes ───────────────────────────────────────────────────────────
@@ -205,6 +212,38 @@ _STATIC: dict[str, PageMeta] = {
 # Pages that must never appear in a search result.
 _NOINDEX_PREFIXES = ("/admin", "/cbs/feedback")
 
+# Every path the SPA can render (frontend/src/App.tsx). Anything else is a 404:
+# serving the shell with a 200 told Google that every typo and every dead link
+# was a real, indexable page ("soft 404"). The shell still goes out with the
+# 404, so a person who mistypes a URL sees the app, not a bare error.
+# KEEP IN SYNC with App.tsx — a route missing here is served with a 404 status
+# (it still renders in a browser, but will not be indexed).
+_SPA_ROUTES = tuple(re.compile(p) for p in (
+    r"^/$",
+    r"^/(about|lookup|organizations|tags|sources|cbs|data|knesset|api|growth|security|rationale)$",
+    r"^/direct(/.*)?$",
+    r"^/(versions|archive|organizations|tags|sources)/[^/]+$",
+    r"^/cbs/feedback$",
+    r"^/data/(explore|guide|normalize)$",
+    r"^/knesset/guide$",
+    r"^/projects/(questions|odata|ocal|ocoi|nadlan|deals|prices|abroad|1933)$",
+    r"^/projects/1933/(decision|request)$",
+    r"^/rationale/[^/]+$",
+    r"^/admin(/.*)?$",
+))
+
+#: Returned by _lookup_dynamic for a detail route whose record does not exist.
+_NOT_FOUND = object()
+
+#: A tag with fewer public datasets than this is a near-duplicate of the one
+#: dataset page it lists: kept out of the sitemap and served noindex,follow.
+#: 2,159 of 2,377 tags had exactly one dataset when this was set.
+MIN_TAG_DATASETS = 3
+
+
+def is_spa_route(path: str) -> bool:
+    return any(p.match(path) for p in _SPA_ROUTES)
+
 
 # ── per-route metadata ──────────────────────────────────────────────────────
 _cache: dict[str, tuple[float, PageMeta]] = {}
@@ -223,29 +262,124 @@ def _clean(value: str | None, limit: int = 300) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-async def _lookup_dynamic(path: str) -> PageMeta | None:
-    """Resolve a detail route against the database.
+# ── server-rendered body ────────────────────────────────────────────────────
+# The head alone was not enough: the body a crawler received was an empty
+# <div id="root">, with no words and no links. What follows renders real, plain
+# HTML for the pages that carry the catalogue — dataset, organization, tag and
+# the hubs that link to them — inside #root. React's createRoot replaces it on
+# mount, so a person sees it only for the moment before the bundle runs, and
+# everyone (crawler or not) gets the same bytes: no cloaking.
 
-    Returns None for anything unrecognised, which the caller treats as "use the
-    site default" rather than as an error.
+_ID_CARD_TIMEOUT = 3.0  # seconds; the append DB being slow costs the card, not the page
+_MAX_LIST = 500
+
+_BODY_STYLE = (
+    "<style>"
+    "#ssr{max-width:60rem;margin:1.5rem auto;padding:0 1rem;"
+    "font-family:Heebo,Rubik,system-ui,sans-serif;line-height:1.6}"
+    "#ssr nav a{margin-inline-end:1rem}"
+    "#ssr .ai-card{border:2px dashed #b45309;background:#fffbeb;color:#422006;"
+    "border-radius:8px;padding:1rem 1.25rem;margin:1.5rem 0}"
+    "#ssr .ai-badge{display:block;background:#b45309;color:#fff;font-weight:700;"
+    "padding:.4rem .75rem;border-radius:6px;margin-bottom:.75rem}"
+    "</style>"
+)
+
+#: The label every LLM-written block carries. Prominent and explicit on purpose:
+#: the ID card must never read as part of the dataset or the publisher's words.
+AI_LABEL_HE = (
+    "🤖 תוכן שנוצר אוטומטית על ידי מודל שפה (AI) — אינו חלק מהמאגר ואינו טקסט "
+    "של הגוף המפרסם. נכתב מתוך דגימה של שורות המאגר ועלול להכיל טעויות."
+)
+
+
+def _e(text) -> str:
+    return html.escape(str(text if text is not None else ""), quote=True)
+
+
+def _a(href: str, text: str) -> str:
+    return f'<a href="{_e(href)}">{_e(text)}</a>'
+
+
+def _nav() -> str:
+    links = [
+        ("/", "דף הבית"), ("/organizations", "ארגונים"), ("/tags", "תגיות"),
+        ("/sources", "מקורות"), ("/data", "ממשק SQL"), ("/knesset", "הכנסת"),
+        ("/projects/questions", "חיפוש רוחבי"), ("/api", "API"), ("/about", "אודות"),
+    ]
+    return '<nav aria-label="ניווט ראשי">' + "".join(_a(h, t) for h, t in links) + "</nav>"
+
+
+def _wrap(inner: str) -> str:
+    return f'{_BODY_STYLE}<div id="ssr" dir="rtl" lang="he">{_nav()}<main>{inner}</main></div>'
+
+
+def _link_list(items: list[tuple[str, str]]) -> str:
+    if not items:
+        return ""
+    return "<ul>" + "".join(f"<li>{_a(h, t)}</li>" for h, t in items) + "</ul>"
+
+
+def id_card_html(cards: list[dict]) -> str:
+    """The LLM-written ID card, inside an unmistakable AI frame."""
+    if not cards:
+        return ""
+    out = (
+        '<section class="ai-card" aria-label="תוכן שנוצר על ידי מודל שפה" '
+        'data-generated-by="llm">'
+        f'<strong class="ai-badge">{_e(AI_LABEL_HE)}</strong>'
+        "<h2>תעודת זהות של המאגר (נוצרה על ידי מודל שפה)</h2>"
+    )
+    for card in cards:
+        if len(cards) > 1 and card.get("title"):
+            out += f"<h3>{_e(card['title'])}</h3>"
+        out += f"<p>{_e(card['summary_he'])}</p>"
+        if card.get("tags"):
+            out += "<p>נושאים (לפי המודל): " + _e(" · ".join(card["tags"])) + "</p>"
+        if card.get("columns"):
+            out += "<dl>" + "".join(
+                f"<dt>{_e(c['name'])}</dt><dd>{_e(c['description_he'])}</dd>"
+                for c in card["columns"]
+            ) + "</dl>"
+    return out + "</section>"
+
+
+def _date(d) -> str:
+    return d.date().isoformat() if d else ""
+
+
+async def _lookup_dynamic(path: str):
+    """Resolve a detail route (or a hub page) against the database.
+
+    Returns a PageMeta, ``_NOT_FOUND`` for a detail route whose record does not
+    exist, or None for a path this function does not handle.
     """
+    from sqlalchemy import desc, func
+
     from app.database import async_session
     from app.models.organization import Organization
-    from app.models.tag import Tag
+    from app.models.tag import Tag, dataset_tags
     from app.models.tracked_dataset import TrackedDataset
+    from app.models.version_index import VersionIndex
 
     parts = [p for p in path.split("/") if p]
+    public = (
+        TrackedDataset.status.in_(("active", "pending")),
+        TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
+    )
 
     async with async_session() as db:
         # /versions/<uuid> and /archive/<uuid> — a tracked dataset
-        if len(parts) == 2 and parts[0] in ("versions", "archive") and _UUID_RE.match(parts[1]):
+        if len(parts) == 2 and parts[0] in ("versions", "archive"):
+            if not _UUID_RE.match(parts[1]):
+                return _NOT_FOUND
             ds = (
                 await db.execute(
                     select(TrackedDataset).where(TrackedDataset.id == uuid.UUID(parts[1]))
                 )
             ).scalar_one_or_none()
             if ds is None or ds.status not in ("active", "pending"):
-                return None
+                return _NOT_FOUND
             # TrackedDataset.organization holds the SOURCE's slug — CKAN gives
             # us "interior_affairs", which is what a search result would have
             # shown. The Organization row carries the name a person recognises,
@@ -261,17 +395,83 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
                 ).first()
                 if row and (row[0] or row[1]):
                     org = row[0] or row[1]
+
+            versions = (
+                await db.execute(
+                    select(VersionIndex.version_number, VersionIndex.detected_at)
+                    .where(VersionIndex.tracked_dataset_id == ds.id)
+                    .order_by(desc(VersionIndex.version_number))
+                )
+            ).all()
+            tags = (
+                await db.execute(
+                    select(Tag.id, Tag.name)
+                    .join(dataset_tags, dataset_tags.c.tag_id == Tag.id)
+                    .where(dataset_tags.c.dataset_id == ds.id)
+                    .order_by(Tag.name)
+                )
+            ).all()
+            siblings = []
+            if ds.organization_id:
+                siblings = (
+                    await db.execute(
+                        select(TrackedDataset.id, TrackedDataset.title)
+                        .where(
+                            TrackedDataset.organization_id == ds.organization_id,
+                            TrackedDataset.id != ds.id,
+                            *public,
+                        )
+                        .order_by(TrackedDataset.title)
+                        .limit(30)
+                    )
+                ).all()
+
+            cards: list[dict] = []
+            try:
+                from app.services import table_profiler
+                cards = await asyncio.wait_for(
+                    table_profiler.dataset_id_cards(db, ds), _ID_CARD_TIMEOUT
+                )
+            except Exception:  # noqa: BLE001 — the card is optional
+                logger.info("SEO: no ID card for %s", ds.id, exc_info=True)
+
             what = "ארכיון מצטבר" if parts[0] == "archive" else "היסטוריית גרסאות"
-            desc = (
+            n_versions = len(versions)
+            desc_text = (
                 f"{what} של המאגר «{_clean(ds.title, 120)}»"
                 + (f" מאת {_clean(org, 80)}" if org else "")
+                + (f" — {n_versions} גרסאות שמורות" if n_versions > 1 else "")
                 + ". גרסאות לעם שומר כל שינוי במאגר כדי שאפשר יהיה להשוות בין גרסאות ולראות מה נמחק."
             )
+
+            inner = f"<h1>{_e(ds.title)}</h1><p>{_e(desc_text)}</p><ul>"
+            if org:
+                label = _a(f"/organizations/{ds.organization_id}", org) if ds.organization_id else _e(org)
+                inner += f"<li>גוף מפרסם: {label}</li>"
+            source = _source_url(ds)
+            if source:
+                inner += f'<li>המקור: <a href="{_e(source)}" rel="nofollow">{_e(source)}</a></li>'
+            if ds.last_polled_at:
+                inner += f"<li>נבדק לאחרונה: {_e(_date(ds.last_polled_at))}</li>"
+            inner += f"<li>גרסאות שמורות: {n_versions}</li></ul>"
+            if versions:
+                inner += "<h2>גרסאות אחרונות</h2><ul>" + "".join(
+                    f"<li>גרסה {v} — {_e(_date(at))}</li>" for v, at in versions[:10]
+                ) + "</ul>"
+            if tags:
+                inner += "<h2>תגיות</h2>" + _link_list([(f"/tags/{i}", n) for i, n in tags])
+            inner += id_card_html(cards)
+            if siblings:
+                inner += f"<h2>מאגרים נוספים של {_e(org)}</h2>" + _link_list(
+                    [(f"/versions/{i}", t) for i, t in siblings]
+                )
+
             return PageMeta(
                 title=_clean(ds.title, 110),
-                description=_clean(desc),
+                description=_clean(desc_text),
                 canonical_path=f"/{parts[0]}/{ds.id}",
                 jsonld=[_dataset_jsonld(ds, org)],
+                body_html=_wrap(inner),
             )
 
         # /organizations/<id>
@@ -282,14 +482,32 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
                 )
             ).scalar_one_or_none() if _UUID_RE.match(parts[1]) else None
             if org is None:
-                return None
+                return _NOT_FOUND
+            name = org.title or org.name
+            rows = (
+                await db.execute(
+                    select(TrackedDataset.id, TrackedDataset.title)
+                    .where(TrackedDataset.organization_id == org.id, *public)
+                    .order_by(TrackedDataset.title)
+                    .limit(_MAX_LIST)
+                )
+            ).all()
+            inner = f"<h1>{_e(name)}</h1>"
+            if org.description:
+                inner += f"<p>{_e(_clean(org.description, 1000))}</p>"
+            inner += f"<h2>מאגרי המידע במעקב ({len(rows)})</h2>" + _link_list(
+                [(f"/versions/{i}", t) for i, t in rows]
+            )
             return PageMeta(
-                title=_clean(org.title or org.name, 110),
+                title=_clean(name, 110),
                 description=_clean(
-                    f"מאגרי המידע של {_clean(org.title or org.name, 90)} שנמצאים במעקב "
+                    f"{len(rows)} מאגרי המידע של {_clean(name, 90)} שנמצאים במעקב "
                     "גרסאות לעם, עם היסטוריית הגרסאות של כל אחד."
                 ),
                 canonical_path=f"/organizations/{org.id}",
+                # An organization with nothing tracked is an empty page.
+                noindex=not rows,
+                body_html=_wrap(inner),
             )
 
         # /tags/<id>
@@ -298,14 +516,84 @@ async def _lookup_dynamic(path: str) -> PageMeta | None:
                 await db.execute(select(Tag).where(Tag.id == uuid.UUID(parts[1])))
             ).scalar_one_or_none() if _UUID_RE.match(parts[1]) else None
             if tag is None:
-                return None
+                return _NOT_FOUND
+            rows = (
+                await db.execute(
+                    select(TrackedDataset.id, TrackedDataset.title)
+                    .join(dataset_tags, dataset_tags.c.dataset_id == TrackedDataset.id)
+                    .where(dataset_tags.c.tag_id == tag.id, *public)
+                    .order_by(TrackedDataset.title)
+                    .limit(_MAX_LIST)
+                )
+            ).all()
+            inner = f"<h1>{_e(tag.name)}</h1>"
+            if tag.description:
+                inner += f"<p>{_e(_clean(tag.description, 1000))}</p>"
+            inner += f"<h2>מאגרי מידע בנושא ({len(rows)})</h2>" + _link_list(
+                [(f"/versions/{i}", t) for i, t in rows]
+            )
             return PageMeta(
                 title=_clean(tag.name, 110),
                 description=_clean(
                     f"מאגרי מידע ממשלתיים בנושא {_clean(tag.name, 90)} — במעקב גרסאות לעם."
                 ),
                 canonical_path=f"/tags/{tag.id}",
+                # A one- or two-dataset tag duplicates the dataset page it
+                # lists. Keep it out of the index, but let the links be followed.
+                noindex=len(rows) < MIN_TAG_DATASETS,
+                body_html=_wrap(inner),
             )
+
+        # Hubs: the static pages that link into the catalogue. Their head is
+        # in _STATIC; only the body is composed here.
+        if path in ("/", "/organizations", "/tags"):
+            base = _STATIC[path]
+            count = func.count(TrackedDataset.id)
+            if path == "/tags":
+                rows = (
+                    await db.execute(
+                        select(Tag.id, Tag.name, count)
+                        .join(dataset_tags, dataset_tags.c.tag_id == Tag.id)
+                        .join(TrackedDataset, TrackedDataset.id == dataset_tags.c.dataset_id)
+                        .where(*public)
+                        .group_by(Tag.id, Tag.name)
+                        .having(count >= MIN_TAG_DATASETS)
+                        .order_by(Tag.name)
+                    )
+                ).all()
+                inner = f"<h1>{_e(base.title)}</h1><p>{_e(base.description)}</p>" + _link_list(
+                    [(f"/tags/{i}", f"{n} ({c})") for i, n, c in rows]
+                )
+            else:
+                orgs = (
+                    await db.execute(
+                        select(Organization.id, Organization.title, count)
+                        .join(TrackedDataset, TrackedDataset.organization_id == Organization.id)
+                        .where(*public)
+                        .group_by(Organization.id, Organization.title)
+                        .order_by(count.desc())
+                    )
+                ).all()
+                org_links = [(f"/organizations/{i}", f"{t} ({c})") for i, t, c in orgs]
+                if path == "/organizations":
+                    inner = f"<h1>{_e(base.title)}</h1><p>{_e(base.description)}</p>" + _link_list(org_links)
+                else:
+                    recent = (
+                        await db.execute(
+                            select(TrackedDataset.id, TrackedDataset.title)
+                            .where(*public)
+                            .order_by(desc(TrackedDataset.created_at))
+                            .limit(60)
+                        )
+                    ).all()
+                    inner = (
+                        f"<h1>{_e(SITE_NAME)} — {_e(base.title)}</h1><p>{_e(base.description)}</p>"
+                        "<h2>מאגרים שנוספו לאחרונה</h2>"
+                        + _link_list([(f"/versions/{i}", t) for i, t in recent])
+                        + "<h2>לפי גוף מפרסם</h2>" + _link_list(org_links)
+                    )
+            from dataclasses import replace
+            return replace(base, body_html=_wrap(inner))
 
     # /sources/<slug> — the registry lives in the worker manifest, not the DB,
     # so the slug itself is the best title available here without a round trip.
@@ -395,14 +683,17 @@ def _website_jsonld() -> dict:
 
 
 async def meta_for(path: str) -> PageMeta:
-    """Metadata for one SPA route. Never raises."""
+    """Metadata (and, where there is any, the body) for one route. Never raises."""
     path = (path or "/").rstrip("/") or "/"
 
     if any(path.startswith(p) for p in _NOINDEX_PREFIXES):
-        return PageMeta(title="ניהול", canonical_path=path, noindex=True)
+        return PageMeta(title="ניהול", canonical_path=path, noindex=True, nofollow=True)
+
+    if not is_spa_route(path):
+        return _not_found(path)
 
     static = _STATIC.get(path)
-    if static is not None:
+    if static is not None and path not in _HUBS:
         return static
 
     now = time.monotonic()
@@ -413,10 +704,15 @@ async def meta_for(path: str) -> PageMeta:
     try:
         found = await _lookup_dynamic(path)
     except Exception:  # noqa: BLE001 — a lookup failure must not cost the page
+        # Not cached and not a 404: the database being away says nothing about
+        # whether the page exists, so serve the generic head and retry next time.
         logger.warning("SEO lookup failed for %s", path, exc_info=True)
-        found = None
+        return static or PageMeta(title=SITE_NAME, canonical_path=path)
 
-    resolved = found or PageMeta(title=SITE_NAME, canonical_path=path)
+    if found is _NOT_FOUND:
+        resolved = _not_found(path)
+    else:
+        resolved = found or static or PageMeta(title=SITE_NAME, canonical_path=path)
     async with _lock:
         # Bounded: a crawler walking every URL, or a scanner inventing them,
         # must not grow this without limit.
@@ -424,6 +720,21 @@ async def meta_for(path: str) -> PageMeta:
             _cache.clear()
         _cache[path] = (now, resolved)
     return resolved
+
+
+#: Static routes whose body lists the catalogue, so they go through the lookup.
+_HUBS = ("/", "/organizations", "/tags")
+
+
+def _not_found(path: str) -> PageMeta:
+    return PageMeta(
+        title="הדף לא נמצא",
+        description="הדף המבוקש לא קיים בגרסאות לעם.",
+        canonical_path=path,
+        noindex=True,
+        status=404,
+        body_html=_wrap("<h1>הדף לא נמצא</h1><p>הכתובת הזו לא קיימת באתר.</p>"),
+    )
 
 
 # ── rendering ───────────────────────────────────────────────────────────────
@@ -440,7 +751,7 @@ def head_html(meta: PageMeta) -> str:
     out += _tag("description", meta.description)
     out += f'    <link rel="canonical" href="{html.escape(canonical, quote=True)}">\n'
     if meta.noindex:
-        out += _tag("robots", "noindex, nofollow")
+        out += _tag("robots", "noindex, nofollow" if meta.nofollow else "noindex, follow")
     else:
         out += _tag("robots", "index, follow, max-image-preview:large, max-snippet:-1")
 
@@ -465,18 +776,26 @@ def head_html(meta: PageMeta) -> str:
 _TITLE_RE = re.compile(r"[ \t]*<title>.*?</title>\s*", re.S | re.I)
 
 
+_ROOT = '<div id="root"></div>'
+
+
 def render(template: str, meta: PageMeta) -> str:
-    """Write the head block into index.html.
+    """Write the head block, and the body if there is one, into index.html.
 
     Prefers the explicit marker. Falls back to replacing the build's own
     <title>, so a dist/ built before the marker existed still gets the tags
-    rather than silently getting none.
+    rather than silently getting none. The body goes inside the empty
+    <div id="root">, which React's createRoot clears when it mounts.
     """
     block = head_html(meta)
     start = template.find(MARKER_START)
     end = template.find(MARKER_END)
     if start != -1 and end > start:
-        return template[:start] + block.strip() + template[end + len(MARKER_END):]
-    if _TITLE_RE.search(template):
-        return _TITLE_RE.sub(block, template, count=1)
-    return template
+        out = template[:start] + block.strip() + template[end + len(MARKER_END):]
+    elif _TITLE_RE.search(template):
+        out = _TITLE_RE.sub(block, template, count=1)
+    else:
+        out = template
+    if meta.body_html and _ROOT in out:
+        out = out.replace(_ROOT, f'<div id="root">{meta.body_html}</div>', 1)
+    return out

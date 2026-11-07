@@ -24,9 +24,9 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.services.seo import SITE_URL
+from app.services.seo import MIN_TAG_DATASETS, SITE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def _url(loc: str, lastmod: str | None, changefreq: str, priority: str) -> str:
 async def _build_sitemap() -> str:
     from app.database import async_session
     from app.models.organization import Organization
-    from app.models.tag import Tag
+    from app.models.tag import Tag, dataset_tags
     from app.models.tracked_dataset import TrackedDataset
 
     body = "".join(_url(p, None, freq, pri) for p, freq, pri in _STATIC_ROUTES)
@@ -116,18 +116,48 @@ async def _build_sitemap() -> str:
                 body += _url(f"/versions/{ds_id}", lastmod, "weekly", "0.8")
                 count += 1
 
-            for (org_id,) in (
-                await db.execute(select(Organization.id))
-            ).all():
+            # Organizations and tags only when the page has something on it.
+            # An organization with nothing tracked is empty, and a tag with one
+            # or two datasets is a near-copy of the dataset page — 2,159 of the
+            # 2,377 tags were exactly that, more than half the sitemap. Those
+            # pages are served noindex,follow (app/services/seo.py) and so must
+            # not be listed here: a sitemap URL that says noindex is a
+            # contradiction Search Console reports as an error.
+            n = func.count(TrackedDataset.id)
+            public = (
+                TrackedDataset.status.in_(("active", "pending")),
+                TrackedDataset.ckan_name.notlike("knesset-committee-single-%"),
+            )
+            orgs = (
+                await db.execute(
+                    select(Organization.id, func.max(TrackedDataset.last_polled_at))
+                    .join(TrackedDataset, TrackedDataset.organization_id == Organization.id)
+                    .where(*public)
+                    .group_by(Organization.id)
+                )
+            ).all()
+            for org_id, polled in orgs:
                 if count >= _URL_CAP:
                     break
-                body += _url(f"/organizations/{org_id}", None, "weekly", "0.6")
+                lastmod = polled.date().isoformat() if polled else None
+                body += _url(f"/organizations/{org_id}", lastmod, "weekly", "0.6")
                 count += 1
 
-            for (tag_id,) in (await db.execute(select(Tag.id))).all():
+            tags = (
+                await db.execute(
+                    select(Tag.id, func.max(TrackedDataset.last_polled_at))
+                    .join(dataset_tags, dataset_tags.c.tag_id == Tag.id)
+                    .join(TrackedDataset, TrackedDataset.id == dataset_tags.c.dataset_id)
+                    .where(*public)
+                    .group_by(Tag.id)
+                    .having(n >= MIN_TAG_DATASETS)
+                )
+            ).all()
+            for tag_id, polled in tags:
                 if count >= _URL_CAP:
                     break
-                body += _url(f"/tags/{tag_id}", None, "weekly", "0.5")
+                lastmod = polled.date().isoformat() if polled else None
+                body += _url(f"/tags/{tag_id}", lastmod, "weekly", "0.5")
                 count += 1
     except Exception:  # noqa: BLE001
         # A sitemap of the static routes still beats a 500: the crawler keeps a
@@ -166,14 +196,18 @@ async def sitemap() -> Response:
 
 @router.get("/robots.txt", include_in_schema=False)
 async def robots() -> Response:
-    # /api/ is disallowed for crawling but the pages are not: the JSON is not
-    # search content, and letting a crawler spend its budget on ~1,250 dataset
-    # payloads instead of the pages is the opposite of what we want.
+    # /api/ is deliberately NOT disallowed. It used to be, to keep crawlers off
+    # the JSON — but every page's content is fetched from /api/ by the SPA, and
+    # Googlebot's renderer honours robots.txt for those sub-requests too. So the
+    # rendered page Google indexed was the empty shell (or an error state) on
+    # every route. The JSON is kept out of the index by the
+    # `X-Robots-Tag: noindex` header main.py puts on /api/ responses instead —
+    # noindex stops indexing without stopping the fetch, which is what the
+    # renderer needs.
     body = (
         "User-agent: *\n"
         "Allow: /\n"
         "Disallow: /admin\n"
-        "Disallow: /api/\n"
         "Disallow: /direct/\n"
         "Disallow: /cbs/feedback\n"
         "\n"

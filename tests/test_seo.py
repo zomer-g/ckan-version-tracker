@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.models.organization import Organization  # noqa: E402
 from app.models.tag import Tag, dataset_tags  # noqa: E402
 from app.models.tracked_dataset import TrackedDataset  # noqa: E402
+from app.models.version_index import VersionIndex  # noqa: E402
 from app.services import seo  # noqa: E402
 
 
@@ -139,10 +140,41 @@ def test_public_pages_are_indexable():
     assert 'content="index, follow' in html
 
 
-def test_an_unknown_route_falls_back_to_the_site_default_without_raising():
+def test_an_unknown_route_is_a_real_404_not_an_indexable_shell():
+    """A soft 404 told Google every typo was a page. The shell still goes out."""
     meta = _run(seo.meta_for("/no/such/page"))
-    assert meta.title == seo.SITE_NAME
-    assert meta.description == seo.DEFAULT_DESCRIPTION
+    assert meta.status == 404
+    assert meta.noindex
+
+
+def test_every_route_in_the_app_is_known():
+    """A route missing from _SPA_ROUTES would be served as a 404."""
+    app_tsx = open(os.path.join(os.path.dirname(__file__), "..", "frontend", "src", "App.tsx"),
+                   encoding="utf-8").read()
+    paths = set(re.findall(r'path="(/[^"]*)"', app_tsx))
+    assert paths, "could not read routes from App.tsx"
+    for p in paths:
+        concrete = re.sub(r":[A-Za-z]+", "x", p).replace("*", "x")
+        assert seo.is_spa_route(concrete.rstrip("/") or "/"), p
+    for nested in ("/projects/1933/decision", "/projects/1933/request"):
+        assert seo.is_spa_route(nested)
+
+
+def test_a_lookup_failure_is_not_a_404():
+    """The database being down says nothing about whether the page exists."""
+    seo._cache.clear()
+
+    async def boom(_path):
+        raise RuntimeError("database is down")
+
+    original = seo._lookup_dynamic
+    seo._lookup_dynamic = boom
+    try:
+        meta = _run(seo.meta_for("/tags/" + str(uuid.uuid4())))
+    finally:
+        seo._lookup_dynamic = original
+    assert meta.status == 200
+    assert not meta.noindex
 
 
 def test_a_lookup_failure_never_propagates():
@@ -170,6 +202,7 @@ async def _seeded_session_factory():
         # loading a Tag touches the association table.
         for table in (
             TrackedDataset.__table__, Organization.__table__, Tag.__table__, dataset_tags,
+            VersionIndex.__table__,
         ):
             await conn.run_sync(lambda c, t=table: t.create(c, checkfirst=True))
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -248,22 +281,26 @@ def test_a_hidden_dataset_does_not_get_an_indexable_page():
         meta = _run(seo.meta_for(f"/versions/{hidden}"))
     finally:
         database.async_session = original
-    assert meta.title == seo.SITE_NAME, "a hidden dataset must fall back to the generic head"
+    assert meta.status == 404, "a hidden dataset must not be an indexable page"
+    assert meta.noindex
 
 
 def test_a_malformed_id_does_not_reach_the_database():
     seo._cache.clear()
-    assert _run(seo.meta_for("/versions/not-a-uuid")).title == seo.SITE_NAME
+    assert _run(seo.meta_for("/versions/not-a-uuid")).status == 404
 
 
 # ── robots.txt ──────────────────────────────────────────────────────────────
 
-def test_robots_points_at_the_sitemap_and_keeps_crawlers_off_the_api():
+def test_robots_points_at_the_sitemap_and_lets_the_renderer_reach_the_api():
+    """Every page's content comes from /api/. Disallowing it made Google's
+    rendered copy of every page empty; the JSON is kept out of the index by
+    an X-Robots-Tag header instead."""
     from app.api import seo as seo_api
     body = _run(seo_api.robots()).body.decode()
     assert f"Sitemap: {seo.SITE_URL}/sitemap.xml" in body
     assert "Disallow: /admin" in body
-    assert "Disallow: /api/" in body
+    assert "Disallow: /api" not in body
     assert "Allow: /" in body
 
 
@@ -285,8 +322,9 @@ def test_sitemap_lists_the_static_routes_and_every_public_dataset():
     assert "<urlset" in xml and "</urlset>" in xml
     assert f"{seo.SITE_URL}/</loc>" in xml
     assert f"{seo.SITE_URL}/versions/{ds_id}</loc>" in xml
-    assert f"{seo.SITE_URL}/organizations/{org_id}</loc>" in xml
-    assert f"{seo.SITE_URL}/tags/{tag_id}</loc>" in xml
+    # neither the organization nor the tag has a dataset yet: empty pages
+    assert f"{seo.SITE_URL}/organizations/{org_id}</loc>" not in xml
+    assert f"{seo.SITE_URL}/tags/{tag_id}</loc>" not in xml
     # admin must never be advertised
     assert "/admin" not in xml
 
@@ -481,3 +519,130 @@ def test_a_scraped_source_without_a_url_claims_no_origin():
         last_polled_at = None
 
     assert "sameAs" not in seo._dataset_jsonld(Fake())
+
+
+# ── thin pages, body and status ─────────────────────────────────────────────
+
+async def _catalogue(factory, org_id, tag_id, n):
+    """n public datasets, all of org_id and all tagged tag_id."""
+    ids = []
+    async with factory() as db:
+        for i in range(n):
+            ds_id = uuid.uuid4()
+            ids.append(ds_id)
+            db.add(TrackedDataset(
+                id=ds_id, ckan_id=f"x{ds_id}", ckan_name=f"ds-{ds_id}", title=f"מאגר {i}",
+                status="active", organization_id=org_id, poll_interval=3600,
+            ))
+        await db.flush()
+        for ds_id in ids:
+            await db.execute(dataset_tags.insert().values(dataset_id=ds_id, tag_id=tag_id))
+        await db.commit()
+    return ids
+
+
+def _with_db(factory, coro_fn):
+    import app.database as database
+    original = database.async_session
+    database.async_session = factory
+    seo._cache.clear()
+    try:
+        return _run(coro_fn())
+    finally:
+        database.async_session = original
+
+
+def test_sitemap_lists_a_tag_only_once_it_has_enough_datasets():
+    from app.api import seo as seo_api
+    factory, _, org_id, tag_id = _run(_seeded_session_factory())
+
+    _run(_catalogue(factory, org_id, tag_id, seo.MIN_TAG_DATASETS - 1))
+    xml = _with_db(factory, seo_api._build_sitemap)
+    assert f"/organizations/{org_id}</loc>" in xml
+    assert f"/tags/{tag_id}</loc>" not in xml
+
+    _run(_catalogue(factory, org_id, tag_id, 1))
+    xml = _with_db(factory, seo_api._build_sitemap)
+    assert f"/tags/{tag_id}</loc>" in xml
+
+
+def test_a_thin_tag_is_noindex_but_followed():
+    factory, _, org_id, tag_id = _run(_seeded_session_factory())
+    _run(_catalogue(factory, org_id, tag_id, 1))
+    meta = _with_db(factory, lambda: seo.meta_for(f"/tags/{tag_id}"))
+    assert meta.noindex
+    assert 'content="noindex, follow"' in seo.head_html(meta)
+
+
+def test_a_dataset_page_body_has_real_text_and_links():
+    factory, _, org_id, tag_id = _run(_seeded_session_factory())
+    ids = _run(_catalogue(factory, org_id, tag_id, 3))
+    meta = _with_db(factory, lambda: seo.meta_for(f"/versions/{ids[0]}"))
+    out = seo.render(TEMPLATE, meta)
+    assert "<h1>מאגר 0</h1>" in out
+    assert f'href="/organizations/{org_id}"' in out
+    assert f'href="/tags/{tag_id}"' in out
+    assert f'href="/versions/{ids[1]}"' in out  # a sibling dataset
+    assert '<div id="root"><style>' in out
+
+
+def test_hubs_link_into_the_catalogue():
+    factory, _, org_id, tag_id = _run(_seeded_session_factory())
+    ids = _run(_catalogue(factory, org_id, tag_id, 3))
+    home = _with_db(factory, lambda: seo.meta_for("/"))
+    assert home.title == seo._STATIC["/"].title
+    assert f'href="/versions/{ids[0]}"' in home.body_html
+    assert f'href="/organizations/{org_id}"' in home.body_html
+    tags = _with_db(factory, lambda: seo.meta_for("/tags"))
+    assert f'href="/tags/{tag_id}"' in tags.body_html
+
+
+def test_the_id_card_is_framed_as_llm_output():
+    cards = [{"title": "t", "summary_he": "סיכום <b>", "tags": ["א"],
+              "columns": [{"name": "c", "description_he": "d"}]}]
+    out = seo.id_card_html(cards)
+    assert 'data-generated-by="llm"' in out
+    assert "מודל שפה" in out and "אינו חלק מהמאגר" in out
+    assert out.index("אינו חלק מהמאגר") < out.index("סיכום")  # label comes first
+    assert "<b>" not in out  # model output is escaped
+
+
+def test_id_card_of_needs_an_llm_summary():
+    from app.services.table_profiler import id_card_of
+    assert id_card_of({"sql_profile": {"columns": {"a": {}}}}) is None
+    card = id_card_of({
+        "table_name": "t", "summary_he": "s",
+        "llm_enrichment": {"tags": ["x"], "columns": {"a": {"description_he": "d"}, "b": {}}},
+        "sql_profile": {"columns": {"a": {}, "b": {}}},
+    })
+    assert card["columns"] == [{"name": "a", "description_he": "d"}]
+
+
+def test_unknown_pages_answer_404_with_the_shell_and_apex_redirects():
+    import httpx
+
+    async def go(path, host="t"):
+        async with httpx.AsyncClient(transport=_app_client(), base_url=f"http://{host}") as c:
+            return await c.get(path)
+
+    r = _run(go("/no-such-page-xyz"))
+    assert r.status_code == 404
+    assert '<div id="root">' in r.text  # a person still gets the app
+
+    r = _run(go("/about?x=1", host="over.org.il"))
+    assert r.status_code == 301
+    assert r.headers["location"] == "https://www.over.org.il/about?x=1"
+
+    assert _run(go("/about", host="www.over.org.il")).status_code == 200
+    # the API is never redirected (workers POST to it on either host)
+    assert _run(go("/api/no-such", host="over.org.il")).status_code == 404
+
+
+def test_api_responses_are_noindex():
+    import httpx
+
+    async def go():
+        async with httpx.AsyncClient(transport=_app_client(), base_url="http://t") as c:
+            return await c.get("/api/no-such")
+
+    assert _run(go()).headers.get("x-robots-tag") == "noindex"

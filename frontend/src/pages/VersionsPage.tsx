@@ -21,6 +21,7 @@ import CopyLookupLinkButton from "../components/CopyLookupLinkButton";
 import SamplingRunPanel from "../components/SamplingRunPanel";
 import SourceMethodology from "../components/SourceMethodology";
 import ScrapeStatusBanner from "../components/ScrapeStatusBanner";
+import DatasetIdCard from "../components/DatasetIdCard";
 import CollectionCoverage from "../components/CollectionCoverage";
 
 // Lazy so the Leaflet bundle is never pulled into the CKAN / scraper /
@@ -752,6 +753,10 @@ export default function VersionsPage() {
       {/* A collection in flight. Public, and only rendered while one is running
           — a dataset that takes days to collect otherwise looks abandoned. */}
       {datasetId && <ScrapeStatusBanner datasetId={datasetId} />}
+
+      {/* The LLM-written ID card, framed as AI output. Renders nothing for a
+          dataset that has none. */}
+      {datasetId && <DatasetIdCard datasetId={datasetId} />}
 
       {/* The rest of the folder. A data.gov.il package holds many files and
           each becomes its own dataset here, so this page is one file of a
