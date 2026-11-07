@@ -2,11 +2,11 @@ import logging
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.utils import parse_uuid, sanitize_ckan_name, scraper_url_slug
+from app.api.utils import parse_uuid, require_http_url, sanitize_ckan_name, scraper_url_slug
 from app.auth.dependencies import get_admin_user, get_current_user, is_admin
 from app.database import get_db
 from app.models.organization import Organization
@@ -46,6 +46,8 @@ class TrackRequest(BaseModel):
     # where an unbounded seen-set would grow without limit. Leave null for
     # slow-cadence append datasets (e.g. the vehicle registry).
     seen_window_versions: int | None = None
+
+    _check_source_url = field_validator("source_url")(require_http_url)
 
 
 class UpdateRequest(BaseModel):
@@ -101,6 +103,7 @@ class UpdateRequest(BaseModel):
     # carry out. Re-pointing keeps the dataset and its whole version history;
     # only where the next scrape looks changes.
     source_url: str | None = None
+    _check_source_url = field_validator("source_url")(require_http_url)
     # Admin escape hatch: merge arbitrary keys into scraper_config for
     # per-dataset engine tuning that has no dedicated field yet (e.g.
     # idf_recursion_root for a hub whose children sit under a sibling path).
@@ -2115,6 +2118,9 @@ class TrackingRequest(BaseModel):
     # a page. Each entry of selected_files must then be an absolute URL the
     # registry can classify on its own.
     split_files: bool = False
+
+    _check_urls = field_validator("source_url", "source_urls", "selected_files")(
+        require_http_url)
     # url → the label the picker showed for that file. The registry can only
     # title a file from its URL, and a filename ("2003.xls", "t7.xls") is not
     # what the site calls the table — so without this the pending queue renders

@@ -27,6 +27,7 @@ import {
 import ArchiveChips from "../components/ArchiveChips";
 import SourceGoneNotice from "../components/SourceGoneNotice";
 import ImportWarningNotice from "../components/ImportWarningNotice";
+import { safeHref } from "../utils/safeHref";
 import TagPicker from "../components/TagPicker";
 import ResourcePickerModal from "../components/ResourcePickerModal";
 import ActivityLogPanel from "../components/ActivityLogPanel";
@@ -1889,7 +1890,7 @@ export default function AdminPage() {
               </div>
               {!isCkanLike(req.source_type) && req.source_url && (
                 <p className="text-sm text-muted" style={{ wordBreak: "break-all", direction: "ltr" }}>
-                  <a href={req.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                  <a href={safeHref(req.source_url)} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
                     {req.source_url}
                   <span className="sr-only"> (נפתח בחלון חדש)</span></a>
                 </p>

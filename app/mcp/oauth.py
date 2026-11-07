@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import jwt
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -47,7 +47,7 @@ from app.mcp.config import (
     mcp_url,
     ocoi_mcp_url,
 )
-from app.models.mcp import ApiUser, McpOauthClient, McpOauthCode
+from app.models.mcp import ApiUser, McpOauthClient, McpOauthCode, McpRefreshToken
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +309,9 @@ async def authorize(request: Request, db: AsyncSession) -> Response:
         "code_challenge_method": q.get("code_challenge_method") or "S256",
         "client_state": q.get("state"),
         "scope": q.get("scope") or "mcp",
+        # Its own audience, required on the way back, so the state can never
+        # be taken for (or confused with) any other token on this secret.
+        "aud": _STATE_AUDIENCE,
         "exp": int(time.time()) + MCP_STATE_TTL_SECONDS,
     }, mcp_jwt_secret(), algorithm="HS256")
 
@@ -333,7 +336,8 @@ async def google_callback(request: Request, db: AsyncSession) -> Response:
     if not code or not state:
         return _err_html(400, "תגובה חלקית", "חסר code או state בתגובה מ-Google.")
     try:
-        st = jwt.decode(state, mcp_jwt_secret(), algorithms=["HS256"])
+        st = jwt.decode(state, mcp_jwt_secret(), algorithms=["HS256"],
+                        audience=_STATE_AUDIENCE)
     except Exception:
         return _err_html(400, "state לא תקין", "ה-state פג תוקף או לא תקף. נסה להתחבר מחדש.")
 
@@ -410,6 +414,11 @@ async def google_callback(request: Request, db: AsyncSession) -> Response:
 
 # ── Token endpoint ─────────────────────────────────────────────────────────
 
+_STATE_AUDIENCE = "over-mcp-state"
+# A spent refresh token presented again within this window is a retry, not
+# theft: clients lose responses and race their own refreshes.
+REFRESH_REUSE_GRACE_SECONDS = 60
+
 def _sign_access(request: Request, api_user_id: str, client_id: str) -> str:
     return jwt.encode({
         "sub": str(api_user_id), "cid": str(client_id), "scope": "mcp",
@@ -418,12 +427,65 @@ def _sign_access(request: Request, api_user_id: str, client_id: str) -> str:
     }, mcp_jwt_secret(), algorithm="HS256")
 
 
-def _sign_refresh(request: Request, api_user_id: str, client_id: str) -> str:
-    return jwt.encode({
+def _sign_refresh(request: Request, api_user_id: str, client_id: str,
+                  jti: str | None = None, family: str | None = None) -> str:
+    claims = {
         "sub": str(api_user_id), "cid": str(client_id), "typ": "refresh",
         "aud": MCP_JWT_AUDIENCE, "iss": mcp_url(request),
         "exp": int(time.time()) + MCP_REFRESH_TOKEN_TTL_SECONDS,
-    }, mcp_jwt_secret(), algorithm="HS256")
+    }
+    if jti:
+        claims["jti"], claims["fam"] = jti, family
+    return jwt.encode(claims, mcp_jwt_secret(), algorithm="HS256")
+
+
+async def _issue_refresh(db: AsyncSession, request: Request, api_user_id, client_id,
+                         family: str | None = None) -> str:
+    """Record a new single-use refresh token (in ``family``, or a new one) and
+    return it signed. Expired rows are swept on the way."""
+    now = datetime.now(timezone.utc)
+    jti = secrets.token_urlsafe(24)
+    family = family or secrets.token_urlsafe(18)
+    await db.execute(delete(McpRefreshToken).where(McpRefreshToken.expires_at < now))
+    db.add(McpRefreshToken(
+        jti=jti, family=family, api_user_id=_as_uuid(api_user_id),
+        client_id=_as_uuid(client_id),
+        expires_at=now + timedelta(seconds=MCP_REFRESH_TOKEN_TTL_SECONDS),
+    ))
+    await db.commit()
+    return _sign_refresh(request, api_user_id, client_id, jti=jti, family=family)
+
+
+async def _spend_refresh(db: AsyncSession, payload: dict) -> tuple[str | None, str | None]:
+    """Spend the refresh token ``payload`` names. Returns (family, error).
+
+    family is the chain the next token joins (None: start a new one, for a
+    token minted before rotation existed). error is set when it must be
+    refused: unknown or revoked, or spent before — which revokes its family.
+    """
+    jti = payload.get("jti")
+    if not jti:
+        # Minted before single-use tokens: accepted once, then the chain is
+        # tracked. These die with the next rotation of the signing secret.
+        return None, None
+    row = await db.get(McpRefreshToken, jti)
+    if row is None or str(row.api_user_id) != str(payload.get("sub")):
+        return None, "refresh token revoked or unknown"
+    now = datetime.now(timezone.utc)
+    if row.used_at is not None:
+        used_at = row.used_at if row.used_at.tzinfo else row.used_at.replace(tzinfo=timezone.utc)
+        if now - used_at <= timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS):
+            # A client retrying a refresh whose answer it lost, or two of its
+            # own requests racing. Not theft; hand out another link.
+            return row.family, None
+        await db.execute(delete(McpRefreshToken).where(McpRefreshToken.family == row.family))
+        await db.commit()
+        logger.warning("MCP refresh token reused after it was spent: revoked family "
+                       "for api_user %s (client %s)", row.api_user_id, row.client_id)
+        return None, "refresh token already used; sign in again"
+    row.used_at = now
+    await db.commit()
+    return row.family, None
 
 
 async def token(request: Request, db: AsyncSession) -> Response:
@@ -481,7 +543,7 @@ async def token(request: Request, db: AsyncSession) -> Response:
             "access_token": _sign_access(request, row.api_user_id, row.client_id),
             "token_type": "Bearer",
             "expires_in": MCP_ACCESS_TOKEN_TTL_SECONDS,
-            "refresh_token": _sign_refresh(request, row.api_user_id, row.client_id),
+            "refresh_token": await _issue_refresh(db, request, row.api_user_id, row.client_id),
             "scope": row.scope or "mcp",
         })
 
@@ -500,11 +562,15 @@ async def token(request: Request, db: AsyncSession) -> Response:
         )).scalar_one_or_none()
         if not user:
             return _oauth_error(400, "invalid_grant", "user no longer active")
+        family, err = await _spend_refresh(db, payload)
+        if err:
+            return _oauth_error(400, "invalid_grant", err)
         return JSONResponse({
             "access_token": _sign_access(request, payload["sub"], client_id),
             "token_type": "Bearer",
             "expires_in": MCP_ACCESS_TOKEN_TTL_SECONDS,
-            "refresh_token": _sign_refresh(request, payload["sub"], client_id),
+            "refresh_token": await _issue_refresh(db, request, payload["sub"], client_id,
+                                                  family=family),
             "scope": "mcp",
         })
 

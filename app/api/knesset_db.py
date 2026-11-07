@@ -26,6 +26,7 @@ from app.config import settings
 from app.rate_limit import limiter
 from app.services import knesset_db
 from app.services.knesset_http import GEO_BLOCK_MESSAGE_HE, KnessetGeoBlocked
+from app.api.utils import public_error
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ async def sql(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — SQL/timeout errors go to the user
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
 
 @router.get("/export.csv")
@@ -126,7 +127,7 @@ async def export_csv(
             yield  # pragma: no cover
         stream = _empty()
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
     async def _chain():
         yield first
@@ -185,7 +186,8 @@ async def _run_deep_search(q: str, scope: int, page: int, size: int):
     except tagit_mcp.DeepSearchUnavailable:
         raise HTTPException(status_code=503, detail="חיפוש עמוק אינו מוגדר בשרת")
     except tagit_mcp.DeepSearchError as e:
-        raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל: {e}")
+        logger.warning("deep search failed: %s", e)
+        raise HTTPException(status_code=502, detail="חיפוש עמוק נכשל") from e
     except Exception as e:  # noqa: BLE001
         logger.exception("deep-search failed (scope=%s)", scope)
         raise HTTPException(status_code=502, detail=f"חיפוש עמוק נכשל ({type(e).__name__})")

@@ -29,8 +29,54 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def client_key(request, user=None) -> str:
+    """Who a public LLM call is charged to: the signed-in user, else an HMAC
+    of the client IP (keyed with the site secret, so the stored value cannot
+    be turned back into an address by hashing the IPv4 space)."""
+    import hashlib
+    import hmac
+
+    if user is not None and getattr(user, "id", None):
+        return f"u:{user.id}"
+    from app.client_ip import get_client_ip
+    ip = get_client_ip(request)
+    digest = hmac.new(settings.get_jwt_secret().encode(), ip.encode(), hashlib.sha256)
+    return f"ip:{digest.hexdigest()[:40]}"
+
+
+async def _reserve_client_call(db: AsyncSession, key: str, budget: int) -> bool:
+    """One call against ``key``'s share of today. Same atomic UPSERT as the
+    global counter; fails open like it."""
+    try:
+        row = (await db.execute(
+            text(
+                "INSERT INTO llm_client_daily_usage (day, client_key, calls) "
+                "VALUES (CURRENT_DATE, :key, 1) "
+                "ON CONFLICT (day, client_key) DO UPDATE "
+                "SET calls = llm_client_daily_usage.calls + 1, updated_at = now() "
+                "WHERE llm_client_daily_usage.calls < :budget "
+                "RETURNING calls"
+            ),
+            {"key": key, "budget": budget},
+        )).first()
+        if row is not None and row[0] == 1:
+            # A caller's first call today: sweep last week's rows while here.
+            await db.execute(text(
+                "DELETE FROM llm_client_daily_usage WHERE day < CURRENT_DATE - 7"))
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("reserve_llm_call: per-client check failed; allowing the call")
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    return row is not None
+
+
 async def reserve_llm_call(db: AsyncSession, *, call_budget: int | None = None,
-                           token_budget_override: int | None = None) -> bool:
+                           token_budget_override: int | None = None,
+                           client: str | None = None) -> bool:
     """Atomically reserve one LLM call against today's global budget.
 
     Returns ``True`` if the call is within budget (today's tally has been
@@ -57,6 +103,12 @@ async def reserve_llm_call(db: AsyncSession, *, call_budget: int | None = None,
                   else getattr(settings, "cbs_ask_daily_budget", 0)) or 0)
     if budget <= 0:
         return True
+    # The caller's own share first, so calls past it do not burn the global
+    # budget everyone else draws on. ``client`` is None for internal callers
+    # (the admin tools, the table profiler), which only the global cap bounds.
+    per_client = int(getattr(settings, "llm_client_daily_calls", 0) or 0)
+    if client and per_client > 0 and not await _reserve_client_call(db, client, per_client):
+        return False
     token_budget = int((token_budget_override if token_budget_override is not None
                         else getattr(settings, "llm_daily_output_token_budget", 0)) or 0)
     # A non-positive token budget means "no token ceiling"; express that as a

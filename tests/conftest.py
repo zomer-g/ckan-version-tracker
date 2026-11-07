@@ -15,6 +15,13 @@ query unchanged. The listener is on Engine rather than on one fixture because
 tests create their own engines all over the suite.
 """
 
+import os
+
+# Settings are read once, when app.config is first imported. Test files set
+# this themselves before importing the app, but whichever file is collected
+# first decides for the whole run, so set it here before any of them.
+os.environ.setdefault("JWT_SECRET_KEY", "test")
+
 from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine

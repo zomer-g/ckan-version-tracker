@@ -242,7 +242,8 @@ async def google_drive_connect(
         db,
         admin.id,
         auth_codes.PURPOSE_DRIVE,
-        next_path=body.next or "/",
+        # Validated like every other return path: it becomes a redirect target.
+        next_path=_safe_next(body.next) or "/",
         ttl_seconds=auth_codes.DRIVE_TTL_SECONDS,
     )
     params = {
@@ -278,7 +279,7 @@ async def google_drive_callback(
         # Unknown / expired / replayed code — we can't trust the return path.
         return RedirectResponse(url="/admin/login?error=drive_unauthorized")
 
-    next_path = consumed.next_path or "/"
+    next_path = _safe_next(consumed.next_path) or "/"
     sep = "&" if "?" in next_path else "?"
 
     if error or not code:

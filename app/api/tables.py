@@ -26,6 +26,7 @@ from app.database import get_db, release_connection
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, sql_shares
+from app.api.utils import public_error
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ async def catalog(request: Request, db: AsyncSession = Depends(get_db)):
         return {"tables": await data_catalog.build_catalog(db)}
     except Exception as e:  # noqa: BLE001 — surface init errors readably
         logger.exception("/api/tables catalog failed")
-        raise HTTPException(status_code=503, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 503) from e
 
 
 @router.get("/{table}/detail")
@@ -225,7 +226,7 @@ async def table_features(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — timeouts/SQL errors go to the caller
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
     return {
         "type": "FeatureCollection",
@@ -293,7 +294,7 @@ async def run_sql(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — SQL/timeout errors go to the user
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
 
 class ShareBody(BaseModel):
@@ -394,7 +395,7 @@ async def export_csv(
 
         stream = _empty()
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
     async def _chain():
         yield first

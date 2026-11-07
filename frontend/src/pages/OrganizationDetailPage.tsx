@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { organizations as orgsApi, OrganizationDetail } from "../api/client";
 import TagChips from "../components/TagChips";
 import SourceChip from "../components/SourceChip";
+import { safeHref } from "../utils/safeHref";
 import AdminDatasetActions from "../components/AdminDatasetActions";
 import { fmtDateHe } from "../utils/dates";
 
@@ -111,9 +112,9 @@ export default function OrganizationDetailPage() {
                 data.gov.il &#8599;
               <span className="sr-only"> (נפתח בחלון חדש)</span></a>
             )}
-            {org.external_website && (
+            {safeHref(org.external_website) && (
               <a
-                href={org.external_website}
+                href={safeHref(org.external_website)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: "var(--text-muted)", textDecoration: "none" }}

@@ -82,7 +82,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.sql_access import SqlCaller, admit, sql_caller
 
-from app.api.utils import MAX_API_OFFSET, parse_uuid
+from app.api.utils import MAX_API_OFFSET, parse_uuid, public_error
 from app.config import settings
 from app.database import get_db, release_connection
 from app.models.tracked_dataset import TrackedDataset
@@ -708,7 +708,7 @@ async def archive_sql(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface SQL/timeout errors to the user
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
 
 # ── CKAN datastore-API–inspired content query endpoints ──────────────────────
@@ -837,7 +837,7 @@ async def datastore_search_sql(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
     result = {"records": r["rows"], "fields": r["fields"], "truncated": r["truncated"]}
     _attach_quality_warning(result, ds)
     return {"success": True, "result": result}

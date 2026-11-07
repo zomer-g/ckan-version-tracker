@@ -367,4 +367,56 @@ async def purge_old() -> int:
     n = res.rowcount or 0
     if n:
         logger.info("API access log: purged %d rows older than %d days", n, days)
+    await pseudonymize_old_ips()
     return n
+
+
+PSEUDONYM_PREFIX = "h:"
+
+
+def ip_pseudonym(ip: str) -> str:
+    """A stable stand-in for ``ip``: HMAC-SHA256 under the site secret, so the
+    same address maps to the same value (the admin tab's per-IP counts keep
+    working) but cannot be turned back into it by hashing the address space."""
+    import hashlib
+    import hmac
+
+    digest = hmac.new(settings.get_jwt_secret().encode(), ip.encode(), hashlib.sha256)
+    return PSEUDONYM_PREFIX + digest.hexdigest()[:32]
+
+
+async def pseudonymize_old_ips(batch: int = 2000) -> int:
+    """Replace the client IP of rows older than ``api_access_log_ip_retention_days``
+    with :func:`ip_pseudonym`. Returns how many distinct addresses were replaced.
+
+    An address is needed while it can still be acted on (an abuse report, a
+    block). After that a whole row's worth of what one address did, kept for
+    180 days, is more than the site needs to hold.
+    """
+    days = int(getattr(settings, "api_access_log_ip_retention_days", 0) or 0)
+    if days <= 0:
+        return 0
+    from sqlalchemy import text
+
+    from app.database import async_session
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    done = 0
+    async with async_session() as s:
+        while True:
+            ips = [r[0] for r in (await s.execute(text(
+                "SELECT DISTINCT ip FROM api_access_log WHERE ts < :cutoff "
+                "AND ip IS NOT NULL AND ip NOT LIKE 'h:%' LIMIT :n"),
+                {"cutoff": cutoff, "n": batch})).all()]
+            if not ips:
+                break
+            for ip in ips:
+                await s.execute(text(
+                    "UPDATE api_access_log SET ip = :p WHERE ip = :ip AND ts < :cutoff"),
+                    {"p": ip_pseudonym(ip), "ip": ip, "cutoff": cutoff})
+            await s.commit()
+            done += len(ips)
+            if len(ips) < batch:
+                break
+    if done:
+        logger.info("API access log: pseudonymized %d addresses older than %d days", done, days)
+    return done
