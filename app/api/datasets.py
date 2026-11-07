@@ -732,6 +732,20 @@ async def list_tracked(
     return Response(content=body, media_type="application/json")
 
 
+# What only an admin may set when creating a dataset; see track_dataset.
+_ADMIN_ONLY_TRACK_FIELDS = ("scraper_config", "storage_mode", "append_key",
+                            "seen_window_versions")
+
+
+def _without_admin_only_fields(body: "TrackRequest", user: User) -> "TrackRequest":
+    """``body`` as sent for an admin; with the admin-only fields at their
+    defaults for anyone else."""
+    if is_admin(user):
+        return body
+    return body.model_copy(update={
+        f: TrackRequest.model_fields[f].default for f in _ADMIN_ONLY_TRACK_FIELDS})
+
+
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def track_dataset(
     body: TrackRequest,
@@ -743,6 +757,14 @@ async def track_dataset(
         body.preferred_interval if body.preferred_interval is not None else body.poll_interval
     )
     interval = max(requested_interval or DEFAULT_POLL_INTERVAL, settings.min_poll_interval)
+
+    # Signing in is an attribution gate any Google account passes, not trust.
+    # A non-admin's request is created pending, and approval carried its
+    # config through as sent — so a free-form scraper_config (the dict the
+    # worker acts on) and the storage knobs are the admin's to set, exactly as
+    # the anonymous /requests endpoint refuses them. The site's own forms
+    # never send these fields.
+    body = _without_admin_only_fields(body, user)
 
     storage_mode = _validate_storage_mode(body.storage_mode)
 

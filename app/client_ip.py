@@ -13,6 +13,14 @@ over.org.il is served ``client → Cloudflare edge → Render edge/LB → Render
 internal → app`` (``Server: cloudflare`` + ``CF-RAY`` confirm Cloudflare
 fronting; the app runs on Render behind ``uvicorn --proxy-headers``).
 
+On xhostd (measured 2026-11-07) the chain is ``client → Caddy ingress → app``
+with no Cloudflare in front: over.org.il resolves to the ingress, and requests
+sent with a forged ``X-Forwarded-For`` and ``CF-Connecting-IP`` were logged
+under the sender's real address. The ingress writes the connecting peer as the
+rightmost XFF hop, so the derivation below holds unchanged; the Cloudflare
+branch simply never fires while nothing reaches us through a Cloudflare edge.
+Re-measure if a CDN is put back in front (tests/test_client_ip.py, xhostd).
+
 Trust model — nothing the client sets is trusted directly
 ---------------------------------------------------------
 * ``X-Forwarded-For`` is *appended* to by each hop, and neither Cloudflare nor

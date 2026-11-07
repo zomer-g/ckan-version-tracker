@@ -50,7 +50,7 @@ import asyncpg
 import httpx
 
 from app.config import settings
-from app.services import append_store, knesset_http
+from app.services import append_store, knesset_http, sql_result_guard
 from app.services.knesset_http import KnessetGeoBlocked
 from app.services.knesset_tables_meta import GROUP_ORDER, description_of, group_of
 
@@ -762,7 +762,8 @@ async def run_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 20000) ->
         s = append_store.normalize_quoted_case(s, known)
     except Exception:  # noqa: BLE001 — normalization is best-effort, never fatal
         logger.debug("knesset_db: identifier normalization skipped", exc_info=True)
-    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
+    wrapped = sql_result_guard.guard_rows(
+        f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}")
     pool = await append_store.get_readonly_pool()  # least-privilege role: writes denied by the DB
     try:
         async with pool.acquire() as conn:
@@ -771,11 +772,13 @@ async def run_sql(sql: str, *, max_rows: int = 1000, timeout_ms: int = 20000) ->
                 await conn.execute(f"SET LOCAL search_path = {_qi(PG_SCHEMA)}, public")
                 stmt = await conn.prepare(wrapped)
                 cols = [a.name for a in stmt.get_attributes()]
-                recs = await stmt.fetch()
+                recs, cut_by_size = await sql_result_guard.fetch_capped(
+                    stmt, int(max_rows) + 1)
     except asyncpg.PostgresError as e:
         # A clean, actionable 400 (the API turns ValueError into 400 detail).
-        raise ValueError(append_store.sql_error_hint(e, known)) from e
-    truncated = len(recs) > max_rows
+        raise ValueError(sql_result_guard.row_too_large(e)
+                         or append_store.sql_error_hint(e, known)) from e
+    truncated = cut_by_size or len(recs) > max_rows
     rows = [
         {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
          for k, v in dict(r).items()}
@@ -795,7 +798,8 @@ async def iter_sql_csv(sql: str, *, max_rows: int = 200_000, timeout_ms: int = 6
         s = append_store.normalize_quoted_case(s, await _known_identifiers())
     except Exception:  # noqa: BLE001
         logger.debug("knesset_db: export identifier normalization skipped", exc_info=True)
-    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}"
+    wrapped = sql_result_guard.guard_rows(
+        f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}")
 
     def _csv_cell(v) -> str:
         if v is None:
@@ -811,7 +815,7 @@ async def iter_sql_csv(sql: str, *, max_rows: int = 200_000, timeout_ms: int = 6
             await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             await conn.execute(f"SET LOCAL search_path = {_qi(PG_SCHEMA)}, public")
             first = True
-            async for rec in conn.cursor(wrapped, prefetch=2000):
+            async for rec in conn.cursor(wrapped, prefetch=sql_result_guard.EXPORT_FETCH_BATCH):
                 if first:
                     yield "﻿" + ",".join(_csv_cell(k) for k in rec.keys()) + "\r\n"
                     first = False

@@ -730,6 +730,11 @@ class Settings(BaseSettings):
     # = feature off (the router answers 503).
     connector_api_key: str = ""
     connector_daily_byte_budget: int = 10 * 1024 ** 3   # shared bucket, 10 GB/window
+    # Apps Script traffic is recognised by Google's own ranges: goog.json less
+    # cloud.json (what Google Cloud customers rent). False admits all of
+    # goog.json again — only if Apps Script is ever seen egressing from a
+    # customer range (refusals are logged; see app/services/google_ips.py).
+    connector_exclude_cloud_ranges: bool = True
 
     # ── Global daily hard cap on paid-LLM calls (anti-abuse) ──
     # The public natural-language endpoints (/api/cbs/ask + /api/cbs/resolve)

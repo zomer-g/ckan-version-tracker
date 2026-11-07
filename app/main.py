@@ -385,6 +385,12 @@ async def lifespan(app: FastAPI):
     # is the guard on every topology; with one database it is the only one.
     await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
     await _prove_app_tables_are_private(shared_db=shared_db)
+    # Load Google's IP ranges in the background now, so the first Looker
+    # connector call is not refused while they are still loading (the check
+    # fails closed and never fetches on the request path).
+    if (settings.connector_api_key or "").strip():
+        from app.services import google_ips
+        google_ips.ensure_fresh()
     # Read where PostGIS lives (`extensions` before xhostd's move, `postgis`
     # after) before the scheduler builds any spatial SQL. Never raises.
     from app.services import postgis_schema
@@ -928,6 +934,28 @@ async def serve_story_page(name: str):
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"
 
+
+def _dist_file(url_path: str, root: Path = frontend_dist) -> Path | None:
+    """The file under ``root`` that ``url_path`` names, or None.
+
+    The path is resolved before the containment check. Comparing the
+    unresolved strings let ``/..%2f..%2f.env`` through: uvicorn decodes %2f
+    into the path, ``dist/../../.env`` still *starts with* ``dist``, and the
+    404 fallback served any file the process could read.
+    """
+    rel = url_path.lstrip("/")
+    if not rel or "\x00" in rel:
+        return None
+    try:
+        base = root.resolve()
+        candidate = (base / rel).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate
+
+
 if frontend_dist.exists() and index_html.exists():
     logger.info("Frontend dist found at %s", frontend_dist)
 
@@ -989,8 +1017,8 @@ if frontend_dist.exists() and index_html.exists():
         if request.url.path.startswith("/api/"):
             return JSONResponse({"detail": exc.detail}, status_code=404)
         # Check if it's an actual static file in dist/ (e.g. favicon.svg)
-        static_path = frontend_dist / request.url.path.lstrip("/")
-        if static_path.is_file() and str(static_path).startswith(str(frontend_dist)):
+        static_path = _dist_file(request.url.path)
+        if static_path is not None:
             return FileResponse(static_path)
         # For all other 404s, serve the SPA
         return await _spa_response(request.url.path)

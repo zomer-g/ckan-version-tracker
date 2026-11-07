@@ -47,6 +47,7 @@ import asyncpg
 
 from app.config import settings
 from app.services import postgis_schema
+from app.services import sql_result_guard
 
 logger = logging.getLogger(__name__)
 
@@ -2116,7 +2117,10 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
             s = normalize_quoted_case(s, canonical)
         except Exception:  # noqa: BLE001 — normalization is best-effort
             logger.debug("append_store: identifier normalization skipped", exc_info=True)
-    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"
+    # Every row is size-checked in Postgres, and the whole result in Python:
+    # rows and time alone let one query buffer gigabytes (sql_result_guard).
+    wrapped = sql_result_guard.guard_rows(
+        f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}")
     pool = await get_readonly_pool()  # least-privilege role: writes denied by the DB
     try:
         async with pool.acquire() as conn:
@@ -2133,25 +2137,30 @@ async def run_readonly_sql(sql: str, *, table: str | None = None,
                     [(a.name, getattr(a.type, "name", None)) for a in attrs])
                 if proj:
                     try:
-                        stmt = await conn.prepare(
-                            f"SELECT {proj} FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}")
+                        stmt = await conn.prepare(sql_result_guard.guard_rows(
+                            f"SELECT {proj} FROM (\n{s}\n) _q LIMIT {int(max_rows) + 1}"))
                         attrs = stmt.get_attributes()
                     except asyncpg.PostgresError:
                         logger.debug("append_store: WKT projection skipped",
                                      exc_info=True)
                 cols = [a.name for a in attrs]
                 fields = [{"id": a.name, "type": _ckan_type(getattr(a.type, "name", None))} for a in attrs]
-                recs = await stmt.fetch()
+                recs, cut_by_size = await sql_result_guard.fetch_capped(
+                    stmt, int(max_rows) + 1)
     except asyncpg.PostgresError as e:
-        raise ValueError(sql_error_hint(e, canonical)) from e
-    truncated = len(recs) > max_rows
+        raise ValueError(sql_result_guard.row_too_large(e)
+                         or sql_error_hint(e, canonical)) from e
+    truncated = cut_by_size or len(recs) > max_rows
     rows = [
         {k: (v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
          for k, v in dict(r).items()}
         for r in recs[:max_rows]
     ]
-    return {"columns": cols, "fields": fields, "rows": rows,
-            "truncated": truncated, "row_count": len(rows)}
+    out = {"columns": cols, "fields": fields, "rows": rows,
+           "truncated": truncated, "row_count": len(rows)}
+    if cut_by_size:
+        out["truncated_by_size"] = True
+    return out
 
 
 async def table_count(table: str, *, schema: str = "public") -> int:
@@ -2454,7 +2463,10 @@ async def iter_sql_csv(sql: str, *, search_path: str | None = None,
     import io as _io
 
     s = validate_readonly_sql(sql)
-    wrapped = f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}"
+    # Rows are size-checked in Postgres and fetched in small batches, so an
+    # export holds at most one batch of bounded rows (sql_result_guard).
+    wrapped = sql_result_guard.guard_rows(
+        f"SELECT * FROM (\n{s}\n) _q LIMIT {int(max_rows)}")
     pool = await get_readonly_pool()
     async with pool.acquire() as conn:
         async with conn.transaction(readonly=True):
@@ -2480,7 +2492,7 @@ async def iter_sql_csv(sql: str, *, search_path: str | None = None,
             yield ("﻿" + head.getvalue()).encode("utf-8")
             yield _row_to_csv(first[0])
             while True:
-                batch = await cur.fetch(500)
+                batch = await cur.fetch(sql_result_guard.EXPORT_FETCH_BATCH)
                 if not batch:
                     break
                 for rec in batch:

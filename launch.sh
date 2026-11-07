@@ -23,7 +23,10 @@ fi
 
 
 # Trusted forwarders: loopback and the private ranges, as on Render, never "*".
-# Narrow to the ingress range measured on xhostd once it is known (plan, wave 2).
+# Measured 2026-11-07: the xhostd ingress (Caddy) writes the real peer into
+# X-Forwarded-For and a forged value does not survive it (app/client_ip.py).
+# The ingress's own private address is not published, so the range stays the
+# private blocks rather than one host.
 # xhostd renamed its variables (XHOST_* -> XHOSTD_*, 2026-10); with `set -u` the
 # old name alone made every boot fail. New name first, then the old, then PORT.
 HTTP_PORT="${XHOSTD_HTTP_PORT:-${XHOST_HTTP_PORT:-${PORT:-}}}"
