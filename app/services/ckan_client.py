@@ -38,8 +38,19 @@ BLOCKED_NETWORKS = [
 DATASTORE_PAGE_SIZE = settings.datastore_page_size
 
 
+def _forbidden_ip(ip) -> bool:
+    """An address a resource download must never reach: anything that is not
+    a public internet address (private, loopback, link-local and the cloud
+    metadata service, CGNAT, reserved, multicast), including those dressed up
+    as IPv4-mapped IPv6."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (not ip.is_global) or any(ip in n for n in BLOCKED_NETWORKS)
+
+
 def _validate_url(url: str) -> None:
-    """Validate URL to prevent SSRF attacks."""
+    """Validate URL to prevent SSRF attacks: scheme, host, and a literal IP.
+    Hostnames are checked by :func:`_check_resolved` before connecting."""
     parsed = urlparse(url)
     if parsed.scheme not in ALLOWED_SCHEMES:
         raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
@@ -48,12 +59,52 @@ def _validate_url(url: str) -> None:
         raise ValueError("URL has no hostname")
     try:
         ip = ipaddress.ip_address(hostname)
-        for network in BLOCKED_NETWORKS:
-            if ip in network:
-                raise ValueError(f"Blocked internal IP: {hostname}")
-    except ValueError as e:
-        if "Blocked" in str(e) or "scheme" in str(e):
-            raise
+    except ValueError:
+        return
+    if _forbidden_ip(ip):
+        raise ValueError(f"Blocked internal IP: {hostname}")
+
+
+async def _check_resolved(url: str) -> None:
+    """Resolve the URL's host and refuse it if ANY address is internal.
+
+    A resource URL is set by whoever published the dataset, and the literal-IP
+    check alone let ``http://metadata.internal`` or a name that resolves to
+    169.254.169.254 through. Run for the first request and, through the
+    client's request hook, for every redirect hop too.
+
+    Not covered: a name that resolves differently between this check and the
+    connection (DNS rebinding). That needs connection pinning.
+    """
+    import socket
+
+    _validate_url(url)
+    host = urlparse(url).hostname or ""
+    try:
+        ipaddress.ip_address(host)
+        return  # a literal, already checked
+    except ValueError:
+        pass
+    try:
+        addresses = await _resolve(host)
+    except socket.gaierror as e:
+        raise ValueError(f"Cannot resolve host: {host}") from e
+    for addr in addresses:
+        if _forbidden_ip(ipaddress.ip_address(addr.split("%", 1)[0])):
+            raise ValueError(f"Blocked internal address for {host}")
+
+
+async def _resolve(host: str) -> list[str]:
+    import asyncio
+    import socket
+
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return [info[4][0] for info in infos]
+
+
+async def _guard_request(request: httpx.Request) -> None:
+    """httpx request hook: every request this client sends, redirects included."""
+    await _check_resolved(str(request.url))
 
 
 # A pasted link, e.g. "https://t.me/s/Israel_Cyber" or "https://example.com/x".
@@ -316,7 +367,8 @@ class CKANClient:
         first_bytes = b""
 
         try:
-            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True,
+                                         event_hooks={"request": [_guard_request]}) as client:
                 try:
                     head = await client.head(url)
                     content_length = head.headers.get("content-length")
@@ -357,7 +409,8 @@ class CKANClient:
     async def head_resource(self, url: str) -> dict:
         """HEAD request to check resource metadata without downloading."""
         _validate_url(url)
-        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
+                                     event_hooks={"request": [_guard_request]}) as client:
             resp = await client.head(url)
             return {
                 "content_length": resp.headers.get("content-length"),

@@ -750,6 +750,11 @@ class Settings(BaseSettings):
     # customer range (refusals are logged; see app/services/google_ips.py).
     connector_exclude_cloud_ranges: bool = True
 
+    # Content-Security-Policy (app/security_headers.py). False: Report-Only,
+    # browsers report to /api/csp-report and block nothing. Turn on once the
+    # reports show nothing the site needs.
+    csp_enforce: bool = False
+
     # ── Global daily hard cap on paid-LLM calls (anti-abuse) ──
     # The public natural-language endpoints (/api/cbs/ask + /api/cbs/resolve)
     # invoke a paid LLM on EVERY request. The per-IP request limiter throttles a
