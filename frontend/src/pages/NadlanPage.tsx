@@ -271,7 +271,7 @@ export default function NadlanPage() {
             <button
               key={id}
               type="button"
-              onClick={() => patch({ tab: id === "search" ? null : id })}
+              onClick={() => patch({ tab: id })}
               style={{
                 padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
                 fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
@@ -412,7 +412,7 @@ export default function NadlanPage() {
                   results={results}
                   selected={expanded}
                   polygon={polygon && polygon.key === expanded ? polygon.geo : null}
-                  onPick={(la, lo) => patch({ tab: null, lat: String(la), lon: String(lo) })}
+                  onPick={(la, lo) => patch({ tab: "map", lat: String(la), lon: String(lo) })}
                   onSelect={(k) => setExpanded(k)}
                   focus={missFocus}
                 />
@@ -573,7 +573,7 @@ export default function NadlanPage() {
                         <button
                           type="button"
                           onClick={() => patch({
-                            tab: null,
+                            tab: "map",
                             lat: String(env.miss!.street_point!.lat),
                             lon: String(env.miss!.street_point!.lon),
                             r: "250",
@@ -598,7 +598,7 @@ export default function NadlanPage() {
                       // street) when we know where that is; the bare map tab
                       // opened on the whole country.
                       onClick={() => patch(env.miss?.street_point
-                        ? { tab: null, lat: String(env.miss.street_point.lat),
+                        ? { tab: "map", lat: String(env.miss.street_point.lat),
                             lon: String(env.miss.street_point.lon), r: "100" }
                         : { tab: "map" })}
                       style={{

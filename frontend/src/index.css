@@ -4430,3 +4430,8 @@ li > a:only-child,
 .nadlan-table td:first-child { white-space: nowrap; }
 .nadlan-property { margin-bottom: 1.25rem; padding: 1.25rem 1.35rem; }
 .nadlan-property .nadlan-tile { box-shadow: none; background: var(--surface); }
+
+/* Leaflet's panes carry z-index 400–1000. Without a stacking context of its
+   own the map painted over the site's modals (the first-visit notice's
+   "הבנתי" could not be clicked where the map lay under it). */
+.leaflet-container { isolation: isolate; z-index: 0; }
