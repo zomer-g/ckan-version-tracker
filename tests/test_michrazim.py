@@ -189,6 +189,27 @@ def test_a_tender_type_filter_without_the_table_explains_itself():
     assert "t.\"סוג מכרז\" = 'מחיר למשתכן'" in raw
 
 
+def test_an_address_finds_the_tenders_rmi_left_without_parcels():
+    rx = michrazim.address_regex("המגיד", 14)
+    hit = lambda t: re.search(rx, t) is not None  # noqa: E731
+    assert hit("מושבה גרמנית רח' המגיד 14")      # 216/2020, ירושלים
+    assert hit("רח' המגיד מס' 14") and hit("רח' המגיד 12-14 פינת")
+    assert not hit("רח' המגיד 141") and not hit("המגידים 14") and not hit("המגיד 4")
+    assert re.search(michrazim.address_regex("שד' (חב\"ד)", 48), "שד' (חב\"ד) 48")
+
+
+def test_the_address_match_is_or_ed_with_the_parcel_and_only_for_unparcelled():
+    f = {"gush": 30010, "helka": 11, "addresses": [(3000, "המגיד", 14), (3000, None, 2)]}
+    raw, _, _ = michrazim.where_clause(f, _tb())
+    assert " OR (NOT EXISTS (SELECT 1 FROM " in raw
+    assert "t.\"סמל יישוב\" = '3000'" in raw and raw.count("t.\"שכונה\" ~") == 1
+    # Without the tenders table there is no location text: gush/helka only.
+    raw, _, _ = michrazim.where_clause(f, _tb(without=("tenders",)))
+    assert "שכונה" not in raw
+    raw, _, _ = michrazim.where_clause({"gush": 1, "helka": 2}, _tb())
+    assert "NOT EXISTS" not in raw
+
+
 def test_amount_basis_rule_and_per_unit_only_for_lot_prices():
     assert f"winning_amount < {michrazim.PER_SQM_MAX}" in michrazim.AMOUNT_BASIS_SQL
     assert "coalesce(units, 0) >= 2 OR max_price IS NOT NULL" in michrazim.AMOUNT_BASIS_SQL

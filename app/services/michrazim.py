@@ -50,6 +50,7 @@ plausible wrong number to a caller who was not told (all measured 2026-11-03):
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import time
 
@@ -73,6 +74,9 @@ COUNT_CAP = 10_000
 
 T, L = "מזהה מכרז", "מזהה מתחם"
 UNITS = 'קיבולת (יח"ד)'
+
+ADDRESS_CAVEAT = ("מכרזים שרמ\"י לא פרסמה להם גוש וחלקה משויכים לנכס לפי הכתובת "
+                  "שבשדה המיקום של המכרז (רחוב ומספר בית באותו יישוב).")
 
 #: role -> columns that identify its table. Each set is disjoint enough that no
 #: table of the register matches two roles (pinned in tests).
@@ -360,7 +364,8 @@ def _shape(r: dict) -> dict:
 
 # ── filters ───────────────────────────────────────────────────────────────────
 FILTERS = ("settlement", "year_from", "year_to", "tender_id", "status", "won_only",
-           "min_units", "gush", "helka", "tender_type", "purpose", "amount_basis")
+           "min_units", "gush", "helka", "tender_type", "purpose", "amount_basis",
+           "addresses")
 
 
 def where_clause(f: dict, tb: dict) -> tuple[str, str, list[str]]:
@@ -396,8 +401,10 @@ def where_clause(f: dict, tb: dict) -> tuple[str, str, list[str]]:
         cond = f"{_c('p', 'גוש')} = {_lit(str(int(f['gush'])))}"
         if f.get("helka") is not None:
             cond += f" AND {_c('p', 'חלקה')} = {_lit(str(int(f['helka'])))}"
-        raw.append(f"EXISTS (SELECT 1 FROM {_t(par)} p WHERE {_c('p', T)} = {_c('l', T)} "
-                   f"AND {_c('p', L)} = {_c('l', L)} AND {cond} AND {_current('p', par[2])})")
+        on_parcel = (f"EXISTS (SELECT 1 FROM {_t(par)} p WHERE {_c('p', T)} = {_c('l', T)} "
+                     f"AND {_c('p', L)} = {_c('l', L)} AND {cond} AND {_current('p', par[2])})")
+        by_addr = address_condition(f.get("addresses") or [], tb)
+        raw.append(f"({on_parcel} OR {by_addr})" if by_addr else on_parcel)
     for key, col in (("tender_type", "סוג מכרז"), ("purpose", "ייעוד")):
         if not f.get(key):
             continue
@@ -417,6 +424,41 @@ def where_clause(f: dict, tb: dict) -> tuple[str, str, list[str]]:
         notes.append("טבלת המכרזים (סוג מכרז, ייעוד, תאריכים) עדיין לא נטענה ל-SQL; "
                      "השדות האלה ריקים, ו-year הוא שנת מספר המכרז.")
     return " AND ".join(raw), " AND ".join(derived), notes
+
+
+_RE_META = re.compile(r"([.^$*+?()\[\]{}|\\])")
+
+
+def address_regex(street: str, number: int) -> str:
+    """A POSIX regex finding "<street> <number>" inside RMI's free-text
+    location ("מושבה גרמנית רח' המגיד 14", "רח' הרצל מס' 154", "רח' סירקין מס'
+    9-11"). The street is a whole word, the number not part of a longer one."""
+    st = _RE_META.sub(r"\\\1", re.sub(r"\s+", " ", street.strip())).replace(" ", "\\s+")
+    return (f"(^|[^א-ת]){st}\\s+(מס['׳]?\\s*)?([0-9]+-)?{int(number)}([^0-9]|$)")
+
+
+def address_condition(addresses: list, tb: dict) -> str | None:
+    """Lots of tenders that published NO גוש/חלקה but name the address in their
+    location text (the tenders table's "שכונה"), in the same settlement.
+    ``addresses`` is ``[(settlement_code, street, house_number), ...]``.
+
+    RMI leaves about a fifth of its tenders without parcels — mostly single
+    buildings in old city centres (216/2020, המגיד 14 ירושלים). For those the
+    address is the only link to the parcel, so the property card finds them by
+    it. None when the tenders table or the addresses are missing."""
+    ten, par = tb.get("tenders"), tb.get("parcels")
+    if not ten or not par or "שכונה" not in ten[2] or "סמל יישוב" not in ten[2]:
+        return None
+    ors = []
+    for code, street, num in addresses[:20]:
+        if not code or not street or num is None:
+            continue
+        ors.append(f"({_c('t', 'סמל יישוב')} = {_lit(str(int(code)))} AND "
+                   f"{_c('t', 'שכונה')} ~ {_lit(address_regex(str(street), int(num)))})")
+    if not ors:
+        return None
+    return (f"(NOT EXISTS (SELECT 1 FROM {_t(par)} p2 WHERE {_c('p2', T)} = {_c('l', T)} "
+            f"AND {_current('p2', par[2])}) AND ({' OR '.join(ors)}))")
 
 
 SORTS = {
@@ -515,12 +557,16 @@ async def series(f: dict) -> dict:
             "row_url": _console_url(sql), "notes": notes}
 
 
-async def parcel_lots(gush: int, helka: int, *, limit: int = 50) -> dict:
-    """Every tender lot that sat on this גוש/חלקה, newest tender first."""
+async def parcel_lots(gush: int, helka: int, *, limit: int = 50,
+                      addresses: list | None = None) -> dict:
+    """Every tender lot that sat on this גוש/חלקה, newest tender first — and,
+    given the parcel's addresses, the tenders with no גוש/חלקה that name one of
+    them (``address_condition``)."""
     tb = await tables()
     if "lots" not in tb or "parcels" not in tb:
         return {"available": False, "lots": [], "total": 0}
-    res = await search_lots({"gush": gush, "helka": helka}, limit=limit, sort="year_desc")
+    res = await search_lots({"gush": gush, "helka": helka, "addresses": addresses or []},
+                            limit=limit, sort="year_desc")
     return {"available": True, "lots": res["data"], "total": res["total"],
             "console_sql": res["console_sql"], "row_url": res["row_url"],
             "notes": res["notes"]}
