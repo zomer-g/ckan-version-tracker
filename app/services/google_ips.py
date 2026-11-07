@@ -75,7 +75,7 @@ def _refresh() -> None:
         with _lock:
             _google, _cloud = google, cloud
             _fetched_at = time.monotonic()
-        logger.info("Loaded %d Google IP ranges (%d of them Google Cloud customer ranges)",
+        logger.info("Loaded %d Google IP ranges and %d Google Cloud customer ranges",
                     len(google), len(cloud))
     except Exception:  # noqa: BLE001 — keep the set we have; retry later
         logger.warning("Google IP ranges refresh failed — %s",

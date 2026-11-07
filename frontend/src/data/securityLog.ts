@@ -45,6 +45,30 @@ export const SECURITY_EMAIL = "guy@z-g.co.il";
 
 export const SECURITY_LOG: SecurityEntry[] = [
   {
+    date: "2026-11-07",
+    kind: "internal",
+    fixed: "2026-11-07",
+    title: {
+      he: "בקשה לנתיב חסר יכלה להחזיר קובץ מהשרת",
+      en: "A request for a missing path could return a file from the server",
+    },
+    finding: {
+      he: "בסקירת אבטחה פנימית נמצא שהטיפול בשגיאת 404 בדק שהנתיב המבוקש נמצא בתיקיית קבצי האתר בהשוואת מחרוזות, בלי לפענח אותו קודם. נתיב עם ../ מקודד עבר את הבדיקה, והשרת החזיר כל קובץ שהתהליך יכול לקרוא.",
+      en: "An internal security review found that the 404 handler checked that a requested path lay inside the site's files by comparing strings, without resolving the path first. A path with an encoded ../ passed the check, and the server returned any file the process could read.",
+    },
+    exposure: {
+      he: "יש להניח שהפרצה הייתה פתוחה לכל אחד: לא בדקנו אם רכיב התשתית שלפני השרת היה חוסם בקשה כזו. הסודות של האתר מוגדרים כמשתני סביבה ולא כקבצים, ואת משתני הסביבה לא ניתן היה לקרוא דרכה. ביומני השרת הזמינים, מ-2 עד 7 בנובמבר 2026, אין אף בקשה כזו. ביומנים יש פערים, ולתקופה שלפני כן אין יומנים. איננו יודעים ממתי הפרצה הייתה קיימת.",
+      en: "It has to be assumed that anyone could reach it: we did not check whether the infrastructure in front of the server would have blocked such a request. The site's secrets are set as environment variables, not files, and the environment could not be read through it. The available server logs, 2–7 November 2026, show no such request. They have gaps, and nothing earlier is kept. We do not know how long the flaw had existed.",
+    },
+    fix: {
+      he: "הנתיב מפוענח לפני הבדיקה, ובדיקה אוטומטית מוודאת שהפרצה לא חוזרת. באותה סקירה נעשו גם תיקוני הקשחה: מגבלת גודל לתוצאות SQL, חיזוק הטוקנים, מכסת LLM לכל משתמש, והחלפת כתובות IP ביומן הגישה בקוד מוצפן אחרי 7 ימים. מדיניות הפרטיות תוקנה: היא אמרה שכתובת ה-IP נשמרת לזמן קצר, אבל יומן הגישה שמר אותה 180 יום.",
+      en: "The path is resolved before the check, and an automated test makes sure the flaw does not return. The same review also brought hardening fixes: a size cap on SQL results, stronger tokens, a per-caller LLM quota, and access-log IP addresses replaced by a keyed code after 7 days. The privacy notice was corrected: it said the IP address is kept briefly, but the access log kept it for 180 days.",
+    },
+    commits: [
+      { sha: "8cb04f0", label: { he: "תיקון קריאת הקבצים וההקשחה", en: "file-read fix and hardening" } },
+    ],
+  },
+  {
     date: "2026-10-04",
     kind: "report",
     fixed: "2026-10-04",
