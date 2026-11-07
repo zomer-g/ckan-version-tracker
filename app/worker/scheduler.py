@@ -446,6 +446,16 @@ async def init_scheduler() -> None:
                 logger.warning("deals indexes: %s", res)
         except Exception:  # noqa: BLE001
             logger.exception("deals indexes check failed")
+        # The רמ"י tenders register: the per-parcel lookup (a cube on every
+        # property page) is an equality on (גוש, חלקה), every tender page one
+        # on the tender id. Same check, same cost when they already exist.
+        try:
+            from app.services import michrazim as _michrazim
+            res = await _michrazim.ensure_indexes()
+            if res["made"] or res["failed"]:
+                logger.warning("michrazim indexes: %s", res)
+        except Exception:  # noqa: BLE001
+            logger.exception("michrazim indexes check failed")
 
     # The נדל"ן לעם crosswalk of the layers too large for the idx mirror: the
     # first build of the next layer in settings.nadlan_layer_links_autobuild,

@@ -32,10 +32,10 @@ from starlette.requests import Request
 
 from app.mcp.auth import McpUser
 from app.mcp.usage import log_usage
-from app.services import deals_notes, deals_query, nadlan_query
+from app.services import deals_notes, deals_query, michrazim, nadlan_query
 
 SERVER_NAME = "over-deals-mcp"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 DEFAULT_PROTOCOL = "2025-06-18"
 
 SERVER_INSTRUCTIONS = (
@@ -78,7 +78,29 @@ SERVER_INSTRUCTIONS = (
     "השתמשו בשרת נדל\"ן לעם ב-over.org.il/nadlan/mcp. שאלה על היקף המאגר "
     "עצמו — register_stats.\n\n"
     "total בחיפוש נספר עד 10,000 ואז מדווח total_capped=true; זה לא המספר "
-    "האמיתי אלא 'יותר מ-'. אל תציגו אותו כסך הכול."
+    "האמיתי אלא 'יותר מ-'. אל תציגו אותו כסך הכול.\n\n"
+    "מכרזי רמ\"י (apps.land.gov.il/MichrazimSite) — מאגר שני בשרת הזה: כל מכרזי "
+    "המקרקעין של רשות מקרקעי ישראל מ-2000, ברמת המתחם (מגרש), עם הזוכה, סכום "
+    "הזכייה, יח\"ד, הוצאות פיתוח, מחיר סף וגוש/חלקה. הכלים: search_tender_lots, "
+    "tender_price_series, get_tender, parcel_tenders, list_tender_settlements. "
+    "חמישה כללים נוספים למכרזים:\n"
+    "(א) מתחם הוא (tender_id, lot_id). מתחם שלא נמכר משווק שוב במכרז מאוחר באותו "
+    "lot_id, והשורה הקודמת שלו אומרת 'אין הצעות' — אל תספרו אותו פעמיים כמכירה.\n"
+    "(ב) amount_basis קובע מה הסכום אומר. lot_total = מחיר הקרקע של המתחם, ורק לו "
+    "מחושב amount_per_unit. per_sqm_suspected = מכרז מחיר למ\"ר (מחיר למשתכן, "
+    "מחיר מטרה): הסכום הוא מחיר מ\"ר דירה. לעולם אל תערבבו את השניים בחציון "
+    "אחד; tender_price_series כבר מפריד ביניהם (median_amount_per_unit מול "
+    "median_sqm_price).\n"
+    "(ג) סכום הזכייה אינו כולל הוצאות פיתוח. עלות הקרקע ליח\"ד היא "
+    "amount_per_unit + dev_costs_per_unit (median_land_cost_per_unit בסדרה).\n"
+    "(ד) year הוא שנת מספר המכרז (שנת השיווק). כשיש tender_type / committee_date "
+    "(טבלת המכרזים נטענה), השתמשו בהם; notes אומר כשהיא עדיין חסרה.\n"
+    "(ה) לחיבור בין מכרז לעסקאות הדירות שנבנו: parcel_tenders / get_tender נותנים "
+    "גוש וחלקה, ו-parcel_deals נותן את העסקאות עליהם. כרבע מהחלקות שווקו לפני "
+    "פרצלציה ומספרן השתנה, ולכן חלקה בלי עסקאות אינה בהכרח חלקה שלא נמכרה; "
+    "ועסקאות על חלקה כוללות גם יד שנייה — סננו לפי תאריך אחרי ועדת המכרזים. "
+    "יישובים: השמות כפי שרמ\"י כותבת אותם; settlement_code הוא הקוד הרשמי, "
+    "והוא המפתח לחיבור עם עסקאות ועם כל מאגר אחר."
 )
 
 SOURCE_NOTE = {
@@ -230,6 +252,97 @@ TOOLS: list[dict] = [
 ]
 
 
+_TENDER_FILTERS = {
+    "settlement": {"type": "string",
+                   "description": "יישוב — בכתיב של רמ\"י (list_tender_settlements) או בשם הרשמי"},
+    "year_from": {"type": "integer", "description": "שנת המכרז, מ-"},
+    "year_to": {"type": "integer", "description": "שנת המכרז, עד"},
+    "tender_id": {"type": "integer", "description": "מזהה מכרז, למשל 20240134"},
+    "status": {"type": "string", "description": "סטטוס מכרז, למשל 'נדון בוועדת מכרזים'"},
+    "won_only": {"type": "boolean", "description": "רק מתחמים עם זוכה וסכום"},
+    "amount_basis": {"type": "string",
+                     "description": "lot_total (מחיר קרקע) | per_sqm_suspected (מחיר מ\"ר דירה)"},
+    "min_units": {"type": "integer", "description": "מינימום יח\"ד במתחם"},
+    "gush": {"type": "integer"},
+    "helka": {"type": "integer"},
+    "tender_type": {"type": "string", "description": "סוג מכרז (רק כשטבלת המכרזים נטענה)"},
+    "purpose": {"type": "string", "description": "ייעוד (רק כשטבלת המכרזים נטענה)"},
+}
+
+TOOLS += [
+    {
+        "name": "search_tender_lots",
+        "description": (
+            "מתחמי מכרזי רמ\"י, מסוננים וממוינים — שורה לכל (מכרז, מתחם): יישוב, "
+            "שנה, יח\"ד, שטח, הזוכה, סכום הזכייה, amount_basis, amount_per_unit, "
+            "הוצאות פיתוח (וליח\"ד), מחיר סף, מספר הצעות, גוש/חלקה ותוכניות. "
+            "console_sql הוא השאילתה המדויקת שענתה, להרצה בקונסולת /data."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **_TENDER_FILTERS,
+                "sort": {"type": "string",
+                         "description": "year_desc (ברירת מחדל) | year_asc | amount_desc | "
+                                        "per_unit_desc | per_unit_asc | bids_desc"},
+                "limit": {"type": "integer", "description": f"1-{michrazim.MAX_LIMIT}"},
+                "offset": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "tender_price_series",
+        "description": (
+            "לכל שנת מכרז, תחת אותם מסננים כמו search_tender_lots: מתחמים ששווקו, "
+            "שנמכרו ושלא קיבלו הצעות, יח\"ד שנמכרו, וחציונים — מחיר קרקע ליח\"ד "
+            "(median_amount_per_unit, רק lot_total), הוצאות פיתוח ליח\"ד, עלות קרקע "
+            "כוללת ליח\"ד, מחיר מ\"ר דירה במכרזי מחיר למ\"ר (median_sqm_price) "
+            "וחציון ההצעות. זה הכלי לשאלות על מגמת מחירי הקרקע והדירות במכרזים."
+        ),
+        "inputSchema": {"type": "object", "properties": dict(_TENDER_FILTERS)},
+    },
+    {
+        "name": "get_tender",
+        "description": (
+            "מכרז אחד במלואו: המתחמים, כל ההצעות לכל מתחם (לא רק הזוכות), הצעות "
+            "ברמת המכרז במכרזי הרשמה והגרלה (כולל מספרי הזהות של המציעים, כפי שרמ\"י מפרסמת אותם), גושים וחלקות, "
+            "תוכניות ומגרשים, ומסמכי המכרז עם קישורים."
+        ),
+        "inputSchema": {"type": "object",
+                        "properties": {"tender_id": {"type": "integer"}},
+                        "required": ["tender_id"]},
+    },
+    {
+        "name": "parcel_tenders",
+        "description": (
+            "כל מתחמי מכרזי רמ\"י ששווקו על גוש וחלקה, מהמכרז החדש לישן. לצד "
+            "parcel_deals זה החיבור בין מחיר הקרקע במכרז למחירי הדירות שנמכרו עליה."
+        ),
+        "inputSchema": {"type": "object",
+                        "properties": {"gush": {"type": "integer"},
+                                       "helka": {"type": "integer"},
+                                       "limit": {"type": "integer", "description": "1-200"}},
+                        "required": ["gush", "helka"]},
+    },
+    {
+        "name": "list_tender_settlements",
+        "description": (
+            "היישובים במכרזי רמ\"י, בכתיב של רמ\"י, עם מספר המתחמים והמכרזים, "
+            "השנה האחרונה, והקוד הרשמי שאליו הם מזוהים (resolved_code). שם בלי "
+            "resolved_code אינו בגזטיר — סננו בו בשם כפי שהוא."
+        ),
+        "inputSchema": {"type": "object",
+                        "properties": {"query": {"type": "string"},
+                                       "limit": {"type": "integer", "description": "1-500"}}},
+    },
+    {
+        "name": "tender_register_stats",
+        "description": "אילו טבלאות של מכרזי רמ\"י טעונות, כמה מתחמים ומכרזים, ומאיזו שנה עד איזו.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+]
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _clamp(v, lo: int, hi: int, default: int) -> int:
@@ -351,7 +464,91 @@ async def _tool_stats(request, db, user, a) -> tuple[dict, int]:
             "caveats": _caveats()}, 1
 
 
+# ── tenders ────────────────────────────────────────────────────────────────
+
+TENDER_SOURCE = {
+    "source": 'מכרזי רמ"י — אתר מכרזי המקרקעין של רשות מקרקעי ישראל, דרך גרסאות לעם',
+    "source_url": michrazim.SOURCE_URL,
+    "processed": False,
+}
+
+
+async def _tender_source() -> dict:
+    # One dataset per table: say which dataset each part of an answer is from.
+    return {**TENDER_SOURCE, "datasets": await michrazim.dataset_links()}
+
+
+async def _require_tenders() -> None:
+    if not await michrazim.is_ready():
+        raise ValueError('מאגר מכרזי רמ"י עדיין לא נטען')
+
+
+def _tender_filters(a: dict) -> dict:
+    return {k: a[k] for k in _TENDER_FILTERS
+            if a.get(k) is not None and a.get(k) != "" and a.get(k) is not False}
+
+
+async def _tool_tender_lots(request, db, user, a) -> tuple[dict, int]:
+    await _require_tenders()
+    f = _tender_filters(a)
+    res = await michrazim.search_lots(
+        f, limit=_clamp(a.get("limit"), 1, michrazim.MAX_LIMIT, 50),
+        offset=_clamp(a.get("offset"), 0, 100_000, 0),
+        sort=a.get("sort") if a.get("sort") in michrazim.SORTS else "year_desc")
+    return {**(await _tender_source()), "query": f, **res, "caveats": michrazim.CAVEATS}, len(res["data"])
+
+
+async def _tool_tender_series(request, db, user, a) -> tuple[dict, int]:
+    await _require_tenders()
+    f = _tender_filters(a)
+    res = await michrazim.series(f)
+    return {**(await _tender_source()), "query": f, **res,
+            "note": "חציונים, לא ממוצעים. ציינו תמיד את lots_priced_per_unit / "
+                    "lots_per_sqm לצד החציון — שנה עם שלושה מתחמים היא רעש.",
+            "caveats": michrazim.CAVEATS}, len(res["years"])
+
+
+async def _tool_get_tender(request, db, user, a) -> tuple[dict, int]:
+    await _require_tenders()
+    out = await michrazim.tender(int(a["tender_id"]))
+    if not out:
+        return {**(await _tender_source()), "found": False}, 0
+    return {**(await _tender_source()), "found": True, **out, "caveats": michrazim.CAVEATS}, len(out["lots"])
+
+
+async def _tool_parcel_tenders(request, db, user, a) -> tuple[dict, int]:
+    await _require_tenders()
+    gush, helka = int(a["gush"]), int(a["helka"])
+    res = await michrazim.parcel_lots(gush, helka, limit=_clamp(a.get("limit"), 1, 200, 50))
+    return {**(await _tender_source()), "gush": gush, "helka": helka, **res,
+            "property_page": "https://www.over.org.il/projects/nadlan"
+                             f"?tab=gush&g={gush}&h={helka}",
+            "caveats": michrazim.CAVEATS}, len(res["lots"])
+
+
+async def _tool_tender_settlements(request, db, user, a) -> tuple[dict, int]:
+    await _require_tenders()
+    rows = await michrazim.settlements()
+    q = (a.get("query") or "").strip()
+    if q:
+        rows = [r for r in rows if q in (r.get("settlement") or "")
+                or q in (r.get("resolved_name") or "")]
+    rows = rows[:_clamp(a.get("limit"), 1, 500, 100)]
+    return {**(await _tender_source()), "settlements": rows}, len(rows)
+
+
+async def _tool_tender_stats(request, db, user, a) -> tuple[dict, int]:
+    return {**(await _tender_source()), "stats": await michrazim.stats(),
+            "caveats": michrazim.CAVEATS}, 1
+
+
 _IMPL = {
+    "search_tender_lots": _tool_tender_lots,
+    "tender_price_series": _tool_tender_series,
+    "get_tender": _tool_get_tender,
+    "parcel_tenders": _tool_parcel_tenders,
+    "list_tender_settlements": _tool_tender_settlements,
+    "tender_register_stats": _tool_tender_stats,
     "search_deals": _tool_search,
     "price_series": _tool_series,
     "compare_settlements": _tool_compare,

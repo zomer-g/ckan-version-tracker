@@ -31,7 +31,7 @@ from starlette.requests import Request
 
 from app.mcp.auth import McpUser
 from app.mcp.usage import log_usage
-from app.services import nadlan_query, nadlan_text
+from app.services import michrazim, nadlan_query, nadlan_text
 
 SERVER_NAME = "over-nadlan-mcp"
 SERVER_VERSION = "0.1.0"
@@ -62,7 +62,12 @@ SERVER_INSTRUCTIONS = (
     "כשלא מוצאים כתובת: רוב הכישלונות הם כתיב של שם רחוב. השתמשו ב-"
     "suggest_streets כדי לקבל את השם כפי שהוא רשום, ורק אז חזרו ל-"
     "lookup_property. לשאלות על מאגר העסקאות עצמו (מגמות, השוואות בין יישובים, "
-    "כמה נמכר) יש שרת נפרד: עסקאות נדל\"ן, ב-over.org.il/deals/mcp."
+    "כמה נמכר) יש שרת נפרד: עסקאות נדל\"ן, ב-over.org.il/deals/mcp.\n\n"
+    "מכרזי רמ\"י: parcel_tenders מחזיר כל מתחם שרמ\"י שיווקה על הגוש והחלקה — "
+    "שנה, יח\"ד, הזוכה, סכום הזכייה והוצאות הפיתוח. גוש וחלקה הם כפי שהיו בעת "
+    "השיווק, וכרבע מהם שונו מאז בפרצלציה. במכרזי מחיר למ\"ר (amount_basis = "
+    "per_sqm_suspected) הסכום הוא מחיר מ\"ר דירה ולא מחיר הקרקע. מגמות והשוואות "
+    "של מחירי מכרזים — בשרת עסקאות נדל\"ן (tender_price_series)."
 )
 
 MAX_LIMIT = nadlan_query.MAX_LIMIT
@@ -183,6 +188,21 @@ TOOLS: list[dict] = [
         "inputSchema": {"type": "object", "properties": {}},
     },
 ]
+
+
+TOOLS.append({
+    "name": "parcel_tenders",
+    "description": (
+        "כל מתחמי מכרזי רמ\"י ששווקו על גוש וחלקה, מהמכרז החדש לישן: שנה, "
+        "יח\"ד, הזוכה, סכום הזכייה, amount_basis, מחיר ליח\"ד והוצאות פיתוח, "
+        "וקישור לדף המכרז."
+    ),
+    "inputSchema": {"type": "object",
+                    "properties": {"gush": {"type": "integer"},
+                                   "helka": {"type": "integer"},
+                                   "limit": {"type": "integer", "description": "1-200"}},
+                    "required": ["gush", "helka"]},
+})
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -326,7 +346,19 @@ async def _tool_coverage(request, db, user, a) -> tuple[dict, int]:
             "caveats": _caveats()}, 1
 
 
+async def _tool_parcel_tenders(request, db, user, a) -> tuple[dict, int]:
+    if not await michrazim.is_ready():
+        raise ValueError('מאגר מכרזי רמ"י עדיין לא נטען')
+    gush, helka = int(a["gush"]), int(a["helka"])
+    res = await michrazim.parcel_lots(gush, helka, limit=_clamp(a.get("limit"), 1, 200, 50))
+    return {"source": 'מכרזי רמ"י — רשות מקרקעי ישראל, דרך גרסאות לעם',
+            "datasets": await michrazim.dataset_links(), "processed": False,
+            "gush": gush, "helka": helka, **res,
+            "caveats": michrazim.CAVEATS}, len(res["lots"])
+
+
 _IMPL = {
+    "parcel_tenders": _tool_parcel_tenders,
     "lookup_property": _tool_lookup,
     "parcel_deals": _tool_parcel_deals,
     "suggest_streets": _tool_suggest_streets,

@@ -745,6 +745,12 @@ Two grains:
 The hit counts on closed cubes come from one `UNION ALL` of GiST bbox probes, so
 the page can show "3" without reading a single attribute.
 
+* **gush_helka** (added 2026-11-03): the רמ"י tenders register, which lists per
+  lot every גוש/חלקה it was marketed on. `rmi_tender_lots` joins on the numbers
+  by equality — a polygon exists for ~1% of the 51k lots — and reports the
+  numbers are as marketed (a quarter were re-parcelled since). See
+  [docs/michrazim.md](michrazim.md).
+
 **Where a layer is found.** `idx` first, then `public.append_*` — both carry a
 `geom` with a GiST index. The national רצף layers (רצף מגרשי תב"ע: 1,092,211
 plots) are too large for the idx mirror's size gate, so the archive table can be

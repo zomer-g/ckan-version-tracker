@@ -64,6 +64,7 @@ from app.api.ocal_admin import router as ocal_admin_router
 from app.api.deals import router as deals_router
 from app.api.govmap_abroad import router as govmap_abroad_router
 from app.api.deals_govmap import router as deals_govmap_router
+from app.api.michrazim import router as michrazim_router
 from app.api.prices import router as prices_router
 from app.api.nadlan import router as nadlan_router
 from app.api.organizations import router as organizations_router
@@ -688,6 +689,7 @@ app.include_router(nadlan_router)
 app.include_router(deals_router)
 app.include_router(govmap_abroad_router)
 app.include_router(deals_govmap_router)
+app.include_router(michrazim_router)
 app.include_router(prices_router)
 app.include_router(organizations_router)
 app.include_router(admin_organizations_router)

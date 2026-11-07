@@ -3522,7 +3522,8 @@ export interface NadlanCubeInfo {
   id: string;
   group: string;
   title: string;
-  grain: "spatial" | "stat_area";
+  /** gush_helka: a register keyed on the cadastral numbers (רמ"י tenders). */
+  grain: "spatial" | "stat_area" | "gush_helka";
   radius_m: number | null;
   description: string;
   available: boolean;
