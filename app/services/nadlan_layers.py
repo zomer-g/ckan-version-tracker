@@ -608,12 +608,32 @@ async def _tenders_ready() -> bool:
         return False
 
 
+async def _parcel_addresses(parcel: dict) -> list[tuple[int, str, int]]:
+    """``(settlement_code, street, house_number)`` of every address on the
+    parcel — how a tender that published no גוש/חלקה is found."""
+    try:
+        rows = await nadlan_query._fetch(
+            "SELECT DISTINCT settlement_code, street_name, house_num "
+            "FROM public.over_re_addresses WHERE parcel_key = $1 "
+            "AND street_name IS NOT NULL AND house_num IS NOT NULL LIMIT 20",
+            parcel["parcel_key"])
+    except Exception as e:  # noqa: BLE001 — the gush/helka match still answers
+        logger.warning("nadlan layers: parcel addresses failed: %s", e)
+        return []
+    return [(int(r["settlement_code"]), r["street_name"], int(r["house_num"]))
+            for r in rows if r.get("settlement_code")]
+
+
 async def _tenders_hits(parcel: dict) -> dict[str, int]:
     from app.services import michrazim
     if not await _tenders_ready():
         return {}
     key = (int(parcel["gush"]), int(parcel["parcel"]))
     try:
+        addrs = await _parcel_addresses(parcel)
+        if addrs:
+            res = await michrazim.parcel_lots(key[0], key[1], limit=1, addresses=addrs)
+            return {TENDERS_ID: int(res.get("total") or 0)}
         counts = await michrazim.parcel_counts([key])
     except Exception as e:  # noqa: BLE001 — counts are a nicety
         logger.warning("nadlan layers: tenders probe failed: %s", e)
@@ -668,7 +688,8 @@ async def tenders_cube(parcel: dict) -> dict:
     if not await _tenders_ready():
         return {"available": False}
     res = await michrazim.parcel_lots(int(parcel["gush"]), int(parcel["parcel"]),
-                                      limit=MAX_FEATURES)
+                                      limit=MAX_FEATURES,
+                                      addresses=await _parcel_addresses(parcel))
     lots_ds = michrazim.dataset_of("lots")
     return {"available": True,
             "features": [tender_lot_feature(r, lots_ds) for r in res["lots"]],
@@ -682,7 +703,8 @@ async def tenders_cube(parcel: dict) -> dict:
                         for role, label in (("lots", 'מכרזי רמ"י — מתחמים'),
                                             ("parcels", 'מכרזי רמ"י — גושים וחלקות'))],
             "notes": list(res.get("notes") or []) + [michrazim.CAVEATS[3],
-                                                      michrazim.CAVEATS[4]]}
+                                                      michrazim.CAVEATS[4],
+                                                      michrazim.ADDRESS_CAVEAT]}
 
 
 # ── crime ──
