@@ -614,11 +614,14 @@ async def history_windows(body: dict, _: User = Depends(get_admin_user),
 
 @router.post("/history/cold/{dataset_id}")
 async def history_cold(dataset_id: str, confirm_rehydrate: bool = Query(False),
+                       resume: bool = Query(False),
                        user: User = Depends(get_admin_user)):
     """Move every table of the dataset to ``full`` Parquet parts on R2 and empty
     it in SQL (verified first). Allowed for a paused dataset or one polled less
     than monthly; otherwise only with ``confirm_rehydrate=true``, which makes
-    the next poll bring it back to SQL before loading. Background job; GET
+    the next poll bring it back to SQL before loading. ``resume=true`` runs
+    again for a dataset already marked cold whose move left tables in SQL (a
+    table already cold is a no-op). Background job; GET
     /history (``tier_job``) or /history/candidates show its progress."""
     import asyncio
     from app.services import history_export
@@ -628,12 +631,15 @@ async def history_cold(dataset_id: str, confirm_rehydrate: bool = Query(False),
     if history_export.tier_status()["running"]:
         raise HTTPException(status_code=409, detail="another tier move is running")
     try:
-        await history_export.check_cold_move(dataset_id, confirm_rehydrate=confirm_rehydrate)
+        await history_export.check_cold_move(dataset_id, confirm_rehydrate=confirm_rehydrate,
+                                             resume=resume)
     except history_export.ColdRefused as e:
         raise HTTPException(status_code=409, detail=str(e))
     asyncio.create_task(history_export.move_to_cold(
-        dataset_id, confirm_rehydrate=confirm_rehydrate, actor=getattr(user, "email", None)))
-    return {"started": True, "dataset_id": dataset_id, "confirm_rehydrate": confirm_rehydrate}
+        dataset_id, confirm_rehydrate=confirm_rehydrate, actor=getattr(user, "email", None),
+        resume=resume))
+    return {"started": True, "dataset_id": dataset_id, "confirm_rehydrate": confirm_rehydrate,
+            "resume": resume}
 
 
 @router.post("/history/cold-ingest/{dataset_id}")

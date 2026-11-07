@@ -482,3 +482,21 @@ def test_parts_from_a_sql_export_seed_the_open_set(fake_r2, tmp_path):
     out = _ingest(ds, t, fake_r2.put_csv("k.csv.gz", [["a", "1"], ["b", "2"]]),
                   _ts(2026, 11, 20), close=True)
     assert out["ok"] and out["matched"] == 1 and out["new"] == 1 and out["closed"] == 0
+
+
+# ── a derived geom does not keep a table hot; a stopped move resumes ─────────
+
+def test_a_geom_derived_from_text_columns_may_go_cold():
+    assert hx.geometry_rebuildable(["geom"], ["Name", "geometry_wkt", "geom"])
+    assert hx.geometry_rebuildable(["geom"], ["Name", "lon", "lat", "geom"])
+    assert not hx.geometry_rebuildable(["geom"], ["Name", "geom"])          # nothing to rebuild from
+    assert not hx.geometry_rebuildable(["shape"], ["geometry_wkt", "shape"])  # not the derived column
+    assert not hx.geometry_rebuildable(["geom", "area"], ["geometry_wkt", "geom", "area"])
+
+
+def test_a_cold_dataset_may_resume_its_move():
+    ds = _ds({"history_tier": "cold", "storage_backend": "r2"})
+    assert hx.cold_move_refusal(ds, confirm_rehydrate=True)                 # "already cold"
+    assert hx.cold_move_refusal(ds, confirm_rehydrate=True, resume=True) is None
+    hot = _ds({"storage_backend": "r2"})
+    assert hx.cold_move_refusal(hot, confirm_rehydrate=False, resume=True)  # active: still refused
