@@ -78,3 +78,14 @@ def is_append_archive(ds) -> bool:
     ``append_only`` dataset, or a full-snapshot one opted into a NEON archive."""
     from app.services.storage_client import dataset_archives_neon
     return ds.storage_mode == "append_only" or dataset_archives_neon(ds)
+
+
+def has_row_tables(ds) -> bool:
+    """Whether this dataset has queryable row tables: it loads into SQL now
+    (is_append_archive), or it is in the cold tier, where its rows live as
+    Parquet behind tables kept empty in SQL. A files-only dataset in the cold
+    tier (app/services/cold_ingest.py) loads nothing into SQL and still has
+    them, so a reader that lists tables must not ask is_append_archive alone."""
+    if is_append_archive(ds):
+        return True
+    return (getattr(ds, "scraper_config", None) or {}).get("history_tier") == "cold"
