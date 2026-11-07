@@ -43,7 +43,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from app.rate_limit import limiter
-from app.services import nadlan_layers, nadlan_query, nadlan_sources, nadlan_text
+from app.services import (nadlan_layers, nadlan_query, nadlan_search, nadlan_sources,
+                          nadlan_text)
 
 router = APIRouter(prefix="/api/nadlan", tags=["nadlan"])
 
@@ -401,6 +402,22 @@ async def nadlan_resolve(
                          alternatives=sniff["alternatives"])
 
     return _envelope(mode, parsed, data, alternatives=sniff["alternatives"])
+
+
+@router.get("/search")
+@limiter.limit("60/minute")
+async def nadlan_search_route(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=200,
+                   description="כל דבר: כתובת, גוש/חלקה, מיקוד, נקודה, מספר מכרז רמ\"י, "
+                               "מספר תכנית או שם"),
+):
+    """The general search box: every reading of ``q`` run side by side —
+    properties (point / gush-helka / zip / address), RMI tenders, plans
+    (מבא"ת and גבולות תב"ע) and streets. Ambiguity is shown, not guessed away."""
+    await _require_ready()
+    res = await nadlan_search.search(q)
+    return {**res, "processed": True, "caveats": CAVEATS}
 
 
 # ── one endpoint for all of it ────────────────────────────────────────────────

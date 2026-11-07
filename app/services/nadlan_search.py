@@ -202,6 +202,15 @@ async def _tenders(parsed: dict) -> list[dict]:
         return []
     first = lots[0]
     won = [x for x in lots if x.get("amount_basis")]
+    parcels: list[dict] = []
+    par = (await michrazim.tables()).get("parcels")
+    if par:
+        rows = await michrazim._fetch(
+            f"SELECT DISTINCT p.\"גוש\" AS g, p.\"חלקה\" AS h FROM {michrazim._t(par)} p "
+            f"WHERE p.\"{michrazim.T}\" = {michrazim._lit(str(int(parsed['tender_id'])))} "
+            f"AND {michrazim._current('p', par[2])} LIMIT {PLAN_PARCEL_SAMPLE}")
+        parcels = [{"gush": int(r["g"]), "helka": int(r["h"])} for r in rows
+                   if str(r["g"]).isdigit() and str(r["h"]).isdigit()]
     return [{
         "tender_id": str(parsed["tender_id"]),
         "tender_number": first.get("tender_number") or parsed["tender_number"],
@@ -216,7 +225,16 @@ async def _tenders(parsed: dict) -> list[dict]:
         "tender_url": first.get("tender_url") or michrazim.TENDER_URL.format(
             id=parsed["tender_id"]),
         "lot_names": [x.get("lot_name") for x in lots[:TENDER_LIMIT] if x.get("lot_name")],
+        "winners": sorted({x["winner"] for x in won if x.get("winner")})[:5],
+        "winning_total": sum(int(x.get("winning_amount") or 0) for x in won) or None,
+        "parcels": parcels,
+        "location": first.get("neighborhood"),
     }]
+
+
+def _norm_sql(expr: str) -> str:
+    """``plan_norm`` in SQL: the same characters dropped."""
+    return f"translate(lower({expr}), ' /\\-.\"''׳״', '')"
 
 
 def _plans_sql(by: str) -> str:
@@ -228,8 +246,7 @@ def _plans_sql(by: str) -> str:
         num = f"f.attrs->>'{src['number']}'"
         name = f"f.attrs->>'{src['name']}'" if src["name"] else "NULL"
         if by == "number":
-            cond = (f"regexp_replace(lower({num}), '[[:space:]/\\\\.\"''׳״-]', '', 'g') "
-                    f"LIKE $1 || '%'")
+            cond = f"{_norm_sql(num)} LIKE $1 || '%'"
         else:
             if not src["name"]:
                 continue
@@ -242,7 +259,7 @@ def _plans_sql(by: str) -> str:
                    {settlement} AS settlement, {url} AS url, {status} AS status,
                    cardinality(f.parcels) AS parcel_count,
                    f.parcels[1:{PLAN_PARCEL_SAMPLE}] AS parcels,
-                   (regexp_replace(lower({num}), '[[:space:]/\\\\.\"''׳״-]', '', 'g') = $1) AS exact
+                   ({_norm_sql(num)} = $1) AS exact
             FROM public."{FEATURES_TABLE}" f
             JOIN public."{STATE_TABLE}" s
               ON s.dataset_id = f.dataset_id AND s.generation = f.generation
@@ -255,7 +272,7 @@ def _plans_sql(by: str) -> str:
 
 async def _plans(norm: str, text: str | None) -> list[dict]:
     sql_num = _plans_sql("number")
-    rows = await nadlan_query._fetch(sql_num, norm, text or "") if norm else []
+    rows = await nadlan_query._fetch(sql_num, norm) if norm else []
     if not rows and text and len(text) >= 3:
         sql_name = _plans_sql("name")
         if sql_name:

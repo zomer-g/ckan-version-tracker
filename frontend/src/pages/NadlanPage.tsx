@@ -21,15 +21,19 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { GeoJsonObject } from "geojson";
-import { nadlan, NadlanEnvelope, NadlanProperty, NadlanStats } from "../api/client";
+import {
+  nadlan, NadlanEnvelope, NadlanProperty, NadlanSearch, NadlanStats,
+} from "../api/client";
 import NadlanResultCard from "../components/nadlan/NadlanResultCard";
+import NadlanSearchResults from "../components/nadlan/NadlanSearchResults";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 const NadlanMap = lazy(() => import("../components/nadlan/NadlanMap"));
 
-type Tab = "map" | "address" | "zip" | "gush";
-const TAB_IDS: Tab[] = ["map", "address", "zip", "gush"];
+type Tab = "search" | "map" | "address" | "zip" | "gush";
+const TAB_IDS: Tab[] = ["search", "map", "address", "zip", "gush"];
 const TAB_LABELS: [Tab, string][] = [
+  ["search", "🔎 חיפוש"],
   ["map", "🗺 לפי מפה"],
   ["address", "🏠 לפי כתובת"],
   ["zip", "✉️ לפי מיקוד"],
@@ -77,8 +81,12 @@ export default function NadlanPage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
 
+  // No tab in the URL: a point means the map (every link the map ever made
+  // carries lat/lon and no tab), anything else opens the general search box.
   const urlTab = params.get("tab");
-  const tab: Tab = urlTab && TAB_IDS.includes(urlTab as Tab) ? (urlTab as Tab) : "map";
+  const tab: Tab = urlTab && TAB_IDS.includes(urlTab as Tab)
+    ? (urlTab as Tab)
+    : params.get("lat") && params.get("lon") ? "map" : "search";
 
   // The gap report and the quiz were tabs here until they became a project of
   // their own. Links to them are out in the world (the quiz shares its own
@@ -92,6 +100,7 @@ export default function NadlanPage() {
 
   const [stats, setStats] = useState<NadlanStats | null>(null);
   const [env, setEnv] = useState<NadlanEnvelope | null>(null);
+  const [searchRes, setSearchRes] = useState<NadlanSearch | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -114,6 +123,7 @@ export default function NadlanPage() {
   const city = useParam(params, "city");
   const street = useParam(params, "street");
   const houseNo = useParam(params, "no");
+  const q = useParam(params, "q");
 
   // Each form keeps its own draft so it can be SUBMITTED; the URL stays the
   // single source of truth for what was actually looked up, and a link opened
@@ -124,6 +134,8 @@ export default function NadlanPage() {
   const [draftZip, setDraftZip] = useState(zip);
   const [draftGush, setDraftGush] = useState(gush);
   const [draftHelka, setDraftHelka] = useState(helka);
+  const [draftQ, setDraftQ] = useState(q);
+  useEffect(() => { setDraftQ(q); }, [q]);
 
   useEffect(() => { setDraftCity(city); }, [city]);
   useEffect(() => { setDraftStreet(street); }, [street]);
@@ -148,7 +160,18 @@ export default function NadlanPage() {
     let cancelled = false;
     const run = async () => {
       let promise: Promise<NadlanEnvelope> | null = null;
-      if (tab === "map" && lat != null && lon != null) {
+      setSearchRes(null);
+      if (tab === "search" && q.trim()) {
+        // Every reading at once; the properties it found go through the same
+        // envelope as the four forms, so the map and the cards need nothing new.
+        promise = nadlan.search(q.trim()).then((r) => {
+          if (!cancelled) setSearchRes(r);
+          return {
+            query: { mode: "search", q: r.q }, data: r.properties, count: r.properties.length,
+            processed: true, caveats: r.caveats, addresses: r.addresses ?? undefined,
+          };
+        });
+      } else if (tab === "map" && lat != null && lon != null) {
         promise = nadlan.point(lat, lon, radiusM, 50, true);
       } else if (tab === "gush" && gush && helka) {
         promise = nadlan.parcel(Number(gush), Number(helka), undefined, true);
@@ -174,7 +197,7 @@ export default function NadlanPage() {
     };
     run();
     return () => { cancelled = true; };
-  }, [tab, lat, lon, radiusM, gush, helka, zip, city, street, houseNo]);
+  }, [tab, lat, lon, radiusM, gush, helka, zip, city, street, houseNo, q]);
 
   // The selected parcel's real polygon — fetched separately because it is the
   // only payload that touches the 4.58 GB source table.
@@ -248,7 +271,7 @@ export default function NadlanPage() {
             <button
               key={id}
               type="button"
-              onClick={() => patch({ tab: id === "map" ? null : id })}
+              onClick={() => patch({ tab: id === "search" ? null : id })}
               style={{
                 padding: "0.5rem 1.05rem", border: "none", cursor: "pointer", background: "none",
                 fontSize: "0.95rem", fontWeight: tab === id ? 700 : 500,
@@ -262,7 +285,29 @@ export default function NadlanPage() {
           ))}
         </div>
 
-        {/* ── the four entry forms ── */}
+        {/* ── the entry forms ── */}
+        {tab === "search" && (
+          <>
+            <LookupForm onSubmit={() => patch({ q: draftQ.trim() })}>
+              <input aria-label="חיפוש: כתובת, גוש/חלקה, מיקוד, מספר מכרז או תכנית"
+                placeholder='כתובת, גוש/חלקה, מיקוד, מכרז רמ"י, מספר תכנית…'
+                value={draftQ}
+                type="search"
+                enterKeyHint="search"
+                onChange={(e) => setDraftQ(e.target.value)}
+                style={{ ...FIELD, minWidth: 240, flex: "1 1 320px" }}
+              />
+            </LookupForm>
+            {!q && (
+              <div className="text-sm text-muted" style={{ marginTop: "-0.5rem", marginBottom: "1rem", lineHeight: 1.8 }}>
+                למשל: "המגיד 14 ירושלים" · "6638/120" · "גוש 6638 חלקה 120" · "6423906" ·
+                "216/2020" (מכרז רמ"י) · "תא/3598" (תכנית) · "32.08, 34.78". כל קריאה אפשרית
+                של הטקסט נבדקת בכל המאגרים המחוברים.
+              </div>
+            )}
+          </>
+        )}
+
         {tab === "map" && (
           <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.6rem" }}>
             <label className="text-sm">
@@ -406,7 +451,16 @@ export default function NadlanPage() {
             {/* ── results ── */}
             {loading && <div className="text-sm text-muted">מחפש…</div>}
             {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
-            {!loading && !error && env && results.length === 0 && (
+            {!loading && tab === "search" && searchRes && (
+              <NadlanSearchResults
+                res={searchRes}
+                onParcel={(g, h) => patch({ tab: "gush", g: String(g), h: String(h) })}
+                onStreet={(st) => patch({
+                  tab: "address", city: st.settlement_name ?? "", street: st.name, no: null,
+                })}
+              />
+            )}
+            {!loading && !error && env && results.length === 0 && tab !== "search" && (
               env.miss ? (
                 <div style={{
                   padding: "0.7rem 0.9rem", borderRadius: 8,
@@ -546,7 +600,7 @@ export default function NadlanPage() {
                       onClick={() => patch(env.miss?.street_point
                         ? { tab: null, lat: String(env.miss.street_point.lat),
                             lon: String(env.miss.street_point.lon), r: "100" }
-                        : { tab: null })}
+                        : { tab: "map" })}
                       style={{
                         marginTop: "0.5rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem",
                         cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6,
