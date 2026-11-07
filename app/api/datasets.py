@@ -2,11 +2,11 @@ import logging
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.utils import parse_uuid, sanitize_ckan_name, scraper_url_slug
+from app.api.utils import parse_uuid, require_http_url, sanitize_ckan_name, scraper_url_slug
 from app.auth.dependencies import get_admin_user, get_current_user, is_admin
 from app.database import get_db
 from app.models.organization import Organization
@@ -46,6 +46,8 @@ class TrackRequest(BaseModel):
     # where an unbounded seen-set would grow without limit. Leave null for
     # slow-cadence append datasets (e.g. the vehicle registry).
     seen_window_versions: int | None = None
+
+    _check_source_url = field_validator("source_url")(require_http_url)
 
 
 class UpdateRequest(BaseModel):
@@ -101,6 +103,7 @@ class UpdateRequest(BaseModel):
     # carry out. Re-pointing keeps the dataset and its whole version history;
     # only where the next scrape looks changes.
     source_url: str | None = None
+    _check_source_url = field_validator("source_url")(require_http_url)
     # Admin escape hatch: merge arbitrary keys into scraper_config for
     # per-dataset engine tuning that has no dedicated field yet (e.g.
     # idf_recursion_root for a hub whose children sit under a sibling path).
@@ -732,6 +735,20 @@ async def list_tracked(
     return Response(content=body, media_type="application/json")
 
 
+# What only an admin may set when creating a dataset; see track_dataset.
+_ADMIN_ONLY_TRACK_FIELDS = ("scraper_config", "storage_mode", "append_key",
+                            "seen_window_versions")
+
+
+def _without_admin_only_fields(body: "TrackRequest", user: User) -> "TrackRequest":
+    """``body`` as sent for an admin; with the admin-only fields at their
+    defaults for anyone else."""
+    if is_admin(user):
+        return body
+    return body.model_copy(update={
+        f: TrackRequest.model_fields[f].default for f in _ADMIN_ONLY_TRACK_FIELDS})
+
+
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def track_dataset(
     body: TrackRequest,
@@ -743,6 +760,14 @@ async def track_dataset(
         body.preferred_interval if body.preferred_interval is not None else body.poll_interval
     )
     interval = max(requested_interval or DEFAULT_POLL_INTERVAL, settings.min_poll_interval)
+
+    # Signing in is an attribution gate any Google account passes, not trust.
+    # A non-admin's request is created pending, and approval carried its
+    # config through as sent — so a free-form scraper_config (the dict the
+    # worker acts on) and the storage knobs are the admin's to set, exactly as
+    # the anonymous /requests endpoint refuses them. The site's own forms
+    # never send these fields.
+    body = _without_admin_only_fields(body, user)
 
     storage_mode = _validate_storage_mode(body.storage_mode)
 
@@ -2093,6 +2118,9 @@ class TrackingRequest(BaseModel):
     # a page. Each entry of selected_files must then be an absolute URL the
     # registry can classify on its own.
     split_files: bool = False
+
+    _check_urls = field_validator("source_url", "source_urls", "selected_files")(
+        require_http_url)
     # url → the label the picker showed for that file. The registry can only
     # title a file from its URL, and a filename ("2003.xls", "t7.xls") is not
     # what the site calls the table — so without this the pending queue renders

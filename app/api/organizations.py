@@ -423,7 +423,7 @@ async def sync_organizations(
         orgs = await ckan_client.organization_list(all_fields=True)
     except Exception as e:
         logger.exception("Failed to fetch organizations from data.gov.il")
-        raise HTTPException(status_code=502, detail=f"data.gov.il fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="data.gov.il fetch failed") from e
 
     if not isinstance(orgs, list):
         raise HTTPException(status_code=502, detail="Unexpected response from data.gov.il")

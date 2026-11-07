@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Date, DateTime, Integer
+from sqlalchemy import Date, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -24,6 +24,27 @@ class LlmDailyUsage(Base):
     # Calendar day this tally is for (server date, CURRENT_DATE).
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     # LLM calls reserved (successfully served) on this day.
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class LlmClientDailyUsage(Base):
+    """Paid-LLM calls per caller per day: one caller's share of the global
+    budget above.
+
+    The global counter caps spend, but one client at 20 requests a minute used
+    the whole day's budget in under two hours, and the feature was off for
+    everyone else until midnight. This caps each caller's share. The caller
+    is the signed-in user, or an HMAC of the client IP for anonymous calls; the
+    address itself is never stored.
+    """
+
+    __tablename__ = "llm_client_daily_usage"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    client_key: Mapped[str] = mapped_column(String(80), primary_key=True)
     calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

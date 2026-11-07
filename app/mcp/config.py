@@ -196,7 +196,9 @@ def google_callback_url(request: Request) -> str:
 
 
 def mcp_jwt_secret() -> str:
-    return settings.get_jwt_secret()
+    """MCP_JWT_SECRET when set, else the site secret (as before). Setting it
+    separates the two: rotating one then leaves the other's tokens valid."""
+    return (settings.mcp_jwt_secret or "").strip() or settings.get_jwt_secret()
 
 
 def mcp_service_token() -> str:

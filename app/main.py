@@ -153,6 +153,18 @@ SENSITIVE_TABLES = frozenset({
     "mcp_oauth_clients",
     "mcp_oauth_codes",
     "mcp_usage_events",
+    "mcp_refresh_tokens",
+})
+
+# Built-in roles the console role must not hold: each reaches past table grants
+# (server files, server programs, every table, role management).
+_CONSOLE_FORBIDDEN_ROLES = frozenset({
+    "pg_read_server_files", "pg_write_server_files", "pg_execute_server_program",
+    "pg_read_all_data", "pg_write_all_data", "pg_signal_backend", "pg_create_subscription",
+})
+# Ones it should not hold: other sessions' query text, every setting.
+_CONSOLE_DISCOURAGED_ROLES = frozenset({
+    "pg_read_all_stats", "pg_read_all_settings", "pg_monitor", "pg_stat_scan_tables",
 })
 
 # Schemas the console role must hold nothing in: `auth` has the credentials,
@@ -212,6 +224,39 @@ async def _prove_console_role_cannot_read_secrets(*, shared_db: bool = False) ->
                        ELSE has_any_column_privilege(c.oid, 'SELECT') END
             """
         )
+        # Table grants are not the only way to read things. A role that is
+        # superuser, or a member of one of these built-in roles, reaches files
+        # on the server, programs, or other sessions' SQL and the server's
+        # settings, none of which a table enumeration shows.
+        powers = await conn.fetchrow(
+            """
+            SELECT r.rolsuper AS superuser, r.rolbypassrls AS bypassrls,
+                   r.rolcreaterole AS createrole,
+                   ARRAY(SELECT b.rolname::text FROM pg_roles b
+                         WHERE b.rolname = ANY($1::text[])
+                           AND pg_has_role(r.oid, b.oid, 'MEMBER')
+                         ORDER BY 1) AS members_of
+            FROM pg_roles r WHERE r.rolname = current_user
+            """,
+            sorted(_CONSOLE_FORBIDDEN_ROLES | _CONSOLE_DISCOURAGED_ROLES),
+        )
+    if powers is not None:
+        members_of = set(powers["members_of"] or [])
+        fatal = sorted(members_of & _CONSOLE_FORBIDDEN_ROLES)
+        fatal += [a for a in ("superuser", "bypassrls", "createrole") if powers[a]]
+        if fatal:
+            logger.critical(
+                "SECURITY: the public SQL console's role has %s. Refusing to start.",
+                ", ".join(fatal))
+            raise RuntimeError("public SQL console role is too powerful: " + ", ".join(fatal))
+        soft = sorted(members_of & _CONSOLE_DISCOURAGED_ROLES)
+        if soft:
+            # Not fatal: a platform-provided role may come with these, and
+            # refusing to boot would take the site down over it. But they let a
+            # console query read other sessions' SQL text and server settings.
+            logger.error(
+                "SECURITY: the public SQL console's role is a member of %s; revoke "
+                "it (REVOKE %s FROM <console role>).", ", ".join(soft), ", ".join(soft))
 
     exposed = [
         f"{r['schema']}.{r['name']}"
@@ -385,6 +430,12 @@ async def lifespan(app: FastAPI):
     # is the guard on every topology; with one database it is the only one.
     await _prove_console_role_cannot_read_secrets(shared_db=shared_db)
     await _prove_app_tables_are_private(shared_db=shared_db)
+    # Load Google's IP ranges in the background now, so the first Looker
+    # connector call is not refused while they are still loading (the check
+    # fails closed and never fetches on the request path).
+    if (settings.connector_api_key or "").strip():
+        from app.services import google_ips
+        google_ips.ensure_fresh()
     # Read where PostGIS lives (`extensions` before xhostd's move, `postgis`
     # after) before the scheduler builds any spatial SQL. Never raises.
     from app.services import postgis_schema
@@ -458,6 +509,51 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
+def _is_internal_route(route) -> bool:
+    """An admin or worker-fleet route: kept out of the published API schema.
+
+    /docs and /redoc are the public API's documentation (linked from /api), so
+    they stay. What they should not be is a map of the ~200 admin routes and
+    the worker protocol for anyone sizing the site up. Those routes refuse
+    every unauthorised call either way; this only stops advertising them.
+    """
+    from app.auth.dependencies import get_admin_user
+
+    path = getattr(route, "path", "") or ""
+    if path.startswith(("/api/admin", "/api/worker")):
+        return True
+    stack = [getattr(route, "dependant", None)]
+    while stack:
+        dep = stack.pop()
+        if dep is None:
+            continue
+        if getattr(dep, "call", None) is get_admin_user:
+            return True
+        stack.extend(getattr(dep, "dependencies", []) or [])
+    endpoint = getattr(route, "endpoint", None)
+    if endpoint is not None:
+        import inspect
+        try:
+            # Worker-key routes outside /api/worker check the key in the body.
+            return "_verify_worker_key(" in inspect.getsource(endpoint)
+        except (OSError, TypeError):
+            return False
+    return False
+
+
+def _public_openapi():
+    if app.openapi_schema is None:
+        from fastapi.openapi.utils import get_openapi
+        app.openapi_schema = get_openapi(
+            title=app.title, version=app.version, description=app.description,
+            routes=[r for r in app.routes if not _is_internal_route(r)],
+        )
+    return app.openapi_schema
+
+
+app.openapi = _public_openapi
 
 # Per-IP data budget for the bulk public API (/api/v1, /api/append): blocks a
 # single client from siphoning an unreasonable VOLUME of data (cost guard) on
@@ -928,6 +1024,28 @@ async def serve_story_page(name: str):
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 index_html = frontend_dist / "index.html"
 
+
+def _dist_file(url_path: str, root: Path = frontend_dist) -> Path | None:
+    """The file under ``root`` that ``url_path`` names, or None.
+
+    The path is resolved before the containment check. Comparing the
+    unresolved strings let ``/..%2f..%2f.env`` through: uvicorn decodes %2f
+    into the path, ``dist/../../.env`` still *starts with* ``dist``, and the
+    404 fallback served any file the process could read.
+    """
+    rel = url_path.lstrip("/")
+    if not rel or "\x00" in rel:
+        return None
+    try:
+        base = root.resolve()
+        candidate = (base / rel).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate
+
+
 if frontend_dist.exists() and index_html.exists():
     logger.info("Frontend dist found at %s", frontend_dist)
 
@@ -989,8 +1107,8 @@ if frontend_dist.exists() and index_html.exists():
         if request.url.path.startswith("/api/"):
             return JSONResponse({"detail": exc.detail}, status_code=404)
         # Check if it's an actual static file in dist/ (e.g. favicon.svg)
-        static_path = frontend_dist / request.url.path.lstrip("/")
-        if static_path.is_file() and str(static_path).startswith(str(frontend_dist)):
+        static_path = _dist_file(request.url.path)
+        if static_path is not None:
             return FileResponse(static_path)
         # For all other 404s, serve the SPA
         return await _spa_response(request.url.path)

@@ -18,8 +18,12 @@ class _FakeConn:
     """The proof runs through append_store.readonly_txn: acquire, a READ ONLY
     transaction, SET LOCAL statement_timeout, then the query."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, powers=None):
         self._rows = rows
+        self._powers = powers
+
+    async def fetchrow(self, _sql, *_args):
+        return self._powers
 
     def transaction(self, **_kw):
         class _Tx:
@@ -39,15 +43,16 @@ class _FakeConn:
 
 
 class _FakePool:
-    def __init__(self, rows):
+    def __init__(self, rows, powers=None):
         self._rows = rows
+        self._powers = powers
 
     def acquire(self):
-        rows = self._rows
+        rows, powers = self._rows, self._powers
 
         class _Acq:
             async def __aenter__(_self):
-                return _FakeConn(rows)
+                return _FakeConn(rows, powers)
 
             async def __aexit__(_self, *a):
                 return False
@@ -55,9 +60,9 @@ class _FakePool:
         return _Acq()
 
 
-def _with_rows(monkeypatch, rows):
+def _with_rows(monkeypatch, rows, powers=None):
     async def fake_pool():
-        return _FakePool(rows)
+        return _FakePool(rows, powers)
 
     monkeypatch.setattr(append_store, "get_readonly_pool", fake_pool)
 
@@ -131,3 +136,26 @@ def test_separate_databases_report_no_collision(monkeypatch):
     monkeypatch.setattr(M.settings, "database_url", "postgresql://a:pw@main-host:5432/app")
     monkeypatch.setattr(M.settings, "append_database_url", "postgresql://a:pw@append-host:5432/archive")
     assert M._guard_db_separation() is False
+
+
+def _powers(members=(), **flags):
+    return {"superuser": False, "bypassrls": False, "createrole": False,
+            "members_of": list(members), **flags}
+
+
+def test_refuses_a_role_that_reads_server_files(monkeypatch):
+    _with_rows(monkeypatch, [], _powers(["pg_read_server_files"]))
+    with pytest.raises(RuntimeError, match="pg_read_server_files"):
+        asyncio.run(M._prove_console_role_cannot_read_secrets())
+
+
+def test_refuses_a_superuser_console_role(monkeypatch):
+    _with_rows(monkeypatch, [], _powers(superuser=True))
+    with pytest.raises(RuntimeError, match="superuser"):
+        asyncio.run(M._prove_console_role_cannot_read_secrets())
+
+
+def test_stats_membership_is_logged_not_fatal(monkeypatch, caplog):
+    _with_rows(monkeypatch, [], _powers(["pg_read_all_stats"]))
+    asyncio.run(M._prove_console_role_cannot_read_secrets())
+    assert "pg_read_all_stats" in caplog.text

@@ -35,6 +35,7 @@ from app.database import get_db
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, nl_query, semantic_model
+from app.services.llm_budget import client_key as llm_client_key
 from app.services.llm_budget import record_llm_tokens, reserve_llm_call
 from app.services.semantic_model import SemanticError
 
@@ -131,6 +132,7 @@ async def query(request: Request, body: QueryRequest, db: AsyncSession = Depends
             db,
             call_budget=cfg.get("daily_call_budget"),
             token_budget_override=cfg.get("daily_output_token_budget"),
+            client=llm_client_key(request, user),
         )
 
     async def _usage(i: int, o: int) -> None:

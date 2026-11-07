@@ -93,3 +93,31 @@ class McpUsageEvent(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class McpRefreshToken(Base):
+    """One issued MCP refresh token, so each can be used once.
+
+    Refresh tokens are 30-day JWTs; without a record of which ones were spent,
+    a leaked one stayed usable for its whole life however often the client
+    refreshed. Every refresh now spends its token and issues the next one in
+    the same ``family`` (one family per sign-in). A spent token presented
+    again after the grace window means two parties hold the chain, so the
+    whole family is revoked and the user signs in again (RFC 9700 §4.14).
+
+    ``jti`` is not a secret on its own — the token is a signed JWT — but the
+    table sits in ``auth`` with the other credential tables regardless.
+    """
+
+    __tablename__ = "mcp_refresh_tokens"
+    __table_args__ = {"schema": "auth"}
+
+    jti: Mapped[str] = mapped_column(Text, primary_key=True)
+    family: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    api_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("auth.api_users.id", ondelete="CASCADE"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("auth.mcp_oauth_clients.client_id", ondelete="CASCADE"), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

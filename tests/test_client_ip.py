@@ -119,3 +119,26 @@ def test_budget_and_ratelimit_share_one_derivation():
 
     req = _through_cloudflare("8.8.8.8")
     assert _client_ip(req) == client_ip_key(req) == get_client_ip(req) == "8.8.8.8"
+
+
+# ── xhostd: client → Caddy ingress → app (no Cloudflare) ─────────────────────
+# Measured 2026-11-07: over.org.il resolves to the xhostd ingress (Via: Caddy),
+# and a request sent with a forged X-Forwarded-For / CF-Connecting-IP was logged
+# under the sender's real address, so the ingress writes the peer as the
+# rightmost XFF hop. These pin that a forger still lands in its own bucket.
+
+def test_xhostd_ingress_forged_headers_ignored():
+    real = "160.79.106.142"
+    # Forged XFF on the left, the ingress-appended peer on the right.
+    req = _Req({"X-Forwarded-For": f"8.8.4.4, {real}",
+                "CF-Connecting-IP": "9.9.9.9"}, host="10.1.2.3")
+    assert get_client_ip(req) == real
+
+
+def test_xhostd_ingress_forged_cloudflare_hop_ignored():
+    # Claiming to be a Cloudflare edge only works if that edge is the hop the
+    # ingress wrote; a client can only put it to the left of its own address.
+    real = "160.79.106.142"
+    req = _Req({"X-Forwarded-For": f"{CF_EDGE}, {real}",
+                "CF-Connecting-IP": "9.9.9.9"}, host="10.1.2.3")
+    assert get_client_ip(req) == real

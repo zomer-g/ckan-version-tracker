@@ -159,7 +159,7 @@ def _ask_client(monkeypatch, exhausted: bool):
     # A provider must look configured, else the gate short-circuits to 503.
     monkeypatch.setattr(cbs_ask, "_provider", lambda: "deepseek")
     # Stand in for the real DB-backed reservation.
-    async def _reserve(db):
+    async def _reserve(db, **_kw):
         return not exhausted
     monkeypatch.setattr(cbs_ask, "reserve_llm_call", _reserve)
     # If the budget ever fails to block, this makes the test fail loudly

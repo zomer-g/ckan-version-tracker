@@ -58,6 +58,7 @@ import { KNESSET_PATTERN } from "../utils/knessetPattern";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useAuth } from "../auth/AuthContext";
+import { safeHref } from "../utils/safeHref";
 const ODATA_BASE = "https://www.odata.org.il";
 
 /** Detect gov.il collector URLs */
@@ -1038,8 +1039,8 @@ export default function HomePage() {
         {(() => {
           const sourceHref =
             ds.source_type === "scraper" || ds.source_type === "govmap"
-              ? ds.source_url
-              : (ds.source_url || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
+              ? safeHref(ds.source_url)
+              : (safeHref(ds.source_url) || `https://data.gov.il/he/datasets/${ds.organization}/${ds.ckan_name}`);
           if (!sourceHref) return null;
           const dsBadge = sourceBadgeFor(ds.source_type, ds.organization, ds.ckan_id);
           // Worker-declared sources label themselves from their manifest.

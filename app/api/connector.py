@@ -29,6 +29,7 @@ from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
 from app.services import append_store, data_catalog, google_ips
+from app.api.utils import public_error
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ async def run_sql(request: Request, body: ConnectorSqlBody):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001 — SQL/timeout errors go to the user
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        raise public_error(e, 400) from e
 
 
 @router.get("/tables")

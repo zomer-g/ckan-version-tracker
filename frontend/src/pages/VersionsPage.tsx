@@ -31,6 +31,7 @@ import ErrorBoundary from "../components/ErrorBoundary";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { Breadcrumbs } from "../components/a11y";
+import { safeHref } from "../utils/safeHref";
 const ODATA_BASE = "https://www.odata.org.il";
 
 // What a partial version READ. A version's change_summary carries the mode's
@@ -684,8 +685,8 @@ export default function VersionsPage() {
           {dataset && (() => {
             const sourceHref =
               dataset.source_type === "scraper" || dataset.source_type === "govmap"
-                ? (dataset.source_url || "#")
-                : (dataset.source_url || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`);
+                ? (safeHref(dataset.source_url) || "#")
+                : (safeHref(dataset.source_url) || `https://data.gov.il/he/datasets/${dataset.organization}/${dataset.ckan_name}`);
             const sourceBadge = sourceBadgeFor(
               dataset.source_type,
               dataset.organization,

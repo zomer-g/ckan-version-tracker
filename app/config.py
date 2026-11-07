@@ -1,5 +1,6 @@
 from urllib.parse import urlsplit
 
+import logging
 import os
 
 from pydantic import model_validator
@@ -35,6 +36,9 @@ def parse_pg_target(dsn: str) -> tuple[str, int, str] | None:
     return (host, port, dbname)
 
 
+# Warn once per process, not on every token.
+_short_secret_warned = False
+
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/ckan_tracker"
     # The same database without xhostd's transaction-mode pooler, for what needs
@@ -59,6 +63,13 @@ class Settings(BaseSettings):
     # via POST /api/auth/refresh (on load + on a timer), so an active admin is
     # never logged out mid-work. Was 1440 (24h). See app/api/auth.refresh.
     jwt_expiry_minutes: int = 120
+    # However often a session is refreshed, it ends this long after the sign-in
+    # it started from (POST /api/auth/refresh refuses past it). Without a cap a
+    # stolen token could be slid forward forever.
+    jwt_max_session_hours: int = 7 * 24
+    # Signs the MCP OAuth tokens (access, refresh, Google-roundtrip state).
+    # Empty: JWT_SECRET_KEY, as before. Set it to rotate the two independently.
+    mcp_jwt_secret: str = ""
 
     data_gov_il_url: str = "https://data.gov.il"
     odata_url: str = "https://www.odata.org.il"
@@ -722,6 +733,9 @@ class Settings(BaseSettings):
     api_access_log_retention_days: int = 180
     # Query strings (search terms, questions) are blanked sooner than the row.
     api_access_log_query_retention_days: int = 30
+    # The client IP is replaced by a keyed pseudonym (same address → same
+    # value, not reversible) once a row is this old. 0 keeps it for the row's life.
+    api_access_log_ip_retention_days: int = 7
 
     # ── Looker Studio community-connector API (/api/connector) ──
     # All Looker Studio traffic egresses from a small pool of Google IPs, so it
@@ -730,6 +744,11 @@ class Settings(BaseSettings):
     # = feature off (the router answers 503).
     connector_api_key: str = ""
     connector_daily_byte_budget: int = 10 * 1024 ** 3   # shared bucket, 10 GB/window
+    # Apps Script traffic is recognised by Google's own ranges: goog.json less
+    # cloud.json (what Google Cloud customers rent). False admits all of
+    # goog.json again — only if Apps Script is ever seen egressing from a
+    # customer range (refusals are logged; see app/services/google_ips.py).
+    connector_exclude_cloud_ranges: bool = True
 
     # ── Global daily hard cap on paid-LLM calls (anti-abuse) ──
     # The public natural-language endpoints (/api/cbs/ask + /api/cbs/resolve)
@@ -744,6 +763,10 @@ class Settings(BaseSettings):
     # See app/services/llm_budget.py.
     llm_budget_enabled: bool = True
     cbs_ask_daily_budget: int = 2000   # max LLM parses/day, summed over everyone
+    # Each caller's share of it: a signed-in user, or one client IP. Without
+    # it, one client at the per-IP rate limit (20/min) spent the whole day's
+    # budget in under two hours. 0 disables the per-caller cap.
+    llm_client_daily_calls: int = 100
     # Second ceiling, on OUTPUT tokens. A call count alone stopped bounding
     # spend once /api/nl/query joined the same budget: its prompt carries a
     # retrieved slice of the semantic model, so per-call cost varies by an order
@@ -894,6 +917,14 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "JWT_SECRET_KEY is not set. Set it in .env or as an environment variable."
             )
+        global _short_secret_warned
+        if len(self.jwt_secret_key) < 32 and not _short_secret_warned:
+            _short_secret_warned = True
+            # Not fatal (a short production secret must not stop the site), but
+            # an HS256 key this short can be brute-forced offline from any token.
+            logging.getLogger(__name__).error(
+                "JWT_SECRET_KEY is shorter than 32 characters; replace it with "
+                "a random value of 64 characters or more")
         return self.jwt_secret_key
 
     def get_admin_emails(self) -> set[str]:

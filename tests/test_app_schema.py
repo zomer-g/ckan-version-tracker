@@ -34,7 +34,8 @@ def _migration_066():
 # ── the lists agree ──────────────────────────────────────────────────────────
 
 # App tables born after 066, created in `app` by name by their own migration.
-CREATED_IN_APP_LATER = {"api_access_log", "history_parts", "health_runs"}  # 068, 072, 074
+CREATED_IN_APP_LATER = {"api_access_log", "history_parts", "health_runs",  # 068, 072, 074
+                        "llm_client_daily_usage"}  # 078
 
 
 def test_migration_moves_exactly_the_runtime_app_tables():
@@ -113,6 +114,9 @@ class _FakeConn:
 
     async def fetch(self, _sql):
         return self._rows
+
+    async def fetchrow(self, _sql, *_args):
+        return None  # role powers: not under test here
 
 
 class _FakePool:

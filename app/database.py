@@ -27,6 +27,7 @@ APP_TABLES = frozenset({
     "health_runs",
     "history_parts",
     "llm_daily_usage",
+    "llm_client_daily_usage",
     "nl_query_cache",
     "nl_query_config",
     "nl_query_log",

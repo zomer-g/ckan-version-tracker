@@ -28,7 +28,7 @@ from app.api.cbs_search_util import RESULT_COLS, build_search
 from app.config import settings
 from app.database import get_db
 from app.rate_limit import limiter
-from app.services.llm_budget import reserve_llm_call
+from app.services.llm_budget import client_key, reserve_llm_call
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cbs", tags=["cbs"])
@@ -244,7 +244,7 @@ async def _parse_question(db: AsyncSession, q: str) -> tuple[str, dict]:
 _FILTER_KEYS = ("query", "geo", "file_type", "section", "year_from", "year_to")
 
 
-async def _enforce_llm_budget(db: AsyncSession) -> None:
+async def _enforce_llm_budget(db: AsyncSession, request: Request | None = None) -> None:
     """Reserve one call against the GLOBAL daily LLM budget, or 429.
 
     Runs before any LLM call on the public (unauthenticated) endpoints so a
@@ -255,7 +255,8 @@ async def _enforce_llm_budget(db: AsyncSession) -> None:
         # No provider configured ⇒ _parse_question will 503 and no LLM is ever
         # called. Don't spend budget on a request that can't cost anything.
         return
-    if not await reserve_llm_call(db):
+    client = client_key(request) if request is not None else None
+    if not await reserve_llm_call(db, client=client):
         email = getattr(settings, "api_contact_email", "guy@z-g.co.il")
         raise HTTPException(
             status_code=429,
@@ -278,7 +279,7 @@ async def ask(request: Request, body: AskRequest, db: AsyncSession = Depends(get
     if not q:
         raise HTTPException(status_code=400, detail="q is required")
 
-    await _enforce_llm_budget(db)
+    await _enforce_llm_budget(db, request)
     provider, parsed = await _parse_question(db, q)
     total, results, used = await _search_relaxed(db, parsed, body.limit)
     relaxed = [k for k in _FILTER_KEYS if parsed.get(k) and not used.get(k)]
@@ -529,5 +530,5 @@ async def resolve(request: Request, body: AskRequest, db: AsyncSession = Depends
     q = (body.q or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="q is required")
-    await _enforce_llm_budget(db)
+    await _enforce_llm_budget(db, request)
     return await resolve_question(db, q, body.limit)

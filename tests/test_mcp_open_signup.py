@@ -72,6 +72,7 @@ def _google(monkeypatch, info):
 def _request():
     state = jwt.encode({"client_id": "00000000-0000-4000-8000-0000000000aa",
                         "redirect_uri": "http://localhost:9/cb", "code_challenge": "x" * 43,
+                        "aud": oauth._STATE_AUDIENCE,
                         "exp": int(time.time()) + 60}, oauth.mcp_jwt_secret(), algorithm="HS256")
 
     class _Req:
