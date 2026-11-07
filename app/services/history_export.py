@@ -1492,8 +1492,9 @@ class PgTable:
             raise ColdRefused(f"{self.table} has PostGIS columns ({', '.join(geo)}), which "
                               "the Parquet parts do not carry: it cannot go cold")
         self.geometry = bool(geo)
+        # The geometry was ruled on just above (rebuilt from text, or refused).
         typed = [r["column_name"] for r in rows if r["column_name"] not in _INTERNAL_COLS
-                 and r["udt_name"] not in ("text", "varchar")]
+                 and r["udt_name"] not in ("text", "varchar") and r["udt_name"] not in _GEOMETRY_UDTS]
         if typed:
             raise ColdRefused(f"{self.table} has non-text source columns ({', '.join(typed)}): "
                               "the parts store strings and could not restore them")

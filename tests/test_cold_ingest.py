@@ -500,3 +500,40 @@ def test_a_cold_dataset_may_resume_its_move():
     assert hx.cold_move_refusal(ds, confirm_rehydrate=True, resume=True) is None
     hot = _ds({"storage_backend": "r2"})
     assert hx.cold_move_refusal(hot, confirm_rehydrate=False, resume=True)  # active: still refused
+
+
+class _DescribeConn:
+    def __init__(self, cols):
+        self.cols = cols
+
+    async def fetch(self, _sql, _table):
+        return [{"column_name": c, "udt_name": u} for c, u in self.cols]
+
+
+def _describe(cols, monkeypatch):
+    async def ident(conn, table):
+        return ("row_hash", "uuid")
+
+    monkeypatch.setattr(hx, "_table_ident", ident)
+    t = hx.PgTable("append_modern_cadaster_a545e976")
+    t.conn = _DescribeConn(cols)
+    return t, asyncio.run(t.describe())
+
+
+def test_describe_lets_the_cadaster_table_go_cold(monkeypatch):
+    """The prod shape that was refused twice: text columns, geometry_wkt, the
+    validity columns, a uuid row_hash and a derived PostGIS geom."""
+    cols = [("Name", "text"), ("GlobalID", "text"), ("geometry_wkt", "text"),
+            ("first_seen", "timestamptz"), ("last_seen", "timestamptz"),
+            ("row_hash", "uuid"), ("geom", "geometry")]
+    t, (export, ident, kind) = _describe(cols, monkeypatch)
+    assert export == ["Name", "GlobalID", "geometry_wkt"]
+    assert (ident, kind) == ("row_hash", "uuid") and t.geometry is True
+
+
+def test_describe_still_refuses_a_geometry_nothing_rebuilds(monkeypatch):
+    with pytest.raises(hx.ColdRefused):
+        _describe([("Name", "text"), ("row_hash", "uuid"), ("geom", "geometry")], monkeypatch)
+    with pytest.raises(hx.ColdRefused):
+        _describe([("n", "int4"), ("geometry_wkt", "text"), ("row_hash", "uuid"),
+                   ("geom", "geometry")], monkeypatch)
