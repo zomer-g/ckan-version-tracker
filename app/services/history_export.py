@@ -1394,12 +1394,15 @@ def rehydrate_promised(ds) -> bool:
     return (getattr(ds, "scraper_config", None) or {}).get("history_rehydrate_on_poll") is True
 
 
-def cold_move_refusal(ds, *, confirm_rehydrate: bool) -> str | None:
+def cold_move_refusal(ds, *, confirm_rehydrate: bool, resume: bool = False) -> str | None:
     """Why ``ds`` may not move to the cold tier now, or None (plan section 2):
     it must be paused or polled more rarely than every 30 days, unless the
     admin promises that the next poll rehydrates it first."""
     if history_tier_of(ds) == TIER_COLD:
-        return "המאגר כבר בשכבה הקרה"
+        # move_to_cold marks the tier FIRST, so a move whose tables failed (or
+        # was stopped) leaves a cold dataset with tables still in SQL. Resuming
+        # moves those; a table already cold exports nothing again.
+        return None if resume else "המאגר כבר בשכבה הקרה"
     if confirm_rehydrate:
         return None
     if getattr(ds, "status", None) == "paused":
@@ -1455,6 +1458,8 @@ class PgTable:
     def __init__(self, table: str):
         self.table = table
         self._types: dict[str, str] = {}
+        # True once describe() saw a geom it lets go (rebuilt on rehydrate).
+        self.geometry = False
 
     async def __aenter__(self) -> "PgTable":
         pool = await append_store.get_pool()
@@ -1483,9 +1488,10 @@ class PgTable:
             self.table)]
         self._types = {r["column_name"]: r["udt_name"] for r in rows}
         geo = [r["column_name"] for r in rows if r["udt_name"] in _GEOMETRY_UDTS]
-        if geo:
+        if geo and not geometry_rebuildable(geo, [r["column_name"] for r in rows]):
             raise ColdRefused(f"{self.table} has PostGIS columns ({', '.join(geo)}), which "
                               "the Parquet parts do not carry: it cannot go cold")
+        self.geometry = bool(geo)
         typed = [r["column_name"] for r in rows if r["column_name"] not in _INTERNAL_COLS
                  and r["udt_name"] not in ("text", "varchar")]
         if typed:
@@ -1527,6 +1533,22 @@ class PgTable:
 
 
 # ── the catalog side of the tiers ────────────────────────────────────────────
+
+def geometry_rebuildable(geo_cols: list[str], cols: list[str]) -> bool:
+    """Whether a table's PostGIS columns can be rebuilt from its text columns.
+
+    The parts leave geometry out. That loses nothing when the only geometry
+    column is the ``geom`` the loader derives (append_store.fill_geometry)
+    from ``geometry_wkt`` or a coordinate pair, both ordinary text columns that
+    the parts DO carry: rehydrate derives it again. Any other geometry column
+    may hold what no text column says, so it still refuses. Pure."""
+    from app.services import append_geometry
+    from app.services.index_mirror import GEOM_COLUMN, WKT_COLUMN
+
+    if set(geo_cols) != {GEOM_COLUMN}:
+        return False
+    return WKT_COLUMN in cols or append_geometry.find_pair(list(cols)) is not None
+
 
 async def _table_parts(table: str) -> list[dict]:
     from sqlalchemy import select
@@ -1727,6 +1749,11 @@ async def rehydrate(dataset_id, table: str, *, table_side=None) -> dict:
             if sql["content_hash"] != content_hash(expected):
                 raise RuntimeError("content hash differs after the load")
         await _set_deleted([p["id"] for p in parts + closure_parts], False)
+        if getattr(side, "geometry", False):
+            # The parts never carried geom: derive it again from geometry_wkt
+            # or the coordinate pair (see geometry_rebuildable).
+            geo = await append_store.fill_geometry(table, cols)
+            logger.info("history rehydrate: %s geometry rebuilt: %s", table, geo)
         logger.info("history rehydrate: %s ← %d parts, %d rows", table, len(parts), len(expected))
         return {"ok": True, "rows": len(expected), "parts": len(parts)}
     except Exception as e:  # noqa: BLE001 — the transaction rolled back, catalog untouched
@@ -1811,7 +1838,8 @@ async def _log(ds, message: str, status: str = "ok", actor: str | None = None) -
         pass
 
 
-async def check_cold_move(dataset_id, *, confirm_rehydrate: bool) -> None:
+async def check_cold_move(dataset_id, *, confirm_rehydrate: bool,
+                          resume: bool = False) -> None:
     """Raise ColdRefused before a move is started (the endpoint's 409)."""
     from app.database import async_session
     from app.models.tracked_dataset import TrackedDataset
@@ -1820,7 +1848,7 @@ async def check_cold_move(dataset_id, *, confirm_rehydrate: bool) -> None:
         ds = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
     if ds is None:
         raise ColdRefused("dataset not found")
-    why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate)
+    why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate, resume=resume)
     if why:
         raise ColdRefused(why)
 
@@ -1839,7 +1867,7 @@ async def _existing_tables(names: list[str]) -> list[str]:
 
 
 async def move_to_cold(dataset_id, *, confirm_rehydrate: bool = False,
-                       actor: str | None = None) -> dict:
+                       actor: str | None = None, resume: bool = False) -> dict:
     """Every NEON table of the dataset to full parts. The tier is set FIRST, so
     no poll loads into a table being emptied; a table that fails stays hot and
     is read as one (the engine decides per table from the catalog)."""
@@ -1854,7 +1882,7 @@ async def move_to_cold(dataset_id, *, confirm_rehydrate: bool = False,
             ds = await db.get(TrackedDataset, _uuid.UUID(str(dataset_id)))
             if ds is None:
                 raise ColdRefused("dataset not found")
-            why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate)
+            why = cold_move_refusal(ds, confirm_rehydrate=confirm_rehydrate, resume=resume)
             if why:
                 raise ColdRefused(why)
             tables = await _existing_tables(await append_tables.resolve_all_tables(ds, db))
