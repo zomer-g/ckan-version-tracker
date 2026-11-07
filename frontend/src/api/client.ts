@@ -3484,6 +3484,59 @@ export interface NadlanEnvelope {
   miss?: NadlanMiss;
 }
 
+/** One reading of what was typed into the general search box. */
+export interface NadlanReading {
+  kind: "point" | "gush_helka" | "gush" | "zip" | "address" | "tender" | "plan" | "text";
+  parsed: Record<string, unknown>;
+}
+
+export interface NadlanSearchTender {
+  tender_id: string;
+  tender_number: string;
+  settlement: string | null;
+  tender_type: string | null;
+  purpose: string | null;
+  status: string | null;
+  committee_date: string | null;
+  lots: number;
+  lots_won: number;
+  units: number;
+  tender_url: string;
+  lot_names: string[];
+  winners: string[];
+  winning_total: number | null;
+  parcels: { gush: number; helka: number }[];
+  /** RMI's own location text (שכונה) — for some tenders the only address. */
+  location: string | null;
+}
+
+export interface NadlanSearchPlan {
+  source: "mavat" | "taba_bounds";
+  source_title: string;
+  number: string;
+  name: string | null;
+  settlement: string | null;
+  url: string | null;
+  status: string | null;
+  parcel_count: number;
+  parcels: { gush: number; suffix: number; helka: number }[];
+  exact: boolean;
+}
+
+/** /api/nadlan/search — every reading of the box, run side by side. */
+export interface NadlanSearch {
+  q: string;
+  interpretations: NadlanReading[];
+  properties: (NadlanProperty & { found_by?: string })[];
+  addresses: Record<string, unknown>[] | null;
+  tenders: NadlanSearchTender[];
+  plans: NadlanSearchPlan[];
+  streets: NadlanStreet[];
+  address_parse: { city: string; street: string; number: string | null } | null;
+  errors: Record<string, string>;
+  caveats: string[];
+}
+
 export interface NadlanStats {
   parcels: number;
   parcels_ambiguous: number;
@@ -3605,6 +3658,10 @@ export const nadlan = {
     request<{ data: NadlanStreet[] }>(
       `/nadlan/streets?q=${encodeURIComponent(q)}` +
       (settlement != null ? `&settlement=${settlement}` : "") + `&limit=${limit}`),
+  /** The general search box: an address, gush/helka, zip, point, RMI tender
+   *  number, plan number or a name — every reading of it at once. */
+  search: (q: string) =>
+    request<NadlanSearch>(`/nadlan/search?q=${encodeURIComponent(q)}`),
   resolve: (q: string, radius_m = 0) =>
     request<NadlanEnvelope>(
       `/nadlan/resolve?q=${encodeURIComponent(q)}&radius_m=${radius_m}`),

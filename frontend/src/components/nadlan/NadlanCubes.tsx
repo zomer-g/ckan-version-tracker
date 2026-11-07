@@ -19,10 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   nadlan, type NadlanCubeData, type NadlanCubeInfo, type NadlanProperty,
 } from "../../api/client";
-
-function Ltr({ children }: { children: React.ReactNode }) {
-  return <span style={{ unicodeBidi: "isolate", direction: "ltr", display: "inline-block" }}>{children}</span>;
-}
+import NadlanTile, { Ltr, TileTable } from "./NadlanTile";
 
 const n = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("he-IL", { maximumFractionDigits: digits });
@@ -90,17 +87,14 @@ function CrimeView({ data, onYear }: { data: NadlanCubeData; onYear: (y: string)
         )}
       </div>
 
-      <div tabIndex={0} role="region" aria-label="פשיעה לפי קבוצת עבירה" className="scroll-region"
-           style={{ overflowX: "auto", marginTop: "0.4rem" }}>
-        <table style={{ width: "100%", fontSize: "0.82rem", borderCollapse: "collapse" }}>
+      <div tabIndex={0} role="region" aria-label="פשיעה לפי קבוצת עבירה"
+           className="scroll-region nadlan-table-wrap" style={{ marginTop: "0.5rem" }}>
+        <table className="nadlan-table">
           <thead>
-            <tr style={{ color: "var(--text-muted)" }}>
-              <th scope="col" style={{ textAlign: "start", padding: "0.2rem 0.4rem" }}>קבוצת עבירה</th>
+            <tr>
+              <th scope="col">קבוצת עבירה</th>
               {scopes.map((k) => (
-                <th key={k} scope="col" style={{
-                  textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap",
-                  fontWeight: focus === k ? 700 : 500,
-                }}>
+                <th key={k} scope="col" style={{ fontWeight: focus === k ? 700 : 500 }}>
                   {SCOPE_LABEL[k]}
                   <div style={{ fontWeight: 400, fontSize: "0.72rem" }}>ל-1,000 (תיקים)</div>
                 </th>
@@ -109,11 +103,10 @@ function CrimeView({ data, onYear }: { data: NadlanCubeData; onYear: (y: string)
           </thead>
           <tbody>
             {data.groups!.filter((g) => g.national > 0).map((g) => (
-              <tr key={g.group} style={{ borderTop: "1px solid var(--border)" }}>
-                <td style={{ padding: "0.2rem 0.4rem" }}>{g.group}</td>
+              <tr key={g.group}>
+                <td>{g.group}</td>
                 {scopes.map((k) => (
-                  <td key={k} style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap",
-                                       fontWeight: focus === k ? 600 : 400 }}>
+                  <td key={k} style={{ whiteSpace: "nowrap", fontWeight: focus === k ? 600 : 400 }}>
                     <Ltr>{n(g[`${k}_per_1000` as const], 1)}</Ltr>{" "}
                     <span className="text-muted" style={{ fontSize: "0.75rem" }}>(<Ltr>{n(g[k])}</Ltr>)</span>
                   </td>
@@ -155,9 +148,37 @@ function displayValue(v: string): string {
   return `${d}/${mo}/${y}${time}`;
 }
 
+/** A layer's records as one table: a row per record, a column per field
+ *  (in the order the records first name them), and the distance first when
+ *  the cube looks around the parcel rather than on it. */
 function SpatialView({ data }: { data: NadlanCubeData }) {
   const feats = data.features ?? [];
   const radius = data.cube.radius_m ?? 0;
+  const columns = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const f of feats) for (const fl of f.fields) if (!seen.has(fl.key)) seen.set(fl.key, fl.label);
+    return [...seen.entries()].map(([key, label]) => ({ key, label }));
+  }, [feats]);
+  const rows = feats.map((f) => {
+    const by = new Map(f.fields.map((fl) => [fl.key, fl]));
+    const cells: React.ReactNode[] = columns.map((c) => {
+      const fl = by.get(c.key);
+      if (!fl) return null;
+      return fl.url
+        ? <a href={fl.url} target="_blank" rel="noopener noreferrer">
+            {fl.value}<span className="sr-only"> (נפתח בחלון חדש)</span>
+          </a>
+        : <span title={displayValue(fl.value) !== fl.value ? fl.value : undefined}>
+            {displayValue(fl.value)}
+          </span>;
+    });
+    if (radius > 0) {
+      cells.unshift(f.distance_m < 1 ? "על החלקה" : <><Ltr>{n(f.distance_m)}</Ltr> מ׳</>);
+    }
+    return cells;
+  });
+  const cols = radius > 0 ? [{ key: "_d", label: "מרחק" }, ...columns] : columns;
+
   return (
     <div>
       {feats.length === 0 ? (
@@ -167,52 +188,19 @@ function SpatialView({ data }: { data: NadlanCubeData }) {
             : radius ? `אין רשומות בשכבה בתוך ${radius} מ׳ מהחלקה.` : "החלקה אינה בתוך אף רשומה בשכבה."}
         </div>
       ) : (
-        <div style={{ display: "grid", gap: "0.45rem" }}>
-          {feats.map((f, i) => (
-            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "0.45rem 0.6rem" }}>
-              {radius > 0 && (
-                <div className="text-muted" style={{ fontSize: "0.75rem", marginBottom: "0.2rem" }}>
-                  {f.distance_m < 1 ? "על החלקה" : <><Ltr>{n(f.distance_m)}</Ltr> מ׳ מהחלקה</>}
-                </div>
-              )}
-              <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.1rem 0.6rem", fontSize: "0.82rem" }}>
-                {f.fields.map((fl) => (
-                  <div key={fl.key} style={{ display: "contents" }}>
-                    <dt style={{ color: "var(--text-muted)", overflowWrap: "anywhere" }}>{fl.label}</dt>
-                    <dd style={{ margin: 0, overflowWrap: "anywhere" }}>
-                      {fl.url
-                        ? <a href={fl.url} target="_blank" rel="noopener noreferrer">
-                            {fl.value}<span className="sr-only"> (נפתח בחלון חדש)</span>
-                          </a>
-                        : <span title={displayValue(fl.value) !== fl.value ? fl.value : undefined}>
-                            {displayValue(fl.value)}
-                          </span>}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          ))}
+        <>
+          <TileTable label={data.cube.title} columns={cols} rows={rows} />
           {(data.count ?? 0) > feats.length && (
-            <div className="text-sm text-muted">מוצגות {feats.length} מתוך {data.count}.</div>
+            <div className="text-sm text-muted" style={{ marginTop: "0.35rem" }}>
+              מוצגות {feats.length} מתוך {data.count}.
+            </div>
           )}
-        </div>
+        </>
       )}
       {data.notes && data.notes.length > 0 && (
-        <ul className="text-muted" style={{ fontSize: "0.75rem", margin: "0.35rem 0 0", paddingInlineStart: "1.1rem", lineHeight: 1.6 }}>
+        <ul className="text-muted" style={{ fontSize: "0.78rem", margin: "0.5rem 0 0", paddingInlineStart: "1.1rem", lineHeight: 1.6 }}>
           {data.notes.map((nt, i) => <li key={i}>{nt}</li>)}
         </ul>
-      )}
-      {data.sources && data.sources.length > 0 && (
-        <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: "0.35rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-          {data.sources.map((s) => (
-            <span key={`${s.dataset_id}:${s.table}`}>
-              <a href={s.row_url} target="_blank" rel="noopener noreferrer">שורות המקור ↗</a>
-              {" · "}
-              <a href={s.page_url} target="_blank" rel="noopener noreferrer">גרסאות המאגר ↗</a>
-            </span>
-          ))}
-        </div>
       )}
     </div>
   );
@@ -236,50 +224,44 @@ function Cube({ info, property }: { info: NadlanCubeInfo; property: NadlanProper
     return () => { cancelled = true; };
   }, [open, year, id.gush, id.helka, id.gush_suffix, info.id]);
 
-  const empty = info.hits === 0;
+  // The source links come with the data; until the cube is opened there are none.
+  const srcs = data?.sources ?? [];
+  const links = srcs.map((s) => ({
+    href: s.row_url, title: s.table,
+    label: srcs.length > 1 ? `שורות: ${s.table}` : "שורות המקור",
+  }));
+  for (const u of new Set(srcs.map((s) => s.page_url))) links.push({ href: u, label: "גרסאות המאגר", title: "" });
+  if (data?.row_url && !links.length) links.push({ href: data.row_url, label: "שורות המקור", title: "" });
+
   return (
-    <div style={{
-      border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)",
-      gridColumn: open ? "1 / -1" : undefined, opacity: empty && !open ? 0.7 : 1,
-    }}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        style={{
-          width: "100%", textAlign: "start", background: "none", border: "none", cursor: "pointer",
-          padding: "0.55rem 0.75rem", display: "flex", gap: "0.5rem", alignItems: "baseline",
-        }}>
-        <span style={{ fontWeight: 700, fontSize: "0.88rem", flex: 1 }}>{info.title}</span>
-        {info.hits != null && (
-          <span style={{
-            fontSize: "0.72rem", padding: "0.05rem 0.45rem", borderRadius: 999,
-            background: info.hits ? "var(--tint-good-bg)" : "var(--surface-2)",
-            color: info.hits ? "var(--success)" : "var(--text-muted)",
-          }}>
-            <Ltr>{info.hits}</Ltr>
-          </span>
-        )}
-        <span aria-hidden="true" className="text-muted">{open ? "▴" : "▾"}</span>
-      </button>
-      {!open && (
-        <div className="text-muted" style={{ fontSize: "0.76rem", padding: "0 0.75rem 0.55rem", lineHeight: 1.5 }}>
-          {info.description}
-        </div>
-      )}
-      {open && (
-        <div style={{ padding: "0 0.75rem 0.7rem" }}>
-          <div className="text-muted" style={{ fontSize: "0.78rem", marginBottom: "0.4rem" }}>{info.description}</div>
+    <NadlanTile
+      title={info.title}
+      badge={info.hits != null ? <Ltr>{info.hits.toLocaleString("he-IL")}</Ltr> : undefined}
+      badgeTone={info.hits ? "info" : "muted"}
+      label={info.group}
+      open={open}
+      onToggle={() => setOpen(!open)}
+      muted={info.hits === 0}
+      links={open ? links : []}
+      detail={
+        <>
           {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
           {!error && !data && <div className="text-sm text-muted">טוען…</div>}
           {data && !data.available && <div className="text-sm text-muted">השכבה אינה זמינה כרגע.</div>}
           {data?.available && (info.grain === "stat_area"
             ? <CrimeView data={data} onYear={setYear} />
             : <SpatialView data={data} />)}
-        </div>
-      )}
-    </div>
+        </>
+      }
+    >
+      <div className="text-muted nadlan-tile-clamp">{info.description}</div>
+    </NadlanTile>
   );
 }
 
-// ── the panel ──
+// ── the cubes, as tiles in the property's grid ──
+/** Rendered INSIDE the property card's tile grid: a heading row, a tile per
+ *  cube that has records here, and the empty ones behind one toggle. */
 export default function NadlanCubes({ property }: { property: NadlanProperty }) {
   const id = property.identity;
   const [cubes, setCubes] = useState<NadlanCubeInfo[] | null>(null);
@@ -300,52 +282,34 @@ export default function NadlanCubes({ property }: { property: NadlanProperty }) 
     return [all.filter((c) => c.hits !== 0), all.filter((c) => c.hits === 0)];
   }, [cubes]);
 
-  const byGroup = (list: NadlanCubeInfo[]) => {
-    const groups: [string, NadlanCubeInfo[]][] = [];
-    for (const c of list) {
-      const g = groups.find(([name]) => name === c.group);
-      if (g) g[1].push(c); else groups.push([c.group, [c]]);
-    }
-    return groups;
-  };
-
   const govmapHref = `https://www.govmap.gov.il/?q=${encodeURIComponent(`גוש ${id.gush} חלקה ${id.helka}`)}`;
 
   return (
-    <section aria-label="שכבות מידע על תא השטח" style={{ marginTop: "0.9rem" }}>
-      <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
-        <h4 style={{ margin: 0, fontSize: "0.95rem" }}>מה עוד ידוע על תא השטח</h4>
-        <a href={govmapHref} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.8rem" }}>
+    <>
+      <div className="nadlan-tiles-heading">
+        <div>
+          <h4>מה עוד ידוע על תא השטח</h4>
+          <div className="text-muted" style={{ fontSize: "0.8rem", marginTop: "0.2rem", lineHeight: 1.6 }}>
+            המספר בכל כרטיס הוא כמה רשומות בשכבה נוגעות בחלקה (או נמצאות ברדיוס שצוין).
+            הפרטים נטענים בלחיצה על "הרחבה".
+          </div>
+        </div>
+        <a href={govmapHref} target="_blank" rel="noopener noreferrer" className="text-sm">
           החלקה ב-GovMap ↗<span className="sr-only"> (נפתח בחלון חדש)</span>
         </a>
       </div>
-      <div className="text-muted" style={{ fontSize: "0.78rem", margin: "0.2rem 0 0.5rem", lineHeight: 1.6 }}>
-        כל קובייה נטענת רק כשפותחים אותה. המספר הוא כמה רשומות בשכבה נוגעות בחלקה
-        (או נמצאות ברדיוס שצוין); שכבות ארציות מדווחות לכל הארץ, ושכבות עירוניות רק ליישוב שפרסם אותן.
-      </div>
-      {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
-      {!error && !cubes && <div className="text-sm text-muted">טוען שכבות…</div>}
-      {byGroup(withData).map(([group, list]) => (
-        <div key={group} style={{ marginBottom: "0.6rem" }}>
-          <div className="text-muted" style={{ fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.25rem" }}>{group}</div>
-          <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-            {list.map((c) => <Cube key={c.id} info={c} property={property} />)}
-          </div>
-        </div>
-      ))}
+      {error && <div className="text-sm" style={{ color: "var(--danger)", gridColumn: "1 / -1" }}>{error}</div>}
+      {!error && !cubes && <div className="text-sm text-muted" style={{ gridColumn: "1 / -1" }}>טוען שכבות…</div>}
+      {withData.map((c) => <Cube key={c.id} info={c} property={property} />)}
       {empty.length > 0 && (
-        <div>
-          <button type="button" onClick={() => setShowEmpty(!showEmpty)} aria-expanded={showEmpty}
-            style={{ ...PILL, marginBottom: "0.4rem" }}>
-            {showEmpty ? "הסתרת" : "הצגת"} {empty.length} שכבות ללא רשומות בנקודה
+        <div style={{ gridColumn: "1 / -1" }}>
+          <button type="button" className="btn-secondary" onClick={() => setShowEmpty(!showEmpty)}
+                  aria-expanded={showEmpty} style={{ fontSize: "0.85rem", padding: "0.35rem 0.85rem" }}>
+            {showEmpty ? "הסתרת" : "הצגת"} {empty.length} שכבות ללא רשומות בחלקה
           </button>
-          {showEmpty && (
-            <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-              {empty.map((c) => <Cube key={c.id} info={c} property={property} />)}
-            </div>
-          )}
         </div>
       )}
-    </section>
+      {showEmpty && empty.map((c) => <Cube key={c.id} info={c} property={property} />)}
+    </>
   );
 }

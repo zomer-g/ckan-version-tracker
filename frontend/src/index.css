@@ -4340,3 +4340,93 @@ li > a:only-child,
   background: var(--tint-bad-bg);
   color: var(--tint-bad-fg);
 }
+
+/* ── נדל"ן לעם: a property's tiles ──────────────────────────────────────────
+   The same card as the home page's dataset cards, in one grid. An open tile
+   spans the row and shows its rows as a table underneath. */
+.nadlan-tiles {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  margin-top: 0.9rem;
+}
+.nadlan-tiles-heading {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+.nadlan-tiles-heading h4 { margin: 0; font-size: 1rem; }
+.nadlan-tile {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.1rem;
+  min-width: 0;
+}
+.nadlan-tile.is-open { grid-column: 1 / -1; }
+.nadlan-tile.is-muted { opacity: 0.75; }
+.nadlan-tile-head { gap: 0.5rem; align-items: flex-start; margin-bottom: 0.35rem; }
+.nadlan-tile-title { font-size: 1rem; font-weight: 600; margin: 0; line-height: 1.4; }
+.nadlan-tile-head .badge { white-space: nowrap; flex-shrink: 0; }
+.nadlan-badge-muted { background: var(--surface-2); color: var(--text-muted); }
+.nadlan-tile-label { margin: 0 0 0.4rem; }
+.nadlan-tile-body { line-height: 1.75; overflow-wrap: anywhere; }
+.nadlan-tile:not(.is-open) .nadlan-tile-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nadlan-tile-foot {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.nadlan-tile-btn { font-size: 0.85rem; padding: 0.35rem 0.85rem; }
+.nadlan-tile-link { color: var(--text-muted); text-decoration: none; }
+.nadlan-tile-link:hover { color: var(--primary); text-decoration: underline; }
+.nadlan-tile-detail {
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.nadlan-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.75rem;
+}
+.nadlan-kv dt { color: var(--text-muted); }
+.nadlan-kv dd { margin: 0; }
+/* A flex column's children default to min-width:auto and grow to the table's
+   width — the table then pushed the whole page sideways instead of scrolling
+   inside its tile. */
+.nadlan-tile > * { min-width: 0; max-width: 100%; }
+.nadlan-table-wrap { overflow-x: auto; max-width: 100%; position: relative; }
+/* .sr-only text in a link inside the table is absolutely positioned; without a
+   positioned ancestor it escapes the scroller and widens the whole page. */
+.nadlan-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+.nadlan-table th {
+  text-align: start;
+  padding: 0.4rem 0.55rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.nadlan-table td {
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  min-width: 4.5rem;
+  max-width: 22rem;
+  overflow-wrap: break-word;
+}
+.nadlan-table td:first-child { white-space: nowrap; }
+.nadlan-property { margin-bottom: 1.25rem; padding: 1.25rem 1.35rem; }
+.nadlan-property .nadlan-tile { box-shadow: none; background: var(--surface); }

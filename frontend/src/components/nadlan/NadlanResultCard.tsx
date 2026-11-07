@@ -25,6 +25,7 @@ import {
   type NadlanSourceRows,
 } from "../../api/client";
 import NadlanCubes from "./NadlanCubes";
+import NadlanTile, { Ltr, TileTable, type TileLink } from "./NadlanTile";
 import { DEAL_HEADER_TITLES, declaredDiffers, portionLabel } from "../../utils/dealFields";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -69,12 +70,6 @@ const NIS = new Intl.NumberFormat("he-IL", {
   style: "currency", currency: "ILS", maximumFractionDigits: 0,
 });
 
-/** RTL reorders a run of digits next to a sign or a separator, so every number
- *  that is read as one unit goes through an LTR isolate — the same fix the
- *  gaps report needed. */
-function Ltr({ children }: { children: React.ReactNode }) {
-  return <span style={{ unicodeBidi: "isolate", direction: "ltr", display: "inline-block" }}>{children}</span>;
-}
 
 function heDate(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -99,13 +94,25 @@ function fmt(v: unknown, key?: string): string {
   return String(v);
 }
 
+/** Tile titles: what the source IS for this parcel, with its publisher on the
+ *  muted line under it (SOURCE_ORIGIN). */
+const SOURCE_TITLES: Record<string, string> = {
+  parcels: "חלקה רשומה",
+  gazetteer: "גזטיר הנכסים",
+  postal: "מיקוד",
+  address_list: "כתובות בחלקה",
+};
+const SOURCE_ORIGIN: Record<string, string> = {
+  parcels: "המרכז למיפוי ישראל — שכבת החלקות",
+  gazetteer: "רשות המסים — גזטיר הנכסים",
+  postal: "דואר ישראל — קובץ המיקוד",
+  address_list: "רשימת כתובות בישראל",
+};
+/** Richest first: what a reader opens before what only confirms the parcel. */
+const SOURCE_ORDER = ["gazetteer", "address_list", "postal", "parcels"];
+
 /** The sources whose own rows can be opened inside their card. */
 const DETAIL_SOURCES = new Set(["gazetteer", "parcels", "postal", "stat_area"]);
-
-/** Sources whose fields the card's summary already shows — the parcel's area
- *  and status, the zips, the statistical area and the deals. Their cards used
- *  to repeat each of those a second time, field for field. */
-const COMPACT_SOURCES = new Set(["parcels", "postal", "stat_area", "deals"]);
 
 /** Sources whose summary block above carries their way to the rows too, so
  *  they get no card of their own below. The statistical area and the deals
@@ -122,31 +129,24 @@ function sourceHasData(block: NadlanSourceBlock): boolean {
     (v) => v != null && v !== "" && v !== 0 && !(Array.isArray(v) && v.length === 0));
 }
 
-/** The link to a source's own rows on /data, as every source card has it. */
-function SourceLink({ block, style }: { block: NadlanSourceBlock | undefined; style?: React.CSSProperties }) {
-  if (!block) return null;
-  return (
-    <a href={block.row_url} target="_blank" rel="noopener noreferrer"
-       style={{ fontSize: "0.82rem", ...style }} title={`${block.table}\n${block.console_sql}`}>
-      שורות המקור ב-/data ↗
-      <span className="sr-only"> (נפתח בחלון חדש)</span>
-    </a>
-  );
+/** The link to a source's own rows on /data, as a tile footer link. */
+function sourceLink(block: NadlanSourceBlock | undefined): TileLink[] {
+  if (!block) return [];
+  return [{ href: block.row_url, label: "שורות המקור ב-/data", title: `${block.table}\n${block.console_sql}` }];
 }
 
 const DETAIL_PAGE = 50;
 
-function detailButtonLabel(id: string, block: NadlanSourceBlock, open: boolean): string {
-  if (open) return "הסתרת הפרטים";
+function expandLabel(id: string, block: NadlanSourceBlock): string {
   const n = Number(block.fields.n_assets);
-  if (id === "gazetteer" && n > 0) return `כל ${n.toLocaleString("he-IL")} הנכסים בגזטיר`;
-  if (id === "postal") return "שורות המיקוד המלאות";
+  if (id === "gazetteer" && n > 0) return `כל ${n.toLocaleString("he-IL")} הנכסים`;
+  if (id === "postal") return "שורות המיקוד";
   return "כל השדות במקור";
 }
 
-/** A source's own rows for this parcel, fetched when its card is opened.
+/** A source's own rows for this parcel, fetched when its tile is opened.
  *
- *  The card shows the summary the envelope carries ("12 נכסים"); this is the
+ *  The tile shows the summary the envelope carries ("12 נכסים"); this is the
  *  twelve. One row reads as a field list, several as a table, paged. */
 function SourceRowsView({ property, source }: { property: NadlanProperty; source: string }) {
   const id = property.identity;
@@ -171,65 +171,35 @@ function SourceRowsView({ property, source }: { property: NadlanProperty; source
       .finally(() => setLoadingMore(false));
   };
 
-  if (error) return <div className="text-sm" style={{ color: "var(--danger)", marginTop: "0.4rem" }}>{error}</div>;
-  if (!data) return <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>טוען…</div>;
-  if (!data.rows.length) {
-    return <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>לא נמצאו שורות במקור לחלקה זו.</div>;
-  }
+  if (error) return <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>;
+  if (!data) return <div className="text-sm text-muted">טוען…</div>;
+  if (!data.rows.length) return <div className="text-sm text-muted">לא נמצאו שורות במקור לחלקה זו.</div>;
 
   if (data.total === 1) {
+    // One row: a two-column field list reads better than a one-row table.
     const row = data.rows[0];
     return (
-      <dl style={{
-        margin: "0.5rem 0 0", display: "grid", gridTemplateColumns: "auto 1fr",
-        gap: "0.15rem 0.6rem", fontSize: "0.83rem", borderTop: "1px solid var(--border)",
-        paddingTop: "0.4rem",
-      }}>
-        {data.columns.map((c, i) => (
-          <div key={c.key} style={{ display: "contents" }}>
-            <dt style={{ color: "var(--text-muted)" }} title={c.key}>{c.label}</dt>
-            <dd style={{ margin: 0, overflowWrap: "anywhere" }}>{row[i] ?? "—"}</dd>
-          </div>
-        ))}
-      </dl>
+      <TileTable
+        label={`שורת ${SOURCE_LABELS[source] ?? source}`}
+        columns={[{ key: "f", label: "שדה" }, { key: "v", label: "ערך" }]}
+        rows={data.columns.map((c, i) => [<span title={c.key}>{c.label}</span>, row[i] ?? "—"])}
+      />
     );
   }
 
   return (
-    <div style={{ marginTop: "0.5rem" }}>
-      <div tabIndex={0} role="region" aria-label={`שורות ${SOURCE_LABELS[source] ?? source}`}
-           className="scroll-region" style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", fontSize: "0.82rem", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ color: "var(--text-muted)" }}>
-              {data.columns.map((c) => (
-                <th key={c.key} scope="col" title={c.key}
-                    style={{ textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
-                  {c.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.rows.map((r, i) => (
-              <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                {r.map((v, j) => (
-                  <td key={j} style={{ padding: "0.2rem 0.4rem" }}>{v ?? "—"}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+    <div>
+      <TileTable
+        label={`שורות ${SOURCE_LABELS[source] ?? source}`}
+        columns={data.columns.map((c) => ({ key: c.key, label: c.label, title: c.key }))}
+        rows={data.rows.map((r) => r.map((v) => v ?? "—"))}
+      />
+      <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>
         מוצגות <Ltr>{data.rows.length.toLocaleString("he-IL")}</Ltr> מתוך{" "}
         <Ltr>{data.total.toLocaleString("he-IL")}</Ltr> שורות.
         {data.rows.length < data.total && (
-          <button type="button" onClick={more} disabled={loadingMore}
-            style={{
-              marginInlineStart: "0.5rem", padding: "0.1rem 0.6rem", fontSize: "0.78rem",
-              cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6, background: "none",
-            }}>
+          <button type="button" className="btn-secondary" onClick={more} disabled={loadingMore}
+            style={{ marginInlineStart: "0.6rem", padding: "0.2rem 0.7rem", fontSize: "0.8rem" }}>
             {loadingMore ? "טוען…" : "עוד"}
           </button>
         )}
@@ -258,72 +228,9 @@ function visibleFields(id: string, block: NadlanSourceBlock, property: NadlanPro
     !(Array.isArray(v) && v.length === 0));
 }
 
-function SourceCard({ id, block, children, wide, property, compact }: {
-  id: string;
-  block: NadlanSourceBlock;
-  children?: React.ReactNode;
-  wide?: boolean;
-  property: NadlanProperty;
-  /** The summary above already shows this source's fields: keep only the way
-   *  to its own rows, so nothing is said twice. */
-  compact?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const fields = visibleFields(id, block, property);
-  const canOpen = DETAIL_SOURCES.has(id) && Object.keys(block.fields).some((k) => {
-    const v = block.fields[k];
-    return v != null && v !== "" && !(Array.isArray(v) && v.length === 0);
-  });
-  return (
-    <div style={{
-      border: "1px solid var(--border)", borderRadius: 8, padding: compact ? "0.5rem 0.85rem" : "0.7rem 0.85rem",
-      background: "var(--surface)", gridColumn: wide || open ? "1 / -1" : undefined,
-    }}>
-      <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: compact ? 0 : "0.4rem" }}>
-        {SOURCE_LABELS[id] ?? id}
-      </div>
-      {compact ? null : fields.length ? (
-        <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.15rem 0.6rem", fontSize: "0.85rem" }}>
-          {fields.map(([k, v]) => (
-            <div key={k} style={{ display: "contents" }}>
-              <dt style={{ color: "var(--text-muted)" }}>{FIELD_LABELS[k] ?? k}</dt>
-              <dd style={{ margin: 0 }}><Ltr>{fmt(v, k)}</Ltr></dd>
-            </div>
-          ))}
-        </dl>
-      ) : (
-        <div className="text-sm text-muted">אין נתונים במקור הזה לחלקה זו.</div>
-      )}
-      {children}
-      {canOpen && (
-        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-          style={{
-            display: "block", marginTop: "0.5rem", padding: "0.2rem 0.65rem", fontSize: "0.8rem",
-            cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6, background: "none",
-          }}>
-          {detailButtonLabel(id, block, open)}
-        </button>
-      )}
-      {open && <SourceRowsView property={property} source={id} />}
-      {/* The physical table name used to be printed under every card — a
-          58-character `odata.ac1ae1fa_…` id that meant nothing to a reader and
-          wrapped mid-word. It is the link's tooltip now, for whoever wants it. */}
-      <a
-        href={block.row_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ display: "inline-block", marginTop: compact ? "0.3rem" : "0.5rem", fontSize: "0.82rem" }}
-        title={`${block.table}\n${block.console_sql}`}
-      >
-        שורות המקור ב-/data ↗
-      <span className="sr-only"> (נפתח בחלון חדש)</span></a>
-    </div>
-  );
-}
-
 /** Where an address's point came from, in a few words — shown only for the
  *  sources a reader should weigh (the register is the default and says
- *  nothing). The raw `pip` match code used to be printed here instead. */
+ *  nothing). */
 const POINT_SOURCE_SHORT: Record<string, string> = {
   municipal: "מיקום מהרשות המקומית",
   govmap_address: "מיקום מ-GovMap",
@@ -335,118 +242,137 @@ function pointFamily(s: string): string {
   return s.startsWith("municipal") ? "municipal" : s;
 }
 
-/** The parcel's addresses, shown INSIDE the address-list source card.
- *
- *  They used to be a table of their own under the source cards, which said the
- *  same thing twice: the address-list card counted the addresses and the table
- *  listed them. The list now lives in the card it comes from. */
-function AddressList({ addresses }: { addresses: NadlanAddress[] }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? addresses : addresses.slice(0, 12);
+/** The parcel's addresses as a table — the address-list tile's detail. */
+function AddressTable({ addresses }: { addresses: NadlanAddress[] }) {
   return (
-    <div style={{ marginTop: "0.5rem" }}>
-      <ul style={{
-        margin: 0, padding: 0, listStyle: "none", display: "grid", gap: "0.15rem 0.9rem",
-        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", fontSize: "0.83rem",
-      }}>
-        {shown.map((a, i) => (
-          <li key={i} style={{ borderTop: "1px solid var(--border)", padding: "0.2rem 0" }}>
-            {a.street ?? "—"} <Ltr>{a.house ?? ""}{a.suffix ?? ""}</Ltr>
-            {a.entrance ? <> · כניסה {a.entrance}</> : null}
-            <span className="text-muted" style={{ fontSize: "0.75rem" }}>
-              {a.zip7 ? <> · <Ltr>{a.zip7}</Ltr></> : null}
-              {a.neighbourhood ? ` · ${a.neighbourhood}` : ""}
-              {a.point_source && POINT_SOURCE_SHORT[pointFamily(a.point_source)]
-                ? ` · ${POINT_SOURCE_SHORT[pointFamily(a.point_source)]}` : ""}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {addresses.length > 12 && (
-        <button type="button" onClick={() => setAll(!all)}
-          style={{
-            marginTop: "0.3rem", padding: "0.15rem 0.6rem", fontSize: "0.78rem", cursor: "pointer",
-            border: "1px solid var(--border)", borderRadius: 6, background: "none",
-          }}>
-          {all ? "פחות" : `כל ${addresses.length.toLocaleString("he-IL")} הכתובות`}
-        </button>
-      )}
-    </div>
+    <TileTable
+      label="כתובות בחלקה"
+      columns={[
+        { key: "a", label: "כתובת" }, { key: "e", label: "כניסה" }, { key: "z", label: "מיקוד" },
+        { key: "n", label: "שכונה" }, { key: "p", label: "מקור המיקום" },
+      ]}
+      rows={addresses.map((a) => [
+        <>{a.street ?? "—"} <Ltr>{a.house ?? ""}{a.suffix ?? ""}</Ltr></>,
+        a.entrance ?? "—",
+        a.zip7 ? <Ltr>{a.zip7}</Ltr> : "—",
+        a.neighbourhood ?? "—",
+        a.point_source ? (POINT_SOURCE_SHORT[pointFamily(a.point_source)] ?? "מרשם הכתובות") : "—",
+      ])}
+    />
   );
 }
 
-/** The CBS statistical area. The socio-economic cluster sits apart and carries
- *  its own division year on purpose: it is published on the 2011 areas, which
- *  are NOT the 2022 areas this property's code comes from, and collapsing the
- *  two would read as one fact when it is two. */
-function StatAreaBlock({ area, property }: {
+/** One source of the crosswalk as a tile: its count, its few fields, and its
+ *  own rows behind "הרחבה". */
+function SourceTile({ id, block, property }: {
+  id: string; block: NadlanSourceBlock; property: NadlanProperty;
+}) {
+  const [open, setOpen] = useState(false);
+  const addrs = property.identity.addresses;
+  const fields = visibleFields(id, block, property);
+  const isAddresses = id === "address_list";
+  const canOpen = isAddresses ? addrs.length > 0 : DETAIL_SOURCES.has(id) && sourceHasData(block);
+
+  let badge: React.ReactNode;
+  let body: React.ReactNode;
+  if (isAddresses) {
+    badge = <Ltr>{addrs.length.toLocaleString("he-IL")}</Ltr>;
+    const houses = groupAddresses(addrs);
+    body = houses.length ? (
+      <div className="nadlan-tile-clamp">
+        {houses.slice(0, 4).map((h) => h.label).join(" · ")}
+        {houses.length > 4 && <span className="text-muted"> ועוד {houses.length - 4}</span>}
+      </div>
+    ) : <span className="text-muted">אין כתובות מקושרות.</span>;
+  } else {
+    if (id === "gazetteer" && block.fields.n_assets != null) {
+      badge = <Ltr>{Number(block.fields.n_assets).toLocaleString("he-IL")}</Ltr>;
+    }
+    const shown = fields.filter(([k]) => !(id === "gazetteer" && k === "n_assets")).slice(0, 5);
+    body = shown.length ? (
+      <dl className="nadlan-kv">
+        {shown.map(([k, v]) => (
+          <div key={k} style={{ display: "contents" }}>
+            <dt>{FIELD_LABELS[k] ?? k}</dt>
+            <dd><Ltr>{fmt(v, k)}</Ltr></dd>
+          </div>
+        ))}
+      </dl>
+    ) : null;
+  }
+
+  return (
+    <NadlanTile
+      title={SOURCE_TITLES[id] ?? SOURCE_LABELS[id] ?? id}
+      badge={badge}
+      label={SOURCE_ORIGIN[id]}
+      open={open}
+      onToggle={canOpen ? () => setOpen(!open) : undefined}
+      expandLabel={isAddresses ? "כל הכתובות" : expandLabel(id, block)}
+      detail={isAddresses ? <AddressTable addresses={addrs} /> : <SourceRowsView property={property} source={id} />}
+      links={sourceLink(block)}
+    >
+      {body}
+    </NadlanTile>
+  );
+}
+
+/** The CBS statistical area. The socio-economic cluster carries its own
+ *  division year on purpose: it is published on the 2011 areas, which are NOT
+ *  the 2022 areas this property's code comes from. */
+function StatAreaTile({ area, property }: {
   area: NonNullable<NadlanProperty["stat_area"]>;
   property: NadlanProperty;
 }) {
   const [open, setOpen] = useState(false);
   const block = property.sources.stat_area as NadlanSourceBlock | undefined;
   return (
-    <div style={{
-      border: "1px solid var(--border)", borderRadius: 8, padding: "0.6rem 0.8rem",
-      background: "var(--surface-2)",
-    }}>
-      <div style={{ fontWeight: 700, fontSize: "0.9rem", marginBottom: "0.3rem" }}>
-        אזור סטטיסטי (א״ס)
+    <NadlanTile
+      title="אזור סטטיסטי (א״ס)"
+      badge={area.code != null ? <Ltr>{area.code}</Ltr> : undefined}
+      label={'הלשכה המרכזית לסטטיסטיקה'}
+      open={open}
+      onToggle={block ? () => setOpen(!open) : undefined}
+      expandLabel="כל השדות במקור"
+      detail={<SourceRowsView property={property} source="stat_area" />}
+      links={sourceLink(block)}
+    >
+      <div>
+        {area.settlement_name ?? "—"}
+        {area.yishuv_stat != null && <span className="text-muted"> · קוד מלא <Ltr>{area.yishuv_stat}</Ltr></span>}
       </div>
-      <div className="text-sm" style={{ lineHeight: 1.8 }}>
-        <div>
-          א״ס <Ltr>{area.code ?? "—"}</Ltr>
-          {area.settlement_name ? ` · ${area.settlement_name}` : ""}
-          {area.yishuv_stat != null && (
-            <span className="text-muted"> (קוד מלא <Ltr>{area.yishuv_stat}</Ltr>)</span>
-          )}
-        </div>
-        {(area.rova != null || area.tat_rova != null) && (
-          <div className="text-muted">
-            רובע <Ltr>{area.rova ?? "—"}</Ltr> · תת-רובע <Ltr>{area.tat_rova ?? "—"}</Ltr>
-          </div>
-        )}
+      {(area.rova != null || area.tat_rova != null) && (
         <div className="text-muted">
-          {area.population != null && (
-            <>אוכלוסייה <Ltr>{area.population.toLocaleString("he-IL")}</Ltr> ({area.population_year}) · </>
-          )}
-          {area.main_function ?? "ייעוד לא מדווח"}
-        </div>
-        {area.socio?.eshkol != null && (
-          <div className="text-muted">
-            מדד חברתי-כלכלי: אשכול <Ltr>{area.socio.eshkol}</Ltr>{" "}
-            <span style={{ fontSize: "0.78rem" }}>
-              (מדד {area.socio.index_year}, על חלוקת האזורים של {area.socio.division})
-            </span>
-          </div>
-        )}
-      </div>
-      {block && (
-        <div className="flex" style={{ gap: "0.6rem", alignItems: "center", flexWrap: "wrap", marginTop: "0.4rem" }}>
-          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-            style={{
-              padding: "0.2rem 0.65rem", fontSize: "0.8rem", cursor: "pointer",
-              border: "1px solid var(--border)", borderRadius: 6, background: "none",
-            }}>
-            {open ? "הסתרת הפרטים" : "כל השדות במקור"}
-          </button>
-          <SourceLink block={block} />
+          רובע <Ltr>{area.rova ?? "—"}</Ltr> · תת-רובע <Ltr>{area.tat_rova ?? "—"}</Ltr>
         </div>
       )}
-      {open && <SourceRowsView property={property} source="stat_area" />}
-    </div>
+      <div className="text-muted">
+        {area.population != null && (
+          <>אוכלוסייה <Ltr>{area.population.toLocaleString("he-IL")}</Ltr> ({area.population_year}) · </>
+        )}
+        {area.main_function ?? "ייעוד לא מדווח"}
+      </div>
+      {area.socio?.eshkol != null && (
+        <div className="text-muted">
+          אשכול חברתי-כלכלי <Ltr>{area.socio.eshkol}</Ltr>{" "}
+          <span style={{ fontSize: "0.78rem" }}>
+            (מדד {area.socio.index_year}, חלוקת {area.socio.division})
+          </span>
+        </div>
+      )}
+    </NadlanTile>
   );
 }
 
-const DEAL_COLUMNS: { label: string; title?: string }[] = [
+const DEAL_COLUMNS = [
   "תאריך", "שווי מכירה", "תמורה מוצהרת", "חלק נמכר", "מהות", "תת-חלקה", "חדרים",
   "שטח (מ״ר)", "₪ למ״ר", "שנת בנייה",
-].map((label) => ({ label, title: DEAL_HEADER_TITLES[label] }));
+].map((label) => ({ key: label, label, title: DEAL_HEADER_TITLES[label] }));
 
 /** The deal history. The summary is already in the envelope; the list is
- *  fetched only when it is opened, because a parcel in a condo tower holds
- *  hundreds of deals and nobody asked for them by clicking a point. */
-function DealsBlock({ property }: { property: NadlanProperty }) {
+ *  fetched only when the tile is opened, because a parcel in a condo tower
+ *  holds hundreds of deals. */
+function DealsTile({ property }: { property: NadlanProperty }) {
   const summary = property.deals!;
   const id = property.identity;
   const [open, setOpen] = useState(false);
@@ -464,114 +390,80 @@ function DealsBlock({ property }: { property: NadlanProperty }) {
   }, [open, rows, id.gush, id.helka]);
 
   const dealsHref = `/projects/deals?gush=${id.gush}&helka=${id.helka}`;
+  const latest = summary.latest;
 
   return (
-    <div style={{
-      border: "1px solid var(--border)", borderRadius: 8, padding: "0.6rem 0.8rem",
-      background: "var(--surface-2)",
-    }}>
-      <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 700, fontSize: "0.9rem" }}>עסקאות מקרקעין</div>
-        <span className="flex" style={{ gap: "0.7rem", alignItems: "baseline", flexWrap: "wrap" }}>
-          <SourceLink block={property.sources.deals as NadlanSourceBlock | undefined} />
-          <Link to={dealsHref} style={{ fontSize: "0.82rem" }}>
-            במאגר עסקאות נדל״ן ←
-          </Link>
-        </span>
-      </div>
-      <div className="text-sm" style={{ lineHeight: 1.8 }}>
-        <div>
-          <Ltr>{summary.deals.toLocaleString("he-IL")}</Ltr> עסקאות מדווחות ·{" "}
-          <Ltr>{heDate(summary.first_deal)}</Ltr> עד <Ltr>{heDate(summary.last_deal)}</Ltr>
-          {summary.sub_parcels > 1 && (
-            <span className="text-muted"> · <Ltr>{summary.sub_parcels}</Ltr> תת-חלקות</span>
-          )}
-        </div>
-        {summary.latest?.date && (
-          <div className="text-muted">
-            אחרונה: <Ltr>{heDate(summary.latest.date)}</Ltr>
-            {summary.latest.amount != null && <> · <Ltr>{NIS.format(summary.latest.amount)}</Ltr></>}
-            {declaredDiffers(summary.latest) && summary.latest.declared_amount != null && (
-              <> (מוצהר <Ltr>{NIS.format(summary.latest.declared_amount)}</Ltr>)</>
-            )}
-            {summary.latest.portion_fraction != null && summary.latest.portion_fraction < 0.9995 && (
-              <> · חלק נמכר <Ltr>{portionLabel(summary.latest)}</Ltr></>
-            )}
-            {summary.latest.nature ? ` · ${summary.latest.nature}` : ""}
-            {summary.latest.rooms ? <> · <Ltr>{summary.latest.rooms}</Ltr> חד׳</> : null}
-          </div>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        style={{
-          marginTop: "0.45rem", padding: "0.25rem 0.7rem", fontSize: "0.82rem",
-          cursor: "pointer", border: "1px solid var(--border)", borderRadius: 6,
-          background: "none",
-        }}
-      >
-        {open ? "סגירת רשימת העסקאות" : "כל העסקאות בחלקה"}
-      </button>
-
-      {open && (
-        <div style={{ marginTop: "0.5rem" }}>
+    <NadlanTile
+      title="עסקאות מקרקעין"
+      badge={<Ltr>{summary.deals.toLocaleString("he-IL")}</Ltr>}
+      label="רשות המסים — מיסוי מקרקעין"
+      open={open}
+      onToggle={() => setOpen(!open)}
+      expandLabel="כל העסקאות"
+      links={[
+        ...sourceLink(property.sources.deals as NadlanSourceBlock | undefined),
+        { href: dealsHref, label: "במאגר עסקאות נדל״ן ←", internal: true },
+      ]}
+      detail={
+        <>
           {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
           {!error && !rows && <div className="text-sm text-muted">טוען עסקאות…</div>}
+          {rows && rows.length === 0 && <div className="text-sm text-muted">לא נמצאו עסקאות לחלקה זו.</div>}
           {rows && rows.length > 0 && (
-            <div tabIndex={0} role="region" aria-label="עסקאות בחלקה" className="scroll-region" style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", fontSize: "0.83rem", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ textAlign: "start", color: "var(--text-muted)" }}>
-                    {DEAL_COLUMNS.map((h) => (
-                      <th key={h.label} scope="col" title={h.title}
-                          style={{ textAlign: "start", padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>{h.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((d, i) => (
-                    <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}><Ltr>{heDate(d.date)}</Ltr></td>
-                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
-                        <Ltr>{d.amount != null ? NIS.format(d.amount) : "—"}</Ltr>
-                      </td>
-                      <td style={{
-                        padding: "0.2rem 0.4rem", whiteSpace: "nowrap",
-                        color: declaredDiffers(d) ? "var(--warning)" : "var(--text-muted)",
-                        fontWeight: declaredDiffers(d) ? 600 : undefined,
-                      }} title={declaredDiffers(d) ? "שונה משווי המכירה" : "זהה לשווי המכירה"}>
-                        <Ltr>{d.declared_amount != null ? NIS.format(d.declared_amount) : "—"}</Ltr>
-                      </td>
-                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}><Ltr>{portionLabel(d)}</Ltr></td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}>{d.nature ?? "—"}</td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.sub_parcel ?? "—"}</Ltr></td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.rooms || "—"}</Ltr></td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.area_sqm || "—"}</Ltr></td>
-                      <td style={{ padding: "0.2rem 0.4rem", whiteSpace: "nowrap" }}>
-                        <Ltr>{d.price_per_sqm_normalized ? NIS.format(d.price_per_sqm_normalized) : "—"}</Ltr>
-                      </td>
-                      <td style={{ padding: "0.2rem 0.4rem" }}><Ltr>{d.year_built || "—"}</Ltr></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <>
+              <TileTable
+                label="עסקאות בחלקה"
+                columns={DEAL_COLUMNS}
+                rows={rows.map((d) => [
+                  <Ltr>{heDate(d.date)}</Ltr>,
+                  <Ltr>{d.amount != null ? NIS.format(d.amount) : "—"}</Ltr>,
+                  <span style={{
+                    color: declaredDiffers(d) ? "var(--warning)" : "var(--text-muted)",
+                    fontWeight: declaredDiffers(d) ? 600 : undefined,
+                  }} title={declaredDiffers(d) ? "שונה משווי המכירה" : "זהה לשווי המכירה"}>
+                    <Ltr>{d.declared_amount != null ? NIS.format(d.declared_amount) : "—"}</Ltr>
+                  </span>,
+                  <Ltr>{portionLabel(d)}</Ltr>,
+                  d.nature ?? "—",
+                  <Ltr>{d.sub_parcel ?? "—"}</Ltr>,
+                  <Ltr>{d.rooms || "—"}</Ltr>,
+                  <Ltr>{d.area_sqm || "—"}</Ltr>,
+                  <Ltr>{d.price_per_sqm_normalized ? NIS.format(d.price_per_sqm_normalized) : "—"}</Ltr>,
+                  <Ltr>{d.year_built || "—"}</Ltr>,
+                ])}
+              />
               {total > rows.length && (
-                <div className="text-sm text-muted" style={{ marginTop: "0.3rem" }}>
+                <div className="text-sm text-muted" style={{ marginTop: "0.4rem" }}>
                   מוצגות <Ltr>{rows.length}</Ltr> מתוך <Ltr>{total.toLocaleString("he-IL")}</Ltr> עסקאות.{" "}
                   <Link to={dealsHref}>להמשך במאגר עסקאות נדל״ן</Link>
                 </div>
               )}
-            </div>
+            </>
           )}
-          {rows && rows.length === 0 && (
-            <div className="text-sm text-muted">לא נמצאו עסקאות לחלקה זו.</div>
+        </>
+      }
+    >
+      <div>
+        <Ltr>{heDate(summary.first_deal)}</Ltr> עד <Ltr>{heDate(summary.last_deal)}</Ltr>
+        {summary.sub_parcels > 1 && (
+          <span className="text-muted"> · <Ltr>{summary.sub_parcels}</Ltr> תת-חלקות</span>
+        )}
+      </div>
+      {latest?.date && (
+        <div className="text-muted">
+          אחרונה: <Ltr>{heDate(latest.date)}</Ltr>
+          {latest.amount != null && <> · <Ltr>{NIS.format(latest.amount)}</Ltr></>}
+          {declaredDiffers(latest) && latest.declared_amount != null && (
+            <> (מוצהר <Ltr>{NIS.format(latest.declared_amount)}</Ltr>)</>
           )}
+          {latest.portion_fraction != null && latest.portion_fraction < 0.9995 && (
+            <> · חלק נמכר <Ltr>{portionLabel(latest)}</Ltr></>
+          )}
+          {latest.nature ? ` · ${latest.nature}` : ""}
+          {latest.rooms ? <> · <Ltr>{latest.rooms}</Ltr> חד׳</> : null}
         </div>
       )}
-    </div>
+    </NadlanTile>
   );
 }
 
@@ -628,13 +520,11 @@ export default function NadlanResultCard({
   const SHOWN = 3;
 
   return (
-    <div style={{
-      border: "1px solid var(--border)", borderRadius: 10, padding: "0.9rem 1rem",
-      marginBottom: "0.75rem", background: "var(--surface)",
+    <section className="card nadlan-property" style={{
       opacity: property.address_match && !property.address_match.primary ? 0.92 : 1,
     }}>
       <div className="flex" style={{ justifyContent: "space-between", alignItems: "baseline", gap: "0.6rem", flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: "1.05rem" }}
+        <h3 style={{ margin: 0, fontSize: "1.15rem" }}
             title={id.point ? `${id.point.lat.toFixed(6)}, ${id.point.lon.toFixed(6)}` : undefined}>
           גוש {id.gush}
           {id.gush_suffix ? `/${id.gush_suffix}` : ""} · חלקה {id.helka}
@@ -687,58 +577,31 @@ export default function NadlanResultCard({
         )}
       </div>
 
-      {(property.stat_area || property.deals) && (
-        <div style={{
-          display: "grid", gap: "0.5rem", marginTop: "0.6rem",
-          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-        }}>
-          {property.stat_area && <StatAreaBlock area={property.stat_area} property={property} />}
-          {property.deals && <DealsBlock property={property} />}
-        </div>
-      )}
-
       {property.match.notes.length > 0 && (
         <ul style={{ margin: "0.5rem 0 0", paddingInlineStart: "1.1rem", fontSize: "0.82rem", color: "var(--warning)" }}>
           {property.match.notes.map((n, i) => <li key={i}>{n}</li>)}
         </ul>
       )}
 
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          marginTop: "0.6rem", padding: "0.3rem 0.8rem", fontSize: "0.85rem", cursor: "pointer",
-          border: "1px solid var(--border)", borderRadius: 6, background: "none",
-        }}
-      >
+      {/* One grid for all of it: the two facts people come for, then — when
+          the property is opened — every source and every information cube,
+          each a tile of the same shape. */}
+      <div className="nadlan-tiles">
+        {property.deals && <DealsTile property={property} />}
+        {property.stat_area && <StatAreaTile area={property.stat_area} property={property} />}
+        {expanded && Object.entries(property.sources)
+          .filter(([k, b]) => !FOLDED_SOURCES.has(k) && sourceHasData(b as NadlanSourceBlock))
+          .sort(([a], [b]) => SOURCE_ORDER.indexOf(a) - SOURCE_ORDER.indexOf(b))
+          .map(([k, b]) => (
+            <SourceTile key={k} id={k} block={b as NadlanSourceBlock} property={property} />
+          ))}
+        {expanded && <NadlanCubes property={property} />}
+      </div>
+
+      <button type="button" className="btn-secondary" onClick={onToggle} aria-expanded={expanded}
+        style={{ marginTop: "1rem", padding: "0.4rem 1rem", fontSize: "0.9rem" }}>
         {expanded ? "הסתרת המידע המלא" : "כל המידע על תא השטח"}
       </button>
-
-      {expanded && (
-        <>
-          <div style={{
-            display: "grid", gap: "0.6rem", marginTop: "0.7rem",
-            gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
-          }}>
-            {/* Sources with something the summary does not already say come
-                first and in full; the rest keep only their way to the rows. */}
-            {Object.entries(property.sources)
-              .filter(([k, b]) => !FOLDED_SOURCES.has(k) && sourceHasData(b as NadlanSourceBlock))
-              .sort(([a], [b]) => Number(COMPACT_SOURCES.has(a)) - Number(COMPACT_SOURCES.has(b)))
-              .map(([k, b]) => (
-              <SourceCard key={k} id={k} block={b as NadlanSourceBlock} property={property}
-                          compact={COMPACT_SOURCES.has(k)}
-                          wide={k === "address_list" && id.addresses.length > 0}>
-                {k === "address_list" && id.addresses.length > 0 && (
-                  <AddressList addresses={id.addresses} />
-                )}
-              </SourceCard>
-            ))}
-          </div>
-
-          <NadlanCubes property={property} />
-        </>
-      )}
-    </div>
+    </section>
   );
 }
