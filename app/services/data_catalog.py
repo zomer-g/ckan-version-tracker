@@ -88,8 +88,11 @@ def _source_url(ds: TrackedDataset) -> str:
 
 
 def _dataset_is_neon(ds: TrackedDataset) -> bool:
-    """True if this dataset accumulates queryable rows in the NEON append DB."""
-    return ds.storage_mode == "append_only" or dataset_archives_neon(ds)
+    """True if this dataset has queryable row tables: it accumulates rows in the
+    NEON append DB, or its rows moved to the cold tier (append_tables.
+    has_row_tables), which a files-only dataset can be."""
+    from app.services.append_tables import has_row_tables
+    return has_row_tables(ds)
 
 
 async def _latest_mappings(db: AsyncSession, dataset_ids: list) -> dict:

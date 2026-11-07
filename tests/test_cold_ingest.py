@@ -537,3 +537,12 @@ def test_describe_still_refuses_a_geometry_nothing_rebuilds(monkeypatch):
     with pytest.raises(hx.ColdRefused):
         _describe([("n", "int4"), ("geometry_wkt", "text"), ("row_hash", "uuid"),
                    ("geom", "geometry")], monkeypatch)
+
+
+def test_a_files_only_cold_dataset_stays_in_the_console_catalog():
+    from app.services import append_tables, data_catalog
+
+    cold = _ds(FILES_ONLY_COLD)
+    assert append_tables.has_row_tables(cold) and data_catalog._dataset_is_neon(cold)
+    assert not append_tables.has_row_tables(_ds({"storage_backend": "r2"}))
+    assert append_tables.has_row_tables(_ds({"storage_backend": "r2", "archive_neon": True}))
