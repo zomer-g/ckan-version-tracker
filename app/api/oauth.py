@@ -2,6 +2,8 @@
 
 import logging
 import base64
+import hashlib
+import hmac
 import secrets
 import uuid
 from urllib.parse import quote, urlencode
@@ -10,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_admin_user, is_admin
@@ -86,12 +88,49 @@ def _next_from_state(state: str | None) -> str | None:
     return _safe_next(raw)
 
 
+# Login CSRF: without these, an attacker could stop their own sign-in halfway
+# and send a victim the rest of it (the Google callback URL, or the
+# /admin/login?code= link), leaving the victim signed in as the attacker, with
+# every query and request attributed to the attacker's account. Each leg is
+# now bound to the browser that started it, by an HttpOnly SameSite=Lax cookie
+# the attacker cannot set in someone else's browser.
+_STATE_COOKIE = "over_sso_state"
+_BIND_COOKIE = "over_sso_bind"
+_COOKIE_PATH = "/api/auth/sso"
+
+
+def _cookie_secure() -> bool:
+    return (settings.app_base_url or "").startswith("https://")
+
+
+def _hmac(value: str) -> str:
+    return hmac.new(settings.get_jwt_secret().encode(), value.encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def _base_host() -> str:
+    from urllib.parse import urlsplit
+    return (urlsplit(settings.app_base_url or "").netloc or "").lower()
+
+
 @router.get("/google")
 @limiter.limit("20/minute")
 async def google_login(request: Request, next_path: str = Query("", alias="next")):
     """Redirect user to Google's OAuth2 consent screen."""
     if not settings.google_client_id:
         raise HTTPException(status_code=501, detail="Google SSO not configured")
+
+    # The callback lands on APP_BASE_URL's host, so the state cookie has to be
+    # set there: a sign-in started on another host (www., the platform URL)
+    # hops to it first.
+    host = (request.headers.get("host") or "").lower()
+    base = _base_host()
+    if base and host and host != base and "localhost" not in base:
+        target = f"{settings.app_base_url.rstrip('/')}/api/auth/sso/google"
+        nxt = _safe_next(next_path)
+        if nxt:
+            target += f"?next={quote(nxt, safe='')}"
+        return RedirectResponse(url=target)
 
     state = _state_with_next(_safe_next(next_path))
     params = {
@@ -103,7 +142,10 @@ async def google_login(request: Request, next_path: str = Query("", alias="next"
         "access_type": "offline",
         "prompt": "select_account",
     }
-    return RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+    resp = RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+    resp.set_cookie(_STATE_COOKIE, _hmac(state.partition(".")[0]), max_age=600,
+                    path=_COOKIE_PATH, httponly=True, samesite="lax", secure=_cookie_secure())
+    return resp
 
 
 @router.get("/google/callback")
@@ -118,6 +160,10 @@ async def google_callback(
     """Handle Google OAuth2 callback."""
     if error or not code:
         return RedirectResponse(url="/admin/login?error=google_denied")
+    # The state must be the one this browser was given when it started.
+    expected = request.cookies.get(_STATE_COOKIE) or ""
+    if not expected or not hmac.compare_digest(expected, _hmac(state.partition(".")[0])):
+        return RedirectResponse(url="/admin/login?error=google_failed")
 
     try:
         # Exchange code for tokens
@@ -143,10 +189,14 @@ async def google_callback(
             userinfo_resp.raise_for_status()
             userinfo = userinfo_resp.json()
 
-        email = userinfo.get("email", "")
+        email = (userinfo.get("email") or "").strip()
         name = userinfo.get("name", "") or email.split("@")[0]
 
         if not email:
+            return RedirectResponse(url="/admin/login?error=no_email")
+        # Admin is decided by email, so only an address Google has verified
+        # counts (the MCP sign-in already refused the others).
+        if userinfo.get("verified_email") is not True and userinfo.get("email_verified") is not True:
             return RedirectResponse(url="/admin/login?error=no_email")
 
         # Find or create user, then hand the SPA a ONE-TIME CODE (not the JWT)
@@ -160,7 +210,12 @@ async def google_callback(
         next_path = _next_from_state(state)
         if next_path:
             destination += f"&next={quote(next_path, safe='')}"
-        return RedirectResponse(url=destination)
+        resp = RedirectResponse(url=destination)
+        resp.delete_cookie(_STATE_COOKIE, path=_COOKIE_PATH)
+        # The code is only good in the browser it was issued to.
+        resp.set_cookie(_BIND_COOKIE, _hmac(login_code), max_age=auth_codes.LOGIN_TTL_SECONDS,
+                        path=_COOKIE_PATH, httponly=True, samesite="lax", secure=_cookie_secure())
+        return resp
 
     except Exception:
         logger.exception("Google OAuth callback failed")
@@ -186,7 +241,11 @@ async def exchange_code(
 
     This is the only place the login JWT is handed to the browser, and it
     travels in a POST response body — never a URL. The code is single-use and
-    expires within seconds."""
+    expires within seconds. It must come from the browser the code was issued
+    to (see _BIND_COOKIE)."""
+    bound = request.cookies.get(_BIND_COOKIE) or ""
+    if not bound or not hmac.compare_digest(bound, _hmac(body.code or "")):
+        raise HTTPException(status_code=400, detail="Invalid or expired login code")
     consumed = await auth_codes.consume_code(db, body.code, auth_codes.PURPOSE_LOGIN)
     if consumed is None:
         raise HTTPException(status_code=400, detail="Invalid or expired login code")
@@ -328,8 +387,11 @@ async def google_drive_callback(
 
 async def _find_or_create_user(db: AsyncSession, email: str, name: str, provider: str) -> User:
     """Find existing user by email, or create a new one. Returns the User."""
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    # Case-insensitive: the admin list is compared lower-cased, and the same
+    # address in another case must not become a second account.
+    result = await db.execute(select(User).where(func.lower(User.email) == email.lower())
+                              .order_by(User.created_at))
+    user = result.scalars().first()
 
     if user:
         if not user.is_active:

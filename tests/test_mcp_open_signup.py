@@ -120,7 +120,8 @@ def test_google_is_not_asked_for_the_profile_scope(monkeypatch):
     """What is never requested cannot be stored: the authorize redirect asks
     Google for openid + email and nothing else."""
     import inspect
-    src = inspect.getsource(oauth.authorize)
+    # The redirect to Google is built after the consent page, in authorize_continue.
+    src = inspect.getsource(oauth.authorize_continue)
     assert '"scope": "openid email"' in src
     assert "profile" not in src.split('"scope"')[1].split("\n")[0]
 

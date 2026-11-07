@@ -17,7 +17,9 @@ from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from urllib.parse import quote
 
+from app import security_headers
 from app.api.auth import router as auth_router
+from app.api.csp import router as csp_router
 from app.api.oauth import router as oauth_router
 from app.api.proxy import router as proxy_router
 from app.api.datasets import router as datasets_router
@@ -621,6 +623,7 @@ async def _security_headers(request, call_next):
     response.headers.setdefault("Referrer-Policy", "strict-origin")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    security_headers.apply(request, response)
     return response
 
 # Maintenance mode (MAINTENANCE_MODE), for the minutes a database is being copied.
@@ -737,6 +740,7 @@ async def healthz():
 
 # API routes
 app.include_router(auth_router)
+app.include_router(csp_router)
 app.include_router(oauth_router)
 app.include_router(proxy_router)
 app.include_router(datasets_router)
@@ -1070,6 +1074,7 @@ if frontend_dist.exists() and index_html.exists():
     # <head> block composed per request, so re-reading the file per view would
     # buy nothing but disk I/O.
     _shell = index_html.read_text(encoding="utf-8")
+    security_headers.register_shell(_shell)
 
     async def _spa_response(path: str) -> Response:
         """index.html with a real <head> for this route.

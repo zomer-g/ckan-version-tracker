@@ -63,7 +63,8 @@ class _FakeGoogle:
         return _FakeResp({"access_token": "ya29.fake", "refresh_token": "1//refresh-fake"})
 
     async def get(self, url, *a, **k):
-        return _FakeResp({"email": "admin@example.com", "name": "Admin"})
+        return _FakeResp({"email": "admin@example.com", "name": "Admin",
+                          "verified_email": True})
 
 
 def _make_app(SessionLocal):
@@ -106,8 +107,13 @@ def test_login_callback_puts_no_jwt_in_url_and_exchange_works():
         application = _make_app(SessionLocal)
 
         async with _client(application) as c:
+            # 0) Start the sign-in: this browser gets the state (and its cookie).
+            start = await c.get("/api/auth/sso/google")
+            from urllib.parse import parse_qs, urlsplit
+            state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
             # 1) The SSO callback must redirect with a one-time ?code=, NOT a JWT.
-            r = await c.get("/api/auth/sso/google/callback", params={"code": "goog-auth-code"})
+            r = await c.get("/api/auth/sso/google/callback",
+                            params={"code": "goog-auth-code", "state": state})
             assert r.status_code in (302, 307), r.text
             loc = r.headers["location"]
             assert loc.startswith("/admin/login?code=")

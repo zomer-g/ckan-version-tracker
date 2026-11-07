@@ -91,6 +91,12 @@ async def oauth_authorize(request: Request, db: AsyncSession = Depends(get_db)):
     return await oauth.authorize(request, db)  # browser redirect — no CORS needed
 
 
+@mcp_router.post("/oauth/authorize/continue")
+@limiter.limit("30/minute")
+async def oauth_authorize_continue(request: Request):
+    return await oauth.authorize_continue(request)
+
+
 @mcp_router.get("/oauth/google/callback")
 async def oauth_google_callback(request: Request, db: AsyncSession = Depends(get_db)):
     return await oauth.google_callback(request, db)

@@ -93,7 +93,8 @@ class _FakeGoogle:
         return _FakeResp({"access_token": "ya29.fake"})
 
     async def get(self, url, *a, **k):
-        return _FakeResp({"email": "reader@example.com", "name": "Reader"})
+        return _FakeResp({"email": "reader@example.com", "name": "Reader",
+                          "verified_email": True})
 
 
 async def _client():

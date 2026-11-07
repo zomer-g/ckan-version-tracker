@@ -14,6 +14,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -244,6 +245,11 @@ async def register_client(request: Request, db: AsyncSession) -> Response:
         return _oauth_error(400, "invalid_client_metadata", "client_name required")
     if not isinstance(redirect_uris, list) or not redirect_uris or not all(isinstance(u, str) for u in redirect_uris):
         return _oauth_error(400, "invalid_client_metadata", "redirect_uris must be a non-empty string list")
+    bad = [u for u in redirect_uris if not redirect_uri_allowed(u)]
+    if bad:
+        return _oauth_error(400, "invalid_redirect_uri",
+                            "redirect URIs must be https, http on loopback, or a reverse-domain "
+                            "app scheme (RFC 8252)")
 
     auth_method = body.get("token_endpoint_auth_method") or "none"
     plain_secret = secret_hash = None
@@ -297,7 +303,7 @@ async def authorize(request: Request, db: AsyncSession) -> Response:
     )).scalar_one_or_none() if _is_uuid(client_id) else None
     if not client:
         return _err_html(400, "לקוח לא רשום", "ה-MCP client לא רשום במערכת.")
-    if redirect_uri not in (client.redirect_uris or []):
+    if redirect_uri not in (client.redirect_uris or []) or not redirect_uri_allowed(redirect_uri):
         return _err_html(400, "redirect_uri לא מאושר", "ה-redirect URI לא תואם למה שנרשם.")
     if not settings.google_client_id or not settings.google_client_secret:
         return _err_html(503, "הזדהות לא זמינה", "Google OAuth לא מוגדר בשרת.")
@@ -315,6 +321,79 @@ async def authorize(request: Request, db: AsyncSession) -> Response:
         "exp": int(time.time()) + MCP_STATE_TTL_SECONDS,
     }, mcp_jwt_secret(), algorithm="HS256")
 
+    # Consent first: the person sees who is asking before any sign-in. Going
+    # straight to Google let a link to this URL — with a client registered by
+    # anyone, pointing anywhere — hand a stranger the victim's token after one
+    # account pick that never said who would receive it.
+    return _consent_page(client.client_name, redirect_uri, state, q.get("state"))
+
+
+def redirect_uri_allowed(uri: str) -> bool:
+    """https anywhere; http only on loopback (RFC 8252 §7.3); or a private-use
+    app scheme (RFC 8252 §7.1). RFC 8252 asks for reverse-domain schemes, but
+    real MCP clients use cursor:// and vscode://, and such a scheme only ever
+    reaches an app on the person's own machine. Never javascript:, data:,
+    file: or plain http to a remote host."""
+    from urllib.parse import urlsplit
+
+    try:
+        p = urlsplit((uri or "").strip())
+    except ValueError:
+        return False
+    scheme = (p.scheme or "").lower()
+    if scheme == "https":
+        return bool(p.hostname)
+    if scheme == "http":
+        return (p.hostname or "") in ("localhost", "127.0.0.1", "::1")
+    if not scheme or scheme in _BLOCKED_SCHEMES:
+        return False
+    return bool(re.fullmatch(r"[a-z][a-z0-9+.-]*", scheme))
+
+
+_BLOCKED_SCHEMES = frozenset({"javascript", "data", "file", "vbscript", "blob", "about",
+                              "ftp", "ws", "wss", "chrome", "view-source"})
+
+
+def _consent_page(client_name: str, redirect_uri: str, state: str,
+                  client_state: str | None) -> HTMLResponse:
+    from html import escape
+    from urllib.parse import urlencode, urlsplit
+
+    p = urlsplit(redirect_uri)
+    dest = p.hostname if p.scheme in ("http", "https") else f"{p.scheme}:"
+    sep = "&" if "?" in redirect_uri else "?"
+    deny = {"error": "access_denied"}
+    if client_state:
+        deny["state"] = client_state
+    cancel = redirect_uri + sep + urlencode(deny)
+    body = f"""<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>אישור חיבור — גרסאות לעם</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:560px;margin:64px auto;padding:0 20px;line-height:1.6">
+<h1 style="font-size:1.4rem">חיבור לשרתי ה-MCP של גרסאות לעם</h1>
+<p>האפליקציה <strong>{escape(client_name)}</strong> מבקשת גישה בשמך לשרתי ה-MCP של האתר.</p>
+<p>אחרי ההתחברות עם Google, הגישה תימסר ל־<strong dir="ltr">{escape(dest or "")}</strong>.
+אם לא אתה התחלת את החיבור הזה, או שהכתובת לא מוכרת לך, בטל.</p>
+<p lang="en" dir="ltr" style="color:#555;font-size:.9rem"><strong>{escape(client_name)}</strong>
+is asking for access to OVER's MCP servers on your behalf. After you sign in with Google, access
+is handed to <strong>{escape(dest or "")}</strong>. If you did not start this, cancel.</p>
+<form method="post" action="/mcp/oauth/authorize/continue" style="display:flex;gap:12px;margin-top:24px">
+<input type="hidden" name="state" value="{escape(state)}">
+<button type="submit" style="padding:10px 18px;font-size:1rem">המשך עם Google / Continue</button>
+<a href="{escape(cancel)}" style="padding:10px 18px">ביטול / Cancel</a>
+</form></body></html>"""
+    return HTMLResponse(content=body, headers={"Cache-Control": "no-store",
+                                               "X-Frame-Options": "DENY"})
+
+
+async def authorize_continue(request: Request) -> Response:
+    """The consent page's "continue": on to Google with the state it carried."""
+    form = await request.form()
+    state = str(form.get("state") or "")
+    try:
+        jwt.decode(state, mcp_jwt_secret(), algorithms=["HS256"], audience=_STATE_AUDIENCE)
+    except Exception:
+        return _err_html(400, "state לא תקין", "פג תוקף הבקשה. התחילו את החיבור מחדש.")
     from urllib.parse import urlencode
     params = {
         "client_id": settings.google_client_id,
@@ -327,7 +406,7 @@ async def authorize(request: Request, db: AsyncSession) -> Response:
         "access_type": "online",
         "state": state,
     }
-    return RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+    return RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{urlencode(params)}", status_code=303)
 
 
 async def google_callback(request: Request, db: AsyncSession) -> Response:
