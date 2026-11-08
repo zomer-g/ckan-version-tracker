@@ -297,7 +297,7 @@ _BODY_STYLE = (
 #: The label every LLM-written block carries. Prominent and explicit on purpose:
 #: the ID card must never read as part of the dataset or the publisher's words.
 AI_LABEL_HE = (
-    "🤖 תוכן שנוצר אוטומטית על ידי מודל שפה (AI) — אינו חלק מהמאגר ואינו טקסט "
+    "תוכן שנוצר אוטומטית על ידי מודל שפה (AI) — אינו חלק מהמאגר ואינו טקסט "
     "של הגוף המפרסם. נכתב מתוך דגימה של שורות המאגר ועלול להכיל טעויות."
 )
 
@@ -336,7 +336,7 @@ def id_card_html(cards: list[dict]) -> str:
     out = (
         '<section class="ai-card" aria-label="תוכן שנוצר על ידי מודל שפה" '
         'data-generated-by="llm">'
-        f'<strong class="ai-badge">{_e(AI_LABEL_HE)}</strong>'
+        f'<strong class="ai-badge"><span aria-hidden="true">🤖 </span>{_e(AI_LABEL_HE)}</strong>'
         "<h2>תעודת זהות של המאגר (נוצרה על ידי מודל שפה)</h2>"
     )
     for card in cards:

@@ -51,7 +51,10 @@ export default function DatasetIdCard({ datasetId }: { datasetId: string }) {
           fontSize: "0.9rem",
         }}
       >
-        🤖 תוכן שנוצר אוטומטית על ידי מודל שפה (AI) — אינו חלק מהמאגר ואינו טקסט
+        {/* The emoji is decoration: a screen reader would announce "robot face"
+            before the sentence that already says it is AI output. */}
+        <span aria-hidden="true">🤖 </span>
+        תוכן שנוצר אוטומטית על ידי מודל שפה (AI) — אינו חלק מהמאגר ואינו טקסט
         של הגוף המפרסם. נכתב מתוך דגימה של שורות המאגר ועלול להכיל טעויות.
       </div>
       <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>
@@ -68,7 +71,7 @@ export default function DatasetIdCard({ datasetId }: { datasetId: string }) {
           )}
           {c.columns.length > 0 && (
             <details>
-              <summary className="text-sm" style={{ cursor: "pointer" }}>
+              <summary className="text-sm" style={{ cursor: "pointer", minHeight: "1.75rem", display: "list-item", paddingBlock: "0.2rem" }}>
                 תיאור העמודות ({c.columns.length}) — לפי המודל
               </summary>
               <dl className="text-sm" style={{ margin: "0.5rem 0 0" }}>
