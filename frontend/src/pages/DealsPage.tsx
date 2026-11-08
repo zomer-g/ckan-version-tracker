@@ -81,7 +81,9 @@ function heDate(iso: string | null | undefined): string {
 }
 
 export default function DealsPage() {
-  useDocumentTitle("עסקאות נדל\"ן");
+  // KEEP IN SYNC with DEALS_TITLE in app/services/seo.py — this is the title
+  // Google indexes (it reads the rendered page).
+  useDocumentTitle('עסקאות נדל"ן של רשות המסים — מחירי דירות שנמכרו');
   const [params, setParams] = useSearchParams();
 
   const urlTab = params.get("tab") as Tab | null;
@@ -257,7 +259,7 @@ export default function DealsPage() {
 
       <div className="container mt-3">
         <div className="page-header" style={{ marginBottom: "0.75rem" }}>
-          <h1 style={{ margin: 0 }}>עסקאות נדל"ן</h1>
+          <h1 style={{ margin: 0 }}>עסקאות נדל"ן של רשות המסים</h1>
           <div className="text-sm text-muted" style={{ marginTop: "0.35rem", lineHeight: 1.7 }}>
             מאגר עסקאות המקרקעין המדווחות לרשות המסים, שהמפרסם מאפשר לקרוא גוש אחד בכל פעם,
             כאן כמאגר אחד שאפשר לסנן, למיין ולהשוות. שתי הלשוניות האחרונות עוסקות בפער שבין

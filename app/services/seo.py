@@ -78,6 +78,8 @@ class PageMeta:
     status: int = 200
 
 
+DEALS_TITLE = 'עסקאות נדל"ן של רשות המסים — מחירי דירות שנמכרו'
+
 # ── static routes ───────────────────────────────────────────────────────────
 # Written out rather than derived from the router: these strings are the search
 # result, so they are copy, not configuration. Each description says what the
@@ -190,11 +192,18 @@ _STATIC: dict[str, PageMeta] = {
         description="הצלבה בין חלקות, גושים, כתובות ומיקוד — מיליון ומאה אלף חלקות מקושרות לכתובות.",
         canonical_path="/projects/nadlan",
     ),
+    # Nearly all of the site's search traffic lands here (Search Console,
+    # 2026-11-05..06: 3,024 of 3,240 impressions). The queries are "מידע נדלן",
+    # "עסקאות נדלן רשות המיסים", "רשות המיסים נדלן", "מחירי דירות שנמכרו" —
+    # so the title says those words, and the description answers them.
+    # KEEP IN SYNC with useDocumentTitle in DealsPage.tsx: Google indexes the
+    # rendered page, whose title is the one React sets.
     "/projects/deals": PageMeta(
-        title="עסקאות נדל\"ן",
-        description=("מאגר עסקאות הנדל\"ן של מיסוי מקרקעין — 3.8 מיליון עסקאות "
-                     "מדווחות מ-1998, לחיפוש ולהשוואה, לצד דוח הפערים מול "
-                     "אתר הנדל\"ן הממשלתי."),
+        title=DEALS_TITLE,
+        description=("מידע נדל\"ן מרשות המסים (מיסוי מקרקעין): 3.8 מיליון עסקאות "
+                     "מדווחות מ-1998 — מחירי דירות שנמכרו לפי יישוב, גוש, חלקה "
+                     "וכתובת. חיפוש, סינון והשוואה חופשיים במאגר אחד, בלי הגבלה "
+                     "של גוש אחד בכל פעם."),
         canonical_path="/projects/deals",
     ),
     "/projects/odata": PageMeta(
@@ -595,19 +604,112 @@ async def _lookup_dynamic(path: str):
             from dataclasses import replace
             return replace(base, body_html=_wrap(inner))
 
-    # /sources/<slug> — the registry lives in the worker manifest, not the DB,
-    # so the slug itself is the best title available here without a round trip.
+    # /sources/<slug> — a real name and the datasets collected from it.
     if len(parts) == 2 and parts[0] == "sources":
-        slug = _clean(parts[1], 60)
-        return PageMeta(
-            title=f"מקור: {slug}",
-            description=_clean(
-                f"כל מאגרי המידע שגרסאות לעם אוסף מהמקור {slug}, ואיך הם נאספים."
-            ),
-            canonical_path=f"/sources/{slug}",
-        )
+        return await _source_page(parts[1], public)
 
     return None
+
+
+# The built-in sources, as frontend/src/utils/sourceBadge.ts::sourceBadgeFor
+# assigns them: (id, Hebrew name, what it is). Order matters — the first match
+# wins, exactly as in the frontend. Worker-declared sources (the registry) are
+# resolved from their manifests before any of these. KEEP IN SYNC with
+# sourceBadge.ts; a source missing here still gets a page, only a plainer one.
+_BUILTIN_SOURCES: dict[str, tuple[str, str]] = {
+    "datagovil": ("data.gov.il — פורטל הנתונים הממשלתי",
+                  "מאגרי המידע של פורטל הנתונים הפתוחים של ממשלת ישראל."),
+    "govil": ("gov.il — אתרי משרדי הממשלה",
+              "מאגרים ופרסומים שנאספים מאתרי משרדי הממשלה ב-gov.il."),
+    "govmap": ("GovMap — המפה הממשלתית",
+               "שכבות המפה של GovMap, כל שכבה כמאגר עם היסטוריית גרסאות."),
+    "atlas": ("אטלס ישראל", "שכבות אטלס ישראל, הנשמרות כמאגרים במעקב."),
+    "cbs": ('הלשכה המרכזית לסטטיסטיקה (למ"ס)', 'פרסומי ונתוני הלמ"ס.'),
+    "idf": ('צה"ל — idf.il', 'מאגרים שמתפרסמים באתר צה"ל.'),
+    "health": ("משרד הבריאות — מאגר בעלי מקצוע",
+               "מאגר בעלי המקצוע הרשומים של משרד הבריאות (practitioners.health.gov.il)."),
+    "registries": ("משרד הבריאות — מרשמים", "המרשמים של משרד הבריאות (registries.health.gov.il)."),
+    "avodata": ("משרד העבודה — avodata", "מאגרי הנתונים של משרד העבודה (avodata.labor.gov.il)."),
+    "munidata": ("מצב השלטון המקומי", "נתוני הרשויות המקומיות מאתר מצב השלטון המקומי."),
+    "emun": ('מערכת אמו"ן', 'נתונים ממערכת אמו"ן.'),
+    "servicescompass": ("מצפן השירותים הממשלתיים", "השירותים הממשלתיים כפי שהם מופיעים במצפן השירותים."),
+    "mevaker": ("מבקר המדינה", "פרסומי מבקר המדינה (mevaker.gov.il)."),
+    "hatzav": ("חצב — משרד התחבורה", "השכבות הגיאוגרפיות של מערכת חצב (geo.mot.gov.il)."),
+    "mankal": ('חוזרי מנכ"ל', 'חוזרי המנכ"ל של משרדי הממשלה.'),
+    "jda": ("הרשות לפיתוח ירושלים", "מאגרים מאתר הרשות לפיתוח ירושלים (jda.gov.il)."),
+    "eden": ("חברת עדן", "מאגרים מאתר חברת עדן (jeden.co.il)."),
+    "knesset": ("הכנסת", "פיד ה-ODATA של הכנסת (knesset.gov.il)."),
+}
+_SCRAPER_PREFIX_SOURCES = (
+    "idf", "health", "registries", "avodata", "munidata", "emun", "servicescompass",
+    "mevaker", "hatzav", "mankal", "jda", "eden", "knesset",
+)
+
+
+def _source_dataset_filter(slug: str, manifests: list) -> tuple[str, str, list] | None:
+    """(name, description, extra WHERE clauses) for one source page, or None."""
+    from app.models.tracked_dataset import TrackedDataset as T
+
+    for man in manifests:
+        if man.id == slug:
+            desc = man.methodology_short_he or f"מאגרי המידע שגרסאות לעם אוסף מ{man.label_he}."
+            return man.label_he, desc, [T.source_type == "scraper", T.ckan_id.startswith(man.ckan_id_prefix)]
+    if slug not in _BUILTIN_SOURCES:
+        return None
+    name, desc = _BUILTIN_SOURCES[slug]
+    registry = [T.ckan_id.startswith(m.ckan_id_prefix) for m in manifests]
+    known = [T.ckan_id.startswith(f"{p}-scraper-") for p in _SCRAPER_PREFIX_SOURCES]
+    from sqlalchemy import not_, or_
+    if slug == "atlas":
+        where = [T.source_type == "govmap", T.ckan_id.startswith("atlas-scraper-")]
+    elif slug == "govmap":
+        where = [T.source_type == "govmap", not_(T.ckan_id.startswith("atlas-scraper-"))]
+    elif slug == "cbs":
+        where = [T.source_type == "cbs"]
+    elif slug in _SCRAPER_PREFIX_SOURCES:
+        where = [T.source_type == "scraper", T.ckan_id.startswith(f"{slug}-scraper-")]
+    elif slug == "govil":
+        where = [T.source_type == "scraper"] + ([not_(or_(*registry, *known))])
+    else:  # datagovil
+        where = [T.source_type.notin_(("scraper", "govmap", "cbs"))]
+    return name, desc, where
+
+
+async def _source_page(raw_slug: str, public: tuple):
+    from app.database import async_session
+    from app.models.tracked_dataset import TrackedDataset
+    from app.services import source_registry
+
+    slug = raw_slug.strip()
+    async with async_session() as db:
+        manifests = await source_registry.load_enabled(db)
+        found = _source_dataset_filter(slug, manifests)
+        if found is None:
+            return _NOT_FOUND
+        name, desc, where = found
+        rows = (
+            await db.execute(
+                select(TrackedDataset.id, TrackedDataset.title)
+                .where(*public, *where)
+                .order_by(TrackedDataset.title)
+                .limit(_MAX_LIST)
+            )
+        ).all()
+    inner = (
+        f"<h1>{_e(name)}</h1><p>{_e(_clean(desc, 1000))}</p>"
+        f"<h2>מאגרים שנאספים מהמקור ({len(rows)})</h2>"
+        + _link_list([(f"/versions/{i}", t) for i, t in rows])
+    )
+    return PageMeta(
+        title=_clean(f"{name} — מאגרי מידע במעקב", 110),
+        description=_clean(
+            f"{_clean(desc, 160)} {len(rows)} מאגרים מהמקור הזה במעקב גרסאות לעם, "
+            "עם היסטוריית הגרסאות של כל אחד."
+        ),
+        canonical_path=f"/sources/{slug}",
+        noindex=not rows,
+        body_html=_wrap(inner),
+    )
 
 
 def _source_url(ds) -> str | None:

@@ -646,3 +646,81 @@ def test_api_responses_are_noindex():
             return await c.get("/api/no-such")
 
     assert _run(go()).headers.get("x-robots-tag") == "noindex"
+
+
+# ── /projects/deals and /sources/<slug> ─────────────────────────────────────
+
+def test_deals_title_matches_what_people_search_and_the_react_title():
+    meta = seo._STATIC["/projects/deals"]
+    assert "רשות המסים" in meta.title and "מחירי דירות" in meta.title
+    assert "מידע נדל" in meta.description
+    page = open(os.path.join(os.path.dirname(__file__), "..", "frontend", "src", "pages", "DealsPage.tsx"),
+                encoding="utf-8").read()
+    assert seo.DEALS_TITLE in page, "DealsPage's useDocumentTitle must equal DEALS_TITLE"
+
+
+class _Man:
+    def __init__(self, id, label_he, prefix, short=None):
+        self.id, self.label_he, self.ckan_id_prefix, self.methodology_short_he = id, label_he, prefix, short
+
+
+def _with_registry(manifests):
+    from app.services import source_registry
+    original = source_registry.load_enabled
+
+    async def fake(db, force=False):
+        return manifests
+    source_registry.load_enabled = fake
+    return lambda: setattr(source_registry, "load_enabled", original)
+
+
+def test_a_source_page_has_a_real_name_and_its_datasets():
+    factory, _, _, _ = _run(_seeded_session_factory())
+    ids = []
+
+    async def seed():
+        async with factory() as db:
+            for i, (st, cid) in enumerate([("scraper", "prices-scraper-1"), ("scraper", "prices-scraper-2"),
+                                            ("govmap", "g1"), ("scraper", "other-1")]):
+                ds_id = uuid.uuid4()
+                ids.append(ds_id)
+                db.add(TrackedDataset(id=ds_id, ckan_id=cid, ckan_name=f"s{i}", title=f"מקור {i}",
+                                      status="active", source_type=st, poll_interval=3600))
+            await db.commit()
+    _run(seed())
+
+    restore = _with_registry([_Man("prices", "שקיפות מחירים — רשתות המזון", "prices-scraper-", "נאסף פעם ביום")])
+    try:
+        reg = _with_db(factory, lambda: seo.meta_for("/sources/prices"))
+        gm = _with_db(factory, lambda: seo.meta_for("/sources/govmap"))
+        gov = _with_db(factory, lambda: seo.meta_for("/sources/govil"))
+        missing = _with_db(factory, lambda: seo.meta_for("/sources/no-such-source"))
+    finally:
+        restore()
+
+    assert reg.title.startswith("שקיפות מחירים")
+    assert f'href="/versions/{ids[0]}"' in reg.body_html and f'href="/versions/{ids[1]}"' in reg.body_html
+    assert f'href="/versions/{ids[2]}"' not in reg.body_html
+    assert gm.title.startswith("GovMap") and f'href="/versions/{ids[2]}"' in gm.body_html
+    # gov.il takes the scrapers no other source claims — not the registered ones
+    assert f'href="/versions/{ids[3]}"' in gov.body_html and f'href="/versions/{ids[0]}"' not in gov.body_html
+    assert missing.status == 404
+
+
+def test_sitemap_lists_source_pages_with_datasets():
+    from app.api import seo as seo_api
+    factory, _, _, _ = _run(_seeded_session_factory())
+
+    async def seed():
+        async with factory() as db:
+            db.add(TrackedDataset(id=uuid.uuid4(), ckan_id="g", ckan_name="g", title="שכבה",
+                                  status="active", source_type="govmap", poll_interval=3600))
+            await db.commit()
+    _run(seed())
+    restore = _with_registry([])
+    try:
+        xml = _with_db(factory, seo_api._build_sitemap)
+    finally:
+        restore()
+    assert "/sources/govmap</loc>" in xml
+    assert "/sources/atlas</loc>" not in xml
