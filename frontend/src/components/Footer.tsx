@@ -1,6 +1,10 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+// The GitHub Sponsors "say thanks" line is switched off for now, by choice.
+// The markup and wording below are kept as they are: set this to true to bring
+// the line back. Nothing else needs to change.
+const SHOW_SPONSOR_LINK = false;
 const SPONSOR_URL = "https://github.com/sponsors/zomer-g?utm_source=over&utm_medium=footer";
 const SOURCE_URL = "https://github.com/zomer-g/ckan-version-tracker";
 // Google's "preferred sources" deeplink: lets a reader star over.org.il so it
@@ -95,7 +99,7 @@ export default function Footer() {
               {he ? "הוספה כמקור מועדף ב-Google" : "Add as a preferred source on Google"}
               {newWindow}
             </a>
-            {he ? (
+            {SHOW_SPONSOR_LINK && (he ? (
               <p className="gz-support" dir="rtl" lang="he">
                 הכלי הזה חינמי.{" "}
                 <a
@@ -123,7 +127,7 @@ export default function Footer() {
                 </a>{" "}
                 · no perks, no commitment
               </p>
-            )}
+            ))}
           </div>
         </div>
       </div>
