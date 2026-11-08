@@ -2292,17 +2292,19 @@ label {
   opacity: 1;
 }
 
-/* Footer layout */
-.footer-inner {
+/* Footer layout — compact: brand on one side, two short lines of links on
+   the other, and a thin bottom bar. The header carries every project, so the
+   footer does not repeat them. */
+.footer-top {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 2rem 3rem;
+  gap: 1.25rem 3rem;
   flex-wrap: wrap;
 }
 
 .footer-brand-col {
-  max-width: 20rem;
+  max-width: 22rem;
 }
 
 .footer-brand {
@@ -2316,51 +2318,78 @@ label {
   font-size: 0.85rem;
 }
 
-.footer-groups {
-  display: flex;
-  gap: 2.5rem;
-  flex-wrap: wrap;
-}
-
-.footer-group {
+.footer-links {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.15rem;
 }
 
-.footer-group-title {
+.footer-links-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 1.1rem;
+}
+
+.footer-links-title {
   font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   opacity: 0.65;
-  margin-bottom: 0.15rem;
+  min-width: 3.5rem;
 }
 
-.footer-group a {
+/* 24px targets (WCAG 2.5.8) without stacking the links into a tall column. */
+.footer-links-row a,
+.footer-meta a {
   font-size: 0.9rem;
+  min-height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
 }
 
-.footer-copy {
+.footer-bottom {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
   flex-wrap: wrap;
-  margin-top: 1.5rem;
-  padding-top: 1rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 0.85rem;
+}
+
+.footer-copyright {
   opacity: 0.85;
 }
 
-@media (max-width: 640px) {
-  .footer-groups {
-    gap: 1.75rem;
-  }
+.footer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+}
 
-  .footer-copy {
-    justify-content: center;
-    text-align: center;
+.footer-meta a {
+  font-size: 0.85rem;
+}
+
+.gz-support {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.gz-support a {
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .footer-top,
+  .footer-bottom {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
@@ -2997,7 +3026,6 @@ html {
 .nav-link,
 .nav-dropdown-link,
 .navbar-mobile-link,
-.footer-group a,
 .catalog-tab,
 .data-tab {
   min-height: var(--target-min);
