@@ -1,101 +1,130 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+const SPONSOR_URL = "https://github.com/sponsors/zomer-g?utm_source=over&utm_medium=footer";
+const SOURCE_URL = "https://github.com/zomer-g/ckan-version-tracker";
+// Google's "preferred sources" deeplink: lets a reader star over.org.il so it
+// shows up more in Top Stories / AI Overviews for them. A plain link, not
+// Google's publisher.js button, so the footer loads no third-party script.
+const PREFERRED_SOURCE_URL = "https://www.google.com/preferences/source?q=over.org.il";
+
+function trackOutbound(name: string) {
+  const gtag = (window as unknown as { gtag?: (...a: unknown[]) => void }).gtag;
+  try {
+    gtag?.("event", name, { transport_type: "beacon" });
+  } catch {
+    /* analytics must never cost a click */
+  }
+}
+
 /**
- * Footer — mirrors the two-level header: a brand blurb plus three grouped
- * link columns (Projects / Catalog / About) and a copyright line.
+ * Footer — short on purpose. The header already lists every project, so the
+ * footer no longer repeats them: it carries the brand, two compact lines of
+ * site links (catalog, about/legal), and a bottom bar with the copyright,
+ * the source code, the "say thanks" link and the preferred-source link.
  */
 export default function Footer() {
   const { t, i18n } = useTranslation();
+  const he = i18n.language === "he";
 
-  const groups: {
-    title: string;
-    links: { label: string; to?: string; href?: string }[];
-  }[] = [
-    {
-      title: t("footer.group_projects", "פרויקטים"),
-      links: [
-        { label: t("nav.questions", "שאלות לעם"), to: "/projects/questions" },
-        { label: t("nav.knesset_db", "הכנסת"), to: "/knesset" },
-        { label: t("nav.cbs", 'למ"ס'), to: "/cbs" },
-        { label: t("nav.odata", "מידע לעם"), to: "/projects/odata" },
-        { label: t("nav.ocal", "יומן לעם"), to: "/projects/ocal" },
-        { label: t("nav.ocoi", "ניגוד עניינים לעם"), to: "/projects/ocoi" },
-        { label: t("nav.nadlan", 'נדל"ן לעם'), to: "/projects/nadlan" },
-        { label: t("nav.deals", 'עסקאות נדל"ן'), to: "/projects/deals" },
-        { label: t("nav.prices", "שקיפות מחירים"), to: "/projects/prices" },
-        { label: t("nav.project1933", "פרויקט 1933"), to: "/projects/1933" },
-        { label: t("nav.abroad", 'חו"ל'), to: "/projects/abroad" },
-      ],
-    },
+  const groups: { title: string; links: { label: string; to: string }[] }[] = [
     {
       title: t("footer.group_catalog", "קטלוג"),
       links: [
-        { label: t("nav.search"), to: "/" },
-        { label: t("nav.data_sql", "SQL"), to: "/data" },
         { label: t("nav.organizations", "ארגונים"), to: "/organizations" },
-        { label: t("nav.tags", "תגיות"), to: "/tags" },
         { label: t("nav.sources", "מקורות"), to: "/sources" },
+        { label: t("nav.tags", "תגיות"), to: "/tags" },
+        { label: t("nav.data_sql", "SQL"), to: "/data" },
+        { label: t("nav.api", "API"), to: "/api" },
       ],
     },
     {
       title: t("footer.group_about", "אודות"),
       links: [
         { label: t("nav.about"), to: "/about" },
-        { label: t("nav.api", "API"), to: "/api" },
         { label: t("about.privacy_title"), to: "/about#privacy" },
         { label: t("about.accessibility_title"), to: "/about#accessibility" },
         { label: t("nav.security", "אבטחת מידע"), to: "/security" },
-        {
-          label: t("footer.source_code"),
-          href: "https://github.com/zomer-g/ckan-version-tracker",
-        },
       ],
     },
   ];
+
+  const newWindow = <span className="sr-only"> {he ? "(נפתח בחלון חדש)" : "(opens in a new window)"}</span>;
 
   return (
     <footer
       className="footer"
       // Translated in full, so it names its own language (WCAG 3.1.2).
       lang={i18n.language}
-      dir={i18n.language === "he" ? "rtl" : "ltr"}
+      dir={he ? "rtl" : "ltr"}
     >
       <div className="container">
-        <div className="footer-inner">
+        <div className="footer-top">
           <div className="footer-brand-col">
             <div className="footer-brand">{t("app_name")}</div>
             <div className="footer-desc">{t("footer.description")}</div>
           </div>
 
-          <div className="footer-groups">
+          <div className="footer-links">
             {groups.map((group) => (
-              <nav key={group.title} className="footer-group" aria-label={group.title}>
-                <div className="footer-group-title">{group.title}</div>
-                {group.links.map((link) =>
-                  link.to ? (
-                    <Link key={link.label} to={link.to}>
-                      {link.label}
-                    </Link>
-                  ) : (
-                    <a
-                      key={link.label}
-                      href={link.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {link.label}
-                    <span className="sr-only"> (נפתח בחלון חדש)</span></a>
-                  )
-                )}
+              <nav key={group.title} className="footer-links-row" aria-label={group.title}>
+                <span className="footer-links-title">{group.title}</span>
+                {group.links.map((link) => (
+                  <Link key={link.to} to={link.to}>
+                    {link.label}
+                  </Link>
+                ))}
               </nav>
             ))}
           </div>
         </div>
 
-        <div className="footer-copy">
-          <span>{t("footer.copyright")}</span>
-          <span>over.org.il</span>
+        <div className="footer-bottom">
+          <span className="footer-copyright">{t("footer.copyright")}</span>
+          <div className="footer-meta">
+            <a href={SOURCE_URL} target="_blank" rel="noopener noreferrer">
+              {t("footer.source_code_github", he ? "קוד מקור ב-GitHub" : "Source code on GitHub")}
+              {newWindow}
+            </a>
+            <a
+              href={PREFERRED_SOURCE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackOutbound("preferred_source_click")}
+            >
+              {he ? "הוספה כמקור מועדף ב-Google" : "Add as a preferred source on Google"}
+              {newWindow}
+            </a>
+            {he ? (
+              <p className="gz-support" dir="rtl" lang="he">
+                הכלי הזה חינמי.{" "}
+                <a
+                  href={SPONSOR_URL}
+                  target="_blank"
+                  rel="noopener"
+                  title="דרך GitHub Sponsors, נדרש חשבון GitHub"
+                  onClick={() => trackOutbound("sponsor_click")}
+                >
+                  אפשר להגיד תודה{newWindow}
+                </a>{" "}
+                · ללא הטבה וללא התחייבות
+              </p>
+            ) : (
+              <p className="gz-support" lang="en">
+                This tool is free.{" "}
+                <a
+                  href={SPONSOR_URL}
+                  target="_blank"
+                  rel="noopener"
+                  title="Via GitHub Sponsors, a GitHub account is required"
+                  onClick={() => trackOutbound("sponsor_click")}
+                >
+                  Say thanks{newWindow}
+                </a>{" "}
+                · no perks, no commitment
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </footer>
