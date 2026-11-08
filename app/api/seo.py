@@ -159,6 +159,28 @@ async def _build_sitemap() -> str:
                 lastmod = polled.date().isoformat() if polled else None
                 body += _url(f"/tags/{tag_id}", lastmod, "weekly", "0.5")
                 count += 1
+            # Source pages: every built-in and registered source with at least
+            # one public dataset (empty ones are served noindex). Guarded on
+            # its own: the registry living elsewhere must not cost the rest.
+            try:
+                from app.services import source_registry
+                from app.services.seo import _BUILTIN_SOURCES, _source_dataset_filter
+                manifests = await source_registry.load_enabled(db)
+                for slug in [m.id for m in manifests] + list(_BUILTIN_SOURCES):
+                    found = _source_dataset_filter(slug, manifests)
+                    if not found or count >= _URL_CAP:
+                        continue
+                    has = (
+                        await db.execute(
+                            select(TrackedDataset.id).where(*public, *found[2]).limit(1)
+                        )
+                    ).first()
+                    if has:
+                        body += _url(f"/sources/{slug}", None, "weekly", "0.6")
+                        count += 1
+            except Exception:  # noqa: BLE001
+                logger.warning("sitemap: source pages skipped", exc_info=True)
+                await db.rollback()
     except Exception:  # noqa: BLE001
         # A sitemap of the static routes still beats a 500: the crawler keeps a
         # valid document and the deep pages come back on the next build.
