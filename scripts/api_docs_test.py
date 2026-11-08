@@ -8,7 +8,12 @@ shape: paging params on /v1/datasets, a `download_url` + `storage` field on
 every version resource, the 404 behavior of …/versions/latest and /{number},
 and the CKAN-style wrapper ({success, result:{fields, records, total, _links}})
 on the append datastore endpoints. It also runs the EXACT example URLs printed
-on the page (incl. the Hebrew `filters=` and the `datastore_search_sql` query).
+on the page (incl. the Hebrew `filters=` query).
+
+The one exception is free SQL per dataset (`POST /api/append/{id}/sql` and
+`GET …/datastore_search_sql`). Since APPEND_SQL_REQUIRE_AUTH=true it needs a
+signed-in account or the SQL service token, so without a token this test checks
+that it answers 401. That also proves the closure did not quietly reopen.
 
 Run: python scripts/api_docs_test.py [--base URL]
 Exit code is non-zero if any documented promise is not met.
@@ -49,6 +54,19 @@ def _get(url: str, timeout=60):
             return e.code, None
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+
+def _post_json(url: str, body: dict, timeout=60):
+    """Status code only: used to check that a closed endpoint refuses."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
 
 
 def ok(label, cond, detail=""):
@@ -167,17 +185,15 @@ def main():
                and (not pr["result"]["records"] or set(pr["result"]["records"][0].keys()) <= {"tozeret_nm"}))
     ok("datastore_search fields= projection + sort= work", proj_ok, f"status={st}")
 
-    # ── 11. /api/append/{id}/datastore_search_sql  (documented SQL example) ──
+    # ── 11. /api/append/{id}/datastore_search_sql and /sql: closed to anonymous ──
+    # Documented as requiring sign-in or a service token (APPEND_SQL_REQUIRE_AUTH).
+    # A 200 here means the closure was lost, which would silently reopen free SQL.
     sql = ("SELECT tozeret_nm, count(*) FROM append_private_and_commercial_vehicles_"
            "e437ab0b GROUP BY 1 ORDER BY 2 DESC LIMIT 10")
-    st, sqlr = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote(sql)}")
-    ok("/append/{id}/datastore_search_sql documented SQL example runs",
-       st == 200 and isinstance(sqlr, dict) and sqlr.get("success") is True
-       and isinstance(sqlr.get("result", {}).get("records"), list),
-       f"status={st} {str(sqlr)[:80] if st != 200 else ''}")
-    # read-only guard: a write must be rejected (not executed)
-    st_w, _ = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote('DELETE FROM x')}")
-    ok("datastore_search_sql rejects non-SELECT (read-only)", st_w in (400, 403, 422), f"status={st_w}")
+    st, _ = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote(sql)}")
+    ok("/append/{id}/datastore_search_sql without a token → 401", st == 401, f"status={st}")
+    st_p = _post_json(base + f"/api/append/{DOC_APPEND_ID}/sql", {"sql": "SELECT 1"})
+    ok("POST /append/{id}/sql without a token → 401", st_p == 401, f"status={st_p}")
 
     # ── 12. /api/append/{id}/schema ──
     st, sc = _get(base + f"/api/append/{DOC_APPEND_ID}/schema")
