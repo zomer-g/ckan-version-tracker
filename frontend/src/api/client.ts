@@ -1390,6 +1390,8 @@ export interface CatalogTable {
   source_url: string;
   archive_url?: string;
   versions_url?: string;
+  /** ``current.<table>``: the same rows as they stand now, without history. */
+  current_table?: string;
   page_url?: string;
   tags: string[];
   // Content field-flags metadata (e.g. { has_locality: true }); see
