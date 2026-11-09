@@ -69,6 +69,11 @@ Cache it to a file — it is ~1.2 MB and you will grep it repeatedly.
 
 - **`public.append_*`** — one table per tracked dataset (or per resource). Every
   column is `text`, named exactly as the source named it, usually in Hebrew.
+  The table keeps HISTORY: a row that left the source, or whose values changed,
+  stays with `last_seen` set; rows in force now have `last_seen IS NULL`.
+- **`current.append_*`** — a view per append table, same name: only the rows in
+  force now, without `last_seen`/`row_hash`. Use it whenever the question is
+  about the source as it stands today (`SELECT … FROM current.append_…`).
 - **`idx.*`** — the collection indexes: one table per GovMap layer, per scraped
   file corpus. All text, plus `geometry_wkt` (text) and `geom` (PostGIS,
   EPSG:4326) where the source is spatial.

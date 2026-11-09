@@ -2012,6 +2012,18 @@ export default function DataSqlPage() {
                 >
                   {"</>"} שאילתה מוכנה
                 </button>
+                {selectedTable.current_table && (
+                  <button
+                    type="button"
+                    title="רק השורות שבתוקף עכשיו במקור, בלי מצבים קודמים (last_seen ריק)"
+                    onClick={() => { setSqlText(`SELECT *
+FROM ${selectedTable.current_table}
+LIMIT 100`); placeholderRef.current = false; }}
+                    style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--primary)", background: "none", color: "var(--primary)", cursor: "pointer" }}
+                  >
+                    {"</>"} רק המצב הנוכחי
+                  </button>
+                )}
                 <a href={selectedTable.source_url} target="_blank" rel="noreferrer"
                    style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text)", textDecoration: "none" }}>
                   ↗ מקור

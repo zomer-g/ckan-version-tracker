@@ -478,6 +478,9 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(source_registry.warm_cache(async_session))
     from app.services import union_views
     asyncio.create_task(union_views.ensure_views_safely())
+    # current.<table>: every append table's rows in force now (current_views.py).
+    from app.services import current_views
+    asyncio.create_task(current_views.ensure_views_safely())
     # Tables moved to the cold tier (docs/history-phase4-plan.md), held in
     # memory for the /data console's note. One catalog query; never raises.
     from app.services import history_query as _hq_cold

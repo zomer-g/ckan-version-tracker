@@ -22,13 +22,13 @@ import asyncio
 import logging
 import time
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
-from app.services import append_store, column_aliases
+from app.services import append_store, column_aliases, current_views
 from app.services.storage_client import dataset_archives_neon
 
 logger = logging.getLogger(__name__)
@@ -95,10 +95,25 @@ def _dataset_is_neon(ds: TrackedDataset) -> bool:
     return has_row_tables(ds)
 
 
+def _has_table_mapping():
+    """SQL predicate: this version names the SQL table(s) its rows went to."""
+    rm = VersionIndex.resource_mappings
+    return or_(rm.has_key("append_table"), rm.has_key("_append_tables"))
+
+
 async def _latest_mappings(db: AsyncSession, dataset_ids: list) -> dict:
     """{tracked_dataset_id: (version_id, resource_mappings)} for the newest
-    version of each dataset — one query via DISTINCT ON (…) ORDER BY version
-    DESC. Datasets with no version yet are simply absent from the map."""
+    version of each dataset THAT NAMES ITS SQL TABLES — one query via
+    DISTINCT ON (…) ORDER BY version DESC. Datasets with no such version are
+    absent from the map and fall back to the deterministic table name.
+
+    Not simply the newest version: a dataset can get versions from two passes.
+    אתרי בנייה פעילים (משרד העבודה) has a datastore poll that loads rows into
+    SQL and writes ``_append_tables``, and a file pass a minute later that
+    archives the PDF next to it and writes no table mapping at all. Reading
+    the newest version meant reading the file pass's, falling back to a table
+    name that does not exist, and dropping the dataset from /data. Same rule
+    as append_tables.resolve_tables, which the /append API already used."""
     if not dataset_ids:
         return {}
     rows = (await db.execute(
@@ -108,6 +123,7 @@ async def _latest_mappings(db: AsyncSession, dataset_ids: list) -> dict:
             VersionIndex.resource_mappings,
         )
         .where(VersionIndex.tracked_dataset_id.in_(dataset_ids))
+        .where(_has_table_mapping())
         .distinct(VersionIndex.tracked_dataset_id)
         .order_by(VersionIndex.tracked_dataset_id, VersionIndex.version_number.desc())
     )).all()
@@ -147,6 +163,10 @@ def _ds_record(ds: TrackedDataset, tbl: str, resource_name: str | None,
         "field_flags": ds.field_flags or {},
         "columns": columns,
         "est_rows": est_rows,
+        # The same rows as they stand now, without superseded states
+        # (app/services/current_views.py). Absent when the view isn't built.
+        **({"current_table": current_views.view_ref(tbl)}
+           if tbl in current_views.known_views() else {}),
     }
 
 
@@ -183,6 +203,12 @@ async def _build_catalog_uncached(db: AsyncSession) -> list[dict]:
         .options(selectinload(TrackedDataset.tags))
         .order_by(TrackedDataset.title)
     )).scalars().all()
+    # The current.<table> views. Built in the background, so a table that
+    # appeared since the last check gets its current_table on a later read.
+    try:
+        asyncio.get_running_loop().create_task(current_views.ensure_views_safely())
+    except RuntimeError:
+        pass
     neon_ds = [d for d in datasets if _dataset_is_neon(d)]
     mappings = await _latest_mappings(db, [d.id for d in neon_ds])
 
@@ -563,6 +589,10 @@ async def schema_text_all(db: AsyncSession, *, schema: str | None = None) -> str
         "--   geom && ST_MakeEnvelope(34.7,31.9,35.0,32.2,4326) לסינון לפי מלבן.",
         "--   ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(34.78,32.08),4326)::geography, 500)",
         "--   למרחק במטרים (בלי ::geography המרחק יוצא במעלות וחסר משמעות).",
+        "-- היסטוריה: טבלת מאגר (append_…) שומרת כל מצב שהמקור היה בו. שורה שהוסרה",
+        "--   מהמקור או שאחד מערכיה השתנה נשארת, עם last_seen (מתי נעלמה); שורה",
+        "--   שבתוקף עכשיו היא עם last_seen ריק. לנתונים כפי שהם עכשיו, בלי היסטוריה:",
+        "--   SELECT * FROM current.<שם הטבלה>  — אותו שם, בסכימה current.",
         append_store.CAST_NOTES,
     ]
     # The site's own resolvers, read live from the database. Without them a
