@@ -520,8 +520,14 @@ engine**: DuckDB, inside OVER, over a view per table that unites the SQL table
 with its parts whose rows were deleted from SQL. Same table and column names,
 one SELECT/WITH, at most 1,000 rows, 30 seconds.
 
+Free SQL per dataset (`POST /api/append/{id}/sql` and
+`GET /api/append/{id}/datastore_search_sql`) needs a signed-in account or a
+service token, sent as `Authorization: Bearer <token>`. Without one it answers
+**401**.
+
 ```bash
 curl -X POST "https://over.org.il/api/append/<id>/sql" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"sql": "SELECT count(*) FROM append_… ", "include_history": true}'
 ```
 

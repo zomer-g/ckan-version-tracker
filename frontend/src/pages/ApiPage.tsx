@@ -176,7 +176,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         path: "/api/append/{id}/sql",
         method: "POST",
         description:
-          "שאילתת SQL (SELECT/WITH יחיד) על טבלאות המאגר, גוף JSON {sql}. ברירת המחדל רצה ב-Postgres על מה שנמצא ב-SQL. עם include_history: true השרת בונה תצוגה בשם הטבלה שמאחדת את הטבלה החמה עם קובצי ה-Parquet שכבר נמחקו מ-SQL, ומריץ את אותו SQL במנוע ההיסטוריה (DuckDB; התשובה מסמנת engine: \"duckdb\" ו-elapsed_ms). כל ההיסטוריה של המאגר בשאילתה אחת, בלי שינוי ב-SQL. עד 30 שניות, שאילתה אחת בכל רגע (429 כשהתור מלא).",
+          "שאילתת SQL (SELECT/WITH יחיד) על טבלאות המאגר, גוף JSON {sql}. ברירת המחדל רצה ב-Postgres על מה שנמצא ב-SQL. עם include_history: true השרת בונה תצוגה בשם הטבלה שמאחדת את הטבלה החמה עם קובצי ה-Parquet שכבר נמחקו מ-SQL, ומריץ את אותו SQL במנוע ההיסטוריה (DuckDB; התשובה מסמנת engine: \"duckdb\" ו-elapsed_ms). כל ההיסטוריה של המאגר בשאילתה אחת, בלי שינוי ב-SQL. עד 30 שניות, שאילתה אחת בכל רגע (429 כשהתור מלא). דורש כניסה עם חשבון גוגל (Authorization: Bearer); בלי אימות מוחזר 401.",
         params: [
           { name: "sql", desc: "משפט SELECT/WITH יחיד, ללא ; בסוף" },
           { name: "include_history", desc: "true = כולל השורות שנמצאות רק בקבצי ההיסטוריה (ראו history ב-/schema)" },
@@ -193,7 +193,7 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
       {
         path: "/api/append/{id}/datastore_search_sql",
         description:
-          "שאילתת SQL גולמית (SELECT/WITH בלבד) על תוכן המאגר — בהשראת datastore_search_sql של CKAN. רצה בטרנזקציית READ ONLY עם הגבלת זמן ושורות. שם הטבלה זמין ב-/schema.",
+          "שאילתת SQL גולמית (SELECT/WITH בלבד) על תוכן המאגר — בהשראת datastore_search_sql של CKAN. רצה בטרנזקציית READ ONLY עם הגבלת זמן ושורות. שם הטבלה זמין ב-/schema. דורש כניסה עם חשבון גוגל (Authorization: Bearer); בלי אימות מוחזר 401.",
         params: [{ name: "sql", desc: "משפט SELECT/WITH יחיד" }],
         example:
           "/api/append/e437ab0b-c247-4d35-b2c4-79c2d19dbabd/datastore_search_sql?sql=SELECT tozeret_nm, count(*) FROM append_private_and_commercial_vehicles_e437ab0b GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
@@ -1006,7 +1006,7 @@ export default function ApiPage() {
           <p>
             {t(
               "api.intro",
-              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API, ו-CORS פתוח כך שאפשר לקרוא להם ישירות מדפדפן. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 (מטא-דאטה) ו-/api/append (שורות), הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal. מעליהם כולם יושב /api/tables — SQL חופשי לקריאה בלבד על כל הטבלאות באתר, כולל שכבות ממ״ג עם PostGIS ופלט GeoJSON לפי מלבן.",
+              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API (חוץ מנתיבי ה-SQL החופשי, שדורשים כניסה עם חשבון גוגל), ו-CORS פתוח כך שאפשר לקרוא להם ישירות מדפדפן. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 (מטא-דאטה) ו-/api/append (שורות), הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal. מעליהם כולם יושב /api/tables — SQL חופשי לקריאה בלבד על כל הטבלאות באתר, כולל שכבות ממ״ג עם PostGIS ופלט GeoJSON לפי מלבן.",
             )}
           </p>
           <p>
