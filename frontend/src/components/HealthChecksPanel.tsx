@@ -128,7 +128,7 @@ function ResultBody({ r }: { r: HealthResult }) {
         <details style={{ marginTop: "0.4rem" }}>
           <summary className="text-sm text-muted" style={{ cursor: "pointer" }}>פרטים גולמיים</summary>
           <pre dir="ltr" style={{
-            fontSize: "0.72rem", background: "var(--code-bg)", padding: "0.5rem",
+            fontSize: "0.72rem", background: "var(--code-bg)", color: "var(--code-fg)", padding: "0.5rem",
             borderRadius: 4, overflowX: "auto", maxHeight: 320, whiteSpace: "pre-wrap",
           }}>{JSON.stringify(details, null, 2)}</pre>
         </details>
