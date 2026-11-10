@@ -5,6 +5,7 @@
     GET  /api/admin/health/runs        the log, newest first (no per-check bodies)
     GET  /api/admin/health/runs/{id}   one run with every result
     POST /api/admin/health/run         start a run now: {tier} or {checks: [...]}
+    GET  /api/admin/health/removals    files / sources / GovMap layers publishers removed
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -171,3 +172,17 @@ async def start_run(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"id": rid, "tier": tier, "status": "started"}
+
+
+@router.get("/removals")
+@limiter.limit("30/minute")
+async def removals(
+    request: Request,
+    days: int = 30,
+    user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The removals log: files, whole sources and GovMap layers that publishers
+    took down in the last ``days`` days (app/services/removals_log.py)."""
+    from app.services import removals_log
+    return await removals_log.collect(db, days)
