@@ -21,6 +21,7 @@ import {
 } from "../api/client";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { AutoRefreshToggle } from "./AutoRefreshToggle";
+import RemovalsLogPanel from "./RemovalsLogPanel";
 
 const STATUS: Record<HealthStatus, { label: string; emoji: string; fg: string; bg: string }> = {
   ok: { label: "תקין", emoji: "✅", fg: "var(--tint-good-fg)", bg: "var(--tint-good-bg)" },
@@ -443,6 +444,8 @@ export default function HealthChecksPanel() {
       </section>
 
       <RunLog refreshKey={logKey} />
+
+      <RemovalsLogPanel />
 
       {info && (
         <details className="card mb-2" style={{ padding: "0.8rem 1.25rem" }}>

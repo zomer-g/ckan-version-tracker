@@ -2462,6 +2462,8 @@ export const admin = {
   },
   healthRun: (id: string) => request<HealthRunRow & { results: HealthResult[] }>(
     `/admin/health/runs/${encodeURIComponent(id)}`),
+  healthRemovals: (days = 30) =>
+    request<RemovalsLog>(`/admin/health/removals?days=${days}`),
   healthStart: (body: { tier?: string; checks?: string[] }) =>
     request<{ id: string; tier: string; status: string }>("/admin/health/run", {
       method: "POST", body: JSON.stringify(body),
@@ -3273,6 +3275,29 @@ export interface HealthResult {
   run_id?: string;
   run_tier?: string;
   checked_at?: string;
+}
+
+// The removals log (app/services/removals_log.py): what publishers took down.
+export type RemovalKind = "file_removed" | "dataset_gone" | "layer_removed";
+export interface RemovalEvent {
+  kind: RemovalKind;
+  at: string | null;
+  name?: string | null;
+  dataset_id?: string;
+  dataset_title?: string | null;
+  source_url?: string | null;
+  resource_id?: string;
+  replaced?: boolean;
+  version_number?: number;
+  previous_version?: number;
+  layer_id?: string;
+}
+export interface RemovalsLog {
+  days: number;
+  since: string;
+  counts: Record<string, number>;
+  events: RemovalEvent[];
+  errors: string[];
 }
 
 export interface HealthRunRow {
