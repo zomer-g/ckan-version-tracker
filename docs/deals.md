@@ -18,6 +18,14 @@ computed; this one publishes one publisher's rows, so the page shows
 `processed: false`. What the project adds is not data, it is reach: the
 publisher only lets you read one גוש at a time behind a form.
 
+**Missing-code copies (issue #20).** The read views suppress a row without
+`settlement_code` only if a coded row matches its settlement name, parcel,
+sub-parcel, date, amount, declared amount, nature, portion, construction year,
+area and room count exactly. A missing code with no matching coded row stays.
+The source archive is unchanged. This does not merge split amounts into sales
+or change the interpretation of `portion`. The browse, console link, aggregates
+and shared parcel readers use the same rule, before counting or paging.
+
 The project exists because two of נדל"ן לעם's six tabs were never property
 lookups — the gap report below and the quiz built on it — and because the deal
 register they argue about had nowhere to be browsed. Split out 2026-09-20;
