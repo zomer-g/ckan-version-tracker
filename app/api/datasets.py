@@ -85,6 +85,11 @@ class UpdateRequest(BaseModel):
     # (POST /api/admin/datasets/{id}/seed-neon?apply=true&reset=true) replays
     # them into the merged one.
     neon_single_table: bool | None = None
+    # Columns a later version may FILL IN where an earlier one left them empty
+    # (the deals register's settlement_code). A reseed collapses the twins this
+    # makes (append_store.collapse_fill_twins). Stored in scraper_config; an
+    # empty list removes it.
+    fill_twin_columns: list[str] | None = None
     # New: replace the tracked-resources set. Empty list ([]) is rejected
     # so an admin can't accidentally orphan a CKAN dataset; pass null to
     # leave unchanged.
@@ -1715,6 +1720,15 @@ async def update_tracked(
     if body.download_files is not None:
         sc = dict(ds.scraper_config or {})
         sc["download_files"] = body.download_files
+        ds.scraper_config = sc or None
+
+    if body.fill_twin_columns is not None:
+        sc = dict(ds.scraper_config or {})
+        cols = [c.strip() for c in body.fill_twin_columns if c and c.strip()]
+        if cols:
+            sc["fill_twin_columns"] = cols
+        else:
+            sc.pop("fill_twin_columns", None)
         ds.scraper_config = sc or None
 
     if body.neon_single_table is not None:

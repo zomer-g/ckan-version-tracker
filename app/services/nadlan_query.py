@@ -641,13 +641,24 @@ MAX_DEALS = 200
 
 def _deal_row(r: dict) -> dict:
     """One deal, typed. Every numeric column in the register is clean integer
-    text (measured over all 3.84 M rows), so a value that fails to parse means
-    the publisher changed the format: the field is dropped, never guessed at."""
+    text (measured over all 3.84 M rows) except the room count, which has half
+    rooms ("4.5" on 158,667 rows) and is read as a number that keeps them. A
+    value that fails to parse means the publisher changed the format: the field
+    is dropped, never guessed at."""
     def num(key):
         try:
             return int(str(r.get(key) or "").strip())
         except ValueError:
             return None
+
+    def rooms():
+        try:
+            v = float(str(r.get("room_num") or "").strip())
+        except ValueError:
+            return None
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        return int(v) if v.is_integer() else v
 
     d = (r.get("deal_date") or "").strip()
     amount, area = num("deal_amount"), num("asset_area")
@@ -668,7 +679,7 @@ def _deal_row(r: dict) -> dict:
         "declared_amount": num("declared_amount"),
         "nature": (r.get("deal_nature") or "").strip() or None,
         "area_sqm": area,
-        "rooms": num("room_num"),
+        "rooms": rooms(),
         "year_built": num("year_built"),
         "portion": (r.get("portion") or "").strip() or None,
         "portion_fraction": share,

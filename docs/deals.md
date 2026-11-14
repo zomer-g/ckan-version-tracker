@@ -47,13 +47,23 @@ building, and one such row moves an average by millions.
    a correct ORDER BY. Everything goes through `nadlan_index.DEAL_SORT_KEY`, the
    immutable `substr` rearrangement into sortable YYYYMMDD, imported by both the
    index declaration and every query so the two cannot drift apart.
-3. **The settlement key is the NAME.** 674,340 rows (17.5%) carry an empty
-   `settlement_code`; only 2,171 lack a name. `/api/deals/settlements` returns
+3. **The settlement key is the NAME.** `settlement_code` is empty on some
+   rows (47,732 in 219 settlements that never carry one, once the twins below
+   are collapsed); only 2,171 lack a name. `/api/deals/settlements` returns
    the names verbatim, because they are the exact strings `/search` filters on —
    a picker built from that list cannot produce an empty result by spelling.
 4. **No gush suffix, no address.** The register reports גוש + חלקה + תת-חלקה
    only, which is why a link to a property goes through נדל"ן לעם and inherits
    its `gp_ambiguous` caveat.
+5. **626,608 rows were stored twice, by us.** The reseed of 2026-09-19 replayed
+   two versions of the same scrape, one with `settlement_code` empty and one
+   with it filled in. The dedup hashes the whole row, so every pair was kept.
+   The copies match in every other column, `scraped_at` included. Outside that
+   load there are no exact twins at all: the register itself does not repeat a
+   deal. The repair is `POST /api/admin/storage/fill-twins?dataset_id=…&column=settlement_code`
+   (a dry run unless `dry_run=false`). It deletes the empty copy and keeps the
+   filled one with the earlier `first_seen`. With `fill_twin_columns:
+   ["settlement_code"]` in the dataset's config, a future reseed does the same.
 
 ## Two costs that are deliberately bounded
 
