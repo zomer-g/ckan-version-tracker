@@ -20,6 +20,10 @@
   POST/GET /api/admin/storage/closures/reopen
                                     — reopen rows a non-closing source closed
                                       (append_store.reopen_closures)
+  POST/GET /api/admin/storage/fill-twins?dataset_id=&column=
+                                    — collapse rows stored twice because a later
+                                      version filled a column in
+                                      (append_store.collapse_fill_twins)
   GET  /api/admin/storage/history/candidates, PATCH /history/windows,
   POST /history/cold/{id}, POST /history/rehydrate/{id}
                                     — the cold tier and window recommendations
@@ -583,6 +587,86 @@ async def closures_reopen(source: str | None = Query(None),
     asyncio.create_task(_reopen_run([str(d.id) for d in ok], bool(dry_run),
                                     getattr(user, "email", None)))
     return {"started": True, "datasets": len(ok), "refused": refused, "dry_run": bool(dry_run)}
+
+
+# ── Fill twins (append_store.collapse_fill_twins) ────────────────────────────
+#
+# One background job at a time, its state in memory: counting the twins of the
+# 3.84M-row deals register is one full join, longer than a request should wait.
+
+_twins: dict = {"running": False, "dry_run": None, "started_at": None,
+                "finished_at": None, "target": None, "tables": [], "failed": []}
+
+
+async def _twins_run(ds_id: str, column: str, dry_run: bool, actor: str | None) -> None:
+    from app.database import async_session
+    from app.services import activity_log, append_store, append_tables
+
+    try:
+        async with async_session() as db:
+            ds = (await db.execute(select(TrackedDataset).where(
+                TrackedDataset.id == uuid.UUID(ds_id)))).scalar_one()
+            tables = await append_tables.resolve_tables(ds, db)
+        deleted = 0
+        for t in tables:
+            try:
+                res = await append_store.collapse_fill_twins(t["table"], column, dry_run=dry_run)
+                _twins["tables"].append(res)
+                deleted += res["deleted"]
+            except Exception as e:  # noqa: BLE001 — one table must not stop the rest
+                logger.warning("fill twins: %s failed: %s", t["table"], e)
+                _twins["failed"].append({"table": t["table"],
+                                         "error": f"{type(e).__name__}: {e}"[:400]})
+        if not dry_run:
+            await activity_log.log_event(
+                event="fill_twins_collapsed", dataset=ds, status="ok", actor=actor,
+                message=(f"איחוד שורות כפולות: {deleted:,} עותקים שבהם {column} ריק "
+                         f"נמחקו, ותאומיהם שבהם הוא מלא נשמרו"))
+    except Exception:  # noqa: BLE001 — surface in status, never crash the app
+        logger.exception("fill twins: run aborted")
+        _twins["failed"].append({"table": None, "error": "aborted, see log"})
+    finally:
+        _twins.update(running=False, finished_at=datetime.now(timezone.utc).isoformat())
+
+
+@router.get("/fill-twins")
+async def fill_twins_status(_: User = Depends(get_admin_user)):
+    """The last (or running) fill-twins job: per table the twins counted, the
+    columns compared, and for a real run how many copies were deleted."""
+    return {k: v for k, v in _twins.items()}
+
+
+@router.post("/fill-twins")
+async def fill_twins(dataset_id: str = Query(...),
+                     column: str = Query(...),
+                     dry_run: bool = Query(True),
+                     user: User = Depends(get_admin_user),
+                     db: AsyncSession = Depends(get_db)):
+    """Collapse rows stored twice because a later version filled ``column`` in:
+    where a row has ``column`` empty and a twin equal on every other source
+    column has it filled, delete the empty copy (the filled one keeps the
+    earlier first_seen). ``dry_run`` (the default) only counts. Runs in the
+    background; GET shows the result."""
+    import asyncio
+
+    try:
+        ds_uuid = uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="dataset_id is not a uuid")
+    if _twins["running"]:
+        return {"started": False, "reason": "already running", **_twins}
+    ds = (await db.execute(select(TrackedDataset).where(
+        TrackedDataset.id == ds_uuid))).scalar_one_or_none()
+    if ds is None:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    _twins.update(running=True, dry_run=bool(dry_run),
+                  started_at=datetime.now(timezone.utc).isoformat(), finished_at=None,
+                  target={"dataset_id": dataset_id, "column": column},
+                  tables=[], failed=[])
+    asyncio.create_task(_twins_run(dataset_id, column, bool(dry_run),
+                                   getattr(user, "email", None)))
+    return {"started": True, "dataset_id": dataset_id, "column": column,
+            "dry_run": bool(dry_run)}
 
 
 # ── The cold tier and window recommendations (docs/history-phase4-plan.md) ───

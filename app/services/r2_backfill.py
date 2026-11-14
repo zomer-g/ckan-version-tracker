@@ -1063,6 +1063,24 @@ async def seed_neon_from_versions(
             summary["rows_inserted"] += n
             summary["per_version"].append({**entry, "rows_in_file": seen_rows, "inserted": n})
 
+    # A replay inserts every version's file, and the dedup is a hash of the
+    # whole row: where a later version only FILLED IN a column the earlier one
+    # left empty, every row of it lands beside its older copy. That is how the
+    # deals register gained 626,608 twins on 2026-09-19 (settlement_code). A
+    # dataset that knows it has such a column lists it in fill_twin_columns,
+    # and the replay collapses those twins before it reports its totals.
+    twin_cols = [c for c in (sc.get("fill_twin_columns") or []) if isinstance(c, str)]
+    if apply and twin_cols:
+        summary["fill_twins"] = []
+        for tbl in sorted({table, *summary["tables"].values()}):
+            for col in twin_cols:
+                try:
+                    summary["fill_twins"].append(
+                        await append_store.collapse_fill_twins(tbl, col, dry_run=False))
+                except Exception as e:  # noqa: BLE001 — a table without the column
+                    summary["fill_twins"].append(
+                        {"table": tbl, "column": col, "error": f"{type(e).__name__}: {e}"[:300]})
+
     if apply:
         try:
             summary["table_total"] = await append_store.table_count(table)

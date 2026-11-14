@@ -1689,6 +1689,101 @@ async def reopen_closures(table: str, *, dry_run: bool, ident_col: str = "row_ha
     return out
 
 
+# ── Fill twins: one row stored twice because a column was filled in later ─────
+#
+# A keyless table dedups on a hash of the WHOLE row. When a later version of
+# the same data fills in a column the earlier one left empty, every row of it
+# hashes differently and lands beside its older copy instead of on it. The
+# deals register (עסקאות נדל"ן) got 626,608 such pairs on 2026-09-19: the reseed
+# replayed two versions of the same scrape, one with settlement_code empty and
+# one with it filled. Each pair is identical in every other column, the
+# scrape's own stamp included.
+#
+# The repair deletes the EMPTY copy of each pair and keeps the filled one,
+# after giving it the earlier first_seen (the date the row really entered the
+# archive). Columns are compared with plain '=', so a NULL in any compared
+# column never matches: a row this cannot prove is a twin is kept, never
+# deleted. An empty row with no filled twin (a settlement that never has a
+# code) is untouched.
+
+_TWIN_SKIP_COLS = frozenset({"first_seen", "last_seen", "row_hash"})
+
+
+def _empty(alias: str, col: str) -> str:
+    return f"coalesce({alias}.{_qi(col)}::text, '') = ''"
+
+
+def _same(a: str, b: str, cols: list[str]) -> str:
+    if not cols:
+        raise ValueError("fill twins need at least one column to compare")
+    return " AND ".join(f"{a}.{_qi(c)} = {b}.{_qi(c)}" for c in cols)
+
+
+def fill_twin_where(table: str, column: str, content_cols: list[str]) -> str:
+    """WHERE clause over alias ``e``: ``e`` has ``column`` empty and another row
+    has it filled and is equal on every one of ``content_cols``."""
+    eq = _same("f", "e", content_cols)
+    return (f"{_empty('e', column)} AND EXISTS (SELECT 1 FROM {_qi(table)} f "
+            f"WHERE NOT {_empty('f', column)} AND {eq})")
+
+
+def fill_twin_count_sql(table: str, column: str, content_cols: list[str]) -> str:
+    return f"SELECT count(*) FROM {_qi(table)} e WHERE {fill_twin_where(table, column, content_cols)}"
+
+
+def fill_twin_first_seen_sql(table: str, column: str, content_cols: list[str]) -> str:
+    """Give each filled row the earlier first_seen of its empty twin."""
+    t = _qi(table)
+    return (f'UPDATE {t} f SET "first_seen" = x.fs FROM ('
+            f'SELECT f2.ctid AS rid, min(e."first_seen") AS fs FROM {t} f2 '
+            f"JOIN {t} e ON {_same('f2', 'e', content_cols)} "
+            f"WHERE NOT {_empty('f2', column)} AND {_empty('e', column)} "
+            f'GROUP BY f2.ctid) x WHERE f.ctid = x.rid AND x.fs < f."first_seen"')
+
+
+def fill_twin_delete_sql(table: str, column: str, content_cols: list[str], *,
+                         batch: int = CLOSE_BATCH) -> str:
+    """One batch of empty copies deleted."""
+    return (f"DELETE FROM {_qi(table)} WHERE ctid IN (SELECT e.ctid FROM {_qi(table)} e "
+            f"WHERE {fill_twin_where(table, column, content_cols)} LIMIT {int(batch)})")
+
+
+def fill_twin_content_cols(cols: list[str], column: str) -> list[str]:
+    return [c for c in cols if c != column and c not in _TWIN_SKIP_COLS]
+
+
+async def collapse_fill_twins(table: str, column: str, *, dry_run: bool,
+                              batch: int = CLOSE_BATCH) -> dict:
+    """Delete the copy with ``column`` empty wherever a twin has it filled (see
+    above). ``dry_run`` only counts. Idempotent: a second run finds nothing."""
+    cols = await _all_columns(table)
+    if column not in cols:
+        raise ValueError(f"{table} has no column {column!r}")
+    content = fill_twin_content_cols(cols, column)
+    out = {"table": table, "column": column, "compared": content,
+           "dry_run": bool(dry_run), "twins": 0, "deleted": 0}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        out["twins"] = int(await conn.fetchval(
+            fill_twin_count_sql(table, column, content), timeout=_CLOSE_TIMEOUT_S) or 0)
+        if dry_run or not out["twins"]:
+            return out
+        if "first_seen" in cols:
+            await conn.execute(fill_twin_first_seen_sql(table, column, content),
+                               timeout=_CLOSE_TIMEOUT_S)
+        while True:
+            n = _count_of(await conn.execute(
+                fill_twin_delete_sql(table, column, content, batch=batch),
+                timeout=_CLOSE_TIMEOUT_S))
+            out["deleted"] += n
+            if n == 0:
+                break
+        await conn.execute(f'VACUUM (ANALYZE) "public".{_qi(table)}', timeout=_CLOSE_TIMEOUT_S)
+    logger.info("append fill twins: %s deleted %d copies with %s empty",
+                table, out["deleted"], column)
+    return out
+
+
 import difflib as _difflib
 import re as _re
 
