@@ -21,7 +21,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { Trans } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import {
-  deals as dealsApi, nadlan as nadlanApi, DealAddressMatch, DealFilters, DealNature,
+  deals as dealsApi, nadlan as nadlanApi, DealAddressMatch, DealAreaMatch, DealAreas,
+  DealFilters, DealNature,
   DealSettlement, DealsSearchResult, DealsStats, DealYear, NadlanDeal,
 } from "../api/client";
 
@@ -56,7 +57,7 @@ const SORTS: [string, string][] = [
 const PAGE_SIZE = 50;
 
 /** The URL parameters the form edits, and that the "חיפוש" button applies. */
-const DRAFT_KEYS = ["settlement", "nature", "street", "no", "gush", "helka",
+const DRAFT_KEYS = ["settlement", "nature", "street", "no", "hood", "area", "gush", "helka",
   "from", "to", "min", "sort"] as const;
 type DraftKey = typeof DRAFT_KEYS[number];
 
@@ -125,6 +126,8 @@ export default function DealsPage() {
     const minRooms = params.get("rooms");
     const street = params.get("street");
     const house = params.get("no");
+    const hood = params.get("hood");
+    const area = params.get("area");
     if (settlement) f.settlement = settlement;
     if (gush) f.gush = gush;
     if (helka) f.helka = helka;
@@ -140,6 +143,9 @@ export default function DealsPage() {
       f.street = street;
       if (house) f.house = house;
     }
+    // So do a neighbourhood and a statistical area: both are a settlement's.
+    if (settlement && hood) f.neighbourhood = hood;
+    if (settlement && area && /^\d+$/.test(area)) f.stat_area = Number(area);
     return f;
   }, [params]);
 
@@ -215,8 +221,9 @@ export default function DealsPage() {
     const next: Record<string, string | null> = {};
     for (const k of DRAFT_KEYS) next[k] = draft[k].trim() || null;
     if (next.sort === "date_desc") next.sort = null;
-    // An address only means something inside a settlement.
-    if (!next.settlement) { next.street = null; next.no = null; }
+    // An address, a neighbourhood and a statistical area only mean something
+    // inside a settlement.
+    if (!next.settlement) { next.street = null; next.no = null; next.hood = null; next.area = null; }
     if (next.min) next.min = next.min.replace(/\D/g, "") || null;
     patch(next);
   };
@@ -236,6 +243,38 @@ export default function DealsPage() {
     }, 250);
     return () => clearTimeout(t);
   }, [draft.street, settlementCode]);
+
+  // The settlement's neighbourhoods and statistical areas, for the two pickers.
+  // Fetched when a settlement is chosen in the form, not when it is applied, so
+  // the pickers are ready before anyone presses "חיפוש".
+  const [areas, setAreas] = useState<DealAreas | null>(null);
+  const [areasLoading, setAreasLoading] = useState(false);
+  useEffect(() => {
+    if (!draft.settlement) { setAreas(null); return; }
+    let cancelled = false;
+    setAreasLoading(true);
+    dealsApi.areas(draft.settlement)
+      .then((r) => { if (!cancelled) setAreas(r); })
+      .catch(() => { if (!cancelled) setAreas(null); })
+      .finally(() => { if (!cancelled) setAreasLoading(false); });
+    return () => { cancelled = true; };
+  }, [draft.settlement]);
+  const hoodOptions: SearchableOption[] = useMemo(() => (areas?.neighbourhoods ?? []).map((n) => ({
+    value: n.name, label: n.name, hint: `${n.parcels.toLocaleString("he-IL")} חלקות`,
+  })), [areas]);
+  const areaOptions: SearchableOption[] = useMemo(() => (areas?.stat_areas ?? []).map((a) => ({
+    value: String(a.code),
+    label: `אזור ${a.code}${a.neighbourhood ? " · " + a.neighbourhood : ""}`,
+    // Short, so the open list stays on screen: who lives there, or what the
+    // area is when nobody does (מוסדי, מתחם ציבורי).
+    hint: a.population ? `${a.population.toLocaleString("he-IL")} תושבים` : (a.main_function ?? ""),
+  })), [areas]);
+  const hoodPlaceholder = !draft.settlement ? "בחרו יישוב קודם"
+    : areasLoading ? "טוען…"
+    : hoodOptions.length === 0 ? "אין נתוני שכונות ליישוב" : "כל השכונות";
+  const areaPlaceholder = !draft.settlement ? "בחרו יישוב קודם"
+    : areasLoading ? "טוען…"
+    : areaOptions.length === 0 ? "אין אזורים סטטיסטיים" : "כל האזורים";
 
   const rows: NadlanDeal[] = result?.data ?? [];
   const hasFilter = Object.keys(filters).length > 0;
@@ -313,11 +352,47 @@ export default function DealsPage() {
                   value={draft.settlement}
                   // A street belongs to one settlement; carrying it across to
                   // another would filter on a street that is not there.
-                  onChange={(v) => edit({ settlement: v || "", street: "", no: "" })}
+                  onChange={(v) => edit({ settlement: v || "", street: "", no: "", hood: "", area: "" })}
                   allLabel="כל היישובים"
                   options={settlementOptions}
                   style={{ width: 230 }}
                 />
+              </label>
+
+              <label className="text-sm">
+                שכונה
+                <br />
+                {draft.settlement && hoodOptions.length > 0 ? (
+                  <SearchableSelect
+                    ariaLabel="שכונה"
+                    value={draft.hood}
+                    onChange={(v) => edit({ hood: v || "" })}
+                    allLabel="כל השכונות"
+                    options={hoodOptions}
+                    style={{ width: 200 }}
+                  />
+                ) : (
+                  <input disabled placeholder={hoodPlaceholder}
+                         style={{ padding: "0.35rem 0.5rem", width: 200 }} />
+                )}
+              </label>
+
+              <label className="text-sm">
+                אזור סטטיסטי
+                <br />
+                {draft.settlement && areaOptions.length > 0 ? (
+                  <SearchableSelect
+                    ariaLabel="אזור סטטיסטי"
+                    value={draft.area}
+                    onChange={(v) => edit({ area: v || "" })}
+                    allLabel="כל האזורים"
+                    options={areaOptions}
+                    style={{ width: 230 }}
+                  />
+                ) : (
+                  <input disabled placeholder={areaPlaceholder}
+                         style={{ padding: "0.35rem 0.5rem", width: 230 }} />
+                )}
               </label>
 
               <label className="text-sm">
@@ -471,6 +546,7 @@ export default function DealsPage() {
             {error && <div className="text-sm" style={{ color: "var(--danger)" }}>{error}</div>}
 
             {result?.address && <AddressMatch m={result.address} />}
+            {result?.area && <AreaMatch m={result.area} />}
 
             {!!result?.notes?.length && <DataNotes notes={result.notes} />}
 
@@ -691,6 +767,37 @@ function DataNotes({ notes }: { notes: string[] }) {
         השורות עצמן מוצגות כפי שפורסמו; ההערות הן שלנו. כל הממצאים והתיקונים
         מתועדים ב<a href="/projects/deals?tab=log">יומן הממצאים והתיקונים</a>.
       </div>
+    </div>
+  );
+}
+
+/** What a neighbourhood / statistical-area filter turned into. Neither is in
+ *  the register, so this says where each comes from: a neighbourhood is
+ *  GovMap's or the address list's, and a statistical area is a point-in-polygon
+ *  of each parcel's centre against the CBS 2022 map. */
+function AreaMatch({ m }: { m: DealAreaMatch }) {
+  const what = [
+    m.neighbourhood ? `שכונת ${m.neighbourhood}` : null,
+    m.stat_area != null ? `אזור סטטיסטי ${m.stat_area}` : null,
+  ].filter(Boolean).join(" ובתוך ");
+  const where = `${what}, ${m.settlement}`;
+  return (
+    <div className="text-sm" role="status" style={{
+      margin: "0.2rem 0 0.5rem", padding: "0.45rem 0.7rem", borderRadius: 6,
+      border: "1px solid var(--border)", background: "var(--surface-2)",
+    }}>
+      <strong>{where}</strong>:{" "}
+      {m.status === "ok"
+        ? (m.parcels === 1 ? "חלקה אחת." : `${m.parcels.toLocaleString("he-IL")} חלקות.`)
+        : m.status === "settlement_unknown"
+          ? "היישוב לא זוהה, ולכן אי אפשר למצוא את השכונות והאזורים שלו."
+          : "לא נמצאה אף חלקה במקום הזה."}
+      <span className="text-muted">
+        {" "}במאגר של רשות המסים אין שכונה ואין אזור סטטיסטי, רק גוש וחלקה, ולכן אנחנו
+        מתרגמים כל אחד מהם לרשימת חלקות.
+        {m.stat_area != null && " חלקה שייכת לאזור הסטטיסטי (חלוקת הלמ״ס 2022) שמרכז החלקה נופל בו."}
+        {m.neighbourhood && " חלקה שייכת לשכונה אם שכבת העסקאות של GovMap או רשימת הכתובות הארצית משייכות אותה אליה. נתוני שכונות קיימים רק בכ-90 יישובים, בעיקר הערים הגדולות."}
+      </span>
     </div>
   );
 }

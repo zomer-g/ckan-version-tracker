@@ -264,7 +264,202 @@ async def addresses_for(pairs: list[tuple[str, str]], per_parcel: int = 3) -> di
     return out
 
 
-def _console_sql(src: tuple[str, str], f: dict) -> str:
+# ── neighbourhood / statistical area → parcels ────────────────────────────────
+# The register has no neighbourhood and no statistical area either, so both
+# reach it the way an address does: resolved to the גוש/חלקה pairs they cover,
+# and filtered on those pairs.
+#
+# * **Statistical area (א"ס)** — the CBS 2022 division, the same layer נדל"ן לעם
+#   shows on a property. A parcel belongs to the area its centroid falls in
+#   (point-in-polygon), as in nadlan_query.stat_areas(). National coverage: every
+#   settlement CBS divides into areas.
+# * **Neighbourhood** — no national neighbourhood map is published. Two sources
+#   name one per parcel: GovMap's deal layer (nadlan.gov.il, ``govmap_deals``,
+#   80 settlements, 2,591 names) and the address list's ``neighbourhood`` column
+#   (86 settlements, written "שכונת X"). Measured 2026-11-15: after dropping the
+#   "שכונת" prefix 1,291 of 1,409 address-list names are spelled exactly as
+#   GovMap spells them, so the two are merged by that name and a parcel counts
+#   in a neighbourhood if EITHER source puts it there. Together: 88 settlements,
+#   the big cities. Elsewhere the list is empty and the page says so.
+MAX_AREA_PARCELS = 5000  # the biggest neighbourhood (הדר, חיפה) is 2,402 parcels
+_GOVMAP_DEALS_T = "public.govmap_deals"
+_STAT_T = _t(nadlan_index.STAT_AREA_SRC)
+_STAT_POP_T = _t(nadlan_index.STAT_AREA_POP_SRC)
+# The address list writes "שכונת רמת אביב"; GovMap writes "רמת אביב".
+_HOOD_NORM_SQL = r"btrim(regexp_replace(btrim({col}), '^שכונת\s+', ''))"
+
+
+def _pg() -> str:
+    return nadlan_index.postgis_schema.qschema()
+
+
+def _stat_area_pairs_sql(code: str, area: str) -> str:
+    """Parcels whose centroid is inside one statistical area. ``code`` and
+    ``area`` are SQL expressions (placeholders, or literals for the deep-link)."""
+    pg = _pg()
+    return (f"SELECT DISTINCT p.gush::text AS g, p.parcel::text AS h\n"
+            f"  FROM {_STAT_T} a JOIN {_PARCEL_T} p\n"
+            f"    ON p.centroid OPERATOR({pg}.&&) a.geom AND {pg}.ST_Contains(a.geom, p.centroid)\n"
+            f"  WHERE nullif(btrim(a.\"SEMEL_YISHUV\"), '')::numeric = {code}\n"
+            f"    AND nullif(btrim(a.\"STAT_2022\"), '')::numeric = {area}")
+
+
+def _hood_pairs_sql(code: str, hood: str, with_govmap: bool) -> str:
+    """Parcels named as being in one neighbourhood, by either source."""
+    addr = (f"SELECT p.gush::text AS g, p.parcel::text AS h\n"
+            f"  FROM {_ADDR_T} a JOIN {_PARCEL_T} p ON p.parcel_key = a.parcel_key\n"
+            f"  WHERE a.settlement_code = {code}\n"
+            f"    AND {_HOOD_NORM_SQL.format(col='a.neighbourhood')} = {hood}")
+    if not with_govmap:
+        return addr
+    return (f"SELECT gush::text AS g, parcel::text AS h FROM {_GOVMAP_DEALS_T}\n"
+            f"  WHERE settlement_id = {code} AND btrim(neighborhood) = {hood}\n"
+            f"    AND gush IS NOT NULL AND parcel IS NOT NULL\n"
+            f"UNION\n{addr}")
+
+
+async def _has_govmap_deals() -> bool:
+    async def produce():
+        try:
+            rows = await _fetch(f"SELECT to_regclass('{_GOVMAP_DEALS_T}') IS NOT NULL AS ok")
+            return bool(rows and rows[0]["ok"])
+        except Exception:  # noqa: BLE001
+            return False
+    return await _cached("has_govmap_deals", produce)
+
+
+async def _settlement_code(settlement: str) -> int | None:
+    async def produce():
+        rows = await _fetch("SELECT public.over_settlement_code($1) AS code", settlement)
+        return rows[0]["code"] if rows else None
+    return await _cached(f"sc:{settlement}", produce)
+
+
+async def areas(settlement: str) -> dict:
+    """The neighbourhoods and statistical areas of one settlement, for the pickers.
+
+    Each statistical area carries its population, its main function and the
+    neighbourhood most of its parcels are in, so "אזור 113" reads as a place."""
+    async def produce():
+        code = await _settlement_code(settlement)
+        if code is None:
+            return {"settlement": settlement, "settlement_code": None,
+                    "neighbourhoods": [], "stat_areas": []}
+        govmap = await _has_govmap_deals()
+        hood_src = (f"SELECT {_HOOD_NORM_SQL.format(col='a.neighbourhood')} AS hood, "
+                    f"p.gush::text AS g, p.parcel::text AS h\n"
+                    f"  FROM {_ADDR_T} a JOIN {_PARCEL_T} p ON p.parcel_key = a.parcel_key\n"
+                    f"  WHERE a.settlement_code = $1 AND nullif(btrim(a.neighbourhood), '') IS NOT NULL")
+        if govmap:
+            hood_src = (f"SELECT btrim(neighborhood) AS hood, gush::text AS g, parcel::text AS h\n"
+                        f"  FROM {_GOVMAP_DEALS_T}\n"
+                        f"  WHERE settlement_id = $1 AND nullif(btrim(neighborhood), '') IS NOT NULL\n"
+                        f"    AND gush IS NOT NULL AND parcel IS NOT NULL\n"
+                        f"UNION\n{hood_src}")
+        pg = _pg()
+        hoods, stats = await asyncio.gather(
+            _fetch(f"""
+                WITH x AS ({hood_src})
+                SELECT hood, count(DISTINCT (g, h)) AS parcels FROM x
+                WHERE hood <> '' AND hood <> 'שכונת'
+                GROUP BY hood ORDER BY hood
+            """, code, timeout_ms=_AGGREGATE_TIMEOUT_MS),
+            _fetch(f"""
+                WITH a AS (
+                  SELECT nullif(btrim(a."STAT_2022"), '')::numeric::int AS area,
+                         nullif(btrim(a."ROVA"), '')::numeric::int AS rova,
+                         nullif(btrim(a."TAT_ROVA"), '')::numeric::int AS tat_rova,
+                         btrim(a."YISHUV_STAT_2022") AS ys, a.geom
+                  FROM {_STAT_T} a
+                  WHERE nullif(btrim(a."SEMEL_YISHUV"), '')::numeric = $1
+                ),
+                pa AS (
+                  SELECT a.area, p.gush::text AS g, p.parcel::text AS h
+                  FROM a JOIN {_PARCEL_T} p
+                    ON p.centroid OPERATOR({pg}.&&) a.geom AND {pg}.ST_Contains(a.geom, p.centroid)
+                ),
+                hp AS ({hood_src}),
+                top AS (
+                  SELECT DISTINCT ON (pa.area) pa.area, hp.hood
+                  FROM pa JOIN hp ON hp.g = pa.g AND hp.h = pa.h
+                  WHERE hp.hood <> '' AND hp.hood <> 'שכונת'
+                  GROUP BY pa.area, hp.hood
+                  ORDER BY pa.area, count(*) DESC, hp.hood
+                )
+                SELECT a.area, a.rova, a.tat_rova,
+                       (SELECT count(*) FROM pa WHERE pa.area = a.area) AS parcels,
+                       nullif(btrim(pop."Pop_Total"), '')         AS population,
+                       nullif(btrim(pop."Main_Function_Txt"), '') AS main_function,
+                       top.hood
+                FROM a
+                LEFT JOIN {_STAT_POP_T} pop ON btrim(pop."YISHUV_STAT22") = a.ys
+                LEFT JOIN top ON top.area = a.area
+                WHERE a.area IS NOT NULL
+                ORDER BY a.area
+            """, code, timeout_ms=_AGGREGATE_TIMEOUT_MS),
+        )
+
+        def _pop(v):
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "settlement": settlement, "settlement_code": code,
+            "neighbourhoods": [{"name": r["hood"], "parcels": r["parcels"]} for r in hoods],
+            "stat_areas": [{
+                "code": r["area"], "rova": r["rova"], "tat_rova": r["tat_rova"],
+                "parcels": r["parcels"], "population": _pop(r.get("population")),
+                "main_function": r.get("main_function"), "neighbourhood": r.get("hood"),
+            } for r in stats],
+        }
+    return await _cached(f"areas:{settlement}", produce)
+
+
+async def resolve_area(settlement: str, neighbourhood: str | None,
+                       stat_area: int | None) -> dict:
+    """The גוש/חלקה pairs under a neighbourhood and/or a statistical area.
+
+    Both given → the parcels in both. Like resolve_address, the status says why
+    nothing was found rather than leaving an empty table to explain itself."""
+    async def produce():
+        code = await _settlement_code(settlement)
+        if code is None:
+            return {"status": "settlement_unknown", "settlement": settlement,
+                    "neighbourhood": neighbourhood, "stat_area": stat_area,
+                    "parcels": 0, "_pairs": ([], [])}
+        parts, args = [], [code]
+        if neighbourhood:
+            args.append(neighbourhood.strip())
+            parts.append(_hood_pairs_sql("$1", f"${len(args)}", await _has_govmap_deals()))
+        if stat_area is not None:
+            args.append(int(stat_area))
+            parts.append(_stat_area_pairs_sql("$1", f"${len(args)}"))
+        body = "\nINTERSECT\n".join(f"({p})" for p in parts)
+        rows = await _fetch(f"SELECT g, h FROM ({body}) x ORDER BY g, h "
+                            f"LIMIT {MAX_AREA_PARCELS}", *args)
+        pairs = [(r["g"], r["h"]) for r in rows]
+        return {
+            "status": "ok" if pairs else "not_found",
+            "settlement": settlement, "neighbourhood": neighbourhood,
+            "stat_area": stat_area, "parcels": len(pairs),
+            "_pairs": ([g for g, _ in pairs], [h for _, h in pairs]),
+        }
+    return dict(await _cached(f"area:{settlement}\u0001{neighbourhood}\u0001{stat_area}", produce))
+
+
+def _area_console_where(f: dict, with_govmap: bool) -> list[str]:
+    sc = f"public.over_settlement_code({_lit(f['settlement'])})"
+    out = []
+    if f.get("neighbourhood"):
+        out.append("(gush, chelka) IN (\n" + _hood_pairs_sql(sc, _lit(f["neighbourhood"]), with_govmap) + ")")
+    if f.get("stat_area") is not None:
+        out.append("(gush, chelka) IN (\n" + _stat_area_pairs_sql(sc, str(int(f["stat_area"]))) + ")")
+    return out
+
+
+def _console_sql(src: tuple[str, str], f: dict, with_govmap: bool = True) -> str:
     """The same filter as one runnable statement, for the /data deep-link.
 
     Literals rather than parameters because the console is handed text, not a
@@ -280,6 +475,8 @@ def _console_sql(src: tuple[str, str], f: dict) -> str:
         parts.append(f"{DEAL_SORT_KEY} <= {_lit(f['date_to'].replace('-', ''))}")
     if f.get("street") and f.get("settlement"):
         parts.append(_address_console_where(f))
+    if f.get("settlement") and (f.get("neighbourhood") or f.get("stat_area") is not None):
+        parts += _area_console_where(f, with_govmap)
     where = " AND ".join(parts) or "true"
     return (f'SELECT * FROM {_t(src)}\nWHERE {where}\n'
             f'ORDER BY {DEAL_SORT_KEY} DESC\nLIMIT 200')
@@ -313,6 +510,7 @@ async def search(filters: dict, limit: int = 50, offset: int = 0,
     total = counted[0]["n"] if counted else 0
     pairs = [((r.get("gush") or "").strip(), (r.get("chelka") or "").strip()) for r in rows]
     addrs = await addresses_for(pairs)
+    console = _console_sql(src, filters, await _has_govmap_deals())
     return {
         "data": [_deal_row(r) | {
             "settlement": (r.get("settlement") or "").strip() or None,
@@ -325,8 +523,8 @@ async def search(filters: dict, limit: int = 50, offset: int = 0,
         "total": min(total, COUNT_CAP),
         "total_capped": total > COUNT_CAP,
         "limit": limit, "offset": offset, "sort": sort,
-        "console_sql": _console_sql(src, filters),
-        "row_url": _console_url(_console_sql(src, filters)),
+        "console_sql": console,
+        "row_url": _console_url(console),
     }
 
 

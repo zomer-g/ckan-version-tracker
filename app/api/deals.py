@@ -13,6 +13,7 @@ Endpoints (all public, rate-limited):
     GET /api/deals/compare?…               two years, every settlement, side by side
     GET /api/deals/settlements             every settlement, with its deal count
     GET /api/deals/natures                 the deal types, with their counts
+    GET /api/deals/areas?settlement=…      a settlement's neighbourhoods and statistical areas
     GET /api/deals/parcel/{gush}/{helka}   one parcel's deals, newest first
     GET /api/deals/log                     what was found in the register, and fixed here
 
@@ -94,6 +95,15 @@ class DealFilters:
                                                "מכיל כתובת: הרחוב מתורגם לגוש-חלקה דרך "
                                                "הצלבת הכתובות של נדל\"ן לעם"),
         house: str | None = Query(None, max_length=10, description="מספר בית (עם street)"),
+        neighbourhood: str | None = Query(None, max_length=80,
+                                          description="שכונה (דורש settlement). המאגר אינו "
+                                                      "מכיל שכונה: היא מתורגמת לגוש-חלקה לפי "
+                                                      "שכבת העסקאות של GovMap ורשימת הכתובות. "
+                                                      "השמות ב-/api/deals/areas"),
+        stat_area: int | None = Query(None, ge=1, le=99_999,
+                                      description="אזור סטטיסטי של הלמ\"ס, חלוקת 2022 "
+                                                  "(דורש settlement). חלקה שייכת לאזור שמרכזה "
+                                                  "נופל בו. הקודים ב-/api/deals/areas"),
     ):
         self.values = {
             "settlement": settlement, "settlement_code": settlement_code,
@@ -103,28 +113,44 @@ class DealFilters:
             "min_rooms": min_rooms, "max_rooms": max_rooms,
             "street": (street or "").strip() or None,
             "house": (house or "").strip() or None,
+            "neighbourhood": (neighbourhood or "").strip() or None,
+            "stat_area": stat_area,
         }
 
     def as_dict(self) -> dict:
         return {k: v for k, v in self.values.items() if v not in (None, "")}
 
 
-async def _with_address(f: dict) -> tuple[dict, dict | None]:
-    """Resolve a street/house filter to the parcels it stands on.
+async def _with_address(f: dict) -> tuple[dict, dict | None, dict | None]:
+    """Resolve the place filters — street/house, neighbourhood, statistical
+    area — to the parcels they cover.
 
     Done here, once, and handed to the query layer as ``parcels`` so /search,
-    /series and /breakdown filter on exactly the same pairs. Returns the filter
-    for the query and the resolution report for the response (None when no
-    address was asked for)."""
+    /series and /breakdown filter on exactly the same pairs. When more than one
+    is set the parcels are the ones in all of them. Returns the filter for the
+    query and the two resolution reports for the response (None when that kind
+    of place was not asked for)."""
     if f.get("house") and not f.get("street"):
         raise HTTPException(status_code=422, detail="מספר בית דורש גם רחוב.")
-    if not f.get("street"):
-        return f, None
+    wants_area = bool(f.get("neighbourhood")) or f.get("stat_area") is not None
+    if not f.get("street") and not wants_area:
+        return f, None, None
     if not f.get("settlement"):
-        raise HTTPException(status_code=422, detail="חיפוש לפי כתובת דורש יישוב.")
-    res = await deals_query.resolve_address(f["settlement"], f["street"], f.get("house"))
-    pairs = res.pop("_pairs")
-    return f | {"parcels": pairs}, res
+        raise HTTPException(status_code=422,
+                            detail="חיפוש לפי כתובת, שכונה או אזור סטטיסטי דורש יישוב.")
+    address = area = None
+    sets: list[set[tuple[str, str]]] = []
+    if f.get("street"):
+        address = await deals_query.resolve_address(f["settlement"], f["street"], f.get("house"))
+        gs, hs = address.pop("_pairs")
+        sets.append(set(zip(gs, hs)))
+    if wants_area:
+        area = await deals_query.resolve_area(f["settlement"], f.get("neighbourhood"),
+                                              f.get("stat_area"))
+        gs, hs = area.pop("_pairs")
+        sets.append(set(zip(gs, hs)))
+    pairs = sorted(set.intersection(*sets))
+    return f | {"parcels": ([g for g, _ in pairs], [h for _, h in pairs])}, address, area
 
 
 @router.get("/stats")
@@ -156,6 +182,23 @@ async def deals_natures(request: Request):
     return {"data": data, "count": len(data)}
 
 
+@router.get("/areas")
+@limiter.limit("60/minute")
+async def deals_areas(
+    request: Request,
+    settlement: str = Query(..., max_length=100, description="שם היישוב כפי שפורסם במאגר"),
+):
+    """A settlement's neighbourhoods and CBS statistical areas, the values the
+    ``neighbourhood`` and ``stat_area`` filters take.
+
+    Neither is a column of the register: each is a set of parcels, resolved
+    through OVER's own crosswalks, and ``parcels`` says how many. An empty list
+    of neighbourhoods means no source names any here (outside the big cities
+    that is the usual case), not that the settlement has none."""
+    await _require_ready()
+    return await deals_query.areas(settlement)
+
+
 @router.get("/search")
 @limiter.limit("60/minute")
 async def deals_search(
@@ -170,9 +213,9 @@ async def deals_search(
     reads past the first page."""
     await _require_ready()
     f = filters.as_dict()
-    qf, address = await _with_address(f)
+    qf, address, area = await _with_address(f)
     res = await deals_query.search(qf, limit=limit, offset=offset, sort=sort)
-    return {"query": f, **res, "count": len(res["data"]), "address": address,
+    return {"query": f, **res, "count": len(res["data"]), "address": address, "area": area,
             "processed": False, "caveats": CAVEATS,
             "notes": await deals_notes.for_filters(f)}
 
@@ -185,7 +228,7 @@ async def deals_series(request: Request, filters: DealFilters = Depends()):
     millions and the register mixes the two."""
     await _require_ready()
     f = filters.as_dict()
-    qf, _ = await _with_address(f)
+    qf, _, _ = await _with_address(f)
     data = await deals_query.series(qf)
     return {"query": f, "data": data, "count": len(data),
             "processed": False, "caveats": CAVEATS,
@@ -201,7 +244,7 @@ async def deals_breakdown(
 ):
     await _require_ready()
     f = filters.as_dict()
-    qf, _ = await _with_address(f)
+    qf, _, _ = await _with_address(f)
     data = await deals_query.breakdown(qf, limit=limit)
     return {"query": f, "data": data, "count": len(data),
             "processed": False, "caveats": CAVEATS,

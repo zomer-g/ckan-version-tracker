@@ -474,6 +474,9 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         params: [
           { name: "settlement", desc: "שם היישוב כפי שמופיע ב-/api/deals/settlements" },
           { name: "gush / helka / sub_parcel", desc: "גוש, חלקה ותת-חלקה" },
+          { name: "street / house", desc: "כתובת (דורש settlement), מתורגמת לגוש-חלקה" },
+          { name: "neighbourhood", desc: "שכונה (דורש settlement), מתוך /api/deals/areas. מתורגמת לגוש-חלקה לפי שכבת העסקאות של GovMap ורשימת הכתובות; קיימת בכ-90 יישובים" },
+          { name: "stat_area", desc: "אזור סטטיסטי של הלמ\"ס, חלוקת 2022 (דורש settlement), מתוך /api/deals/areas. חלקה שייכת לאזור שמרכזה נופל בו" },
           { name: "nature", desc: "מהות העסקה, מתוך /api/deals/natures" },
           { name: "date_from / date_to", desc: "טווח תאריכים בפורמט YYYY-MM-DD" },
           { name: "min_amount / max_amount", desc: "טווח שווי מדווח בשקלים" },
@@ -517,6 +520,13 @@ const ENDPOINT_GROUPS: ApiGroup[] = [
         path: "/api/deals/natures",
         description: "סוגי העסקאות (47 במאגר), עם מספר העסקאות וחציון השווי בכל סוג.",
         example: "/api/deals/natures",
+      },
+      {
+        path: "/api/deals/areas",
+        description:
+          "השכונות והאזורים הסטטיסטיים של יישוב אחד — הערכים שהמסננים neighbourhood ו-stat_area מקבלים. אף אחד מהם אינו עמודה במאגר: כל אחד הוא רשימת חלקות, ו-parcels אומר כמה. לכל אזור סטטיסטי מצורפים מספר התושבים, הייעוד העיקרי והשכונה שרוב החלקות שלו נמצאות בה. רשימת שכונות ריקה פירושה שאין מקור שמשייך חלקות לשכונות ביישוב הזה, לא שאין בו שכונות.",
+        params: [{ name: "settlement", desc: "שם היישוב כפי שמופיע ב-/api/deals/settlements" }],
+        example: "/api/deals/areas?settlement=תל אביב -יפו",
       },
       {
         path: "/api/deals/parcel/{gush}/{helka}",
