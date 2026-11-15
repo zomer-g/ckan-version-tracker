@@ -99,6 +99,34 @@ address list's coverage (big cities first), not a bug. The match is on the
 parcel, so an address search also returns the other entrances of the same
 building, which the register has no way to tell apart.
 
+## Neighbourhood and statistical area: also borrowed, also parcels
+
+Added 2026-11-15. The register has no neighbourhood and no statistical area
+either, so `neighbourhood` and `stat_area` (both need `settlement`) go the same
+way as an address: `deals_query.resolve_area()` turns them into גוש/חלקה pairs,
+`_with_address()` intersects them with an address when both are set, and the
+response's `area` block says how it went (`ok`, `settlement_unknown`,
+`not_found`). `/api/deals/areas?settlement=` lists the values for the pickers.
+
+* **Statistical area** — the CBS 2022 division (`nadlan_index.STAT_AREA_SRC`), the
+  same layer נדל"ן לעם shows on a property. A parcel is in the area its centroid
+  falls in. National: every settlement CBS divides. Each area in the picker
+  carries its population and main function (`STAT_AREA_POP_SRC`) and the
+  neighbourhood most of its parcels are in, so "אזור 113" reads as רמת אביב.
+* **Neighbourhood** — no national neighbourhood map is published. Two sources
+  name one per parcel: GovMap's deal layer (`public.govmap_deals.neighborhood`,
+  80 settlements, 2,591 names) and the address list
+  (`over_re_addresses.neighbourhood`, 86 settlements, written "שכונת X"). With
+  the "שכונת" prefix dropped, 1,291 of 1,409 address-list names are spelled as
+  GovMap spells them (measured 2026-11-15), so they merge by name and a parcel
+  is in a neighbourhood if either source puts it there: 88 settlements in all,
+  the big cities. Elsewhere the list is empty and the page says so.
+
+Measured on production: statistical area 113 in תל אביב -יפו is 168 parcels and
+1,931 deals; רמת אביב within it, 1,929. The /data deep-link carries both
+resolutions as subqueries (about 2 s); the page itself filters on the resolved
+pairs, which are cached for an hour.
+
 ## The MCP resource (`/deals/mcp`)
 
 Added 2026-09-20, on the shared authorization server. This one exists for

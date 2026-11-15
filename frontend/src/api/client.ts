@@ -3763,6 +3763,41 @@ export interface DealFilters {
   /** Needs `settlement`; resolved to גוש/חלקה pairs server-side. */
   street?: string;
   house?: string;
+  /** Needs `settlement`; a name from /deals/areas. Resolved to parcels server-side. */
+  neighbourhood?: string;
+  /** Needs `settlement`; a CBS 2022 statistical-area code from /deals/areas. */
+  stat_area?: number;
+}
+
+/** How a neighbourhood / statistical-area filter resolved. "not_found" answers
+ *  no deals: no parcel is known to be in that place (or in both, when both are
+ *  set). */
+export interface DealAreaMatch {
+  status: "ok" | "settlement_unknown" | "not_found";
+  settlement: string;
+  neighbourhood: string | null;
+  stat_area: number | null;
+  parcels: number;
+}
+
+/** A settlement's places, the values of the two filters above. Neither is in
+ *  the register; each is a set of parcels found through OVER's crosswalks. */
+export interface DealStatArea {
+  code: number;
+  rova: number | null;
+  tat_rova: number | null;
+  parcels: number;
+  population: number | null;
+  main_function: string | null;
+  /** The neighbourhood most of its parcels are in, when one is known. */
+  neighbourhood: string | null;
+}
+
+export interface DealAreas {
+  settlement: string;
+  settlement_code: number | null;
+  neighbourhoods: { name: string; parcels: number }[];
+  stat_areas: DealStatArea[];
 }
 
 /** How an address filter resolved. Anything but "ok" answers no deals, and the
@@ -3805,6 +3840,7 @@ export interface DealsSearchResult {
   console_sql: string;
   row_url: string;
   address: DealAddressMatch | null;
+  area?: DealAreaMatch | null;
   processed: false;
   caveats: string[];
   /** OVER's notes on the value filtered on — a settlement published under two
@@ -3963,6 +3999,8 @@ export const deals = {
   settlements: () =>
     request<{ data: DealSettlement[]; count: number }>("/deals/settlements"),
   natures: () => request<{ data: DealNature[]; count: number }>("/deals/natures"),
+  areas: (settlement: string) =>
+    request<DealAreas>("/deals/areas?settlement=" + encodeURIComponent(settlement)),
   search: (f: DealFilters, limit = 50, offset = 0, sort = "date_desc") =>
     request<DealsSearchResult>("/deals/search?" + dealQuery(f, { limit, offset, sort })),
   series: (f: DealFilters) =>

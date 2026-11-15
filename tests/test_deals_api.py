@@ -55,6 +55,17 @@ def seen(monkeypatch):
         captured.append((sql, args, kw))
         if "over_street_key" in sql:
             return [_RESOLVED]
+        if "to_regclass" in sql:
+            return [{"ok": True}]
+        if "over_settlement_code($1) AS code" in sql:
+            return [{"code": 7900}]
+        if "SELECT g, h FROM (" in sql:          # a neighbourhood / statistical area
+            return [{"g": "6319", "h": "225"}, {"g": "6319", "h": "226"}]
+        if "count(DISTINCT (g, h)) AS parcels" in sql:   # the neighbourhood picker
+            return [{"hood": "כפר גנים", "parcels": 2}]
+        if "AS main_function" in sql:                     # the statistical-area picker
+            return [{"area": 113, "rova": 1, "tat_rova": 11, "parcels": 2,
+                     "population": "3564.0", "main_function": "מגורים", "hood": "כפר גנים"}]
         if "p.gp_key = ANY" in sql:
             return [{"gp_key": "6319-225", "street_name": "אבימלך", "house_num": 8, "sfx": ""},
                     {"gp_key": "6319-225", "street_name": "אבימלך", "house_num": 10, "sfx": "א"}]
@@ -361,3 +372,86 @@ def test_the_log_is_served_newest_first_and_well_formed(client):
     for e in entries:
         assert e["kind"] in ("finding", "fix")
         assert e["title"] and e["body"] and all(isinstance(p, str) and p for p in e["body"])
+
+
+# ── neighbourhood and statistical area, which the register does not carry either
+def _browse(seen):
+    """The listing statement itself, not the resolution that fed it."""
+    return next((s, a) for s, a, _ in seen if "LIMIT 50 OFFSET" in s)
+
+
+def test_a_statistical_area_filters_on_the_parcels_inside_it(client, seen):
+    body = client.get("/api/deals/search?settlement=פתח תקווה&stat_area=113").json()
+    assert body["area"]["status"] == "ok" and body["area"]["parcels"] == 2
+    assert "_pairs" not in body["area"]
+    resolve_sql, resolve_args = next((s, a) for s, a, _ in seen if "SELECT g, h FROM (" in s)
+    assert "ST_Contains(a.geom, p.centroid)" in resolve_sql      # point-in-polygon
+    assert 113 in resolve_args
+    sql, args = _browse(seen)
+    assert "(gush, chelka) IN" in sql
+    assert ["6319", "6319"] in args and ["225", "226"] in args
+
+
+def test_a_neighbourhood_reads_both_sources_and_is_a_parameter(client, seen):
+    client.get("/api/deals/search?settlement=פתח תקווה&neighbourhood=כפר גנים")
+    sql, args = next((s, a) for s, a, _ in seen if "SELECT g, h FROM (" in s)
+    assert "govmap_deals" in sql and "a.neighbourhood" in sql
+    assert "UNION" in sql
+    assert "כפר גנים" not in sql and "כפר גנים" in args
+
+
+def test_neighbourhood_and_area_together_are_their_intersection(client, seen):
+    client.get("/api/deals/search?settlement=פתח תקווה&neighbourhood=כפר גנים&stat_area=113")
+    assert "INTERSECT" in _sql(seen, "SELECT g, h FROM (")
+
+
+def test_an_area_and_an_address_together_keep_only_shared_parcels(client, seen):
+    """The address resolves to 6319-225 only; the area to 225 and 226."""
+    client.get("/api/deals/search?settlement=פתח תקווה&street=אבימלך&house=8&stat_area=113")
+    _, args = _browse(seen)
+    assert ["6319"] in args and ["225"] in args
+
+
+def test_an_area_that_resolves_to_nothing_answers_nothing(client, monkeypatch, seen):
+    async def _fetch(sql, *args, **kw):
+        seen.append((sql, args, kw))
+        if "over_settlement_code($1) AS code" in sql:
+            return [{"code": 7900}]
+        return []
+    monkeypatch.setattr(deals_query, "_fetch", _fetch)
+    body = client.get("/api/deals/search?settlement=פתח תקווה&stat_area=999").json()
+    assert body["area"]["status"] == "not_found"
+    sql, args = _browse(seen)
+    assert "(gush, chelka) IN" in sql and [] in args
+
+
+@pytest.mark.parametrize("url", [
+    "/api/deals/search?neighbourhood=כפר גנים",                  # no settlement
+    "/api/deals/search?stat_area=113",
+    "/api/deals/search?settlement=פתח תקווה&stat_area=0",         # not a code
+])
+def test_an_area_without_its_settlement_is_refused(client, url):
+    assert client.get(url).status_code == 422
+
+
+def test_the_chart_filters_on_the_same_area_as_the_table(client, seen):
+    q = "settlement=פתח תקווה&stat_area=113"
+    client.get(f"/api/deals/search?{q}")
+    _, table_args = _browse(seen)
+    seen.clear()
+    client.get(f"/api/deals/series?{q}")
+    series_args = next(a for s, a, _ in seen if "GROUP BY" in s)
+    assert table_args == series_args
+
+
+def test_the_console_link_carries_the_area_resolution(client):
+    body = client.get("/api/deals/search?settlement=פתח תקווה&stat_area=113").json()
+    assert "ST_Contains" in body["console_sql"] and "= 113" in body["console_sql"]
+
+
+def test_the_areas_route_lists_a_settlements_places(client, seen):
+    body = client.get("/api/deals/areas?settlement=פתח תקווה").json()
+    assert body["settlement_code"] == 7900
+    assert {"neighbourhoods", "stat_areas"} <= body.keys()
+    kws = [kw for s, _, kw in seen if "ST_Contains" in s or "count(DISTINCT (g, h))" in s]
+    assert kws and all(kw.get("timeout_ms") == deals_query._AGGREGATE_TIMEOUT_MS for kw in kws)
