@@ -10,15 +10,20 @@ client that keeps the queue full, or waits too long, gets a 429.
 
 State is in process memory: OVER runs as a single uvicorn process (launch.sh,
 no --workers), the same assumption slowapi's in-memory storage already makes.
-Keyed by ``client_ip_key``, the same real-IP derivation the rate limiter uses.
+Keyed by ``sql_client_key``: the real client IP (as the rate limiter uses),
+except for a trusted proxy (SQL_PROXY_TOKEN), whose visitors all arrive from
+one address — there the key is the visitor id the proxy sends in
+``X-Over-Client``, so each visitor gets their own allowance and slots.
 """
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 
 from fastapi import HTTPException, Request
 
+from app.auth.sql_access import proxy_token_matches
 from app.client_ip import client_ip_key
 
 # The per-minute allowance of each free-SQL endpoint (was 20/minute). Safe to
@@ -38,6 +43,20 @@ class _Slot:
 
 _slots: dict[str, _Slot] = {}
 
+_CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def sql_client_key(request: Request) -> str:
+    """Who a free-SQL request counts against: its IP, or — for a request
+    carrying SQL_PROXY_TOKEN — the visitor id the proxy forwards. A proxy
+    request without a valid id counts against one shared proxy bucket."""
+    auth = request.headers.get("authorization") or ""
+    token = auth[7:] if auth[:7].lower() == "bearer " else None
+    if token and proxy_token_matches(token):
+        cid = request.headers.get("x-over-client") or ""
+        return f"proxy:{cid}" if _CLIENT_ID.match(cid) else "proxy"
+    return client_ip_key(request)
+
 
 def _busy(detail: str) -> HTTPException:
     return HTTPException(status_code=429, detail=detail,
@@ -47,7 +66,7 @@ def _busy(detail: str) -> HTTPException:
 async def sql_slot(request: Request):
     """FastAPI dependency: hold one of the client's running-query slots for
     the duration of the endpoint."""
-    ip = client_ip_key(request)
+    ip = sql_client_key(request)
     slot = _slots.get(ip)
     if slot is None:
         slot = _slots[ip] = _Slot()

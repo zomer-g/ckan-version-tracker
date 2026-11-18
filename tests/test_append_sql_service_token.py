@@ -87,3 +87,27 @@ def test_a_signed_in_user_is_admitted_and_logged_by_id(monkeypatch):
     sql_access.admit(sql_access.SqlCaller("user", "8b0c6d0e"), dataset_id=DS, sql="SELECT 1")
     with pytest.raises(Exception):
         sql_access.admit(sql_access.ANONYMOUS, dataset_id=DS, sql="SELECT 1")
+
+
+# SQL_PROXY_TOKEN: the Nadlan site forwarding its visitors' queries.
+PROXY = "proxy-token-for-tests-" + "y" * 40
+
+
+@pytest.mark.parametrize("call", [_post, _get])
+def test_the_proxy_token_gets_through_and_is_logged_as_the_proxy(client, monkeypatch, caplog, call):
+    monkeypatch.setattr(M.settings, "append_sql_require_auth", True)
+    monkeypatch.setattr(M.settings, "sql_proxy_token", PROXY)
+    with caplog.at_level(logging.INFO):
+        r = call(client, {"Authorization": f"Bearer {PROXY}", "X-Over-Client": "visitor0123456789"})
+    assert r.status_code == 200, r.text
+    assert "caller=service:sql-proxy" in caplog.text
+    assert PROXY not in caplog.text
+
+
+def test_the_proxy_token_is_not_the_service_token(client, monkeypatch):
+    monkeypatch.setattr(M.settings, "append_sql_require_auth", True)
+    monkeypatch.setattr(M.settings, "sql_proxy_token", PROXY)
+    monkeypatch.setattr(M.settings, "sql_service_token", "")
+    assert _post(client, {"Authorization": f"Bearer {TOKEN}"}).status_code == 401
+    monkeypatch.setattr(M.settings, "sql_proxy_token", "")
+    assert _post(client, {"Authorization": f"Bearer {PROXY}"}).status_code == 401

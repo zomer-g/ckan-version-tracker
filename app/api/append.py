@@ -88,7 +88,7 @@ from app.database import get_db, release_connection
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
-from app.sql_concurrency import SQL_RATE, sql_slot
+from app.sql_concurrency import SQL_RATE, sql_client_key, sql_slot
 from app.services import append_store, append_tables, history_query
 
 logger = logging.getLogger(__name__)
@@ -676,7 +676,7 @@ async def archive_download(
 
 
 @router.post("/{dataset_id}/sql")
-@limiter.limit(SQL_RATE)
+@limiter.limit(SQL_RATE, key_func=sql_client_key)
 async def archive_sql(
     dataset_id: str,
     request: Request,
@@ -820,7 +820,7 @@ def _attach_quality_warning(result: dict, ds) -> None:
 
 
 @router.get("/{dataset_id}/datastore_search_sql")
-@limiter.limit(SQL_RATE)
+@limiter.limit(SQL_RATE, key_func=sql_client_key)
 async def datastore_search_sql(
     dataset_id: str,
     request: Request,

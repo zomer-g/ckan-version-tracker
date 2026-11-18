@@ -17,12 +17,15 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from app import sql_concurrency as G
+from app.config import settings
+
+REAL_KEY = G.sql_client_key  # the fixture below swaps it out
 
 
 @pytest.fixture(autouse=True)
 def _gate(monkeypatch):
     # The "request" is the IP itself; the real key function is tested elsewhere.
-    monkeypatch.setattr(G, "client_ip_key", lambda request: request)
+    monkeypatch.setattr(G, "sql_client_key", lambda request: request)
     G._slots.clear()
     yield
     G._slots.clear()
@@ -146,3 +149,30 @@ def test_the_free_sql_endpoints_carry_the_gate_and_the_new_rate():
                 limits = [str(l.limit) for l in limiter._route_limits.get(name, [])]
                 assert any("120 per 1 minute" in l for l in limits), (r.path, limits)
     assert found == wanted, wanted - found
+
+
+# ── SQL_PROXY_TOKEN: a trusted site forwarding its visitors ──────────────────
+
+PROXY = "p" * 40
+
+
+class _Req:
+    def __init__(self, headers):
+        self.headers = {k.lower(): v for k, v in headers.items()}
+
+
+def test_the_proxy_key_is_the_forwarded_visitor(monkeypatch):
+    monkeypatch.setattr(settings, "sql_proxy_token", PROXY)
+    monkeypatch.setattr(G, "client_ip_key", lambda request: "9.9.9.9")
+    auth = {"Authorization": "Bearer " + PROXY}
+    assert REAL_KEY(_Req({**auth, "X-Over-Client": "visitorAAAA1234"})) == "proxy:visitorAAAA1234"
+    assert REAL_KEY(_Req(auth)) == "proxy"                                   # no id: one shared bucket
+    assert REAL_KEY(_Req({**auth, "X-Over-Client": "bad id!"})) == "proxy"   # malformed id ignored
+    assert REAL_KEY(_Req({"Authorization": "Bearer wrong", "X-Over-Client": "visitorAAAA1234"})) == "9.9.9.9"
+    assert REAL_KEY(_Req({"X-Over-Client": "visitorAAAA1234"})) == "9.9.9.9"  # an id alone is not trusted
+
+
+def test_an_unconfigured_proxy_token_matches_nothing(monkeypatch):
+    monkeypatch.setattr(settings, "sql_proxy_token", "")
+    monkeypatch.setattr(G, "client_ip_key", lambda request: "9.9.9.9")
+    assert REAL_KEY(_Req({"Authorization": "Bearer ", "X-Over-Client": "visitorAAAA1234"})) == "9.9.9.9"
