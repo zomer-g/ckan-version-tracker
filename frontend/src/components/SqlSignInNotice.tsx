@@ -4,8 +4,10 @@
  *
  * It is deliberately not styled as an error. Nothing went wrong and nothing is
  * being withheld: every table these consoles reach is public, and the machine
- * surfaces over the same data — `/api/append/{id}/sql`, the Looker connector,
- * the MCP servers — are untouched and still anonymous. Signing in attaches a
+ * surfaces over the same data — the Looker connector, the MCP servers — are
+ * untouched and still anonymous. (`/api/append/{id}/sql` and
+ * `…/datastore_search_sql` are closed too since APPEND_SQL_REQUIRE_AUTH=true;
+ * services reach them with SQL_SERVICE_TOKEN.) Signing in attaches a
  * name and a per-account budget to a query, which is what lets the console stay
  * open to anyone rather than being rate-limited into uselessness by one abuser.
  *
