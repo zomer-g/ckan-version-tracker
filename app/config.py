@@ -891,6 +891,10 @@ class Settings(BaseSettings):
     # token and signed-in users get through. Turn on only after every service
     # client sends the token. See app/auth/sql_access.py.
     sql_service_token: str = ""
+    # A trusted site that forwards its own visitors' queries (the Nadlan site).
+    # Same access as SQL_SERVICE_TOKEN, but rate limits and the running-query
+    # cap key on the visitor id it sends in X-Over-Client, not on its one IP.
+    sql_proxy_token: str = ""
     append_sql_require_auth: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}

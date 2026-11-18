@@ -47,6 +47,12 @@ class SqlCaller:
 ANONYMOUS = SqlCaller("anonymous", "anonymous")
 
 
+def proxy_token_matches(presented: str | None) -> bool:
+    """SQL_PROXY_TOKEN: a trusted site forwarding its visitors (see app/sql_concurrency.py)."""
+    configured = settings.sql_proxy_token or ""
+    return bool(configured) and bool(presented) and hmac.compare_digest(presented, configured)
+
+
 def service_token_matches(presented: str | None) -> bool:
     configured = settings.sql_service_token or ""
     return bool(configured) and bool(presented) and hmac.compare_digest(presented, configured)
@@ -62,6 +68,8 @@ async def sql_caller(
     token = credentials.credentials if credentials else None
     if service_token_matches(token):
         return SqlCaller("service", "sql-service")
+    if proxy_token_matches(token):
+        return SqlCaller("service", "sql-proxy")
     if token:
         user = await get_optional_user(credentials, db)
         if user is not None:

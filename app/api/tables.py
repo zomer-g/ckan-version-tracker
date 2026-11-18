@@ -25,7 +25,7 @@ from app.auth.dependencies import require_signed_in_user
 from app.database import get_db, release_connection
 from app.models.user import User
 from app.rate_limit import limiter
-from app.sql_concurrency import SQL_RATE, sql_slot
+from app.sql_concurrency import SQL_RATE, sql_client_key, sql_slot
 from app.services import append_store, data_catalog, sql_shares
 from app.api.utils import public_error
 
@@ -249,7 +249,7 @@ async def table_features(
 
 
 @router.post("/sql")
-@limiter.limit(SQL_RATE)
+@limiter.limit(SQL_RATE, key_func=sql_client_key)
 async def run_sql(
     request: Request,
     body: SqlBody,
