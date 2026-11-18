@@ -88,6 +88,7 @@ from app.database import get_db, release_connection
 from app.models.tracked_dataset import TrackedDataset
 from app.models.version_index import VersionIndex
 from app.rate_limit import limiter
+from app.sql_concurrency import SQL_RATE, sql_slot
 from app.services import append_store, append_tables, history_query
 
 logger = logging.getLogger(__name__)
@@ -675,7 +676,7 @@ async def archive_download(
 
 
 @router.post("/{dataset_id}/sql")
-@limiter.limit("20/minute")
+@limiter.limit(SQL_RATE)
 async def archive_sql(
     dataset_id: str,
     request: Request,
@@ -683,6 +684,7 @@ async def archive_sql(
     table: str | None = None,
     db: AsyncSession = Depends(get_db),
     caller: SqlCaller = Depends(sql_caller),
+    _sql_slot: None = Depends(sql_slot),
 ):
     """Run a user-supplied read-only SELECT against the append DB. Guarded by a
     READ ONLY transaction + statement_timeout + row cap (see
@@ -818,7 +820,7 @@ def _attach_quality_warning(result: dict, ds) -> None:
 
 
 @router.get("/{dataset_id}/datastore_search_sql")
-@limiter.limit("20/minute")
+@limiter.limit(SQL_RATE)
 async def datastore_search_sql(
     dataset_id: str,
     request: Request,
@@ -826,6 +828,7 @@ async def datastore_search_sql(
     table: str | None = None,
     db: AsyncSession = Depends(get_db),
     caller: SqlCaller = Depends(sql_caller),
+    _sql_slot: None = Depends(sql_slot),
 ):
     """CKAN ``datastore_search_sql``-style read-only SQL (single SELECT/WITH).
     Reference the dataset's table(s) by the name(s) in /schema. Returns the CKAN

@@ -25,6 +25,7 @@ from app.auth.dependencies import require_signed_in_user
 from app.database import get_db, release_connection
 from app.models.user import User
 from app.rate_limit import limiter
+from app.sql_concurrency import SQL_RATE, sql_slot
 from app.services import append_store, data_catalog, sql_shares
 from app.api.utils import public_error
 
@@ -248,11 +249,12 @@ async def table_features(
 
 
 @router.post("/sql")
-@limiter.limit("20/minute")
+@limiter.limit(SQL_RATE)
 async def run_sql(
     request: Request,
     body: SqlBody,
     user: User = Depends(require_signed_in_user),
+    _sql_slot: None = Depends(sql_slot),
 ):
     """Read-only SELECT over the append DB, spanning the public (dataset) and
     knesset schemas (search_path = public, knesset).
