@@ -28,7 +28,8 @@ python .claude/skills/over-sql/scripts/run_sql.py query.sql
 
 Write the SQL to a file rather than echoing it into the script — Hebrew
 identifiers and their double quotes do not survive shell quoting, and you end up
-running a query you did not write. Space calls ~3 s apart: 20/minute.
+running a query you did not write. The limit is 120/minute and 4 queries
+running at once per IP; run them one after another, not in parallel.
 
 ## Two surfaces, one engine
 
@@ -59,7 +60,7 @@ console is the same database.
 | `search_path` | `public, knesset, idx, odata, ocal, extensions, postgis` — schema-qualify only on a name collision |
 | statement timeout | **10 s** (60 s on `/api/tables/export.csv`) |
 | rows | 1,000 in the browser, 200,000 via export |
-| rate limit | 20/min for SQL, 6/min for CSV export |
+| rate limit | 120/min for SQL, at most 4 running at once per IP (a 5th waits up to 20 s, then 429); 6/min for CSV export |
 
 Catalog for discovery: `GET https://www.over.org.il/api/tables` returns every
 table with its title, columns (with Hebrew `alias` where known) and row estimate.

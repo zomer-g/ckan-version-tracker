@@ -24,6 +24,7 @@ from app.models.user import User
 from app.auth.dependencies import get_admin_user
 from app.config import settings
 from app.rate_limit import limiter
+from app.sql_concurrency import SQL_RATE, sql_slot
 from app.services import knesset_db
 from app.services.knesset_http import GEO_BLOCK_MESSAGE_HE, KnessetGeoBlocked
 from app.api.utils import public_error
@@ -90,11 +91,12 @@ async def schema_txt(request: Request, group: str | None = None):
 
 
 @router.post("/sql")
-@limiter.limit("20/minute")
+@limiter.limit(SQL_RATE)
 async def sql(
     request: Request,
     body: SqlBody,
     user: User = Depends(require_signed_in_user),
+    _sql_slot: None = Depends(sql_slot),
 ):
     _require_enabled()
     try:
