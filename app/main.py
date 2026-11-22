@@ -1073,6 +1073,22 @@ def _dist_file(url_path: str, root: Path = frontend_dist) -> Path | None:
     return candidate
 
 
+def _dist_file_headers(path: Path) -> dict:
+    """FileResponse overrides for the two PWA files at the root of dist.
+
+    The manifest's type is pinned: .webmanifest is missing from older
+    mime.types tables, and served as text/plain it is ignored by some
+    browsers. The service worker is revalidated on every fetch: a CDN copy of
+    an old sw.js would keep its caching rules alive after a deploy changed
+    them, and the browser only learns of a new worker by re-fetching this file.
+    """
+    if path.name == "manifest.webmanifest":
+        return {"media_type": "application/manifest+json"}
+    if path.name == "sw.js":
+        return {"headers": {"Cache-Control": "no-cache"}}
+    return {}
+
+
 if frontend_dist.exists() and index_html.exists():
     logger.info("Frontend dist found at %s", frontend_dist)
 
@@ -1139,7 +1155,7 @@ if frontend_dist.exists() and index_html.exists():
         # Check if it's an actual static file in dist/ (e.g. favicon.svg)
         static_path = _dist_file(request.url.path)
         if static_path is not None:
-            return FileResponse(static_path)
+            return FileResponse(static_path, **_dist_file_headers(static_path))
         # For all other 404s, serve the SPA
         return _apex_redirect(request) or await _spa_response(request.url.path)
 

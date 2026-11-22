@@ -10,6 +10,17 @@
          build is also served from caches and previews. -->
     <meta name="referrer" content="strict-origin" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Installable app (PWA): manifest, home-screen icon, and the browser
+         chrome tinted to the header (--chrome-bg in src/index.css, per scheme).
+         Outside the SEO markers below, so every route keeps them. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#044E66" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0E2833" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="גרסאות לעם" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Heebo:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
