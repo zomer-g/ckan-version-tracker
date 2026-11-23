@@ -780,3 +780,13 @@ def test_a_municipal_layer_ranks_as_one_family_and_ties_stay_primary():
 def test_the_caveats_quote_no_stale_share():
     from app.api import nadlan as api
     assert not any("42%" in c for c in api.CAVEATS)
+
+
+def test_free_text_address_in_q_gets_a_hint_not_a_500(client, monkeypatch):
+    """sniff_mode reads "רחוב הרצל 5 תל אביב" as mode "address" with only the
+    text; the address mode needs city/street, and this was a KeyError → 500."""
+    _stub_lookup(monkeypatch)
+    r = client.get("/api/nadlan/lookup", params={"q": "הרצל 5 תל אביב"})
+    assert r.status_code == 200, r.text
+    assert r.json()["query"]["mode"] == "address_text"
+    assert r.json()["hint"]
