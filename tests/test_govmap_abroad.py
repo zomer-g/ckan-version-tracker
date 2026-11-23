@@ -92,3 +92,13 @@ def test_feature_name_prefers_name_fields_then_any_hebrew_text():
     assert feature_name({"name": "גשר הישנה"}) == "גשר הישנה"
     assert feature_name({"code": "LLP1205", "place": "ים ראש הנקרה-אכזיב"}) == "ים ראש הנקרה-אכזיב"
     assert feature_name({"objectId": "3", "x": "1"}) == ""
+
+
+def test_row_hash_is_read_through_json_so_layers_without_it_do_not_fail():
+    """17 idx layers were indexed without a _row_hash column, and naming the
+    column directly failed the whole layer ("column zz_src._row_hash does not
+    exist"). Reading it through to_jsonb gives the same text where it exists
+    and a hash of the row where it does not."""
+    insert, _ = ga._check_sql("govmap_39_52ed870a_e5d37c75")
+    assert "zz_src._row_hash" not in insert
+    assert "coalesce(to_jsonb(zz_src) ->> '_row_hash', md5(to_jsonb(zz_src)::text))" in insert
