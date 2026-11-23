@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { PlainSummary } from "../components/a11y";
@@ -1020,10 +1021,9 @@ export default function ApiPage() {
             )}
           </p>
           <p>
-            {t(
-              "api.intro_2",
-              "השימוש פתוח לחוקרים, עיתונאים, פעילי שקיפות ופרויקטים אזרחיים. אם אתם בונים אינטגרציה רחבה — נא להימנע ממיליוני קריאות מקבילות ולשמור מטמון מקומי.",
-            )}
+            {/* No audience list here: an "open for researchers, journalists…"
+                line read as a restriction on who may use the API. */}
+            <Trans i18nKey="api.intro_2" components={{ 1: <Link to="/about#no-terms" /> }} />
           </p>
           <p>
             {t(
