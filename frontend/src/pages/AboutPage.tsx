@@ -215,6 +215,18 @@ export default function AboutPage() {
           </dl>
         </div>
 
+        {/* Deliberately in place of a terms-of-use page, not beside one: the
+            site's position is that nobody — the authority or this mirror — has
+            the power to restrict what the public does with public data. */}
+        <div className="about-card" id="no-terms">
+          <h2>{t("about.no_terms_title")}</h2>
+          {(["no_terms_p1", "no_terms_p2", "no_terms_p3", "no_terms_p4"] as const).map((k) => (
+            <p key={k}>
+              <Trans i18nKey={`about.${k}`} components={{ strong: <strong /> }} />
+            </p>
+          ))}
+        </div>
+
         <div className="about-card" id="privacy">
           <h2>{t("about.privacy_title")}</h2>
           <p>

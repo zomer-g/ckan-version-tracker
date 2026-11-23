@@ -76,7 +76,7 @@
 | מוניטור | מתי | מה | issue (label) |
 |---|---|---|---|
 | `site` | כל 15 דקות | ‎`/healthz` עונה ו-`ok`, המתזמן רץ, לא במצב תחזוקה, **הבדיקה היומית רצה ב-26 השעות האחרונות והשבועית ב-8 הימים האחרונים**, דף הבית ו-‎`/api/v1` עונים. כשל נבדק שוב שלוש פעמים, בהפרש של 40 שניות, לפני שהוא נחשב כשל, כדי שאתחול בזמן פריסה לא ייחשב נפילה | `monitor-site` |
-| `api` | יומי, 05:20 UTC | `scripts/api_docs_test.py` ו-`scripts/source_health_check.py` מול האתר החי, מבחוץ | `monitor-api` |
+| `api` | יומי, 05:20 UTC | `scripts/api_docs_test.py` ו-`scripts/source_health_check.py` מול האתר החי, מבחוץ. נקודות ה-SQL החופשי סגורות לאנונימיים (`APPEND_SQL_REQUIRE_AUTH`): הבדיקה מוודאת שאנונימי מקבל 401, ומריצה את דוגמת ה-SQL המתועדת עם ה-secret ‏`OVER_SQL_TOKEN` של הריפו (הערך של `SQL_SERVICE_TOKEN` באתר). בלי ה-secret שתי בדיקות ה-SQL נכשלות ואומרות שחסר token. בבדיקה השבועית בתוך האפליקציה (`site.api_contract`) הסקריפט קורא את `SQL_SERVICE_TOKEN` מהסביבה | `monitor-api` |
 | `health` | יומי, 05:20 UTC | האם הבדיקה היומית האחרונה מצאה תקלה (הנתון מגיע מ-‎`/healthz`) | `monitor-health` |
 
 לכל מוניטור יש לכל היותר **issue פתוח אחד**:

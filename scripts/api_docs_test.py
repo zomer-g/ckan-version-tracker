@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Contract test for the PUBLIC API documented at https://www.over.org.il/api.
 
-Every endpoint advertised on that page is GET, public, and key-less ("אין צורך
-באימות, אין מפתח API"). This test calls each one WITHOUT any token and verifies
-the documented contract actually holds — not just a 200, but the promised
+Every endpoint advertised on that page is public and key-less, except the free
+SQL ones, which since 2026-11-09 (APPEND_SQL_REQUIRE_AUTH=true, see
+app/auth/sql_access.py) answer 401 to anonymous callers. This test calls every
+public endpoint WITHOUT any token and verifies the documented contract actually
+holds — not just a 200, but the promised
 shape: paging params on /v1/datasets, a `download_url` + `storage` field on
 every version resource, the 404 behavior of …/versions/latest and /{number},
 and the CKAN-style wrapper ({success, result:{fields, records, total, _links}})
 on the append datastore endpoints. It also runs the EXACT example URLs printed
 on the page (incl. the Hebrew `filters=` and the `datastore_search_sql` query).
+
+For datastore_search_sql it checks both halves of that contract: anonymous gets
+401, and the documented example runs (and a
+write is refused) with a token. The token is read from OVER_SQL_TOKEN, or from
+SQL_SERVICE_TOKEN, which is what the in-app weekly check (site.api_contract)
+already has in its environment. Without either, those two checks FAIL with a
+message saying so: the SQL contract cannot be verified without a credential.
 
 Run: python scripts/api_docs_test.py [--base URL]
 Exit code is non-zero if any documented promise is not met.
@@ -17,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -33,20 +43,23 @@ DOC_APPEND_ID = "e437ab0b-c247-4d35-b2c4-79c2d19dbabd"
 results: list[tuple[bool, str, str]] = []  # (ok, label, detail)
 
 
-def _get(url: str, timeout=60):
-    req = urllib.request.Request(url, method="GET")
+def _get(url: str, timeout=60, token: str | None = None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    req = urllib.request.Request(url, method="GET", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
             try:
-                return r.status, json.loads(raw)
+                body = json.loads(raw)
             except Exception:
-                return r.status, raw[:300].decode("utf-8", "replace")
+                body = raw[:300].decode("utf-8", "replace")
+            return r.status, body
     except urllib.error.HTTPError as e:
         try:
-            return e.code, json.loads(e.read())
+            body = json.loads(e.read())
         except Exception:
-            return e.code, None
+            body = None
+        return e.code, body
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
@@ -168,16 +181,29 @@ def main():
     ok("datastore_search fields= projection + sort= work", proj_ok, f"status={st}")
 
     # ── 11. /api/append/{id}/datastore_search_sql  (documented SQL example) ──
+    # Closed to anonymous callers (APPEND_SQL_REQUIRE_AUTH); the token opens it.
     sql = ("SELECT tozeret_nm, count(*) FROM append_private_and_commercial_vehicles_"
            "e437ab0b GROUP BY 1 ORDER BY 2 DESC LIMIT 10")
-    st, sqlr = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote(sql)}")
-    ok("/append/{id}/datastore_search_sql documented SQL example runs",
-       st == 200 and isinstance(sqlr, dict) and sqlr.get("success") is True
-       and isinstance(sqlr.get("result", {}).get("records"), list),
-       f"status={st} {str(sqlr)[:80] if st != 200 else ''}")
-    # read-only guard: a write must be rejected (not executed)
-    st_w, _ = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote('DELETE FROM x')}")
-    ok("datastore_search_sql rejects non-SELECT (read-only)", st_w in (400, 403, 422), f"status={st_w}")
+    sql_url = base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql={urllib.parse.quote(sql)}"
+    st_a, body_a = _get(sql_url)
+    ok("datastore_search_sql anonymous → 401 (closed to anonymous callers)",
+       st_a == 401, f"status={st_a} {str(body_a)[:80]}")
+    token = os.environ.get("OVER_SQL_TOKEN") or os.environ.get("SQL_SERVICE_TOKEN") or None
+    no_token = "no OVER_SQL_TOKEN / SQL_SERVICE_TOKEN in the environment"
+    if token:
+        st, sqlr = _get(sql_url, token=token)
+        ok("/append/{id}/datastore_search_sql documented SQL example runs (with token)",
+           st == 200 and isinstance(sqlr, dict) and sqlr.get("success") is True
+           and isinstance(sqlr.get("result", {}).get("records"), list),
+           f"status={st} {str(sqlr)[:80] if st != 200 else ''}")
+        # read-only guard: a write must be rejected (not executed)
+        st_w, _ = _get(base + f"/api/append/{DOC_APPEND_ID}/datastore_search_sql?sql="
+                       f"{urllib.parse.quote('DELETE FROM x')}", token=token)
+        ok("datastore_search_sql rejects non-SELECT (read-only, with token)",
+           st_w in (400, 403, 422), f"status={st_w}")
+    else:
+        ok("/append/{id}/datastore_search_sql documented SQL example runs (with token)", False, no_token)
+        ok("datastore_search_sql rejects non-SELECT (read-only, with token)", False, no_token)
 
     # ── 12. /api/append/{id}/schema ──
     st, sc = _get(base + f"/api/append/{DOC_APPEND_ID}/schema")
@@ -204,8 +230,8 @@ def main():
     print("-" * 90)
     n_fail = len(results) - n_ok
     print(f"TOTAL: {len(results)}   ✅ {n_ok} pass   ❌ {n_fail} fail")
-    print("\nEvery documented endpoint was called WITHOUT a token (public, as the page states)."
-          if not n_fail else "")
+    print("\nEvery public endpoint was called WITHOUT a token; the SQL endpoint was checked both"
+          " ways (anonymous refused, token accepted)." if not n_fail else "")
     sys.exit(1 if n_fail else 0)
 
 

@@ -1009,14 +1009,14 @@ export default function ApiPage() {
 
       <div className="container" style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}>
       <PlainSummary>
-        העמוד הזה מסביר איך לקבל את הנתונים של האתר ישירות לתוכנה שלכם (<Abbr>API</Abbr>), בלי לעבור דרך הדפדפן. אין צורך בהרשמה או במפתח. כל כתובת בעמוד מחזירה נתונים בפורמט שתוכנות קוראות; אפשר להעתיק אותה ולהדביק בדפדפן כדי לראות מה מגיע.
+        העמוד הזה מסביר איך לקבל את הנתונים של האתר ישירות לתוכנה שלכם (<Abbr>API</Abbr>), בלי לעבור דרך הדפדפן. אין צורך בהרשמה או במפתח, חוץ משאילתות SQL חופשיות, שדורשות התחברות. כל כתובת בעמוד מחזירה נתונים בפורמט שתוכנות קוראות; אפשר להעתיק אותה ולהדביק בדפדפן כדי לראות מה מגיע.
       </PlainSummary>
 
         <div className="api-base-card">
           <p>
             {t(
               "api.intro",
-              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API, ו-CORS פתוח כך שאפשר לקרוא להם ישירות מדפדפן. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 (מטא-דאטה) ו-/api/append (שורות), הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal. מעליהם כולם יושב /api/tables — SQL חופשי לקריאה בלבד על כל הטבלאות באתר, כולל שכבות ממ״ג עם PostGIS ופלט GeoJSON לפי מלבן.",
+              "כל ה-endpoints הם ציבוריים (רובם GET) — אין צורך באימות, אין מפתח API, ו-CORS פתוח כך שאפשר לקרוא להם ישירות מדפדפן. היוצא מן הכלל הוא SQL חופשי (‎/api/append/{id}/sql, ‏/api/append/{id}/datastore_search_sql, ‏/api/tables/sql, ‏/api/tables/export.csv, ‏/api/knesset-db/sql): הוא דורש התחברות (Authorization: Bearer) ועונה 401 בלעדיה. לכל מקור קידומת כתובת משלו: OVER תחת /api/v1 (מטא-דאטה) ו-/api/append (שורות), הלמ״ס תחת /api/cbs, הכנסת תחת /api/knesset-db ו-/api/knesset-protocols, ויומן לעם תחת /api/ocal. מעליהם כולם יושב /api/tables — SQL חופשי לקריאה בלבד על כל הטבלאות באתר, כולל שכבות ממ״ג עם PostGIS ופלט GeoJSON לפי מלבן.",
             )}
           </p>
           <p>

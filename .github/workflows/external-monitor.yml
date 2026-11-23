@@ -67,6 +67,12 @@ jobs:
       - uses: actions/checkout@v4
       - id: docs
         continue-on-error: true
+        # The free-SQL endpoints answer 401 to anonymous callers
+        # (APPEND_SQL_REQUIRE_AUTH). The test checks that, and runs the documented
+        # SQL example with this token. Repository secret OVER_SQL_TOKEN = the
+        # site's SQL_SERVICE_TOKEN; without it the two SQL checks fail and say so.
+        env:
+          OVER_SQL_TOKEN: ${{ secrets.OVER_SQL_TOKEN }}
         run: python3 scripts/api_docs_test.py --base "$BASE" | tee docs.txt
       - id: sources
         continue-on-error: true

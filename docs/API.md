@@ -7,7 +7,11 @@ data.gov.il / gov.il and to the snapshotted mirror on
 [odata.org.il](https://www.odata.org.il).
 
 - **Base URL:** `https://<your-deployment>/api/v1`
-- **Auth:** none. All endpoints are public.
+- **Auth:** none, except free SQL. `POST /api/append/{id}/sql`,
+  `GET /api/append/{id}/datastore_search_sql`, `POST /api/tables/sql`,
+  `/api/tables/export.csv` and `POST /api/knesset-db/sql` answer 401 to anonymous
+  callers (`APPEND_SQL_REQUIRE_AUTH`, see `app/auth/sql_access.py`); send
+  `Authorization: Bearer <token>` (a sign-in token, or a service token from the site).
 - **Format:** JSON. UTF-8. No trailing slash on paths.
 - **CORS:** allowed by the server config. Calls from the browser are fine.
 - **Stability:** the `/api/v1` namespace is the stable public surface.

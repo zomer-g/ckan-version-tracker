@@ -97,10 +97,20 @@ EXPECT = {
     "ckan": {"zip": None, "geojson": False},
 }
 
-# "append_table"/"_append_tables" hold NEON table NAMES, not resources — without
-# them here a NEON-archived dataset reports a phantom ODATA-stored CSV.
-_BOOKKEEPING = {"_hashes", "_resource_ids", "_appendonly_seen",
+# Mapping keys that are bookkeeping, not files. Keep in step with
+# _BOOKKEEPING_KEYS in app/services/archive_state.py (this script is stdlib-only,
+# so it cannot import it). "append_table"/"_append_tables" hold NEON table NAMES —
+# without them a NEON-archived dataset reports a phantom ODATA-stored CSV.
+# "_names" is the resource → display-name map: probing it as a download gave
+# "download _names -> 403" on every Nadlan-addresses version (a false FAIL).
+_BOOKKEEPING = {"_hashes", "_resource_ids", "_appendonly_seen", "_names",
+                "_filedates", "_probes", "_large_dataset_info",
                 "append_table", "_append_tables"}
+
+# A heavy GovMap layer publishes its features as GeoPackage / GeoParquet INSTEAD
+# of a CSV + GeoJSON (app/api/worker.py, _FILE_AGGREGATE_KEYS), so for govmap
+# either of these satisfies "the geometry is archived".
+_GEO_FILE_KEYS = ("_geojson", "_gpkg", "_parquet")
 
 
 def _resource_storage(value):
@@ -219,6 +229,7 @@ def check_one(base, typ, d):
 
     has_zip = any(k in ("_zip", "_zip_parts") for k in m)
     has_geojson = "_geojson" in m
+    has_geo_file = any(k in m for k in _GEO_FILE_KEYS)  # GeoJSON, GPKG or GeoParquet
     named = [k for k in m if k not in _BOOKKEEPING and not k.startswith("_")]
     has_csv = bool(named)
 
@@ -231,8 +242,8 @@ def check_one(base, typ, d):
     storage = "/".join(sorted(storages)) or "none"
 
     problems = []
-    if exp["geojson"] and not has_geojson:
-        problems.append("missing GeoJSON")
+    if exp["geojson"] and not has_geo_file:
+        problems.append("missing GeoJSON/GPKG/GeoParquet")
     # A document source can also publish a purely tabular register (mevaker's
     # party-donations table: 51k rows, no documents). The ZIP is owed only when
     # the version declares documents; with none declared there is nothing to zip.
@@ -240,7 +251,7 @@ def check_one(base, typ, d):
         problems.append(f"missing document ZIP (att={att})")
     if exp["zip"] is False and has_zip:
         problems.append("unexpected ZIP for catalog-only source")
-    if not has_csv and not has_geojson and not has_zip:
+    if not has_csv and not has_geo_file and not has_zip:
         problems.append("no resources at all")
 
     # storage-served check: HEAD/Range a representative resource
@@ -261,7 +272,8 @@ def check_one(base, typ, d):
     detail = (
         f"v{v.get('version_number')} {(v.get('detected_at') or '')[:16]} | "
         f"rows={rows} docs={att} | csv={has_csv} zip={has_zip} "
-        f"geojson={has_geojson} | storage={storage} | dl={dl}"
+        f"geojson={has_geojson} gpkg/parquet={has_geo_file and not has_geojson} | "
+        f"storage={storage} | dl={dl}"
     )
     if d.get("last_error"):
         problems.append(f"last_error: {str(d['last_error'])[:40]}")
