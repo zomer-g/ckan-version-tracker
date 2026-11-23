@@ -251,7 +251,21 @@ def check_one(base, typ, d):
         problems.append(f"missing document ZIP (att={att})")
     if exp["zip"] is False and has_zip:
         problems.append("unexpected ZIP for catalog-only source")
-    if not has_csv and not has_geo_file and not has_zip:
+    # A NEON-only dataset (storage_backend='neon', e.g. two of the michrazim
+    # tables) keeps no file by design: its archive IS the row table, named by
+    # append_table / _append_tables. For those, what must hold is that the
+    # rows are actually served, so that is what is checked instead of a file.
+    neon_only = (not has_csv and not has_geo_file and not has_zip
+                 and ("append_table" in m or "_append_tables" in m))
+    if neon_only:
+        try:
+            served = _get_json(base, f"/api/append/{d['id']}/rows?limit=1") or {}
+        except Exception as e:  # noqa: BLE001 — reported as the problem it is
+            served = {}
+            problems.append(f"rows endpoint: {e}"[:80])
+        if rows and not served.get("rows"):
+            problems.append("NEON-only, but its rows are not served")
+    elif not has_csv and not has_geo_file and not has_zip:
         problems.append("no resources at all")
 
     # storage-served check: HEAD/Range a representative resource
@@ -273,7 +287,7 @@ def check_one(base, typ, d):
         f"v{v.get('version_number')} {(v.get('detected_at') or '')[:16]} | "
         f"rows={rows} docs={att} | csv={has_csv} zip={has_zip} "
         f"geojson={has_geojson} gpkg/parquet={has_geo_file and not has_geojson} | "
-        f"storage={storage} | dl={dl}"
+        f"storage={'neon (rows only)' if neon_only else storage} | dl={dl}"
     )
     if d.get("last_error"):
         problems.append(f"last_error: {str(d['last_error'])[:40]}")
