@@ -459,7 +459,11 @@ def _check_sql(table: str, tol_m: float = 0.0) -> tuple[str, str]:
     insert = f"""
         INSERT INTO public.{_qi(FEATURES_TABLE)}
             (dataset_id, table_name, layer_id, row_hash, distance_km, attrs, geom)
-        SELECT $1, $2, $3, zz_src._row_hash::text,
+        SELECT $1, $2, $3,
+               -- Some idx layers were indexed without a _row_hash column; read it
+               -- through the row's JSON so those do not fail on a missing column,
+               -- and stand in a hash of the row itself where it is absent.
+               coalesce(to_jsonb(zz_src) ->> '_row_hash', md5(to_jsonb(zz_src)::text)),
                (SELECT min({_X()}.ST_Distance(n.geom::{_X()}.geography, zz_src.geom::{_X()}.geography))
                 FROM (SELECT p.geom FROM {parts} p
                       ORDER BY p.geom OPERATOR({_X()}.<->) zz_src.geom LIMIT 5) n) / 1000.0,

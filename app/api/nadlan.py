@@ -511,7 +511,10 @@ async def nadlan_lookup(
     elif q:
         sniff = nadlan_text.sniff_mode(q)
         mode, parsed = sniff["mode"], sniff["parsed"]
-        if mode == "address_text":
+        # sniff_mode calls free text "address" with only {"text": ...}; the
+        # address mode needs city/street, so reading it as one was a KeyError
+        # and a 500 for anyone typing an address into q.
+        if mode == "address_text" or (mode == "address" and "city" not in parsed):
             return _envelope("address_text", {**parsed, "fields": sorted(wanted)}, [],
                              hint="כתובת חופשית — השתמשו ב-city/street/number",
                              alternatives=sniff["alternatives"])

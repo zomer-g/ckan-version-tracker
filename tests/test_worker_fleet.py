@@ -471,3 +471,44 @@ def test_fleet_reads_an_empty_table_without_error():
         async with Session() as db:
             assert await fleet(db) == []
     _run(go())
+
+
+def _busy_worker(db, *, polled_ago, beat_ago, status="running"):
+    ds = TrackedDataset(
+        id=uuid.uuid4(), ckan_id="layer-long", ckan_name="layer-long", title="שכבה ארוכה",
+        source_type="govmap", is_active=True,
+    )
+    db.add(ds)
+    db.add(ScrapeTask(
+        id=uuid.uuid4(), tracked_dataset_id=ds.id, status=status,
+        priority=PRIORITY_ROUTINE, created_at=NOW - timedelta(hours=1),
+        updated_at=NOW - beat_ago,
+        worker_id="NucBox_G10#212cc2", worker_ip="176.228.253.201",
+    ))
+    db.add(WorkerNode(worker_key="NucBox_G10", worker_id="NucBox_G10#212cc2",
+                      worker_ip="176.228.253.201", last_seen_at=NOW - polled_ago))
+
+
+def test_a_busy_worker_that_stopped_polling_is_still_alive():
+    """A worker an hour into one task sends /progress, not /poll, so its
+    last_seen_at goes stale. Its task heartbeat says it is alive — the health
+    check once reported "no live worker" at exactly such a moment."""
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            _busy_worker(db, polled_ago=timedelta(minutes=40), beat_ago=timedelta(seconds=30))
+            await db.commit()
+            row = (await fleet(db))[0]
+            assert row["offline"] is False
+            assert len(row["current_tasks"]) == 1
+    _run(go())
+
+
+def test_a_stale_heartbeat_does_not_revive_a_worker():
+    async def go():
+        Session = await _session_factory()
+        async with Session() as db:
+            _busy_worker(db, polled_ago=timedelta(minutes=40), beat_ago=timedelta(minutes=30))
+            await db.commit()
+            assert (await fleet(db))[0]["offline"] is True
+    _run(go())

@@ -172,8 +172,18 @@ async def fleet(db: AsyncSession) -> list[dict]:
     # one thing. Overwriting into a single slot would hide work and make a
     # machine look safe to restart when it isn't.
     current: dict[str, list[dict]] = {}
+    # A busy worker stops polling: it reports /progress on the task it holds
+    # until that task ends, and only /poll refreshes last_seen_at. Without this
+    # a single worker an hour into a GovMap layer reads as offline, and the
+    # health check reports "no live worker" while scraping is in fact running.
+    # The task heartbeat is the same signal, on the same 10-minute clock.
+    heartbeat: dict[str, datetime] = {}
     for task, ds in running.all():
-        current.setdefault(worker_key(task.worker_id, task.worker_ip), []).append({
+        key = worker_key(task.worker_id, task.worker_ip)
+        beat = _as_utc(task.updated_at)
+        if beat is not None and (key not in heartbeat or beat > heartbeat[key]):
+            heartbeat[key] = beat
+        current.setdefault(key, []).append({
             "task_id": str(task.id),
             "dataset_id": str(ds.id),
             "dataset_title": ds.title,
@@ -188,6 +198,9 @@ async def fleet(db: AsyncSession) -> list[dict]:
     out = []
     for n in nodes:
         seen = _as_utc(n.last_seen_at)
+        beat = heartbeat.get(n.worker_key)
+        if beat is not None and (seen is None or beat > seen):
+            seen = beat
         offline = seen is None or (now - seen) > OFFLINE_AFTER
         tasks = current.get(n.worker_key, [])
         out.append({
