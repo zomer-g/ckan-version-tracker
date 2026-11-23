@@ -553,7 +553,7 @@
     "title": "Public API",
     "subtitle": "Open access to four sources — government datasets (OVER), the CBS index, Knesset protocols, and public-official diaries (Yoman La'am) — over REST and MCP",
     "base_url": "Base URL:",
-    "intro": "All endpoints are public (mostly GET) — no auth, no API key. Each source has its own path prefix: OVER under /api/v1 and /api/append, CBS under /api/cbs, the Knesset under /api/knesset-db and /api/knesset-protocols, and Yoman La'am under /api/ocal.",
+    "intro": "All endpoints are public (mostly GET) — no auth, no API key, except free SQL (/api/append/{id}/sql, /api/append/{id}/datastore_search_sql, /api/tables/sql, /api/tables/export.csv, /api/knesset-db/sql), which needs sign-in (Authorization: Bearer) and answers 401 without it. Each source has its own path prefix: OVER under /api/v1 and /api/append, CBS under /api/cbs, the Knesset under /api/knesset-db and /api/knesset-protocols, and Yoman La'am under /api/ocal.",
     "intro_2": "Open for researchers, journalists, transparency activists, and civic projects. If you are building a heavy integration, please avoid millions of parallel calls and keep a local cache.",
     "endpoints": "Endpoints",
     "intro_versions": "Full interactive documentation (OpenAPI) for every endpoint of all sources is available at "
