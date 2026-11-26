@@ -116,7 +116,7 @@ def test_every_route_has_a_rate_limit():
     unlimited = [
         f"{sorted(r.methods)} {r.path}"
         for r in deals_router.routes if isinstance(r, APIRoute)
-        if not limiter._route_limits.get(f"{r.endpoint.__module__}.{r.endpoint.__name__}")
+        if not limiter.declared_amounts(f"{r.endpoint.__module__}.{r.endpoint.__name__}")
     ]
     assert unlimited == [], f"endpoints missing @limiter.limit: {unlimited}"
 

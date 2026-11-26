@@ -556,7 +556,8 @@
     "intro": "All endpoints are public (mostly GET) — no auth, no API key, except free SQL (/api/append/{id}/sql, /api/append/{id}/datastore_search_sql, /api/tables/sql, /api/tables/export.csv, /api/knesset-db/sql), which needs sign-in (Authorization: Bearer) and answers 401 without it. Each source has its own path prefix: OVER under /api/v1 and /api/append, CBS under /api/cbs, the Knesset under /api/knesset-db and /api/knesset-protocols, and Yoman La'am under /api/ocal.",
     "intro_2": "Open to everyone, for any purpose, commercial use included; there are no terms of use (<1>why</1>). If you are building a heavy integration, please avoid millions of parallel calls and keep a local cache, so the service stays available to everyone.",
     "endpoints": "Endpoints",
-    "intro_versions": "Full interactive documentation (OpenAPI) for every endpoint of all sources is available at "
+    "intro_versions": "Full interactive documentation (OpenAPI) for every endpoint of all sources is available at ",
+    "intro_limits": "Rate limits: each endpoint has a per-minute limit per IP address (usually 30–120 calls a minute), and all the נדל״ן לעם endpoints together allow 300 a minute. Going over returns 429 with Retry-After. For bulk collection, sign in and send Authorization: Bearer (signed-in limits are 10 times higher), or pull a whole table at once (download.csv, Parquet files, or SQL at /data) instead of item by item."
   },
   "cbs": {
     "title": "Central Bureau of Statistics (CBS)",

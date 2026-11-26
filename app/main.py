@@ -493,7 +493,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(asyncio.to_thread(history_query.ensure_extensions))
     yield
     from app.services import api_access_log
-    await api_access_log.flush()
+    await api_access_log.flush(final=True)
     shutdown_scheduler()
     for t in list(_writer_tasks):
         t.cancel()

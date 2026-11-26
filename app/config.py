@@ -725,6 +725,12 @@ class Settings(BaseSettings):
     api_budget_window_seconds: int = 86400        # rolling 24h
     api_contact_email: str = "guy@z-g.co.il"
 
+    # ── Per-minute request limits (app/rate_limit.py) ──
+    # A caller with a valid site token (Authorization: Bearer, from signing in)
+    # is limited per user instead of per IP, at this multiple of every route's
+    # anonymous limit — the sanctioned way to collect at scale. 1 = no tier.
+    signed_in_rate_multiplier: int = 10
+
     # ── API access log (admin "גישה ל-API" tab) ──
     # One row per request to /api/* and every MCP server, written in batches off
     # the request path (app/services/api_access_log.py). Rows older than the

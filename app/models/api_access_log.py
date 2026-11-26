@@ -46,6 +46,10 @@ class ApiAccessLog(Base):
     actor_id: Mapped[str | None] = mapped_column(String(100))
     actor_label: Mapped[str | None] = mapped_column(String(200))
     referer_host: Mapped[str | None] = mapped_column(String(200))
+    # How many calls this row stands for: 1, or more for the aggregate rows a
+    # flood's overflow is folded into (app/services/api_access_log._admit).
+    # Every count reads sum(hits), never count(*).
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
         Index("ix_api_access_log_ts", "ts"),

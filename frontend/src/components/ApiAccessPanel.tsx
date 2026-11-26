@@ -366,6 +366,11 @@ export default function ApiAccessPanel() {
                         <td style={{ ...cell, color: r.status >= 400 ? "var(--tint-bad-fg)" : undefined }}>{r.status}</td>
                         <td style={{ ...cell, whiteSpace: "normal", wordBreak: "break-all", minWidth: "16rem" }} dir="ltr" title={r.user_agent ?? ""}>
                           <b>{r.method}</b> {r.path}{r.query ? `?${r.query}` : ""}
+                          {(r.hits ?? 1) > 1 && (
+                            <span title="שורה מצרפית: הקריאות שמעבר ל-300 בדקה מאותה כתובת" style={{ marginInlineStart: "0.4rem", fontWeight: 600 }}>
+                              ×{n(r.hits ?? 1)}
+                            </span>
+                          )}
                         </td>
                         <td style={cell} dir="ltr">{r.ip ?? "—"}{r.country ? ` · ${r.country}` : ""}</td>
                         <td style={cell} dir="ltr">{r.actor_label ?? ACTOR_LABELS[r.actor_kind] ?? r.actor_kind}</td>
