@@ -264,43 +264,90 @@ def enabled() -> bool:
     return bool(settings.api_access_log_enabled) and not settings.maintenance_mode
 
 
-# Per-IP cap on rows per minute, so an unauthenticated flood (a 404 scan, a
-# retry loop) cannot fill the table. Past the cap the IP's rows for that minute
-# are counted and written as ONE summary row when the minute rolls over.
+# Per-IP cap on DETAILED rows per minute, so a flood (a 404 scan, a sweep over
+# ids) cannot fill the table with one row per call. Past the cap nothing is
+# lost: the IP's further calls that minute are folded into one row per
+# (route, status, method, channel, client, actor) whose ``hits`` says how many
+# calls it stands for, written once the minute is over. Every reader sums
+# ``hits``, so totals, errors and per-route counts stay exact.
+#
+# (Until 26.11 the overflow became ONE "(suppressed)" row with status 0 and no
+# route, so a flood's errors vanished from the error and per-route counts: on
+# 25.11 the admin page showed 46,231 nadlan errors of the 54,317 served.)
 PER_IP_PER_MINUTE = 300
-_ip_minute: dict[str, list] = {}   # ip -> [minute, count, template_row]
+_ip_minute: dict[str, list] = {}   # ip -> [minute, count]
+_overflow: dict[tuple, dict] = {}  # (minute, ip, group...) -> aggregate row
+_GROUP_KEYS = ("method", "route", "status", "area", "channel", "client",
+               "actor_kind", "actor_id")
+MAX_OVERFLOW_GROUPS = 50_000
+_last_drop_report = 0.0
+_dropped = 0                       # rows lost (buffer full / overflow full / DB down)
+
+
+def _minute_now() -> int:
+    return int(time.time() // 60)
 
 
 def _admit(row: dict) -> bool:
+    """True: buffer ``row`` as its own row. False: it was folded into an aggregate."""
+    global _dropped
     ip = row.get("ip") or "?"
-    minute = int(time.time() // 60)
+    minute = _minute_now()
     slot = _ip_minute.get(ip)
     if slot is None or slot[0] != minute:
-        if slot is not None and slot[1] > PER_IP_PER_MINUTE:
-            _buffer.append(_suppressed_row(slot))
         if len(_ip_minute) > 20_000:
             _ip_minute.clear()
-        _ip_minute[ip] = [minute, 1, row]
+        _ip_minute[ip] = [minute, 1]
         return True
     slot[1] += 1
-    return slot[1] <= PER_IP_PER_MINUTE
+    if slot[1] <= PER_IP_PER_MINUTE:
+        return True
+    # An unmatched path (a scan) has no route: group it under one name so a
+    # scanner's random paths cannot make one group each.
+    key = (minute, ip) + tuple(row.get(k) for k in _GROUP_KEYS)
+    agg = _overflow.get(key)
+    if agg is None:
+        if len(_overflow) >= MAX_OVERFLOW_GROUPS:
+            _dropped += 1
+            return False
+        agg = _overflow[key] = {
+            **row, "ts": datetime.fromtimestamp(minute * 60 + 59, timezone.utc),
+            "path": row.get("route") or "(unmatched)", "query": None, "target": None,
+            "hits": 0, "bytes_out": 0, "duration_ms": 0, "_ms_total": 0,
+        }
+    agg["hits"] += 1
+    agg["bytes_out"] += int(row.get("bytes_out") or 0)
+    agg["_ms_total"] += int(row.get("duration_ms") or 0)
+    return False
 
 
-def _suppressed_row(slot: list) -> dict:
-    tpl = slot[2]
-    return {**tpl, "ts": datetime.fromtimestamp(slot[0] * 60 + 59, timezone.utc),
-            "method": "-", "path": "(suppressed)", "route": None, "query": None, "target": None,
-            "status": 0, "duration_ms": 0, "bytes_out": 0,
-            "actor_label": f"{slot[1] - PER_IP_PER_MINUTE} requests over the per-minute cap"}
+def _drain_overflow(before_minute: int | None = None) -> int:
+    """Move finished minutes' aggregates into the write buffer (all of them
+    when ``before_minute`` is None, e.g. at shutdown)."""
+    done = [k for k in _overflow if before_minute is None or k[0] < before_minute]
+    for k in done:
+        agg = _overflow.pop(k)
+        ms_total = agg.pop("_ms_total", 0)
+        agg["duration_ms"] = int(ms_total / agg["hits"]) if agg["hits"] else 0
+        _append(agg)
+    return len(done)
+
+
+def _append(row: dict) -> None:
+    global _dropped
+    if len(_buffer) >= MAX_BUFFER:
+        _dropped += 1          # the deque drops the oldest row to make room
+    _buffer.append(row)
 
 
 def enqueue(row: dict) -> None:
     global _flusher
     if not enabled():
         return
+    row.setdefault("hits", 1)
     if not _admit(row):
         return
-    _buffer.append(row)
+    _append(row)
     if _flusher is None or _flusher.done():
         try:
             _flusher = asyncio.get_running_loop().create_task(_flush_loop())
@@ -314,9 +361,14 @@ async def _flush_loop() -> None:
         await flush()
 
 
-async def flush() -> int:
-    """Write everything buffered. Returns rows written."""
-    global _last_warn
+MAX_ATTEMPTS = 3   # a batch the database refused is retried on the next flushes
+
+
+async def flush(final: bool = False) -> int:
+    """Write everything buffered (and every finished minute's aggregates; all
+    of them when ``final``). Returns rows written."""
+    global _last_warn, _dropped, _last_drop_report
+    _drain_overflow(None if final else _minute_now())
     written = 0
     while _buffer:
         batch = []
@@ -327,19 +379,36 @@ async def flush() -> int:
 
             from app.database import async_session
             from app.models.api_access_log import ApiAccessLog
+            rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in batch]
             async with async_session() as s:
-                await s.execute(insert(ApiAccessLog), batch)
+                await s.execute(insert(ApiAccessLog), rows)
                 await s.commit()
             written += len(batch)
         except Exception as e:  # noqa: BLE001
+            # Put the batch back (oldest first) for the next flush, unless it
+            # has already failed MAX_ATTEMPTS times — then it is dropped, so
+            # one bad batch cannot block the log forever.
+            lost = 0
+            for r in reversed(batch):
+                r["_attempts"] = r.get("_attempts", 0) + 1
+                if r["_attempts"] < MAX_ATTEMPTS and len(_buffer) < MAX_BUFFER:
+                    _buffer.appendleft(r)
+                else:
+                    lost += 1
+            _dropped += lost
             now = time.monotonic()
             if now - _last_warn > 60:
                 _last_warn = now
                 # The exception's text is NOT logged: SQLAlchemy puts the bound
                 # parameters (IPs, user agents, emails) into it, and platform
                 # logs are not where those may go.
-                logger.warning("API access log: dropped %d rows (%s)", len(batch), type(e).__name__)
+                logger.warning("API access log: write failed for %d rows, %d dropped (%s)",
+                               len(batch), lost, type(e).__name__)
             break
+    if _dropped and time.monotonic() - _last_drop_report > 60:
+        _last_drop_report = time.monotonic()
+        logger.warning("API access log: %d rows were lost since the last report", _dropped)
+        _dropped = 0
     return written
 
 

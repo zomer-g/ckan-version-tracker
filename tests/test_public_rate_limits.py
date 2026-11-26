@@ -73,7 +73,7 @@ def test_every_public_route_has_a_rate_limit():
     unlimited = [
         f"{sorted(r.methods)} {r.path}"
         for r in _routes()
-        if not limiter._route_limits.get(_limit_key(r))
+        if not limiter.declared_amounts(_limit_key(r))
     ]
     assert unlimited == [], f"endpoints missing @limiter.limit: {unlimited}"
 
@@ -89,9 +89,9 @@ def test_every_public_route_has_a_rate_limit():
     ],
 )
 def test_heavy_endpoints_have_a_lower_ceiling(name, ceiling):
-    limits = limiter._route_limits[name]
+    limits = limiter.declared_amounts(name)
     assert limits, f"{name} has no limit"
-    amount = limits[0].limit.amount
+    amount = limits[0]
     assert amount == ceiling, f"{name} allows {amount}/min, expected {ceiling}"
 
 

@@ -48,6 +48,13 @@ from app.services import (nadlan_layers, nadlan_query, nadlan_search, nadlan_sou
 
 router = APIRouter(prefix="/api/nadlan", tags=["nadlan"])
 
+# Every route also counts against ONE bucket per caller for the whole family,
+# so a client cannot multiply its rate by spreading a sweep over the routes.
+# A person on the site opens a parcel in ~5-15 calls (envelope, geometry, deals,
+# layers, a card or two); 300/minute is far above that and far below the
+# 1,277/minute a sweep reached on 25.11. Signed-in callers get the usual multiple.
+NADLAN_PER_CALLER = "300/minute"
+
 # Stated on every response so a caller cannot mistake the crosswalk for a
 # primary source. Each is a measured limit, not a guess — see docs/nadlan.md.
 CAVEATS = [
@@ -103,6 +110,7 @@ def _envelope(mode: str, parsed: dict, data: list, **extra) -> dict:
 
 @router.get("/stats")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_stats(request: Request):
     """Hero counters and the published coverage percentages."""
     await _require_ready()
@@ -111,6 +119,7 @@ async def nadlan_stats(request: Request):
 
 @router.get("/parcel/{gush}/{helka}")
 @limiter.limit("120/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -129,6 +138,7 @@ async def nadlan_parcel(
 
 @router.get("/parcel/{gush}/{helka}/geometry")
 @limiter.limit("30/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel_geometry(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -148,6 +158,7 @@ async def nadlan_parcel_geometry(
 
 @router.get("/parcel/{gush}/{helka}/deals")
 @limiter.limit("120/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel_deals(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -175,6 +186,7 @@ async def nadlan_parcel_deals(
 
 @router.get("/parcel/{gush}/{helka}/source/{source}")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel_source(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -196,6 +208,7 @@ async def nadlan_parcel_source(
 
 @router.get("/layers")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_layers_catalog(request: Request):
     """Every information cube a parcel can be opened into, and whether this
     deployment holds the table behind it."""
@@ -212,6 +225,7 @@ async def _parcel_or_404(gush: int, helka: int, suffix: int | None) -> dict:
 
 @router.get("/parcel/{gush}/{helka}/layers")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel_layers(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -234,6 +248,7 @@ async def nadlan_parcel_layers(
 
 @router.get("/parcel/{gush}/{helka}/layer/{cube_id}")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_parcel_layer(
     request: Request,
     gush: int = Path(..., ge=1, le=99_999_999),
@@ -264,6 +279,7 @@ async def nadlan_parcel_layer(
 
 @router.get("/point")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_point(
     request: Request,
     lat: float = Query(..., ge=29.0, le=34.0, description="קו רוחב (WGS84)"),
@@ -304,6 +320,7 @@ async def nadlan_point(
 
 @router.get("/zip/{zip_code}")
 @limiter.limit("120/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_zip(
     request: Request,
     zip_code: str = Path(..., min_length=5, max_length=7),
@@ -323,6 +340,7 @@ async def nadlan_zip(
 
 @router.get("/address")
 @limiter.limit("120/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_address(
     request: Request,
     city: str = Query(..., min_length=1, max_length=100),
@@ -356,6 +374,7 @@ async def nadlan_address(
 
 @router.get("/streets")
 @limiter.limit("120/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_streets(
     request: Request,
     q: str = Query(..., min_length=1, max_length=80),
@@ -368,6 +387,7 @@ async def nadlan_streets(
 
 @router.get("/resolve")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_resolve(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
@@ -406,6 +426,7 @@ async def nadlan_resolve(
 
 @router.get("/search")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_search_route(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200,
@@ -451,6 +472,7 @@ async def _by_mode(mode: str, parsed: dict, radius_m: float, limit: int,
 
 @router.get("/lookup")
 @limiter.limit("60/minute")
+@limiter.shared_limit(NADLAN_PER_CALLER, scope="nadlan")
 async def nadlan_lookup(
     request: Request,
     q: str | None = Query(None, max_length=200,

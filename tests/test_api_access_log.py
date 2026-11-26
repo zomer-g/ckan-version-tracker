@@ -143,29 +143,83 @@ def test_middleware_off_when_disabled(monkeypatch):
     assert rows == []
 
 
-def test_per_ip_cap_collapses_a_flood(monkeypatch):
+def _flood_setup(monkeypatch):
+    import collections
     monkeypatch.setattr(settings, "api_access_log_enabled", True)
     monkeypatch.setattr(settings, "maintenance_mode", False)
-    monkeypatch.setattr(log, "_buffer", __import__("collections").deque())
+    monkeypatch.setattr(log, "_buffer", collections.deque())
     monkeypatch.setattr(log, "_ip_minute", {})
+    monkeypatch.setattr(log, "_overflow", {})
     monkeypatch.setattr(log.asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
     now = [1_000_000.0]
     monkeypatch.setattr(log.time, "time", lambda: now[0])
-    base = {"ip": "9.9.9.9", "area": "v1", "channel": "script", "actor_kind": "anonymous"}
-    for _ in range(log.PER_IP_PER_MINUTE + 50):
-        log.enqueue(dict(base))
-    assert len(log._buffer) == log.PER_IP_PER_MINUTE
+    return now
+
+
+def _row(status=200, route="/api/nadlan/parcel/{gush}/{helka}/source/{source}", **kw):
+    return {"ip": "9.9.9.9", "area": "nadlan", "channel": "browser", "actor_kind": "anonymous",
+            "method": "GET", "route": route, "path": "/api/nadlan/parcel/1/2/source/gazetteer",
+            "status": status, "bytes_out": 100, "duration_ms": 10, **kw}
+
+
+def test_a_flood_keeps_every_call_and_every_status(monkeypatch):
+    """The 25.11 case: past the cap, calls are folded, not lost, and the 404s
+    stay 404s (they used to become one status-0 "(suppressed)" row)."""
+    now = _flood_setup(monkeypatch)
+    cap = log.PER_IP_PER_MINUTE
+    for i in range(cap + 500):
+        log.enqueue(_row(status=404 if i % 2 else 200))
+    assert len(log._buffer) == cap          # detailed rows only, so far
+    assert log._drain_overflow(log._minute_now()) == 0   # the minute is not over yet
     now[0] += 60
-    log.enqueue(dict(base))
+    assert log._drain_overflow(log._minute_now()) == 2   # one aggregate per status
     rows = list(log._buffer)
-    summary = [r for r in rows if r.get("path") == "(suppressed)"]
-    assert len(summary) == 1 and summary[0]["actor_label"].startswith("50 ")
-    assert len(rows) == log.PER_IP_PER_MINUTE + 2
+    assert sum(r["hits"] for r in rows) == cap + 500
+    assert sum(r["hits"] for r in rows if r["status"] == 404) == (cap + 500) // 2
+    agg = [r for r in rows if r["hits"] > 1]
+    assert {r["path"] for r in agg} == {"/api/nadlan/parcel/{gush}/{helka}/source/{source}"}
+    assert all(r["bytes_out"] == 100 * r["hits"] and r["duration_ms"] == 10 for r in agg)
+    assert all(r["ts"].second == 59 for r in agg)
+
+
+def test_a_scan_of_unmatched_paths_folds_into_one_group(monkeypatch):
+    now = _flood_setup(monkeypatch)
+    for i in range(log.PER_IP_PER_MINUTE + 100):
+        log.enqueue(_row(status=404, route=None, path=f"/api/random-{i}"))
+    now[0] += 60
+    assert log._drain_overflow(log._minute_now()) == 1
+    agg = [r for r in log._buffer if r["hits"] > 1][0]
+    assert agg["hits"] == 100 and agg["path"] == "(unmatched)"
+
+
+def test_a_failed_write_is_retried_then_dropped(monkeypatch, caplog):
+    import asyncio, collections
+    monkeypatch.setattr(log, "_buffer", collections.deque([{"ip": "203.0.113.77", "hits": 1}]))
+    monkeypatch.setattr(log, "_overflow", {})
+    monkeypatch.setattr(log, "_last_warn", 0.0)
+    monkeypatch.setattr(log, "_last_drop_report", 0.0)
+    monkeypatch.setattr(log, "_dropped", 0)
+
+    class Boom:
+        async def __aenter__(self):
+            raise RuntimeError("db down")
+        async def __aexit__(self, *a):
+            return False
+    import app.database as D
+    monkeypatch.setattr(D, "async_session", lambda: Boom())
+    caplog.set_level("WARNING")
+    for _ in range(log.MAX_ATTEMPTS - 1):
+        asyncio.run(log.flush())
+        assert len(log._buffer) == 1        # kept for the next attempt
+    asyncio.run(log.flush())
+    assert len(log._buffer) == 0
+    assert "1 rows were lost" in caplog.text
 
 
 def test_flush_failure_does_not_log_row_contents(monkeypatch, caplog):
     import asyncio, collections
     monkeypatch.setattr(log, "_buffer", collections.deque([{"ip": "203.0.113.77"}]))
+    monkeypatch.setattr(log, "_overflow", {})
     monkeypatch.setattr(log, "_last_warn", 0.0)
 
     class Boom:

@@ -1035,6 +1035,9 @@ export default function ApiPage() {
             <a href="/redoc" target="_blank" rel="noopener noreferrer" dir="ltr">/redoc<span className="sr-only"> (נפתח בחלון חדש)</span></a>
             .
           </p>
+          <p id="limits">
+            {t("api.intro_limits", "מגבלות קצב: לכל נקודת קצה מגבלה לדקה, לכל כתובת IP (בדרך כלל 30–120 קריאות לדקה), ולכל נקודות הקצה של נדל״ן לעם יחד 300 לדקה. חריגה מחזירה 429 עם Retry-After. לאיסוף בהיקף גדול: התחברו ושלחו Authorization: Bearer — המגבלות לחשבון מחובר גבוהות פי 10; או משכו טבלה שלמה בבת אחת (download.csv, קובצי Parquet או SQL ב-/data) במקום פריט-פריט.")}
+          </p>
         </div>
 
         <McpCard />

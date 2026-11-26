@@ -77,7 +77,10 @@ def client():
         id=uuid.uuid4(), email="admin@test", is_admin=True
     )
     limiter.reset()
-    return TestClient(app, raise_server_exceptions=False)
+    yield TestClient(app, raise_server_exceptions=False)
+    # aiosqlite keeps one non-daemon thread per open connection; an engine left
+    # undisposed can keep the test process from exiting.
+    asyncio.run(engine.dispose())
 
 
 # ── the publish gate ─────────────────────────────────────────────────────
@@ -325,4 +328,4 @@ def test_public_routes_are_rate_limited():
     for route in router.routes:
         if isinstance(route, APIRoute):
             key = f"{route.endpoint.__module__}.{route.endpoint.__name__}"
-            assert limiter._route_limits.get(key), f"{route.path} has no rate limit"
+            assert limiter.declared_amounts(key), f"{route.path} has no rate limit"

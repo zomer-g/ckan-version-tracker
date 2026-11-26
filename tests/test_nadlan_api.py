@@ -99,7 +99,7 @@ def test_every_route_has_a_rate_limit():
     unlimited = [
         f"{sorted(r.methods)} {r.path}"
         for r in _routes()
-        if not limiter._route_limits.get(f"{r.endpoint.__module__}.{r.endpoint.__name__}")
+        if not limiter.declared_amounts(f"{r.endpoint.__module__}.{r.endpoint.__name__}")
     ]
     assert unlimited == [], f"endpoints missing @limiter.limit: {unlimited}"
 
@@ -107,7 +107,7 @@ def test_every_route_has_a_rate_limit():
 def test_the_geometry_route_is_the_most_restricted():
     """It is the only response that reads the 4.58 GB source table."""
     def amount(name):
-        return limiter._route_limits[f"app.api.nadlan.{name}"][0].limit.amount
+        return limiter.declared_amounts(f"app.api.nadlan.{name}")[0]
 
     assert amount("nadlan_parcel_geometry") == 30
     assert amount("nadlan_parcel_geometry") < amount("nadlan_parcel")

@@ -3,7 +3,10 @@
   GET /api/admin/api-access/stats   — totals, time series and breakdowns
   GET /api/admin/api-access/recent  — the raw rows, newest first
 
-Both take the same filters. ``exclude_site`` (on by default) drops calls our own
+Both take the same filters. Every count is ``sum(hits)``, not ``count(*)``: past
+300 calls per IP per minute the log folds a flood's calls into aggregate rows
+(app/services/api_access_log._admit), and ``hits`` says how many each stands for.
+``exclude_site`` (on by default) drops calls our own
 frontend makes, which otherwise outnumber everything external by far.
 """
 
@@ -102,12 +105,12 @@ async def api_access_stats(
     frm = f"FROM api_access_log l WHERE {where}"
 
     totals = (await _rows(db, f"""
-        SELECT count(*) AS requests,
+        SELECT coalesce(sum(l.hits), 0) AS requests,
                count(DISTINCT l.ip) AS unique_ips,
                count(DISTINCT l.actor_id) AS unique_actors,
                coalesce(sum(l.bytes_out), 0) AS bytes,
-               count(*) FILTER (WHERE l.status >= 400) AS errors,
-               count(*) FILTER (WHERE l.status = 429) AS throttled,
+               coalesce(sum(l.hits) FILTER (WHERE l.status >= 400), 0) AS errors,
+               coalesce(sum(l.hits) FILTER (WHERE l.status = 429), 0) AS throttled,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY l.duration_ms) AS p50_ms,
                percentile_cont(0.95) WITHIN GROUP (ORDER BY l.duration_ms) AS p95_ms,
                min(l.ts) AS first_ts, max(l.ts) AS last_ts
@@ -117,17 +120,17 @@ async def api_access_stats(
     bucket = "hour" if f["days"] <= 3 else "day"
     series = _iso(await _rows(db, f"""
         SELECT date_trunc('{bucket}', l.ts AT TIME ZONE '{TZ}') AS t,
-               count(*) AS requests, count(DISTINCT l.ip) AS ips,
+               sum(l.hits) AS requests, count(DISTINCT l.ip) AS ips,
                coalesce(sum(l.bytes_out), 0) AS bytes,
-               count(*) FILTER (WHERE l.status >= 400) AS errors
+               coalesce(sum(l.hits) FILTER (WHERE l.status >= 400), 0) AS errors
         {frm} GROUP BY 1 ORDER BY 1""", p), "t")
 
     async def by(col: str, limit: int = 25, where_sql: str = where, params: dict = p) -> list[dict]:
         return await _rows(db, f"""
-            SELECT {col} AS key, count(*) AS requests, count(DISTINCT l.ip) AS ips,
+            SELECT {col} AS key, sum(l.hits) AS requests, count(DISTINCT l.ip) AS ips,
                    coalesce(sum(l.bytes_out), 0) AS bytes,
-                   count(*) FILTER (WHERE l.status >= 400) AS errors,
-                   round(avg(l.duration_ms)) AS avg_ms
+                   coalesce(sum(l.hits) FILTER (WHERE l.status >= 400), 0) AS errors,
+                   round(sum(l.duration_ms::bigint * l.hits)::numeric / nullif(sum(l.hits), 0)) AS avg_ms
             FROM api_access_log l WHERE {where_sql}
             GROUP BY 1 ORDER BY requests DESC LIMIT {int(limit)}""", params)
 
@@ -136,15 +139,15 @@ async def api_access_stats(
 
     routes = await _rows(db, f"""
         SELECT l.area, l.method, coalesce(l.route, l.path) AS route,
-               count(*) AS requests, count(DISTINCT l.ip) AS ips,
+               sum(l.hits) AS requests, count(DISTINCT l.ip) AS ips,
                coalesce(sum(l.bytes_out), 0) AS bytes,
-               count(*) FILTER (WHERE l.status >= 400) AS errors,
-               round(avg(l.duration_ms)) AS avg_ms
+               coalesce(sum(l.hits) FILTER (WHERE l.status >= 400), 0) AS errors,
+               round(sum(l.duration_ms::bigint * l.hits)::numeric / nullif(sum(l.hits), 0)) AS avg_ms
         {frm} GROUP BY 1, 2, 3 ORDER BY requests DESC LIMIT 40""", p)
 
     top_ips = _iso(await _rows(db, f"""
-        SELECT l.ip, count(*) AS requests, coalesce(sum(l.bytes_out), 0) AS bytes,
-               count(*) FILTER (WHERE l.status >= 400) AS errors,
+        SELECT l.ip, sum(l.hits) AS requests, coalesce(sum(l.bytes_out), 0) AS bytes,
+               coalesce(sum(l.hits) FILTER (WHERE l.status >= 400), 0) AS errors,
                count(DISTINCT coalesce(l.route, l.path)) AS routes,
                mode() WITHIN GROUP (ORDER BY l.client) AS client,
                mode() WITHIN GROUP (ORDER BY l.channel) AS channel,
@@ -158,7 +161,7 @@ async def api_access_stats(
     top_actors = _iso(await _rows(db, f"""
         SELECT l.actor_kind, l.actor_id,
                max({_ACTOR_LABEL}) AS label,
-               count(*) AS requests, coalesce(sum(l.bytes_out), 0) AS bytes,
+               sum(l.hits) AS requests, coalesce(sum(l.bytes_out), 0) AS bytes,
                count(DISTINCT l.ip) AS ips,
                mode() WITHIN GROUP (ORDER BY l.area) AS top_area,
                max(l.ts) AS last_ts
@@ -169,7 +172,7 @@ async def api_access_stats(
     heatmap = await _rows(db, f"""
         SELECT extract(isodow FROM l.ts AT TIME ZONE '{TZ}')::int AS dow,
                extract(hour FROM l.ts AT TIME ZONE '{TZ}')::int AS hour,
-               count(*) AS requests
+               sum(l.hits) AS requests
         {frm} GROUP BY 1, 2""", p)
 
     return {
@@ -208,7 +211,7 @@ async def api_access_recent(
         SELECT l.id, l.ts, l.method, l.path, l.route, l.area, l.query, l.target, l.status,
                l.duration_ms, l.bytes_out, l.ip, l.country, l.user_agent, l.client,
                l.channel, l.actor_kind, l.actor_id,
-               {_ACTOR_LABEL} AS actor_label, l.referer_host
+               {_ACTOR_LABEL} AS actor_label, l.referer_host, l.hits
         FROM api_access_log l {_ACTOR_JOINS}
         WHERE {where}
         ORDER BY l.ts DESC LIMIT :limit OFFSET :offset""", {**p, "limit": limit, "offset": offset})

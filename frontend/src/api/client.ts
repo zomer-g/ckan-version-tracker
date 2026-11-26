@@ -2427,6 +2427,8 @@ export interface ApiAccessRow {
   bytes_out: number; ip: string | null; country: string | null; user_agent: string | null;
   client: string | null; channel: string; actor_kind: string; actor_id: string | null;
   actor_label: string | null; referer_host: string | null;
+  /** Calls this row stands for: >1 for a flood's aggregate row. */
+  hits?: number;
 }
 
 export const admin = {
